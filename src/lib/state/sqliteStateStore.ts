@@ -1940,7 +1940,9 @@ export class SqliteStateCollection<T> {
   }
 
   snapshot(): T[] {
-    return this.loadReadonly().map((record) => this.options.clone(record));
+    const records = this.loadReadonly();
+    // A whole-collection copy is synchronous work on the caller's thread: name it.
+    return performanceSpans.sync("state.copy", () => records.map((record) => this.options.clone(record)), records.length);
   }
 
   async snapshotAsync(): Promise<T[]> {
