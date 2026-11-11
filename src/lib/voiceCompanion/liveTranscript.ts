@@ -108,7 +108,15 @@ export class LiveTranscript {
     const before = this.dropped[row.speaker] + rows.slice(0, rows.indexOf(row)).map(part => part.text).join("");
     const stream = this.dropped[row.speaker] + rows.map(part => part.text).join("");
     const mask = credentialMask(stream, this.secrets);
-    return row.fragmentEnds.map(end => maskedSlice(stream, mask, before.length, before.length + end).length);
+    // Walk the text once; rescanning every fragment's prefix would grow quadratically with a long reply.
+    let at = before.length, length = 0;
+    return row.fragmentEnds.map(end => {
+      for (; at < before.length + end; at++) {
+        if (!mask[at]) length++;
+        else if (at === before.length || !mask[at - 1]) length += "[redacted]".length;
+      }
+      return length;
+    });
   }
   /** The turn an operator segment belongs to. */
   turnOf(itemId: string): number | undefined { return this.segments.find(row => row.itemId === itemId && row.speaker === "operator")?.turn; }
