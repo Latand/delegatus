@@ -227,7 +227,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   65: "1b7344d356b834edcb0271c666b477672024e236169ea2e810dbf08e17f0486d",
   // v66 promotes contract preparation, effect-aware recovery and role-specific guidance.
   66: "fc1e372d84b668a3e29d64a8f7383cd0feeb72051fa3d95133d139cb49844606",
-  67: "4c5c9a9226ce513f5acec5fb8a9f008bb2da2a48799d2d462050582be3c67b2f",
+  67: "63a5a68874eccd4d1490efce573c4f520c33ef984fee7d14dd9005c44f1e3c91",
 };
 
 /* v30: a proactive seat keeps accepted work moving, so the greeting says what
