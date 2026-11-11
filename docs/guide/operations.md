@@ -1,6 +1,6 @@
 # Keeping Delegatus running and up to date
 
-This page covers updates, automatic updates, running a checkout under a user
+This page covers updates, automatic updates, running a user
 service, the memory and CPU limits for agents, and moving memory and settings
 to another install. Docker has its own runbook,
 [docs/docker.md](../docker.md).
@@ -41,11 +41,53 @@ install. A packaged install updates through the Update dialog instead.
 
 ## Running as a user service
 
-A checkout launcher may also run under a user systemd service. The Update dialog
-restarts an older launcher through a transient service outside the unit being
-restarted. Obsolete `agent-log-viewer` units still produce the migration notice;
-[docs/docker.md](../docker.md#moving-off-the-systemd-install) describes retiring
-those units.
+A packaged install on Linux or macOS can start automatically at login:
+
+```bash
+delegatus service install           # optional: --port 9123
+delegatus doctor
+delegatus service remove
+```
+
+Install is opt-in and needs no elevation. A second install with the same
+settings leaves a running service unchanged; remove is safe to repeat. The
+command refuses a temporary `bunx` copy, a checkout, a container, root, an
+incomplete package or a foreign service file. Update an older installed
+command with `bun add -g delegatus-cli@latest` first.
+
+Linux uses `delegatus.service` in the user manager's configuration directory.
+Read its log with `journalctl --user -u delegatus.service`. It runs from the
+first login until the last logout; an account with lingering enabled can keep
+it running without a login. Enabling lingering with `loginctl enable-linger`
+is your choice. Five failed starts in ten minutes stop the restart loop.
+Doctor names the failure; fix its cause, then repeat the install command.
+
+macOS uses `~/Library/LaunchAgents/org.delegatus.server.plist` and logs to
+`~/Library/Logs/Delegatus/server.log`. It runs in the graphical login session;
+an install over SSH is saved for the next desktop login. launchd throttles
+restarts to one per ten seconds.
+
+If another Delegatus already runs, install enables the service for the next
+login and leaves the running instance alone. To switch now, finish your work,
+run `delegatus stop --all`, then repeat `delegatus service install`. Updates
+and deploys by exact commit retain the launcher's supervision. `stop --all`
+exits successfully and leaves the service stopped until the next login or a
+manual `systemctl --user start delegatus.service` on Linux, or
+`launchctl kickstart gui/$(id -u)/org.delegatus.server` on macOS.
+
+The service captures PATH, state/cache directories, language and telemetry
+opt-outs from the installing shell. It copies no access keys or provider
+credentials. If those settings change, run install again: a running instance
+keeps its settings until the next start (on macOS, next login). Restart it at
+a quiet moment using the command printed by install. Removal stops the
+service; Linux drop-ins you made remain and are named in the output.
+
+A checkout keeps its own user systemd service and the
+[checkout deploy procedure](../deploy-checkout.md). The Update dialog restarts
+an older launcher through a transient service outside the unit being restarted.
+Obsolete `agent-log-viewer` units still produce the migration notice;
+[the Docker guide](../docker.md#moving-off-the-systemd-install) describes
+retiring those units.
 
 ## Agent memory and CPU
 

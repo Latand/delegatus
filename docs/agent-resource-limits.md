@@ -71,7 +71,8 @@ including from inside an agent's signal domain, where it stays in the agent's
 namespaces. Without a reachable user manager a domain's gate runs under the
 agent's ceiling instead, and says so.
 
-An existing user-service install needs this drop-in to survive a kill of a
+The unit written by `delegatus service install` already sets these OOM
+properties. An existing user-service install needs this drop-in to survive a kill of a
 process that still shares the service (workers, builds or watchdog-mode agents):
 
 ```sh
