@@ -31,7 +31,15 @@ if (process.argv[2] === "--load") {
 }
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
-import { attemptTempAuthority } from "./attemptTempProduction";
+import { attemptTempAuthority, runAttemptTempSweep } from "./attemptTempProduction";
+
+if (process.argv[2] === "--production-report") {
+  Date.now = () => Number(process.argv[3]);
+  const report = await runAttemptTempSweep({ scan: () => ({ ownNamespace: null, processes: [] }) },
+    { ...process.env, LLV_TEMP_SWEEP: "on" });
+  process.stdout.write(JSON.stringify(report) + "\n");
+  process.exit(0);
+}
 
 if (process.argv[2] === "--hold") {
   process.stdout.write("ready\n");
@@ -45,6 +53,16 @@ if (process.argv[4] === "reporting") {
     const now = Number(process.argv[3]);
     store.refreshReporting(() => now, now + 1000);
     process.stdout.write(JSON.stringify({ retention: store.retention(now), unattributed: store.unattributedCopies() }));
+  } finally { store.close(); }
+  process.exit(0);
+}
+if (process.argv[4] === "scheduled-copies") {
+  try {
+    const now = Number(process.argv[3]), expiresAt = Number(process.argv[5]);
+    const report = await sweepEvidenceCopies(store, { now: () => now, state: async () => "closed",
+      authority: async () => ({ state: "closed", expiresAt, revision: "fixture", isCurrent: () => true }),
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
+    process.stdout.write(JSON.stringify({ report, retention: store.retention(now) }));
   } finally { store.close(); }
   process.exit(0);
 }

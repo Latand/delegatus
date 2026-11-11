@@ -763,6 +763,45 @@ test("foreign and gate-named directories with no creation record survive registr
   } finally { store.close(); }
 });
 
+test.each(["due", "upcoming"] as const)("the persisted %s forecast clears after a pin across repeats and a process restart", async timing => {
+  const { AttemptTempStore } = await import("./attemptTempRetention");
+  const { runAttemptTempSweep } = await import("./attemptTempProduction");
+  const { digest } = await import("@/lib/recordedChecks/wire");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-report-pin-")); roots.push(root);
+  const priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  const now = Date.parse("2026-11-01T00:00:01Z"), clock = spyOn(Date, "now").mockReturnValue(now);
+  const pipeline = finishedLane(root, timing === "due" ? "2026-10-25T00:00:00Z" : "2026-10-31T00:00:00Z");
+  const expiresAt = Date.parse(pipeline.closedAt!) + 7 * 86400000;
+  savePipelines([pipeline]);
+  const destination = statePath("evidence", "attempt-temp", digest("report-pin"));
+  fs.mkdirSync(destination, { recursive: true });
+  fs.writeFileSync(path.join(destination, ".delegatus-keep"), "operator pin");
+  const store = new AttemptTempStore();
+  store.registerCopy({ destination, pipelineId: pipeline.id, launchId: "copy", kind: "lane",
+    createdAt: 1, expiresAt, checkedAt: 0, bytes: 4096 });
+  store.close();
+  const file = statePath("attempt-temp-report.json");
+  fs.writeFileSync(file, JSON.stringify({ condition: { mode: "on", overCap: false, failing: false },
+    retention: { periodDays: 7, dueBytes: timing === "due" ? 4096 : 0,
+      upcomingBytes: timing === "upcoming" ? 4096 : 0, until: expiresAt, partial: false } }));
+  try {
+    for (let n = 0; n < 2; n++) {
+      const report = await runAttemptTempSweep({ scan: () => ({ ownNamespace: null, processes: [] }) },
+        { ...process.env, LLV_TEMP_SWEEP: "on" });
+      expect(report!.retention).toMatchObject({ dueBytes: 0, upcomingBytes: 0, until: null });
+      expect(JSON.parse(fs.readFileSync(file, "utf8")).retention).toEqual(report!.retention);
+    }
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), "--production-report", String(now + 60001)],
+      { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+    const [output, error, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(exit, error).toBe(0);
+    const report = JSON.parse(output.trim().split("\n").at(-1)!);
+    expect(JSON.parse(fs.readFileSync(file, "utf8")).retention).toEqual(report.retention);
+    expect(fs.existsSync(path.join(destination, ".delegatus-keep"))).toBeTrue();
+  } finally { clock.mockRestore(); process.env.LLV_STATE_DIR = priorState; }
+});
+
 test("an idle minute tick writes no journal line or report, and a changed condition is reported once across restarts", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-idle-tick-")); roots.push(root);
   const { runAttemptTempSweep } = await import("./attemptTempProduction");

@@ -63,16 +63,17 @@ function setting(raw: string | undefined, fallback: number) {
 }
 type TickCondition = { mode: "on" | "dry-run"; overCap: boolean; failing: boolean };
 const quiet = (mode: TickCondition["mode"]): TickCondition => ({ mode, overCap: false, failing: false });
-function recordedCondition(file: string, mode: TickCondition["mode"]): TickCondition {
+function recordedReport(file: string, mode: TickCondition["mode"]): { condition: TickCondition; retention?: unknown } {
   try {
-    const condition = JSON.parse(fs.readFileSync(file, "utf8"))?.condition;
-    if (condition && typeof condition.overCap === "boolean" && typeof condition.failing === "boolean") return condition;
+    const report = JSON.parse(fs.readFileSync(file, "utf8")), condition = report?.condition;
+    return { condition: condition && typeof condition.overCap === "boolean" && typeof condition.failing === "boolean"
+      ? condition : quiet(mode), retention: report?.retention };
   } catch { /* A missing or unreadable report counts as the quiet condition. */ }
-  return quiet(mode);
+  return { condition: quiet(mode) };
 }
 
 /** A minute tick reports only when it removed, held over the cap or failed,
- * or when its condition changed from the recorded report. The recorded
+ * or when its condition or recorded forecast changed. The recorded
  * condition is on disk, so a restarted helper does not repeat itself. */
 export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "scan">, env: NodeJS.ProcessEnv = process.env) {
   const mode = tempSweepMode(env);
@@ -95,8 +96,10 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     const report = { ...roots, copies, retention: store.retention(Date.now(), options.retentionMs) };
     const file = statePath("attempt-temp-report.json");
     const condition: TickCondition = { mode, overCap: report.overCapBytes > 0, failing: report.errors > 0 || copies.errors > 0 };
-    const changed = JSON.stringify(recordedCondition(file, mode)) !== JSON.stringify(condition);
-    if (report.removed || copies.removed || report.errors || copies.errors || report.deferred || report.overCapBytes || changed || report.retention.dueBytes || report.retention.upcomingBytes) {
+    const previous = recordedReport(file, mode);
+    const changed = JSON.stringify(previous.condition) !== JSON.stringify(condition);
+    const forecastChanged = previous.retention !== undefined && JSON.stringify(previous.retention) !== JSON.stringify(report.retention);
+    if (report.removed || copies.removed || report.errors || copies.errors || report.deferred || report.overCapBytes || changed || forecastChanged || report.retention.dueBytes || report.retention.upcomingBytes) {
       const gb = (bytes: number) => `${(bytes / 1e9).toFixed(2)} GB`;
       const summary = `Measured ${gb(report.bytes)}; cap ${gb(report.capBytes)}; ${mode === "dry-run" ? "would reclaim" : "reclaimed"} ${gb(report.removedBytes)}; `
         + `budget deferred ${gb(report.deferredBytes)}; held live ${gb(report.liveHeldBytes)}; held by evidence ${gb(report.evidenceHeldBytes)}; `

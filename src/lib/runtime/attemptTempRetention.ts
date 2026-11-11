@@ -32,6 +32,7 @@ export const DEFAULT_ATTEMPT_TEMP_CAP_BYTES = 100 * 1024 ** 3;
 const attemptTempIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS roots_due ON roots(checkedAt,createdAt,directory)",
   "CREATE INDEX IF NOT EXISTS copies_due ON copies(checkedAt,destination) WHERE kind<>'unattributed'",
+  "CREATE INDEX IF NOT EXISTS copies_inspection ON copies(destination) WHERE kind<>'unattributed'",
   "CREATE INDEX IF NOT EXISTS copies_expiry ON copies(expiresAt,destination)",
   "CREATE INDEX IF NOT EXISTS roots_retention_expiry ON root_retention(expiresAt)",
 ]);
@@ -62,6 +63,7 @@ export class AttemptTempStore {
       this.db.exec("CREATE TABLE IF NOT EXISTS root_expiry_admission(directory TEXT PRIMARY KEY, expiresAt REAL NOT NULL)");
       this.db.exec("CREATE TABLE IF NOT EXISTS copy_retention_failures(destination TEXT PRIMARY KEY, failure TEXT NOT NULL)");
       this.db.exec("CREATE TABLE IF NOT EXISTS copy_adoption(id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL, done INTEGER NOT NULL)");
+      this.db.exec("CREATE TABLE IF NOT EXISTS copy_inspection(id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL)");
       attemptTempIndexes.install(this.db, path.dirname(filename));
       this.db.exec("CREATE TABLE IF NOT EXISTS totals (id INTEGER PRIMARY KEY CHECK(id=1), bytes REAL NOT NULL)");
       this.db.exec("INSERT OR IGNORE INTO totals VALUES (1,0)");
@@ -177,6 +179,16 @@ export class AttemptTempStore {
   }
   dueCopies(now: number, limit: number): EvidenceCopy[] {
     return this.db.query<EvidenceCopy, [number, number]>("SELECT * FROM copies WHERE checkedAt<=? AND kind<>'unattributed' ORDER BY checkedAt,destination LIMIT ?").all(now, limit);
+  }
+  copiesToInspect(limit: number): EvidenceCopy[] {
+    const cursor = this.db.query<{ cursor: string }, []>("SELECT cursor FROM copy_inspection WHERE id=1").get()?.cursor ?? "";
+    const page = (after: string) => this.db.query<EvidenceCopy, [string, number]>(
+      "SELECT * FROM copies WHERE destination>? AND kind<>'unattributed' ORDER BY destination LIMIT ?").all(after, limit);
+    const rows = page(cursor);
+    return rows.length || !cursor ? rows : page("");
+  }
+  checkpointCopyInspection(destination: string) {
+    this.db.query("INSERT OR REPLACE INTO copy_inspection VALUES(1,?)").run(destination);
   }
   forgetCopy(destination: string) {
     this.db.transaction(() => {

@@ -357,7 +357,14 @@ New table `copies` in `attempt-temp.sqlite` (§5.5).
      `validate` checks current expired authority, directory identity and the
      independent protection snapshot after the last await, including replay;
      then delete the row. Finished but not expired →
-     `checkedAt = expiresAt`. Open → `checkedAt = now + 1 h`.
+     `checkedAt = expiresAt`. Open → `checkedAt = now + 1 h`;
+  4. up to 8 attributable copies from an independent destination-key cursor,
+     using the partial `copies_inspection` index. This read-only filesystem
+     inspection runs after the due page and shares its deadline. It changes
+     eligibility without changing `checkedAt` or `expiresAt`, and never removes
+     data. The persisted `copy_inspection` cursor advances before each
+     observation, including errors, and wraps after the last destination.
+     Copies already visited by the due page need no second inspection.
 
 Missing copy namespaces use a proof of the nearest existing ancestor: it must
 be an owned, readable, direct directory, and each missing segment must remain
@@ -372,10 +379,20 @@ A copy's `copy_eligibility` record is independent of its `expiresAt`. A proved
 marker, unsafe tree or changed protection snapshot excludes its bytes from
 both due and upcoming totals. This includes markers added during consumer or
 authority observations and journal replay. The expiry and scheduled recheck
-remain; a later clear inspection can restore eligibility. Copies that have not
-yet expired also receive this inspection before their upcoming bytes are
-reported, including a quarantine whose authority now defers expiry. Personal
-keep markers remain untouched.
+remain; a later clear inspection can restore eligibility. The independent
+page also reaches copies whose producer scheduled `checkedAt` at a future
+expiry. Large backlogs converge over successive bounded pages, across helper
+restarts. Eligibility is cleared before each independent observation; an
+absent, unreadable, indirect, replaced or journaled destination stays excluded
+until a valid inspection or expiry reconciliation. A protection snapshot and
+parent proof are rechecked after inspection, including the deadline. A
+quarantine whose authority defers expiry is inspected by the due page before
+restoration. Personal keep markers remain untouched.
+
+The minute tick compares the final forecast with its persisted report as well
+as comparing pressure/error conditions. A change in due bytes, upcoming bytes,
+the cutoff or backfill completeness writes a new report even when both byte
+totals become zero. An unchanged quiet forecast stays silent after restart.
 
 ### 5.5 Schema and where it is installed
 
@@ -388,6 +405,8 @@ precedent as the `adoption` table (`attemptTempRetention.ts:53`); no `ALTER` of
   the expiry of a held root of a finished lane, and its last reported failure
 - `copy_retention_failures(destination TEXT PRIMARY KEY, failure TEXT NOT NULL)`
 - `copy_adoption(id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL, done INTEGER NOT NULL)`
+- `copy_inspection(id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL)` —
+  the independent, restartable protection-inspection position
 - `copy_eligibility(destination TEXT PRIMARY KEY, eligible INTEGER NOT NULL)` —
   the last protection observation, removed with the copy row
 - `retention_sources(source, entry, bytes, expiresAt, unattributed, eligible)` —
@@ -455,7 +474,8 @@ step and no one-shot cleanup.
   eight short state transactions per expired held root. Each check has at most
   eight manifest roots; their cutoff writes and creation-receipt reads are
   bounded by those same limits. Copies: ≤ 32 adoption
-  directory records, ≤ 8 removals, 10 s. Every query is a key or index seek.
+  directory records, ≤ 8 removals and ≤ 8 independent eligibility inspections,
+  sharing 10 s. Every query is a key or index seek.
   Copy discovery reads at most 32 records, including dot entries, per page;
   at most one native 4 KiB chunk is read and its tail is persisted. Its work
   and memory do not grow with the first backlog. Directory protection
@@ -716,7 +736,12 @@ dead and journaled claim recovery in the retention and production files.
 `recordedChecks/lifecycle.integration.test.ts` uses production authority for
 pending and unread holds while refusing retirement and deletion callbacks;
 late files still count toward pressure and their live evidence stays held.
-The retention file also covers missing copy namespaces (including eight-row
+The production file also verifies that clearing the last due or upcoming
+contribution updates the persisted report, repeats silently and survives a
+new helper process. The retention file covers future-scheduled copies without
+resetting `checkedAt`, eight-row independent inspection pages across processes,
+unpinning, inspection failures, late pins, replaced directories and a spent
+deadline. It also covers missing copy namespaces (including eight-row
 pages across real process restarts), refused parent/authority proofs, existing
 and late pins excluded from both forecasts, rechecking after unpinning, large
 reporting backlogs, a spent deadline, radix boundaries and reporting backfill

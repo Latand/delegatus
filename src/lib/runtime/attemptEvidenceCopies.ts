@@ -96,7 +96,7 @@ export async function sweepEvidenceCopies(store: AttemptTempStore, options: Atte
 
 async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSweepOptions) {
   const now = options.now ?? Date.now, deadline = now() + 10000;
-  const report = { adopted: 0, checked: 0, removed: 0, removedBytes: 0, errors: 0, unattributed: { count: 0, bytes: 0 } };
+  const report = { adopted: 0, checked: 0, inspected: 0, removed: 0, removedBytes: 0, errors: 0, unattributed: { count: 0, bytes: 0 } };
   if (options.mode !== "dry-run") {
     try {
       report.adopted = await adoptCopies(store, now, deadline);
@@ -119,8 +119,10 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
     return options.authority ? options.authority(owner, inventory)
       : { state: await options.state(owner, inventory), revision: "", isCurrent: () => true };
   };
+  const visited = new Set<string>();
   for (const row of now() >= deadline ? [] : store.dueCopies(now(), 8)) {
     if (now() >= deadline) break;
+    visited.add(row.destination);
     report.checked++;
     store.registerCopy({ ...row, checkedAt: now() + 60000 });
     let releaseClaim: (() => void) | null = null;
@@ -211,6 +213,33 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
         const detail = attemptTempFailureDetail(error);
         if (store.copyFailure(row.destination, detail)) console.error("[attempt evidence] retirement claim retained", detail);
       }
+    }
+  }
+  // A producer schedules checkedAt at expiry. Visit a separate indexed page
+  // for human pins without changing that schedule or granting removal authority.
+  // The durable cursor keeps advancing even if a particular copy is unreadable.
+  for (const row of now() >= deadline ? [] : store.copiesToInspect(8)) {
+    if (now() >= deadline) break;
+    store.checkpointCopyInspection(row.destination);
+    if (visited.has(row.destination)) continue;
+    report.inspected++;
+    store.copyEligible(row.destination, false);
+    try {
+      const parent = copyParentProof();
+      copyPath(row.destination, parent.parent);
+      if (!parent.exists || fs.existsSync(attemptTempJournalPath(row.destination))) continue;
+      const stat = fs.lstatSync(row.destination, { throwIfNoEntry: false });
+      if (!stat) continue;
+      if (!stat.isDirectory() || stat.isSymbolicLink() || process.getuid && stat.uid !== process.getuid())
+        throw new Error("attempt evidence identity changed");
+      const protection = await snapshotAttemptProtection(row.destination, deadline - now());
+      const clear = await inspectAttemptTree(row.destination, row.destination);
+      store.copyEligible(row.destination, clear && protection.current() && parent.current() && now() < deadline);
+      store.copyFailure(row.destination, null);
+    } catch (error) {
+      report.errors++;
+      const detail = attemptTempFailureDetail(error);
+      if (store.copyFailure(row.destination, detail)) console.error("[attempt evidence] inspection retained", detail);
     }
   }
   report.unattributed = store.unattributedCopies();

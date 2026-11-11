@@ -314,12 +314,14 @@ test("a copy sweep with its deadline spent never reads the backlog for reporting
   process.env.LLV_STATE_DIR = path.join(f.root, "spent-state");
   let clockReads = 0;
   const reads = spyOn(f.store, "dueCopies");
+  const inspections = spyOn(f.store, "copiesToInspect");
   try {
     const report = await sweepEvidenceCopies(f.store, { now: () => ++clockReads === 1 ? NOW : NOW + 10001,
       state: async () => "expired", scan: () => ({ ownNamespace: null, processes: [] }) });
     expect(report.checked).toBe(0); expect(report.errors).toBe(0);
     expect(reads).not.toHaveBeenCalled();
-  } finally { reads.mockRestore(); f.store.close(); process.env.LLV_STATE_DIR = priorState; }
+    expect(inspections).not.toHaveBeenCalled();
+  } finally { reads.mockRestore(); inspections.mockRestore(); f.store.close(); process.env.LLV_STATE_DIR = priorState; }
 });
 
 test("an existing nested human marker keeps an expired automatic copy", async () => {
@@ -369,22 +371,109 @@ test("a recent pinned copy stays out of upcoming bytes and becomes eligible afte
   process.env.LLV_STATE_DIR = path.join(f.root, "recent-copy-state");
   const destination = statePath("evidence", "attempt-temp", digest("recent-pin")), marker = path.join(destination, ".delegatus-keep");
   fs.mkdirSync(destination, { recursive: true }); fs.writeFileSync(marker, "operator pin");
+  const expiresAt = NOW + 6 * 86400000;
+  // The root sweep schedules its new copy at expiry, without a due visit first.
   f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane",
-    createdAt: 1, expiresAt: NOW + 1000, checkedAt: 0, bytes: 4096 });
+    createdAt: 1, expiresAt, checkedAt: expiresAt, bytes: 4096 });
   const options = { now: () => NOW, state: async () => "closed" as const,
-    authority: async () => ({ state: "closed" as const, expiresAt: NOW + 1000, revision: "fixture", isCurrent: () => true }),
+    authority: async () => ({ state: "closed" as const, expiresAt, revision: "fixture", isCurrent: () => true }),
     scan: () => ({ ownNamespace: null, processes: [] }) };
   try {
-    for (let n = 0; n < 2; n++) {
-      f.store.registerCopy({ ...f.store.copy(destination)!, checkedAt: 0 });
+    for (let n = 0; n < 3; n++) {
       expect((await sweepEvidenceCopies(f.store, options)).errors).toBe(0);
-      expect(f.store.copy(destination)?.expiresAt).toBe(NOW + 1000);
+      expect(f.store.copy(destination)).toMatchObject({ expiresAt, checkedAt: expiresAt });
       expect(f.store.retention(NOW)).toMatchObject({ dueBytes: 0, upcomingBytes: 0 });
     }
-    fs.unlinkSync(marker); f.store.registerCopy({ ...f.store.copy(destination)!, checkedAt: 0 });
-    expect((await sweepEvidenceCopies(f.store, options)).errors).toBe(0);
-    expect(f.store.retention(NOW).upcomingBytes).toBe(4096);
+    const restart = async () => {
+      const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"),
+        f.filename, String(NOW + 60001), "scheduled-copies", String(expiresAt)],
+        { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+      const [output, error, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(exit, error).toBe(0);
+      return JSON.parse(output);
+    };
+    expect((await restart()).retention).toMatchObject({ dueBytes: 0, upcomingBytes: 0, until: null });
+    expect(fs.existsSync(marker)).toBeTrue();
+    fs.unlinkSync(marker);
+    expect((await restart()).retention).toMatchObject({ dueBytes: 0, upcomingBytes: 4096, until: expiresAt });
+    expect(f.store.copy(destination)).toMatchObject({ expiresAt, checkedAt: expiresAt });
   } finally { f.store.close(); process.env.LLV_STATE_DIR = priorState; }
+});
+
+test("scheduled copy inspection advances eight rows per process independently of expiry", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "inspection-state");
+  const expiresAt = NOW + 6 * 86400000, destinations: string[] = [];
+  try {
+    for (let n = 0; n < 20; n++) {
+      const destination = statePath("evidence", "attempt-temp", digest(n)); destinations.push(destination);
+      fs.mkdirSync(destination, { recursive: true }); fs.writeFileSync(path.join(destination, ".delegatus-keep"), "operator pin");
+      f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane",
+        createdAt: 1, expiresAt, checkedAt: expiresAt, bytes: 4096 });
+    }
+    // An unattributable backlog must not be scanned by the independent cursor.
+    const db = new Database(f.filename);
+    try {
+      db.transaction(() => {
+        for (let n = 0; n < 1000; n++) db.query("INSERT INTO copies VALUES(?,NULL,'legacy','unattributed',1,NULL,0,1)").run(`legacy-${n}`);
+      })();
+      const plans = db.query<{ detail: string }, [string, number]>("EXPLAIN QUERY PLAN SELECT * FROM copies WHERE destination>? AND kind<>'unattributed' ORDER BY destination LIMIT ?").all("", 8);
+      expect(plans.every(row => !row.detail.includes("SCAN"))).toBeTrue();
+    } finally { db.close(); }
+    for (const [inspected, remaining] of [[8, 12], [8, 4], [4, 0]]) {
+      const result = await retentionProcess(f.filename, NOW, "scheduled-copies", String(expiresAt));
+      expect(result.report).toMatchObject({ inspected, checked: 0, removed: 0, errors: 0 });
+      expect(result.retention.upcomingBytes).toBe(remaining! * 4096);
+    }
+    for (const destination of destinations) {
+      expect(f.store.copy(destination)).toMatchObject({ expiresAt, checkedAt: expiresAt });
+      expect(fs.existsSync(path.join(destination, ".delegatus-keep"))).toBeTrue();
+    }
+    // A complete scan wraps durably and can observe a removed pin next time.
+    fs.unlinkSync(path.join(destinations.sort()[0], ".delegatus-keep"));
+    const next = await retentionProcess(f.filename, NOW, "scheduled-copies", String(expiresAt));
+    expect(next.report).toMatchObject({ inspected: 8, removed: 0, errors: 0 });
+    expect(next.retention).toMatchObject({ dueBytes: 0, upcomingBytes: 4096, until: expiresAt });
+  } finally { f.store.close(); process.env.LLV_STATE_DIR = priorState; }
+});
+
+test.each(["late-pin", "replacement", "parent-symlink", "unreadable", "deadline"] as const)("scheduled copy forecast refuses %s after inspection and recovers", async kind => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "inspection-race-state");
+  const destination = statePath("evidence", "attempt-temp", digest(kind)), expiresAt = NOW + 6 * 86400000;
+  fs.mkdirSync(destination, { recursive: true }); fs.writeFileSync(path.join(destination, "payload"), "keep data");
+  f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane",
+    createdAt: 1, expiresAt, checkedAt: expiresAt, bytes: 4096 });
+  let now = NOW;
+  const inspect = filesystem.inspectAttemptTree;
+  const observation = spyOn(filesystem, "inspectAttemptTree").mockImplementation(async (directory, original) => {
+    const result = await inspect(directory, original);
+    if (directory === destination) {
+      if (kind === "late-pin") fs.writeFileSync(path.join(directory, ".delegatus-keep"), "operator pin");
+      if (kind === "replacement") { fs.renameSync(directory, directory + "-previous"); fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "replacement"); }
+      if (kind === "parent-symlink") {
+        const parent = path.dirname(directory); fs.renameSync(parent, parent + "-previous"); fs.symlinkSync(parent + "-previous", parent);
+      }
+      if (kind === "unreadable") throw Object.assign(new Error("fixture unreadable copy"), { code: "EACCES" });
+      if (kind === "deadline") now += 10001;
+    }
+    return result;
+  });
+  const options = { now: () => now, state: async () => "closed" as const,
+    scan: () => ({ ownNamespace: null, processes: [] }) };
+  try {
+    const report = await sweepEvidenceCopies(f.store, options);
+    expect(report).toMatchObject({ inspected: 1, checked: 0, removed: 0, errors: kind === "unreadable" ? 1 : 0 });
+    expect(f.store.retention(NOW)).toMatchObject({ dueBytes: 0, upcomingBytes: 0 });
+    expect(f.store.copy(destination)).toMatchObject({ expiresAt, checkedAt: expiresAt });
+    expect(fs.readFileSync(path.join(destination, "payload"), "utf8")).toBe(kind === "replacement" ? "replacement" : "keep data");
+    observation.mockRestore();
+    if (kind === "late-pin") fs.unlinkSync(path.join(destination, ".delegatus-keep"));
+    if (kind === "parent-symlink") { const parent = path.dirname(destination); fs.unlinkSync(parent); fs.renameSync(parent + "-previous", parent); }
+    const next = await retentionProcess(f.filename, NOW + 60001, "scheduled-copies", String(expiresAt));
+    expect(next.report).toMatchObject({ inspected: 1, checked: 0, removed: 0, errors: 0 });
+    expect(next.retention.upcomingBytes).toBe(4096);
+  } finally { observation.mockRestore(); f.store.close(); process.env.LLV_STATE_DIR = priorState; }
 });
 
 test("expired linked evidence retires without following its target; recent failures are logged once", async () => {
@@ -546,8 +635,8 @@ test("copies retain unfinished, recent and unattributed data and never touch dur
   } finally { process.env.LLV_STATE_DIR = priorState; f.store.close(); }
 });
 
-async function retentionProcess(filename: string, now: number, mode: string) {
-  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), filename, String(now), mode],
+async function retentionProcess(filename: string, now: number, mode: string, ...args: string[]) {
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), filename, String(now), mode, ...args],
     { stdout: "pipe", stderr: "pipe", env: { ...process.env } });
   const output = await new Response(child.stdout).text(), errors = await new Response(child.stderr).text();
   expect(await child.exited, errors).toBe(0);
