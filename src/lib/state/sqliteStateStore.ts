@@ -17,6 +17,9 @@ import type { Database as BunDatabase, SQLQueryBindings } from "bun:sqlite";
 import { procBackend } from "@/lib/proc";
 
 import { rememberRecordBytes } from "./registryRecords";
+import { DEFERRED_TEXT_ACCESSOR_BYTES, deferLongText } from "./deferredText";
+import { cacheCounter } from "../cacheTelemetry";
+import { readAttribution } from "../readAttribution";
 import { installPipelineControllerSchedule, pipelineControllerScheduleIndexes, selectPipelineTickWork, type PipelineTickWork } from "./pipelineControllerSchedule";
 import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
 import { installPipelineControllerReferences, pipelineControllerReferenceIndexesCurrent, pipelineControllerReferencesCurrent, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
@@ -196,6 +199,15 @@ export interface SqliteStateCollectionOptions<T> {
   /** Opt-in version for identical decoders and rejection policies across
       separately compiled copies of a store. Bump when their semantics change. */
   readCacheKey?: string;
+  /** The read cache keeps each record's structure and short values; a string
+      longer than this many UTF-16 units is read from its stored row on
+      access, so the cache grows with the record count and stays independent
+      of the stored text. Cached records of such a collection are frozen. A
+      text read of a record whose row was rewritten or removed since throws
+      StateSnapshotChangedError; `JSON.stringify` of such a record serializes
+      the current row whole. Writes take records from `get`, a snapshot copy
+      or a mutation session, all of which carry the complete text. */
+  deferTextLongerThan?: number;
 }
 
 type CollectionRow = {
@@ -218,6 +230,11 @@ type LeaseRow = {
   owner_start_identity: string | null;
   acquired_at: number;
 };
+
+/** Stored UTF-16 bytes of the complete decoded rows one collection keeps for
+    deferred text. A reader that walks several records in turn, or returns to
+    one, finds its row decoded; the newest row always stays. */
+const DEFERRED_TEXT_ROW_BYTES = 32 * 1024 * 1024;
 
 type CachedRecord<T> = {
   sourceBytes: number;
@@ -1703,6 +1720,24 @@ export function resetStateReadonlyReaderForTests(): void {
  * held over a yield, so all compiled consumers can share this one connection.
  * Switching directories closes the previous handle; replacement is guarded by
  * openCurrentDatabase. Row versions remain the authority across awaits. */
+/** The stored text of every row of these collections that contains one of
+    the needles. SQLite does the matching; no row is decoded here. A result
+    over the byte bound throws, so a caller never works from a partial read. */
+export function stateRowsContaining(filename: string, collections: readonly string[], needles: readonly string[], maxBytes = 64 * 1024 * 1024): string[] {
+  if (!collections.length || !needles.length || !fs.existsSync(filename)) return [];
+  const rows: string[] = [];
+  let bytes = 0;
+  for (const row of sharedStateReadonlyDatabase(filename).query<{ value_json: string }, SQLQueryBindings[]>(
+    `SELECT value_json FROM state_rows WHERE collection IN (${collections.map(() => "?").join(", ")})
+      AND (${needles.map(() => "instr(value_json, ?) > 0").join(" OR ")})`,
+  ).iterate(...collections, ...needles)) {
+    bytes += row.value_json.length;
+    if (bytes > maxBytes) throw new Error("state rows matching the search exceed the read bound");
+    rows.push(row.value_json);
+  }
+  return rows;
+}
+
 function sharedStateReadonlyDatabase(filename: string): Database {
   const current = stateReadonlyReaderOwner.__llvStateReadonlyReader;
   if (current?.filename === filename) return current.db;
@@ -1837,7 +1872,8 @@ export class SqliteStateCollection<T> {
       this.cacheAuthority = authority;
     }
     const key = this.options.readCacheKey ? JSON.stringify([path.resolve(this.filename), identity,
-      this.options.collection, this.options.schemaVersion, this.options.compatibleSchemaVersions ?? [], this.options.readCacheKey, authority]) : undefined;
+      this.options.collection, this.options.schemaVersion, this.options.compatibleSchemaVersions ?? [], this.options.readCacheKey, authority,
+      this.options.deferTextLongerThan ?? null]) : undefined;
     if (key) this.cacheSlot = collectionReadCache(key, this.options.collection === "pipelines_archive");
     return { identity, authority, key };
   }
@@ -1867,6 +1903,9 @@ export class SqliteStateCollection<T> {
     return this.publishCache(value, context);
   }
   private revisionCache: { signature: string; revision: number } | null = null;
+  private readonly textSources = new Map<string, { revision: number; identity: string | null; value: T; bytes: number }>();
+  private textSourceBytes = 0;
+  private readonly textSourceTelemetry = cacheCounter(this, "deferred-text-rows", "state/sqliteStateStore", "source-utf16");
   private readonly controllerCacheIdentity = crypto.randomUUID();
 
   constructor(readonly filename: string, private readonly options: SqliteStateCollectionOptions<T>) {
@@ -1923,7 +1962,7 @@ export class SqliteStateCollection<T> {
         `).all(this.options.collection, order, order, key, 16));
         await mapCooperatively(rows, row => {
           const value = withViewerOperation("pipelines.controller-decode", () => this.decodeRow(row.value_json));
-          if (value !== null) records.set(row.row_key, { value, sourceBytes: row.value_json.length * 2, rowRevision: row.row_revision, order: row.row_order });
+          if (value !== null) records.set(row.row_key, this.cachedRecord(row, value));
           order = row.row_order; key = row.row_key;
         }, { batchSize: 4, timeBudgetMs: 16 });
         if (rows.length < 16) break;
@@ -2153,6 +2192,9 @@ export class SqliteStateCollection<T> {
     this.readDb.close();
     this.localCache = null;
     this.revisionCache = null;
+    this.textSources.clear();
+    this.textSourceBytes = 0;
+    this.textSourceTelemetry.set(0, 0);
   }
 
   /** Keyset page over a collection's primary key; no unrelated payload reads. */
@@ -2647,12 +2689,7 @@ export class SqliteStateCollection<T> {
         }
         const decoded = this.decodeRow(row.value_json);
         if (decoded === null) next.delete(key);
-        else next.set(key, {
-          sourceBytes: row.value_json.length * 2,
-          value: decoded,
-          order: row.row_order,
-          rowRevision: row.row_revision,
-        });
+        else next.set(key, this.cachedRecord(row, decoded));
       }
       const ordered = orderChanged
         ? this.createCache(revision, next)
@@ -3163,14 +3200,61 @@ export class SqliteStateCollection<T> {
     `).iterate(this.options.collection)) {
       const decoded = this.decodeRow(row.value_json);
       if (decoded === null) continue;
-      records.set(row.row_key, {
-        sourceBytes: row.value_json.length * 2,
-        value: decoded,
-        order: row.row_order,
-        rowRevision: row.row_revision,
-      });
+      records.set(row.row_key, this.cachedRecord(row, decoded));
     }
     return this.createCache(revision, records);
+  }
+
+  /** What the read cache keeps for one decoded row. */
+  private cachedRecord(row: Pick<CollectionRow, "row_key" | "value_json" | "row_order" | "row_revision">, value: T): CachedRecord<T> {
+    let sourceBytes = row.value_json.length * 2;
+    const bound = this.options.deferTextLongerThan;
+    if (bound !== undefined) {
+      // The accessors keep the key, revision and database identity, never the
+      // row's JSON text.
+      const key = row.row_key, rowRevision = row.row_revision, identity = this.cacheIdentity;
+      const { released, deferred } = deferLongText(value, bound, {
+        built: () => this.textSource(key, rowRevision, identity),
+        current: () => this.textSource(key, null, null),
+        moved: error => error instanceof StateSnapshotChangedError,
+      });
+      sourceBytes += deferred * DEFERRED_TEXT_ACCESSOR_BYTES - released;
+    }
+    return { sourceBytes, value, order: row.row_order, rowRevision: row.row_revision };
+  }
+
+  /** The complete decoded row a deferred text belongs to: one keyed read,
+      named `state.deferred-text` in read attribution. Rows stay decoded up to
+      a byte budget, so the texts of one record share one read and a walk over
+      several records returns to decoded rows. A cached record names the row
+      revision and the database file it was built from; a row written since,
+      or the same key in a replaced database, does not answer for it. A null
+      revision asks for the row as stored now. */
+  private textSource(rowKey: string, rowRevision: number | null, builtIdentity: string | null): T {
+    const held = this.textSources.get(rowKey);
+    if (held && rowRevision !== null && held.revision === rowRevision && held.identity === builtIdentity) {
+      this.textSources.delete(rowKey);
+      this.textSources.set(rowKey, held);
+      return held.value;
+    }
+    const identity = databaseFileIdentity(this.filename);
+    if (rowRevision !== null && identity !== builtIdentity) throw new StateSnapshotChangedError();
+    const row = readAttribution.sync("state.deferred-text", () => this.readDb.query<Pick<CollectionRow, "value_json" | "row_revision">, [string, string]>(
+      "SELECT value_json, row_revision FROM state_rows WHERE collection = ? AND row_key = ?",
+    ).get(this.options.collection, rowKey));
+    const value = row && (rowRevision === null || row.row_revision === rowRevision) ? this.decodeRow(row.value_json) : null;
+    if (!row || value === null) throw new StateSnapshotChangedError();
+    if (held) { this.textSourceBytes -= held.bytes; this.textSources.delete(rowKey); }
+    const bytes = row.value_json.length * 2;
+    this.textSources.set(rowKey, { revision: row.row_revision, identity, value, bytes });
+    this.textSourceBytes += bytes;
+    while (this.textSourceBytes > DEFERRED_TEXT_ROW_BYTES && this.textSources.size > 1) {
+      const [oldest, evicted] = this.textSources.entries().next().value!;
+      this.textSources.delete(oldest);
+      this.textSourceBytes -= evicted.bytes;
+    }
+    this.textSourceTelemetry.set(this.textSources.size, this.textSourceBytes);
+    return value;
   }
 
   private createCache(revision: number, records: Map<string, CachedRecord<T>>): CollectionCache<T> {

@@ -74,7 +74,6 @@ const question = (over: Partial<FileEntry> & { path: string }, kind: "question" 
     toolUseId: `toolu-${kind}`,
     transcriptPath: over.path,
     pid: 4_402,
-    paneTarget: null,
     askedAt: new Date((NOW - 540) * 1_000).toISOString(),
   } as FileEntry["pendingQuestion"],
   ...over,

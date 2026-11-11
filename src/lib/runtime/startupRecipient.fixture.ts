@@ -397,7 +397,7 @@ export async function addressedRecipientSocket(kind: "unhosted" | "live" | "stam
   const recover: typeof recoverDeadStructuredConversation = (request,dependencies) => {
     recoveries++;
     return recoverDeadStructuredConversation(request,{
-    ...dependencies,registry,client,transport:() => "structured",park:() => null,
+    ...dependencies,registry,client,transportAvailable: () => true,park:() => null,
     resolveAccount:() => ({engine:"codex",accountId:"default",kind:"legacy",home:directory,transcriptRoot:directory,env:{NODE_ENV:"test"}}),
     spawn:async input => {
       spawns++;

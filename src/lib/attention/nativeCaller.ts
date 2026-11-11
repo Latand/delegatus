@@ -109,12 +109,9 @@ export function resolveNativeCaller(sources: NativeCallerSources): NativeCallerV
       || path.basename(transcript) !== `${record.sessionId}.jsonl`) return refuse("transcript-outside-home");
     for (const entry of Object.values(snapshot.entries)) {
       if (entry.artifactPath !== generation.path && sources.realpath(entry.artifactPath) !== transcript) continue;
-      if ((entry.host && !entry.host.agent?.pid) || (entry.structuredHost && !entry.structuredHost.process?.pid)) {
-        return refuse("generation-hosted");
-      }
-      for (const host of [entry.host?.agent, entry.structuredHost?.process]) {
-        if (host?.pid && sources.hostStatus(host) !== "dead") return refuse("generation-hosted");
-      }
+      const host = entry.structuredHost?.process;
+      if (entry.structuredHost && !host?.pid) return refuse("generation-hosted");
+      if (host?.pid && sources.hostStatus(host) !== "dead") return refuse("generation-hosted");
     }
     const recordBytes = JSON.stringify(record);
     const generationProof = sources.generationProof(pid, transcript);

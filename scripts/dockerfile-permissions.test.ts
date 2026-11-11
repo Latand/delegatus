@@ -90,7 +90,11 @@ describe("runtime-host Docker credentials (#102)", () => {
     expect(wrapper).not.toContain("--setuid");
   });
 
-  test("host CLI and tmux shims retain every supplementary group", () => {
+  test("the image carries no tmux shim or wrapper", () => {
+    expect(dockerfile).not.toMatch(/tmux/i);
+  });
+
+  test("host CLI shims retain every supplementary group", () => {
     const cliShim = dockerfile.match(/make_nsenter_shim\(\) \{([\s\S]*?)\n\}/)?.[1];
     expect(cliShim).toBeDefined();
     expect(cliShim).toContain("nsenter -t 1 -m -p -C --no-fork --");
@@ -98,14 +102,6 @@ describe("runtime-host Docker credentials (#102)", () => {
     expect(cliShim).toContain('/usr/bin/setpriv --reuid="\\$uid" --regid="\\$gid" --groups="\\$groups" --');
     expect(cliShim).not.toContain("--setgid");
     expect(cliShim).not.toContain("--setuid");
-
-    const tmuxWrapper = dockerfile.match(/cat > \/usr\/local\/bin\/tmux <<'WRAPPER'([\s\S]*?)WRAPPER/)?.[1];
-    expect(tmuxWrapper).toBeDefined();
-    expect(tmuxWrapper).toContain("nsenter -t 1 -m -p -C --no-fork --");
-    expect(tmuxWrapper).toContain("groups=$(id -G | tr ' ' ',')");
-    expect(tmuxWrapper).toContain('/usr/bin/setpriv --reuid="$uid" --regid="$gid" --groups="$groups" --');
-    expect(tmuxWrapper).not.toContain("--setgid");
-    expect(tmuxWrapper).not.toContain("--setuid");
   });
 
   test("the runtime passwd home follows the portable Compose HOME for every git caller (#999)", () => {

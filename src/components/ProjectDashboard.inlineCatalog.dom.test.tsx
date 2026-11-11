@@ -163,8 +163,7 @@ const asking = file({
   activity: "live", proc: "running", pid: 4_402,
   lastTurn: { startedAt: (NOW - 600) * 1_000, endedAt: null },
   pendingQuestion: {
-    kind: "question", toolUseId: "toolu-export", transcriptPath: "/repo/ask.jsonl", pid: 4_402, paneTarget: null,
-    askedAt: new Date((NOW - 540) * 1_000).toISOString(),
+    kind: "question", toolUseId: "toolu-export", transcriptPath: "/repo/ask.jsonl", pid: 4_402,     askedAt: new Date((NOW - 540) * 1_000).toISOString(),
     questions: [{ question: "Which format?", header: "Format", multiSelect: false, options: [] }],
   },
 } as unknown as Partial<FileEntry> & { path: string });

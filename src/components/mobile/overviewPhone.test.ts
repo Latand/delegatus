@@ -20,7 +20,7 @@ const file = (path: string, project: string, extra: Partial<FileEntry> = {}): Fi
   ...extra,
 }) as FileEntry;
 const asking = (path: string, project: string, askedAgo: number) => file(path, project, {
-  pendingQuestion: { kind: "question", toolUseId: `tool-${path}`, transcriptPath: path, pid: 1, paneTarget: null, askedAt: new Date((NOW - askedAgo) * 1000).toISOString(), questions: [{ question: "Which one?", header: "One", multiSelect: false, options: [] }] },
+  pendingQuestion: { kind: "question", toolUseId: `tool-${path}`, transcriptPath: path, pid: 1, askedAt: new Date((NOW - askedAgo) * 1000).toISOString(), questions: [{ question: "Which one?", header: "One", multiSelect: false, options: [] }] },
 } as Partial<FileEntry>);
 const task = (id: string, project: string): BoardTask => ({ id, project, text: id, status: "assigned", placement: "unplaced", assignments: [], createdAt: "2026-09-20T10:00:00.000Z", updatedAt: "2026-09-20T10:00:00.000Z" }) as unknown as BoardTask;
 const lane = (id: string, project: string, state: Pipeline["state"]): Pipeline => ({

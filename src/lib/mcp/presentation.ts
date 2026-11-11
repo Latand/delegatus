@@ -467,7 +467,6 @@ export function describeMcpCall(
       kill: ["mcp.verb.killing", "mcp.call.conversation.kill"],
       resume: ["mcp.verb.resuming", "mcp.call.conversation.resume"],
       compact: ["mcp.verb.compacting", "mcp.call.conversation.compact"],
-      "dialog-key": ["mcp.verb.answeringDialog", "mcp.call.conversation.dialogKey"],
       permission: ["mcp.verb.answeringPermission", "mcp.call.conversation.permission"],
       archive: ["mcp.verb.archiving", "mcp.call.conversation.archive"],
       unarchive: ["mcp.verb.unarchiving", "mcp.call.conversation.unarchive"],

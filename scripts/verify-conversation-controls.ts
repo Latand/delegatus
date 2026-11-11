@@ -29,10 +29,10 @@ window.renderScenario=(transport,surface,busy)=>{
 };
 `);
 const build = await Bun.build({ entrypoints: [entry], target: "browser", outdir: out, plugins: [{ name: "inert-control-fixture", setup(builder) {
-  builder.onResolve({ filter: /(^@\/hooks\/useRuntime$|\/TmuxComposer(?:\.tsx)?$|\/LogFeed(?:\.tsx)?$)/ }, (args) => ({ path: args.path, namespace: "fixture" }));
+  builder.onResolve({ filter: /(^@\/hooks\/useRuntime$|\/ConversationComposer(?:\.tsx)?$|\/LogFeed(?:\.tsx)?$)/ }, (args) => ({ path: args.path, namespace: "fixture" }));
   builder.onLoad({ filter: /.*/, namespace: "fixture" }, (args) => ({ loader: "js", contents: args.path.includes("useRuntime")
     ? `export const useRuntimeEnabled=()=>true; export const useRuntimeSession=()=>window.fixtureRuntime; export const useRuntimeSessionByArtifact=()=>null; export const refreshRuntime=async()=>true; export const useRuntimeReceiptsForArtifact=()=>[]; export const sendRuntimeMessage=async()=>{throw new Error("fixture prohibits sends")};`
-    : args.path.includes("TmuxComposer") ? `export const TmuxComposer=()=>null; export const appendComposerDraft=()=>{};` : `export const LogFeed=()=>null;` }));
+    : args.path.includes("ConversationComposer") ? `export const ConversationComposer=()=>null; export const appendComposerDraft=()=>{};` : `export const LogFeed=()=>null;` }));
   builder.onResolve({ filter: /^@\// }, (args) => ({ path: Bun.resolveSync(path.join(repo, "src", args.path.slice(2)), repo) }));
   builder.onResolve({ filter: /^react(\/|$)/ }, (args) => ({ path: Bun.resolveSync(args.path, repo) }));
 } }] });
