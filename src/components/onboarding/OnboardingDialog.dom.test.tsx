@@ -57,7 +57,7 @@ Object.assign(globalThis, {
       return json({ marker: { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: {}, lastHealth: null, walk: null } });
     }
     if (url.includes("/api/external-relay")) return json(relayBody);
-    if (url.includes("/api/roles")) return json(rolesBody);
+    if (url.includes("/api/roles")) return init?.method === "PUT" && rolesPut ? rolesPut(JSON.parse(String(init.body))) : json(rolesBody);
     if (url.includes("/api/transcribe/backend")) return json({ backend: "local", lockedByEnv: false, options: [] });
     if (url.includes("/api/access")) return json({ tailnetUrl: null, phone: { state: "missing", dnsName: null, viewerPort: 8898, servingPort: null, persisted: false }, phoneError: null });
     if (url.includes("/api/orchestrator/seat")) return Promise.resolve(new Response("{}", { status: 404 }));
@@ -75,6 +75,8 @@ let relayBody: unknown = { relays: [], pending: [], status: [] };
 
 /* What `/api/roles` answers; the agent mapping's case sets it. */
 let rolesBody: unknown = { schemaVersion: 2, roles: [] };
+/* When set, answers `PUT /api/roles` (the move at creation); otherwise the catalog above answers it too. */
+let rolesPut: ((body: unknown) => Promise<Response>) | null = null;
 
 /* Every request the guide made, and what the bot panel's status read answers:
    the Telegram step's cases set it (docs/design/orchestrator-reports.md §5.6). */
@@ -255,7 +257,9 @@ test("the visual critic's row cannot move to Codex, alone or with the banner's b
     await until(() => requests.some((request) => request.method === "PUT"));
     const overrides = (requests.find((request) => request.method === "PUT")!.body as { overrides: Record<string, unknown> }).overrides;
     expect(Object.keys(overrides)).not.toContain("visual-critic");
-    for (const roleId of claudeRows) expect(Object.keys(overrides)).toContain(roleId);
+    /* The orchestrator's own row stays where it is: the step starts it on the connected engine itself. */
+    expect(Object.keys(overrides)).not.toContain("orchestrator");
+    for (const roleId of claudeRows.filter((id) => id !== "orchestrator")) expect(Object.keys(overrides)).toContain(roleId);
   } finally {
     flushSync(() => root.unmount());
     host.remove();
@@ -1486,3 +1490,210 @@ for (const [label, orchestrator] of [["without an orchestrator", false], ["with 
     }
   });
 }
+
+/* Part 2, one engine: the orchestrator step says how many roles move to the engine that is connected, moves them
+   once, with Create, through the roles endpoint, and leaves Undo in the roles table. The factory catalog is
+   what a fresh install reads: 10 roles default to Codex and 7 to Claude... the other way round per case. */
+async function factoryCatalog() {
+  const { mergeRoleDefinitions } = await import("@/lib/roles/store");
+  const { ROLE_VARIANT_DEFAULTS } = await import("@/lib/roles/paramConfig");
+  const roles = mergeRoleDefinitions({}).map((role) => ({
+    ...role, promptPreview: role.promptScaffold,
+    shipped: { config: role.config, variants: ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS] },
+  }));
+  return { schemaVersion: 2, revision: "rev-factory", roles };
+}
+const ONE_PROJECT = [{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }];
+const claudeOnly = () => answerAccounts({ claude: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, codex: { active: "", cli: "found", accounts: [] }, copilot: { active: "", accounts: [] } });
+const codexOnly = () => answerAccounts({ claude: { active: "", cli: "found", accounts: [] }, codex: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, copilot: { active: "", accounts: [] } });
+const rolesWrites = () => requests.filter((request) => request.method === "PUT" && request.url.includes("/api/roles"));
+
+async function openOrchestrator() {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} markerStatus="read" projects={ONE_PROJECT} onClose={() => {}} />));
+  chooseProject(host, "orchestrator");
+  await until(() => Boolean(host.querySelector<HTMLButtonElement>("[data-onboarding-orchestrator-create]:not([disabled])")));
+  const done = () => { flushSync(() => root.unmount()); host.remove(); rolesBody = { roles: [] }; rolesPut = null; answerAccounts({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } }); };
+  return { host, root, done };
+}
+
+test("one engine: the step names the roles that move, opening it and the table behind Change write nothing, and Create writes the move once before the draft", async () => {
+  rolesBody = await factoryCatalog();
+  claudeOnly();
+  const { onOrchestratorDraftRequest, takePendingSeatConfirm } = await import("@/components/orchestrator/draftPrefill");
+  const drafts: unknown[] = [];
+  const off = onOrchestratorDraftRequest((request) => drafts.push(request));
+  requests.length = 0;
+  const { host, done } = await openOrchestrator();
+  try {
+    await until(() => Boolean(host.querySelector("[data-onboarding-orchestrator-roles]")));
+    expect(host.querySelector("[data-onboarding-orchestrator-roles]")!.textContent).toBe("10 that default to Codex will also run on Claude");
+    /* Roles is the third fact, with the existing Change. */
+    const change = host.querySelector("[data-onboarding-orchestrator-change=roles]") as HTMLElement;
+    expect(change.textContent).toBe("Change");
+    /* Change opens the table under Later and Back returns to the step; neither writes the mapping. */
+    flushSync(() => change.click());
+    expect(host.querySelector("[data-onboarding-step=agents]")?.getAttribute("aria-current")).toBe("step");
+    await until(() => Boolean(host.querySelector("[data-agent-mapping]")));
+    flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+    await until(() => Boolean(host.querySelector<HTMLButtonElement>("[data-onboarding-orchestrator-create]:not([disabled])")));
+    expect(rolesWrites()).toEqual([]);
+    expect(drafts).toEqual([]);
+
+    /* Create is held until the write answers: the draft follows the response, never precedes it. */
+    let answer!: (response: Response) => void;
+    rolesPut = () => new Promise<Response>((resolve) => { answer = resolve; });
+    const create = host.querySelector("[data-onboarding-orchestrator-create]") as HTMLButtonElement;
+    expect(create.closest("footer")).not.toBeNull();
+    flushSync(() => create.click());
+    await until(() => rolesWrites().length === 1);
+    expect(rolesWrites()).toHaveLength(1);
+    const body = rolesWrites()[0]!.body as { expectedRevision: string; overrides: Record<string, unknown> };
+    expect(body.expectedRevision).toBe("rev-factory");
+    expect(Object.keys(body.overrides).sort()).toEqual(["builder", "cleaner", "deployer", "maintainer", "merger", "prod-auditor", "reviewer", "verifier"]);
+    expect(Object.keys(body.overrides)).not.toContain("orchestrator");
+    expect(Object.keys(body.overrides)).not.toContain("visual-critic");
+    /* 10 rows: builder and reviewer carry two variants each. */
+    const rows = Object.entries(body.overrides).flatMap(([id, value]) => [...("config" in (value as object) ? [id] : []), ...Object.keys((value as { variants?: object }).variants ?? {}).map((variant) => `${id}:${variant}`)]);
+    expect(rows).toHaveLength(10);
+    expect(drafts).toEqual([]);
+    /* While the write is out the footer's Create is held, so a second press cannot write twice. */
+    await until(() => (host.querySelector("[data-onboarding-orchestrator-create]") as HTMLButtonElement).disabled);
+    expect((host.querySelector("[data-onboarding-orchestrator-create]") as HTMLButtonElement).disabled).toBe(true);
+    answer(new Response(JSON.stringify(rolesBody), { status: 200, headers: { "content-type": "application/json" } }));
+    await until(() => drafts.length === 1);
+    expect(drafts).toEqual([{ project: "repo-todo", launch: { engine: "claude", model: "opus", effort: "high", account: "default" }, confirm: true }]);
+    expect(rolesWrites()).toHaveLength(1);
+    takePendingSeatConfirm("repo-todo");
+  } finally {
+    off();
+    done();
+  }
+});
+
+test("one engine, Undo: the table shows the receipt for the move made at creation and Undo resets every moved row", async () => {
+  rolesBody = await factoryCatalog();
+  claudeOnly();
+  requests.length = 0;
+  const { onOrchestratorDraftRequest, takePendingSeatConfirm } = await import("@/components/orchestrator/draftPrefill");
+  const off = onOrchestratorDraftRequest(() => {});
+  const first = await openOrchestrator();
+  rolesPut = async () => json(rolesBody);
+  try {
+    await until(() => Boolean(first.host.querySelector("[data-onboarding-orchestrator-roles]")));
+    flushSync(() => (first.host.querySelector("[data-onboarding-orchestrator-create]") as HTMLElement).click());
+    await until(() => rolesWrites().length === 1);
+    takePendingSeatConfirm("repo-todo");
+  } finally {
+    off();
+    first.done();
+  }
+  rolesBody = await factoryCatalog();
+  const { host, done } = (() => {
+    const element = document.createElement("div");
+    document.body.appendChild(element);
+    const root = createRoot(element);
+    flushSync(() => root.render(<OnboardingDialog mode="mapping" marker={null} onClose={() => {}} />));
+    return { host: element, done: () => { flushSync(() => root.unmount()); element.remove(); } };
+  })();
+  try {
+    await until(() => Boolean(host.querySelector("[data-mapping-receipt]")));
+    expect(host.querySelector("[data-mapping-receipt]")!.textContent).toContain("Moved 10 roles to Claude.");
+    rolesPut = async () => json(rolesBody);
+    const before = rolesWrites().length;
+    flushSync(() => (host.querySelector("[data-mapping-receipt] button") as HTMLElement).click());
+    await until(() => rolesWrites().length === before + 1);
+    const undo = rolesWrites().at(-1)!.body as { overrides: Record<string, { config?: unknown; variants?: Record<string, unknown> }> };
+    const configs = Object.values(undo.overrides).flatMap((entry) => ["config" in entry ? [entry.config] : [], ...Object.values(entry.variants ?? {})].flat());
+    expect(configs).toHaveLength(10);
+    expect(configs.every((config) => config === null)).toBe(true);
+  } finally {
+    done();
+    rolesPut = null;
+    rolesBody = { roles: [] };
+    answerAccounts({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
+  }
+});
+
+test("only Codex: 7 roles move, the orchestrator runs on Codex Sol, and the advice to use Claude sends to Engines", async () => {
+  rolesBody = await factoryCatalog();
+  codexOnly();
+  requests.length = 0;
+  const { host, done } = await openOrchestrator();
+  try {
+    await until(() => Boolean(host.querySelector("[data-onboarding-orchestrator-roles]")));
+    expect(host.querySelector("[data-onboarding-orchestrator-roles]")!.textContent).toBe("7 that default to Claude will also run on Codex");
+    expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")!.textContent).toContain("Codex · GPT-6.1-Sol · high effort");
+    const advice = host.querySelector("[data-onboarding-orchestrator-advice]")!;
+    expect(advice.textContent).toContain("Claude is recommended for the orchestrator.");
+    expect(advice.querySelector("button")!.textContent).toBe("Connect Claude");
+    /* The advice sits under "Runs on", inside its block. */
+    expect(advice.previousElementSibling?.querySelector("[data-onboarding-orchestrator-runs-on]")).not.toBeNull();
+    let answered: unknown = null;
+    rolesPut = async (body) => { answered = body; return json(rolesBody); };
+    const { onOrchestratorDraftRequest, takePendingSeatConfirm } = await import("@/components/orchestrator/draftPrefill");
+    const off = onOrchestratorDraftRequest(() => {});
+    flushSync(() => (host.querySelector("[data-onboarding-orchestrator-create]") as HTMLElement).click());
+    await until(() => answered !== null);
+    off();
+    takePendingSeatConfirm("repo-todo");
+    const overrides = (answered as { overrides: Record<string, unknown> }).overrides;
+    expect(Object.keys(overrides)).not.toContain("orchestrator");
+    expect(Object.keys(overrides).sort()).toEqual(["architect", "builder", "issue-reporter"]);
+    flushSync(() => (host.querySelector("[data-onboarding-orchestrator-advice] button") as HTMLElement).click());
+    expect(host.querySelector("[data-onboarding-step=engines]")?.getAttribute("aria-current")).toBe("step");
+  } finally {
+    done();
+  }
+});
+
+test("a refused move keeps the step open with the reason, sends no draft, and Create can be pressed again", async () => {
+  rolesBody = await factoryCatalog();
+  claudeOnly();
+  requests.length = 0;
+  const { onOrchestratorDraftRequest } = await import("@/components/orchestrator/draftPrefill");
+  const drafts: unknown[] = [];
+  const off = onOrchestratorDraftRequest((request) => drafts.push(request));
+  const { host, done } = await openOrchestrator();
+  try {
+    await until(() => Boolean(host.querySelector("[data-onboarding-orchestrator-roles]")));
+    rolesPut = async () => json({ error: "the roles file is read-only" }, 500);
+    flushSync(() => (host.querySelector("[data-onboarding-orchestrator-create]") as HTMLElement).click());
+    await until(() => Boolean(host.querySelector("[data-onboarding-orchestrator-move-error]")));
+    expect(host.querySelector("[role=alert]")!.textContent).toBe("Could not save the mapping: the roles file is read-only. Nothing changed.");
+    expect(drafts).toEqual([]);
+    expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current")).toBe("orchestrator");
+    await until(() => !(host.querySelector("[data-onboarding-orchestrator-create]") as HTMLButtonElement).disabled);
+    expect((host.querySelector("[data-onboarding-orchestrator-create]") as HTMLButtonElement).disabled).toBe(false);
+    /* A changed revision (409) answers the server's catalog: the step reads it and the next press carries the new revision. */
+    rolesPut = async () => json({ ...(rolesBody as object), revision: "rev-newer" }, 409);
+    flushSync(() => (host.querySelector("[data-onboarding-orchestrator-create]") as HTMLElement).click());
+    await until(() => (host.querySelector("[role=alert]")?.textContent ?? "").includes("HTTP 409"));
+    await until(() => !(host.querySelector("[data-onboarding-orchestrator-create]") as HTMLButtonElement).disabled);
+    rolesPut = async () => json(rolesBody);
+    flushSync(() => (host.querySelector("[data-onboarding-orchestrator-create]") as HTMLElement).click());
+    await until(() => rolesWrites().length === 3);
+    expect((rolesWrites()[2]!.body as { expectedRevision: string }).expectedRevision).toBe("rev-newer");
+  } finally {
+    off();
+    done();
+  }
+});
+
+test("the orchestrator step carries exactly one filled button, Create in the footer, and none in the body", async () => {
+  rolesBody = await factoryCatalog();
+  claudeOnly();
+  const { host, done } = await openOrchestrator();
+  try {
+    const filled = Array.from(host.querySelectorAll("button")).filter((button) => button.className.includes("bg-brand"));
+    expect(filled.map((button) => button.textContent)).toEqual(["Create the orchestrator"]);
+    expect(filled[0]!.closest("footer")).not.toBeNull();
+    expect(host.querySelector("[data-onboarding-orchestrator]")!.querySelector("[data-onboarding-orchestrator-create]")).toBeNull();
+    expect(Array.from(host.querySelectorAll("footer button")).map((button) => button.textContent)).toEqual(["Back", "Finish without it", "Create the orchestrator"]);
+    /* A state with its own action in the body has no Create in the footer. */
+  } finally {
+    done();
+  }
+});

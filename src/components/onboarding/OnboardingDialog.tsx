@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Check, ChevronLeft, X } from "lucide-react";
+import { AlertTriangle, Bot, Check, ChevronLeft, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { DelegatusMark } from "@/components/brand/BrandMark";
@@ -173,6 +173,8 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   /* The Telegram step's save, for the footer's Continue. */
   const telegramAction = useRef<(() => Promise<boolean> | null) | null>(null);
   const [memoryState, setMemoryState] = useState<MemorySourceState>("loading");
+  /* The orchestrator step's create action, which the footer carries; null while the step has its own action in the body. */
+  const [createAction, setCreateAction] = useState<{ disabled: boolean; run: () => void } | null>(null);
   const [projectDraft, setProjectDraft] = useState<CreateDraft>("none");
   /* The notice rides on the first guide step and on the step the guide opened
      on, so a later step opens on its own heading. */
@@ -410,6 +412,8 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
       onCreate={create}
       onReadFirst={readFirst}
       onOpenSeat={openSeat}
+      onCreateAction={setCreateAction}
+      onGoAgents={() => goTo("agents")}
       newcomer={unfinishedFirstRun(marker, markerStatus)}
     />
   ) : (
@@ -473,7 +477,8 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   const counter = guideStep ? t("onboarding.stepCounter", { n: guideIndex + 1, total: GUIDE.length }) : t("onboarding.later");
   const bordered = "border border-border bg-card text-primary hover:bg-sunken";
   const filled = "bg-brand text-on-brand hover:opacity-90";
-  const footerButton = "inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-[2]";
+  const footerButtonBase = "inline-flex h-8 items-center justify-center rounded-[8px] px-4 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11";
+  const footerButton = `${footerButtonBase} max-sm:flex-[2]`;
   const backButton = (onClick: () => void) => (
     <button type="button" data-onboarding-back="" onClick={onClick} className="inline-flex h-8 items-center justify-center rounded-[8px] border border-border bg-card px-3.5 text-ui font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-1">
       {t("onboarding.back")}
@@ -487,9 +492,17 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
     <>
       {guideIndex > 0 ? backButton(() => goTo(GUIDE[guideIndex - 1]!)) : null}
       {current === "orchestrator" ? (
-        <button type="button" data-onboarding-primary="" data-onboarding-finish-without="" onClick={() => finish("completed", "skipped")} className={`${footerButton} ${bordered}`}>
-          {t("onboarding.finishWithout")}
-        </button>
+        <>
+          <button type="button" data-onboarding-primary="" data-onboarding-finish-without="" onClick={() => finish("completed", "skipped")} className={`${footerButtonBase} ${bordered} max-sm:flex-1`}>
+            {t("onboarding.finishWithout")}
+          </button>
+          {createAction ? (
+            <button type="button" data-onboarding-orchestrator-create="" disabled={createAction.disabled} onClick={createAction.run} className={`${footerButtonBase} ${filled} gap-1.5 disabled:opacity-50 max-sm:order-first max-sm:basis-full`}>
+              <Bot className="h-4 w-4" aria-hidden />
+              {t("orchPanel.confirm")}
+            </button>
+          ) : null}
+        </>
       ) : (
         <button type="button" data-onboarding-primary="" onClick={next} className={`${footerButton} ${stepOwnsPrimary ? bordered : filled}`}>
           {t("onboarding.continue")}
@@ -543,7 +556,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
           <div className={heading ? "mt-4" : ""}>{content}</div>
         </div>
         {footerButtons ? (
-          <footer className="flex shrink-0 gap-2 border-t border-border bg-raised px-4 pb-[calc(10px+env(safe-area-inset-bottom))] pt-2.5">
+          <footer className="flex shrink-0 flex-wrap gap-2 border-t border-border bg-raised px-4 pb-[calc(10px+env(safe-area-inset-bottom))] pt-2.5">
             {footerButtons}
           </footer>
         ) : null}
@@ -587,8 +600,9 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
           </div>
         </div>
         {footerButtons ? (
-          <footer className="flex h-[60px] shrink-0 items-center gap-2 border-t border-border bg-raised px-4">
-            <span className="min-w-0 flex-1 text-label font-semibold text-muted tabular-nums">{counter}</span>
+          <footer className="flex h-[60px] shrink-0 items-center justify-end gap-2 border-t border-border bg-raised px-4">
+            {/* Between 640 and 860 px the orchestrator step needs the row for its buttons. */}
+            <span className={`min-w-0 flex-1 text-label font-semibold text-muted tabular-nums ${current === "orchestrator" ? "max-[859px]:hidden" : ""}`}>{counter}</span>
             {footerButtons}
           </footer>
         ) : null}
