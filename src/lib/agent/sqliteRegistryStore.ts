@@ -3,6 +3,7 @@ import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { observeRegistryWriter } from "./registryWriter";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { nextSqliteRows, observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
+import { applySqliteMemoryMap } from "@/lib/sqliteMemoryMap";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
@@ -1256,6 +1257,7 @@ export class SqliteAgentRegistryStore {
       this.db = openCurrentDatabase(filename, () => {
         const db = observeSqlite(new Database(filename, { readonly: true, strict: true }), "registry");
         db.exec("PRAGMA busy_timeout = 0");
+        applySqliteMemoryMap(db);
         return db;
       }, { reopened: (db, previous) => this.onDatabaseReopened(db, previous) });
       try {
@@ -1283,6 +1285,7 @@ export class SqliteAgentRegistryStore {
            tables it changes nothing, so only a new database is given it. */
         const existing = Boolean(db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_meta'").get());
         db.exec(`PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON;${existing ? "" : " PRAGMA auto_vacuum = INCREMENTAL;"}`);
+        applySqliteMemoryMap(db);
         db.exec(`
         CREATE TABLE IF NOT EXISTS registry_meta (
           key TEXT PRIMARY KEY,
