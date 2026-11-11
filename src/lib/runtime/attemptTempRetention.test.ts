@@ -14,6 +14,7 @@ import { holdFinishedRoot } from "./attemptTempRetention.testSupport";
 import { recordedRootHeld, RecordedCheckStore } from "@/lib/recordedChecks/store";
 import { Database } from "bun:sqlite";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
+import * as copyDiscovery from "./attemptCopyDiscovery";
 import { digest } from "@/lib/recordedChecks/wire";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
 
@@ -88,6 +89,11 @@ test.each([
     expect(injected).toBeTrue(); expect(report.removed).toBe(0); expect(f.store.copy(destination)).not.toBeNull();
     expect(fs.existsSync(path.join(destination, "nested", ".delegatus-keep"))).toBeTrue();
     expect(fs.existsSync(attemptTempJournalPath(destination))).toBeFalse();
+    expect(f.store.retention(NOW)).toMatchObject({ dueBytes: 0, upcomingBytes: 0 });
+    f.store.close();
+    const reopened = new AttemptTempStore(f.filename);
+    try { expect(reopened.retention(NOW)).toMatchObject({ dueBytes: 0, upcomingBytes: 0 }); }
+    finally { reopened.close(); }
   } finally { f.store.close(); process.env.LLV_STATE_DIR = priorState; }
 });
 
@@ -112,6 +118,210 @@ test.each([false, true])("a human marker added in the final root authority read 
   } finally { f.store.close(); }
 });
 
+test("a missing automatic-copy parent reconciles expired rows and old failures across a restart", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "missing-copy-state");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  const parent = statePath("evidence", "attempt-temp"), destination = path.join(parent, digest("missing-parent"));
+  // An earlier cleanup has already removed the namespace; no filesystem effect is needed.
+  f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane",
+    createdAt: 1, expiresAt: 1, checkedAt: 0, bytes: 4096 });
+  f.store.copyFailure(destination, "earlier cleanup");
+  f.store.copyFailure(parent, "earlier discovery failure");
+  try {
+    const options = { now: () => NOW, state: async () => "expired" as const,
+      authority: async () => ({ state: "expired" as const, expiresAt: 1, revision: "fixture", isCurrent: () => true }),
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true };
+    expect((await sweepEvidenceCopies(f.store, options)).errors).toBe(0);
+    expect(f.store.copy(destination)).toBeNull();
+    expect(f.store.retention(NOW).dueBytes).toBe(0);
+    expect((await sweepEvidenceCopies(f.store, options)).errors).toBe(0);
+    f.store.close();
+    expect((await retentionProcess(f.filename, NOW + 60001, "copies")).errors).toBe(0);
+    const db = new Database(f.filename);
+    try { expect(db.query("SELECT * FROM copy_retention_failures").all()).toEqual([]); }
+    finally { db.close(); }
+  } finally { f.store.close(); process.env.LLV_STATE_DIR = priorState; }
+});
+
+test.each(["live", "revoked", "symlink", "unreadable", "replaced"] as const)("missing copy reconciliation retains %s authority or parent proof", async kind => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "guarded-copy-state"); fs.mkdirSync(process.env.LLV_STATE_DIR);
+  const parent = statePath("evidence", "attempt-temp"), destination = path.join(parent, digest(kind));
+  const external = path.join(f.root, "external"); fs.mkdirSync(external);
+  if (kind === "symlink") { fs.mkdirSync(path.dirname(parent)); fs.symlinkSync(external, parent); }
+  f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane", createdAt: 1, expiresAt: 1, checkedAt: 0, bytes: 4096 });
+  const access = fs.accessSync;
+  const unreadable = kind === "unreadable" ? spyOn(fs, "accessSync").mockImplementation((target, mode) => {
+    if (String(target) === process.env.LLV_STATE_DIR) throw Object.assign(new Error("fixture unreadable parent"), { code: "EACCES" });
+    return access(target, mode);
+  }) : null;
+  try {
+    const report = await sweepEvidenceCopies(f.store, { now: () => NOW, state: async () => "expired",
+      authority: async () => {
+        if (kind === "replaced") fs.mkdirSync(parent, { recursive: true });
+        return { state: kind === "live" ? "live" : "expired", expiresAt: 1, revision: "fixture", isCurrent: () => kind !== "revoked" };
+      }, scan: () => ({ ownNamespace: null, processes: [] }) });
+    expect(report.removed).toBe(0); expect(f.store.copy(destination)).not.toBeNull();
+    expect(fs.readdirSync(external)).toEqual([]);
+    if (kind === "live" || kind === "revoked") expect(report.errors).toBe(0);
+    else expect(report.errors).toBeGreaterThan(0);
+  } finally { unreadable?.mockRestore(); f.store.close(); process.env.LLV_STATE_DIR = priorState; }
+});
+
+test("missing copy namespaces reconcile eight rows per process without phantom bytes", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "bounded-missing-state"); fs.mkdirSync(process.env.LLV_STATE_DIR);
+  try {
+    for (let n = 0; n < 20; n++) f.store.registerCopy({ destination: statePath("evidence", "attempt-temp", digest(n)),
+      pipelineId: "lane", launchId: "copy", kind: "lane", createdAt: 1, expiresAt: 1, checkedAt: 0, bytes: 4096 });
+    f.store.close();
+    for (const checked of [8, 8, 4]) {
+      const report = await retentionProcess(f.filename, NOW, "copies");
+      expect(report).toMatchObject({ checked, removed: 0, errors: 0 });
+    }
+    const reopened = new AttemptTempStore(f.filename);
+    try { expect(reopened.retention(NOW).dueBytes).toBe(0); expect(reopened.dueCopies(NOW, 8)).toEqual([]); }
+    finally { reopened.close(); }
+  } finally { f.store.close(); process.env.LLV_STATE_DIR = priorState; }
+});
+
+test("reporting reads remain bounded with a large copy and root backlog", () => {
+  const f = fixture(), db = new Database(f.filename);
+  try {
+    db.transaction(() => {
+      for (let n = 0; n < 10000; n++) {
+        db.query("INSERT INTO copies VALUES(?,NULL,'legacy','unattributed',1,NULL,0,4096)").run(`copy-${n}`);
+        db.query("INSERT INTO roots VALUES(?,'lane','launch',1,1,'1:1',0,0,4096)").run(`root-${n}`);
+        db.query("INSERT INTO root_retention(directory,expiresAt) VALUES(?,1)").run(`root-${n}`);
+      }
+    })();
+    const ledger = (f.store as unknown as { db: Database }).db, query = ledger.query.bind(ledger);
+    const plans: string[] = [], executions: { sql: string; args: unknown[] }[] = [];
+    const observed = spyOn(ledger, "query").mockImplementation(((sql: string) => {
+      if (/^SELECT/i.test(sql.trim())) {
+        const parameters = sql.match(/\?/g)?.length ?? 0;
+        plans.push(...query(`EXPLAIN QUERY PLAN ${sql}`).all(...Array(parameters).fill(NOW)).map(row => (row as { detail: string }).detail));
+      }
+      const statement = query(sql);
+      return new Proxy(statement, { get(target, method) {
+        const value = Reflect.get(target, method);
+        if (method === "get" || method === "all") return (...args: unknown[]) => {
+          executions.push({ sql, args });
+          return value.apply(target, args);
+        };
+        return typeof value === "function" ? value.bind(target) : value;
+      } });
+    }) as typeof ledger.query);
+    try { f.store.retention(NOW); f.store.unattributedCopies(); }
+    finally { observed.mockRestore(); }
+    let aggregateRows = 0;
+    for (const { sql, args } of executions) {
+      if (!/sum\s*\(/i.test(sql)) continue;
+      const bounded = /FROM \(([\s\S]*)\)\s*$/i.exec(sql)?.[1];
+      if (bounded) aggregateRows += query(bounded).all(...args as []).length;
+      else {
+        const from = sql.slice(sql.toUpperCase().indexOf("FROM "));
+        const parameters = from.match(/\?/g)?.length ?? 0;
+        aggregateRows += (query(`SELECT count(*) AS count ${from}`).get(...(parameters ? args.slice(-parameters) : []) as []) as { count: number }).count;
+      }
+    }
+    expect(aggregateRows).toBeGreaterThan(0);
+    expect(aggregateRows).toBeLessThanOrEqual(3584);
+    expect(plans.join("\n")).not.toMatch(/SCAN (?:copies|roots|r)(?:\s|$)/);
+    expect(f.store.retention(NOW).dueBytes).toBe(10000 * 4096);
+    expect(f.store.unattributedCopies()).toEqual({ count: 10000, bytes: 10000 * 4096 });
+  } finally { db.close(); f.store.close(); }
+});
+
+test("legacy reporting advances bounded pages across real helper restarts and skips an exhausted deadline", async () => {
+  const f = fixture(); f.store.close();
+  const legacy = path.join(f.root, "legacy.sqlite"), db = new Database(legacy);
+  db.exec(`CREATE TABLE roots(directory TEXT PRIMARY KEY,pipelineId TEXT,launchId TEXT,retainUntilClose INTEGER,
+    createdAt REAL,identity TEXT,released INTEGER,checkedAt REAL,bytes REAL);
+    CREATE TABLE copies(destination TEXT PRIMARY KEY,pipelineId TEXT,launchId TEXT,kind TEXT,
+      createdAt REAL,expiresAt REAL,checkedAt REAL,bytes REAL);
+    CREATE TABLE root_retention(directory TEXT PRIMARY KEY,expiresAt REAL,failure TEXT);`);
+  db.transaction(() => {
+    for (let n = 0; n < 101; n++) {
+      const key = String(n).padStart(3, "0");
+      db.query("INSERT INTO roots VALUES(?,'lane','launch',1,1,'1:1',0,0,4096)").run(key);
+      db.query("INSERT INTO root_retention VALUES(?,1,NULL)").run(key);
+      db.query("INSERT INTO copies VALUES(?,NULL,'legacy','unattributed',1,NULL,0,2048)").run(key);
+    }
+  })(); db.close();
+  const store = new AttemptTempStore(legacy);
+  try {
+    store.refreshReporting(() => NOW, NOW);
+    expect(store.retention(NOW)).toMatchObject({ dueBytes: 0, partial: true });
+    expect(store.unattributedCopies()).toEqual({ count: 0, bytes: 0 });
+  } finally { store.close(); }
+  for (const count of [32, 64, 96, 101]) {
+    const result = await retentionProcess(legacy, NOW, "reporting");
+    expect(result.retention).toMatchObject({ dueBytes: count * 4096, upcomingBytes: 0, partial: count < 101 });
+    expect(result.unattributed).toEqual({ count, bytes: count * 2048 });
+  }
+  const reopened = new AttemptTempStore(legacy);
+  try {
+    reopened.forget("000"); reopened.forgetCopy("000");
+    reopened.refreshReporting(() => NOW, NOW);
+    expect(reopened.retention(NOW)).toMatchObject({ dueBytes: 100 * 4096, partial: false });
+    expect(reopened.unattributedCopies()).toEqual({ count: 100, bytes: 100 * 2048 });
+  } finally { reopened.close(); }
+});
+
+test("incremental reporting follows bytes, expiry, pins, deletion and clock changes at radix boundaries", () => {
+  const f = fixture(), directory = f.make("reporting"), expiries = [1, 255, 256, 65535, 65536, 65536.5, NOW, NOW + 256];
+  try {
+    f.store.measure(directory, 111); f.store.retainRoot(directory, 256);
+    expiries.forEach((expiresAt, n) => f.store.registerCopy({ destination: `copy-${n}`, pipelineId: "lane", launchId: "launch",
+      kind: "lane", createdAt: 1, expiresAt, checkedAt: 0, bytes: n + 1 }));
+    for (const now of [0, 1, 255, 256, 65535, 65536, 65537, NOW, NOW + 256, 255]) {
+      const due = expiries.reduce((sum, expiry, n) => sum + (expiry <= now ? n + 1 : 0), 0) + (256 <= now ? 111 : 0);
+      const upcoming = expiries.reduce((sum, expiry, n) => sum + (expiry > now && expiry <= now + 256 ? n + 1 : 0), 0)
+        + (256 > now && 256 <= now + 256 ? 111 : 0);
+      expect(f.store.retention(now, 256)).toMatchObject({ dueBytes: due, upcomingBytes: upcoming });
+    }
+    f.store.copyEligible("copy-0", false); f.store.copyEligible("copy-7", false);
+    expect(f.store.retention(NOW, 256)).toMatchObject({ dueBytes: 138, upcomingBytes: 0 });
+    f.store.measure(directory, 222); f.store.retainRoot(directory, null);
+    expect(f.store.retention(NOW, 256).dueBytes).toBe(27);
+    f.store.forgetCopy("copy-1"); f.store.copyEligible("copy-0", true);
+    expect(f.store.retention(NOW, 256).dueBytes).toBe(26);
+  } finally { f.store.close(); }
+});
+
+test("a repeated copy discovery failure is logged once and clears after discovery recovers", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "discovery-state");
+  const parent = statePath("evidence", "attempt-temp"); fs.mkdirSync(parent, { recursive: true });
+  const discovery = spyOn(copyDiscovery, "discoverAttemptCopies").mockImplementation(() => { throw new Error("fixture discovery refusal"); });
+  const lines: unknown[][] = [], log = spyOn(console, "error").mockImplementation((...args) => { lines.push(args); });
+  const options = { now: () => NOW, state: async () => "expired" as const, scan: () => ({ ownNamespace: null, processes: [] }) };
+  try {
+    for (let n = 0; n < 3; n++) expect((await sweepEvidenceCopies(f.store, options)).errors).toBe(1);
+    expect(lines).toHaveLength(1);
+    discovery.mockRestore();
+    expect((await sweepEvidenceCopies(f.store, options)).errors).toBe(0);
+    const db = new Database(f.filename);
+    try { expect(db.query("SELECT * FROM copy_retention_failures WHERE destination=?").all(parent)).toEqual([]); }
+    finally { db.close(); }
+  } finally { discovery.mockRestore(); log.mockRestore(); f.store.close(); process.env.LLV_STATE_DIR = priorState; }
+});
+
+test("a copy sweep with its deadline spent never reads the backlog for reporting", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "spent-state");
+  let clockReads = 0;
+  const reads = spyOn(f.store, "dueCopies");
+  try {
+    const report = await sweepEvidenceCopies(f.store, { now: () => ++clockReads === 1 ? NOW : NOW + 10001,
+      state: async () => "expired", scan: () => ({ ownNamespace: null, processes: [] }) });
+    expect(report.checked).toBe(0); expect(report.errors).toBe(0);
+    expect(reads).not.toHaveBeenCalled();
+  } finally { reads.mockRestore(); f.store.close(); process.env.LLV_STATE_DIR = priorState; }
+});
+
 test("an existing nested human marker keeps an expired automatic copy", async () => {
   const f = fixture(), priorState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(f.root, "copy-state");
@@ -121,9 +331,59 @@ test("an existing nested human marker keeps an expired automatic copy", async ()
   f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane", createdAt: 1, expiresAt: 1, checkedAt: 0, bytes: 4096 });
   try {
     expect((await sweepEvidenceCopies(f.store, { now: () => NOW, state: async () => "expired",
+      authority: async () => ({ state: "expired", expiresAt: 1, revision: "fixture", isCurrent: () => true }),
       references: async () => true, scan: () => ({ ownNamespace: null, processes: [] }) })).removed).toBe(0);
     expect(fs.existsSync(path.join(destination, "nested", ".delegatus-keep"))).toBeTrue();
     expect(f.store.copy(destination)).not.toBeNull();
+    expect(f.store.retention(NOW).dueBytes).toBe(0);
+    expect(f.store.retention(NOW).upcomingBytes).toBe(0);
+    f.store.close();
+    expect((await retentionProcess(f.filename, NOW + 60001, "copies")).removed).toBe(0);
+    const reopened = new AttemptTempStore(f.filename);
+    try { expect(reopened.retention(NOW + 60001).dueBytes).toBe(0); }
+    finally { reopened.close(); }
+  } finally { f.store.close(); process.env.LLV_STATE_DIR = priorState; }
+});
+
+test("a pinned copy in quarantine stays out of upcoming bytes when expiry moves into the future", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "recent-trash-state");
+  const destination = statePath("evidence", "attempt-temp", digest("recent-trash"));
+  fs.mkdirSync(destination, { recursive: true }); fs.writeFileSync(path.join(destination, ".delegatus-keep"), "operator pin");
+  const stat = fs.lstatSync(destination), trash = path.join(path.dirname(destination), `.delegatus-trash-${path.basename(destination)}-fixture`);
+  fs.renameSync(destination, trash);
+  fs.writeFileSync(attemptTempJournalPath(destination), JSON.stringify({ directory: destination, trash, uid: stat.uid,
+    identity: `${stat.dev}:${stat.ino}`, disposable: true }));
+  f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane", createdAt: 1, expiresAt: 1, checkedAt: 0, bytes: 4096 });
+  try {
+    expect((await sweepEvidenceCopies(f.store, { now: () => NOW, state: async () => "closed",
+      authority: async () => ({ state: "closed", expiresAt: NOW + 1000, revision: "fixture", isCurrent: () => true }),
+      scan: () => ({ ownNamespace: null, processes: [] }) })).removed).toBe(0);
+    expect(f.store.retention(NOW)).toMatchObject({ dueBytes: 0, upcomingBytes: 0 });
+    expect(fs.existsSync(path.join(destination, ".delegatus-keep"))).toBeTrue();
+  } finally { f.store.close(); process.env.LLV_STATE_DIR = priorState; }
+});
+
+test("a recent pinned copy stays out of upcoming bytes and becomes eligible after its marker is removed", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "recent-copy-state");
+  const destination = statePath("evidence", "attempt-temp", digest("recent-pin")), marker = path.join(destination, ".delegatus-keep");
+  fs.mkdirSync(destination, { recursive: true }); fs.writeFileSync(marker, "operator pin");
+  f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane",
+    createdAt: 1, expiresAt: NOW + 1000, checkedAt: 0, bytes: 4096 });
+  const options = { now: () => NOW, state: async () => "closed" as const,
+    authority: async () => ({ state: "closed" as const, expiresAt: NOW + 1000, revision: "fixture", isCurrent: () => true }),
+    scan: () => ({ ownNamespace: null, processes: [] }) };
+  try {
+    for (let n = 0; n < 2; n++) {
+      f.store.registerCopy({ ...f.store.copy(destination)!, checkedAt: 0 });
+      expect((await sweepEvidenceCopies(f.store, options)).errors).toBe(0);
+      expect(f.store.copy(destination)?.expiresAt).toBe(NOW + 1000);
+      expect(f.store.retention(NOW)).toMatchObject({ dueBytes: 0, upcomingBytes: 0 });
+    }
+    fs.unlinkSync(marker); f.store.registerCopy({ ...f.store.copy(destination)!, checkedAt: 0 });
+    expect((await sweepEvidenceCopies(f.store, options)).errors).toBe(0);
+    expect(f.store.retention(NOW).upcomingBytes).toBe(4096);
   } finally { f.store.close(); process.env.LLV_STATE_DIR = priorState; }
 });
 

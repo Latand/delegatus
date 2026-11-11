@@ -359,6 +359,24 @@ New table `copies` in `attempt-temp.sqlite` (§5.5).
      then delete the row. Finished but not expired →
      `checkedAt = expiresAt`. Open → `checkedAt = now + 1 h`.
 
+Missing copy namespaces use a proof of the nearest existing ancestor: it must
+be an owned, readable, direct directory, and each missing segment must remain
+absent. The same ancestor identity and absence are checked after authority and
+claim admission. An expired copy with no destination or journal is forgotten
+with its failure row. A symlink, access refusal, changed ancestor or revoked
+authority retains the row. Successful discovery or proved absence clears an
+old namespace-discovery failure. Reconciliation shares the eight-row page and
+persists progress through `checkedAt` across helper restarts.
+
+A copy's `copy_eligibility` record is independent of its `expiresAt`. A proved
+marker, unsafe tree or changed protection snapshot excludes its bytes from
+both due and upcoming totals. This includes markers added during consumer or
+authority observations and journal replay. The expiry and scheduled recheck
+remain; a later clear inspection can restore eligibility. Copies that have not
+yet expired also receive this inspection before their upcoming bytes are
+reported, including a quarantine whose authority now defers expiry. Personal
+keep markers remain untouched.
+
 ### 5.5 Schema and where it is installed
 
 All in `attempt-temp.sqlite`, all `CREATE TABLE IF NOT EXISTS`, the same
@@ -370,6 +388,13 @@ precedent as the `adoption` table (`attemptTempRetention.ts:53`); no `ALTER` of
   the expiry of a held root of a finished lane, and its last reported failure
 - `copy_retention_failures(destination TEXT PRIMARY KEY, failure TEXT NOT NULL)`
 - `copy_adoption(id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL, done INTEGER NOT NULL)`
+- `copy_eligibility(destination TEXT PRIMARY KEY, eligible INTEGER NOT NULL)` —
+  the last protection observation, removed with the copy row
+- `retention_sources(source, entry, bytes, expiresAt, unattributed, eligible)` —
+  one indexed contribution per root or copy, maintained by point-write triggers
+- `retention_buckets(level, slot, bytes)` — seven radix levels of expiry sums
+- `retention_unattributed(id, count, bytes)` — a singleton incremental total
+- `retention_backfill(source, cursor, done)` — durable root/copy backfill cursors
 
 Declared indexes through the existing `attemptTempIndexes` (`:26-28`):
 `copies(checkedAt, destination)` and `root_retention(expiresAt)`. Index repair
@@ -383,6 +408,30 @@ its directory is gone. The ledger tables are additive. Recorded-check rows
 also gain the `expired-with-lane` acknowledgement value: a rollback reader
 must understand that value before it reads the new history or pending
 notification rows. An older strict acknowledgement schema cannot do so.
+
+### 5.6 Bounded reporting
+
+`runtime/attemptRetentionReporting.ts` maintains the reporting contributions
+inside each ledger write transaction. Root measurements, expiry changes,
+copy measurements, protection observations and deletions update their own
+contribution and seven expiry buckets. Writes that only advance `checkedAt`
+do no reporting work. Unattributed count and bytes come from one stored row.
+
+For integer epoch-millisecond clocks, a prefix total reads at most seven
+indexed ranges, each capped at 256 buckets. Due and upcoming together visit
+at most 3,584 bucket rows; the latest expiry is one indexed lookup. The number
+of roots or copies does not change that bound. A spent copy-pass deadline
+skips backfill and candidate selection; its final summary still uses these
+bounded reads. No reporting query aggregates the roots or copies tables.
+
+An existing ledger backfills at most 32 root rows and 32 copy rows per copy
+pass, within that pass's deadline. Each point contribution and its cursor
+commit together. Concurrent ledger writers use the same triggers, and replay
+uses the contribution's primary key, so backfill cannot count a row twice.
+Before backfill finishes, `retention.partial` is true and reported bytes are
+lower bounds over indexed contributions. Indexed measurements, exclusions and
+deletions take effect immediately, including during backfill. Restart opens
+the persisted cursor and totals without rebuilding the whole ledger.
 
 ## 6. The first run after upgrade
 
@@ -667,6 +716,12 @@ dead and journaled claim recovery in the retention and production files.
 `recordedChecks/lifecycle.integration.test.ts` uses production authority for
 pending and unread holds while refusing retirement and deletion callbacks;
 late files still count toward pressure and their live evidence stays held.
+The retention file also covers missing copy namespaces (including eight-row
+pages across real process restarts), refused parent/authority proofs, existing
+and late pins excluded from both forecasts, rechecking after unpinning, large
+reporting backlogs, a spent deadline, radix boundaries and reporting backfill
+across fresh helper processes. The review's two copy probes are retained in
+these repository fixtures.
 Run the typecheck and privacy publication gate. Hosted checks, including
 `bun-runtime`, run on the published commit.
 

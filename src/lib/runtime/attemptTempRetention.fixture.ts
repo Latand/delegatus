@@ -40,6 +40,14 @@ if (process.argv[2] === "--hold") {
 }
 
 const store = new AttemptTempStore(process.argv[2]!);
+if (process.argv[4] === "reporting") {
+  try {
+    const now = Number(process.argv[3]);
+    store.refreshReporting(() => now, now + 1000);
+    process.stdout.write(JSON.stringify({ retention: store.retention(now), unattributed: store.unattributedCopies() }));
+  } finally { store.close(); }
+  process.exit(0);
+}
 if (process.argv[4] === "copies") {
   try {
     const report = await sweepEvidenceCopies(store, { now: () => Number(process.argv[3]), state: async () => "expired",

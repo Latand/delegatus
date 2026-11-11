@@ -9,6 +9,7 @@ import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, snap
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
 import { recordedRootHeld, recordRootRetirement, expireRecordedRootHolds, type CheckRow } from "@/lib/recordedChecks/store";
+import { AttemptRetentionReporting } from "./attemptRetentionReporting";
 import { FINISHED_LANE_RETENTION_MS } from "@/lib/pipelines/laneFinish";
 import { claimAttemptRetirement } from "@/lib/pipelines/store";
 import { hasAttemptRetirementClaim, restoreRefusedAttemptTrash } from "@/lib/pipelines/retirementClaim";
@@ -39,6 +40,7 @@ const attemptTempIndexes = declaredIndexes([
  * walks all roots. The due index also prevents live roots starving old ones. */
 export class AttemptTempStore {
   private db: Database;
+  private reporting!: AttemptRetentionReporting;
   constructor(readonly filename = statePath("attempt-temp.sqlite")) {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
@@ -66,6 +68,7 @@ export class AttemptTempStore {
       this.db.exec("CREATE TRIGGER IF NOT EXISTS roots_bytes_update AFTER UPDATE OF bytes ON roots BEGIN UPDATE totals SET bytes=bytes+NEW.bytes-OLD.bytes WHERE id=1; END");
       this.db.exec("CREATE TRIGGER IF NOT EXISTS roots_bytes_delete AFTER DELETE ON roots BEGIN UPDATE totals SET bytes=bytes-OLD.bytes WHERE id=1; END");
       this.db.exec("CREATE TABLE IF NOT EXISTS adoption (id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL)");
+      this.reporting = new AttemptRetentionReporting(this.db, path.dirname(filename));
       fs.chmodSync(filename, 0o600);
     } catch (error) { this.db.close(); throw error; }
   }
@@ -178,6 +181,7 @@ export class AttemptTempStore {
   forgetCopy(destination: string) {
     this.db.transaction(() => {
       this.db.query("DELETE FROM copies WHERE destination=?").run(destination);
+      this.db.query("DELETE FROM copy_eligibility WHERE destination=?").run(destination);
       this.db.query("DELETE FROM copy_retention_failures WHERE destination=?").run(destination);
     })();
   }
@@ -189,19 +193,14 @@ export class AttemptTempStore {
   }
   copyCursor() { return this.db.query<{ cursor: string; done: number }, []>("SELECT * FROM copy_adoption WHERE id=1").get() ?? { cursor: "", done: 0 }; }
   checkpointCopies(cursor: string, done = false) { this.db.query("INSERT OR REPLACE INTO copy_adoption VALUES(1,?,?)").run(cursor, Number(done)); }
+  refreshReporting(now: () => number = Date.now, deadline = now() + 10000) { this.reporting.backfill(now, deadline); }
   retention(now: number, retentionMs = FINISHED_LANE_RETENTION_MS) {
-    const roots = this.db.query<{ due: number; upcoming: number; until: number | null }, [number, number, number]>(`SELECT
-      coalesce(sum(CASE WHEN r.expiresAt<=? THEN roots.bytes ELSE 0 END),0) AS due,
-      coalesce(sum(CASE WHEN r.expiresAt>? THEN roots.bytes ELSE 0 END),0) AS upcoming,max(r.expiresAt) AS until
-      FROM root_retention r JOIN roots USING(directory) WHERE r.expiresAt IS NOT NULL AND r.expiresAt<=?`).get(now, now, now + retentionMs)!;
-    const copies = this.db.query<{ due: number; upcoming: number; until: number | null }, [number, number, number]>(`SELECT
-      coalesce(sum(CASE WHEN expiresAt<=? THEN bytes ELSE 0 END),0) AS due,
-      coalesce(sum(CASE WHEN expiresAt>? THEN bytes ELSE 0 END),0) AS upcoming,max(expiresAt) AS until
-      FROM copies WHERE expiresAt IS NOT NULL AND expiresAt<=? AND kind<>'unattributed'`).get(now, now, now + retentionMs)!;
-    return { periodDays: retentionMs / 86400000, dueBytes: roots.due + copies.due,
-      upcomingBytes: roots.upcoming + copies.upcoming, until: Math.max(roots.until ?? 0, copies.until ?? 0) || null };
+    return this.reporting.retention(now, retentionMs);
   }
-  unattributedCopies() { return this.db.query<{ count: number; bytes: number }, []>("SELECT count(*) AS count,coalesce(sum(bytes),0) AS bytes FROM copies WHERE kind='unattributed'").get()!; }
+  unattributedCopies() { return this.reporting.unattributed(); }
+  copyEligible(destination: string, eligible: boolean) {
+    this.db.query("INSERT INTO copy_eligibility VALUES(?,?) ON CONFLICT(destination) DO UPDATE SET eligible=excluded.eligible").run(destination, Number(eligible));
+  }
   measure(directory: string, bytes: number) { this.db.query("UPDATE roots SET bytes=? WHERE directory=?").run(bytes, directory); }
   bytes() { return this.db.query<{ bytes: number }, []>("SELECT bytes FROM totals WHERE id=1").get()!.bytes; }
   close() { this.db.close(); }
