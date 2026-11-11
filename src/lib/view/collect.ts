@@ -3,10 +3,9 @@ import { completedFileScan } from "@/lib/scanner/scanCache";
 import { overlaySnapshotSessionTitles } from "@/lib/session/titleProjection";
 
 import { composeSnapshot } from "./snapshot";
-import { resolveSiblings } from "./siblings";
 import type { SnapshotRequestV1 } from "./types";
 
-export type SnapshotPhaseName = "completed-scan" | "session-titles" | "siblings" | "compose";
+export type SnapshotPhaseName = "completed-scan" | "session-titles" | "compose";
 export interface SnapshotPhaseTiming {
   name: SnapshotPhaseName;
   durationMs: number;
@@ -36,7 +35,6 @@ export async function collectSnapshot(
   body: SnapshotRequestV1,
   dependencies: {
     completedFileScan: typeof completedFileScan;
-    resolveSiblings: typeof resolveSiblings;
     /** Compatibility seam for callers compiled against the completed-registry
         projection. Snapshot composition leaves it untouched. */
     registrySnapshot?: () => RegistryFile;
@@ -45,7 +43,7 @@ export async function collectSnapshot(
     overlaySnapshotSessionTitles?: typeof overlaySnapshotSessionTitles;
     observePhase?: SnapshotPhaseObserver;
     signal?: AbortSignal | null;
-  } = { completedFileScan, resolveSiblings },
+  } = { completedFileScan },
 ): Promise<Awaited<ReturnType<typeof composeSnapshot>>> {
   const started = Date.now();
   let phaseStartedAt = performance.now();
@@ -53,8 +51,8 @@ export async function collectSnapshot(
   const files = scan.snapshot.files;
   observePhase(dependencies.observePhase, "completed-scan", phaseStartedAt, { files: files.length });
   // Custom session titles (issue #33) are the last word on `title` for the agent
-  // snapshot surface too — applied before siblings resolve and the snapshot
-  // composes, so renamed conversations and their siblings show the human title.
+  // snapshot surface too — applied before the snapshot composes, so renamed
+  // conversations show the human title.
   phaseStartedAt = performance.now();
   (dependencies.overlaySnapshotSessionTitles ?? overlaySnapshotSessionTitles)(
     files,
@@ -63,13 +61,9 @@ export async function collectSnapshot(
   );
   observePhase(dependencies.observePhase, "session-titles", phaseStartedAt, { files: files.length });
   phaseStartedAt = performance.now();
-  const siblings = await dependencies.resolveSiblings(body.caller);
-  observePhase(dependencies.observePhase, "siblings", phaseStartedAt, { agents: siblings.agents.length });
-  phaseStartedAt = performance.now();
   const snapshot = await composeSnapshot({
     request: body,
     files,
-    siblings,
     snapshotSpawns: dependencies.snapshotSpawns ?? ((launchIds) => agentRegistry().snapshotSpawns(launchIds)),
     scannerDurationMs: scan.lastScan?.durationMs ?? Date.now() - started,
     scannerScannedAt: scan.refreshedAt ?? Date.now(),

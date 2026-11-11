@@ -73,7 +73,7 @@ jobs:
           --prefix src/app/api/accounts/
 
   darwin-identity:
-    timeout-minutes: 10
+    timeout-minutes: 20
     needs: scope
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.scope.result != 'success' || needs.scope.outputs.run == 'true') }}
     runs-on: macos-latest
@@ -138,6 +138,9 @@ jobs:
       - name: Verify identity, credentials and portable provisioning in isolated processes
         env:
           PORTABLE_BUN_VERSION: ${{ steps.pin.outputs.version }}
+          # This hosted runner belongs to this job. Its load average held the
+          # portable gates for minutes until the job's execution limit expired.
+          DELEGATUS_CPU_PRESSURE: "off"
         run: |
           python3 - <<'PYCODE'
           import os, pathlib, subprocess, tempfile

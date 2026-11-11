@@ -10,7 +10,8 @@ import type { ResourceSession } from "@/lib/types";
  * is what the operator sees before clicking.
  */
 
-/** A structured host row. A row with no kind is a legacy tmux pane. */
+/** A structured host row. A row with no kind comes from an observation stored
+    while agents ran in terminal panes. */
 export function isStructuredHost(session: ResourceSession): boolean {
   return session.kind === "structured";
 }

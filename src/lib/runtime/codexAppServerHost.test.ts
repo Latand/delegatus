@@ -7109,62 +7109,6 @@ describe("CodexAppServerHost", () => {
     expect(after.engineRouting.codex.revision).toBe(before.engineRouting.codex.revision + 1);
   });
 
-  test("legacy host upserts preserve coexisting structured columns", () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-coexistence-"));
-    const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
-    const key = { engine: "codex" as const, sessionId: "coexisting-thread" };
-    const structuredHost = {
-      kind: "codex-app-server" as const,
-      endpoint: "stdio:42",
-      process: { pid: 42, startIdentity: "42:start" },
-      eventCursor: 8,
-      protocolVersion: "0.144.1",
-      writerClaimEpoch: 3,
-      activeTurnRef: "turn-live",
-      pendingAttention: ["approval-live"],
-      activeFlags: ["running"],
-    };
-    registry.upsert({
-      key,
-      artifactPath: "/sessions/coexisting-thread.jsonl",
-      cwd: "/repo",
-      accountId: null,
-      status: "live",
-      host: null,
-      structuredHost,
-      claimEpoch: 3,
-      claimOwner: "structured-owner",
-      pendingAction: null,
-    });
-    registry.upsert({
-      key,
-      artifactPath: "/sessions/coexisting-thread.jsonl",
-      cwd: "/repo",
-      accountId: null,
-      status: "live",
-      host: {
-        kind: "tmux",
-        endpoint: "/tmp/tmux.sock",
-        server: { pid: 10, startIdentity: "10:start" },
-        paneId: "%1",
-        panePid: { pid: 11, startIdentity: "11:start" },
-        windowName: "codex",
-        agent: { pid: 12, startIdentity: "12:start" },
-        argv: ["codex"],
-      },
-      claimEpoch: 3,
-      claimOwner: "structured-owner",
-      pendingAction: null,
-    });
-    expect(registry.snapshot().entries["codex:coexisting-thread"]?.structuredHost).toEqual(structuredHost);
-    expect(registry.ownsStructuredHostClaim(key, "structured-owner", 3)).toBeTrue();
-    registry.markUnhosted(key);
-    expect(registry.snapshot().entries["codex:coexisting-thread"]).toMatchObject({
-      status: "live",
-      host: null,
-      structuredHost,
-    });
-  });
 });
 
 test("the realtime notification deadline poisons a writer after the start RPC succeeds", async () => {

@@ -201,6 +201,12 @@
  * notice; then the third generation arrives and the reader must follow it
  * with neither archived row drawn beside it, at 1440 × 900 in en and uk.
  *
+ * With BOARD_CAPTURE_CASE=install-manifest it reads the web app manifest
+ * through Chromium's own protocol (`Page.getAppManifest`,
+ * `Page.getInstallabilityErrors`) on the production build served from
+ * 127.0.0.1, without the access key and with it, and fails on any manifest or
+ * installability error. INSTALL_MANIFEST_RENDER_DIR keeps the reading.
+ *
  * With BOARD_CAPTURE_CASE=memory-source it frames the Settings row of the
  * memory source switch on the desktop menu (docs/design/memory-source-switch.md
  * §3.4) in every state at 1440 and 800 px, en and uk, light and dark, over the
@@ -7863,6 +7869,78 @@ async function installPingMain(): Promise<void> {
   console.log("Install ping notice, settings and persisted opt-out passed EN/UK at 390 and 1440");
 }
 
+/* BOARD_CAPTURE_CASE=install-manifest: the page served from 127.0.0.1 reports no
+   installability error for its web app manifest, in Chromium, on an install
+   without the access key and on one with it. The manifest is read through the
+   browser's own CDP (`Page.getAppManifest`, `Page.getInstallabilityErrors`),
+   the same source the Install entry of Chrome and Edge reads. */
+async function installManifestMain(): Promise<void> {
+  /* Chromium names a socket under its TMPDIR and refuses a path of 108 bytes or more, which the
+     capture root (this process's TMPDIR) exceeds: the browser gets its own short directory. */
+  const chromeTmp = fs.mkdtempSync("/tmp/llv-chrome-");
+  seedHome();
+  const evidenceDir = process.env.INSTALL_MANIFEST_RENDER_DIR || OUT_DIR;
+  fs.mkdirSync(evidenceDir, { recursive: true });
+  const KEY = "install-manifest-key";
+  const report: { variants: Record<string, unknown>; failures: string[] } = { variants: {}, failures: [] };
+  const fail = (message: string) => report.failures.push(message);
+  try {
+    for (const keyed of [false, true]) {
+      const name = keyed ? "access-key-on" : "no-key";
+      const port = await freePort();
+      const baseUrl = `http://127.0.0.1:${port}`;
+      const server = spawn(CAPTURE_BUN, ["--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
+        cwd: repoRoot, env: { ...buildEnvironment(port), ...(keyed ? { LLV_TOKEN: KEY } : {}) }, stdio: ["ignore", "inherit", "inherit"],
+      });
+      try {
+        const deadline = Date.now() + 120_000;
+        for (;;) {
+          if (server.exitCode !== null) throw new Error(`${name}: production server exited with ${server.exitCode}`);
+          try { if ((await fetch(`${baseUrl}/api/files`, { headers: keyed ? { authorization: `Bearer ${KEY}` } : {} })).ok) break; } catch { /* booting */ }
+          if (Date.now() > deadline) throw new Error(`${name}: production server did not become ready`);
+          await Bun.sleep(400);
+        }
+        /* A persistent profile: an ordinary context is incognito, and Chromium reports `in-incognito`
+           for every page in one, whatever its manifest says. */
+        const context = await chromium.launchPersistentContext(path.join(chromeTmp, `profile-${name}`), {
+          executablePath: process.env.CHROME_BIN || undefined, args: ["--no-sandbox", "--disable-dev-shm-usage"],
+          env: { ...process.env, TMPDIR: chromeTmp } as Record<string, string>, viewport: { width: 1280, height: 800 },
+        });
+        try {
+          report.variants.browser = context.browser()?.version();
+          const page = await context.newPage();
+          /* The key reaches a browser as a link with ?k=; the answer sets the cookie and redirects. */
+          await page.goto(keyed ? `${baseUrl}/?k=${KEY}` : `${baseUrl}/`, { waitUntil: "load", timeout: 120_000 });
+          const link = await page.evaluate(() => {
+            const node = document.querySelector("link[rel='manifest']");
+            return node ? { href: (node as HTMLLinkElement).href, crossOrigin: node.getAttribute("crossorigin") } : null;
+          });
+          if (!link) fail(`${name}: the document names no manifest`);
+          const cdp = await context.newCDPSession(page);
+          const { url, errors, data } = await cdp.send("Page.getAppManifest");
+          const { installabilityErrors } = await cdp.send("Page.getInstallabilityErrors");
+          const parsed = data ? JSON.parse(data) as { name?: string; display?: string; start_url?: string; icons?: { sizes?: string }[] } : null;
+          report.variants[name] = { link, manifestUrl: url, manifestErrors: errors, installabilityErrors, name: parsed?.name, display: parsed?.display, startUrl: parsed?.start_url, iconSizes: parsed?.icons?.map((icon) => icon.sizes) };
+          if (!parsed) fail(`${name}: Chromium read no manifest (${JSON.stringify(errors)})`);
+          if (errors.length) fail(`${name}: the manifest reported ${JSON.stringify(errors)}`);
+          if (installabilityErrors.length) fail(`${name}: installability errors ${JSON.stringify(installabilityErrors)}`);
+          /* Nothing new is exposed: without the key the manifest answers as the page does. */
+          const bare = await fetch(`${baseUrl}/manifest.webmanifest`);
+          const barePage = await fetch(`${baseUrl}/`);
+          if (bare.status !== barePage.status) fail(`${name}: the manifest answers ${bare.status} without a key while the page answers ${barePage.status}`);
+          if (keyed && bare.status !== 403) fail(`${name}: the manifest answers ${bare.status} without the key`);
+        } finally { await context.close(); }
+      } catch (error) {
+        fail(String(error).split("\n")[0]);
+      } finally { await stop(server); }
+    }
+  } finally { fs.rmSync(chromeTmp, { recursive: true, force: true }); }
+  fs.writeFileSync(path.join(evidenceDir, "install-manifest.json"), JSON.stringify(report, null, 2) + "\n");
+  console.log(JSON.stringify(report, null, 2));
+  if (report.failures.length) throw new Error(report.failures.join("; "));
+  console.log("install-manifest: Chromium reports no installability error, without the key and with it");
+}
+
 /* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801), account-removal the removal dialog's (#1857), activity the activity dashboard's, instead of the camera probes. */
 /** Hard reloads of the production Viewer, including its real hydration boundary.
  * BOARD_CAPTURE_CASE=hydration uses only the synthetic home above. Set
@@ -8719,6 +8797,7 @@ if (process.env.BOARD_CAPTURE_CASE === "registry-history") await registryHistory
 else if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
 else if (process.env.BOARD_CAPTURE_CASE === "twice-switched-link") await twiceSwitchedLinkMain();
 else if (process.env.BOARD_CAPTURE_CASE === "install-ping") await installPingMain();
+else if (process.env.BOARD_CAPTURE_CASE === "install-manifest") await installManifestMain();
 else if (process.env.BOARD_CAPTURE_CASE === "memory-source") await memorySourceMain();
 else if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
 else if (process.env.BOARD_CAPTURE_CASE === "self-update-auto") await selfUpdateAutoMain();

@@ -2307,7 +2307,7 @@ if (CALM) {
   const cut = "interrupted by a Delegatus restart";
   const asker = conv("calm-ask", L("Which banner copy ships?", "Який текст банера йде в реліз?"), 9 * MIN, {
     pendingQuestion: {
-      kind: "question", toolUseId: "toolu-calm-ask", transcriptPath: "/repo/calm-ask.jsonl", pid: 1, paneTarget: null, askedAt: iso(9 * MIN),
+      kind: "question", toolUseId: "toolu-calm-ask", transcriptPath: "/repo/calm-ask.jsonl", pid: 1, askedAt: iso(9 * MIN),
       questions: [{ question: L("Which banner copy ships?", "Який текст банера йде в реліз?"), header: L("Banner copy", "Текст банера"), multiSelect: false, options: [{ label: L("Short", "Короткий") }, { label: L("Long", "Довгий") }] }],
     },
   });
@@ -3999,7 +3999,7 @@ const needsFiles: FileEntry[] = [];
 const needsAdd = (file: FileEntry) => { needsFiles.push(file); return file; };
 const nfAsk = needsAdd(conversation("nf-ask", "Which export presets should ship first?", NEEDS_NOTHING ? { mtime: now - 20 * MIN } : {
   mtime: now - 9 * MIN, lastTurn: { startedAt: (now - 14 * MIN) * 1_000, endedAt: (now - 10 * MIN) * 1_000 },
-  pendingQuestion: { kind: "question", toolUseId: "tool-nf-ask", transcriptPath: "/repo/nf-ask.jsonl", pid: 1, paneTarget: null, askedAt: iso(9 * MIN), questions: [{ question: "Which export presets should ship first?", header: "Presets", multiSelect: false, options: [] }] },
+  pendingQuestion: { kind: "question", toolUseId: "tool-nf-ask", transcriptPath: "/repo/nf-ask.jsonl", pid: 1, askedAt: iso(9 * MIN), questions: [{ question: "Which export presets should ship first?", header: "Presets", multiSelect: false, options: [] }] },
 }));
 const nfLaneBuild = needsAdd(conversation("nf-lane-build", "Reconciling the ledger export", working({ plan: { current: "Reconciling the ledger export" } })));
 const nfClearedBuild = needsAdd(conversation("nf-cleared-build", "Rotating the search alias", { mtime: now - 40 * MIN }));
@@ -4513,7 +4513,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({
       files: carried,
       projectCatalog: [{ project: PROJECT, conversations: files.length, smt: Math.max(...files.map((file) => file.mtime)) }],
-      flows: [], pipelines: [], tasks: [], workflows: [], systemHealth: { tmux: { status: "healthy" } },
+      flows: [], pipelines: [], tasks: [], workflows: [], systemHealth: {},
       ...(pinned ? { pinOverlayPaths: [pinned.path] } : {}),
     });
   }
@@ -4570,7 +4570,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const retiredBoard = SCENARIO === "retired-review" && params.get("surface") === "direct-board"
       ? { files: [orchestrator, ...directFiles], flows: [], pipelines: [], tasks: [], conversationAliases: { "old-direct-subject": "direct-subject" },
         projectCatalog: [{ project: PROJECT, conversations: directFiles.length + 1, smt: now }] } : {};
-    const body = JSON.stringify({ ...scoped, ...retiredBoard, ...((DECISIONS || REPORT_PREVIEW) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
+    const body = JSON.stringify({ ...scoped, ...retiredBoard, ...((DECISIONS || REPORT_PREVIEW) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
     if (COLD_BOARD) {
       const headers = new Headers(init?.headers);
       const required = headers.get("x-llv-files-generation");
@@ -4608,7 +4608,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.pathname === "/api/runtime/snapshot" && STRUCTURED) return json(structuredSnapshot());
   if (url.pathname === "/api/runtime/snapshot") return json({ code: RUNTIME_PLANE_ABSENT }, 503);
-  if (STRUCTURED && url.pathname === "/api/tmux" && method === "POST") {
+  if (STRUCTURED && url.pathname === "/api/conversation-host" && method === "POST") {
     evidence.pillRequests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     return json({ ok: true, structured: true });
   }

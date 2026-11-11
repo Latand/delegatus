@@ -34,7 +34,7 @@ LLV_RUNTIME_EVENTS=1 LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-h
 
 The runtime-host container uses UID/GID `1000:1000` by default and receives
 the Docker socket GID as a supplementary group. `LLV_UID`, `LLV_GID`,
-`LLV_TMUX_TMPDIR`, `LLV_ENV_FILE` and the app dir (`DELEGATUS_CONFIG_DIR`,
+`LLV_ENV_FILE` and the app dir (`DELEGATUS_CONFIG_DIR`,
 passed on as `LLV_CONFIG_DIR`) flow into nested Compose resolution so
 candidate containers preserve supported host overrides. The Docker namespace
 shim restores the complete credential set before invoking the host CLI.

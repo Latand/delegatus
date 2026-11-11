@@ -6,13 +6,12 @@ import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, op
 import os from "node:os";
 import path from "node:path";
 
-import { createTranscriptHostObserver } from "@/lib/agent/transcriptHost";
 import { procBackend } from "@/lib/proc";
 import { shellQuote } from "@/lib/agent/cli";
 import { createResourceDiagnosticTail, RESOURCE_FAILURE_STDERR_MAX_BYTES } from "@/lib/resourceCollector";
 import type { FileEntry, ResourcesPayload } from "@/lib/types";
 
-import { allowedKillTarget, allowedStructuredHostTarget, applyResourceTargets, buildResourceSnapshot, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourceWorkerFileSnapshot, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES, type StructuredHostRecord } from "./resources";
+import { allowedStructuredHostTarget, applyResourceTargets, buildResourceSnapshot, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourceWorkerFileSnapshot, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES, type StructuredHostKillRef, type StructuredHostRecord } from "./resources";
 
 const NODE_BIN = process.env.LLV_TEST_NODE_BIN || Bun.which("node");
 if (!NODE_BIN) throw new Error("resource tests require Node on PATH");
@@ -108,13 +107,11 @@ const structuredRecord: StructuredHostRecord = {
   owned: true,
 };
 
-function ref(tmuxServerPid: number, panePid: number, paneId: string) {
+/** A structured host's kill reference; the allowlist tests name hosts by pid. */
+function ref(_group: number, pid: number, sessionId: string): StructuredHostKillRef {
   return {
-    tmuxServerPid,
-    tmuxServerStartIdentity: `${tmuxServerPid}:one`,
-    panePid,
-    paneStartIdentity: `${panePid}:one`,
-    paneId,
+    kind: "structured", pid, startIdentity: `${pid}:one`, bootEpoch: null, engine: "codex", sessionId,
+    conversationId: null, seat: false, turnBusy: false, owned: true, lastActiveAt: null,
   };
 }
 
@@ -729,7 +726,6 @@ describe("resource observation", () => {
       swapBytes: 6,
       procCount: 3,
     }]);
-    expect(allowedKillTarget(STRUCTURED_TARGET)).toBeNull();
     expect(lastResourceTargetRefs()).toMatchObject([{ target: STRUCTURED_TARGET, ref: { kind: "structured", pid: 100, startIdentity: "100:one" } }]);
     expect(lastResourceBuildDiagnostic()).toEqual(expect.objectContaining({
       fresh: true,
@@ -878,44 +874,6 @@ describe("resource observation", () => {
     expect(overLimitPersistAttempts).toBe(0);
   });
 
-  test("two handoff paths for one stable conversation form one conflict", async () => {
-    const secondPath = `/home/user/.codex/sessions/2026/07/10/rollout-2026-07-10-${SECOND_SESSION_ID}.jsonl`;
-    const files = resourceWorkerFileSnapshot([
-      entry,
-      { ...entry, path: secondPath, name: secondPath, pid: 201 },
-    ], () => "conversation_test");
-    const conversationByPath = new Map(files.map((file) => [file.path, file.conversationId]));
-    const observe = createTranscriptHostObserver({
-      listFiles: async () => files as FileEntry[],
-      panes: async () => ({
-        kind: "available",
-        panes: new Map([
-          [100, { paneId: "%1", target: "agents:4.0" }],
-          [101, { paneId: "%2", target: "agents:5.0" }],
-        ]),
-      }),
-      ppidMap: () => new Map([[200, 100], [201, 101]]),
-      agents: () => [
-        { pid: 200, engine: "codex", argv: ["codex", "resume", SESSION_ID], cwd: "/repo", tty: 1 },
-        { pid: 201, engine: "codex", argv: ["codex", "resume", SECOND_SESSION_ID], cwd: "/repo", tty: 1 },
-      ],
-      serverPid: async () => 900,
-      resumeRecords: async () => null,
-      identity: (pid) => `${pid}:one`,
-      conversationIdForPath: (pathname) => conversationByPath.get(pathname) ?? null,
-    });
-
-    const snapshot = await observe(true, files as FileEntry[]);
-
-    expect(snapshot.conflicts).toEqual([{
-      conversationId: "conversation_test",
-      paths: [PATHNAME, secondPath],
-      paneIds: ["%1", "%2"],
-    }]);
-    expect(snapshot.canonicalFor(PATHNAME)).toBeNull();
-    expect(snapshot.canonicalFor(secondPath)).toBeNull();
-  });
-
   test("worker launch selection pairs existing workers with source, standalone, and prepack runtimes", () => {
     const sourceCwd = "/checkout";
     const standaloneCwd = "/checkout/.next/standalone";
@@ -973,6 +931,7 @@ describe("kill-target allowlist", () => {
     const targetRef = ref(900, 111, "%11");
     const session = {
       target: "agents:1.0",
+      kind: "structured" as const,
       panePid: 111,
       path: null,
       engine: "codex" as const,
@@ -1018,16 +977,16 @@ describe("kill-target allowlist", () => {
       });
 
       expect((await reader.read()).payload.sessions).toHaveLength(1);
-      expect(allowedKillTarget(session.target)).toBeNull();
+      expect(allowedStructuredHostTarget(session.target)).toBeNull();
       await reader.read(true);
-      expect(allowedKillTarget(session.target)).toEqual(targetRef);
+      expect(allowedStructuredHostTarget(session.target)).toEqual(targetRef);
     });
   });
 
   test("a worker collection started before target consumption cannot restore it", async () => {
     const targetRef = ref(900, 111, "%11");
     const session = {
-      target: "agents:1.0", panePid: 111, path: null, engine: "codex" as const, hostConflict: false,
+      target: "agents:1.0", kind: "structured" as const, panePid: 111, path: null, engine: "codex" as const, hostConflict: false,
       title: null, project: null, activity: null, lastActiveAt: null, cwd: "/repo", rssBytes: 1, swapBytes: 0, procCount: 1,
     };
     const message = JSON.stringify({
@@ -1062,10 +1021,10 @@ describe("kill-target allowlist", () => {
       consumeKillTarget(session.target);
       release.resolve([]);
       await stale;
-      expect(allowedKillTarget(session.target)).toBeNull();
+      expect(allowedStructuredHostTarget(session.target)).toBeNull();
 
       await reader.read(true);
-      expect(allowedKillTarget(session.target)).toEqual(targetRef);
+      expect(allowedStructuredHostTarget(session.target)).toEqual(targetRef);
     });
   });
 
@@ -1115,8 +1074,8 @@ describe("kill-target allowlist", () => {
 
   test("nothing is killable before a snapshot exists", () => {
     noteSessionTargets([]);
-    expect(allowedKillTarget("agents:1.0")).toBeNull();
-    expect(allowedKillTarget("")).toBeNull();
+    expect(allowedStructuredHostTarget("agents:1.0")).toBeNull();
+    expect(allowedStructuredHostTarget("")).toBeNull();
   });
 
   test("only targets from the last snapshot pass, each with its pane id and pid", () => {
@@ -1124,17 +1083,17 @@ describe("kill-target allowlist", () => {
       { target: "agents:1.0", ref: ref(900, 111, "%11") },
       { target: "agents:2.0", ref: ref(900, 222, "%22") },
     ]);
-    expect(allowedKillTarget("agents:1.0")).toEqual(ref(900, 111, "%11"));
-    expect(allowedKillTarget("agents:2.0")).toEqual(ref(900, 222, "%22"));
-    expect(allowedKillTarget("agents:3.0")).toBeNull();
-    expect(allowedKillTarget("main:0.0")).toBeNull();
+    expect(allowedStructuredHostTarget("agents:1.0")).toEqual(ref(900, 111, "%11"));
+    expect(allowedStructuredHostTarget("agents:2.0")).toEqual(ref(900, 222, "%22"));
+    expect(allowedStructuredHostTarget("agents:3.0")).toBeNull();
+    expect(allowedStructuredHostTarget("main:0.0")).toBeNull();
   });
 
   test("a new snapshot fully replaces the allowlist", () => {
     noteSessionTargets([{ target: "agents:1.0", ref: ref(900, 111, "%11") }]);
     noteSessionTargets([{ target: "agents:2.0", ref: ref(900, 222, "%22") }]);
-    expect(allowedKillTarget("agents:1.0")).toBeNull();
-    expect(allowedKillTarget("agents:2.0")).toEqual(ref(900, 222, "%22"));
+    expect(allowedStructuredHostTarget("agents:1.0")).toBeNull();
+    expect(allowedStructuredHostTarget("agents:2.0")).toEqual(ref(900, 222, "%22"));
   });
 
   test("a consumed target no longer passes — tmux may reuse its coordinates", () => {
@@ -1143,21 +1102,21 @@ describe("kill-target allowlist", () => {
       { target: "agents:2.0", ref: ref(900, 222, "%22") },
     ]);
     consumeKillTarget("agents:1.0");
-    expect(allowedKillTarget("agents:1.0")).toBeNull();
-    expect(allowedKillTarget("agents:2.0")).toEqual(ref(900, 222, "%22"));
+    expect(allowedStructuredHostTarget("agents:1.0")).toBeNull();
+    expect(allowedStructuredHostTarget("agents:2.0")).toEqual(ref(900, 222, "%22"));
   });
 
   test("an older observation cannot re-arm a concurrently consumed target", () => {
     applyResourceTargets(2, [{ target: "agents:1.0", ref: ref(900, 111, "%11") }]);
     consumeKillTarget("agents:1.0");
     applyResourceTargets(1, [{ target: "agents:1.0", ref: ref(900, 111, "%11") }]);
-    expect(allowedKillTarget("agents:1.0")).toBeNull();
+    expect(allowedStructuredHostTarget("agents:1.0")).toBeNull();
   });
 
   test("a reset drops the global reader, diagnostics, and allowlist", () => {
     noteSessionTargets([{ target: "agents:1.0", ref: ref(900, 111, "%11") }]);
     resetResourcesForTests();
-    expect(allowedKillTarget("agents:1.0")).toBeNull();
+    expect(allowedStructuredHostTarget("agents:1.0")).toBeNull();
     expect(lastResourceBuildDiagnostic()).toBeNull();
   });
 });
