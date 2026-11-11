@@ -81,6 +81,7 @@ export function readNativeTiming(session: string, directory = statePath("structu
   if (!fs.existsSync(filename)) return [];
   const db = openDatabase(filename, true);
   try {
+    db.exec("PRAGMA busy_timeout=0");
     // Reserve room in the attempt for bounded check observations too. Keep
     // whole turns: dropping a tool span while retaining its turn would label
     // that missing observation as model time.

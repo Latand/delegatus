@@ -57,7 +57,8 @@ Pending admission survives the time spent waiting for launch. A finished
 attempt freezes its timing observations for its current completion interval in
 its own record so later reports need
 neither the native ledger nor check files. Reopening an existing attempt clears
-that snapshot; its next completion records the new interval.
+that total; its next completion records the new interval. Stored closed
+observations survive reopening and retirement of their runtime files.
 
 Native timing uses observed turn and tool boundaries. Model time means observed
 time inside a native turn outside tool execution. It is not a provider's compute

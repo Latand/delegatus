@@ -1,3 +1,6 @@
+import { FileRuntimeEventStore } from "@/lib/runtime/eventStore";
+import { statePath } from "@/lib/configDir";
+import fs from "node:fs";
 import { expect, test, harness, create, tickPipelines, loadPipelines, savePipelines, finishReported, BUILD_ONLY, createPipelineFromRequest, patchPipeline } from "./engine.fixture";
 import { isStoredPipeline } from "./store";
 import { REPEAT_REASONS } from "./accounting";
@@ -63,10 +66,15 @@ test("reopening an attempt clears its old split and a later completion records i
   await tickPipelines([], h.ports); await tickPipelines([], h.ports);
   let lane = loadPipelines()[0]!;
   let attempt = lane.runs[0]!.attempts[0]!;
+  attempt.sessionId = "retained-clock-session";
+  const events = new FileRuntimeEventStore();
+  events.append(attempt.sessionId, { kind: "turn-started", turnId: "known", seq: 1, accountingAt: new Date(1_000_000).toISOString() });
+  events.append(attempt.sessionId, { kind: "turn-ended", turnId: "known", seq: 2, status: "completed", accountingAt: new Date(1_000_500).toISOString() });
   attempt.state = "failed"; attempt.completedAt = new Date(1_001_000).toISOString();
   lane.state = "needs_decision";
   savePipelines([lane]);
-  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accounting!.time!.intervalMs).toBe(1000);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accounting!.time).toMatchObject({ intervalMs: 1000, modelMs: 500, unknownMs: 500 });
+  const native = statePath("structured-host-events", "timing.sqlite"); fs.renameSync(native, native + ".retained");
   lane = loadPipelines()[0]!; attempt = lane.runs[0]!.attempts[0]!;
   attempt.state = "running"; attempt.completedAt = null; lane.state = "running";
   savePipelines([lane]);
@@ -74,7 +82,7 @@ test("reopening an attempt clears its old split and a later completion records i
   lane = loadPipelines()[0]!; attempt = lane.runs[0]!.attempts[0]!;
   attempt.state = "failed"; attempt.completedAt = new Date(1_003_000).toISOString(); lane.state = "needs_decision";
   savePipelines([lane]);
-  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accounting!.time).toMatchObject({ intervalMs: 3000, unknownMs: 3000 });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accounting!.time).toMatchObject({ intervalMs: 3000, modelMs: 500, unknownMs: 2500 });
   lane = loadPipelines()[0]!; attempt = lane.runs[0]!.attempts[0]!;
   attempt.completedAt = new Date(1_004_000).toISOString(); savePipelines([lane]);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accounting!.time!.intervalMs).toBe(4000);

@@ -23,14 +23,14 @@ export function settleAttemptAccounting(attempt: PipelineStageAttempt, pipelineI
   const accounting = attempt.accounting;
   if (!accounting) return;
   if (!attempt.completedAt) {
-    if (accounting.time) { accounting.time = null; delete accounting.spans; }
+    if (accounting.time) accounting.time = null;
     return;
   }
   const start = accounting.startedAt ?? attempt.startedAt ?? accounting.admittedAt;
   const delta = Date.parse(attempt.completedAt) - Date.parse(start ?? "");
   const interval = Number.isFinite(delta) && delta >= 0 ? delta : null;
   if (accounting.time && accounting.time.intervalMs === interval) return;
-  const spans: TimeSpan[] = [];
+  const spans: TimeSpan[] = [...(accounting.spans ?? [])];
   try { if (attempt.sessionId) spans.push(...readNativeTiming(attempt.sessionId)); }
   catch { /* A missing timing source leaves its whole interval unknown. */ }
   try { if (pipelineId && attempt.launchId) spans.push(...readAttemptCheckTiming(attempt.launchId, pipelineId)); }
@@ -47,6 +47,7 @@ export function settleAttemptAccounting(attempt: PipelineStageAttempt, pipelineI
     } catch { /* Unknown is retained, never extrapolated from a deadline. */ }
     finally { checks?.close(); }
   }
-  accounting.spans = spans.length > 4096 ? [] : spans;
+  const unique = [...new Map(spans.map(span => [`${span.kind}:${span.start}:${span.end}`, span])).values()];
+  accounting.spans = unique.length > 4096 ? [] : unique;
   accounting.time = splitAttemptTime(start, attempt.completedAt, accounting.spans);
 }

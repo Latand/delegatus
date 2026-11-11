@@ -11,6 +11,7 @@ export function readAttemptCheckTiming(launch: string, pipeline: string): TimeSp
   if (!sqlite) return [];
   const db = new sqlite.Database(filename, { readonly: true });
   try {
+    db.exec("PRAGMA busy_timeout=0");
     const roots = db.query<{ directory: string; identity: string }, [string, string]>(
       "SELECT directory,identity FROM roots WHERE launchId=? AND pipelineId=? ORDER BY directory LIMIT 8").all(launch, pipeline);
     return roots.flatMap(root => foregroundCheckTiming(root.directory, root.identity).flatMap(row => [
