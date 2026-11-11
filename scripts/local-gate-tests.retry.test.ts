@@ -411,6 +411,60 @@ test.each(["base", "head"] as const)("confirmation checks a completed peer's tes
   expect(ending.line).toContain(`${budgetSide === "base" ? "head" : "base"} rerun: missing or skipped test example.test.ts: target`);
 });
 
+test.each(["assertion confirmation", "diagnostic retry"] as const)("initial file refusals survive a later %s deadline", async boundary => {
+  const site: TestSite = { file: "example.test.ts", suite: "", name: "target", kind: "test", occurrence: 0 };
+  const transient: TestSite = { ...site, name: "<between-tests error> transient", kind: "error" };
+  for (const reason of ["owned runner: surviving owned processes: 123", "hook cleanup failed", "incomplete report", "runner did not finish (124)"]) {
+    const diagnostic: TestSite = { ...site, name: `${reason.startsWith("owned runner:") ? "<ownership error>" : "<runner error>"} ${reason}`, kind: "error" };
+    for (const known of [false, true]) {
+      const base: TestRun = { failures: known ? [diagnostic] : [], passed: [site], completed: [site.file], elapsedMs: 0 };
+      const head: TestRun = { ...base, failures: [site, diagnostic, ...(boundary === "diagnostic retry" ? [transient] : [])], passed: [] };
+      const calls: string[] = [];
+      const error = await confirmFailures(base, head, side => {
+        calls.push(side);
+        if (side === "head") throw new BudgetExhausted("head confirmation deadline");
+        return base;
+      }).catch(error => error);
+      const ending = comparatorEnding(error);
+      expect(calls).toEqual(boundary === "diagnostic retry" ? ["head"] : ["base", "head"]);
+      const blocking = !known && reason !== "runner did not finish (124)";
+      expect(ending.code).toBe(blocking ? 1 : 75);
+      expect(ending.line).toContain("head confirmation deadline");
+      if (blocking) {
+        expect(ending.line).toContain(`NEW example.test.ts: ${diagnostic.name}`);
+        expect(ending.line).toContain("gate error (blocking)");
+      }
+    }
+  }
+});
+
+test.each(["repeated between-tests error", "new ownership error"] as const)("a completed diagnostic retry retains its %s before a later deadline", async mode => {
+  const site: TestSite = { file: "example.test.ts", suite: "", name: "target", kind: "test", occurrence: 0 };
+  const diagnostic: TestSite = { ...site, name: "<between-tests error> transient", kind: "error" };
+  const retained: TestSite = mode === "new ownership error"
+    ? { ...diagnostic, name: "<runner error> owned runner: surviving owned processes: 123" } : diagnostic;
+  const base: TestRun = { failures: [], passed: [site], completed: [site.file], elapsedMs: 0 };
+  const head: TestRun = { ...base, failures: [site, diagnostic], passed: [] };
+  const error = await confirmFailures(base, head, (side, sites) => {
+    if (sites.some(site => site.kind === "error")) return { ...head, failures: [site, retained] };
+    if (side === "head") throw new BudgetExhausted("later confirmation deadline");
+    return base;
+  }).catch(error => error);
+  const ending = comparatorEnding(error);
+  expect(ending.code).toBe(1);
+  expect(ending.line).toContain(`NEW example.test.ts: ${retained.name}`);
+  expect(ending.line).toContain("later confirmation deadline");
+});
+
+test("an unconfirmed between-tests diagnostic alone retains the deadline policy", async () => {
+  const diagnostic: TestSite = { file: "example.test.ts", suite: "", name: "<between-tests error> transient", kind: "error" };
+  const base: TestRun = { failures: [], passed: [], completed: [diagnostic.file], elapsedMs: 0 };
+  const error = await confirmFailures(base, { ...base, failures: [diagnostic] }, () => {
+    throw new BudgetExhausted("diagnostic retry deadline");
+  }).catch(error => error);
+  expect(comparatorEnding(error).code).toBe(75);
+});
+
 const serviceTest = test.skipIf(process.platform !== "linux"
   || spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" }).status !== 0);
 serviceTest.each(["timeout first", "cleanup first", "only timeouts"] as const)("filtered worker refusals survive comparator restarts: %s", mode => {
@@ -445,6 +499,50 @@ catch (error) { const ending = comparatorEnding(error); console.log(ending.line)
       expect(outcome.stdout).toContain("owned runner: surviving owned processes:");
       expect(outcome.stdout).toContain("gate error (blocking)");
     }
+  }
+}, 60000);
+
+serviceTest.each(["head-only cleanup", "pre-existing cleanup", "no cleanup"] as const)("initial refusal precedence survives comparator restarts: %s", mode => {
+  const f = fixture(source(true));
+  const marker = path.join(f.dir, "initial-refusal-runs");
+  const scheduled = `import { test, expect } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+const side = basename(process.cwd()) === "baseline" ? "base" : "head";
+const marker = ${JSON.stringify(marker)} + "-" + side;
+const run = existsSync(marker) ? Number(readFileSync(marker, "utf8")) + 1 : 1;
+writeFileSync(marker, String(run));
+test("contract", async () => {
+  if (side === "head" && run === 2) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20000);
+  if (run === 1 && (${JSON.stringify(mode)} === "pre-existing cleanup" || (${JSON.stringify(mode)} === "head-only cleanup" && side === "head"))) {
+    const child = Bun.spawn([process.execPath, "-e", 'require("node:child_process").spawn("sleep", ["300"], { detached: true, stdio: "ignore" }).unref(); process.exit(0)'], { stdout: "ignore", stderr: "ignore" });
+    await child.exited;
+  }
+  expect(side === "base" || run > 1).toBe(true);
+});`;
+  writeFileSync(path.join(f.dir, "example.test.ts"), scheduled);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "Initial refusal baseline");
+  const base = f.git("rev-parse", "HEAD");
+  writeFileSync(path.join(f.dir, "example.test.ts"), `${scheduled}\n// reviewed head`);
+  const driver = path.join(f.dir, "driver.ts");
+  writeFileSync(driver, `import { touchedTests, comparatorEnding } from ${JSON.stringify(path.join(root, "scripts/local-gate-tests.ts"))};
+import { publicationDeadlineOnly } from ${JSON.stringify(path.join(root, "src/lib/pipelines/publication.ts"))};
+try { const result = await touchedTests(${JSON.stringify(f.dir)}, ${JSON.stringify(base)}, ["example.test.ts"], { budgets: { fileMs: 2500, runMs: 60000 } }); process.exitCode = result.introduced.length ? 1 : 0; }
+catch (error) { const ending = comparatorEnding(error); console.log(ending.line); console.log("retryable=" + publicationDeadlineOnly(ending.line)); process.exitCode = ending.code; }`);
+  const invoke = () => spawnSync(process.execPath, [driver], { cwd: f.dir, env: f.env, encoding: "utf8", timeout: 30000 });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    writeFileSync(marker + "-head", "0"); writeFileSync(marker + "-base", "0");
+    const outcome = invoke();
+    expect(outcome.status, outcome.stdout + outcome.stderr).toBe(mode === "head-only cleanup" ? 1 : 75);
+    expect(outcome.stdout).toContain(`retryable=${mode !== "head-only cleanup"}`);
+    expect(outcome.stdout).toContain("head rerun: example.test.ts: runner did not finish (124)");
+    if (mode === "head-only cleanup") {
+      expect(outcome.stdout).toContain("NEW example.test.ts: <ownership error> owned runner: surviving owned processes:");
+      expect(outcome.stdout).toContain("gate error (blocking)");
+    }
+    const next = invoke();
+    expect(next.status, next.stdout + next.stderr).toBe(0);
+    expect(next.stdout).toContain("green head; no baseline checkout or sample needed");
   }
 }, 60000);
 

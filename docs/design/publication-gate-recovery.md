@@ -52,6 +52,12 @@ After every worker settles, an aggregate interruption retains any file-level
 error already observed. The comparator reports that diagnostic with exit 1
 alongside the interruption reason, so a cleanup refusal still prevents a
 publisher retry. A runner deadline alone retains the capacity-retry behavior.
+The same precedence applies after the baseline comparison: a new file or
+ownership error stays in the blocking output if assertion confirmation or the
+full-file diagnostic retry later times out. A repeated or newly observed error
+from a completed diagnostic retry also remains decisive. Matching pre-existing
+errors keep their comparison policy; a between-tests error still owes its
+existing full-file retry before it becomes decisive.
 The checkpoint controls exercise both a real surviving child followed by
 aggregate expiry and a clean expiry that resumes green files in a new process.
 
