@@ -41,6 +41,7 @@ import { randomUUID } from "node:crypto";
 import { registryConversationsForEntryKey, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
 import { assertMemberLaunchAllowed } from "@/lib/team/memberLaunchAuthority";
+import { recoverMemberAdoption } from "./memberAdoptionRecovery";
 import { withStructuredSetupCustody } from "./structuredSetupCustody";
 
 export { structuredHostsEnabled };
@@ -56,13 +57,6 @@ function memberAdoptionGuard(registry: AgentRegistry, entry: AgentRegistryEntry)
     if (!registry.ownsStructuredHostClaim(entry.key, entry.claimOwner!, entry.claimEpoch))
       throw new Error("member host adoption ownership changed");
   };
-}
-
-function pendingMemberAdoption(registry: AgentRegistry, entry: AgentRegistryEntry): boolean {
-  const profile = entry.launchProfile ?? registry.launchProfileForPath(entry.artifactPath);
-  if (!profile?.workspace || profile.workspace.fromMessage) return false;
-  const setup = registry.spawnReceiptForHost(entry.key)?.hostSetup;
-  return setup?.adoptionClaimEpoch !== undefined && !setup.cleanupConfirmed;
 }
 
 async function memberAdoptionCustody(registry: AgentRegistry, entry: AgentRegistryEntry, owner: ProcessIdentity,
@@ -1150,7 +1144,8 @@ export async function adoptCodexRegistryHosts(
       await registry.withOperationLock(entry.key, owner, async () => {
         const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
         if (!current?.structuredHost || !candidate(current)) return;
-        if (pendingMemberAdoption(registry, current)) return;
+        if (!await recoverMemberAdoption(registry, current.key, dependencies.assertActive)) return;
+        dependencies.assertActive?.();
         const socketOwner = current.structuredHost.process && verifiedCodexSocketOwner({ endpoint: current.structuredHost.endpoint, process: current.structuredHost.process })
           ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process, signalDomain: current.structuredHost.signalDomain, signalBoundary: current.structuredHost.signalBoundary } : undefined;
         const recordedConversation = registryConversationsForEntryKey(startupHostSnapshot(registry, entry.key), sessionKeyId(entry.key))[0];
@@ -1321,7 +1316,8 @@ export async function adoptClaudeRegistryHosts(
       await registry.withOperationLock(entry.key, owner, async () => {
         const eligible = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
         if (!eligible?.structuredHost || !shouldAdopt(eligible)) return;
-        if (pendingMemberAdoption(registry, eligible)) return;
+        if (!await recoverMemberAdoption(registry, eligible.key, dependencies.assertActive)) return;
+        dependencies.assertActive?.();
         let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
         if (!claimed) {
           const current = startupHostSnapshot(registry, entry.key).entries[`claude:${entry.key.sessionId}`];

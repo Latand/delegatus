@@ -1,4 +1,5 @@
 import { recordedAgentScope } from "./agentScope";
+import { recoverMemberAdoption } from "./memberAdoptionRecovery";
 import { withStructuredSetupCustody } from "./structuredSetupCustody";
 import { assertMemberLaunchAllowed } from "@/lib/team/memberLaunchAuthority";
 import { recordHostStop, withHostStopOrigin } from "./hostExit";
@@ -2915,6 +2916,11 @@ export async function spawnStructuredConversation(
     // The journal can accept spawn before its RPC acknowledgement returns.
     // Publish setup ownership before that await so registering work stays live.
     if (resumeKey && resumeIdentity) {
+      if (!await recoverMemberAdoption(input.registry, resumeKey, assertAdmissionCurrent)) {
+        adoptionClaimContended = true;
+        throw new Error("structured resume setup cleanup is pending");
+      }
+      assertAdmissionCurrent();
       const claimResume = () => input.registry.deliveryWriteOrBusy({ label: "registry.resume-claim" }, () => {
         assertResumeSurvivorsRetired();
         input.resumeAdmission?.beforeClaim();

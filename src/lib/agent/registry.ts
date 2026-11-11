@@ -212,6 +212,13 @@ export function structuredClaimIdentity(owner: string): ProcessIdentity | null {
   }
 }
 
+/** Indexed by generation; cleanup custody survives any change of claimant. */
+function unfinishedStructuredAdoption(file: RegistryFile, key: SessionKey): boolean {
+  return registryRowsMatching(file, "receipts", "key.sessionId", key.sessionId).some(receipt =>
+    receipt.key?.engine === key.engine && receipt.hostSetup?.adoptionClaimEpoch !== undefined
+      && !receipt.hostSetup.cleanupConfirmed);
+}
+
 /** Immutable tmux facts captured before readiness polling can expose a new
     pane to the observer. They are the only durable correlation between a
     launch receipt and an externally observed host. */
@@ -8063,6 +8070,7 @@ export class AgentRegistry {
       if (!receipt) throw new Error("unknown spawn receipt");
       const bound = receipt.key ? file.entries[sessionKeyId(receipt.key)] : null;
       if (receipt.transport !== "structured"
+        || receipt.hostSetup?.adoptionClaimEpoch !== undefined && !receipt.hostSetup.cleanupConfirmed
         || ((!bound?.structuredHost?.process || bound.structuredHostOperationId !== launchId)
           && receipt.hostSetup?.phase === "executing" && !receipt.hostSetup.cleanupConfirmed)
         || !receipt.admissionOwner
@@ -8213,7 +8221,8 @@ export class AgentRegistry {
       }
       return { kind: "conflict", receipt: clone(receipt), code };
     };
-    if ([prior, existingTarget].some(candidate => (candidate?.structuredTerminationSurvivors?.length ?? 0) > 0)) {
+    if (unfinishedStructuredAdoption(file, entry.key)
+      || [prior, existingTarget].some(candidate => (candidate?.structuredTerminationSurvivors?.length ?? 0) > 0)) {
       return conflict("spawn_identity_conflict");
     }
     if (receipt.state === "failed" || receipt.state === "conflicted") {
@@ -9531,6 +9540,9 @@ export class AgentRegistry {
           claimEpoch: 0, claimOwner: null, pendingAction: "resume" as const, updatedAt: now() }
         : null);
       if (!entry) return null;
+      // Every claimant (boot, resume and retry) must retain the predecessor's
+      // writer epoch until native setup has confirmed cleanup.
+      if (unfinishedStructuredAdoption(file, key)) return null;
       // A dead-host cleanup clears these columns. Resume setup must publish
       // its writer claim before starting the replacement host, under this lock.
       const structuredHost = entry.structuredHost
@@ -9608,6 +9620,7 @@ export class AgentRegistry {
     return this.mutate((file) => {
       const entry = file.entries[sessionKeyId(key)];
       if (!entry) throw new Error("agent registry entry is missing");
+      if (unfinishedStructuredAdoption(file, key)) throw new Error("structured adoption cleanup is pending");
       if (entry.claimOwner && entry.claimOwner !== owner) throw new Error("agent session is claimed by another operation");
       entry.claimOwner = owner;
       entry.claimEpoch += 1;
