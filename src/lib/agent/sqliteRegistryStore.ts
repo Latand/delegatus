@@ -3143,6 +3143,8 @@ export class SqliteAgentRegistryStore {
       if (owners) ownerViews.set(view,owners);
       shape = made;
       merged = view;
+      // This view must not keep the key list of the build before it.
+      previous = undefined;
     };
     return reader;
   }
@@ -3606,7 +3608,8 @@ export class SqliteAgentRegistryStore {
         get: this.archivedRowReader(collection, key, id, identity, snapshot.stamp, pinnedGrants) });
       }
     }
-    if (syntheticOwners.size && !reused.has("deliveryOperationOwners")) {
+    /* Taken-over accessors already include the owners synthesized here. */
+    if (syntheticOwners.size && !reused.has("deliveryOperationOwners") && !coldReused.has("deliveryOperationOwners")) {
       let rows = collections.get("deliveryOperationOwners");
       if (!rows) collections.set("deliveryOperationOwners",rows = new Map());
       for (const [operationId,deliveryId] of syntheticOwners) {

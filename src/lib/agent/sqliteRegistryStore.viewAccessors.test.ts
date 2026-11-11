@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { heapStats } from "bun:jsc";
+import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
 
 import { normalizeRegistry, type RegistryFile } from "./registry";
@@ -159,4 +160,42 @@ test("an archived operation owner reads the deliveries of the view it is read th
   expect(new Set(judged.map(owner => JSON.stringify(owner))).size).toBeGreaterThan(1);
   expect(held.deliveryOperationOwners[operationId]).toEqual(before);
   expect(Object.keys(views[2]!.deliveryOperationOwners)).toEqual(Object.keys(judge.snapshot().file.deliveryOperationOwners));
+});
+
+test("owners synthesized from archived deliveries survive a refresh that takes the archived owners over", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "registry-accessors-"));
+  directories.push(directory);
+  const dataset = buildRegistryPerformanceDataset(directory, scaledRegistryPerformanceShape(0.02));
+  // A legacy archived delivery with no stored owner row beside archived owners.
+  const operationId = dataset.coldOperationIds[0]!;
+  const db = new Database(dataset.filename);
+  try {
+    expect(db.run("DELETE FROM registry_rows WHERE collection='deliveryOperationOwners' AND row_key=?", [operationId]).changes).toBeGreaterThan(0);
+  } finally { db.close(); }
+  const open = () => {
+    const store = new SqliteAgentRegistryStore(dataset.filename, {
+      normalize: normalizeRegistry,
+      initialSnapshot: () => { throw new Error("the dataset must already exist"); },
+    });
+    stores.push(store);
+    return store;
+  };
+  const reader = open();
+  const writer = open();
+  const judge = open();
+  const first = reader.readOnlySnapshot().file;
+  const synthesized = first.deliveryOperationOwners[operationId];
+  expect(synthesized).toBeDefined();
+  const delivery = dataset.pendingDeliveryIds[0]!;
+  for (let round = 1; round <= 3; round++) {
+    writer.mutate((file) => {
+      file.heldDeliveries[delivery]!.updatedAt = new Date(Date.UTC(2026, 9, 13, 0, 0, round)).toISOString();
+    }, false);
+    const view = reader.readOnlySnapshot().file;
+    const whole = judge.snapshot().file;
+    expect(view.deliveryOperationOwners[operationId]).toEqual(synthesized!);
+    expect(Object.keys(view.deliveryOperationOwners)).toEqual(Object.keys(whole.deliveryOperationOwners));
+    expect(view.heldDeliveries[delivery]).toEqual(whole.heldDeliveries[delivery]!);
+  }
+  expect(first.deliveryOperationOwners[operationId]).toEqual(synthesized!);
 });
