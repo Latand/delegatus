@@ -756,8 +756,11 @@ export interface RegistryConversation {
   /** The failed account switch holding this conversation's messages (#1846). */
   switchHold?: ConversationSwitchHold | null;
   migration: ConversationMigration | null;
-  /** Explicit Stop/Keep decision for one target at one routing revision. */
-  migrationOptOut: { targetId: string; updatedAt: string } | null;
+  /** Explicit Stop/Keep decision for one target at one routing revision. A
+      null `targetId` is a withdrawal that kept its time: no opt-out stands,
+      and a stop decided before `updatedAt` whose sweep reaches the
+      conversation later writes nothing over it. */
+  migrationOptOut: { targetId: string | null; updatedAt: string } | null;
   /** Set when a successor conversation terminally retired this one (issue
       #383). Null for every non-superseded conversation, including all legacy
       records. Cleared only by an explicit operator "resume here" fork. */
@@ -1431,27 +1434,81 @@ function advanceMigrationScopeRevision(
     (docs/design/viewer-stalls-root-cause.md, section 4.1). */
 export const MIGRATION_STOP_SLICE_ROWS = 32;
 
-/** Whether a stop's opt-out reaches this conversation: it existed when the
-    intent stopped, it is not on the stopped target, and nothing decided to
-    move it after the stop. */
-function stopSweepOptsOut(
+/**
+ * The ids of the conversations of one reading that match, found a few
+ * milliseconds at a time so the loop runs between the parts. The result is a
+ * list of candidates and nothing more: the reading can be behind the registry
+ * by the time it is used, so its user checks each one again under the write lock.
+ */
+async function conversationIdsWhere(
+  conversations: readonly RegistryConversation[],
+  matches: (conversation: RegistryConversation) => boolean,
+): Promise<ViewerConversationId[]> {
+  const ids: ViewerConversationId[] = [];
+  let sliceStartedAt = performance.now();
+  for (let index = 0; index < conversations.length; index += 1) {
+    const conversation = conversations[index]!;
+    if (matches(conversation)) ids.push(conversation.id);
+    if ((index + 1) % 256 !== 0 || performance.now() - sliceStartedAt < 4) continue;
+    await yieldToRuntime();
+    sliceStartedAt = performance.now();
+  }
+  return ids;
+}
+
+/** The account a conversation ran on at `at`: its newest generation created
+    by then. A stop decides about that account, and the conversation may have
+    moved since. */
+function accountAt(conversation: RegistryConversation, at: string): string | null | undefined {
+  const generations = conversation.generations;
+  for (let index = generations.length - 1; index > 0; index -= 1) {
+    if (!(generations[index]!.createdAt > at)) return generations[index]!.accountId;
+  }
+  return generations[0]?.accountId;
+}
+
+/** Whether a stop decided an opt-out for this conversation: it existed when
+    the intent stopped and it was not on the stopped target then. */
+function stopSweepCovers(
   conversation: RegistryConversation,
   intent: MigrationIntent,
   sweep: MigrationStopSweep,
 ): boolean {
   if (!sweep.optOut || conversation.engine !== intent.engine) return false;
   if (conversation.createdAt > sweep.stampedAt) return false;
-  if (conversation.generations.at(-1)?.accountId === intent.targetId) return false;
-  const migration = conversation.migration;
-  return !(migration && migration.intentId !== intent.id
-    && (migration.startedAt ?? migration.updatedAt) > sweep.stampedAt);
+  return accountAt(conversation, sweep.stampedAt) !== intent.targetId;
 }
 
-/** The stopped intents whose sweep still has this engine's opt-out from
-    `targetId` to write. */
-function pendingStopSweeps(file: RegistryFile, engine: AgentEngine, targetId: string): MigrationIntent[] {
+/**
+ * Whether a stop's opt-out is still to be written on this conversation.
+ *
+ * A conversation has one opt-out and the decisions about it are ordered by
+ * their own times: the newest stands. A sweep writes the stop's decision late,
+ * under the stop's time, so it writes only where nothing was decided at or
+ * after that time. A later opt-out stands (another stop, a cancelled or
+ * rolled-back switch), and so does a later withdrawal, which keeps its time in
+ * the slot while a sweep is on its way ({@link withdrawMigrationOptOut}).
+ * Whether the conversation migrates meanwhile changes nothing: the order is
+ * read from the slot, which outlives a migration that is cleaned up. A
+ * decision stamped in the stop's own millisecond counts as the later one, so a
+ * sweep never replaces what may be newer than its stop.
+ */
+function stopSweepOptsOut(
+  conversation: RegistryConversation,
+  intent: MigrationIntent,
+  sweep: MigrationStopSweep,
+): boolean {
+  if (!stopSweepCovers(conversation, intent, sweep)) return false;
+  const decided = conversation.migrationOptOut;
+  return !decided || decided.updatedAt < sweep.stampedAt;
+}
+
+/** The stopped intents of an engine whose sweep still has an opt-out to
+    write, from `targetId` alone when one is named. */
+function pendingStopSweeps(file: RegistryFile, engine: AgentEngine, targetId?: string): MigrationIntent[] {
   return Object.values(file.migrationIntents).filter((intent) =>
-    intent.state === "stopped" && intent.engine === engine && intent.targetId === targetId && intent.stopSweep?.optOut === true);
+    intent.state === "stopped" && intent.engine === engine && intent.stopSweep?.optOut === true
+    && (targetId === undefined || intent.targetId === targetId));
 }
 
 /** A stop decides the opt-out and its sweep writes it. Until the sweep reaches
@@ -1461,13 +1518,44 @@ function stopSweepStillOptsOut(conversation: RegistryConversation, sweeps: reado
   return sweeps.some((intent) => stopSweepOptsOut(conversation, intent, intent.stopSweep!));
 }
 
+/** The opt-out that stands for a conversation: the one stored on it, or a
+    newer one that a stop decided and its sweep has not written yet. */
+function standingMigrationOptOut(
+  conversation: RegistryConversation,
+  sweeps: readonly MigrationIntent[],
+): RegistryConversation["migrationOptOut"] {
+  let standing = conversation.migrationOptOut;
+  for (const intent of sweeps) {
+    const sweep = intent.stopSweep!;
+    if (!stopSweepCovers(conversation, intent, sweep)) continue;
+    if (standing && standing.updatedAt >= sweep.stampedAt) continue;
+    standing = { targetId: intent.targetId, updatedAt: sweep.stampedAt };
+  }
+  return standing;
+}
+
+/**
+ * Withdraws a conversation's opt-out at `at`. With no sweep on its way the
+ * slot is emptied. While a stop that covers the conversation still has its
+ * sweep to finish, an empty slot would read to that sweep as never decided
+ * and it would write its older opt-out back: the withdrawal keeps its time in
+ * the slot instead, and the sweep passes over it.
+ */
+function withdrawMigrationOptOut(conversation: RegistryConversation, sweeps: readonly MigrationIntent[], at: string): void {
+  let newest = "";
+  for (const intent of sweeps) {
+    const sweep = intent.stopSweep!;
+    if (stopSweepCovers(conversation, intent, sweep) && sweep.stampedAt > newest) newest = sweep.stampedAt;
+  }
+  conversation.migrationOptOut = newest ? { targetId: null, updatedAt: at > newest ? at : newest } : null;
+}
+
 /** Whether the sweep of a stopped intent has anything left to write on this conversation. */
 function stopSweepOwes(conversation: RegistryConversation, intent: MigrationIntent, sweep: MigrationStopSweep): boolean {
   if (conversation.engine !== intent.engine) return false;
   if (conversation.migration?.intentId === intent.id
     && conversation.migration.phase !== "committed" && conversation.migration.phase !== "rolled-back") return true;
-  return stopSweepOptsOut(conversation, intent, sweep)
-    && !(conversation.migrationOptOut?.targetId === intent.targetId && conversation.migrationOptOut.updatedAt === sweep.stampedAt);
+  return stopSweepOptsOut(conversation, intent, sweep);
 }
 
 /** The paths whose readiness a stop can change: the conversations it rolls
@@ -1485,19 +1573,22 @@ function stoppedMigrationReadinessPaths(file: RegistryFile, owned: readonly Regi
 }
 
 /** What stopping `intent` does to one conversation: the opt-out from the
-    stopped target, and the rollback of a migration the intent still owns. */
+    stopped target, and the rollback of a migration the intent still owns.
+    `deferred` is the sweep, which writes after the stop's own transaction. */
 function settleConversationForStoppedIntent(
   file: RegistryFile,
   intent: MigrationIntent,
   conversation: RegistryConversation,
   sweep: MigrationStopSweep,
   reason: string,
-  keepNewerUpdate: boolean,
+  deferred: boolean,
 ): void {
   if (conversation.engine !== intent.engine) return;
-  if (stopSweepOptsOut(conversation, intent, sweep)) {
+  /* The stop's own transaction is the newest decision there is. The sweep
+     writes that decision later and yields to whatever was decided since. */
+  if (deferred ? stopSweepOptsOut(conversation, intent, sweep) : stopSweepCovers(conversation, intent, sweep)) {
     conversation.migrationOptOut = { targetId: intent.targetId, updatedAt: sweep.stampedAt };
-    if (!keepNewerUpdate || conversation.updatedAt < sweep.stampedAt) conversation.updatedAt = sweep.stampedAt;
+    if (!deferred || conversation.updatedAt < sweep.stampedAt) conversation.updatedAt = sweep.stampedAt;
   }
   if (conversation.migration?.intentId !== intent.id || conversation.migration.phase === "committed") return;
   queueAbandonedMigrationCleanup(file, conversation, sweep.stampedAt);
@@ -1559,7 +1650,9 @@ function stopMigrationIntentInFile(
     stampedAt: intent.updatedAt,
     optOut: file.engineRouting[intent.engine].activeAccountId === intent.targetId,
   };
-  intent.stopSweep = sweep;
+  /* A stop repeated after routing left the target decides no opt-out. The
+     opt-out an earlier stop decided, and has not finished writing, stays. */
+  if (sweep.optOut || !intent.stopSweep?.optOut) intent.stopSweep = sweep;
   for (const conversation of owned) settleConversationForStoppedIntent(file, intent, conversation, sweep, reason, false);
   advanceMigrationScopeRevision(file, intent.engine, signature, paths);
   return clone(intent);
@@ -1596,16 +1689,38 @@ function sweepStoppedMigrationIntentInFile(
   return true;
 }
 
-/** A read found nothing left for the sweep: its marker goes, unless another stop replaced it. */
+/** Every slice of the sweep's reading is written: its marker goes, unless another stop replaced it. */
 function finishStoppedMigrationSweepInFile(file: RegistryFile, id: string, stampedAt: string): void {
   const intent = file.migrationIntents[id];
   if (intent?.stopSweep?.stampedAt === stampedAt) delete intent.stopSweep;
 }
 
-/** Plans one call makes: rows that change under a sweep are picked up by the
-    next plan, and a registry that keeps changing leaves the rest to the
-    hygiene pass rather than holding the caller. */
-const MIGRATION_STOP_SWEEP_PASSES = 4;
+/** What a sweep reads before it writes: the stop's time and the conversations it may still owe. */
+interface MigrationStopSweepReading {
+  stampedAt: string;
+  conversations: RegistryConversation[];
+  owes: (conversation: RegistryConversation) => boolean;
+}
+
+/**
+ * One reading of what a stopped intent's sweep may still have to write, taken
+ * from a view of the registry and without the write lock. One reading is
+ * enough for a sweep: what a stop owes a conversation is fixed by the stop's
+ * own time, and once a conversation is settled, or something newer is decided
+ * for it, nothing makes it owed again. So every conversation outside the
+ * reading owes nothing, each one inside it is checked again in the
+ * transaction that writes it, and the sweep is over when its last slice is.
+ */
+function migrationStopSweepReading(view: RegistryFile, id: string): MigrationStopSweepReading | null {
+  const intent = view.migrationIntents[id];
+  const sweep = intent?.stopSweep;
+  if (!intent || !sweep || intent.state !== "stopped") return null;
+  return {
+    stampedAt: sweep.stampedAt,
+    conversations: Object.values(view.conversations),
+    owes: (conversation) => stopSweepOwes(conversation, intent, sweep),
+  };
+}
 
 function migrationScopeCounts(
   file: RegistryFile,
@@ -2765,7 +2880,7 @@ function normalizeConversation(value: RegistryConversation, policy?: McpGrantPol
     : [];
   const rawOptOut = (value as Partial<RegistryConversation>).migrationOptOut;
   const migrationOptOut = rawOptOut
-    && typeof rawOptOut.targetId === "string"
+    && (typeof rawOptOut.targetId === "string" || rawOptOut.targetId === null)
     && typeof rawOptOut.updatedAt === "string"
     ? { targetId: rawOptOut.targetId, updatedAt: rawOptOut.updatedAt }
     : null;
@@ -10532,18 +10647,28 @@ export class AgentRegistry {
       let scoped = 0;
       const settlingLaunches = settlingLaunchAccounts(file);
       /* A stop whose sweep has not written every opt-out yet still decided
-         them. A manual migration to the same target withdraws that decision
+         them, so each conversation is read with the opt-out that stands for
+         it. A manual migration to the same target withdraws that decision
          along with the opt-outs already written; an automatic one honours it. */
-      const stopSweeps = pendingStopSweeps(file, input.engine, input.targetId).filter((stopped) => stopped.id !== intent.id);
-      if (input.origin === "manual") for (const stopped of stopSweeps) stopped.stopSweep = { ...stopped.stopSweep!, optOut: false };
+      const stopSweeps = pendingStopSweeps(file, input.engine);
+      const withdrawn = input.origin === "manual" ? stopSweeps.filter((stopped) => stopped.targetId === input.targetId) : [];
+      const unwithdrawn = stopSweeps.filter((stopped) => !withdrawn.includes(stopped));
       for (const conversation of Object.values(file.conversations)) {
         if (conversation.engine !== input.engine) continue;
-        if (conversation.pinnedAccountId) continue;
-        if (input.origin === "manual" && conversation.migrationOptOut?.targetId === input.targetId) {
-          conversation.migrationOptOut = null;
+        const standing = stopSweeps.length ? standingMigrationOptOut(conversation, stopSweeps) : conversation.migrationOptOut;
+        if (conversation.pinnedAccountId) {
+          /* A manual migration leaves a pinned conversation's opt-out alone.
+             The withdrawn sweep will not write it any more, so it is written here. */
+          if (withdrawn.length && standing && standing !== conversation.migrationOptOut && standing.targetId === input.targetId) {
+            conversation.migrationOptOut = standing;
+            if (conversation.updatedAt < standing.updatedAt) conversation.updatedAt = standing.updatedAt;
+          }
+          continue;
         }
-        if (input.origin === "auto" && conversation.migrationOptOut?.targetId === input.targetId) continue;
-        if (input.origin === "auto" && stopSweepStillOptsOut(conversation, stopSweeps)) continue;
+        if (input.origin === "manual" && standing?.targetId === input.targetId) {
+          withdrawMigrationOptOut(conversation, unwithdrawn, changedAt);
+        }
+        if (input.origin === "auto" && standing?.targetId === input.targetId) continue;
         const source = conversation.generations.at(-1);
         if (!source || source.accountId === null || source.accountId === input.targetId) {
           if (source && conversation.migration && conversation.migration.phase !== "committed") {
@@ -10588,6 +10713,7 @@ export class AgentRegistry {
         );
         conversation.updatedAt = changedAt;
       }
+      for (const stopped of withdrawn) stopped.stopSweep = { ...stopped.stopSweep!, optOut: false };
       if (scoped === 0) intent.state = "complete";
       return clone(intent);
     }));
@@ -10679,8 +10805,9 @@ export class AgentRegistry {
     }
 
     /* A stop whose sweep has not reached this conversation yet already opted
-       it out. Read here, where the intents are listed anyway, so the checks
-       above cost a send nothing more than they did. */
+       it out, unless something was decided for the conversation since. Read
+       here, where the intents are listed anyway, so the checks above cost a
+       send nothing more than they did. */
     if (stopSweepStillOptsOut(conversation, pendingStopSweeps(file, conversation.engine, targetId))) return clone(conversation);
     const changedAt = now();
     let intent = Object.values(file.migrationIntents)
@@ -10783,7 +10910,12 @@ export class AgentRegistry {
       }
 
       const changedAt = now();
-      if (conversation.migrationOptOut?.targetId === targetId) conversation.migrationOptOut = null;
+      /* Naming the target withdraws the opt-out from it, written already or
+         still on its way from a stop's sweep. */
+      const stopSweeps = pendingStopSweeps(file, conversation.engine);
+      if (standingMigrationOptOut(conversation, stopSweeps)?.targetId === targetId) {
+        withdrawMigrationOptOut(conversation, stopSweeps, changedAt);
+      }
       const requestId = reconfigureOwner
         ? reconfigureMigrationRequestId(reconfigureOwner)
         : `reseat:${canonicalId}:${source.id}`;
@@ -11135,6 +11267,10 @@ export class AgentRegistry {
         const intent = file.migrationIntents[id];
         if (!intent) throw new Error("migration intent is unknown");
         if (expectedRevision !== undefined && intent.revision !== expectedRevision) throw new Error("migration intent revision is stale");
+        /* A stop whose sweep is still writing was decided after the reading
+           this change was made from: the intent stays stopped, and its sweep
+           and the readers of its decision keep finding it. */
+        if (intent.state === "stopped" && intent.stopSweep) return clone(intent);
         intent.state = state;
         intent.updatedAt = now();
         return clone(intent);
@@ -11145,88 +11281,124 @@ export class AgentRegistry {
        It finds the intent's conversations inside the stop's own transaction,
        which reads every conversation of the registry under the write lock. */
     this.mutate((file) => stopMigrationIntentInFile(file, id, expectedRevision, stoppedDeliveryReason, null));
-    for (let pass = 0; pass < MIGRATION_STOP_SWEEP_PASSES; pass += 1) {
-      const plan = this.migrationStopSweepPlan(id);
-      if (!plan) break;
+    const reading = migrationStopSweepReading(this.readOnlySnapshot(), id);
+    if (reading) {
+      const ids = reading.conversations.filter(reading.owes).map((conversation) => conversation.id);
       let current = true;
-      for (let offset = 0; current && offset < plan.ids.length; offset += MIGRATION_STOP_SLICE_ROWS) {
-        const slice = plan.ids.slice(offset, offset + MIGRATION_STOP_SLICE_ROWS);
-        current = this.mutate((file) => sweepStoppedMigrationIntentInFile(file, id, plan.stampedAt, slice, stoppedDeliveryReason), { deliveryOnly: true });
+      for (let offset = 0; current && offset < ids.length; offset += MIGRATION_STOP_SLICE_ROWS) {
+        const slice = ids.slice(offset, offset + MIGRATION_STOP_SLICE_ROWS);
+        current = this.mutate((file) => sweepStoppedMigrationIntentInFile(file, id, reading.stampedAt, slice, stoppedDeliveryReason), { deliveryOnly: true });
       }
-      if (!current) break;
-      if (plan.ids.length === 0) {
-        this.mutate((file) => finishStoppedMigrationSweepInFile(file, id, plan.stampedAt), { deliveryOnly: true });
-        break;
-      }
+      if (current) this.mutate((file) => finishStoppedMigrationSweepInFile(file, id, reading.stampedAt), { deliveryOnly: true });
     }
     const stopped = this.readOnlySnapshot().migrationIntents[id];
     if (!stopped) throw new Error("migration intent is unknown");
     return clone(stopped);
   }
 
-  /** What a stopped intent's sweep still has to write, read without the write lock. */
-  private migrationStopSweepPlan(id: string): { stampedAt: string; ids: ViewerConversationId[] } | null {
-    const snapshot = this.readOnlySnapshot();
-    const intent = snapshot.migrationIntents[id];
-    const sweep = intent?.stopSweep;
-    if (!intent || !sweep || intent.state !== "stopped") return null;
-    const ids: ViewerConversationId[] = [];
-    for (const conversation of Object.values(snapshot.conversations)) {
-      if (stopSweepOwes(conversation, intent, sweep)) ids.push(conversation.id);
+  /**
+   * The view of the registry a stop reads from, prepared a few milliseconds at
+   * a time on the reader connection the serving process and the migration
+   * helper both keep. The plain snapshot brings its view up to date in one
+   * synchronous step, which after a stop's own transaction took the loop for
+   * half a second and more at the size of the incident.
+   */
+  private migrationStopView(): Promise<RegistryFile> {
+    return this.prepareReadOnlySnapshot(undefined, { recoveryIndexes: false });
+  }
+
+  /** The time of the sweep a stopped intent still has to finish, read by key from the registry as it is now. */
+  private pendingMigrationStopSweep(id: string): string | null {
+    return this.readKeyed((file) => {
+      const intent = file.migrationIntents[id];
+      return intent?.state === "stopped" ? intent.stopSweep?.stampedAt ?? null : null;
+    });
+  }
+
+  /**
+   * The sweep's reading from a prepared view. A view can have been started
+   * before the stop committed, by a caller that asked for one earlier; it
+   * would show no sweep, or an older one. The reading is taken only from a
+   * view that shows the sweep the registry holds now. `"behind"` means no such
+   * view came, and the sweep is left with its marker for a later call.
+   */
+  private async currentMigrationStopSweepReading(id: string): Promise<MigrationStopSweepReading | "behind" | null> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const reading = migrationStopSweepReading(await this.migrationStopView(), id);
+      const pending = this.pendingMigrationStopSweep(id);
+      if (pending === null) return null;
+      if (reading?.stampedAt === pending) return reading;
     }
-    return { stampedAt: sweep.stampedAt, ids };
+    return "behind";
   }
 
   /**
    * Stops an intent without holding the registry's write lock for the engine
-   * (docs/design/viewer-stalls-root-cause.md, section 4.1). The conversations
-   * the intent owns are found in a read made before the lock is asked for; the
-   * stop's own transaction settles those by key and records the opt-out as a
-   * decision on the intent; {@link continueMigrationStop} then writes that
-   * decision onto the engine's conversations, a bounded number per
-   * transaction, with the lock given up between them. `{ acquired: false }`
-   * means the stop itself was refused and nothing changed. A sweep the lock
-   * interrupts leaves its marker on the intent and the hygiene pass resumes it.
+   * and without keeping the event loop for the stop
+   * (docs/design/viewer-stalls-root-cause.md, sections 4.1 and 12.7). The
+   * conversations the intent owns are found in a read made before the lock is
+   * asked for; the stop's own transaction settles those by key and records the
+   * opt-out as a decision on the intent; {@link continueMigrationStop} then
+   * writes that decision onto the engine's conversations, a bounded number per
+   * transaction, with the lock given up and the loop given a turn between
+   * them. `{ acquired: false }` means the stop itself was refused and nothing
+   * changed. A sweep the lock interrupts leaves its marker on the intent and
+   * the hygiene pass resumes it.
    */
   async stopMigrationIntent(
     id: string,
     options: { expectedRevision?: number; reason?: string } = {},
   ): Promise<{ acquired: true; value: MigrationIntent } | { acquired: false }> {
     const reason = options.reason ?? STOPPED_MIGRATION_DELIVERY_REASON;
-    const owned: ViewerConversationId[] = [];
-    for (const conversation of Object.values(this.readOnlySnapshot().conversations)) {
-      if (conversation.migration?.intentId === id && conversation.migration.phase !== "committed") owned.push(conversation.id);
-    }
+    const owned = await conversationIdsWhere(Object.values((await this.migrationStopView()).conversations),
+      (conversation) => conversation.migration?.intentId === id && conversation.migration.phase !== "committed");
     const stopped = await this.deliveryWrite({ label: "migration.stop" },
       () => this.mutate((file) => stopMigrationIntentInFile(file, id, options.expectedRevision, reason, owned)));
     if (!stopped.acquired) return stopped;
-    await this.continueMigrationStop(id, reason);
+    await yieldToRuntime();
+    try {
+      await this.continueMigrationStop(id, reason);
+    } catch (error) {
+      /* The stop is committed and its caller is owed that answer. A sweep
+         that could not read or write keeps its marker, like one the lock
+         refused, and the hygiene pass resumes it. */
+      console.warn(`[registry] migration.stop.sweep for ${id} ended early and is left to the hygiene pass: `
+        + `${error instanceof Error ? error.message : String(error)}`);
+    }
     return stopped;
   }
 
   /**
    * Writes what a stopped intent's sweep still owes. Answers false when the
-   * write lock was refused, or rows kept changing, before the sweep ended: its
-   * marker stays on the intent, readers keep honouring the stop's decision
-   * from it, and a later call carries on from the rows that are left.
+   * write lock was refused before the sweep ended, or no current view of the
+   * registry came to read from: its marker stays on the intent, readers keep
+   * honouring the stop's decision from it, and a later call carries on from
+   * the rows that are left.
+   *
+   * A write lock that is free is granted without a wait, so the await on a
+   * write does not by itself give the loop a turn: every slice would follow
+   * the last in one turn and timers, requests and this process's other
+   * deliveries would wait for the whole sweep. The loop is given its turn
+   * after each transaction, once the lock is released. Whatever changed
+   * during that turn is read again inside the next transaction: the sweep's
+   * marker, the intent's state and each conversation it was going to write.
    */
   async continueMigrationStop(id: string, reason: string = STOPPED_MIGRATION_DELIVERY_REASON): Promise<boolean> {
-    for (let pass = 0; pass < MIGRATION_STOP_SWEEP_PASSES; pass += 1) {
-      const plan = this.migrationStopSweepPlan(id);
-      if (!plan) return true;
-      for (let offset = 0; offset < plan.ids.length; offset += MIGRATION_STOP_SLICE_ROWS) {
-        const slice = plan.ids.slice(offset, offset + MIGRATION_STOP_SLICE_ROWS);
-        const written = await this.deliveryWrite({ label: "migration.stop.sweep" },
-          () => this.mutate((file) => sweepStoppedMigrationIntentInFile(file, id, plan.stampedAt, slice, reason), { deliveryOnly: true }));
-        if (!written.acquired) return false;
-        if (!written.value) return true;
-      }
-      if (plan.ids.length > 0) continue;
-      const finished = await this.deliveryWrite({ label: "migration.stop.sweep" },
-        () => this.mutate((file) => finishStoppedMigrationSweepInFile(file, id, plan.stampedAt), { deliveryOnly: true }));
-      return finished.acquired;
+    const reading = await this.currentMigrationStopSweepReading(id);
+    if (!reading) return true;
+    if (reading === "behind") return false;
+    const ids = await conversationIdsWhere(reading.conversations, reading.owes);
+    for (let offset = 0; offset < ids.length; offset += MIGRATION_STOP_SLICE_ROWS) {
+      const slice = ids.slice(offset, offset + MIGRATION_STOP_SLICE_ROWS);
+      const written = await this.deliveryWrite({ label: "migration.stop.sweep" },
+        () => this.mutate((file) => sweepStoppedMigrationIntentInFile(file, id, reading.stampedAt, slice, reason), { deliveryOnly: true }));
+      if (!written.acquired) return false;
+      if (!written.value) return true;
+      await yieldToRuntime();
     }
-    return false;
+    const finished = await this.deliveryWrite({ label: "migration.stop.sweep" },
+      () => this.mutate((file) => finishStoppedMigrationSweepInFile(file, id, reading.stampedAt), { deliveryOnly: true }));
+    return finished.acquired;
   }
 
   autoBalancePolicy(engine: AgentEngine): AutoBalancePolicy {

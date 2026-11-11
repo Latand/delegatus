@@ -43,8 +43,10 @@ const store = (registry as unknown as { sqliteStore: { upsertRow: (...values: un
 const upsertRow = store.upsertRow.bind(store);
 store.upsertRow = (...values: unknown[]) => { if (open) open.rows += 1; upsertRow(...values); };
 
-/* The helper keeps a reader view between passes; the pass does not pay for the first one. */
-registry.readOnlySnapshot();
+/* The helper keeps a prepared reader view between passes, which the
+   account-migration controller opens at its start; the pass does not pay for
+   the first one. */
+await registry.prepareReadOnlySnapshot(undefined, { recoveryIndexes: false });
 fs.writeFileSync(ready, "ready");
 while (!fs.existsSync(release)) await new Promise(resolve => setTimeout(resolve, 5));
 

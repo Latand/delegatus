@@ -21,6 +21,8 @@ export interface MigrationStopFixtureShape {
   otherEngineConversations: number;
   /** Settled deliveries spread over the source conversations. */
   deliveredDeliveries: number;
+  /** How many of the source conversations a launch pinned to their account. */
+  pinnedSourceConversations?: number;
 }
 
 export interface MigrationStopFixture {
@@ -38,6 +40,8 @@ export interface MigrationStopFixture {
   sourceConversationIds: string[];
   targetConversationIds: string[];
   otherEngineConversationIds: string[];
+  /** The first source conversations, pinned to the source account. */
+  pinnedConversationIds: string[];
 }
 
 const uuid = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
@@ -111,6 +115,8 @@ export function buildMigrationStopFixture(directory: string, shape: MigrationSto
   };
   let next = 100;
   const sourceConversationIds = Array.from({ length: shape.sourceConversations }, () => clone(next++, bulkTemplate, MIGRATION_STOP_SOURCE, "codex"));
+  const pinnedConversationIds = sourceConversationIds.slice(0, shape.pinnedSourceConversations ?? 0);
+  for (const pinned of pinnedConversationIds) file.conversations[pinned]!.pinnedAccountId = MIGRATION_STOP_SOURCE;
   const targetConversationIds = Array.from({ length: shape.targetConversations }, () => clone(next++, bulkTemplate, MIGRATION_STOP_TARGET, "codex"));
   const otherEngineConversationIds = Array.from({ length: shape.otherEngineConversations }, () => clone(next++, otherTemplate, "claude-account", "claude"));
   for (let index = 0; index < shape.deliveredDeliveries; index++) {
@@ -144,6 +150,7 @@ export function buildMigrationStopFixture(directory: string, shape: MigrationSto
     sourceConversationIds,
     targetConversationIds,
     otherEngineConversationIds,
+    pinnedConversationIds,
   };
   imported.close();
   return fixture;
