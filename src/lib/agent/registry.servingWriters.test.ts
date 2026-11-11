@@ -29,7 +29,6 @@ import { registryLockHolder } from "./registryLockHolderFixture";
 import { runIdentityWaveMigrationAtStartupOffLoop } from "./identityWaveStartup";
 import { resolveSpawnLineageOffLoop } from "./spawnParent";
 import { recordActualSpawnAccountOffLoop } from "./spawnAccountSettlement";
-import { beginRegistryResumeOffLoop, reconcileObservedTranscriptHostsOffLoop } from "./transcriptHost";
 
 const AT = "2026-10-19T00:00:00.000Z";
 const SESSION = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
@@ -128,23 +127,6 @@ test("transcript identity admission rereads foreign liveness after waiting", asy
   } finally { f.registry.close(); }
 });
 
-test("transcript observation and resume rerun their admitted guards", async () => {
-  const f = fixture();
-  f.seed();
-  let current = true;
-  const guard = () => { if (!current) throw new Error("observation replaced"); };
-  try {
-    await held(f, () => reconcileObservedTranscriptHostsOffLoop([], f.registry, guard));
-    await expect(held(f, () => reconcileObservedTranscriptHostsOffLoop([], f.registry, guard), () => { current = false; })).rejects.toThrow("observation replaced");
-    current = true;
-    const entry = { engine: "codex", path: f.artifactPath } as FileEntry;
-    const spec = { engine: "codex", cwd: "/repo", windowName: "Resume" } as Parameters<typeof beginRegistryResumeOffLoop>[1];
-    const result = await held(f, () => beginRegistryResumeOffLoop(entry, spec, guard, f.registry));
-    expect(result?.receipt.purpose).toBe("resume-successor");
-    await expect(held(f, () => beginRegistryResumeOffLoop(entry, spec, guard, f.registry), () => { current = false; })).rejects.toThrow("observation replaced");
-  } finally { f.registry.close(); }
-});
-
 test("deputy registration repeats seat authority inside admission", async () => {
   const f = fixture();
   let current = true;
@@ -191,9 +173,9 @@ for (const shared of [false, true]) test(`account selection keeps catalog and ro
   } finally { f.registry.close(); }
 });
 
-for (const family of ["flow", "resume"] as const) for (const phase of ["reservation", "task", "recorded"] as const) {
+for (const family of ["flow"] as const) for (const phase of ["reservation", "task", "recorded"] as const) {
   // Pre-freeze flow execution cases remain until S8; retirement is covered above.
-  (family === "flow" ? test.skip : test)(`${family} revocation after ${phase} admission durably retires its unactuated receipt`, async () => {
+  test.skip(`${family} revocation after ${phase} admission durably retires its unactuated receipt`, async () => {
     const f = fixture(); f.seed();
     let revoked = false;
     const current = () => {
@@ -204,13 +186,7 @@ for (const family of ["flow", "resume"] as const) for (const phase of ["reservat
       return !revoked;
     };
     try {
-      if (family === "resume") {
-        const entry = { engine: "codex", path: f.artifactPath } as FileEntry;
-        const spec = { engine: "codex", cwd: "/repo", windowName: "Resume" } as Parameters<typeof beginRegistryResumeOffLoop>[1];
-        await expect(beginRegistryResumeOffLoop(entry, spec, () => {
-          if (!current()) throw new Error("resume authority replaced");
-        }, f.registry)).rejects.toThrow("resume authority replaced");
-      } else {
+      {
         const flow = { id: `phase-${phase}`, project: "fixture", cwd: "/repo", implementerPath: f.artifactPath,
           implementerConversationId: f.registry.conversationForPath(f.artifactPath)!.id,
           roles: { reviewer: { engine: "codex", model: null, effort: "high" } }, rounds: [] } as unknown as Flow;
@@ -230,7 +206,7 @@ for (const family of ["flow", "resume"] as const) for (const phase of ["reservat
   });
 }
 
-for (const family of ["flow", "resume"] as const) (family === "flow" ? test.skip : test)(`${family} reports refused revocation cleanup and a reopened writer can finish it`, async () => {
+for (const family of ["flow"] as const) test.skip(`${family} reports refused revocation cleanup and a reopened writer can finish it`, async () => {
   const f = fixture(false, 1_000); f.seed();
   const peer = new Database(f.sqliteFilename);
   let locked = false;
@@ -242,11 +218,7 @@ for (const family of ["flow", "resume"] as const) (family === "flow" ? test.skip
   };
   try {
     let work: Promise<unknown>;
-    if (family === "resume") {
-      const entry = { engine: "codex", path: f.artifactPath } as FileEntry;
-      const spec = { engine: "codex", cwd: "/repo", windowName: "Resume" } as Parameters<typeof beginRegistryResumeOffLoop>[1];
-      work = beginRegistryResumeOffLoop(entry, spec, () => { if (!current()) throw new Error("resume authority replaced"); }, f.registry);
-    } else {
+    {
       const flow = { id: "cleanup-refusal", project: "fixture", cwd: "/repo", implementerPath: f.artifactPath,
         implementerConversationId: f.registry.conversationForPath(f.artifactPath)!.id,
         roles: { reviewer: { engine: "codex", model: null, effort: "high" } }, rounds: [] } as unknown as Flow;

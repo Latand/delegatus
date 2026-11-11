@@ -9,8 +9,8 @@ import { DraftAgentPane } from "./DraftAgentPane";
 
 /* Issue #266: the draft composer grounds its launch copy in the spawn host
    capability it already negotiates (`spawnTransport`). A structured (pane-less)
-   spawn drops the tmux wording from the placeholder and from the status line a
-   launch shows once it needs the operator; a legacy tmux spawn keeps it. */
+   spawn names no terminal in the placeholder or in the status line a launch
+   shows once it needs the operator. */
 
 const dom = new Window();
 Object.assign(globalThis, {
@@ -45,7 +45,7 @@ const imageCapability = {
   maxEncodedBytesPerRequest: 8,
 };
 
-const negotiation = (transport: "tmux" | "structured") => ({
+const negotiation = (transport: "structured") => ({
   dirs: ["/repo"],
   cwd: "/repo",
   cwdExists: true,
@@ -102,22 +102,4 @@ test("a structured spawn drops the tmux wording from the placeholder and says no
   expect(host.querySelector("[data-draft-opening] [data-message-row]")!.textContent).toContain("Start the structured agent");
   expect(host.textContent).not.toContain("confirming the agent");
   expect(host.textContent).not.toContain("tmux");
-});
-
-test("a legacy tmux spawn keeps the tmux wording in the placeholder (#266)", async () => {
-  globalThis.fetch = (async (input) => {
-    const url = String(input);
-    const auxiliary = auxiliaryResponse(url);
-    if (auxiliary) return auxiliary;
-    if (url.startsWith("/api/spawn?")) return { ok: true, json: async () => negotiation("tmux") } as Response;
-    throw new Error(`unexpected request: ${url}`);
-  }) as typeof fetch;
-  const host = document.createElement("div");
-  document.body.append(host);
-  root = createRoot(host);
-  flushSync(() => root!.render(<DraftAgentPane draftId="legacy-copy" project="proj" files={[]} onClose={() => {}} onSpawned={() => {}} />));
-  await settle();
-
-  const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
-  expect(textarea.placeholder).toBe("first prompt — the agent will start in tmux…");
 });

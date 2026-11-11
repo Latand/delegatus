@@ -40,7 +40,6 @@ test("snapshot collection performs exactly one discovery and shares its entries"
       discoveries += 1;
       return { snapshot: { files: [entry], projectCatalog: [], complete: true } } as never;
     },
-    resolveSiblings: async () => ({ selfResolution: "omitted" as const, agents: [] }),
   });
   expect(discoveries).toBe(1);
   expect(result.conversations[0]?.path).toBe(entry.path);
@@ -56,7 +55,6 @@ test("snapshot reports bounded aggregate phase timings without path data", async
     }),
     {
       completedFileScan: async () => ({ snapshot: { files: [entry], projectCatalog: [], complete: true } }) as never,
-      resolveSiblings: async () => ({ selfResolution: "omitted" as const, agents: [] }),
       overlaySnapshotSessionTitles: () => {},
       snapshotDeadlineMs: 10_000,
       scheduler: { setTimeout, clearTimeout },
@@ -114,7 +112,6 @@ test("transcript-only snapshot serves one completed 373-file projection without 
           refreshedAt,
         };
       },
-      resolveSiblings: async () => ({ selfResolution: "omitted" as const, agents: [] }),
       registrySnapshot: () => {
         registryReads += 1;
         throw new Error("transcript-only snapshot touched the poisoned registry");
@@ -156,7 +153,6 @@ test("twenty concurrent transcript-only snapshots retain no registry or response
     }),
     {
       completedFileScan: async () => ({ snapshot: { files, projectCatalog: [], complete: true } }) as never,
-      resolveSiblings: async () => ({ selfResolution: "omitted" as const, agents: [] }),
       registrySnapshot: () => {
         wholeRegistrySnapshots += 1;
         throw new Error("transcript-only snapshot materialized the whole registry");
@@ -197,7 +193,6 @@ test("snapshot route owns a deadline when the framework request signal stays liv
       scanSignal = signal ?? null;
       signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
     }),
-    resolveSiblings: async () => ({ selfResolution: "omitted" as const, agents: [] }),
     registrySnapshot: () => ({ conversations: {}, entries: {}, lineageEdges: {}, memberships: {}, conversationAliases: {}, receipts: {} }) as never,
     snapshotDeadlineMs: 10_000,
     scheduler: {
@@ -241,7 +236,6 @@ test("snapshot caller abort cancels the scan and releases its deadline", async (
       scanSignal = signal ?? null;
       signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
     }),
-    resolveSiblings: async () => ({ selfResolution: "omitted" as const, agents: [] }),
     snapshotDeadlineMs: 10_000,
     scheduler: {
       setTimeout: () => {

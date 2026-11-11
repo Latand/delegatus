@@ -1,5 +1,5 @@
 import type { AgentRegistry } from "@/lib/agent/registry";
-import { deliverConversationMessage, migrationDeliveryOutcome, type DeliveryOverrides } from "@/lib/delivery";
+import { deliverConversationMessage, migrationDeliveryOutcome } from "@/lib/delivery";
 import { ownedDeliveryProgressStore } from "@/lib/runtime/deliveryProgress";
 import { recordObservedWait, recordWait, type DeliveryProgressPort } from "@/lib/runtime/recordWait";
 import {
@@ -16,13 +16,10 @@ export interface MigrationDeliveryPortDependencies {
   legacyDelivery?: (input: HeldDeliveryInput) => Promise<Exclude<HeldStructuredMessageOutcome, null> | "held">;
   /** Where the drain's own waits are recorded; the Viewer's store by default. */
   progress?: DeliveryProgressPort | null;
-  /** The legacy ladder's transports, for tests that drive the real legacy drain. */
-  legacyOverrides?: DeliveryOverrides;
-  /** Whether this process types a held legacy send. The inventory sidecar
-      does not: it owns no progress store, and a pane input has no journal
-      effect the Viewer's queue could see, so a send it typed would wait with
-      no phase on its record. It leaves the send to the Viewer's pass, which
-      owns the record (docs/design/delivery-progress-and-drain.md, P9, P17). */
+  /** Whether this process runs the recovery a held send needs when no
+      structured host holds its conversation. The inventory sidecar does not:
+      it owns no progress store, so it leaves the send to the Viewer's pass,
+      which owns the record (docs/design/delivery-progress-and-drain.md, P9, P17). */
   actuatesLegacy?: () => boolean;
   /** Whether this process claims a held send at all. The inventory sidecar
       claims none, structured or legacy: the waits before the journal holds a
@@ -46,7 +43,7 @@ export function createMigrationDeliveryPort(
   const actuatesLegacy = dependencies.actuatesLegacy ?? actuates;
   const legacyDelivery = dependencies.legacyDelivery ?? (async ({ delivery, path, clientMessageId, lease }) => {
     if (delivery.payloadKind === "runtime-images") return "delivery-uncertain";
-    /* Nothing typed: the claim is put back for the Viewer's pass, which the
+    /* Nothing sent: the claim is put back for the Viewer's pass, which the
        send's own record wakes. */
     if (!actuatesLegacy()) return "held";
     const result = await deliverConversationMessage({
@@ -61,7 +58,6 @@ export function createMigrationDeliveryPort(
       ...(delivery.command.origin ? { origin: delivery.command.origin } : {}),
       ...(delivery.command.roleMemoryRevision ? { roleMemoryRevision: delivery.command.roleMemoryRevision } : {}),
     }, {
-      ...dependencies.legacyOverrides,
       ...(dependencies.progress !== undefined ? { progress: dependencies.progress } : {}),
       ...(lease ? { actuationLease: lease } : {}),
     });

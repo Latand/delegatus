@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, expect, test } from "bun:test";
 
 import { AgentRegistry, type ConversationObservation } from "@/lib/agent/registry";
+import { structuredHostFixture } from "@/lib/agent/registryTestFixtures";
 import type { FileEntry } from "@/lib/types";
 
 import { advanceConversationMigration, reconcileMigrationInventory } from "./coordinator";
@@ -141,16 +142,7 @@ test("a terminal status with retained host evidence authorizes no switch release
   const { updatedAt: _updatedAt, ...entry } = currentEntry;
   registry.upsert({
     ...entry,
-    host: {
-      kind: "tmux",
-      endpoint: "tmux:contradictory",
-      server: { pid: 301, startIdentity: "server:301" },
-      paneId: "%30",
-      panePid: { pid: 302, startIdentity: "pane:302" },
-      windowName: "contradictory-host",
-      agent: { pid: 303, startIdentity: "agent:303" },
-      argv: ["codex", "resume", generationId],
-    },
+    structuredHost: structuredHostFixture({ pid: 303, startIdentity: "agent:303" }, "codex-app-server"),
     cwd: sandbox,
   });
 
