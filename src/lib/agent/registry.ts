@@ -37,6 +37,7 @@ import { durableSemanticTitle, firstMeaningfulPromptLine, SPAWN_TITLE_REQUIRED_E
 import { ACCOUNT_MUTATION_ADMISSION_WAIT_MS, AccountMutationBusyError, withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { accountMutationHeld } from "@/lib/accounts/accountMutationContext";
 import { readRetiredAccountIds, retiredAccountIds } from "@/lib/accounts/accountsStore";
+import { noteWriterAdmitted } from "@/lib/state/admissionWitness";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { accountProjectBindings, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import { admitAutomaticAccountTarget, placedAccountHolds } from "@/lib/accounts/projectSelection";
@@ -5858,6 +5859,7 @@ export class AgentRegistry {
   }
 
   private mutate<T>(fn: (file: RegistryFile) => T, options: { deliveryOnly?: boolean } = {}): T {
+    noteWriterAdmitted();
     const startedAt = performance.now();
     const result = this.mutateStorage(fn, options);
     this.transactionCount += 1;

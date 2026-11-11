@@ -24,6 +24,7 @@ import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady, pipelineEvide
 import { databaseFileIdentity, databaseSwapMarker, databaseSwapInProgress, DatabaseReplacedError, openCurrentDatabase } from "./currentDatabase";
 import { collectionReadCache, rememberCollectionReadCache, type ReadCacheSlot } from "./collectionReadCache";
 import { FileTransactionBusyError } from "./fileTransaction";
+import { noteWriterAdmitted } from "./admissionWitness";
 import { isDiskFullError, noteStateCommit, noteStateDiskFull, StateDiskFullError, stateFreeBytes, STATE_DISK_FULL_FLOOR_BYTES } from "./diskFull";
 
 export const STATE_LEASE_MAX_AGE_MS = 15 * 60_000;
@@ -801,6 +802,7 @@ function isBusyError(error: unknown): boolean {
 function withImmediateTransaction<T>(db: Database, busyMessage: string, operation: () => T, collection?: string): T {
   assertOperationLease();
   stateLockAttempt(`state.transaction.${collection ?? "import"}`, () => db.exec("BEGIN IMMEDIATE"), collection);
+  noteWriterAdmitted();
   const holdStart = performance.now();
   try {
     const before = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
@@ -3582,6 +3584,7 @@ export class SqliteStateCollection<T> {
         VALUES (?, ?, ?, ?, ?)
       `).run(this.options.collection, ownerToken, process.pid, procBackend.processIdentity(process.pid), Date.now());
       performanceSpans.sync("state.lease-commit", () => db.exec("COMMIT"));
+      noteWriterAdmitted();
       const start = performance.now();
       const operation = viewerLoopMonitor.current() ?? `${this.options.collection}.mutation`;
       const timer = setTimeout(() => {
