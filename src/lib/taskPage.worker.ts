@@ -76,7 +76,7 @@ for await (const line of lines) {
     }
     const result = builder.build(frame.request as PageBuildRequest);
     const cpuUsed = process.cpuUsage(cpu);
-    process.stdout.write(`{"id":${JSON.stringify(id)},${correlation ? `"correlation":${JSON.stringify(correlation)},` : ""}"result":{"page":${result.pageJson},"privacyRevision":${JSON.stringify(result.privacyRevision)},"builds":${result.builds},"startRevision":${result.startRevision},"cpu":${JSON.stringify(cpuUsed)}}}\n`);
+    process.stdout.write(`{"id":${JSON.stringify(id)},${correlation ? `"correlation":${JSON.stringify(correlation)},` : ""}"result":{"page":${result.pageJson},"builds":${result.builds},"startRevision":${result.startRevision},"cpu":${JSON.stringify(cpuUsed)}}}\n`);
   } catch (error) {
     // Store errors may contain task text or paths. Carry only the error class.
     process.stdout.write(`${JSON.stringify({ id, correlation, error: "LESSON_PRIVACY_UNAVAILABLE", failure: privacyFailureOf(error) })}\n`);

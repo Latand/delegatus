@@ -51,15 +51,16 @@ function fixture(count = 3) {
   return { root, collection, tasks, exchange: new TaskExchange(peer, self), projects: new Set([project]) };
 }
 
-test("export payload keeps the fixed fixture bytes and withholds learned text", async () => {
+test("export payload keeps the fixed fixture bytes and carries task text as written, learned rules included", async () => {
   const f = fixture();
   const expected = readScanPage("", { self, projects: f.projects, skipPrefix: null, includeBoard: false, includePrototypeReview: false, peerTaskWireVersion: 0 });
   const result = await f.exchange.request(f.projects);
   const bytes = JSON.stringify(result.push?.rows);
   expect(bytes).toBe(JSON.stringify(expected.rows));
-  expect(bytes).not.toContain(lesson);
-  expect(bytes).toContain("[learned rule]");
-  expect(createHash("sha256").update(bytes).digest("hex")).toBe("7710d44d20edc176b9d6261ea956b0c59e65f2c5d925678839f68fe8abdafe68");
+  // A linked installation is the same operator's: nothing is withheld on this wire.
+  expect(bytes).toContain(lesson);
+  expect(bytes).not.toContain("[learned rule]");
+  expect(createHash("sha256").update(bytes).digest("hex")).toBe("1a104e13d04020362b006c188d19e80bd47f7e98e6f5e4f9af1729874120764d");
 });
 
 test("unchanged failing exchange reuses its page without cloning memory per task", async () => {
@@ -153,7 +154,7 @@ test("a replaced privacy database with unchanged size and mtime cannot reuse its
   } finally { process.env.LLV_STATE_DIR = root; }
 });
 
-test("the worker reuses encoded pages and invalidates task, privacy and capability changes", async () => {
+test("the worker reuses encoded pages, invalidates task and capability changes, and ignores a lesson change", async () => {
   const f = fixture();
   const { TaskPageWorker } = await import("../taskPageWorker");
   const worker = new TaskPageWorker();
@@ -169,10 +170,11 @@ test("the worker reuses encoded pages and invalidates task, privacy and capabili
     expect(changed.builds).toBe(2);
     expect(JSON.stringify(changed.page)).toContain("silver orchard");
     f.collection.boundedPatch(2, tx => tx.put({ ...tx.get("r:fixture")!, rule: "Another fixture rule covers the silver orchard." } as RoleMemoryRule));
-    const privatePage = await worker.build({ kind: "scan", after: "" }, filter);
-    expect(privatePage.builds).toBe(3);
-    expect(JSON.stringify(privatePage.page)).not.toContain("silver orchard");
-    expect((await worker.build({ kind: "scan", after: "" }, { ...filter, includeBoard: true })).builds).toBe(4);
+    // The page holds no lesson check, so a new lesson neither rebuilds nor rewrites it.
+    const afterLesson = await worker.build({ kind: "scan", after: "" }, filter);
+    expect(afterLesson.builds).toBe(2);
+    expect(JSON.stringify(afterLesson.page)).toContain("silver orchard");
+    expect((await worker.build({ kind: "scan", after: "" }, { ...filter, includeBoard: true })).builds).toBe(3);
   } finally { await worker.shutdown(); }
 });
 
@@ -187,7 +189,7 @@ test("a failed worker withholds export and a fresh worker retries successfully",
     runtime.launch = taskPageWorkerLaunch();
     const answer = await worker.build({ kind: "scan", after: "" }, filter);
     expect("rows" in answer.page && answer.page.rows.length).toBe(3);
-    expect(JSON.stringify(answer.page)).not.toContain(lesson);
+    expect(JSON.stringify(answer.page)).toContain(lesson);
     await worker.shutdown();
     const restarted = await worker.build({ kind: "scan", after: "" }, filter);
     expect(restarted.builds).toBe(1);
@@ -277,52 +279,23 @@ test("pending omission sweeps advance across repeated unchanged log requests", a
   expect("rows" in second.page && second.page.rows.map(row => row.id)).toEqual([last.id]);
 }, 30_000);
 
-test("a privacy revision that moves after build refuses final serialization", async () => {
+test("a task page is built and served while role memory cannot be read", async () => {
   const f = fixture();
-  const { assertTaskExportCurrent } = await import("../taskExportPrivacy");
-  const request = await f.exchange.request(f.projects);
-  expect(() => assertTaskExportCurrent(request)).not.toThrow();
-  f.collection.boundedPatch(2, tx => tx.put({ ...tx.get("r:fixture")!, rule: "Another fixture rule covers the silver orchard." } as RoleMemoryRule));
-  expect(() => assertTaskExportCurrent({ ...request })).toThrow("nothing was sent");
-  expect(JSON.stringify(request)).not.toContain("privacy-revision");
-});
-
-test("an individually unbuildable privacy matcher withholds the task page", async () => {
-  const f = fixture();
-  const oversized = "oversized ".repeat(1_800);
-  f.collection.boundedPatch(2, tx => tx.put({ ...tx.get("r:fixture")!, rule: oversized } as RoleMemoryRule));
-  mutateTasks(() => ({ tasks: f.tasks.map(task => ({ ...task, details: oversized })), result: null }));
-  const { TaskPageWorker } = await import("../taskPageWorker");
-  const entries = ["src/lib/taskPage.worker.ts", ...(process.env.LLV_TASK_PAGE_BUILT_TEST === "1" ? [".next/server/task-page-worker.js"] : [])];
-  for (const entry of entries) {
-    const worker = new TaskPageWorker({ launch: { executable: process.execPath, workerPath: path.join(process.cwd(), entry) } });
-    try { await expect(worker.build({ kind: "scan", after: "" }, { self, projects: f.projects, skipPrefix: null })).rejects.toThrow("nothing was sent"); }
-    finally { await worker.shutdown(); }
-  }
-});
-
-test("unreadable privacy input withholds the page after a successful cached build", async () => {
-  const f = fixture(); await f.exchange.request(f.projects);
-  const { taskFeedSource } = await import("@/lib/tasks/store");
-  const cursor = taskFeedSource()!.revision();
-  mutateTasks(() => ({ tasks: f.tasks.map(task => ({ ...task, text: `Changed: ${lesson}` })), result: null }));
   const saved = f.collection.get("r:fixture")!;
   const db = new Database(path.join(f.root, "state.sqlite"));
   db.query("UPDATE state_rows SET value_json = ? WHERE collection = ? AND row_key = ?").run(JSON.stringify({ kind: "rule", id: 7, rule: lesson }), "role_memory", "r:fixture");
   db.query("UPDATE state_collections SET revision = revision + 1 WHERE collection = ?").run("role_memory"); db.close();
   try {
-    await expect(Promise.resolve().then(() => f.exchange.request(f.projects))).rejects.toThrow();
-    const { readLogPageInWorker } = await import("../taskPageWorker");
-    await expect(readLogPageInWorker([cursor], { self, projects: f.projects, skipPrefix: null })).rejects.toThrow();
-  }
-  finally {
+    const request = await f.exchange.request(f.projects);
+    expect(request.push?.rows).toHaveLength(3);
+  } finally {
     const restore = new Database(path.join(f.root, "state.sqlite"));
     restore.query("UPDATE state_rows SET value_json = ? WHERE collection = ? AND row_key = ?").run(JSON.stringify(saved), "role_memory", "r:fixture");
     restore.query("UPDATE state_collections SET revision = revision + 1 WHERE collection = ?").run("role_memory"); restore.close();
   }
 });
 
-(process.env.LLV_TASK_PAGE_BUILT_TEST === "1" ? test : test.skip)("the compiled worker preserves filtered payload bytes", async () => {
+(process.env.LLV_TASK_PAGE_BUILT_TEST === "1" ? test : test.skip)("the compiled worker preserves payload bytes", async () => {
   const f = fixture();
   const { TaskPageWorker } = await import("../taskPageWorker");
   const worker = new TaskPageWorker({ launch: { executable: process.execPath, workerPath: path.join(process.cwd(), ".next/server/task-page-worker.js") } });
@@ -330,6 +303,6 @@ test("unreadable privacy input withholds the page after a successful cached buil
   try {
     const result = await worker.build({ kind: "scan", after: "" }, filter);
     expect(JSON.stringify(result.page)).toBe(JSON.stringify(readScanPage("", filter)));
-    expect(JSON.stringify(result.page)).not.toContain(lesson);
+    expect(JSON.stringify(result.page)).toContain(lesson);
   } finally { await worker.shutdown(); }
 });

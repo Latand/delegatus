@@ -4,10 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-/* A stored lesson stays on this machine: the linked board's wire, the bridge
-   and issue reports, and the publication privacy gate all withhold or refuse
-   its text, while the lesson's own record is untouched. The state directory
-   and the scratch repository are private to this file. */
+/* Where a stored lesson is kept from leaving. Public output withholds or
+   refuses its text: issue reports, the manager report whose copy goes to the
+   project's Telegram chat, and the publication privacy gate. What stays with
+   the operator carries it as written: a linked installation's board and agent
+   feed, a relay to it, and prompts to the operator's own agents. The lesson's
+   own record is untouched. The state directory and the scratch repository are
+   private to this file. */
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-role-memory-egress-"));
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 afterAll(async () => {
@@ -16,7 +19,8 @@ afterAll(async () => {
 });
 
 const { leaveLessons, lessonPublicationEnv, projectView, recordLessonRequest, revertRule, storedLessonTexts, withoutStoredLessons, WITHHELD_LESSON: WITHHELD_LESSON_TEXT } = await import("./roleStore");
-const { outboundTask } = await import("@/lib/links/taskFeed");
+const { readScanPage } = await import("@/lib/links/taskFeed");
+const { mutateTasks } = await import("@/lib/tasks/store");
 const { renderReport, renderPlain } = await import("@/lib/bridge/reportRender");
 const { scrubIssueReport } = await import("@/lib/issueReports/scrub");
 const { EMPTY_DENY_LIST } = await import("@/lib/bridge/publicSafe");
@@ -41,17 +45,33 @@ test("outgoing text withholds a quoted lesson and its why; the lesson's record k
   expect(projectView(PROJECT).scopes.find((scope) => scope.roleId === "builder")!.active).toEqual([expect.objectContaining({ id: left!.id, rule: RULE, why: WHY })]);
 });
 
-test("a task leaves for a linked board without the lesson its text or details quote", () => {
-  const task = { id: "task-1", project: PROJECT, text: QUOTED, details: `Notes: ${RULE}`, status: "inbox" } as unknown as BoardTask;
-  const outbound = outboundTask(task);
-  expect(outbound.text).toBe("Done. Applied [learned rule].");
-  expect(outbound.details).toBe("Notes: [learned rule].");
-  expect(task.text).toBe(QUOTED);
-  const plain = { ...task, text: "Fix the parser", details: undefined } as unknown as BoardTask;
-  expect(outboundTask(plain)).toBe(plain);
+test("a task leaves for a linked installation as written, and its page never builds a lesson pattern", () => {
+  const at = "2026-10-07T12:00:00.000Z";
+  const project = `repo-${"f".repeat(32)}`;
+  const id = ["40000000", "0000", "4000", "8000", "000000000001"].join("-");
+  mutateTasks(() => ({ tasks: [{ id, project, text: QUOTED, details: `Notes: ${RULE}`, status: "inbox", placement: "unplaced", assignments: [], sources: [], createdAt: at, updatedAt: at } as unknown as BoardTask], result: null }));
+  const NativeRegExp = globalThis.RegExp;
+  let lessonPatterns = 0;
+  class CountingRegExp extends NativeRegExp {
+    constructor(pattern: string | RegExp, flags?: string) {
+      super(pattern, flags);
+      if (/branch/i.test(this.source)) lessonPatterns += 1;
+    }
+  }
+  globalThis.RegExp = CountingRegExp as typeof RegExp;
+  try {
+    const self = { id: ["10000000", "0000", "4000", "8000", "000000000001"].join("-"), prefix: "10000000" };
+    const page = readScanPage("", { self, projects: new Set([project]), skipPrefix: null, includeBoard: false, includePrototypeReview: false, peerTaskWireVersion: 0 });
+    expect(page.rows).toHaveLength(1);
+    const wire = JSON.stringify(page.rows);
+    expect(wire).toContain("WRITE THE TEST FOR THAT BRANCH");
+    expect(wire).toContain(`Notes: ${RULE}`);
+    expect(wire).not.toContain(WITHHELD_LESSON_TEXT);
+    expect(lessonPatterns).toBe(0);
+  } finally { globalThis.RegExp = NativeRegExp; }
 });
 
-test("bridge and issue reports drop a quoted lesson as private text", () => {
+test("the manager report copied to the project's Telegram chat and an issue report for GitHub drop a quoted lesson as private text", () => {
   const deny = { ...EMPTY_DENY_LIST, lessons: storedLessonTexts() };
   const { cut, warnings, dropped } = renderReport({ class: "status", name: "Delegatus", at: new Date("2026-10-07T12:00:00Z"), locale: "en", timeZone: "Europe/Kyiv",
     summary: QUOTED, sections: { inProgress: ["the parser fix", `follow ${RULE}`] }, deny });
@@ -85,7 +105,7 @@ test("the publication privacy gate refuses a change that carries a stored lesson
 }, 30_000);
 
 const { parseLessons } = await import("./roleStage");
-test("rewritten and reverted text is withheld at every existing egress and in publication known values", () => {
+test("rewritten and reverted text is withheld at every public output and in publication known values", () => {
   const before = "Before replaying a durable write, prove the operation still owns its acknowledgement.";
   const after = "Before replaying durable writes, prove both operation and current owner match their acknowledgement.";
   const why = "A receipt from an earlier owner reached the replay path.";
@@ -99,7 +119,6 @@ test("rewritten and reverted text is withheld at every existing egress and in pu
   const deny = { ...EMPTY_DENY_LIST, lessons: storedLessonTexts() };
   for (const text of [before, after]) {
     expect(withoutStoredLessons(text)).not.toContain(text);
-    expect(outboundTask({ id: "task-version", project: PROJECT, text, status: "inbox" } as unknown as BoardTask).text).not.toContain(text);
     expect(scrubIssueReport({ title: "Receipt replay", body: text }, deny).map(finding => finding.class)).toContain("lesson");
     const report = renderReport({ class: "status", name: "Delegatus", at: new Date(), locale: "en", timeZone: "Europe/Kyiv", summary: text, sections: {}, deny });
     expect(renderPlain(report.cut)).not.toContain(text);
@@ -132,7 +151,7 @@ function store(lessons: { scope: "role" | "project" | "machine"; rule: string; w
   });
 }
 
-test("every text of a task the linked board receives withholds a stored lesson: prototype titles, variants and decisions, original and replica", () => {
+test("every text of a task reaches a linked installation as written: prototype titles, variants and decisions, original and replica", () => {
   const at = "2026-10-07T12:00:00.000Z";
   const round: PrototypeReviewRound = {
     id: `pr_${"b".repeat(32)}`, taskId: uuid("b"), project: WIRE_PROJECT, title: `Variants for: ${RULE}`, createdAt: at,
@@ -146,17 +165,14 @@ test("every text of a task the linked board receives withholds a stored lesson: 
     createdAt: at, updatedAt: at, prototypeReviewReplica: { ...prototypeReviewReplica(original)!, rounds: prototypeReviewReplica(original)!.rounds.map((entry) => ({ ...entry, taskId: uuid("c") })) } } as unknown as BoardTask;
   const quotes = (value: unknown) => /write the test for that branch|untested empty-input path/i.test(JSON.stringify(value));
   for (const task of [original, replica]) {
-    expect(quotes(encodeTask(task, SELF).row)).toBe(true);
-    const { row } = encodeTask(outboundTask(task), SELF);
+    const { row } = encodeTask(task, SELF);
     expect("withheld" in row).toBe(false);
-    expect(quotes(row)).toBe(false);
-    expect(JSON.stringify(row)).toContain(WITHHELD_LESSON_TEXT);
+    expect(quotes(row)).toBe(true);
+    expect(JSON.stringify(row)).not.toContain(WITHHELD_LESSON_TEXT);
   }
-  /* The local records keep every text. */
-  expect(original.prototypeReviews![0]!.title).toBe(`Variants for: ${RULE}`);
 });
 
-test("an agent's title on the linked board withholds a lesson its task's first line quotes, before the line is cut", async () => {
+test("an agent's title on a linked installation is its task's first line as written, cut to the wire length", async () => {
   const at = Date.parse("2026-10-14T00:00:00Z");
   const task = { id: uuid("d"), project: WIRE_PROJECT, text: `Follow this before every push: ${RULE} That holds in every lane of the project.\nDetails`, chosen: true, status: "assigned",
     placement: "unplaced", assignments: [{ conversationId: "conversation_feed" }], createdAt: new Date(at).toISOString(), updatedAt: new Date(at).toISOString() } as unknown as BoardTask;
@@ -168,12 +184,13 @@ test("an agent's title on the linked board withholds a lesson its task's first l
   try {
     const page = await agentPart(id, null, new Set([WIRE_PROJECT]));
     const row = (page.rows as AgentRow[]).find((entry) => entry.task === task.id)!;
-    expect(row.t).toStartWith("Follow this before every push: [learned rule]");
-    expect(JSON.stringify(page).toLowerCase()).not.toContain("write the test");
+    expect(row.t).toBe(`Follow this before every push: ${RULE} That holds in every lane of the project.`.slice(0, 120));
+    expect(row.t).toContain("write the test");
+    expect(JSON.stringify(page)).not.toContain(WITHHELD_LESSON_TEXT);
   } finally { dropAgents(id); }
 });
 
-test("short reasons and symbol-heavy rules are refused at leave_lesson; one stored before that is still withheld on every path", () => {
+test("short reasons and symbol-heavy rules are refused at leave_lesson; one stored before that is still withheld on every public output", () => {
   const SHORT_RULE = "Guard each concurrent write to the shared store with the lock.";
   const SYMBOLS = "Use `a<b` && `c>d` || `e==f` -> `g!=h`;";
   const why = "Two writers raced on the shared store and one write was lost.";
@@ -186,8 +203,6 @@ test("short reasons and symbol-heavy rules are refused at leave_lesson; one stor
   expect(storedLessonTexts()).toEqual(expect.arrayContaining(["Writes raced.", SYMBOLS]));
   expect(withoutStoredLessons("Why: Writes raced.")).toBe(`Why: ${WITHHELD_LESSON_TEXT}.`);
   expect(withoutStoredLessons(`Applied ${SYMBOLS}`)).toBe(`Applied ${WITHHELD_LESSON_TEXT}`);
-  const task = { id: "task-2", project: PROJECT, text: "Fix the store", details: `Why: writes  raced.\nRule: ${SYMBOLS}`, status: "inbox" } as unknown as BoardTask;
-  expect(outboundTask(task).details).toBe(`Why: ${WITHHELD_LESSON_TEXT}.\nRule: ${WITHHELD_LESSON_TEXT}`);
   const deny = { ...EMPTY_DENY_LIST, lessons: storedLessonTexts() };
   const { dropped } = renderReport({ class: "status", name: "Delegatus", at: new Date("2026-10-07T12:00:00Z"), locale: "en", timeZone: "Europe/Kyiv",
     summary: "Store fixed.", sections: { inProgress: ["Why: Writes raced.", `Rule ${SYMBOLS}`, "the parser fix"] }, deny });

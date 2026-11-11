@@ -171,32 +171,26 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   } finally { await worker.shutdown(); }
 }, 30_000);
 
-test("linked agent titles are filtered before truncation and republished after a lesson revision", async () => {
+test("linked agent titles go out as written at the wire length, and a lesson revision does not republish them", async () => {
   const { AgentFeed, agentPart, decodeCursor, dropAgents } = await import("@/lib/links/agentFeed");
   const { sharedLinkState } = await import("@/lib/links/runtimeState");
   const project = `repo-${"a".repeat(32)}`, id = "privacy-agent-fixture";
   const title = "A long fixtureword title preserves every original receipt until its operation completes " + "with the complete documented context ".repeat(6);
-  const files = ["fixture", "unbound"].map(name => ({ path: `/sandbox/${name}.jsonl`, conversationId: `conversation_${name}`, project, engine: "claude", proc: "running", activity: "live", mtime: 1, lastAgentWorkAt: 1 }));
-  let tasks = [{ id: "fixture-task", project, chosen: true, text: title, assignments: [{ path: files[0]!.path }] }];
+  const files = [{ path: "/sandbox/fixture.jsonl", conversationId: "conversation_fixture", project, engine: "claude", proc: "running", activity: "live", mtime: 1, lastAgentWorkAt: 1, pendingQuestion: null, waitingInput: null }];
+  const tasks = [{ id: "fixture-task", project, chosen: true, text: title, assignments: [{ path: files[0]!.path }] }];
   const feed = new AgentFeed(id, () => files as never, () => tasks as never, () => [], () => () => false,
     { snapshot: () => ({ conversations: {}, memberships: {}, lineageEdges: {} }), seats: () => [], canonical: p => p });
   sharedLinkState("agentFeed.feeds", () => new Map<string, InstanceType<typeof AgentFeed>>()).set(id, feed);
+  const worker = spyOn(TaskPageWorker.prototype, "privacy");
   try {
     const first = await agentPart(id, null, new Set([project]));
     expect(first.rows?.find(row => "task" in row && row.task === "fixture-task")).toMatchObject({ t: title.slice(0, 120), e: "claude" });
-    store([title, "claude"]);
-    const changed = await agentPart(id, decodeCursor(first.cursor)!, new Set([project]));
-    expect(changed.rows?.find(row => "task" in row && row.task === "fixture-task")).toMatchObject({ t: withoutStoredLessonsIn(title).slice(0, 120), e: "claude" });
-    expect(changed.rows?.find(row => "t" in row && !("task" in row))).toMatchObject({ t: "claude agent", e: "claude" });
-    expect(feed.page(null, new Set([project])).rows?.every(row => !("t" in row) || row.t.length <= 120)).toBe(true);
-    const retitled = `${title}Additional receipt context`;
-    tasks = [{ ...tasks[0]!, text: retitled }];
-    const edited = await agentPart(id, decodeCursor(changed.cursor)!, new Set([project]));
-    expect(edited.rows?.find(row => "task" in row && row.task === "fixture-task")).toMatchObject({ t: withoutStoredLessonsIn(retitled).slice(0, 120) });
-    const { assertTaskExportCurrent } = await import("@/lib/links/taskExportPrivacy");
-    store([title, "claude", lesson]);
-    expect(() => assertTaskExportCurrent({ push: { agents: changed } })).toThrow("privacy changed");
-  } finally { dropAgents(id); }
+    store([title]);
+    const after = await agentPart(id, decodeCursor(first.cursor)!, new Set([project]));
+    expect(after.rows ?? []).toEqual([]);
+    expect((await agentPart(id, null, new Set([project]))).rows?.find(row => "task" in row && row.task === "fixture-task")).toMatchObject({ t: title.slice(0, 120) });
+    expect(worker).not.toHaveBeenCalled();
+  } finally { worker.mockRestore(); dropAgents(id); }
 }, 30_000);
 
 test.each(["lease-abort", "lease-abort-with-worker-error", "worker-failure"] as const)("privacy entry points preserve their failure class: %s", async mode => {

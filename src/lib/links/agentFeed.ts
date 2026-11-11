@@ -15,9 +15,6 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { Engine, FileEntry } from "@/lib/types";
 import { decodeLaneRow, isLaneKey, laneRowsFor, MAX_LANE_ROWS, type LaneRow } from "./laneFeed";
 import { linkedContext, runsHere } from "./linked";
-import { storedLessonRevision } from "@/lib/memory/roleStore";
-import { runPrivacyWork } from "./taskPageWorker";
-import { markTaskExport } from "./taskExportPrivacy";
 
 export type AgentRow = { k: string; p: string; t: string; e: string; m: string; st: "working" | "waiting" | "done"; task?: string; ro?: string; seat?: 1; at: number; pl?: { id: string; state: string; stage: string; stageState: string } };
 // Keep the complete chosen title local until the outbound worker filters it.
@@ -178,7 +175,6 @@ export class AgentFeed {
   private owned = false;
   private projectsKey = "";
   private seatRevision = "";
-  private privacyRevision = "";
   private resetSnapshot: { key: string; rows: Array<AgentRow | LaneRow>; cursor: Cursor } | null = null;
   private floor = 0;
   private expiresAt = Infinity;
@@ -190,8 +186,6 @@ export class AgentFeed {
     private readonly registrySources: FeedSources = {}) {}
 
   refresh(projects: ReadonlySet<string>): void {
-    const privacyRevision = storedLessonRevision();
-    const privacyChanged = privacyRevision !== this.privacyRevision;
     const files = this.source();
     const tasks = this.tasks();
     const projectsKey = [...projects].sort().join("|");
@@ -205,15 +199,14 @@ export class AgentFeed {
     const owns = this.ownership();
     if (tasks !== this.seenTasks || projectsKey !== this.projectsKey) this.owned = projects.size > 0 && tasks.some((task) => projects.has(task.project) && owns(task));
     const pipelines = this.owned || (projects.size > 0 && !!files?.length) ? this.pipelines() : null;
-    if (!privacyChanged && files === this.scanned && tasks === this.seenTasks && pipelines === this.seenPipelines && projectsKey === this.projectsKey && seatRevision === this.seatRevision && Date.now() < this.expiresAt) { this.pruneMarkers(); return; }
-    if (privacyChanged || projectsKey !== this.projectsKey) this.resetSnapshot = null;
+    if (files === this.scanned && tasks === this.seenTasks && pipelines === this.seenPipelines && projectsKey === this.projectsKey && seatRevision === this.seatRevision && Date.now() < this.expiresAt) { this.pruneMarkers(); return; }
+    if (projectsKey !== this.projectsKey) this.resetSnapshot = null;
     this.scanned = files;
     this.seenTasks = tasks;
     if (pipelines !== this.seenPipelines) this.attemptLookup = null;
     this.seenPipelines = pipelines;
     this.projectsKey = projectsKey;
     this.seatRevision = seatRevision;
-    this.privacyRevision = privacyRevision;
     this.expiresAt = Infinity;
     // Registry and seat storage are consulted only past the refresh cache fence.
     const seatRows = projects.size > 0
@@ -288,7 +281,7 @@ export class AgentFeed {
     }
     for (const [key, row] of wanted) {
       const previous = this.rows.get(key);
-      if (privacyChanged || !previous || titleToFilter(previous.row) !== titleToFilter(row)
+      if (!previous || titleToFilter(previous.row) !== titleToFilter(row)
         || JSON.stringify(previous.row) !== JSON.stringify(row)) this.rows.set(key, { row, version: ++this.version });
     }
     this.pruneMarkers();
@@ -359,12 +352,9 @@ export function decodeCursor(value: unknown): Cursor | null | undefined {
 }
 export async function agentPart(id: string, after: Cursor | null, projects: ReadonlySet<string>, offset = 0) {
   const { rows, reset, more, cursor } = agentFeed(id).page(after, projects, offset);
-  const titles = rows?.map(row => titleToFilter(row) ?? null);
-  const result = titles?.some(title => title !== null) ? await runPrivacyWork({ kind: "filter", value: titles }) : null;
-  const filtered = result?.value as Array<string | null> | undefined;
-  const safeRows = rows?.map((row, index) => "t" in row ? { ...row, t: (filtered?.[index] ?? row.t).slice(0, 120) } : row);
-  const part = { ...(safeRows?.length ? { rows: safeRows } : {}), ...(reset ? { reset } : {}), ...(more ? { more } : {}), cursor: encodeCursor(cursor) };
-  return result ? markTaskExport(part, result.privacyRevision) : part;
+  // A linked installation is the same operator's: titles leave as written, at their wire length.
+  const safeRows = rows?.map(row => "t" in row ? { ...row, t: row.t.slice(0, 120) } : row);
+  return { ...(safeRows?.length ? { rows: safeRows } : {}), ...(reset ? { reset } : {}), ...(more ? { more } : {}), cursor: encodeCursor(cursor) };
 }
 export function dropAgents(id: string): void { feeds.delete(id); received.delete(id); cursors.delete(id); }
 export function receivedAgentRows(id: string): readonly AgentRow[] { return [...(received.get(id)?.rows.values() ?? [])]; }
