@@ -629,6 +629,12 @@ which keeps the rule of `engine.ts:15613-15619`. Unchanged: a repository with
 any configured remote, a request with an explicit delivery remote, a named
 branch or commit, a detached checkout (keeps `main`), and a folder the product
 initialised (its branch is `main`).
+
+An explicitly named draft base keeps its existing resolution rule: without
+`origin`, it follows `refs/heads/<branch>`, including when another remote such
+as `publish` exists. This local read fetches nothing. The checked-out default
+above still requires the configured remote list to be empty.
+
 Test in `src/lib/pipelines/engine.creation.test.ts` with real Git: a
 repository on `master` with one commit, no remote and nothing named gives a
 lane whose base is `master`; provisioning resolves `refs/heads/master` and
@@ -661,9 +667,12 @@ it. #3756 changes only a design file, whose plan changes
 change first.
 
 The new Git reads are local and run at creation only when the request pins no
-commit: `git remote get-url origin`, and, with no `origin`, the branch read and
-the commit check. A test stub that answers every Git call with exit 0 and
-empty output reports an `origin` and keeps today's path; G0 runs
+commit: `git remote`, and, with no configured remote or delivery remote, the
+branch read and the commit check. A draft with a named branch also keeps the
+existing `git remote get-url origin` check when other remotes exist, so it can
+choose the local ref if `origin` is absent. A test stub that answers every Git
+call with exit 0 and empty output supplies no checked-out branch and keeps
+`main`; G0 runs
 `engine.creation.test.ts` and the engine test files that create lanes without
 a remote to confirm it.
 

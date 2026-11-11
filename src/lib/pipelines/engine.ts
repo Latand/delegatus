@@ -15640,12 +15640,14 @@ export async function createPipelineFromRequest(
     }
   }
   if (localOnly && req.autoStart === false) followsBaseBranch = true;
-  const followedRef = localOnly ? `refs/heads/${localBaseBranch}` : `refs/remotes/origin/${requestedBaseBranch}`;
+  const followsLocalBranch = localOnly || (followsBaseBranch
+    && (await ports.exec("git", ["remote", "get-url", "origin"], repoDir)).code === 2);
+  const followedRef = followsLocalBranch ? `refs/heads/${localBaseBranch}` : `refs/remotes/origin/${requestedBaseBranch}`;
   const base = explicitBaseRef || followsBaseBranch
     ? (await resolvePipelineBase(repoDir, { baseBranch: localOnly ? localBaseBranch : req.baseBranch, baseRef: explicitBaseRef || followedRef }, ports.exec))
     : null;
   if (base && !base.ok) {
-    return { error: followsBaseBranch && !localOnly ? `${base.error}; fetch origin ${requestedBaseBranch} in this checkout and create the draft again` : base.error, status: 409 };
+    return { error: followsBaseBranch && !followsLocalBranch ? `${base.error}; fetch origin ${requestedBaseBranch} in this checkout and create the draft again` : base.error, status: 409 };
   }
   const inventedTasks = loadTasksByIds(new Set(taskIds)).filter(task => task.proactive && !proactiveCandidateDecision(task).adopted);
   if (inventedTasks.length && !options.creationRequest) {

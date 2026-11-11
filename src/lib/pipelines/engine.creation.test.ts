@@ -45,6 +45,33 @@ test.each([["named delivery", true], ["configured non-origin remote", false]] as
   } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
+test.each(["release", "absent"])("a named draft base without origin uses the local branch with a publish remote (base %s)", async baseBranch => {
+  savePipelines([]);
+  const f = await realProvisioningRepo("non-origin-draft-base");
+  try {
+    await f.git(f.repo, "commit", "--allow-empty", "-m", "Initial fixture");
+    await f.git(f.repo, "branch", "release");
+    await f.git(f.repo, "remote", "add", "publish", "https://example.invalid/project.git");
+    const head = await f.git(f.repo, "rev-parse", "refs/heads/release");
+    const h = harness();
+    const calls: string[][] = [];
+    h.ports.exec = (command, args, ...rest) => { calls.push(args); return realExec(command, args, ...rest); };
+    const result = await createPipelineFromRequest({ task: "Named local draft base", repoDir: f.repo,
+      stages: RUN_STAGES as never, baseBranch, autoStart: false }, h.ports);
+    if (baseBranch === "release") {
+      expect(result.error).toBeUndefined();
+      expect(result.pipeline).toMatchObject({ state: "draft", baseBranch: "release", baseRef: head, baseRefPinned: false });
+      expect(loadPipelines()[0]).toMatchObject({ state: "draft", baseBranch: "release", baseRef: head });
+    } else {
+      expect(result.status).toBe(409);
+      expect(result.error).toContain("refs/heads/absent");
+      expect(loadPipelines()).toEqual([]);
+    }
+    expect(calls.some(args => args[0] === "fetch")).toBe(false);
+    expect(h.spawnInputs).toHaveLength(0);
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test.each([undefined, "main"])("a local repository without a commit is refused before storage (base %s)", async baseBranch => {
   savePipelines([]);
   const f = await realProvisioningRepo("unborn-base");
