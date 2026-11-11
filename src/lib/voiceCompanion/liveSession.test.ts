@@ -3451,6 +3451,36 @@ for (const backend of ["api", "codex"] as const) for (const crash of [false, tru
   expect(n3.lines).toEqual([]); expect(n3.owed).toBe(0);
 });
 
+for (const backend of ["api", "codex"] as const) for (const replied of [false, true])
+  test(`A2: ${backend} repeated resume handoff survives a real process restart with replied=${replied}`, async () => {
+    const directory = fs.mkdtempSync(path.join(root, "resume-restart-"));
+    const run = async (mode: "seed" | "handoff" | "reply" | "recover", resume = "", item = "") => {
+      const child = Bun.spawn([process.execPath, "src/lib/voiceCompanion/resumeRecovery.fixture.ts"], { cwd: process.cwd(), env: { ...process.env,
+        LLV_STATE_DIR: path.join(directory, "state"), XDG_CONFIG_HOME: path.join(directory, "config"),
+        RECOVERY_BACKEND: backend, RECOVERY_MODE: mode, RECOVERY_RESUME: resume, RECOVERY_ITEM: item }, stdout: "pipe", stderr: "pipe" });
+      const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(code, err).toBe(mode === "handoff" || mode === "reply" ? 73 : 0);
+      return JSON.parse(out) as { id: string; before: import("./storage").ReportSpeech[]; owed: import("./storage").ReportSpeech[]; rows: import("./transcriptRecord").TranscriptEntry[] };
+    };
+    const p = await run("seed");
+    const item = p.rows.find(row => row.kind === "utterance")!.id;
+    const point = { part: p.id, item };
+    const n = await run("handoff", p.id, item);
+    const first = n.rows.find(row => row.kind === "handoff")!;
+    expect(first.data.resumeOf).toEqual(point);
+    const n2 = await run(replied ? "reply" : "handoff", n.id);
+    const second = n2.rows.find(row => row.kind === "handoff")!;
+    expect(second.data.resumeOf).toEqual(point);
+    expect(second.id).not.toBe(first.id);
+    expect(n2.owed).toMatchObject([{ kind: "resume", resumeOf: point }]);
+    if (replied) expect(n2.rows.find(row => row.kind === "reply")?.data).toMatchObject({ handoffIds: [second.id] });
+    const n3 = await run("recover", n2.id);
+    expect(n3.before).toHaveLength(replied ? 0 : 1);
+    expect(n3.owed).toHaveLength(replied ? 0 : 1);
+    expect(n3.rows.filter(row => row.kind === "handoff")).toHaveLength(replied ? 0 : 1);
+    if (!replied) expect(n3.before[0].resumeOf).toEqual(point);
+  });
+
 for (const backend of ["api", "codex"] as const) for (const delay of [0, 180_000])
   test(`slice 3: ${backend} adopts an outage answer after ${delay}ms and two lost start answers exactly once`, async () => {
     let now = Date.UTC(2026, 10, 11, 12);

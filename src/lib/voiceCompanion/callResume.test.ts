@@ -653,6 +653,21 @@ test("slice 2: a mint key written before cursors still recovers its answer and t
   expect(h.provider.sessions).toHaveLength(2);
 });
 
+for (const acknowledged of ["first", "second", "unrelated", "empty"] as const)
+  test(`reconnect: repeated resume handoffs reconcile the ${acknowledged} receipt`, async () => {
+    const { resumeWasSaid } = await import("./callResume");
+    const point = { part: "original-part", item: "cut-item" };
+    const handoff = (id: string): import("./transcriptRecord").TranscriptEntry => ({ id, kind: "handoff", atMs: 0, data: { resumeOf: point } });
+    const reply: import("./transcriptRecord").TranscriptEntry = { id: "answer", kind: "reply", atMs: 1,
+      data: { text: acknowledged === "empty" ? " " : "Go on.", handoffIds: [acknowledged === "empty" ? "second" : acknowledged] } };
+    // Explicit receipts can extend a reply row begun before its handoff.
+    const segments = [{ id: "attempt-one", createdAt: 0, entries: [handoff("first")] },
+      { id: "attempt-two", createdAt: 1, entries: [reply, handoff("second")] }];
+    expect(resumeWasSaid(segments, point)).toBe(acknowledged === "first" || acknowledged === "second");
+    expect(resumeWasSaid(segments, { ...point, part: "another-part" })).toBe(false);
+    expect(resumeWasSaid(segments, { ...point, item: "another-item" })).toBe(false);
+  });
+
 for (const explicit of [true, false]) test(`reconnect: ${explicit ? "explicit receipts" : "legacy row order"} bind recovery to the report and resume actually answered`, async () => {
   const { recoverReportSpeech, resumeWasSaid } = await import("./callResume");
   const h = harness();

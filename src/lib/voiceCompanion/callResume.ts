@@ -68,11 +68,17 @@ function sentenceStart(text: string, offset: number): number {
 export function resumeWasSaid(segments: readonly CallSegment[], resumeOf: ResumePoint["resumeOf"]): boolean {
   // Receipt identity also survives the private-history cut; none of that speech enters the resume context.
   const rows = segments.flatMap(segment => segment.entries);
-  const handoff = rows.findIndex(row => row.kind === "handoff" && (row.data.resumeOf as ResumePoint["resumeOf"] | undefined)?.part === resumeOf.part
-    && (row.data.resumeOf as ResumePoint["resumeOf"] | undefined)?.item === resumeOf.item);
-  return handoff >= 0 && (rows.slice(handoff + 1).some(row => row.kind === "reply" && textOf(row).trim()
-      && (!Array.isArray(row.data.handoffIds) || row.data.handoffIds.includes(rows[handoff].id)))
-    || rows.some(row => row.kind === "reply" && Array.isArray(row.data.handoffIds) && row.data.handoffIds.includes(rows[handoff].id)));
+  const handoffs = new Set<string>();
+  let firstHandoff = Infinity;
+  for (const [index, row] of rows.entries()) {
+    const point = row.data.resumeOf as ResumePoint["resumeOf"] | undefined;
+    if (row.kind === "handoff" && point?.part === resumeOf.part && point.item === resumeOf.item) {
+      handoffs.add(row.id); firstHandoff = Math.min(firstHandoff, index);
+    }
+  }
+  // An unheard resume may have several handoffs across parts; any matching receipt settles it.
+  return rows.some((row, index) => row.kind === "reply" && textOf(row).trim()
+    && (Array.isArray(row.data.handoffIds) ? row.data.handoffIds.some(id => handoffs.has(id)) : index > firstHandoff));
 }
 /** These are announcements only. They carry no permission to replay an action or confirm an old proposal. */
 export function resumeNotices(segments: readonly CallSegment[]): ResumePoint[] {
