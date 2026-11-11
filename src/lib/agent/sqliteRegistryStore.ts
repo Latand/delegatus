@@ -611,6 +611,10 @@ const conversationPathSql = (records: string) => `SELECT conversation_id FROM (
     installation fit; operation owners, the largest payloads, stay per commit. */
 const COLD_STABLE_ROW_BYTES = 48 * 1024 * 1024;
 
+/** Journalled changes a preparation replays on the published reader in one
+    synchronous step. A row change is a keyed read and one normalization. */
+const PREPARED_REPLAY_CHANGES = 256;
+
 type StoredRow = { collection: string; row_key: string; value_json: string; row_order: number };
 type MetaRow = { key: string; value: string };
 type CachedRow = { valueJson: string; parsed: unknown };
@@ -1874,9 +1878,45 @@ export class SqliteAgentRegistryStore {
       if (cached && cached.stamp === this.preparedReader.storeStamp()) {
         return Promise.resolve(cached);
       }
+      /* A few journalled commits are replayed on the published reader, the
+         step every synchronous read between preparations already takes.
+         Opening a reader and assembling the whole view for each of them left
+         one connection and one complete set of row accessors behind for every
+         view a caller still held. */
+      if (cached) {
+        let replayed: StampedSnapshot | null = null;
+        try { replayed = this.preparedReader.replayBoundedJournal(); }
+        catch { /* The cooperative preparation below reports what it finds. */ }
+        if (replayed) return Promise.resolve(replayed);
+      }
     }
     const shared = this.preparingReader ?? this.startReaderPreparation();
     return this.awaitReaderPreparation(shared, signal);
+  }
+
+  /** The view brought up to date from the journal when it names a few row
+      changes since this view, none of them a conversation and none a moved
+      archived version; null otherwise. A longer or trimmed journal, a commit
+      the journal does not name, a conversation change and an archive pass
+      belong to the cooperative preparation. */
+  private replayBoundedJournal(): StampedSnapshot | null {
+    const cold = this.coldViewCache;
+    if (!this.readOnlyCache || !cold || !this.changesReady || this.writerHeld) return null;
+    const journal = this.db.query<{ first: number; last: number }, []>(
+      "SELECT COALESCE(MIN(seq),0) AS first,COALESCE(MAX(seq),0) AS last FROM registry_changes").get()!;
+    if (journal.first === 0 || journal.first > this.snapshotChangeId + 1 || journal.last <= this.snapshotChangeId) return null;
+    if (journal.last - this.snapshotChangeId > PREPARED_REPLAY_CHANGES) return null;
+    const version = this.db.query<{ archive_id: number }, [string, string]>("SELECT archive_id FROM registry_cold WHERE collection=? AND row_key=?");
+    for (const change of this.db.query<{ collection: string; row_key: string }, [number]>(
+      "SELECT DISTINCT collection,row_key FROM registry_changes WHERE seq>?").all(this.snapshotChangeId)) {
+      if (!ROW_COLLECTION_KEYS.has(change.collection)) continue;
+      /* A receipt takes its artifact materialization from its conversation
+         when the whole registry is normalized; a row replay does not derive it. */
+      if (change.collection === "conversations") return null;
+      const held = cold.coldIds.get(change.collection as RowCollection)?.get(change.row_key);
+      if (held !== version.get(change.collection, change.row_key)?.archive_id) return null;
+    }
+    return withViewerOperation("registry.read", () => performanceSpans.sync("registry.snapshot", () => this.refreshSnapshot()));
   }
 
   /** Attach one caller to the shared preparation. A caller without a signal
