@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +6,9 @@ import { loadFlows, saveFlows } from "@/lib/flows/store";
 
 import type { Flow } from "@/lib/flows/types";
 
-import { advanceFlowFromRuntime, createServerRuntimeConsumers } from "./serverConsumers";
+import { consumeRuntimeEvent } from "./consumers";
+import { runtimeScope, type RuntimeEvent } from "./contracts";
+import { createServerRuntimeConsumers } from "./serverConsumers";
 
 function flow(): Flow {
   return {
@@ -34,30 +35,29 @@ function flow(): Flow {
   };
 }
 
-test("terminal readiness refuses without mutating the retained flow", () => {
-  const value = flow();
-  const before = JSON.stringify(value);
-  expect(() => advanceFlowFromRuntime(value, "REVIEW_READY: contract fixed")).toThrow("FLOW_RETIRED");
-  expect(JSON.stringify(value)).toBe(before);
-});
-
-test("retired runtime callbacks refuse immediately while the state database has another writer", async () => {
+test("stored flow and workflow events reach no writer and leave the stored flow untouched", async () => {
   const previous = process.env.LLV_STATE_DIR;
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-consumer-lock-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-consumer-retired-"));
   process.env.LLV_STATE_DIR = root;
-  let db: Database | undefined;
   try {
     saveFlows([flow()]);
     const before = JSON.stringify(loadFlows());
-    db = new Database(path.join(root, "state.sqlite"));
-    db.exec("PRAGMA busy_timeout = 0");
-    db.exec("BEGIN IMMEDIATE");
-    await expect(createServerRuntimeConsumers().flowReady("flow-one", "REVIEW_READY: durable")).rejects.toMatchObject({ code: "FLOW_RETIRED" });
-    await expect(createServerRuntimeConsumers().workflowStageCompleted("workflow-one", 0)).rejects.toMatchObject({ code: "FLOW_RETIRED" });
+    const consumers = createServerRuntimeConsumers();
+    expect(Object.keys(consumers).sort()).toEqual(["spawnTurnEnded", "taskDeliveryAcknowledged"]);
+    const event = (kind: string, scope: RuntimeEvent["scope"], payload: Record<string, unknown>): RuntimeEvent => ({
+      schemaVersion: 1, seq: 1, eventId: `event-${kind}`, revision: 1, scope, kind, payload,
+      occurredAt: "2026-07-10T00:00:00.000Z", recordedAt: "2026-07-10T00:00:00.000Z",
+      producer: { kind: "test" }, causationId: null, correlationId: null,
+    });
+    for (const stored of [
+      event("flow.ready", runtimeScope("flow", "flow-one"), { flowId: "flow-one", readyNote: "REVIEW_READY: durable" }),
+      event("turn-ended", runtimeScope("session", "implementer"), { flowId: "flow-one", readyNote: "REVIEW_READY: durable", conversationId: "conversation_c", turnId: "t1", outcome: "completed" }),
+      event("workflow.stage.completed", runtimeScope("workflow", "workflow-one"), { workflowId: "workflow-one", stage: 0 }),
+    ]) {
+      expect(await consumeRuntimeEvent(stored, consumers)).toEqual([]);
+    }
     expect(JSON.stringify(loadFlows())).toBe(before);
-    db.exec("ROLLBACK");
   } finally {
-    db?.close();
     if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }

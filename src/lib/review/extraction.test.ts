@@ -33,24 +33,6 @@ test("review parsing and settled relay projection cannot load flow execution or 
   }
 });
 
-test("legacy entry points share the extracted implementations", async () => {
-  const oldFindings = await import("@/lib/flows/findings");
-  const parsing = await import("./findings");
-  const scanner = await import("@/lib/scanner/lastAssistantMessage");
-  const artifacts = await import("@/lib/reviewHistory/findings");
-  expect(oldFindings.parseFindings).toBe(parsing.parseFindings);
-  expect(oldFindings.lastAssistantMessage).toBe(scanner.lastAssistantMessage);
-  expect(oldFindings.readFindingsFile).toBe(artifacts.readFindingsFile);
-  expect(oldFindings.fallbackReviewFromTranscript).toBe(artifacts.fallbackReviewFromTranscript);
-  const oldExec = await import("@/lib/flows/exec");
-  const executor = await import("@/lib/agent/headless");
-  expect(oldExec.runHeadlessCodexOnce).toBe(executor.runHeadlessCodexOnce);
-  expect(oldExec.terminateHeadlessReviewerGroupAndWait).toBe(executor.terminateHeadlessReviewerGroupAndWait);
-  const oldPrompts = await import("@/lib/flows/prompts");
-  const history = await import("@/lib/reviewHistory/relayPrompt");
-  expect(oldPrompts.relayPrompt).toBe(history.relayPrompt);
-});
-
 test("archive GET import graphs cannot tick, refresh merge evidence or reconcile ownership", () => {
   for (const entry of ["src/app/api/review-history/route.ts", "src/app/api/review-history/[id]/route.ts", "src/app/api/review-history/[id]/export/route.ts"]) {
     const dependencies = [...runtimeDependencies(entry)].map(file => path.relative(process.cwd(), file));
