@@ -898,3 +898,82 @@ test("parallel request keys cannot expose another workspace's in-flight or saved
     expect(deliveries).toBe(1); expect(readDeputies()).toHaveLength(1);
   } finally { release.resolve(); recorded.resolve(); await Promise.allSettled([first, collision].filter(Boolean)); factory.mockRestore(); setAgentRegistryForTests(null); registry.close(); }
 });
+
+test("a fenced seat keeps the Telegram tools its record grants; no other fenced caller does", async () => {
+  const seat = "conversation_seat";
+  snapshot.conversations[seat] = conversation(seat, own, false) as never;
+  dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: seat, role: "orchestrator" });
+  rebuild();
+  let requests = 0;
+  const tools = (): Promise<{ ok: boolean }[]> => Promise.all([
+    call("telegram_bot_chats", { clientRequestId: `telegram-${++requests}` }),
+    call("telegram_bot_messages", { chat: "team", clientRequestId: `telegram-${++requests}` }),
+    call("telegram_bot_send", { chat: "team", text: "status", clientRequestId: `telegram-${++requests}` }),
+  ]);
+  const refused = async () => { for (const answer of await tools()) expect(answer).toMatchObject(REFUSED); };
+  const served = async () => { for (const answer of await tools()) expect(answer.ok).toBe(true); };
+  const designate = (key: string, grant: boolean, workspace?: { memberId: string; workspaceId: string }) => {
+    beginOrchestratorSeatIntent({ project: own, mandate: "Run this workspace", clientRequestId: key, mode: "existing", conversationId: seat,
+      ...(workspace ? { workspace } : {}), telegramGrant: grant, now: AT });
+    completeOrchestratorSeatIntent({ project: own, clientRequestId: key, conversationId: seat, path: `${seat}.jsonl`, now: AT });
+  };
+  // A conversation a member wrote to that is no seat.
+  store.admitConversationMember(seat, member.id);
+  await refused();
+  // The owner's seat, fenced by the member's message.
+  designate("seat-without-grant", false);
+  await refused();
+  designate("seat-with-grant", true);
+  await served();
+  // The grant covers the Telegram tools and no other installation-wide tool.
+  expect(await call("deploy_exact_sha", { sha: "a".repeat(40) })).toMatchObject(REFUSED);
+  expect(await call("account_limits")).toMatchObject(REFUSED);
+  // The seat's worker holds no grant.
+  dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: "conversation_member", role: "builder" });
+  rebuild();
+  await refused();
+  dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: seat, role: "orchestrator" });
+  rebuild();
+  // A seat a person designated for the member stays without the tools.
+  designate("member-seat", true, { memberId: member.id, workspaceId: W1 });
+  await refused();
+  designate("owner-seat-again", true);
+  await served();
+  // A conversation a member launched keeps its binding as the owner's seat, and gets no grant.
+  snapshot.conversations[seat] = conversation(seat, own) as never;
+  await refused();
+  snapshot.conversations[seat] = conversation(seat, own, false) as never;
+  await served();
+  // An unreadable seat record and a lost project both end the grant.
+  const seats = path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json");
+  const saved = fs.readFileSync(seats, "utf8");
+  fs.writeFileSync(seats, "{");
+  for (const answer of await tools()) expect(answer.ok).toBe(false);
+  fs.writeFileSync(seats, saved);
+  await served();
+  store.removeWorkspaceMember(W1, member.id);
+  await refused();
+});
+
+test("an agent author's project label never refuses a permitted transcript, and a foreign transcript stays refused", async () => {
+  const records = [{ role: "user", text: "relayed", author: { kind: "agent", role: "reviewer", project: "Another Project", conversationId: "conversation_foreign" } }];
+  const fenced = withWorkspaceMcpFence({ callTool: async (tool, _input, context) => {
+    const answer = { ok: true, toolName: tool, clientRequestId: null, replayed: false, records } as never;
+    context?.assertResult?.(answer);
+    return answer;
+  } } as McpToolService, dependencies);
+  const permitted = await fenced.callTool("conversation_messages", { clientRequestId: "own-transcript", transcriptPath: "conversation_member.jsonl" });
+  if (!permitted.ok) throw new Error(permitted.error);
+  expect(permitted.records).toHaveLength(1);
+  // The label of a project outside the caller's reach is withheld with its author.
+  expect(JSON.stringify(permitted)).not.toContain("Another Project");
+  expect(await fenced.callTool("conversation_messages", { clientRequestId: "foreign-transcript", transcriptPath: "conversation_foreign.jsonl" })).toMatchObject(REFUSED);
+  expect(await fenced.callTool("conversation_messages", { clientRequestId: "foreign-id", conversationId: "conversation_foreign" })).toMatchObject(REFUSED);
+  // A row that itself belongs to a foreign project still refuses the whole answer.
+  const leaking = withWorkspaceMcpFence({ callTool: async (tool, _input, context) => {
+    const answer = { ok: true, toolName: tool, clientRequestId: null, replayed: false, records: [{ role: "user", text: "x", project: other }] } as never;
+    context?.assertResult?.(answer);
+    return answer;
+  } } as McpToolService, dependencies);
+  expect(await leaking.callTool("conversation_messages", { clientRequestId: "leak", transcriptPath: "conversation_member.jsonl" })).toMatchObject(REFUSED);
+});

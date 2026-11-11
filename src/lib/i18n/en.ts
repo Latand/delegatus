@@ -2490,6 +2490,7 @@ export const en = {
   "feed.processingFailed": "Could not display this record",
   "feed.processingFailedRecord": "Record: {type}",
   "feed.agentEnded": "agent finished",
+  "feed.pictureMissing": "Picture not available",
   "feed.copyCode": "Copy code",
   "feed.copyMd": "Copy message (Markdown)",
   "feed.voiceTurn": "Voice",
