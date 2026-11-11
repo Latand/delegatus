@@ -1692,6 +1692,31 @@
       ],
       "sharedFixture": "src/lib/pipelines/engine.rolePrivacyEffects.fixture.ts",
       "rule": "Every existing effect scenario runs in exactly one explicit test file. Assertions, inputs, per-test timeouts and process isolation are preserved; the recursive child receives its wrapper path."
-    }
+    },
+    "finalMainParent": "32a6460958623ce4a09709edd343224a171c8ce4",
+    "freshRemovalControls": {
+      "pipeline": {
+        "normal": {
+          "pass": 6,
+          "fail": 0
+        },
+        "withoutSwitch": {
+          "pass": 2,
+          "fail": 4
+        }
+      },
+      "socketRecovery": {
+        "normal": {
+          "pass": 2,
+          "fail": 0
+        },
+        "withoutSwitch": {
+          "pass": 0,
+          "fail": 2
+        }
+      },
+      "remainingControls": "The other twenty control sites are unchanged; their retained normal/red evidence remains applicable."
+    },
+    "lateMainAudit": "The first-run guide appends text to the existing role-preset spawn. The stage-test repair fixes isolation on main. Neither adds a Codex launch mechanism; both are merged without conflict."
   }
 }
