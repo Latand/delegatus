@@ -23,23 +23,7 @@ export function taskPageWorkerLaunch(cwd = process.cwd()) {
   if (fs.existsSync(source) && fs.existsSync("/usr/local/bin/bun-container")) return { executable: "/usr/local/bin/bun-container", workerPath: source };
   return { executable: process.versions.bun ? process.execPath : (process.env.LLV_BUN_EXECUTABLE || "bun"), workerPath: fs.existsSync(bundled) ? bundled : source };
 }
-export type TaskPageWorkerRuntime = { cwd?: string; env?: Partial<NodeJS.ProcessEnv>; launch?: ReturnType<typeof taskPageWorkerLaunch>; timeoutMs?: number; onPhase?: (phase: "compile" | "match") => void;
-  /** Resident memory of the worker process in bytes, or null when it cannot be read. */
-  residentBytes?: (pid: number) => number | null };
-/** A worker whose resident memory passes this after a job is retired; the
- * next job starts a fresh one. Its caches rebuild from the store. */
-export const TASK_PAGE_WORKER_RSS_LIMIT_MB = 1536;
-export function taskPageWorkerRssLimitBytes(env: Partial<NodeJS.ProcessEnv> = process.env): number {
-  const configured = Number(env.LLV_TASK_PAGE_WORKER_RSS_MB);
-  return (Number.isFinite(configured) && configured > 0 ? configured : TASK_PAGE_WORKER_RSS_LIMIT_MB) * 1024 * 1024;
-}
-/** Linux reports resident pages in /proc; elsewhere the size is unknown and the worker stays. */
-function processResidentBytes(pid: number): number | null {
-  try {
-    const pages = Number(fs.readFileSync(`/proc/${pid}/statm`, "utf8").split(" ")[1]);
-    return Number.isFinite(pages) ? pages * 4096 : null;
-  } catch { return null; }
-}
+export type TaskPageWorkerRuntime = { cwd?: string; env?: Partial<NodeJS.ProcessEnv>; launch?: ReturnType<typeof taskPageWorkerLaunch>; timeoutMs?: number; onPhase?: (phase: "compile" | "match") => void };
 type WorkResult = PageBuildResult | PrivacyResult;
 type Job = { id: number; settled: boolean; observation: ReturnType<typeof observePrivacyWorkerJob>; phaseDone?: () => void; finish(error?: Error, result?: WorkResult): void };
 type Resident = { child: ChildProcess; closed: Promise<void>; buffer: string; files?: ReturnType<typeof lastScannedFiles> };
@@ -57,8 +41,6 @@ export class TaskPageWorker {
   private nextId = 0;
   private idle?: ReturnType<typeof setTimeout>;
   builds = 0;
-  /** Workers retired for passing the memory limit. */
-  retirements = 0;
   lastCpu: NodeJS.CpuUsage | null = null;
   constructor(private runtime: TaskPageWorkerRuntime = {}) {}
 
@@ -133,17 +115,9 @@ export class TaskPageWorker {
           await completed;
           await this.waitForRetirement();
           if (this.resident === worker) {
-            const resident = worker.child.pid === undefined ? null : (this.runtime.residentBytes ?? processResidentBytes)(worker.child.pid);
-            if (resident !== null && resident > taskPageWorkerRssLimitBytes({ ...process.env, ...this.runtime.env })) {
-              // The job is answered; a worker this large gives its memory back by ending.
-              console.warn("[task-page-worker] retired over its memory limit", JSON.stringify({ residentMb: Math.round(resident / 1024 / 1024) }));
-              this.retirements += 1;
-              this.retire(worker);
-            } else {
-              // Keep the page cache through the failing peer's five-minute wait.
-              this.idle = setTimeout(() => this.retire(worker), 10 * 60_000);
-              this.idle.unref();
-            }
+            // Keep the page cache through the failing peer's five-minute wait.
+            this.idle = setTimeout(() => this.retire(worker), 10 * 60_000);
+            this.idle.unref();
           }
         } catch (error) {
           job.finish(unavailable(privacyFailureOf(error)));
