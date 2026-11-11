@@ -635,3 +635,20 @@ test("slice 2: many open requests each keep their current status inside the cont
     expect(line).toBeDefined(); expect(line).toContain(index % 2 ? "delivered" : "queued");
   }
 });
+
+test("slice 2: a mint key written before cursors still recovers its answer and then reports its closed part", async () => {
+  const { createHash } = await import("node:crypto");
+  const h = harness(); const p = await start(h);
+  say(h, p.providerId, [["voice", "The build passed."]]); await h.service.drain(p.sessionId); await h.service.close(p.sessionId, "transport");
+  const input = { project: "fixture", locale: "en" as const, sdp: "v=1", requestId: "legacy-resume", startedBy: operator, resume: p.sessionId };
+  const n = await h.service.start(input);
+  // The persisted digest format of slices 0/1, with no optional cursor field.
+  h.storage.change(doc => { doc.sessions[n.sessionId].mintDigest = createHash("sha256").update(JSON.stringify([input.project, input.locale, input.sdp, operator, p.sessionId, null])).digest("hex"); });
+  expect(await h.service.start(input)).toEqual(n);
+  expect(h.provider.sessions).toHaveLength(2);
+  await h.service.close(n.sessionId, "transport");
+  const state = new CompanionStorage(h.now);
+  const gate = new CompanionAdmission(state, { recipient: () => null, reports: () => [], send: async () => { throw new Error("unexpected send"); } }, h.now);
+  await expect(h.build(state, gate).start(input)).rejects.toThrow("SESSION_CLOSED");
+  expect(h.provider.sessions).toHaveLength(2);
+});

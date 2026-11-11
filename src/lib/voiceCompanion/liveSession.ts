@@ -242,7 +242,7 @@ export class CompanionLiveSessions {
     const requestId = input.requestId ?? randomUUID();
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId) || (input.resume !== undefined && !/^[A-Za-z0-9_-]{1,200}$/.test(input.resume))) throw new Error("INVALID_REQUEST");
     if (input.cursor !== undefined && (!input.resume || !resumeCursorValid(input.cursor))) throw new Error("INVALID_REQUEST");
-    const digest = createHash("sha256").update(JSON.stringify([input.project, input.locale, input.sdp, input.startedBy ?? null, ...(input.resume ? [input.resume] : []), input.drop ?? null, input.cursor ?? null])).digest("hex");
+    const digest = createHash("sha256").update(JSON.stringify([input.project, input.locale, input.sdp, input.startedBy ?? null, ...(input.resume ? [input.resume] : []), input.drop ?? null, ...(input.cursor !== undefined ? [input.cursor] : [])])).digest("hex");
     const knownRequest = (): Promise<MintedCompanionSession> | null => {
       const previous = Object.values(this.storage.read().sessions).find(row => row.mintRequestId === requestId);
       if (!previous) return null;
