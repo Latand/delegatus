@@ -387,6 +387,7 @@ test.skipIf(process.platform !== "linux")("a plain recorded foreground gate supp
   const parent = fixture();
   const access = materializeStructuredHostAccess(false, process.env, null, parent.root,
     { pipelineId: "foreground-lane", launchId: "foreground-launch", retainUntilClose: false });
+  if (!access.scratchDirectory) throw new Error("expected an owned scratch root");
   const log = path.join(access.env.TMPDIR!, "plain.log");
   const f = { root: access.scratchDirectory, log, dir: log + ".gate" };
   const env = portableEnvironment(f);
