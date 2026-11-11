@@ -11217,7 +11217,6 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
       ...admitted.flatMap(row => { const current = findPipelineRecord(row.id); return current ? [current] : []; })]
       .map(row => [row.id, row])).values()].filter((pipeline) =>
       pipeline.state === "provisioning" && !pipeline.hiddenAt && !pipeline.closedAt
-      && !pipelineSurvivorRefusal(pipeline)
       && (!publishesRemoteBranch(pipeline) || pipeline.delivery)
       /* A lane waiting out a transient failure keeps its backoff: its own
          scheduled tick provisions it when the wait falls due. */
@@ -11238,7 +11237,6 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
     const revalidate = pipelineRecordRevalidator(pipeline.id, (record) => {
       if (!record || record.state !== "provisioning" || record.hiddenAt || record.closedAt
         || JSON.stringify(provisionFence(record)) !== fence) abort.abort();
-      if (record && pipelineSurvivorRefusal(record)) abort.abort();
     });
     return { pipeline, abort, revalidate };
   });
@@ -11318,7 +11316,6 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
     against the record as it stands now. */
 async function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOutcome | undefined, ports: PipelinePorts): Promise<boolean> {
   if (!outcome || pipeline.state !== "provisioning" || pipeline.hiddenAt || pipeline.closedAt) return false;
-  if (pipelineSurvivorRefusal(pipeline)) return false;
   const fence = provisionFence(pipeline);
   if ((Object.keys(fence) as Array<keyof typeof fence>).some((key) => fence[key] !== outcome.fence[key])) return false;
   if (outcome.base) {

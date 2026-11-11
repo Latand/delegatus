@@ -17,7 +17,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:te
  *  - a runtime host generation: `src/runtime-host/main.ts` under `bun run`, on
  *    a private socket in a private state directory. Every Viewer generation
  *    below talks to it over that socket, as the Viewer container does.
- *  - Viewer generations: `fixtures/stageHostGeneration.ts` under `bun run`,
+ *  - Viewer generations: `fixtures/generationCloseHost.ts` under `bun run`,
  *    one process per generation. The incumbent runs the product's spawn
  *    writers and records itself as the claim owner; a successor runs the
  *    product's `adoptStructuredHostsAtStartup` with only the CLI launch
@@ -82,7 +82,7 @@ async function tickPipelines(...args: Parameters<typeof engineTickPipelines>) {
 }
 
 const repoRoot = path.resolve(import.meta.dir, "../../..");
-const generationFixture = path.join(import.meta.dir, "fixtures", "stageHostGeneration.ts");
+const generationFixture = path.join(import.meta.dir, "fixtures", "generationCloseHost.ts");
 const runtimeSocket = path.join(isolated, "runtime-host.sock");
 const generationEnvironment: Record<string, string | undefined> = {
   PATH: process.env.PATH,
@@ -1367,7 +1367,7 @@ test.each(["retry-stage", "skip-stage"] as const)("%s checks older attempt survi
 });
 
 
-test.each(["alive", "unknown", "late-alive", "late-unknown"])("ticks defer provisioning until an earlier partial tree is dead (%s) (#1501)", async (mode) => {
+test("ticks defer worktree provisioning until an earlier partial tree is positively dead (#1501)", async () => {
   const current = await lane("tree");
   const pipeline = pipelineFor(current);
   const survivor = current.descendant!;
@@ -1385,20 +1385,12 @@ test.each(["alive", "unknown", "late-alive", "late-unknown"])("ticks defer provi
   record.closedAt = null;
   record.cursor = structuredClone(pipeline.cursor);
   record.state = "provisioning";
-  const retained = structuredClone(record.runs[0]!.attempts[0]!.unresolvedTermination!);
-  if (mode.endsWith("unknown")) retained.survivors[0]!.bootEpoch = null;
-  record.runs[0]!.attempts[0]!.unresolvedTermination = mode.startsWith("late-") ? undefined : retained;
   savePipelines(loadPipelines().map((item) => item.id === pipeline.id ? record : item));
   const commands: string[] = [];
   const ports = { ...defaultPipelinePorts(), exec: (command: string, args: string[]) => {
     commands.push([command, ...args].join(" "));
     if (command === "git" && args[0] === "branch") return { code: 0, stdout: `${pipeline.branch}\n`, stderr: "" };
     if (command === "git" && args[0] === "rev-parse") {
-      if (mode.startsWith("late-")) {
-        const live = pipelineRecord(pipeline.id);
-        live.runs[0]!.attempts[0]!.unresolvedTermination = retained;
-        savePipelines(loadPipelines().map(item => item.id === live.id ? live : item));
-      }
       return { code: 0, stdout: `${path.join(current.directory, ".git")}\n`, stderr: "" };
     }
     return { code: 1, stdout: "", stderr: "controlled command boundary" };

@@ -42,18 +42,17 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { AgentRegistry, type ProcessIdentity } from "@/lib/agent/registry";
+import { AgentRegistry, type AgentRegistryEntry, type ProcessIdentity } from "@/lib/agent/registry";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { captureProcessIdentity } from "@/lib/processIdentity";
-import { adoptClaudeRegistryHosts } from "@/lib/runtime/registry";
 import { createFakeDeliveryLedger, FakeEngineHost } from "@/lib/runtime/fixtures/fakeEngineHost";
 import { adoptStructuredHostsAtStartup, structuredStartupDeferral, structuredStartupHosts } from "@/lib/runtime/startup";
 import { structuredStartupAxis } from "@/lib/runtime/startupStatus";
 import { runStructuredHostStartup } from "@/lib/viewerInstrumentation";
 
 const [mode, registryPath, laneDirectory, hostShape = "single"] = process.argv.slice(2);
-if ((mode !== "spawn" && mode !== "adopt" && mode !== "pending") || !registryPath || !laneDirectory || (hostShape !== "single" && hostShape !== "tree")) {
-  throw new Error("usage: stageHostGeneration.ts <spawn|adopt|pending> <registry path> <lane directory> [single|tree]");
+if ((mode !== "spawn" && mode !== "adopt") || !registryPath || !laneDirectory || (hostShape !== "single" && hostShape !== "tree")) {
+  throw new Error("usage: stageHostGeneration.ts <spawn|adopt> <registry path> <lane directory> [single|tree]");
 }
 
 const self = captureProcessIdentity(process.pid);
@@ -94,14 +93,7 @@ function report(payload: Record<string, unknown>): void {
 
 const registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
 
-if (mode === "pending") {
-  const pending = registry.beginSpawnRequest({
-    engine: "claude", cwd: laneDirectory, transport: "structured", accountId: null,
-    launchProfile: { title: "Recover unrelated pending launch" },
-  });
-  if (pending.kind !== "created") throw new Error("pending launch receipt was unavailable");
-  report({ launchId: pending.receipt.launchId });
-} else if (mode === "spawn") {
+if (mode === "spawn") {
   const sessionId = crypto.randomUUID();
   const transcript = path.join(laneDirectory, `${sessionId}.jsonl`);
   /* A turn the transcript never closed: the shape a host leaves when the
@@ -172,26 +164,31 @@ if (mode === "pending") {
       : {}),
     adopt: async () => [],
     /* The one substitution: the CLI launch. Selection is the product's. */
-    adoptClaude: async (received, _optionsFor, env, shouldAdopt = () => true, processed, custody) => {
+    adoptClaude: async (received, _optionsFor, _env, shouldAdopt = () => true) => {
       passes += 1;
-      for (const entry of Object.values(received.readOnlySnapshot().entries)) {
-        if (entry.key.engine === "claude" && entry.structuredHost?.kind === "claude-broker") considered.push(sessionKeyId(entry.key));
+      await pauseAt("admission");
+      const rows = Object.values(received.readOnlySnapshot().entries).filter((entry: AgentRegistryEntry) =>
+        entry.key.engine === "claude" && entry.structuredHost?.kind === "claude-broker");
+      const result: Array<{ key: AgentRegistryEntry["key"]; host: never }> = [];
+      for (const entry of rows) {
+        considered.push(sessionKeyId(entry.key));
+        if (!shouldAdopt(entry)) continue;
+        const claimed = received.claimStructuredHost(entry.key, self, { allowUnhosted: true });
+        if (!claimed?.structuredHost || !claimed.claimOwner) continue;
+        const host = controlledHost();
+        const written = received.setStructuredHostClaimed(
+          entry.key,
+          { ...claimed.structuredHost, endpoint: `stdio:${host.pid}`, process: host, activeTurnRef: null },
+          "live",
+          claimed.claimOwner,
+          claimed.claimEpoch,
+        );
+        if (!written) throw new Error("the successor generation could not record its host");
+        adopted.push({ key: sessionKeyId(entry.key), host });
+        const engineHost = Object.assign(new FakeEngineHost(createFakeDeliveryLedger()), { onStateChange: () => () => {} });
+        result.push({ key: entry.key, host: engineHost as never });
       }
-      return adoptClaudeRegistryHosts(received, async () => {
-        await pauseAt("admission");
-        return {} as never;
-      }, env, shouldAdopt, processed, {
-        ...custody,
-        adoptHost: async (sessionId) => {
-          const host = controlledHost();
-          adopted.push({ key: sessionKeyId({ engine: "claude", sessionId }), host });
-          return Object.assign(new FakeEngineHost(createFakeDeliveryLedger(), {
-            status: "idle", sessionKey: sessionId, endpoint: `stdio:${host.pid}`,
-            pid: host.pid, processStartIdentity: host.startIdentity, eventCursor: 0,
-            protocolVersion: "test", activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
-          }), { onStateChange: () => () => {}, setWriterFence: () => {} }) as never;
-        },
-      });
+      return result;
     },
     /* The deferred-evidence re-probe timer, live only where a case asks. */
     schedule: (callback, delayMs) => reprobe ? setTimeout(callback, delayMs) : { unref() {} },
