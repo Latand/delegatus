@@ -331,7 +331,8 @@ test("an engine whose command is missing reads Not installed even with a credent
   expect(codex.getAttribute("data-engine-state")).toBe("missing");
   expect(codex.textContent).toContain("Not installed");
   expect(codex.textContent).not.toContain("Connected");
-  expect(host.querySelector("[data-onboarding-engines-note]")?.textContent).toContain("With Claude only");
+  /* One engine is enough: no note about it any more. */
+  expect(host.querySelector("[data-onboarding-engines-note]")).toBeNull();
   flushSync(() => root.unmount());
   host.remove();
 });
