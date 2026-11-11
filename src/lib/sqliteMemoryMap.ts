@@ -13,15 +13,14 @@
  * a process's resident set once per connection that touched them, and worker
  * processes are retired on their resident set, so they keep reading as before.
  *
- * `LLV_SQLITE_MMAP_MB` sets the size per connection; `0` turns it off. The
- * default applies on Linux alone: on Windows a mapped file cannot be shortened
- * by another process's checkpoint, and macOS runs the SQLite Apple ships.
- * SQLite caps the value at its own build limit (2 GiB less 64 KiB in Bun's),
- * and reads past the mapping keep using read calls.
+ * Off unless `LLV_SQLITE_MMAP_MB` names a size above zero, in megabytes per
+ * connection: the Viewer's reported resident set grows with it, and on Windows
+ * a mapped file cannot be shortened by another process's checkpoint. SQLite
+ * caps the value at its own build limit (2 GiB less 64 KiB in Bun's), and
+ * reads past the mapping keep using read calls.
  */
 
 export const SQLITE_MMAP_ENV = "LLV_SQLITE_MMAP_MB";
-const DEFAULT_LINUX_MB = 2047;
 const MIB = 1024 * 1024;
 
 /* The Viewer loads modules through more than one bundle; the choice is the
@@ -33,14 +32,9 @@ export function enableSqliteMemoryMap(enabled = true): void {
   owner.__llvSqliteMemoryMap = enabled;
 }
 
-export function sqliteMemoryMapBytes(
-  env: Readonly<Record<string, string | undefined>> = process.env,
-  platform: string = process.platform,
-): number {
+export function sqliteMemoryMapBytes(env: Readonly<Record<string, string | undefined>> = process.env): number {
   if (!owner.__llvSqliteMemoryMap) return 0;
-  const raw = env[SQLITE_MMAP_ENV]?.trim();
-  if (!raw) return platform === "linux" ? DEFAULT_LINUX_MB * MIB : 0;
-  const megabytes = Number(raw);
+  const megabytes = Number(env[SQLITE_MMAP_ENV]?.trim() || 0);
   return Number.isFinite(megabytes) && megabytes > 0 ? Math.floor(megabytes) * MIB : 0;
 }
 

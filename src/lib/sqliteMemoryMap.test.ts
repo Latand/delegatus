@@ -34,18 +34,15 @@ function collection(filename: string): SqliteStateCollection<Row> {
     key: row => row.id, decode: value => value as Row, clone: row => structuredClone(row) });
 }
 
-test("a process maps nothing until it asks, and the size follows the platform and the setting", () => {
-  expect(sqliteMemoryMapBytes({}, "linux")).toBe(0);
-  expect(sqliteMemoryMapBytes({ [SQLITE_MMAP_ENV]: "512" }, "linux")).toBe(0);
+test("a process maps only when it asked and the setting names a size above zero", () => {
+  expect(sqliteMemoryMapBytes({ [SQLITE_MMAP_ENV]: "512" })).toBe(0);
   enableSqliteMemoryMap();
-  expect(sqliteMemoryMapBytes({}, "linux")).toBe(2047 * MIB);
-  expect(sqliteMemoryMapBytes({}, "darwin")).toBe(0);
-  expect(sqliteMemoryMapBytes({}, "win32")).toBe(0);
-  expect(sqliteMemoryMapBytes({ [SQLITE_MMAP_ENV]: "512" }, "linux")).toBe(512 * MIB);
-  expect(sqliteMemoryMapBytes({ [SQLITE_MMAP_ENV]: "512" }, "darwin")).toBe(512 * MIB);
-  expect(sqliteMemoryMapBytes({ [SQLITE_MMAP_ENV]: "0" }, "linux")).toBe(0);
-  expect(sqliteMemoryMapBytes({ [SQLITE_MMAP_ENV]: "plenty" }, "linux")).toBe(0);
-  expect(sqliteMemoryMapBytes({ [SQLITE_MMAP_ENV]: "-5" }, "linux")).toBe(0);
+  expect(sqliteMemoryMapBytes({})).toBe(0);
+  expect(sqliteMemoryMapBytes({ [SQLITE_MMAP_ENV]: "" })).toBe(0);
+  expect(sqliteMemoryMapBytes({ [SQLITE_MMAP_ENV]: "512" })).toBe(512 * MIB);
+  expect(sqliteMemoryMapBytes({ [SQLITE_MMAP_ENV]: "0" })).toBe(0);
+  expect(sqliteMemoryMapBytes({ [SQLITE_MMAP_ENV]: "plenty" })).toBe(0);
+  expect(sqliteMemoryMapBytes({ [SQLITE_MMAP_ENV]: "-5" })).toBe(0);
 });
 
 test.skipIf(process.platform !== "linux")("state collection reads go through a map of the database file once the process asks for it", () => {
@@ -57,7 +54,14 @@ test.skipIf(process.platform !== "linux")("state collection reads go through a m
     expect(mapped(filename)).toBe(false);
     plain.close();
 
+    /* Asking alone changes nothing: the setting decides. */
     enableSqliteMemoryMap();
+    const unset = collection(filename);
+    expect(unset.snapshot()).toHaveLength(40);
+    expect(mapped(filename)).toBe(false);
+    unset.close();
+
+    process.env[SQLITE_MMAP_ENV] = "256";
     const reader = collection(filename);
     expect(reader.snapshot()).toHaveLength(40);
     expect(mapped(filename)).toBe(true);
@@ -68,6 +72,18 @@ test.skipIf(process.platform !== "linux")("state collection reads go through a m
     expect(reader.snapshot()).toHaveLength(39);
     expect(readStateCollectionRevision(filename, "fixture")).toBeGreaterThan(1);
     reader.close(); peer.close();
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test.skipIf(process.platform !== "linux")("a process that did not ask keeps plain reads whatever the setting", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sqlite-memory-map-worker-"));
+  try {
+    const filename = stateFixture(root);
+    process.env[SQLITE_MMAP_ENV] = "256";
+    const worker = collection(filename);
+    expect(worker.snapshot()).toHaveLength(40);
+    expect(mapped(filename)).toBe(false);
+    worker.close();
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -95,6 +111,7 @@ test.skipIf(process.platform !== "linux")("registry reads go through a map of th
     plain.close();
 
     enableSqliteMemoryMap();
+    process.env[SQLITE_MMAP_ENV] = "256";
     const filename = path.join(root, "registry.sqlite");
     const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: empty, normalize: normalizeRegistry });
     expect(store.read(file => Object.keys(file.conversations).length)).toBe(0);
