@@ -2,6 +2,7 @@ import { candidateState, candidateById } from "../importCuration";
 import { roleScopePassLastAt, scopeRowForRewrite } from "../roleViewSource";
 import { importCollection, readImportRecord } from "../importStore";
 import { prepareImportEdits } from "./importApply";
+import { scopeRowWithEntry } from "../roleHistoryRows";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import fs from "node:fs";
@@ -297,11 +298,11 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
     const counts = { calls: 1, changed: touched.size + created.size, rewritten: input.rewrite?.length ?? 0, merged: input.merge?.reduce((n, m) => n + m.from.length, 0) ?? 0, moved: input.move?.length ?? 0, split: input.split?.length ?? 0, archived: (input.archive?.length ?? 0) + (input.problem?.length ?? 0), restored: input.restore?.length ?? 0 };
     for (const [scope, row] of scopes) {
       const revision = row.revision + 1;
-      tx.put({ ...row, active: orders.get(scope)!, curatedAt: now, revision, history: [...row.history, { revision, revisionScope: row.revisionScope ?? scope, at: now, by: "curator", pass: pass.id, ...(scope === input.scopes[0].scope ? { counts } : {}), before: row.active, prior: [...prior.values()].filter(p => canonicalScope(p.fields.scope) === scope), created: [...created.values()].filter(r => r.scope === scope).map(r => r.id), added: [],
+      tx.put(scopeRowWithEntry(row, { active: orders.get(scope)!, curatedAt: now, revision }, { revision, revisionScope: row.revisionScope ?? scope, at: now, by: "curator", pass: pass.id, ...(scope === input.scopes[0].scope ? { counts } : {}), before: row.active, prior: [...prior.values()].filter(p => canonicalScope(p.fields.scope) === scope), created: [...created.values()].filter(r => r.scope === scope).map(r => r.id), added: [],
         rewritten: [...prior.values()].flatMap(p => p.version && canonicalScope(p.fields.scope) === scope ? [{ id: p.id, version: p.version }] : []),
         moved: (input.move ?? []).filter(m => get(m.id).scope === scope).map(m => ({ id: m.id, from: scope, to: m.to })),
         split: (input.split ?? []).filter(s => get(s.id).scope === scope).map(s => ({ id: s.id, parts: [s.id, ...s.parts.slice(1).map((_, index) => placeholders[`split:${s.id}:${index + 1}`])] })),
-        merged: (input.merge ?? []).flatMap(m => m.from.map(from => ({ from, into: m.into }))), archived: [...(input.archive ?? []).map(a => a.id), ...(input.problem ?? []).map(p => p.id)], restored: input.restore ?? [] }] });
+        merged: (input.merge ?? []).flatMap(m => m.from.map(from => ({ from, into: m.into }))), archived: [...(input.archive ?? []).map(a => a.id), ...(input.problem ?? []).map(p => p.id)], restored: input.restore ?? [] }, { window: false }));
     }
     result = { placeholders, counts };
     const record = fresh.importBatch ? readImportRecord(fresh.importBatch.importId) : null;

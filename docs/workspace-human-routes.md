@@ -159,6 +159,7 @@ served API route has no declared decision or a project handler loses its gate.
 | `/api/logs` | POST | project |
 | `/api/logs/stream` | GET | project |
 | `/api/mcp` | DELETE, GET, POST | capability |
+| `/api/memory/history-rows` | GET, PUT | owner |
 | `/api/memory/inject` | POST | owner |
 | `/api/memory/settings` | GET, PUT | owner |
 | `/api/memory/source` | GET, PUT | owner |

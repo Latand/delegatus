@@ -1,18 +1,19 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { stopWorktreeSweepWorker } from "@/lib/pipelines/worktreeSweepWorker";
+import { planRoleMemory } from "@/lib/transfer/roleMemory";
 import { PARTS } from "@/lib/transfer/sections";
 import { takeSourceSnapshot } from "@/lib/transfer/stores";
 import { applyCuration, revertCuratorPass, type CurationApply } from "./curation/apply";
 import { claimPass, curationScopes, curationStatus, patchPass } from "./curation/store";
-import { drainRoleHistory, drainRoleHistoryStep, unclaimedRoleHistoryTokens } from "./roleHistoryDrain";
+import { drainRoleHistory, drainRoleHistoryStep, ROLE_HISTORY_BACKUP_AGE_MS, RoleHistoryDrainRefusal, roleHistoryRowsEnabled, setRoleHistoryRowsEnabled, unclaimedRoleHistoryTokens } from "./roleHistoryDrain";
 import { ROLE_HISTORY_COLLECTION } from "./roleHistoryRows";
 import { joinMovedScopes, leaveLessons, projectView, recordLessonRequest, roleMemoryCollection, roleScope } from "./roleStore";
-import { activeRoleRuleRows, projectViewRows, projectViewRowsCooperatively, roleScopePassLastAt, roleScopeReadMetadata, scopeRowWithHistory } from "./roleViewSource";
+import { activeRoleRuleRows, projectViewRows, projectViewRowsCooperatively, roleScopePassLastAt, roleScopeReadMetadata, scopeRowForRewrite, scopeRowWithHistory } from "./roleViewSource";
 import { ROLE_MEMORY_HISTORY_LIMIT, type RoleMemoryRule, type RoleMemoryScopeRow, type RuleSource, type ScopeHistoryEntry } from "./roleTypes";
 
 const PROJECT = "history-rows-fixture";
@@ -70,18 +71,20 @@ function historyRowKeys(): string[] {
   try { return db.query<{ row_key: string }, [string]>("SELECT row_key FROM state_rows WHERE collection=? ORDER BY row_key").all(ROLE_HISTORY_COLLECTION).map(row => row.row_key); }
   finally { db.close(); }
 }
-const drainAll = (graceMs = 0, now?: number) => drainRoleHistory({ minEntries: 1, graceMs, now });
+/** A state backup taken just now, as the drain requires before its first step. */
+const backedUp = { newestBackupAt: () => Date.now() };
+const drainAll = (graceMs = 0, now?: number) => drainRoleHistory({ minEntries: 1, graceMs, now, newestBackupAt: () => now ?? Date.now() });
 
 test("the drain keeps every history entry and continues from the stored rows after a stop", async () => {
   const scope = roleScope(PROJECT, "builder");
   const original = seed(scope, entries(300, 2_000, scope));
   // One bounded step, then nothing: the process stopped here.
-  expect(drainRoleHistoryStep({ after: "" }, { minEntries: 1, maxEntries: 70 })).toBe(true);
+  expect(drainRoleHistoryStep({ after: "" }, { minEntries: 1, maxEntries: 70, ...backedUp })).toBe(true);
   expect(stored(scope).history).toHaveLength(230);
   expect(stored(scope).historyRows).toMatchObject({ next: 70, count: 70 });
   expect(JSON.stringify(whole(scope).history)).toBe(JSON.stringify(original.history));
   // A new process holds no cursor and no memory of the first step.
-  expect(await drainRoleHistory({ minEntries: 1, maxEntries: 70 })).toBe(4);
+  expect(await drainRoleHistory({ minEntries: 1, maxEntries: 70, ...backedUp })).toBe(4);
   expect(stored(scope).history).toEqual([]);
   expect(stored(scope).historyRows).toMatchObject({ next: 300, count: 300, ordinary: 225 });
   expect(JSON.stringify(whole(scope))).toBe(JSON.stringify(original));
@@ -93,7 +96,7 @@ test("the drain keeps every history entry and continues from the stored rows aft
 test("one transaction of the drain is bounded by bytes as well as entries", () => {
   const scope = roleScope(PROJECT, "builder");
   seed(scope, entries(40, 20_000, scope));
-  expect(drainRoleHistoryStep({ after: "" }, { minEntries: 1, maxBytes: 50_000 })).toBe(true);
+  expect(drainRoleHistoryStep({ after: "" }, { minEntries: 1, maxBytes: 50_000, ...backedUp })).toBe(true);
   // Two 20 KB curator calls and the lessons around them fit; the third call would pass the bound.
   expect(stored(scope).historyRows!.count).toBe(11);
 });
@@ -101,11 +104,11 @@ test("one transaction of the drain is bounded by bytes as well as entries", () =
 test("a short recent tail stays in the scope row until it is worth a write", async () => {
   const scope = roleScope(PROJECT, "builder");
   seed(scope, entries(8, 100, scope));
-  expect(await drainRoleHistory()).toBe(0);
+  expect(await drainRoleHistory(backedUp)).toBe(0);
   expect(stored(scope).history).toHaveLength(8);
 });
 
-test("readers answer the same from history rows as from the scope row", async () => {
+test.each([["every entry in rows", 1024], ["rows and a tail still in the scope row", 50]] as const)("readers answer the same from history rows as from the scope row: %s", async (_name, moved) => {
   const scope = roleScope(PROJECT, "builder");
   seed(scope, entries(120, 500, scope));
   const answers = async () => ({
@@ -119,8 +122,8 @@ test("readers answer the same from history rows as from the scope row", async ()
   });
   const before = await answers();
   expect(before.metadata.hasPass).toBe(true);
-  expect(await drainAll()).toBeGreaterThan(0);
-  expect(stored(scope).history).toEqual([]);
+  expect(drainRoleHistoryStep({ after: "" }, { minEntries: 1, maxEntries: moved, ...backedUp })).toBe(true);
+  expect(stored(scope).history).toHaveLength(Math.max(0, 120 - moved));
   const after = await answers();
   expect(JSON.parse(JSON.stringify(after))).toEqual(JSON.parse(JSON.stringify({ ...before,
     scopes: before.scopes.map(row => ({ ...row, historyRows: undefined })), rows: before.rows })));
@@ -296,19 +299,43 @@ test("a write by an earlier release keeps the scope's history rows and loses no 
   expect(JSON.stringify(whole(scope).history)).toBe(JSON.stringify([...original.history, late]));
 });
 
-test("rows left by an earlier release's scope join are kept, never removed", async () => {
-  const from = "role:history-rows-old:builder", into = "role:history-rows-new:builder";
-  seed(from, entries(20, 300, from));
-  roleMemoryCollection(true)!.patchSync(() => ({ records: [{ kind: "scope", scope: into, revision: 12, active: [], history: entries(12, 300, into) }] }));
-  await drainAll();
-  const before = historyRowKeys();
-  // The earlier release joins the two scope rows as it reads them and removes the moved one.
+/* The earlier release joins two scope rows as it reads them, entries in the
+   scope rows only, and removes the moved one. */
+function earlierReleaseJoin(from: string, into: string) {
   roleMemoryCollection(true)!.boundedPatch(8, tx => {
     const source = tx.get(`s:${from}`) as RoleMemoryScopeRow, target = tx.get(`s:${into}`) as RoleMemoryScopeRow;
     tx.put({ ...target, revision: 21, history: [...source.history, ...target.history, { revision: 21, at: at(950_000), by: "succession", added: [], merged: [], archived: [] }] });
     tx.delete(`s:${from}`);
   });
+}
+
+test("rows left by an earlier release's scope join go to the scope the stored aliases name", async () => {
+  const from = "role:history-rows-old:builder", into = "role:history-rows-new:builder";
+  const source = seed(from, entries(20, 300, from));
+  roleMemoryCollection(true)!.patchSync(() => ({ records: [{ kind: "scope", scope: into, revision: 12, active: [], history: entries(12, 300, into) }] }));
+  const target = stored(into);
+  await drainAll();
+  expect(persistProjectAliases([{ source: "history-rows-old", target: "history-rows-new", displayName: "history-rows-new" }])).toBe(true);
+  earlierReleaseJoin(from, into);
   expect(stored(into).historyRows).toMatchObject({ count: 12 });
+  expect(unclaimedRoleHistoryTokens()).toBe(1);
+  await drainAll(3_600_000, NOW + 960_000);
+  expect(unclaimedRoleHistoryTokens()).toBe(0);
+  const joined = whole(into).history;
+  expect(joined).toHaveLength(33);
+  expect(JSON.stringify(joined.slice(0, 20).map(entry => ({ ...entry, revisionScope: undefined })))).toBe(JSON.stringify(source.history.map(entry => ({ ...entry, revisionScope: undefined }))));
+  expect(joined.slice(0, 20).every(entry => entry.revisionScope === from)).toBe(true);
+  expect(JSON.stringify(joined.slice(20, 32))).toBe(JSON.stringify(target.history));
+  expect(joined.at(-1)).toMatchObject({ by: "succession" });
+});
+
+test("rows whose scope is gone and that no alias places are kept and counted", async () => {
+  const from = "role:history-rows-old:builder", into = "role:history-rows-new:builder";
+  seed(from, entries(20, 300, from));
+  roleMemoryCollection(true)!.patchSync(() => ({ records: [{ kind: "scope", scope: into, revision: 12, active: [], history: entries(12, 300, into) }] }));
+  await drainAll();
+  const before = historyRowKeys();
+  earlierReleaseJoin(from, into);
   await drainAll();
   expect(before.every(key => historyRowKeys().includes(key))).toBe(true);
   expect(whole(into).history).toHaveLength(13);
@@ -322,4 +349,115 @@ test("a history its readers refuse stays in the scope row", async () => {
   expect(await drainAll()).toBe(0);
   expect(stored(scope).history).toEqual([null] as never);
   expect(historyRowKeys()).toEqual([]);
+});
+
+test.each([["absent", {}], ["null", { prior: null }], ["an empty array", { prior: [] }], ["an array", { prior: [{ id: "r_00000000000000aa", version: null, fields: { state: "active" } }] }]] as const)(
+  "an entry whose undo payload is %s is stored and read back exactly", async (_name, extra) => {
+  const scope = roleScope(PROJECT, "builder");
+  const entry = { revision: 1, at: at(), by: "curator", pass: "p_exact", before: [], ...extra, created: [], added: [], merged: [], archived: [] } as unknown as ScopeHistoryEntry;
+  const original = seed(scope, [entry, { revision: 2, at: at(1000), by: "agent", added: [], merged: [], archived: [] }]);
+  await drainAll();
+  expect(stored(scope).history).toEqual([]);
+  expect(JSON.stringify(whole(scope))).toBe(JSON.stringify(original));
+  // A reader that leaves undo payloads out still sees what the scope row itself held.
+  const read = scopeRowWithHistory(stored(scope)).history[0]!;
+  expect("prior" in read).toBe(Array.isArray(extra && (extra as { prior?: unknown }).prior) ? false : "prior" in extra);
+  // An undo of that pass reads the scope without failing.
+  expect(() => scopeRowForRewrite(stored(scope), at(2000))).not.toThrow();
+});
+
+test("an import that merges into a scope with history rows records the rows it replaces", () => {
+  const scope = roleScope(PROJECT, "builder");
+  const held: RoleMemoryScopeRow = { kind: "scope", scope, revision: 3, active: ["r_00000000000000aa"], history: entries(3, 100, scope) };
+  const arriving = rule("r_00000000000000dd", scope, { rule: "Name the reader each stored rule serves before it is written." });
+  const incoming = [{ key: `r:${arriving.id}`, value: arriving }, { key: `s:${scope}`, value: { kind: "scope", scope, revision: 1, active: [arriving.id], history: [] } }];
+  const plan = planRoleMemory(incoming, new Map([[`s:${scope}`, JSON.stringify(held)]]), { now: at(5000), released: new Map([[`s:${scope}`, "00112233aabbccdd"]]) });
+  const merged = plan.writes.find(write => write.key === `s:${scope}`)!.value as RoleMemoryScopeRow;
+  expect(merged.history.at(-1)).toMatchObject({ by: "transfer", added: [arriving.id] });
+  expect(merged.historyDropped).toEqual([{ token: "00112233aabbccdd", at: at(5000) }]);
+});
+
+test("the first step on a store is refused without a state backup from the last hour", async () => {
+  const scope = roleScope(PROJECT, "builder");
+  seed(scope, entries(40, 300, scope));
+  const options = { minEntries: 1, now: NOW };
+  expect(() => drainRoleHistoryStep({ after: "" }, options)).toThrow(RoleHistoryDrainRefusal);
+  expect(() => drainRoleHistoryStep({ after: "" }, { ...options, newestBackupAt: () => NOW - 2 * ROLE_HISTORY_BACKUP_AGE_MS })).toThrow("state backup");
+  expect(stored(scope).history).toHaveLength(40);
+  expect(historyRowKeys()).toEqual([]);
+  expect(drainRoleHistoryStep({ after: "" }, { ...options, maxEntries: 10, newestBackupAt: () => NOW - 60_000 })).toBe(true);
+  // A store that already has history rows is past the point the backup guards.
+  expect(drainRoleHistoryStep({ after: "" }, { ...options, maxEntries: 10 })).toBe(true);
+  expect(stored(scope).historyRows).toMatchObject({ count: 20 });
+});
+
+test("the drain stays off until the operator turns it on, and turning it on needs the backup", () => {
+  const scope = roleScope(PROJECT, "builder");
+  seed(scope, entries(40, 300, scope));
+  expect(roleHistoryRowsEnabled()).toBe(false);
+  expect(() => setRoleHistoryRowsEnabled(true, { now: NOW })).toThrow(RoleHistoryDrainRefusal);
+  expect(roleHistoryRowsEnabled()).toBe(false);
+  setRoleHistoryRowsEnabled(true, { now: NOW, newestBackupAt: () => NOW - 60_000 });
+  expect(roleHistoryRowsEnabled()).toBe(true);
+  setRoleHistoryRowsEnabled(false);
+  expect(roleHistoryRowsEnabled()).toBe(false);
+});
+
+test("a refused scope row is not read again until it changes", async () => {
+  const scope = roleScope(PROJECT, "builder");
+  seed(scope, entries(20, 300, scope));
+  roleMemoryCollection(true)!.boundedPatch(2, tx => { tx.put({ ...stored(scope), history: [null] } as unknown as RoleMemoryScopeRow); });
+  await drainAll();
+  const memory = roleMemoryCollection()!, get = spyOn(memory, "get");
+  try {
+    await drainAll();
+    expect(get.mock.calls.filter(([key]) => key === `s:${scope}`)).toHaveLength(0);
+    roleMemoryCollection(true)!.boundedPatch(2, tx => { tx.put({ ...stored(scope), history: entries(20, 300, scope) }); });
+    get.mockClear();
+    await drainAll();
+    expect(get.mock.calls.filter(([key]) => key === `s:${scope}`).length).toBeGreaterThan(0);
+  } finally { get.mockRestore(); }
+  expect(stored(scope).history).toEqual([]);
+});
+
+/* A scope row holds only its newest entries, so code that reads `.history`
+   of a row it took from the store, or writes a scope row it built itself,
+   is wrong in a way no type shows. Whole histories come from
+   `scopeRowWithHistory` and its callers in roleViewSource; appends go through
+   `scopeRowWithEntry`. This list is every production file that touches a
+   scope's history and how many lines do; a change here means a new reader or
+   writer, to be checked against those two accessors before the count moves. */
+const HISTORY_TOUCHES: Record<string, number> = {
+  "scripts/memory-replay.ts": 1,
+  "scripts/replay-viewer-readers.ts": 1,
+  "src/lib/memory/curation/apply.ts": 7,
+  "src/lib/memory/curation/store.ts": 2,
+  "src/lib/memory/importLifecycle.ts": 1,
+  "src/lib/memory/roleHistoryDrain.ts": 7,
+  "src/lib/memory/roleHistoryRows.ts": 4,
+  "src/lib/memory/roleStore.ts": 9,
+  "src/lib/memory/roleTypes.ts": 1,
+  "src/lib/memory/roleViewSource.ts": 7,
+  "src/lib/transfer/exporter.ts": 1,
+  "src/lib/transfer/importer.ts": 6,
+  "src/lib/transfer/roleMemory.ts": 2,
+  "src/lib/transfer/sections.ts": 1,
+  "src/runtime-host/candidateStateDataset.ts": 2,
+};
+test("every production touch of a scope's history is a reviewed one", () => {
+  const root = path.join(import.meta.dir, "..", "..", "..");
+  const found: Record<string, number> = {};
+  const walk = (directory: string) => {
+    for (const entry of fs.readdirSync(path.join(root, directory), { withFileTypes: true })) {
+      const relative = `${directory}/${entry.name}`;
+      if (entry.isDirectory()) { if (entry.name !== "fixtures" && entry.name !== "node_modules") walk(relative); continue; }
+      if (!/\.tsx?$/.test(entry.name) || /\.(test|fixture|cases)\.tsx?$/.test(entry.name)) continue;
+      const source = fs.readFileSync(path.join(root, relative), "utf8");
+      if (!/RoleMemoryScopeRow|roleMemoryCollection|RoleMemoryRow\b/.test(source)) continue;
+      const lines = source.split("\n").filter(line => /\.history\b|\bhistory:/.test(line) && !/^\s*(\/\/|\/?\*)/.test(line)).length;
+      if (lines) found[relative] = lines;
+    }
+  };
+  for (const directory of ["src/lib", "src/app", "src/runtime-host", "scripts"]) walk(directory);
+  expect(found).toEqual(HISTORY_TOUCHES);
 });

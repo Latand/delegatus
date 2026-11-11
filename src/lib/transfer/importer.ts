@@ -394,8 +394,10 @@ function rowsRevision(collection: string): string {
 }
 
 /** This install's role memory rows as a bundle holds them: every scope with
-    its whole history in its row. The plan compares and merges in that format. */
-function wholeRoleRows(rows: ReadonlyMap<string, string>): Map<string, string> {
+    its whole history in its row. The plan compares and merges in that format;
+    `released` receives the token of each scope's history rows, for a merge
+    that stores the scope in this shape. */
+function wholeRoleRows(rows: ReadonlyMap<string, string>, released?: Map<string, string>): Map<string, string> {
   const whole = new Map(rows);
   let tokens: ReturnType<typeof historyRowsByToken> | undefined;
   for (const [key, json] of rows) {
@@ -404,6 +406,7 @@ function wholeRoleRows(rows: ReadonlyMap<string, string>): Map<string, string> {
     if (row.kind !== "scope" || !row.historyRows) continue;
     tokens ??= historyRowsByToken([...(readTargetRows(ROLE_HISTORY_COLLECTION)?.rows.values() ?? [])].map(stored => JSON.parse(stored) as unknown));
     whole.set(key, JSON.stringify(scopeFromCollectedRows(row, tokens)));
+    released?.set(key, row.historyRows.token);
   }
   return whole;
 }
@@ -662,7 +665,8 @@ function planRows(
   }
   const target = readTargetRows(part.collection);
   revisions[`rows:${part.collection}`] = collectionRevision(target);
-  const held = part.merge === "role-memory" ? wholeRoleRows(target?.rows ?? new Map<string, string>()) : target?.rows ?? new Map<string, string>();
+  const released = new Map<string, string>();
+  const held = part.merge === "role-memory" ? wholeRoleRows(target?.rows ?? new Map<string, string>(), released) : target?.rows ?? new Map<string, string>();
   const out = writes.rows.get(part.collection) ?? { part, records: [] };
   writes.rows.set(part.collection, out);
   const valid = rows.filter(row => {
@@ -672,7 +676,7 @@ function planRows(
     return ok;
   });
   if (part.merge === "role-memory") {
-    const role = planRoleMemory(valid, held, { now });
+    const role = planRoleMemory(valid, held, { now, released });
     for (const outcome of role.outcomes) count(plan, outcome.outcome, `${part.id}|${outcome.key}`, undefined, outcome.action, outcome.versions);
     for (const row of valid) {
       if (!row.key.startsWith("s:")) continue;

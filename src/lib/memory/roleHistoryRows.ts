@@ -1,6 +1,6 @@
 import { statePath } from "@/lib/configDir";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
-import type { RoleMemoryScopeRow, ScopeHistoryEntry } from "./roleTypes";
+import { ROLE_MEMORY_HISTORY_LIMIT, type RoleMemoryScopeRow, type ScopeHistoryEntry } from "./roleTypes";
 
 /* A scope's retained history, outside the scope row. One stored row per
    history entry, and a second row for the entry's undo payload (`prior`),
@@ -13,8 +13,10 @@ import type { RoleMemoryScopeRow, ScopeHistoryEntry } from "./roleTypes";
 
 export const ROLE_HISTORY_COLLECTION = "role_memory_history";
 type UndoPayload = NonNullable<ScopeHistoryEntry["prior"]>;
-/** `prior: null` marks the place of an undo payload stored in its own row. */
-export type StoredHistoryEntry = { kind: "entry"; token: string; seq: number; scope: string; entry: Omit<ScopeHistoryEntry, "prior"> & { prior?: null } };
+/** With `undo` set, the entry's `prior` array is stored in its own row and
+ * `entry.prior` only holds its place among the entry's fields. Without it the
+ * entry is stored exactly as written, whatever its `prior` is. */
+export type StoredHistoryEntry = { kind: "entry"; token: string; seq: number; scope: string; entry: Omit<ScopeHistoryEntry, "prior"> & { prior?: unknown }; undo?: true };
 export type StoredHistoryUndo = { kind: "undo"; token: string; seq: number; scope: string; prior: UndoPayload };
 export type StoredHistoryRow = StoredHistoryEntry | StoredHistoryUndo;
 
@@ -45,21 +47,38 @@ export function roleHistoryCollection(create = false): SqliteStateCollection<Sto
 
 /** The stored rows of one history entry. */
 export function historyEntryRows(scope: string, token: string, seq: number, entry: ScopeHistoryEntry): StoredHistoryRow[] {
-  if (entry.prior === undefined) return [{ kind: "entry", token, seq, scope, entry: entry as StoredHistoryEntry["entry"] }];
-  return [{ kind: "entry", token, seq, scope, entry: { ...entry, prior: null } }, { kind: "undo", token, seq, scope, prior: entry.prior }];
+  if (!Array.isArray(entry.prior)) return [{ kind: "entry", token, seq, scope, entry }];
+  return [{ kind: "entry", token, seq, scope, entry: { ...entry, prior: null }, undo: true }, { kind: "undo", token, seq, scope, prior: entry.prior }];
 }
 
 /** The entries as they were written. With `undo` absent the payloads are left
  * out; with it every entry that had one must find it. */
 export function historyEntries(rows: readonly StoredHistoryEntry[], undo?: ReadonlyMap<number, UndoPayload>): ScopeHistoryEntry[] {
   return rows.map(row => {
-    if (row.entry.prior === undefined) return row.entry as ScopeHistoryEntry;
+    if (!row.undo) return row.entry as ScopeHistoryEntry;
     if (!undo) { const entry = { ...row.entry }; delete entry.prior; return entry as ScopeHistoryEntry; }
     const prior = undo.get(row.seq);
     if (!prior) throw new Error("memory scope changed while being read");
     // Assigning the held key keeps the entry's field order as it was written.
     return { ...row.entry, prior };
   });
+}
+
+/** Keep 10,000 ordinary changes independently of every curator Undo record.
+ * At 141 daily writes this covers over 70 days; delivery rows keep their own
+ * ordered ids and content hashes, so reconstruction never depends on this window. */
+export function keepHistory(entries: ScopeHistoryEntry[]): ScopeHistoryEntry[] {
+  const recent = new Set(entries.filter(entry => !entry.pass).slice(-ROLE_MEMORY_HISTORY_LIMIT));
+  return entries.filter(entry => !!entry.pass || recent.has(entry));
+}
+
+/** The way a writer adds one entry to a stored scope row: every field of the
+ * row it read stays, the reference to its history rows among them. A scope
+ * row built from chosen fields would leave those rows without a scope. */
+export function scopeRowWithEntry(row: RoleMemoryScopeRow, change: Partial<Pick<RoleMemoryScopeRow, "revision" | "active" | "curatedAt">>,
+  entry: ScopeHistoryEntry, options: { window?: boolean } = {}): RoleMemoryScopeRow {
+  const history = [...row.history, entry];
+  return { ...row, ...change, history: options.window === false ? history : keepHistory(history) };
 }
 
 /** A scope row with its stored rows ahead of the entries it still holds, in
