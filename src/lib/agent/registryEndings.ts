@@ -1,5 +1,9 @@
 import type { Database } from "bun:sqlite";
 
+/* Rebuild projections whose milliseconds were parsed by SQLite. SQLite 3.39
+   truncates some fractional seconds one millisecond before Date.parse does. */
+export const OWNER_ENDINGS_CURSOR = "owner_endings_cursor_v2";
+
 /* One current ending per operation. Compatibility writers and archive mapping
    changes update it in their own transaction. Payloads remain authoritative. */
 const field = (path: string) => `json_extract(d.value_json,'$.${path}')`;
@@ -11,12 +15,9 @@ const deliveryOperation = `CASE WHEN ${kind("command.operationId")} IS NULL OR $
     OR (${kind("command.operationId")}='text' AND ${field("command.operationId")}='')
   THEN ${field("id")} WHEN ${kind("command.operationId")}='text' THEN ${field("command.operationId")} END`;
 const settledDeliveryAt = "json_extract(o.value_json,'$.settledDelivery.deliveredAt')";
-const isoInstant = (text: string) => `(${text} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*' AND julianday(${text}) IS NOT NULL)`;
-/* The later of two stored instants, compared as instants: text order puts
-   'Thu, 01 Oct…' after '2026-10-23…'. A pair SQL cannot parse is kept whole
-   as a JSON array with no instant; endingInstant reads the later in JS. */
+/* Keep both candidates until endingInstant compares them with the same parser
+   as normalization. SQLite 3.39 can collapse adjacent milliseconds to a tie. */
 const laterInstant = (a: string, b: string) => `CASE WHEN ${a} IS NULL THEN ${b} WHEN ${b} IS NULL THEN ${a}
-  WHEN ${isoInstant(a)} AND ${isoInstant(b)} THEN CASE WHEN julianday(${a})>=julianday(${b}) THEN ${a} ELSE ${b} END
   ELSE json_array(${a},${b}) END`;
 /* A delivery stored without its digest gets one computed from its text on
    normalization, which SQL cannot reproduce. Such a delivery may or may not be
@@ -32,8 +33,7 @@ const endingText = `CASE WHEN json_type(o.value_json,'$.settledAt')='text'
         AND (${kind("requestDigest")} IS NOT 'text' OR ${field("requestDigest")}=json_extract(o.value_json,'$.requestDigest'))),
     ${settledDeliveryAt}) END`;
 const endingSelect = `SELECT o.row_key, json_extract(o.value_json,'$.deliveryId'),
-  CASE WHEN (${endingText}) GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'
-    THEN CAST(round((julianday(${endingText})-2440587.5)*86400000) AS INTEGER) END, ${endingText}
+  NULL, ${endingText}
   FROM registry_records o WHERE o.collection='deliveryOperationOwners'`;
 
 /** The instant a projected ending names: its stored text, or the later of
@@ -53,7 +53,20 @@ export function endingInstant(text: string): number {
 export function refreshOwnerEndingSql(predicate: string): string {
   return `INSERT INTO registry_owner_endings(operation_id,delivery_id,ending_ms,ending_text)
     ${endingSelect} AND (${predicate}) ON CONFLICT(operation_id) DO UPDATE SET
-      delivery_id=excluded.delivery_id,ending_ms=excluded.ending_ms,ending_text=excluded.ending_text`;
+      delivery_id=excluded.delivery_id,ending_ms=excluded.ending_ms,ending_text=excluded.ending_text
+    RETURNING operation_id,ending_text`;
+}
+
+type EndingRow = { operation_id: string; ending_text: string | null };
+
+/* Refresh and normalization share a transaction: a prepared index never
+   exposes SQLite's approximation of the payload's instant. */
+function storeEndingInstants(db: Database, rows: EndingRow[]): void {
+  const update = db.query("UPDATE registry_owner_endings SET ending_ms=?,ending_text=? WHERE operation_id=?");
+  for (const row of rows) {
+    const ms = row.ending_text === null ? NaN : endingInstant(row.ending_text);
+    update.run(Number.isFinite(ms) ? ms : null, Number.isFinite(ms) ? row.ending_text : null, row.operation_id);
+  }
 }
 
 /** Triggers of earlier builds of this projection, which refreshed it inside the
@@ -93,24 +106,20 @@ export function installRegistryEndings(db: Database): void {
 /** Bootstrap by key, never OFFSET. Each committed cursor covers exactly the
     projection rows in that transaction; interruption resumes after that key. */
 export function prepareRegistryEndingsBatch(db: Database, limit = 16): boolean {
-  const mark = db.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key='owner_endings_cursor'").get()?.value;
+  const mark = db.query<{ value: string }, [string]>("SELECT value FROM registry_meta WHERE key=?").get(OWNER_ENDINGS_CURSOR)?.value;
   const after = mark && mark !== "complete" ? JSON.parse(mark) as string : "";
   const keys = mark === "complete" ? [] : db.query<{ row_key: string }, [string, number]>(`SELECT row_key FROM registry_rows
     WHERE collection='deliveryOperationOwners' AND row_key>? ORDER BY row_key LIMIT ?`).all(after, limit);
-  const insert = db.query(refreshOwnerEndingSql("o.row_key=?"));
-  for (const key of keys) insert.run(key.row_key);
-  if (mark !== "complete") db.query("INSERT OR REPLACE INTO registry_meta(key,value) VALUES ('owner_endings_cursor',?)")
-    .run(keys.length < limit ? "complete" : JSON.stringify(keys.at(-1)!.row_key));
+  const insert = db.query<EndingRow, [string]>(refreshOwnerEndingSql("o.row_key=?"));
+  for (const key of keys) storeEndingInstants(db, insert.all(key.row_key));
+  if (mark !== "complete") db.query("INSERT OR REPLACE INTO registry_meta(key,value) VALUES (?,?)")
+    .run(OWNER_ENDINGS_CURSOR, keys.length < limit ? "complete" : JSON.stringify(keys.at(-1)!.row_key));
   // The traversal refreshes every key it has yet to reach; queued changes
   // drain once it is complete, before the projection reads as ready.
   const drained = (mark === "complete" || keys.length < limit) && drainRegistryEndingChanges(db, limit);
   const legacy = db.query<{ operation_id: string; ending_text: string }, [number]>(`SELECT operation_id,ending_text FROM registry_owner_endings
     WHERE ending_ms IS NULL AND ending_text IS NOT NULL LIMIT ?`).all(limit);
-  const parsed = db.query("UPDATE registry_owner_endings SET ending_ms=?,ending_text=? WHERE operation_id=?");
-  for (const row of legacy) {
-    const ms = endingInstant(row.ending_text);
-    parsed.run(Number.isFinite(ms) ? ms : null, Number.isFinite(ms) ? row.ending_text : null, row.operation_id);
-  }
+  storeEndingInstants(db, legacy);
   return keys.length < limit && drained && legacy.length < limit;
 }
 
@@ -123,14 +132,14 @@ export function drainRegistryEndingChanges(db: Database, limit = 64): boolean {
     "SELECT rowid AS id,collection,row_key FROM registry_owner_ending_changes ORDER BY rowid LIMIT ?").all(limit);
   if (queued.length === 0) return true;
   const removeOwner = db.query("DELETE FROM registry_owner_endings WHERE operation_id=?");
-  const refreshOwner = db.query(refreshOwnerEndingSql("o.row_key=?"));
-  const refreshDelivery = db.query(refreshOwnerEndingSql("o.row_key IN (SELECT operation_id FROM registry_owner_endings WHERE delivery_id=?)"));
+  const refreshOwner = db.query<EndingRow, [string]>(refreshOwnerEndingSql("o.row_key=?"));
+  const refreshDelivery = db.query<EndingRow, [string]>(refreshOwnerEndingSql("o.row_key IN (SELECT operation_id FROM registry_owner_endings WHERE delivery_id=?)"));
   const done = db.query("DELETE FROM registry_owner_ending_changes WHERE rowid=?");
   for (const change of queued) {
     if (change.collection === "deliveryOperationOwners") {
       removeOwner.run(change.row_key);
-      refreshOwner.run(change.row_key);
-    } else refreshDelivery.run(change.row_key);
+      storeEndingInstants(db, refreshOwner.all(change.row_key));
+    } else storeEndingInstants(db, refreshDelivery.all(change.row_key));
     done.run(change.id);
   }
   return queued.length < limit && !db.query("SELECT 1 FROM registry_owner_ending_changes LIMIT 1").get();
@@ -144,7 +153,7 @@ export function registryEndingChangesPending(db: Database): boolean {
 }
 
 export function registryEndingsPrepared(db: Database): boolean {
-  return db.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key='owner_endings_cursor'").get()?.value === "complete"
+  return db.query<{ value: string }, [string]>("SELECT value FROM registry_meta WHERE key=?").get(OWNER_ENDINGS_CURSOR)?.value === "complete"
     && !registryEndingChangesPending(db)
     && !db.query("SELECT 1 FROM registry_owner_endings WHERE ending_ms IS NULL AND ending_text IS NOT NULL LIMIT 1").get();
 }

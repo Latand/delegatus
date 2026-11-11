@@ -25,6 +25,7 @@ function fixture(overrides: Partial<HeapDiagnosticsDeps> & { objectCount?: numbe
         objectTypeCounts: { Object: 1, string: overrides.strings ?? 0, Array: 2 }, protectedObjectTypeCounts: { Timeout: 1 } };
     },
     memoryUsage: () => ({ rss: 5000, heapUsed: 1000, heapTotal: 2000, external: 300, arrayBuffers: 10 }),
+    residentSet: () => ({ anonBytes: 3000, fileBytes: 2000 }),
     generateSnapshot: () => { calls.generate++; return new TextEncoder().encode(`{"snapshot":${calls.generate}}`); },
     directory: () => directory,
     freeDiskBytes: () => 100 * GIB,
@@ -44,6 +45,7 @@ test("cheap mode returns the census and memory counters and writes no file", () 
   expect(answer.status).toBe(200);
   expect(answer.body.heap).toMatchObject({ heapSize: 1000, extraMemorySize: 300, objectCount: 10 });
   expect(answer.body.memoryUsage).toEqual({ rss: 5000, heapUsed: 1000, heapTotal: 2000, external: 300, arrayBuffers: 10 });
+  expect(answer.body.residentSet).toEqual({ anonBytes: 3000, fileBytes: 2000 });
   expect(Object.entries(answer.body.objectTypeCounts as object)).toEqual([["string", 7], ["Array", 2], ["Object", 1]]);
   expect(answer.body.protectedObjectTypeCounts).toEqual({ Timeout: 1 });
   expect(calls.generate).toBe(0);

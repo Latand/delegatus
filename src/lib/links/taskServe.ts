@@ -1,4 +1,3 @@
-import { markTaskExport } from "./taskExportPrivacy";
 /**
  * B's half of the `tasks` part of `boards/sync` (docs/design/linked-installs.md
  * M.5). B never calls out and holds no cursor: A names the position, B answers
@@ -61,14 +60,12 @@ export async function serveTasks(grant: Grant, wire: Record<string, unknown>, ag
       // The position a resync ends on is read before its first row.
       const page = await readScanPage(scan.after as string, { ...filter, projects, skipPrefix: null });
       const at = scan.after === "" ? page.at : undefined;
-      markTaskExport(parts, page);
       parts.tasks = { cursor: pull.after, ...(page.rows.length ? { rows: page.rows } : {}), scan: page.next, ...(at ? { at } : {}) };
       moved ||= page.rows.length > 0;
     } else if (pull.after === null) {
       parts.tasks = { resync: true };
     } else {
       const page = await readLogPage(pull.after as Position, { ...filter, projects: link.projects });
-      markTaskExport(parts, page);
       if (page.kind === "resync") parts.tasks = { resync: true };
       else {
         parts.tasks = { cursor: page.cursor, ...(page.rows.length ? { rows: page.rows } : {}), ...(page.more ? { more: true } : {}) };

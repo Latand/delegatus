@@ -292,14 +292,16 @@ jobs:
           LLV_STATE_DIR: ${{ runner.temp }}/readme-state
           TMPDIR: ${{ runner.temp }}/readme-tmp
           LLV_VIEWER_CONTROL_URL: http://127.0.0.1:1
-          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/readme-browsers
           # Hosted runners have no Delegatus user systemd manager.
           DELEGATUS_AGENT_CPU: "off"
         run: |
           set -euo pipefail
           mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$LLV_STATE_DIR" "$TMPDIR"
-          bun node_modules/playwright-core/cli.js install --with-deps chromium
-          export CHROME_BIN="$(bun -e 'console.log(require("playwright-core").chromium.executablePath())')"
+          # Hosted Ubuntu includes Chrome and its system libraries. Installing
+          # them again made this runtime check depend on Ubuntu apt mirrors.
+          CHROME_BIN="$(command -v google-chrome)"
+          export CHROME_BIN
+          "$CHROME_BIN" --version
           bash scripts/gate-slot.sh bun test scripts/capture-readme-media.test.ts
           time bash scripts/gate-slot.sh bun scripts/capture-readme-media.ts --check-layout
 

@@ -88,6 +88,7 @@ export const WORKSPACE_ROUTES = {
   "/api/logs": "project",
   "/api/logs/stream": "project",
   "/api/mcp": "capability",
+  "/api/memory/history-rows": "owner",
   "/api/memory/inject": "owner",
   "/api/memory/settings": "owner",
   "/api/memory/source": "owner",
