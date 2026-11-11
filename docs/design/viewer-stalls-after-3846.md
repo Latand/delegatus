@@ -8,8 +8,9 @@ The coordinator accepted this interrupted window as the diagnostic basis
 on 2026-11-11 at 12:56:54 UTC. A separate 90-minute measurement on the
 installed release remains required before the next deployment.
 
-This document supplies parts 1 to 4 of the follow-up specification. The next
-stage supplies the ordered implementation plan.
+This document supplies parts 1 to 5 of the follow-up specification. Part 5
+is the ordered plan of fixes. Its section 5.1 checks parts 1 to 4 against their
+own commands and records three corrections.
 
 The originating board requirements are “Delegatus став частіше підвисати з
 28.10” and “Runtime host гальмує на перебудові знімка сесій”. Both full task
@@ -122,6 +123,12 @@ All endpoints have Viewer PID 3875509 and start identity 55984392. The second sh
 The operator apply began at 12:31:11.902, so the final six minutes also include deployment preparation on this machine. A sensitivity cohort ending at that start, 11:27:27–12:31:11.902 (63 minutes 44.902 seconds), contains 695 Viewer records and 963.758 seconds of gaps: **25.1969%** of wall time. Its residual is 706.459 seconds, **73.3025%** of gap time; the runtime host is at 0.3073%. Removing deployment preparation therefore retains the stall and attribution failures. This shorter cohort also fails the requested duration.
 
 The equal-duration reference and this cohort differ in session count, project concurrency, event coverage and deployment activity. The 63.660-second maximum in the reference lies outside the acceptance's shorter 08:00–08:30 window. Its larger value here follows the changed time bounds. Both Viewer gap shares remain far above section 11's under-5% threshold. These unmatched observations establish persistence of stalls and do not estimate a repair's gain or loss.
+
+Correction from section 5.1: the cohort above starts after the ten-minute
+exclusion but before the Viewer's structured-host startup pass had finished.
+That pass failed its 300-second deadline seven times and reached `ready` at
+12:06:10.901. The window was in gaps 29.52 % of the time inside the passes and
+23.66 % outside them. The figures above are unchanged.
 
 ### Required follow-up: a separate 90-minute window
 
@@ -2419,6 +2426,7 @@ specific algorithm, collection or call site that caused it.
 | Other readers: 2.9464% | Newly separated observation: scanner IPC and miscellaneous readers | scanner.ipc-frame 1.3926%. This is serving-thread frame processing, distinct from worker CPU. A generic scanner label does not establish which caller or payload shape caused it. |
 | Named tail: 1.3164% | Telemetry capacity limitation | Duration is measured; family and exact caller were omitted. Do not redistribute it across visible families. |
 | Runtime host: 0.2869% of its own wall time | Section 10: snapshot rebuild, idle liveTurn and retirement policy | Measured separately from Viewer gaps. Existing snapshot work and any retirement decision retain their owners; this is no share of the Viewer residual. |
+| Startup adoption block: 7.91 % floor, 17.63 % ceiling (added by section 5.2) | Cause not yet written down; plan item 2 | Six 13.5–16.1 s gaps each hold the stale-claim refusal of a retried structured startup pass. Named readers explain 1.0–1.5 s of each. |
 | No numerical share assigned | Section 10: direct yields, migration start, opt-out reads, key retry, auto_vacuum and stopped-state presentation | The current records do not isolate these mechanisms. Few cooperative resumes exclude many resumed queue slices in those records, and say nothing about unsliced work or first slices. No speculative savings are assigned. |
 
 <!-- mapping:end -->
@@ -2524,6 +2532,11 @@ The retained command output is `attributed seconds 299.875`, followed by
 `combined contexts 50.279 16.77%` (each percentage uses attributed time).
 
 ## 4. Seeing inside the residual
+
+Section 5.1 narrows this proposal. As written below, the capture would keep the
+current frame filter, which drops every frame of the chunks that hold the
+registry store. Plan item 1 builds the observation into the existing deploy
+recorder and its kill switch, and the new route moves to section 5.5.
 
 The least disruptive next step is a short, explicitly approved sampling
 session using the existing Viewer recorder. The recorder already exists in
@@ -3106,3 +3119,773 @@ PY
 ```
 
 <!-- evidence:end -->
+
+## 5. Ordered plan of fixes
+
+This part was written on 2026-11-11 between 13:30 and 14:10 UTC. It rests on
+sections 1 to 4, section 10 of
+[the earlier design](viewer-stalls-root-cause.md#10-deferred-with-the-reason)
+and the code on main. Main was `1037130e` at 13:42:28 (`git ls-remote`), five
+commits past this worktree's base `1a2e577f`: PRs 3841, 3857, 3849 and two
+gate and test fixes. Among the files this plan names, those commits change
+`sqliteRegistryStore.ts`, `viewerLoopMonitor.ts` and role-memory files. They
+change none of the files that items 1 to 4 edit. Every number below comes from a
+command in section 5.6, with its time bounds.
+
+### 5.1 Checks of parts 1 to 4, and corrections
+
+**The numbers of sections 1 and 2 reproduce.** The collector retained at the end
+of section 4 was run again unchanged, read from 13:32:29.059 to 13:32:35.210,
+and once more inside the analysis script of section 5.6, read from 13:59:57.023
+to 14:00:09.848. The first run returns 801 Viewer gaps, 1,095,605 ms, 26.1056 %
+of the window, a residual of 795,729.867 ms, the seven family totals of section
+2, 309 gaps of one second or more, and 54 distinct watchdog triggers (50 of them
+`unknown-runtime-or-native`). The second run returns the same gap count, gap
+time and residual. Both return the cohort digests `de4ef66e…` (steady) and
+`6fcce116…` (earlier) of the evidence manifest. No number in
+sections 1 and 2 needs correction.
+
+**Correction 1: the cohort started after the ten-minute exclusion but before
+startup had finished.** Section 1 calls the window steady. On `692e5338` the
+Viewer's structured-host startup pass ran out of its 300-second deadline
+(`STRUCTURED_STARTUP_PASS_DEADLINE_MS`, `src/lib/runtime/startupWork.ts:2`)
+seven times. Each time it logged `startup adoption failed; retry scheduled`
+(`src/lib/viewerInstrumentation.ts:857`) and started again. The eighth pass
+reached `ready` at 12:06:10.901, 48 minutes 43.9 seconds after the first pass was
+admitted at 11:17:27.014. 1,748.9 s of the 4,196.8 s window (41.7 %) lay inside a
+pass. Inside the passes the Viewer was in gaps 29.52 % of the time. Outside them
+it was in gaps 23.66 % of the time. The 26.11 % of section 1 mixes these two
+states. Its figures stand. The follow-up window of section 1 should therefore
+record the `ready` time of the startup pass and report the share before and
+after it separately. On `662a6012` the first pass reached `ready` at 12:42:50.148,
+5 minutes 6 seconds after the Viewer started.
+
+**Correction 2: the capture proposed in section 4 would keep the filter that
+hides the registry.** Section 4 emits "only the existing privacy-filtered
+summary". That filter, `location()` in `src/lib/loopProfiler.ts:20-50`, keeps a
+frame only after it has read the frame's source file. It reads at most eight
+files (`sourceFileCap`) and skips any file over 1 MiB (`sourceFileBytesCap`).
+The served release `662a6012` has 1,226 server JavaScript files and no source maps.
+Ten of the files exceed 1 MiB. The registry store's code
+(`loadLazyInTransaction`) is emitted only into four chunks of 2.76 to 3.21 MB. So
+the current filter drops every frame inside the registry store. The earlier
+design (section 8) reports that the 41 captures of 9 November kept under 11 % of
+their samples. These caps are a sufficient explanation. That release was not
+re-examined, so this cause is inferred. Item 1 below replaces the filter. Without
+that change, the capture of section 4 would be expected to leave most samples
+unnamed again.
+
+**Correction 3: the switch already exists, and so does the arming.** The Viewer's
+recorder already arms after the first start of each new revision for
+`armMinutes` (30 to 120, default 30). It samples in back-to-back five-second
+windows and rereads the kill switch `loop-profiler.json` at every window
+boundary (`src/lib/loopProfilerServing.ts:68-93`,
+[serving contract](../perf/viewer-stall-attribution.md)). The switch is set to
+`{"enabled": false}`. Its modification time is 2026-11-10 08:30:09 UTC. The
+seat's problem report of 9 November records the same setting from 2026-10-30. No
+writer exists in the source. Item 1 therefore builds on the deploy recorder and
+its existing switch. A deploy restarts the Viewer and arms the recorder before
+the startup pass, which a manual arm on a running process would miss. The new
+operator route of section 4 moves to section 5.5.
+
+**Addition: the earlier cohort's families.** The same collector run returns the
+family totals of the earlier `803f12c1` cohort, which section 2 did not publish.
+They use `summarise()`, which does not cap a record's named time at its gap.
+Role-memory readers took 271.5 s against 30.0 s on `692e5338`, and the residual
+was 615.1 s against 795.7 s. Registry readers took 71.8 s, state readers 80.1 s,
+operation bodies 38.8 s, other readers 21.3 s and the named tail 13.0 s. The
+windows differ in load (section 1), so these figures support no causal claim.
+They show that role-memory reads fell out of the named share while the
+unattributed share grew.
+
+### 5.2 What the retained records add
+
+#### The structured startup adoption block, a cause not yet written down
+
+Six of the eight longest gaps of the window hold the line
+`[structured hosts] refusing stale turn-claim adoption`. A retried startup pass
+prints that line from `startupAdoptionPredicate`
+(`src/lib/runtime/startup.ts:1940`) while it filters its adoption candidates
+(`startup.ts:2859-2860`), just before it reports `adopting Codex hosts`
+(`startup.ts:2971`). The journal received both lines during the gap.
+
+| Gap end (UTC) | Gap ms | Refusal line, s after gap start | `adopting Codex hosts` line, s after gap start | Main-thread reads around the gap, MB | Named ms |
+| --- | --- | --- | --- | --- | --- |
+| 11:31:24.157 | 13,799 | 11.0 | 12.8 | 994 | 1,426 |
+| 11:34:32.798 | 14,956 | 12.7 | 14.1 | 1,067 | 1,334 |
+| 11:40:46.547 | 16,078 | 13.8 | 15.4 | 1,030 | 1,518 |
+| 11:47:12.330 | 14,728 | 12.0 | 13.5 | 1,075 | 1,345 |
+| 11:53:31.080 | 13,605 | 11.1 | 12.5 | 1,115 | 1,007 |
+| 12:03:36.799 | 13,502 | 10.9 | 12.2 | 1,200 | 1,077 |
+
+Observed: each block began 10.9 to 13.8 s before the candidate filter reached the
+stale row, and it ended within about two seconds after the filter. In each block
+named readers explain 1.0 to 1.5 s. The `scheduler.readBytes` sample window
+around each block shows 0.99 to 1.20 GB read by the serving thread. One or two
+more gaps of 5.3 to 8.3 s, topped by `registry.read/registry.keyed`, follow
+within 25 s, near the `adopting Claude hosts` line (rows of the section-2
+ledger). Three measures of this
+signature, over the 1,095.605 s of Viewer gap time:
+
+| Measure | Gaps | Seconds | Share of gap time | Share of the residual |
+| --- | --- | --- | --- | --- |
+| The six gaps that hold a refusal line (floor) | 6 | 86.668 | 7.91 % | 9.92 % |
+| Gaps of 5 s or more topped by `registry.keyed`, up to 45 s after each refusal (core) | 17 | 160.639 | 14.66 % | 18.59 % |
+| All gaps of 1 s or more, from the one that holds each refusal to 45 s after it (ceiling) | 35 | 193.160 | 17.63 % | 21.56 % |
+
+Without the 35 gaps of the ceiling, the passes were in gaps 18.48 % of their wall
+time, less than the 23.66 % outside them. Inference: the retried passes add
+stall through this block only.
+
+The code between the `refreshing transcripts` progress line and the candidate
+filter is `startup.ts:2739-2860`. It covers the end of
+`refreshStructuredTranscriptState`, `readBulkEvidence` twice,
+`preparedStartupSnapshot` with `startupConversationRows`,
+`settleSubmittedInterruptionObligations`, `revalidateRetainedStartupHosts`,
+`deadSupersededHeldDeliveryCandidates`,
+`reconcileDeadStructuredRegistryHostsOffLoop`, `structuredStartupSignals`,
+`structuredStartupAdoptionFilter`, `startupStructuredHostEntries` and the
+`shouldAdopt` filter. The records name none of them. In the whole window the
+watchdog sampled `unknown-runtime-or-native` in 10,853 of 12,598 site samples
+(86.15 %). The section-11 cooperative counters show no resumed slice in these
+gaps. The batch helper `forEachStartupBatch` (`startupWork.ts:6-34`) already
+yields a timer turn between batches, so the block runs outside it. Which step
+holds the thirteen seconds is not established.
+
+The block also occurs once per Viewer start. On `662a6012` the first pass was
+admitted at 12:38:21.380 and refused the same stale claim at 12:39:04.623. It
+produced gaps of 14,914, 6,800 and 6,786 ms at 12:39:06.760, 12:39:16.853 and
+12:39:33.803. Around those gaps the serving thread read 1,039, 678 and 644 MB.
+That pass reached `ready` on its first attempt.
+
+#### The dominant operation of each gap (co-occurrence only)
+
+Each gap below is classed by the operation with the most visible exclusive
+reader time, after the adoption block. The class's seconds are whole gaps and
+include their residual. They show where the unnamed time co-occurs; what it is
+stays open until item 1 runs.
+
+| Dominant visible operation | Gaps | Seconds | Share of gap time | Residual s | Share of the residual |
+| --- | --- | --- | --- | --- | --- |
+| Startup adoption block (above) | 35 | 193.2 | 17.63 % | 171.5 | 21.56 % |
+| `registry.read` | 153 | 148.7 | 13.58 % | 92.4 | 11.61 % |
+| `seat-tick.check` | 113 | 135.2 | 12.34 % | 106.4 | 13.37 % |
+| `http.render` | 36 | 100.0 | 9.13 % | 73.7 | 9.26 % |
+| `pipelines.mutation` | 79 | 74.5 | 6.80 % | 63.6 | 7.99 % |
+| `role-memory.view` | 43 | 52.4 | 4.78 % | 30.3 | 3.80 % |
+| `registry.write` | 31 | 47.7 | 4.35 % | 36.9 | 4.64 % |
+| `pipelines.controller-schedule` | 33 | 43.7 | 3.99 % | 35.5 | 4.46 % |
+| `memory.import.curation` | 12 | 40.3 | 3.68 % | 4.7 | 0.59 % |
+| `scanner.worker` | 36 | 33.1 | 3.02 % | 15.4 | 1.94 % |
+
+Visible exclusive time outside the adoption block, capped as in section 2, is
+57.080 s for `registry.read` (5.21 %), 21.781 s for `seat-tick.check` (1.99 %)
+and 23.352 s for `http.render` (2.13 %).
+
+#### Whole-store reads inside two contexts
+
+- `http.render` ran 687,687 `registry.get` calls and 686,363 `registry.json`
+  parses of 2,209.5 MB across 15 and 12 gaps. The largest, the gap that ended at
+  12:30:12.201 (10,526 ms), prepared, read and parsed 152,700 registry rows one
+  at a time inside a page render: 629.0 MB of JSON, 1,538 ms of parsing, 1,499 ms
+  of `get` and 138 ms of `prepare`. `http.render` wraps Next render spans only
+  (`src/lib/nextRenderMonitor.ts:11-29`), so this was a page or a server
+  component render; API route handlers run outside these spans. The record does not name the page.
+- `seat-tick.check` parsed 3,380.6 MB of state JSON in 5,681 `state.json` calls
+  across 93 gaps. It reads whole pipeline and task lists through
+  `loadPipelinesForList*` and `loadTasks*` (`src/lib/monitor/seatTickSources.ts:69,93`)
+  before it prepares its projection (`seatTickSources.ts:2911-2935`).
+  The record names no collection.
+
+Both are whole-store reads on a per-request or per-tick path. The named time of
+each is small beside the gaps it dominates.
+
+#### Memory and the collector threads
+
+Between the first and the last gap record of the window (11:27:30.778 and
+12:36:37.676), the heap size after the last collection grew from 2.84 to 7.21 GB
+and RSS from 5.55 to 13.46 GB. The serving thread's `rchar` summed over the
+gaps' sample windows is 147.4 GB. GC time on the serving thread is not measured:
+799 records say `gc-entry-unsupported`. A procfs read of the live `662a6012`
+Viewer (PID 946855) at 13:47:09.365 found its main thread at 3,492.6 CPU-seconds
+and its seven `HeapHelper` threads at 621.9 CPU-seconds since the start at
+12:37:44. Inference: collection work is large. How much of it stops the serving
+thread is not established.
+
+#### The installed release so far
+
+From 12:47:44.306 (ten minutes after the `662a6012` Viewer started) to
+13:40:00.000, the Viewer (PID 946855) recorded 627 gaps of 630.095 s: 20.09 % of
+that 52-minute window. The history-drain setting of PR 3841
+(`role-history-rows.json`) was absent at 13:46, so role-memory history still
+lives in the scope rows. This is not the 90-minute follow-up of section 1. Its
+load was not recorded, and it supports no comparison with either cohort. It shows
+that gaps persist on the release that contains PRs 3841 and 3857.
+
+### 5.3 The plan
+
+Each item is a separate lane. Shares are fractions of the Viewer gap time of the
+section-1 cohort. A floor counts the item's visible exclusive time. A ceiling
+counts the whole gaps the item dominates, which include their residual. The
+residual cannot be assigned until item 1 runs, so every repair item states both.
+Lane sizes: S is one module and its tests, under about 200 changed lines. M is up
+to five files, under about 600 lines. L must be split before it is built.
+
+| Order | Item | Expected share removed | Waits for | Risk | Review rounds | Size |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | The deploy recorder names the residual, per gap | 0 (diagnosis; it names the 72.63 % residual) | Section 1's 90-minute follow-up before activation | Medium-low | 2 | S-M |
+| 2 | Startup adoption selection yields the loop | 7.91-17.63 % in a window with retried passes; about 28.5 s of gaps per Viewer start | Item 1's capture of one start, or the fallback sites | High | 3 | M |
+| 3 | A page render reads only the registry rows it shows | 2.13-9.13 % | Item 1 names the page | Medium | 2 | S-M |
+| 4 | A seat-tick check reads what changed since its last check | 1.99-12.34 % | Item 1 names the parsing callers | Medium | 2 | M |
+| 5 | Registry reads outside startup stop rebuilding whole views | 5.21-13.58 % | Item 1 names the callers; the diffs of PRs 3710, 2926 and 3861 | High | 3 | L, split per caller |
+
+The ceilings overlap neither each other nor the adoption block, because each gap
+has one dominant class. The floors overlap nothing. A ceiling still counts
+residual time whose cause item 1 may place elsewhere.
+
+#### Item 1. The deploy recorder names the residual, per gap
+
+**Share removed:** none. The goal is to name the functions behind the 795.730 s
+(72.63 %) residual and the 86 % `unknown-runtime-or-native` watchdog samples, at
+the same per-gap granularity as section 2.
+
+**Switch.** The existing kill switch is `loop-profiler.json` in the state
+directory. `{"enabled": false}` is off. With any other content the recorder arms
+after the first start of a new revision, for `armMinutes` (30 to 120). The first
+start of a revision uses up that revision's arming even when the switch is off.
+To activate the recorder, the operator writes
+`{"enabled": true, "armMinutes": 60}` before the deploy that first carries this
+item. To stop it, the operator writes `{"enabled": false}`. That takes effect at
+the next five-second window boundary. Sixty minutes cover the startup block and
+about fifty minutes after it. The item changes neither the switch's defaults nor
+its ledger. The operator activates it, and only after section 1's 90-minute
+follow-up is taken with the switch off.
+
+**What the builder changes:**
+
+1. `src/lib/loopProfiler.ts`, `location()` and `trimLoopProfile()`: accept a
+   frame by position. Keep a frame whose `sourceURL` resolves under the serving
+   root to `.next/server/**.js`, `src/**` or `scripts/**` and whose line and
+   column are valid. Emit `{file, line, column}`. Emit `function` only when the
+   name passes the existing static-name check for a source already cached under
+   the present caps, and `null` otherwise. Never emit a computed name. Remove the
+   eight-file and 1 MiB caps from acceptance, and keep them for the name lookup
+   only.
+2. Same file, native leaves: in each sample, credit `self` to the first accepted
+   frame. Count `selfViaNative` when frames above it were native or filtered.
+   Report `unresolvedSamples`, the samples with no accepted frame within depth 32.
+3. Same file, per-gap clipping: in `createLoopProfiler`, trim once per pending
+   gap (at most four per window, each within the existing 4,096-sample cap). Use
+   only traces whose timestamp falls inside that gap's `[lastTick, tick]`, which
+   `correlate()` already receives from `viewerLoopMonitor.ts:233`. Also report
+   whole-window counts. The rehearsal fixes the unit and epoch of the trace
+   timestamps on Bun 1.4.0, as section 4 requires. When they cannot be aligned,
+   the summary says `correlation: "window"` and assigns no per-gap weight.
+4. Same file: report `expectedSamples` (gap ms × 1000 / interval µs) beside the
+   samples taken, as the share of the gap that the sampler could not see.
+5. `src/lib/loopWatchdog.ts`: while the recorder is armed, the watchdog worker
+   also reads the `utime + stime` of the process's `HeapHelper` threads, at most
+   sixteen `/proc/<pid>/task/<tid>/stat` reads per sample. It adds
+   `gcHelperCpuMs` over the interval that already yields `scheduler.runMs`. No
+   procfs read moves to the serving thread. The thread name was confirmed on the
+   live process (section 5.2).
+6. `scripts/probe-loop-profiler.ts`: add a `--map <release-directory>` mode. It
+   reads `[viewer loop-gap]` lines on standard input and prints, for each
+   position, the source location from a source map when the release has one, and
+   otherwise a fixed 160-byte excerpt of the emitted chunk around the position.
+   It is an offline tool and prints to the caller's terminal only. A source-map
+   rebuild of the same revision in a scratch export can be used when its chunks
+   are byte-identical to the served ones apart from the map comment. The tool
+   checks that before it uses the map.
+7. Tests in `src/lib/loopProfiler.test.ts`, `src/lib/loopWatchdog.test.ts` and
+   the compiled fixture `src/lib/loopProfiler.fixture.ts`.
+
+`viewerLoopMonitor.ts` and `viewerInstrumentation.ts` are not edited. Open
+PRs 3710 and 3861 change them, and the existing call sites suffice. Neither the
+runtime host nor the Bun pin is touched.
+
+**Bounds kept:** five-second windows, a 10 ms interval, at most 4,096 inspected
+samples per summary, depth 32, 128 candidate frames, 16 output rows, 8,192 bytes
+per gap record, and an arm of at most 120 minutes. A capture keeps no raw stack
+after it is trimmed. Native collection during a blocked loop remains the exposure
+the revised contract accepted.
+
+**Acceptance:**
+
+- Tests that fail on the base and pass on the head. A frame from an emitted
+  chunk over 1 MiB is kept, and the base drops it. A ninth source file is kept,
+  and the base drops it. A computed function name never reaches the summary. A
+  native leaf is credited to its first accepted caller. Synthetic timestamps clip
+  the samples to their gap. `gcHelperCpuMs` is read from an injected procfs
+  reader.
+- A rehearsal on this machine: the production build of the branch under Bun
+  1.4.0, with a private HOME, TMPDIR and `LLV_STATE_DIR` and the control URL on a
+  closed port, through `scripts/gate-slot.sh`. Paired runs add less than 2 % to
+  the serving thread's CPU and less than 32 MiB of RSS. Each per-gap trim takes
+  under 10 ms, and each summary is at most 8,192 bytes. The existing
+  `syntheticThreeSecondBlockForProfilerFixture` resolves to its own file and line
+  in at least 80 % of its clipped samples. A kill switch written during a window
+  stops collection at the next boundary.
+- Production, after the follow-up and the operator's activation: the gap that
+  holds the first pass's stale-claim refusal (or, without one, the longest gap
+  of the first startup pass) carries `jsProfile.status: "captured"`, and at least
+  80 % of its clipped samples resolve to a repository position. On 9 November the
+  filter kept under 11 % of samples. Over the armed hour, the median resolved
+  share of gaps of two seconds or more is at least 80 %. No raw stack or computed
+  name appears in the journal.
+
+**Risk:** medium-low. The change is diagnostic code in the serving Viewer, active
+only while it is armed. A defect adds serving-thread work for at most the arm
+duration, and the switch stops it at the next window. **Review:** two rounds.
+**Size:** S-M.
+
+**Interim option without code:** the operator can turn the existing switch on for
+the next deploy before item 1 lands. The startup code is emitted into two 70 KB
+chunks, which pass the current caps, so a capture could name startup functions.
+It would still drop every frame of the four chunks that hold the registry store.
+The same order applies: the follow-up first, then activation.
+
+**Fallback if the switch stays off:** item 2's builder wraps the synchronous
+bodies of the steps listed in section 5.2 in new static performance sites
+(`runtime.startup.<step>`). The watchdog then reports them per gap in
+`scheduler.sites`. This names steps without naming functions.
+
+#### Item 2. Startup adoption selection yields the loop
+
+**Share removed:** 7.91 % (floor), 14.66 % (core) and up to 17.63 % (ceiling) of
+gap time in a window where the startup pass retries as it did on `692e5338`. In
+any window, the item removes about 28.5 s of gaps of five seconds or more per
+Viewer start (31.7 s of gaps of one second or more). On `662a6012` the three
+gaps of 14.9, 6.8 and 6.8 s appeared once per start. In a
+window that begins after a first-pass `ready` it removes close to nothing. The
+reasoning is in section 5.2: the passes add stall through this block only.
+
+**Files:** `src/lib/runtime/startup.ts` (`adoptStructuredHostsPass` from line
+2539, `refreshStructuredTranscriptState`, `structuredStartupAdoptionFilter` at
+line 1805, `startupAdoptionPredicate` at line 1846),
+`src/lib/runtime/startupSnapshot.ts`, `src/lib/runtime/startupWork.ts` and their
+tests. No open PR touches these files (36 open PRs checked at 13:41). The block
+calls into `src/lib/agent/registry.ts` and `sqliteRegistryStore.ts`, which open
+PRs 3710, 2926 and 3861 change. The builder changes the startup call sites, and
+edits a registry method only when item 1 names one, after reading those diffs.
+`src/lib/cooperative.ts` is used without being edited, because open PR 3866
+changes it.
+
+**Change:** the steps item 1 names run in bounded slices that end in a timer turn,
+the way `forEachStartupBatch` already does. An `await` on a promise that has
+already settled does not end the loop turn. Every decision stays as it is: the
+same registry state yields the same candidates, the same refusals, the same
+claims and the same order of claims.
+
+**Acceptance:**
+
+- A fixture test, red on the base: a registry with enough live structured hosts
+  that the base selection holds one timer gap of at least 500 ms. Its length is
+  measured on the base and recorded in the test. On the head, no timer gap
+  between the `refreshing transcripts` and `adopting Codex hosts` progress marks
+  exceeds 100 ms. The adopted and refused host sets match the base row for row.
+- The candidate gate on this machine (`bun scripts/verify-viewer-runtime.ts
+  --performance`, isolated as in item 1). In the successor's startup, the
+  longest Viewer gap between the same two progress lines is under 250 ms. The
+  builder records the base value first.
+- Production, by the section-11 collector on the first start after the deploy:
+  no Viewer gap of one second or more holds the stale-claim refusal or the
+  `adopting Codex hosts` or `adopting Claude hosts` line. From the
+  `refreshing transcripts` line to 30 s after the `adopting Claude hosts` line,
+  gaps of one second or more sum to under 2 s. On `662a6012` the same
+  interval, from 12:38:35.014 to 12:39:56.097, holds five such gaps summing to
+  31.657 s.
+
+**Risk:** high. Startup adoption decides which agents are hosted again after a
+restart. A reordering can leave an agent unhosted or host it twice, and the
+pass interacts with release succession and the claim fences. **Review:** three
+rounds, the depth the project gives the runtime host. **Size:** M.
+
+#### Item 3. A page render reads only the registry rows it shows
+
+**Share removed:** 2.13 % (floor, visible `http.render` time outside the block)
+to 9.13 % (ceiling, the 36 gaps it dominates).
+
+**Evidence:** one render read 152,700 registry rows one at a time, each with its
+own `prepare`, `get` and JSON parse (section 5.2). The records do not name the
+page. Item 1's frames from `.next/server/app/**` will name it.
+
+**Files:** the page or server component that item 1 names, and the registry
+accessor it uses (`src/lib/agent/registry.ts`, `readOnlySnapshot` and the lazy
+row readers). The change belongs in the page's read: a keyed or projected read
+of the rows it displays. Registry internals are edited only after the diffs of
+PRs 3710, 2926 and 3861 have been read.
+
+**Acceptance:** a test that renders the page's data path over a fixture registry
+of at least 50,000 rows and counts `registry.get` calls. On the head the count is
+at most the number of rows the page shows plus a constant. On the base it equals
+the registry's row count. In the 90-minute window after deploy, by the
+section-11 collector: no Viewer gap of one second or more whose largest visible
+operation is `http.render` with `registry.get` among its readers.
+
+**Risk:** medium, since the page's content must stay identical. That needs
+rendered evidence through the existing kanban or phone driver, in en and uk,
+light and dark, if the page is a board surface. **Review:** two rounds.
+**Size:** S-M.
+
+#### Item 4. A seat-tick check reads what changed since its last check
+
+**Share removed:** 1.99 % (floor) to 12.34 % (ceiling).
+
+**Files:** `src/lib/monitor/seatTickSources.ts` (the refresh at lines 2911-2935
+and its `loadPipelinesForList*` and `loadTasks*` reads),
+`src/lib/monitor/seatTickController.ts`, and the list readers in
+`src/lib/tasks/store.ts`. No open PR touches the seat-tick files or
+`tasks/store.ts`. `src/lib/pipelines/store.ts` is changed by six open PRs
+(3668, 3710, 3747, 3749, 3801, 3802). The item reads pipelines through its
+existing exports and does not edit that file. Item 1 tells which reads parse
+the 3.4 GB. The existing `seatTickRefreshCache` and `changeFingerprint` are the
+place to make the work scale with what changed.
+
+**Acceptance:** a fixture test, red on the base: after one check, a second check
+with one changed task parses a bounded amount of JSON (a constant plus the
+changed rows). On the base it parses the whole list again. Alarm records stay
+identical on a recorded fixture. In the 90-minute window after deploy:
+`seat-tick.check/state.json` decoded bytes inside gaps are under 10 % of the
+cohort's 3,380.6 MB per 70 minutes, scaled to the window and at a comparable
+seat count. No Viewer gap of one second or more is dominated by
+`seat-tick.check`.
+
+**Risk:** medium. A stale projection could miss an alarm. **Review:** two rounds.
+**Size:** M.
+
+#### Item 5. Registry reads outside startup stop rebuilding whole views
+
+**Share removed:** 5.21 % (floor, visible `registry.read` time outside the block)
+to 13.58 % (ceiling, 153 gaps).
+
+**Evidence and mapping:** by the retained collector's `readersMs`,
+`registry.keyed` (29.297 s) is the largest named reader after the operation
+bodies, and `registry.snapshot` (21.048 s) is the fourth, after `state.json`. These totals include
+their time inside the startup block.
+They map to two deferred items of section 10 of the earlier design: the plain
+snapshot that brings its view up to date in one synchronous step, and the keyed
+readers that walk every row a transaction has changed.
+
+**Files:** `src/lib/agent/registry.ts` (`readKeyed` near line 6448) and
+`src/lib/agent/sqliteRegistryStore.ts` (the measured snapshot near line 1807).
+Open PRs 3710, 2926 and 3861 change these files. Item 1 names the callers. The
+lane splits per caller and reads those diffs before it starts.
+
+**Acceptance:** for each caller, a test that counts the rows a call reads and
+holds it to the rows the caller needs. By the section-11 collector, the
+`registry.read` visible time per hour in gaps falls below a tenth of the
+cohort's 57.080 s per 70 minutes at a comparable session count.
+
+**Risk:** high. The registry is the shared store of every agent and every
+delivery. **Review:** three rounds. **Size:** L, split per caller.
+
+#### After item 1
+
+When item 1 has run for one armed hour, its per-gap frames are joined to the
+classes of section 5.2 by the same collector. Items 3 to 5 are then re-ranked by
+the seconds their named functions hold. `pipelines.mutation` (6.80 %),
+`registry.write` (4.35 %) and `pipelines.controller-schedule` (3.99 %) get an
+item when their frames show a repairable call site. If the GC helper CPU and the
+unseen-sample share account for a large part of the residual, the heap growth
+of section 5.2 becomes the next item. Its owner is the existing memory work
+(PRs 3851 and 3856).
+
+### 5.4 Covered by other work
+
+| Share | Covered by | Why not planned |
+| --- | --- | --- |
+| Role-memory readers 30.032 s (2.74 %); `role-memory.view` context 18.540 s (1.69 %) | PRs 3841 and 3857 (merged at 12:07:04 and 12:29:01, in `662a6012`) | Their history move waits for the operator's drain switch (`role-history-rows.json`, absent at 13:46). Measure after activation. No plan item edits `roleViewSource.ts`, `roleStore.ts`, `roleProblems.ts` or `curation/*`. |
+| Curator apply: `memory.import.curation` 2.90 % visible, 3.68 % as a class; a 4.364 s hold on `692e5338` | Deferred fix 4 of the earlier design, on top of PR 3841 | PR 3841 changed `curation/apply.ts` and its drain is still off. Size fix 4 after activation, as section 3 says. |
+| Runtime host 0.29 % of its own time | Section 10 of the earlier design; lane `d2a17781` | Outside the Viewer's share. |
+| Heap growth and heap diagnostics | PR 3851 (heap diagnostics), PR 3856 (memory ceiling) | Item 1 adds only a GC helper CPU field. It changes no heap code. |
+
+### 5.5 Deferred — not currently justified
+
+- **The manual operator arm of section 4** (`src/app/api/operator/loop-profile/route.ts`).
+  The deploy recorder arms itself on each new revision, and this machine
+  took two releases between 11:00 and 13:00 on 2026-11-11 (section 1). Reconsider if a stall has to be captured on a process
+  that no deploy will restart.
+- **An external native sampler** (section 4's escalation). Reconsider only if
+  item 1 leaves more than 20 % of clipped samples unresolved in its armed hour.
+- **Resuming a startup pass from the phase where its deadline ran out.**
+  The retries delayed `ready` by 48 minutes on `692e5338`. Without the
+  adoption-block gaps, though, the passes stalled the loop less than the time
+  outside them (18.48 % against 23.66 %). The stall requirement does not justify
+  it after item 2. A late `ready` has functional effects, and those belong in a
+  separate task if the operator wants one.
+- **Startup step marks as a permanent log.** They are needed only if item 1
+  cannot be activated; that case is item 1's fallback.
+
+### 5.6 Commands and bounds for part 5
+
+<details>
+<summary>Analysis script, its output, and the auxiliary reads</summary>
+
+The analysis script runs the collector of section 4 unchanged. Save that
+collector as `collector.py` and keep its definitions:
+
+```bash
+awk '/^lo=ms\(/{exit} {print}' collector.py > defs.py
+python3 -I plan_analysis.py defs.py
+```
+
+`plan_analysis.py` (SHA-256 `f958bdbebf8659b2034735825c770b7800aebe5027a32924deb69a6b63ccd578`;
+`defs.py` SHA-256 `9aa42e2dceea19e6873a4d08238a6014bf92e03ea048f6af32a9a38a408c48e2`):
+
+```python
+import collections, datetime, json, os, pathlib, re, subprocess, sys, time
+
+# Definitions of the retained collector (section "Exact collector and
+# allocation command"): everything above its line `lo=ms(...)`.
+ns = {}
+exec(open(sys.argv[1]).read(), ns)
+ms, iso, collect = ns['ms'], ns['iso'], ns['collect']
+began = iso(time.time() * 1000)
+REV_A, REV_B, REV_C = ('692e5338ea3fffa1d3e4110876387063bb7f3da9', '803f12c106a45833954c7df5a0c8533fa9253d09',
+                       '662a6012b39f051669da557d828c13b9e82aa27d')
+LO, HI = ms('2026-11-11T11:27:27.000Z'), ms('2026-11-11T12:37:23.816Z')
+a = collect(LO, HI, REV_A)
+b = collect(ms('2026-11-11T08:17:30.184Z'), ms('2026-11-11T09:27:27.000Z'), REV_B)
+c_start = collect(ms('2026-11-11T12:37:44.306Z'), ms('2026-11-11T12:47:44.306Z'), REV_C)
+c_part = collect(ms('2026-11-11T12:47:44.306Z'), ms('2026-11-11T13:40:00.000Z'), REV_C)
+out = {'readStart': began, 'digests': {'steady': a['digest'], 'earlier': b['digest']}}
+
+def viewer(data): return sorted([v for v in data['gaps'] if v['role'] == 'viewer'], key=lambda v: v['utc'])
+def named(v): return v['reads'].get('namedSyncMs', 0) if v.get('reads') else None
+def resid(v): return v['gapMs'] if not v.get('reads') else max(0, v['gapMs'] - named(v))
+A = viewer(a); TOT = sum(v['gapMs'] for v in A); RES = sum(resid(v) for v in A)
+out['steady'] = {'n': len(A), 'gapMs': TOT, 'residualMs': round(RES, 3)}
+
+# Earlier cohort families, the same rule as summarise() (no per-record cap).
+fam = collections.Counter()
+for v in viewer(b):
+    r = v.get('reads', {}); vis = 0
+    for x in r.get('top', []):
+        if x.get('worker'): continue
+        n = x['reader']; vis += x.get('syncMs', 0)
+        fam['registry' if n.startswith('registry.') else 'state' if n.startswith('state.') else 'memory' if n.startswith('memory.view.')
+            else 'operation bodies' if n == 'operation' else 'other'] += x.get('syncMs', 0)
+    fam['named beyond top'] += max(0, r.get('namedSyncMs', 0) - vis)
+    fam['unattributed'] += max(0, v['gapMs'] - r.get('namedSyncMs', 0))
+out['earlierFamiliesS'] = {k: round(x / 1000, 1) for k, x in fam.items()}
+
+# Structured-host startup lines, first journal line of each message.
+def startup_lines(since, until):
+    q = subprocess.run(['journalctl', '--user', '-u', 'delegatus.service', '--since', since, '--until', until, '--utc', '-o', 'json',
+                        '--no-pager', '-n', '20000', '--grep', r'structured hosts\] (startup|refusing)'],
+                       capture_output=True, text=True, timeout=60)
+    rows = q.stdout.splitlines(); assert q.returncode == 0 and len(rows) < 20000
+    return sorted((int(json.loads(x)['__REALTIME_TIMESTAMP']) / 1000, json.loads(x)['MESSAGE']) for x in rows)
+ev = startup_lines('2026-11-11 11:17:00 UTC', '2026-11-11 12:37:24 UTC')
+passes, cur = [], None
+for t, m in ev:
+    if 'startup pass admitted' in m: cur = t
+    if ('retry scheduled' in m or 'adoption recovered' in m) and cur is not None: passes.append((cur, t, 'retry' if 'retry' in m else 'ready')); cur = None
+out['passes'] = [[iso(s), iso(e), k, round((e - s) / 1000, 1)] for s, e, k in passes]
+inside = [0, 0]; outside = [0, 0]
+wall = sum(max(0, min(e, HI) - max(s, LO)) for s, e, _ in passes)
+for v in A:
+    e = ms(v['utc']); s = e - v['gapMs']; f = sum(max(0, min(e, pe) - max(s, ps)) for ps, pe, _ in passes) / v['gapMs']
+    inside[0] += f * v['gapMs']; inside[1] += f * resid(v); outside[0] += (1 - f) * v['gapMs']; outside[1] += (1 - f) * resid(v)
+out['passWindows'] = {'wallS': round(wall / 1000, 1), 'insideGapS': round(inside[0] / 1000, 1), 'insideSharePct': round(100 * inside[0] / TOT, 2),
+                      'insideWallSharePct': round(100 * inside[0] / wall, 2), 'outsideGapS': round(outside[0] / 1000, 1),
+                      'outsideWallSharePct': round(100 * outside[0] / ((HI - LO) - wall), 2)}
+
+# Adoption block: from the gap that holds each stale-claim refusal to 45 s after it.
+refusals = [t for t, m in ev if 'refusing stale' in m and LO <= t < HI]
+def top_reader(v):
+    top = sorted([x for x in v['reads'].get('top', []) if not x.get('worker')], key=lambda x: -x['syncMs'])
+    return top[0]['reader'] if top else None
+block = [v for v in A if v.get('reads') and v['gapMs'] >= 1000 and any(ms(v['utc']) >= r - 500 and ms(v['utc']) - v['gapMs'] <= r + 45000 for r in refusals)]
+holding = [v for v in block if any(ms(v['utc']) - v['gapMs'] <= r <= ms(v['utc']) for r in refusals)]
+core = [v for v in block if v['gapMs'] >= 5000 and top_reader(v) == 'registry.keyed']
+def agg(rows): return {'n': len(rows), 'gapS': round(sum(v['gapMs'] for v in rows) / 1000, 3), 'sharePct': round(100 * sum(v['gapMs'] for v in rows) / TOT, 2),
+                       'residualS': round(sum(resid(v) for v in rows) / 1000, 1), 'residualSharePct': round(100 * sum(resid(v) for v in rows) / RES, 2)}
+out['adoptionBlock'] = {'refusals': len(refusals), 'holding': agg(holding), 'core': agg(core), 'ceiling': agg(block),
+                        'holdingRows': [[v['utc'][11:23], v['gapMs'], round((r - (ms(v['utc']) - v['gapMs'])) / 1000, 1),
+                                         round((next(t for t, m in ev if 'startup progress' in m and t >= r) - (ms(v['utc']) - v['gapMs'])) / 1000, 1),
+                                         round(v['scheduler']['readBytes'] / 1e6), round(named(v))]
+                                        for v in holding for r in refusals if ms(v['utc']) - v['gapMs'] <= r <= ms(v['utc'])]}
+non_block_inside = inside[0] - sum(v['gapMs'] * sum(max(0, min(ms(v['utc']), pe) - max(ms(v['utc']) - v['gapMs'], ps)) for ps, pe, _ in passes) / v['gapMs'] for v in block)
+out['passWindows']['insideWithoutBlockWallSharePct'] = round(100 * non_block_inside / wall, 2)
+
+# Dominant visible operation per record (co-occurrence only).
+cls = collections.defaultdict(lambda: [0, 0, 0]); blockset = {v['utc'] for v in block}
+for v in A:
+    if not v.get('reads'): k = '(truncated record)'
+    elif v['utc'] in blockset: k = 'startup adoption block'
+    else:
+        ops = collections.Counter()
+        for x in v['reads'].get('top', []):
+            if not x.get('worker'): ops[x['operation']] += x['syncMs']
+        k = ops.most_common(1)[0][0] if ops else '(no visible reader)'
+    cls[k][0] += 1; cls[k][1] += v['gapMs']; cls[k][2] += resid(v)
+out['dominant'] = [[k, n, round(g / 1000, 1), round(100 * g / TOT, 2), round(r / 1000, 1), round(100 * r / RES, 2)]
+                   for k, (n, g, r) in sorted(cls.items(), key=lambda x: -x[1][1])[:10]]
+
+# Visible exclusive time per context outside the adoption block (capped as in section 2).
+floors = {}
+for op in ['registry.read', 'seat-tick.check', 'http.render']:
+    acc = 0.0
+    for v in A:
+        if not v.get('reads') or v['utc'] in blockset: continue
+        n = named(v); f = min(1, v['gapMs'] / n) if n else 1
+        acc += sum(f * y['syncMs'] for y in v['reads']['top'] if not y.get('worker') and y['operation'] == op)
+    floors[op] = [round(acc / 1000, 3), round(100 * acc / TOT, 2)]
+out['contextFloorsOutsideBlock'] = floors
+
+# Reader volumes in two contexts named by the plan.
+vol = collections.defaultdict(lambda: [0, 0.0, 0, 0])
+for v in A:
+    for x in (v.get('reads') or {}).get('top', []):
+        if x.get('worker') or x['operation'] not in ('http.render', 'seat-tick.check'): continue
+        z = vol[x['operation'] + '/' + x['reader']]; z[0] += x['calls']; z[1] += x['syncMs']; z[2] += x.get('decodedJsonBytes', 0); z[3] += 1
+out['contextReaders'] = {k: [n, round(s / 1000, 2), round(j / 1e6, 1), g] for k, (n, s, j, g) in sorted(vol.items(), key=lambda x: -x[1][1])[:6]}
+big = max((v for v in A if v.get('reads') and any(x['operation'] == 'http.render' and x['reader'] == 'registry.get' for x in v['reads']['top'])),
+          key=lambda v: next(x['calls'] for x in v['reads']['top'] if x['operation'] == 'http.render' and x['reader'] == 'registry.get'))
+out['largestRenderWalk'] = {'utc': big['utc'], 'gapMs': big['gapMs'], 'rows': {x['reader']: [x['calls'], round(x['syncMs']), round(x.get('decodedJsonBytes', 0) / 1e6, 1)]
+                            for x in big['reads']['top'] if x['operation'] == 'http.render'}}
+
+# Memory and main-thread reads across the window.
+withmem = [v for v in A if v.get('memoryUsage')]
+out['heap'] = {'firstUtc': withmem[0]['utc'], 'firstHeapGB': round(withmem[0]['memoryUsage']['heapUsed'] / 1e9, 2), 'firstRssGB': round(withmem[0]['memoryUsage']['rss'] / 1e9, 2),
+               'lastUtc': withmem[-1]['utc'], 'lastHeapGB': round(withmem[-1]['memoryUsage']['heapUsed'] / 1e9, 2), 'lastRssGB': round(withmem[-1]['memoryUsage']['rss'] / 1e9, 2)}
+out['mainThreadReadGB'] = round(sum((v.get('scheduler', {}).get('readBytes') or 0) for v in A) / 1e9, 1)
+sites = collections.Counter()
+for v in A:
+    for x in v.get('scheduler', {}).get('sites', []): sites[x['site']] += x['samples']
+out['watchdogSites'] = {'unknown': sites['unknown-runtime-or-native'], 'total': sum(sites.values())}
+
+# 662a6012: its first startup pass, then a partial window (not the 90-minute follow-up).
+C0 = viewer(c_start)
+out['c662start'] = [[v['utc'][11:23], v['gapMs'], round(named(v)), round(v['scheduler']['readBytes'] / 1e6)] for v in C0 if v['gapMs'] >= 5000]
+b_lo, b_hi = ms('2026-11-11T12:38:35.014Z'), ms('2026-11-11T12:39:56.097Z')
+base2 = [v for v in C0 if v['gapMs'] >= 1000 and ms(v['utc']) - v['gapMs'] < b_hi and ms(v['utc']) > b_lo]
+out['item2Base'] = {'from': '12:38:35.014', 'to': '12:39:56.097', 'gaps': [[v['utc'][11:23], v['gapMs']] for v in base2], 'sumMs': sum(v['gapMs'] for v in base2)}
+C1 = viewer(c_part); last = ms(C1[-1]['utc'])
+out['c662partial'] = {'from': '2026-11-11T12:47:44.306Z', 'lastRecord': C1[-1]['utc'], 'n': len(C1), 'gapS': round(sum(v['gapMs'] for v in C1) / 1000, 3),
+                      'windowEnd': '2026-11-11T13:40:00.000Z', 'sharePct': round(100 * sum(v['gapMs'] for v in C1) / (ms('2026-11-11T13:40:00.000Z') - ms('2026-11-11T12:47:44.306Z')), 2), 'pids': sorted({v['pid'] for v in C1})}
+ev662 = startup_lines('2026-11-11 12:37:44 UTC', '2026-11-11 12:47:44 UTC')
+out['c662passes'] = [[iso(t), m.split('{')[0].strip()] for t, m in ev662 if 'admitted' in m or 'retry' in m or 'refusing' in m]
+
+# Release bundle and switches (read-only file metadata).
+rel = pathlib.Path.home() / '.cache/delegatus/self-update/bb38046574072bf9/releases/662a6012b39f/.next/server'
+js = list(rel.rglob('*.js'))
+holder = [p for p in js if b'loadLazyInTransaction' in p.read_bytes()]
+out['bundle'] = {'jsFiles': len(js), 'over1MiB': sum(p.stat().st_size > 1048576 for p in js), 'maps': len(list(rel.rglob('*.map'))),
+                 'registryChunkBytes': [p.stat().st_size for p in holder]}
+state = pathlib.Path.home() / '.config/delegatus/state'
+ks = state / 'loop-profiler.json'
+out['killSwitch'] = {'content': ks.read_text()[:64], 'mtimeUtc': iso(ks.stat().st_mtime * 1000)}
+out['historyDrainSetting'] = (state / 'role-history-rows.json').exists()
+out['readEnd'] = iso(time.time() * 1000)
+print(json.dumps(out, indent=1))
+```
+
+Output of the run that read from 13:59:57.023 to 14:00:09.848 UTC, one key per line:
+
+```json
+{"readStart":"2026-11-11T13:59:57.023Z"}
+{"digests":{"steady":"de4ef66e8ea0c7afc3cd2658b79c22acec0a2168a755525d35895f58cdd35094","earlier":"6fcce116389a0a9c4199e70f3436078429d8548978fef06e5809d221ab141137"}}
+{"steady":{"n":801,"gapMs":1095605,"residualMs":795729.867}}
+{"earlierFamiliesS":{"state":80.1,"operation bodies":38.8,"registry":71.8,"memory":271.5,"named beyond top":13.0,"unattributed":615.1,"other":21.3}}
+{"passes":[["2026-11-11T11:17:27.014Z","2026-11-11T11:22:21.884Z","retry",294.9],["2026-11-11T11:22:28.681Z","2026-11-11T11:27:55.743Z","retry",327.1],["2026-11-11T11:28:06.642Z","2026-11-11T11:33:07.716Z","retry",301.1],["2026-11-11T11:33:24.813Z","2026-11-11T11:38:34.017Z","retry",309.2],["2026-11-11T11:39:19.031Z","2026-11-11T11:44:21.597Z","retry",302.6],["2026-11-11T11:45:34.663Z","2026-11-11T11:50:38.604Z","retry",303.9],["2026-11-11T11:53:00.830Z","2026-11-11T11:58:00.879Z","retry",300.0],["2026-11-11T12:02:47.615Z","2026-11-11T12:06:10.901Z","ready",203.3]]}
+{"passWindows":{"wallS":1748.9,"insideGapS":516.3,"insideSharePct":47.13,"insideWallSharePct":29.52,"outsideGapS":579.3,"outsideWallSharePct":23.66,"insideWithoutBlockWallSharePct":18.48}}
+{"adoptionBlock":{"refusals":6,"holding":{"n":6,"gapS":86.668,"sharePct":7.91,"residualS":79.0,"residualSharePct":9.92},"core":{"n":17,"gapS":160.639,"sharePct":14.66,"residualS":147.9,"residualSharePct":18.59},"ceiling":{"n":35,"gapS":193.16,"sharePct":17.63,"residualS":171.5,"residualSharePct":21.56},"holdingRows":[["11:31:24.157",13799,11.0,12.8,994,1426],["11:34:32.798",14956,12.7,14.1,1067,1334],["11:40:46.547",16078,13.8,15.4,1030,1518],["11:47:12.330",14728,12.0,13.5,1075,1345],["11:53:31.080",13605,11.1,12.5,1115,1007],["12:03:36.799",13502,10.9,12.2,1200,1077]]}}
+{"dominant":[["startup adoption block",35,193.2,17.63,171.5,21.56],["registry.read",153,148.7,13.58,92.4,11.61],["seat-tick.check",113,135.2,12.34,106.4,13.37],["http.render",36,100.0,9.13,73.7,9.26],["pipelines.mutation",79,74.5,6.8,63.6,7.99],["role-memory.view",43,52.4,4.78,30.3,3.8],["registry.write",31,47.7,4.35,36.9,4.64],["pipelines.controller-schedule",33,43.7,3.99,35.5,4.46],["memory.import.curation",12,40.3,3.68,4.7,0.59],["scanner.worker",36,33.1,3.02,15.4,1.94]]}
+{"contextFloorsOutsideBlock":{"registry.read":[57.08,5.21],"seat-tick.check":[21.781,1.99],"http.render":[23.352,2.13]}}
+{"contextReaders":{"seat-tick.check/state.json":[5681,7.03,3380.6,93],"http.render/registry.get":[687687,6.9,0.0,15],"http.render/registry.json":[686363,6.54,2209.5,12],"seat-tick.check/state.exec":[12984,4.68,0.0,135],"seat-tick.check/state.all":[599,2.79,0.0,40],"http.render/state.json":[21834,2.38,1114.1,76]}}
+{"largestRenderWalk":{"utc":"2026-11-11T12:30:12.201Z","gapMs":10526,"rows":{"registry.json":[152700,1538,629.0],"registry.get":[152700,1499,0.0],"registry.prepare":[152700,138,0.0],"cache.accounting":[172222,50,0.0]}}}
+{"heap":{"firstUtc":"2026-11-11T11:27:30.778Z","firstHeapGB":2.84,"firstRssGB":5.55,"lastUtc":"2026-11-11T12:36:37.676Z","lastHeapGB":7.21,"lastRssGB":13.46}}
+{"mainThreadReadGB":147.4}
+{"watchdogSites":{"unknown":10853,"total":12598}}
+{"c662start":[["12:39:06.760",14914,1161,1039],["12:39:16.853",6800,403,678],["12:39:33.803",6786,664,644]]}
+{"item2Base":{"from":"12:38:35.014","to":"12:39:56.097","gaps":[["12:38:38.553",1998],["12:39:06.760",14914],["12:39:08.326",1159],["12:39:16.853",6800],["12:39:33.803",6786]],"sumMs":31657}}
+{"c662partial":{"from":"2026-11-11T12:47:44.306Z","lastRecord":"2026-11-11T13:39:41.405Z","n":627,"gapS":630.095,"windowEnd":"2026-11-11T13:40:00.000Z","sharePct":20.09,"pids":[946855]}}
+{"c662passes":[["2026-11-11T12:38:21.380Z","[structured hosts] startup pass admitted"],["2026-11-11T12:39:04.623Z","[structured hosts] refusing stale turn-claim adoption"],["2026-11-11T12:42:51.354Z","[structured hosts] startup pass admitted"],["2026-11-11T12:45:00.069Z","[structured hosts] startup pass admitted"]]}
+{"bundle":{"jsFiles":1226,"over1MiB":10,"maps":0,"registryChunkBytes":[3206713,2981566,3132631,2755582]}}
+{"killSwitch":{"content":"{\"enabled\": false}","mtimeUtc":"2026-11-10T08:30:09.427Z"}}
+{"historyDrainSetting":false}
+{"readEnd":"2026-11-11T14:00:09.848Z"}
+```
+
+The `662a6012` startup phases were read at 13:49:43 UTC:
+
+```bash
+journalctl --user -u delegatus.service --since '2026-11-11 12:37:44 UTC' --until '2026-11-11 12:47:44 UTC' \
+  --utc -o json --no-pager -n 20000 | python3 -I -c "
+import sys,json,re,datetime
+for l in sys.stdin:
+  x=json.loads(l);m=x.get('MESSAGE') or ''
+  if re.match(r'\s+phase: \"', m):
+    print(datetime.datetime.fromtimestamp(int(x['__REALTIME_TIMESTAMP'])/1e6,datetime.timezone.utc).isoformat(timespec='milliseconds'),m.strip())"
+```
+
+It printed `refreshing transcripts` at 12:38:35.014, `adopting Codex hosts`
+at 12:39:06.417, `adopting Claude hosts` at 12:39:26.097 and `ready` at
+12:42:50.148.
+
+Thread CPU of the live Viewer, procfs only, read at 13:47:09.365 UTC:
+
+```bash
+python3 -I - <<'PY'
+import pathlib,collections
+p=pathlib.Path('/proc/946855');names=collections.Counter();cpu=collections.Counter()
+s=(p/'stat').read_text();print('start identity',s[s.rfind(')')+2:].split()[19])
+for i,t in enumerate(sorted((p/'task').iterdir())):
+  if i>2000:break
+  try:
+    n=(t/'comm').read_text().strip();f=(t/'stat').read_text();f=f[f.rfind(')')+2:].split()
+    names[n]+=1;cpu[n]+=(int(f[11])+int(f[12]))/100
+  except FileNotFoundError:pass
+for n,c in names.most_common(30):print(repr(n),c,round(cpu[n],1))
+PY
+```
+
+It printed start identity 56471738, the main thread `bun` at 3,492.6 s,
+seven `HeapHelper` threads at 621.9 s and three `JITWorker` threads at 276.7 s.
+
+Which emitted chunks hold the startup and registry code, read at 13:47 UTC:
+
+```bash
+R="$HOME/.cache/delegatus/self-update/bb38046574072bf9/releases/662a6012b39f/.next/server"
+for s in loadLazyInTransaction 'structured startup pass deadline exceeded' 'refusing stale turn-claim adoption'; do
+  printf '%s: ' "$s"; grep -l -r -F "$s" "$R" --include=*.js | xargs -r stat -c '%n(%s) ' | sed "s#$R/##g" | tr -d '\n'; echo
+done
+```
+
+`loadLazyInTransaction` appears in `chunks/57866.js` (2,981,566 bytes),
+`chunks/57539.js` (3,132,631), `middleware.js` (3,206,713) and
+`chunks/65465.js` (2,755,582). Both startup strings appear in `chunks/6865.js`
+(70,205) and `chunks/66136.js` (70,206).
+
+Open pull requests and main, read at 13:41 to 13:42 UTC:
+
+```bash
+gh pr list --state open --limit 100 --json number,title,updatedAt,files \
+  --jq '.[] | {n:.number, f:[.files[].path]}'
+git ls-remote origin refs/heads/main
+gh api repos/latand/delegatus/compare/1a2e577f2a9f1357ffe9822edb00665c81d93cb5...1037130eed9d990edcdd3053150af7ba44592cf9 \
+  --jq '{ahead:.ahead_by, files:[.files[].filename]}'
+gh pr view 3841 --json state,mergedAt,mergeCommit; gh pr view 3857 --json state,mergedAt,mergeCommit
+```
+
+There were 36 open PRs. The overlaps used above: 3710 and 3861 touch
+`viewerInstrumentation.ts`; 3710 also touches `viewerLoopMonitor.ts`. 3710, 2926
+and 3861 touch `registry.ts`, and 3710 and 2926 touch `sqliteRegistryStore.ts`.
+3866 touches `cooperative.ts`. 3668, 3710, 3747, 3749, 3801 and 3802 touch
+`pipelines/store.ts`. None touches `src/lib/runtime/startup*`,
+`src/lib/loopProfiler*`, `src/lib/loopWatchdog*`, `scripts/probe-loop-profiler*`,
+`src/lib/monitor/seatTick*` or `src/lib/tasks/store.ts`. Main was `1037130e`.
+PRs 3841 and 3857 were merged as `941e0193` and `662a6012`.
+
+Every database and journal read in this part was read-only. The journal was read
+through `journalctl`, with row caps and subprocess timeouts. The two settings
+files were read with stat and one bounded read each. No production route,
+profiler, signal, restart, setting change or load generator was used. One
+`search_memory` and one `search_transcripts` call looked for earlier answers
+about the kill switch. Either may have written a receipt or started a leased
+helper.
+
+</details>
