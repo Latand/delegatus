@@ -84,7 +84,7 @@ Summary (each row condenses the labelled section below it; line numbers are on `
 | C2 | Scratch roots of agents launched outside lanes and of seats | same, owner `pipelineId: null` (`structuredSpawn.ts:274-278`) | ~10 GB live; ~8 GB created per day | same sweep, one day after creation when unreferenced (`attemptTempRetention.ts:414`) | none found: nothing older than 7 days remained |
 | C3 | Lane worktrees in this repository | `store.ts:2564` names `<repo>-pipeline-<id>`, `git.ts:248` adds | ~1 GB per lane, tens of lanes per day | worktree sweep, hourly (`worktreeSweep.ts`) | `.artifacts` holds, backup refusals, sweep budget |
 | C4 | Worktrees in other projects' repositories | lanes: same code; others: agents' own `git worktree add` | 397 extra worktrees, 146 GB per path | worktree sweep for lane worktrees; nothing for others | `not-created-by-delegatus`, `uncommitted`, `recent-writes` |
-| C5 | Dependency folders inside worktrees | agents and stages installing packages | 174 folders, 102 GB per path, 26 GB unique | trim of top-level build folders (`worktreeSweep.ts:1634`) | trim never looks below the top level; foreign worktrees never |
+| C5 | Dependency folders in lane and agent-made worktrees, primary checkouts and one-off folders (subtypes D1–D4) | agents and stages installing packages | 174 folders, 102 GB per path, 26 GB unique | trim of top-level build folders in lane worktrees only (`worktreeSweep.ts:1634`) | trim never looks below the top level; nothing looks outside lane worktrees |
 | C6 | Automatic copies of check evidence | `attemptTempEvidence.ts:14-120` | 49–62 GB stored | copy sweep at lane expiry (`attemptEvidenceCopies.ts`) | legacy copies kept as "unattributed" forever (`attemptEvidenceCopies.ts:69-74`) |
 | C7 | Other evidence (`$LLV_EVIDENCE_DIR` per lane, per agent, recorded-check evidence, worktree backups) | `structuredSpawn.ts:204-208`, `recordedChecks/service.ts:309`, `worktreeBackup.ts:94` | ~60 GB | nothing, by design | "never deleted" (design of 2026-11-04) |
 | C8 | Archives and backup refs made by the cleanup passes | the manual passes; product: `git.ts:352` | 21–33 GB per pass; 26,203 refs | nothing | no owner, no lifetime |
@@ -187,15 +187,26 @@ Summary (each row condenses the labelled section below it; line numbers are on `
   checkout; in a monorepo they sit below the top level (`apps/<name>/.venv`,
   `apps/<name>/node_modules`).
 - **Measured [O].** 174 folders, 102.3 GB per path, 25.9 GB unique blocks (most files are
-  hardlinks into the package manager cache). Of the 160 removed in pass 17: 96 inside lane
-  worktrees of other projects (69.8 GB per path), 12 inside agent-made worktrees, the rest
-  in main checkouts and caches.
-- **Supposed remover [O].** The worktree sweep trims rebuildable ignored folders of a
-  settled lane worktree it keeps (`worktreeSweep.ts:1600-1660`).
-- **Why it stayed [O].** The trim lists only the worktree's top-level children
+  hardlinks into the package manager cache). Pass 17 removed 160 of them (99.4 GB per path);
+  classified by where each removed path sat (its ledger rows, and `git rev-parse` on the
+  surviving parent directory, read-only):
+
+  | Subtype | Folders | GB per path | Owner today |
+  |---|---|---|---|
+  | D1 inside lane worktrees of other projects (`<repo>-pipeline-<id>`) | 96 | 69.7 | worktree sweep |
+  | D2 inside agent-made worktrees under a repository's `worktrees/` folder | 12 | 10.9 | none (C4) |
+  | D3 ignored paths of a repository's primary checkout | 12 | 8.6 | none: a person's working copy |
+  | D4 outside any Git checkout: agent-made one-off folders under the projects folder, a home data folder and a deploy folder (checkout copies without `.git`, downloaded toolchains, virtual environments), and tool environments in the home cache folder | 40 | 10.2 | none (C11) |
+
+  The 13 dependency folders inside stage scratch were excluded from the pass and left to C1.
+  The package manager and model caches the folders hardlink into were not removed by any pass
+  (§10).
+- **Supposed remover [O].** For D1 only: the worktree sweep trims rebuildable ignored folders
+  of a settled lane worktree it keeps (`worktreeSweep.ts:1600-1660`). Nothing for D2 to D4.
+- **Why it stayed [O].** D1: the trim lists only the worktree's top-level children
   (`fs.readdirSync(worktree)` at `worktreeSweep.ts:1634`), so `apps/backend/.venv` is never a
-  candidate; it trims only sibling lane worktrees with an owner (`:1607-1612`), never
-  agent-made ones. The last sweep trimmed 0 bytes.
+  candidate. D2: the trim takes only sibling lane worktrees with an owner (`:1607-1612`), never
+  agent-made ones. D3 and D4: no code looks at them. The last sweep trimmed 0 bytes.
 
 ### C6. Automatic copies of check evidence
 
@@ -224,6 +235,13 @@ Summary (each row condenses the labelled section below it; line numbers are on `
   (`worktreeBackup.ts:94`).
 - **Measured [O].** At 12:02Z: agents' folders 12.5 GB, recorded-check evidence 9.9 GB,
   per-lane folders up to 6.7 GB each; 58.6 GB of evidence outside the automatic copies.
+- **Two different kinds in one folder [O].** The worktree backup is a **preservation record**,
+  unlike the rest of the evidence: untracked files go into a backup commit through a
+  temporary index (`worktreeBackup.ts:89`) kept under `refs/delegatus/worktree-backup/…`
+  (`:151`), but `git add` respects ignore rules, so ignored files (`.artifacts`, media) are
+  copied one by one into `evidence/<lane>/worktree` (`:94`, `:158-175`) with a manifest
+  `worktree-backup.json` (`:176`). After the checkout is removed, that copy is the only one.
+  Screenshots, frames and check outputs are by-products the lane already reported on.
 - **Why it stayed [O].** No code removes these folders. The design of 2026-11-04
   (`docs/design/disk-retention-fix.md` §4) states "never deleted", and the seven-day design
   (`docs/design/scratch-and-evidence-retention.md` §13) deferred them.
@@ -239,8 +257,15 @@ Summary (each row condenses the labelled section below it; line numbers are on `
 - **Measured [O].** The evidence folder outside the state directory holds 49.1 GB now; the
   repository has 26,203 refs under `refs/backup/` and a 1.43 GiB pack.
 - **Why it stayed [O].** Nothing owns them and no ledger gives them an end date.
-  [I] Removing a backup ref can lose the only copy of a commit (pass 14 stored commits
-  reachable from no other ref under these refs), so refs must never expire automatically.
+- **Backup refs hold commits found nowhere else in the repository [O].** Pass 14 stored commits
+  reachable from no other ref. Pass 16 found 236 standalone repositories inside the 13 roots it
+  removed; before its backup step, 13,241 distinct commits of 230 of them were absent from every
+  ref of the main repository (its inspection computed the backup set as each clone's commits
+  minus `rev-list --all` of the main repository), and 206 of those repositories had no
+  remote-tracking refs at all. The pass fetched those commits into 25,195 refs under
+  `refs/backup/` (plus 3 refs for registered worktree heads) before removal. Whether any of
+  them was real work or a test fixture is unknown [I]; the refs are now their only copy on this
+  machine, so they must never expire automatically.
 
 ### C9. Built releases
 
@@ -253,8 +278,13 @@ Summary (each row condenses the labelled section below it; line numbers are on `
   `process-unreadable:1:ns/mnt:EACCES`, removed 0. The scan walks every process
   (`retentionInspection.ts:55-125`); a process it cannot read is recorded as uncertain for the
   whole releases root (`:119`), and an uncertain release is kept (`retention.ts:282-283`). PID 1
-  (the system's init, run by root) cannot be read, so every release is uncertain. The only resolver asks
-  `sudo -n` (`retention.worker.ts:25`), which this machine does not grant. Separately, at
+  (the system's init, run by root) cannot be read, so every release is uncertain. This is
+  deliberate: a process of another user, or one behind a private ancestor directory, can hold a
+  descriptor it inherited before its credentials changed (`retentionInspection.ts:38-40`), and
+  a root process can use a release through a descriptor or working directory without naming it
+  on its command line. The only resolver asks `sudo -n` to run the release's own observer
+  script (`src/lib/retention.worker.ts:25`), which this machine does not grant; granting it as
+  is would let the user run a script it can edit as root. Separately, at
   14:35Z 17 old releases were the working directory of live processes, mostly the shell
   stderr drains of Codex hosts (`sh`, `dd`, `tee`, `wc`), which inherit the spawner's working
   directory (`codexSocketTransport.ts:95`, no `cwd` given) and live as long as the host.
@@ -425,23 +455,36 @@ history or caches with their own owners; this document proposes nothing for them
   preservation 30 seconds (`attemptTempEvidence.ts:16`), the checkout-link inventory up to 30
   seconds, a container command 12 seconds plus start-up. A step that starts at second 39 can end
   at second 69. On overrun the parent kills the helper (`worktreeSweepWorker.ts:152`), which can
-  leave half-finished trash (§3.3) and an abandoned state lease (§3.7).
+  leave half-finished trash (§3.3) and a state lease that the next owner must take over.
 
-### 3.7 The parse error in the sweep — cause confirmed
+### 3.7 The parse error in the sweep — mechanism confirmed in code, trigger inferred from the journal
 
 - **Observed [O].** Six "tick failed JSON Parse error: Unexpected identifier "state"" between
-  11:57Z and 12:59Z, several within minutes after a killed tick.
+  11:57Z and 13:40Z.
 - **Code [O].** The helper answers on stdout, one JSON line per request, and the parent parses
-  each line (`worktreeSweepWorker.ts:66`). The helper redirects only `console.log` to stderr
-  (`worktreeSweep.worker.ts:11`). Bun writes `console.info` to stdout [O: probe with the
-  installed Bun 1.4.0], and the state store prints
-  `console.info("[state lease] cleared abandoned …")` (`sqliteStateStore.ts:98`) when it clears a
-  lease a killed process left behind. `JSON.parse("[state lease] …")` fails with exactly this
-  message; the parent then fails the request and kills the helper. Other helpers already redirect
-  `console.info` (`filesResponse.worker.ts:28`, `board/store.sqliteChild.ts:7`,
-  `accountRemoval.worker.ts:8`).
-- **Unknown [I].** Which lease was cleared each time: the line is consumed by the parent and never
-  reaches the journal.
+  each line (`worktreeSweepWorker.ts:66`); the helper's stderr is inherited by the service
+  (`:54`). The helper redirects only `console.log` to stderr (`worktreeSweep.worker.ts:11`).
+  Bun writes `console.info` to stdout [O: probe with the installed Bun 1.4.0].
+  `JSON.parse("[state lease] …")` fails with exactly this message; the parent then fails the
+  request and kills the helper. Other helpers already redirect `console.info`
+  (`filesResponse.worker.ts:28`, `board/store.sqliteChild.ts:7`, `accountRemoval.worker.ts:8`).
+- **The line's producer [O].** `console.info("[state lease] cleared abandoned …")` sits in
+  `forgetAbandoned` (`sqliteStateStore.ts:98`), which runs only for a lease recorded in the
+  **current process's** in-memory abandoned map (`:84-87`). That map is filled when this
+  process's own lease release fails (`releaseLeaseSync` → `abandonLease`, `:3721-3724`,
+  `:134-146`, with a `console.warn` on stderr); a retry timer 250 ms later deletes the lease and
+  prints the info line (`:113-130`), as does a later takeover by the same process (`:3683-3685`).
+  A new helper starts with an empty map, so taking over the lease of a killed helper prints
+  nothing on stdout.
+- **What the journal shows [O].** Each of the six parse errors is preceded, 0 to 1 second
+  earlier, by "[state lease] abandoned pipelines" (once also `pipelines_archive`) with "state
+  admission is busy at state.lease.release", and no matching "cleared abandoned" line for that
+  collection reaches the journal, while the Viewer's own "cleared" lines do. Both helper and
+  Viewer write to the same inherited stream, so the journal names one process id for both.
+- **Cause [I, strongly supported].** Under write contention the helper's release of the
+  `pipelines` lease fails as busy, the retry succeeds a quarter of a second later and prints
+  the info line into the reply channel. Recovery after a killed helper cannot produce the
+  line (above). **Check:** the W1 test reproduces it in the real helper.
 
 ### 3.8 Stale recorded sizes behind the forecast — cause confirmed
 
@@ -473,8 +516,8 @@ their texts.
 
 | Never removed | Proof the sweep already uses or must use before removal |
 |---|---|
-| Commits that exist only on this machine | For any registered or nested worktree: every commit of HEAD is reachable from a ref a remote advertises now (`git ls-remote`) or from a merged pull request's head; otherwise keep (`local-only-commits`, `worktreeSweep.ts`). Backup refs are never removed by any sweep. Stage `TMPDIR` is declared disposable when the stage settles; standalone clones inside it are not checked (§9). |
-| Unsaved changes | `git status --porcelain --untracked-files=all --ignored=matching` before removal; untracked and unknown ignored files are copied into the lane's evidence folder and verified (`worktreeBackup.ts`) or the worktree is kept (`uncommitted`). Git's own dirty check runs last (`git worktree remove` without force). |
+| Commits that exist only on this machine | For any registered or nested worktree: every commit of HEAD is reachable from a ref a remote advertises now (`git ls-remote`) or from a merged pull request's head; otherwise keep (`local-only-commits`, `worktreeSweep.ts`). Backup refs are never removed by any sweep. **Gap today [O]:** a standalone repository (a `.git` directory) inside a scratch root is not a marker (`attemptTempFilesystem.ts:474-475` matches only `.git` entries that are not directories), so a root holding a clone with its only copy of a commit, or with uncommitted changes, is retired with no check; pass 16 found 13,241 such commits (§2 C8). Proposed proof (W14): every commit of every ref and HEAD is reachable from the lane repository's refs or from refs its remote advertises now, and the tree is clean; otherwise the repository is preserved into a verified bundle first, or the root is held with a named reason. The proof is repeated at the deletion boundary. |
+| Unsaved changes | `git status --porcelain --untracked-files=all --ignored=matching` before removal; untracked files go into a backup commit and ignored evidence files are copied into the lane's evidence folder and verified (`worktreeBackup.ts`), or the worktree is kept (`uncommitted`). Git's own dirty check runs last (`git worktree remove` without force). Those copies and the backup commit are **preservation records**: no evidence lifetime may remove them (§4.2). |
 | Data of a running lane | `laneFinish` and the authority read again at dispatch with a revision check; a live process's cwd, open files, maps and `TMPDIR`-like environment; Unix sockets; container mounts; symlinks from live checkouts (`attemptTempRetention.ts:362-490`). |
 | Anything under a person's keep marker | Any `.delegatus-keep` in the tree holds the whole root or worktree; a protection snapshot is checked again at dispatch. |
 
@@ -486,14 +529,19 @@ re-check-at-dispatch pattern, and bounded work per tick.
 | Class | Today | Proposed lifetime | Proposed owner | Decision for a person? |
 |---|---|---|---|---|
 | Lanes whose attempts lack `completedAt` (C1, C6, C13) | never expire (bug) | the lane's normal seven days, with `closedAt` as the clock of terminal attempts once close teardown has settled | `laneFinish.ts` | no: this restores the rule already decided |
-| Other evidence: per-lane and per-agent evidence folders, recorded-check evidence, worktree backups (C7) | never deleted (decision of 2026-11-04) | 30 days after the lane finished; for an agent, 30 days after its host ended | the attempt-temp sweep's copy path, as rows in the existing `copies` ledger | **yes**: it reverses an earlier "never deleted" |
+| Expendable evidence: per-lane and per-agent evidence folders and recorded-check evidence, **excluding** preservation records (C7) | never deleted (decision of 2026-11-04) | 30 days after the lane finished; for an agent, 30 days after its host ended | the attempt-temp sweep's copy path, as rows in the existing `copies` ledger | **yes**: it reverses an earlier "never deleted" |
+| Preservation records: worktree backups (`evidence/<lane>/worktree`, `worktree-backup.json`, `refs/delegatus/worktree-backup/…`), the bundles of W14, backup refs (C7, C8) | never deleted | none: they hold the only copy of ignored files, untracked files or commits. Removal only by a person, per record, after the card shows it; or automatically only once a verified copy of each file or commit exists elsewhere (another remote, a merged head) | card (W11) | **yes**, per record |
 | Unattributed legacy evidence copies (C6) | kept forever | attribute by `launchId` through the registry's spawn receipts; the rest expire 30 days after adoption | copy sweep | **yes** |
 | Host event journals (C12) | no pruning | remove a session's ledger 30 days after its last event when the session is not live and its transcript exists | a new bounded page in the attempt-temp tick | **yes**: month-old sessions lose exact replay |
 | Container build cache and unused images (C14) | no pruning | the operator's rule of 11-11: build cache and images without containers older than 14 days, daily, with Docker's own `builder prune --filter until=336h` and `image prune -a --filter until=336h`; volumes never | a daily product job | stopped containers and anonymous volumes: **yes** |
 | Agent-made worktrees in other repositories (C4) | kept as `not-created-by-delegatus` | the operator's rule of 11-11: clean, no local-only commits, idle more than 30 days, removed with `git worktree remove` | worktree sweep, per project opt-in | **yes**: per project |
-| Nested dependency folders in lane worktrees (C5) | not trimmed below the top level | trimmed with the lane's existing four-day rule | worktree sweep | no |
-| Releases (C9) | rule exists, never applies here | the existing rule (three newest, active, rollback, in use) | release retention | **yes**: how to treat processes of other users (W8) |
-| Diagnostic captures, recovery folders, one-off home folders (C10, C11) | none | stop creating them: agents write durable work data into `$LLV_EVIDENCE_DIR`, which gets the 30-day lifetime above | role mechanics text | existing folders: **yes** |
+| Dependency folders D1, in lane worktrees (C5) | not trimmed below the top level | trimmed with the lane's existing four-day rule | worktree sweep | no |
+| Dependency folders D2, in agent-made worktrees (C5) | none | go with the worktree under the agent-made worktree rule above; while the worktree is kept, trimmed under the same per-project opt-in once idle more than 30 days | worktree sweep | **yes**: same decision as agent-made worktrees |
+| Dependency folders D3, in a repository's primary checkout (C5) | none | none: the primary checkout is a person's working copy and its environment may be the one they run; the product never trims it | — | **yes**: stays manual (recommended) |
+| Dependency folders D4, outside any checkout (C5) | none | none for existing folders: the product cannot tell an agent's one-off environment from a tool's installed one [I]; new ones are prevented with the one-off scratch below | — | existing folders: **yes** |
+| Standalone repositories inside scratch roots (C1) | removed with the root, unchecked | the root's own lifetime, after the proof of §4.1 row 1 or a verified bundle | attempt-temp sweep | no: this closes a gap in the never-remove rule |
+| Releases (C9) | rule exists, never applies here | the existing rule (three newest, active, rollback, in use), once a complete read of every process is possible | release retention, with a root-owned read-only observer | **yes**: whether to install that observer (§7 item 6) |
+| Diagnostic captures, recovery folders, one-off home folders (C10, C11) | none | stop creating them: agents write durable work data into `$LLV_EVIDENCE_DIR`, which gets the 30-day lifetime above (operational recommendation R1, §6) | role mechanics text | existing folders: **yes** |
 | Cleanup archives and backups (C8) | none | none needed once manual passes stop; existing archives by a person's decision; backup refs never | — | **yes** |
 | Keep markers (C15) | forever | still forever; markers made through a product action carry author, reason and an optional end date | card and marker format | agent-written markers: **yes** |
 
@@ -505,8 +553,8 @@ add no new control.
 
 1. **Scratch, one row per state with bytes and count:** removed soon (due), removed by a date
    (upcoming), kept because the lane is open, kept because the lane cannot finish (§3.1), kept
-   for a check, kept by a keep marker, cannot be removed (permissions or Git link, with the
-   count), waiting in the queue. Source: a per-root reason column beside `root_retention`,
+   for a check, kept by a keep marker, kept because a standalone repository is unproven (W14),
+   cannot be removed (permissions or Git link, with the count), waiting in the queue. Source: a per-root reason column beside `root_retention`,
    summed incrementally like the existing radix buckets so the card reads a bounded number of
    rows.
 2. **Lower bound in words.** The forecast says "at least" whenever the backfill is partial, any
@@ -515,12 +563,15 @@ add no new control.
 3. **Keep markers:** one row "kept by a keep marker: N folders, X; oldest N days"; the marker's
    first line of text is shown where the card already shows a category's detail.
 4. **Releases:** real bytes of kept releases and the reason in words (in use, newest, rollback,
-   uncertain because another user's process cannot be read).
-5. **Classes without a lifetime** (until §4.2 is decided): evidence folders, host event journals,
+   uncertain because a process could not be read completely, with the kind of process and what
+   could not be read, never its command line).
+5. **Preservation records:** one row with bytes and count for worktree backups, bundles and backup
+   refs, worded as the only copy of files or commits, kept until a person decides.
+6. **Classes without a lifetime** (until §4.2 is decided): evidence folders, host event journals,
    unattributed copies, container images and cache (from the Docker API), other projects'
-   worktrees Delegatus did not create, unmanaged temp. One row each, so a person sees what is
+   worktrees Delegatus did not create and their dependency folders, unmanaged temp. One row each, so a person sees what is
    kept with no end date.
-6. **Failures:** a count per fixed error class (EACCES, container removal, tick overrun, helper
+7. **Failures:** a count per fixed error class (EACCES, container removal, tick overrun, helper
    reply unreadable), never the raw error text.
 
 The card's strings are Ukrainian literals today [O]; the change ships them in English and
@@ -537,39 +588,62 @@ measurement of tick duration on the same fixture.
 
 | # | Workstream | Files | Acceptance (test red on `main` today) | Fences | Size |
 |---|---|---|---|---|---|
-| W1 | Helper reply channel: route `console.info` and `console.debug` to stderr in the sweep helper | `src/lib/worktreeSweep.worker.ts`, `src/lib/pipelines/worktreeSweepWorker.test.ts` | Start the real helper entry on an isolated state with an abandoned lease and send an `attempt-temp` request: the parent receives the report. Today: "JSON Parse error: Unexpected identifier "state"". | none open | trivial |
-| W2 | One deadline for the whole tick: the parent passes the remaining time; every step's bound is clipped to it | `worktreeSweepWorker.ts`, `worktreeSweep.worker.ts`, `attemptTempProduction.ts`, `attemptTempRetention.ts`, `attemptTempFilesystem.ts`, `attemptTempEvidence.ts`, `attemptEvidenceCopies.ts` | With an injected clock, a request that waited 20 s and a reference check that takes 30 s returns a report before the parent deadline with the root deferred. Today the helper is killed. | none open | normal |
+| W1 | Helper reply channel: route `console.info` and `console.debug` to stderr in the sweep helper | `src/lib/worktreeSweep.worker.ts`, `src/lib/pipelines/worktreeSweepWorker.test.ts` | Start the real helper entry on an isolated state with a test preload that arms the state store's existing write-fault hook (`injectWriteFault("release", "pipelines")`, `sqliteStateStore.ts:58-66`) to fail one `pipelines` lease release, and send an `attempt-temp` request through the real parent (`WorktreeSweepWorker`): the parent receives a report and the helper stays alive for a second request. Today: the 250 ms retry prints the "cleared abandoned" line on stdout and the parent fails with "JSON Parse error: Unexpected identifier "state"" and kills the helper. Separate control, green today and after: a helper that takes over the lease of a killed helper prints nothing on stdout. | none open | trivial |
+| W2 | One deadline for the whole tick: the parent sends its absolute deadline with the request; every step's bound inside the helper is clipped to what remains minus a reply margin | `src/lib/pipelines/worktreeSweepWorker.ts`, `src/lib/worktreeSweep.worker.ts`, `src/lib/runtime/attemptTempProduction.ts`, `attemptTempRetention.ts`, `attemptTempFilesystem.ts`, `attemptTempEvidence.ts`, `attemptEvidenceCopies.ts` | Real parent and real helper entry, isolated state, request timeout injected at 6 s: a `temp` request that a test preload holds for 3 s, then an `attempt-temp` request for one due root whose reference check the preload holds for 5 s and which starts one child process. Today the helper starts its own budgets at receipt, the parent's deadline fires at 6 s with "attempt temp tick exceeded" and kills the helper. After: the report arrives before 6 s with the root `deferred`; the root keeps its `dev:ino`, no trash and no journal exist; the child process the helper started is gone (its recorded pid no longer exists); a following request in the same helper is answered. | none open | normal |
 | W3 | Lanes finish: `closedAt` is the clock of a terminal attempt without `completedAt` in a lane whose close teardown settled; `parkPipelineState` stamps `completedAt` | `src/lib/pipelines/laneFinish.ts`, `laneFinish.test.ts`; `engine.ts:3305` and an engine test | A completed lane with a `needs_decision` attempt lacking `completedAt` and settled activity is finished at `closedAt`; its expired root is retired and its hold acknowledged. Running, spawning and committing attempts still block. Today `{ finished: false }` forever. | `engine.ts` is changed by open #3668, #3710, #3747, #3749, #3801, #3802; none edits `parkPipelineState`; check with `git merge-file` before building | normal |
 | W4 | Removable trees: owner-writable repair (`chmod u+rwX` on own entries, no symlinks, one filesystem) before native removal; the protection snapshot and measurement survive EACCES by using the container namespace with a time bound sized to the tree; failure text keeps `code`, `signal`, `stderr` before the command | `attemptTempFilesystem.ts`, `attemptTempDiagnostics.ts`, `attemptTempRetention.ts:518` | An expired fixture root with a 0555 module-cache directory is removed with no container available; a 000 own directory no longer fails the snapshot. Today: trash left behind / "failed EACCES scandir". | none open | normal |
 | W5 | Orphan trash: a disposable journal in scratch with no ledger row re-registers its original as an orphan, so the normal guards and replay finish it | `attemptTempRetention.ts` (adoption page), `tempSweep.ts` | Isolated scratch with trash and a disposable journal but no ledger row: both are gone after the sweep. Today they stay forever. | none open | normal |
 | W6 | Nested worktree registrations inside scratch: after the worktree sweep's own proofs (clean, every commit advertised by a remote or in a merged head, not locked), remove the registration with `git worktree remove`, then retire the root; `merge-batch` removes its worktrees when it ends | `attemptTempRetention.ts`, `attemptTempFilesystem.ts`, `worktreeSweep.ts` (reuse its proof), `scripts/merge-batch.ts` | Fixture root with a registered clean worktree whose commit a fake remote advertises: registration and root removed; with a local-only commit: both kept with a named reason. Today: held forever. | none open | design first |
 | W7 | Sizes and reasons the card can trust: keep `du`'s total on a non-zero exit, never fall back to the root's own blocks, mark the size unmeasured; store one reason per root; report the forecast as a lower bound | `attemptTempFilesystem.ts:650-662`, `attemptTempRetention.ts`, `attemptRetentionReporting.ts` | Fixture root with an unreadable own subdirectory and a 10 MB file: recorded size ≥ 10 MB and `lowerBound: true`. Today 4,096 B and no flag. | none open | normal |
-| W8 | Releases: start the Codex stderr drain outside the release directory; decide how unreadable processes of other users count (options in §7) | `src/lib/runtime/codexSocketTransport.ts:95`; `selfUpdate/retentionInspection.ts`, `retention.ts` | Drain started from a temporary working directory has a working directory outside it. After decision 6(a) of §7: a release fixture with an unreadable process of another non-root user, the old release is removed. Today kept as `process-unreadable`. | none open | drain: trivial; scoping: design first |
+| W8 | Release working directories: start the Codex stderr drain outside the release directory | `src/lib/runtime/codexSocketTransport.ts:95` and its test | A drain started by a host whose working directory is a release fixture has a working directory outside that release (read from `/proc/<pid>/cwd`). Today it inherits the release directory. | none open | trivial |
 | W9 | Nested dependency trim in lane worktrees: rebuildable ignored folders down to three levels, never inside a nested repository or `.artifacts` | `src/lib/pipelines/worktreeSweep.ts:1600-1660`, `worktreeSweep.test.ts` | A settled lane worktree with ignored `apps/backend/.venv` and `apps/web/node_modules` is trimmed. Today 0 trimmed. | none open | normal |
-| W10 | Worktree backup accepts what it refuses today: unknown ignored files and `.artifacts` are copied into the lane's evidence folder and verified; a nested repository gets the same commit proof as its parent | `src/lib/pipelines/worktreeBackup.ts`, `worktreeSweep.ts` | Finished lane worktree past four days with an unknown ignored file is backed up and removed. Today `uncommitted: backup retained checkout: Error: unknown ignored file`. | none open | normal |
+| W10 | Worktree backup accepts what it refuses today: unknown ignored files and `.artifacts` are copied as preservation records and verified; a nested repository gets the same commit proof as its parent | `src/lib/pipelines/worktreeBackup.ts`, `worktreeSweep.ts` | Finished lane worktree past four days with an unknown ignored file is backed up and removed, and the copy is recorded in `worktree-backup.json` as a preservation record. Today `uncommitted: backup retained checkout: Error: unknown ignored file`. | none open | normal |
 | W11 | Disk card per §5 | `src/lib/state/diskPressure.ts`, `selfUpdate/retention.ts` (kept bytes), the card component, en and uk strings | Reporting test: rows per hold reason, lower-bound wording, keep-marker row, real release bytes. Rendered evidence through the existing board driver, both languages and themes. | `src/lib/resources.ts` is in open #3355 (not needed by this plan) | design first |
-| W12 | Lifetimes of §4.2 that need a person's decision: evidence folders, unattributed copies, host event journals, containers, agent-made worktrees, release scoping, existing archives, agent-written keep markers | per decision | per decision, each with a fixture test that the never-remove list of §4.1 holds | — | design first, after decisions |
-| W13 | Durable work data in an owned place: role mechanics name `$LLV_EVIDENCE_DIR` for anything that must outlive the stage, and say never to create folders under the home directory or `/var/tmp` | `src/lib/roles/defaults.ts` | Behaviour test only: none (no phrase tests, AGENTS.md); measured by C10 and C11 not growing | `defaults.ts` is in open #3870, #3805, #3762 | trivial |
+| W12a | Expendable evidence lifetime (after §7 item 1): lane and agent evidence folders and recorded-check evidence become rows of the `copies` ledger with an expiry 30 days after the lane finished or the agent's host ended; preservation records are never rows | `src/lib/runtime/attemptEvidenceCopies.ts`, `attemptTempRetention.ts` (one bounded adoption page per tick), `attemptTempRetention.test.ts` | Frozen clock, isolated state: a finished lane with a screenshot in its evidence folder and a worktree backup holding the only copy of an ignored file. Run the worktree sweep, then the evidence sweep, then advance 31 days and run both again: the screenshot is gone, the ignored file's copy and `worktree-backup.json` remain and match their hashes; at 29 days both remain; a live agent's folder remains. Today nothing expires. | none open | normal |
+| W12b | Attribute legacy copies (after §7 item 2): adoption reads the copy manifest's `launchId` against the registry's spawn receipts; attributed copies expire with their lane, the rest 30 days after adoption | `src/lib/runtime/attemptEvidenceCopies.ts:47-77` and its test | A legacy copy whose `launchId` has a spawn receipt for a lane finished 8 days ago is retired; one without a receipt is retired 30 days after adoption and kept at 29. Today both are `unattributed` forever. | none open | normal |
+| W12c | Host event journal lifetime (after §7 item 3): a bounded page of ledgers per tick; a ledger goes 30 days after its last event when its session is not live and its transcript exists | `src/lib/runtime/eventStore.ts`, a new page in the sweep helper, its test | Fixture ledgers: last event 31 days ago, session ended, transcript present → removed; same with a live session, with the transcript missing, or 29 days → kept; a page never visits more than its bound. Today nothing is removed. | none open | normal |
+| W12d | Daily container prune (after §7 item 4): `docker builder prune -f --filter until=336h` and `docker image prune -a -f --filter until=336h`, once per day, nothing else | a new module beside `src/lib/tempSweep.ts`, a new request kind in `src/lib/worktreeSweep.worker.ts`, its test | With a recording fake `docker` first on PATH: one day of ticks calls exactly those two commands once; never `container prune`, `volume prune` or `system prune`; a refused or missing Docker is reported as one fixed error class and retried the next day. Today no call is made. | none open | normal |
+| W12e | Agent-made worktrees and their dependency folders (after §7 item 5): in an opted-in project, a worktree without a creation record that is clean, has no local-only commits and has been idle more than 30 days is removed with `git worktree remove`; while one is kept, D2 dependency folders in it are trimmed under the same rule | `src/lib/pipelines/worktreeSweep.ts:49-66`, `:1600-1660`, `worktreeSweep.test.ts` | Fixture repository opted in: a clean agent-made worktree idle 31 days whose commits a fake remote advertises is removed; with a local-only commit, a dirty file, 29 days idle, a live process inside it, or in a project not opted in, it stays with a named reason. Today all stay as `not-created-by-delegatus`. | none open | normal |
+| W12f | Complete process reads for releases (after §7 item 6): the resolver calls a fixed root-owned read-only observer instead of the release's own script; without it, releases stay kept with a named uncertainty | `src/lib/retention.worker.ts:25`, `src/lib/selfUpdate/retentionInspection.ts`, `retention.ts`, an installation note | A `/proc` fixture with a root process and a process of another user whose `fd`, `maps` and `cwd` are unreadable and whose command line names nothing: the old release is kept as uncertain (green today, stays green). With a recording fake `sudo` that allows only the fixed observer path and the observer reporting a complete scan with no holder: the old release is removed. Today `sudo -n` is asked for the release-specific script, the fake refuses it, and the release stays. In every case the active release, the rollback release and the three newest stay. | none open | design first |
+| W14 | Standalone repositories in scratch roots: `.git` directories become markers that need the proof of §4.1 row 1; an unproven repository is preserved first into a verified bundle (`git bundle create` of every ref and HEAD, plus a commit of the working tree and index built through a temporary index) under a preservation folder, or the root is held as `standalone-repository-unproven`; the proof and the bundle's `list-heads` are compared with the repository again at the deletion boundary. Ignored files inside such a repository follow the stage scratch contract and are not preserved | `src/lib/runtime/attemptTempFilesystem.ts:474-490`, `attemptTempRetention.ts`, a new module for the proof and bundle, `attemptTempFilesystem.test.ts` | An expired fixture root with a standalone repository holding a commit no other repository has and an uncommitted file: today the root is retired and both are lost. After: a bundle exists, `git bundle verify` passes, and cloning it yields the commit and the file's content; then the root is retired. If the bundle cannot be written, or the repository's refs change between the bundle and dispatch, the root stays with the reason. A repository whose commits are all in the lane repository is retired without a bundle. More repositories or bytes than the per-tick bound defer the root. | none open; builds on W2's deadline | design first |
+
+**Operational recommendation R1 (not a workstream).** Durable work data belongs in an owned place: role mechanics name `$LLV_EVIDENCE_DIR` for anything that must outlive the stage and say never to create folders under the home directory, the projects folder or `/var/tmp`. Files: `src/lib/roles/defaults.ts`, which open #3870, #3805 and #3762 also change. No test can check this (AGENTS.md forbids phrase tests); its effect is measured on the disk card by the C10, C11 and D4 rows not growing.
 
 **Which workstreams would have made the passes unnecessary.** With the seven-day retention of
-#3845 (installed 11-11), W1 + W2 + W3 + W4 + W5 + W7 cover the stage scratch, the held roots and
-the lane copies that passes 1, 2, 4, 5, 10, 11, 12 and 16 removed by hand and pass 15 tried to
-remove [I: by class; the
-throughput after W1 and W2 is not yet measured]. W9 + W10 cover the lane worktrees and their
-dependency folders (passes 1, 4, 5, 11 and most of 17). W6 covers the Git-linked roots of pass 16.
-W8 covers the releases that pass 12 had to leave. The rest needs a person's decision first:
-container images, containers and volumes (passes 3 and 17), agent-made worktrees in other
-projects (pass 18), diagnostic and one-off folders (passes 13 and 14), evidence folders, host
-event journals, unattributed copies, existing archives and agent-written keep markers (W12).
-The archives the passes made themselves (C8) stop appearing when the passes stop.
+#3845 (installed 11-11), by class [I: by class; the throughput after W1 and W2 is not yet
+measured, §9]:
+
+| Pass | What it removed, by class | Workstreams, or the decision it still needs |
+|---|---|---|
+| 1, 4, 5 | stage scratch (C1), lane worktrees (C3), merge-train and `/var/tmp` one-offs (C11) | W1–W5, W7; W9, W10; one-offs: R1 and §7 item 8 |
+| 2 | stage scratch (C1), `/var/tmp` one-offs (C11) | W1–W5, W7; R1 and §7 item 8 |
+| 3 | old evidence and archives (C7, C8), scratch after host stops (C1), stopped containers and volumes (C14) | W12a; W1–W5; containers and volumes stay manual (§7 item 4) |
+| 10, 11 | stage scratch of finished lanes (C1), clean worktrees (C3) | W1–W5, W7; W9, W10 |
+| 12 | held roots (C1, C13), automatic copies (C6), archives of earlier passes (C8), a review export (C11) | W3, W4; W3 and W12b; §7 item 8; R1 |
+| 13, 14 | diagnostic captures, recovery and one-off folders (C10, C11), worktrees registered inside them, backup refs | R1 for new ones; §7 item 8 for existing ones; backup refs stay (§4.2) |
+| 15, 16 | stuck roots of lanes closed over seven days (C1): no clock, read-only trees, trash, Git links, standalone repositories | W3, W4, W5, W6, W14 (bundles in place of 25,198 refs) |
+| 17 | D1 dependency folders in lane worktrees | W9 |
+| 17 | D2 in agent-made worktrees | W12e |
+| 17 | D3 in primary checkouts | none: stays manual (§7 item 9) |
+| 17 | D4 outside any checkout | R1 for new ones; §7 item 9 for existing ones |
+| 17 | unused container images (C14) | W12d |
+| 18 | agent-made worktrees in other projects (C4) | W12e |
+
+Together, W1–W7, W9, W10 and W14, plus W12a–W12e once their decisions are taken, cover every
+class the passes removed except D3, the existing D4, C10 and C11 folders, the existing archives,
+stopped containers and volumes, and keep markers. Those stay a person's call (§7). The archives the
+passes made themselves (C8) stop appearing when the passes stop. Releases (W8, W12f) were never
+removed by a pass; W12f frees the space pass 12 had to leave, and it needs a person to install
+the observer.
 
 **Program acceptance** (the task's own step): one week with no manual pass and free space never
 below 400 GiB, read from the disk card and `df` once a day.
 
 ## 7. Decisions for a person
 
-1. **Evidence folders** (C7): keep forever (today), or remove 30 days after the lane finished.
-   Recommendation: 30 days.
+1. **Expendable evidence folders** (C7, without preservation records): keep forever (today), or
+   remove 30 days after the lane finished. Recommendation: 30 days. Worktree backups, bundles and
+   backup refs are outside this choice: they stay until a person removes a listed record (§4.2).
 2. **Unattributed legacy copies** (C6, 39 GB discovered so far): attribute what the registry can,
    remove the rest 30 days after adoption, or keep. Recommendation: attribute, then 30 days.
 3. **Host event journals** (C12): keep forever, or remove a ledger 30 days after its session's
@@ -577,17 +651,27 @@ below 400 GiB, read from the disk card and `df` once a day.
 4. **Containers** (C14): extend the 11-11 rule (cache and unused images older than 14 days) to a
    daily automatic job; whether stopped containers and anonymous volumes older than 14 days may
    go too. Recommendation: cache and images yes; containers and volumes stay manual.
-5. **Agent-made worktrees in other projects** (C4): per project, apply the 11-11 rule (clean,
-   no local-only commits, idle more than 30 days) automatically. Recommendation: yes, per project.
-6. **Releases and other users' processes** (C9): (a) treat a process of another non-root user as
-   unable to use a release when the release root is private to its owner (kernel permission
-   proof), and a root process as not using a release unless its readable command line names it
-   or a container mounts it; (b) keep today's rule (nothing is ever pruned here). Recommendation:
-   (a).
+5. **Agent-made worktrees in other projects** (C4, with their D2 dependency folders): per
+   project, apply the 11-11 rule (clean, no local-only commits, idle more than 30 days)
+   automatically. Recommendation: yes, per project.
+6. **Releases and processes this account cannot read** (C9): directory permissions and command
+   lines do not prove that a process does not use a release (§2 C9), so the only complete read is
+   a privileged one. (a) A person installs a fixed, root-owned observer that only reads `/proc`
+   and answers which processes hold paths under a given directory, plus a sudo rule for exactly
+   that command; the product never prompts and never runs removal as root (W12f). (b) Keep
+   today's rule: releases on this machine are never pruned, and the card shows them as kept for
+   an uncertain read with their real bytes. Recommendation: (a), since about 35 GB of releases
+   stay otherwise; it needs a person because it needs root.
 7. **Agent-written keep markers** (C15): keep forever, or let a marker without an author and an
    end date lapse 30 days after the lane finished. Recommendation: keep, and show them on the card.
 8. **Existing cleanup archives and the diagnostic and one-off folders** that remain: one decision
    per list on the card.
+9. **Dependency folders outside Delegatus's own worktrees** (C5): D3, in a repository's primary
+   checkout, and D4, outside any checkout. Recommendation: no automatic lifetime for either. A
+   primary checkout's environment may be the one a person runs, and the product cannot tell an
+   agent's one-off environment from an installed tool's. R1 prevents new D4 folders, and existing
+   ones are removed by a person from a list. The package manager and model caches stay out of
+   every pass, as in pass 17.
 
 ## 8. Ledgers and code that disagree
 
@@ -604,6 +688,11 @@ below 400 GiB, read from the disk card and `df` once a day.
 6. The seven-day design (#3845, §4.3) says the ignored-evidence pin of worktrees ends four days
    after the lane finished; the sweep report shows 21 worktrees held by `.artifacts` past four
    days (§2 C3) [O]; why is not established (§9).
+7. The pass 16 report says all 32,587 standalone commits of the removed roots were reachable from
+   the main repository. That reachability was measured after the pass had fetched 13,241 of them
+   into backup refs; before that step they were absent from every ref of the main repository
+   (§2 C8). The sentence describes the result of the preservation, so it does not show that the
+   clones were redundant.
 
 ## 9. What could not be confirmed, and where I looked
 
@@ -611,18 +700,22 @@ below 400 GiB, read from the disk card and `df` once a day.
   before `code=`. Looked in the journal 11:17Z–14:32Z and the 14:24Z report. Check named in §3.2.
 - **Why one trash root lost its ledger row** (§3.3): looked in the ledger tables, the journal and
   the code paths that call `forget`. A per-root reason (W7) would record it next time.
-- **Which lease each parse error cleared** (§3.7): the line goes to the parent and never reaches
-  the journal.
+- **That the helper itself printed the six lease lines** (§3.7): the info line goes to the parent
+  and never reaches the journal, and the stderr warnings before it carry the service's process id
+  for both processes. The timing (0 to 1 second before each error, `pipelines` each time, no
+  matching "cleared" line in the journal) supports it. Check: the W1 reproduction.
 - **Why 21 worktrees past four days stay held by `.artifacts`** and **why 52 finished lane
   worktrees show `recent-writes`** (§2 C3, C4): read the sweep report rows; the rows carry no
   write source. Check: a dry-run sweep on a copy of one such worktree with the decision logged.
 - **Whether retention throughput keeps up once W1 and W2 remove the killed ticks**: the
   13 GB/hour after the deploy includes the backlog. Check: removals per hour against new scratch
   per hour over a day after W1 and W2.
-- **Standalone clones inside stage scratch with unique commits**: retention does not check them
-  (only `.git` files are markers). Pass 16 found all 32,587 standalone commits of the removed
-  roots reachable from the main repository; pass 14 stored commits reachable from no other ref
-  under backup refs. The stage contract says `TMPDIR` is disposable.
+- **Whether the 13,241 commits pass 16 preserved were real work** (§2 C8): 206 of the 230
+  repositories that held them had no remote-tracking refs, which fits both test fixtures and
+  local clones of other repositories. Looked at the pass 16 inspection rows and plans only; the
+  clones themselves are gone. Check: for a sample of the backup refs, `git log` of the commit
+  and a search for its tree in other local repositories and their remotes. Until then they are
+  treated as possibly the only copy (W14, §4.2).
 - **Container storage and about 114 GB of the volume** that no walk could read (`/var/lib/docker`,
   other users' trees): measured only through the Docker API.
 - **Who wrote each keep marker**: the files carry no author.
@@ -631,8 +724,8 @@ below 400 GiB, read from the disk card and `df` once a day.
 
 - Pruning account stores, transcript and registry databases, and the scanner's response results:
   history and caches with their own owners; nothing in the passes removed them.
-- A unique-commit check for standalone clones in stage scratch: the stage contract makes
-  `TMPDIR` disposable and pass 16 found no unique commit; it would add a Git walk to the hot path.
+- Pruning the package manager and model caches that dependency folders hardlink into: no pass
+  removed them, and they are what keeps reinstalls cheap.
 - Moving the orphan clock of agent roots from creation to host end: no root of this class
   outlived seven days; the live host's `TMPDIR` already holds its root.
 - A rework of the checkout-link inventory for throughput: measure after W1 and W2 first.
