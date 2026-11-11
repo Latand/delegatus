@@ -10,43 +10,75 @@ import { TeamError } from "./members";
 
 export type WorkspacePrincipal = NonNullable<LaunchProfile["workspace"]>;
 
+/** Where a conversation's reach comes from. `fromMessage` is true when the
+ * latest person to write decided it (theirs, or inherited through a rotation)
+ * and false when a launch or a designation bound it. */
+export interface WorkspaceReach {
+  principal: WorkspacePrincipal | null;
+  fromMessage: boolean;
+}
+
 /** Parent links are durable, including pipeline source and migration generations.
  * A missing principal means an installation-owned launch. A bound principal
  * survives revocation and project moves; those can only remove its authority. */
 export function conversationWorkspacePrincipal(snapshot: RegistryFile | ((id: string) => RegistryConversation | null), id: string | null, store = existingTeamStore()): WorkspacePrincipal | null {
+  return conversationWorkspaceReach(snapshot, id, store).principal;
+}
+
+/**
+ * A project's seat states its own reach, so resolution ends at it:
+ * - a seat designated for a member keeps that binding whoever writes later;
+ * - a seat that inherited a member's message through a rotation
+ *   (`workspaceFromMessage`) is fenced until a person writes to it, and then
+ *   that person decides, as on any conversation a member wrote to;
+ * - a seat with no binding answers to the latest person who wrote to it.
+ * Its parent link is the handover to the seat it replaced and carries no
+ * authority: whoever designated the successor already decided that.
+ */
+export function conversationWorkspaceReach(snapshot: RegistryFile | ((id: string) => RegistryConversation | null), id: string | null, store = existingTeamStore()): WorkspaceReach {
   const seen = new Set<string>();
   // One lazy, identity-cached seat map per resolution. Solo installations skip it;
   // persisted launch bindings still fail closed if their team store vanishes.
-  let seatPrincipals: ReadonlyMap<string | null, WorkspacePrincipal | undefined> | undefined;
+  let seats: ReturnType<typeof orchestratorWorkspacePrincipalsOrUnknown> | undefined;
   const hasWorkspaces = Boolean(store?.workspaceRows().length);
-  const seatPrincipal = (id: string) => {
+  // A launch binding is the narrower answer, so it stands when seats cannot be
+  // read; an unbound conversation has no such fallback and refuses.
+  const seatBinding = (id: string, bound: boolean) => {
     if (!hasWorkspaces) return undefined;
-    if (!seatPrincipals) {
+    if (!seats) {
       const principals = orchestratorWorkspacePrincipalsOrUnknown();
-      if (!principals) throw new Error("workspace seat authority is unavailable");
-      seatPrincipals = principals;
+      if (!principals) {
+        if (bound) return undefined;
+        throw new Error("workspace seat authority is unavailable");
+      }
+      seats = principals;
     }
-    return seatPrincipals.get(id);
+    return seats.get(id);
+  };
+  const bound = (principal: WorkspacePrincipal, fromMessage: boolean): WorkspaceReach => {
+    const member = store?.member(principal.memberId);
+    return { principal: member?.status === "active" && member.role === "owner" ? null : principal, fromMessage };
   };
   while (id && !seen.has(id)) {
     seen.add(id);
     const conversation = typeof snapshot === "function" ? snapshot(id) : Object.hasOwn(snapshot.conversations, id) ? snapshot.conversations[id] : undefined;
     const profile = conversation?.generations.at(-1)?.launchProfile;
-    const principal = profile?.workspace ?? seatPrincipal(id);
-    if (principal) {
-      const member = store?.member(principal.memberId);
-      return member?.status === "active" && member.role === "owner" ? null : principal;
-    }
+    const seat = seatBinding(id, Boolean(profile?.workspace));
+    const inherited = seat?.fromMessage ? seat.workspace : undefined;
+    const principal = inherited ? undefined : profile?.workspace ?? seat?.workspace;
+    if (principal) return bound(principal, false);
     const memberId = store?.latestConversationMember(id);
     if (memberId) {
       const member = store!.member(memberId);
-      if (member?.role === "owner" && member.status === "active") return null;
+      if (member?.role === "owner" && member.status === "active") return { principal: null, fromMessage: true };
       const project = conversationProjectKey(conversation?.projectOwnership, profile);
-      return { memberId, workspaceId: project ? workspaceDirectory(store!).workspaceOf(project) : null };
+      return { principal: { memberId, workspaceId: project ? workspaceDirectory(store!).workspaceOf(project) : null }, fromMessage: true };
     }
+    if (inherited) return bound(inherited, true);
+    if (seat) return { principal: null, fromMessage: false };
     id = profile?.parentConversationId ?? null;
   }
-  return null;
+  return { principal: null, fromMessage: false };
 }
 
 export function memberWorkspacePrincipal(store: TeamStore, memberId: string, project: string | null): WorkspacePrincipal | null {

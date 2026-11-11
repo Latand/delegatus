@@ -128,8 +128,10 @@ function pinFallbackTitle(req: Pick<NextRequest, "headers">): string {
 }
 
 export interface SpawnCommandDependencies {
-  /** Trusted in-process service authority; never read from the request body. */
-  workspacePrincipal?: WorkspacePrincipal;
+  /** Trusted in-process service authority; never read from the request body.
+      `null` launches unbound, and absent leaves the launch to inherit its
+      actor's or its parent's reach. */
+  workspacePrincipal?: WorkspacePrincipal | null;
   registry: typeof agentRegistry;
   resolveHealthySpawnAccount: typeof resolveHealthySpawnAccount;
   resolveSpawnAccount: typeof accountManager.resolveSpawn;
@@ -686,8 +688,8 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       : null;
     const parentProfile = parentRecord?.generations.at(-1)?.launchProfile;
     const team = existingTeamStore();
-    workspacePrincipal = existingAttempt?.launchProfile.workspace ?? dependencies.workspacePrincipal
-      ?? (spawnActor.kind === "member" && team
+    workspacePrincipal = existingAttempt?.launchProfile.workspace ?? (dependencies.workspacePrincipal !== undefined ? dependencies.workspacePrincipal
+      : spawnActor.kind === "member" && team
         ? memberWorkspacePrincipal(team, spawnActor.memberId, explicitProject ?? projectForCwd(cwd))
         : conversationWorkspacePrincipal((id: string) => registry.conversation(id as `conversation_${string}`), authenticatedCaller?.kind === "agent"
           ? authenticatedCaller.conversationId : launcher.value?.conversationId ?? pipelineSourceConversationId ?? parentConversationId));
