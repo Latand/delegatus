@@ -15,7 +15,6 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { residentWorkerOverLimit } from "@/lib/residentWorkerMemory";
 import type { FeedFilter, FeedFiles, ScanPage, LogPage, Position } from "./taskFeed";
 import type { PageBuildResult, PageRequest } from "./taskPageBuild";
-import { markTaskExport } from "./taskExportPrivacy";
 import { sharedLinkState } from "./runtimeState";
 
 export function taskPageWorkerLaunch(cwd = process.cwd()) {
@@ -210,9 +209,9 @@ export class TaskPageWorker {
             job.finish(new RoleMemoryRefusal(frame.curationRefusal, frame.curationRefusal === "CURATE_LIVE" ? "only a completed curator pass can be undone" : "pass version is unavailable")); continue;
           }
           if (frame.error) throw unavailable(privacyFailureCode(frame.failure) ?? "worker-unavailable");
-          if (!frame.result || typeof frame.result.privacyRevision !== "string"
-            || !(frame.result.page || Object.hasOwn(frame.result, "value"))) throw unavailable("worker-invalid-reply");
-          if (storedLessonRevision() !== frame.result.privacyRevision) throw unavailable("store-changed");
+          if (!frame.result || !(frame.result.page || Object.hasOwn(frame.result, "value") && typeof frame.result.privacyRevision === "string")) throw unavailable("worker-invalid-reply");
+          // A privacy answer holds only for the lessons it was checked against; a page carries none.
+          if (!frame.result.page && storedLessonRevision() !== frame.result.privacyRevision) throw unavailable("store-changed");
           if (frame.result.page) { this.builds = frame.result.builds; this.lastCpu = frame.result.cpu; }
           job.finish(undefined, frame.result);
         } catch (error) { fail(privacyFailureOf(error, "worker-invalid-reply")); return; }
@@ -251,7 +250,7 @@ async function sharedWorker(): Promise<TaskPageWorker> {
 async function page(request: PageRequest, filter: FeedFilter): Promise<LogPage | ScanPage> {
   const result = await (await sharedWorker()).build(request, filter);
   if (request.kind === "scan") Object.defineProperty(result.page, "at", { value: [result.startRevision] });
-  return "rows" in result.page && result.page.rows.length ? markTaskExport(result.page, result.privacyRevision) : result.page;
+  return result.page;
 }
 export async function readScanPageInWorker(after: string, filter: FeedFilter): Promise<ScanPage & { at: Position }> { return await page({ kind: "scan", after }, filter) as ScanPage & { at: Position }; }
 export async function readLogPageInWorker(after: Position, filter: FeedFilter): Promise<LogPage> { return await page({ kind: "log", after }, filter) as LogPage; }
