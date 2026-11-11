@@ -42767,7 +42767,9 @@ describe("first-run guide: variant 1 on the real components", () => {
         const phone = width < 640;
         const form = spec.token.startsWith("form-");
         const settings = spec.token.startsWith("settings-");
-        const scenario = form ? "orchestrator-first-walk" : "orchestrator-first&guide=installer";
+        /* Where an orchestrator exists the board behind the dialog carries it; before one, the fresh install. */
+        const seated = spec.token === "later-memory-after" || spec.token === "settings-memory-after";
+        const scenario = form || seated ? "orchestrator-first-walk" : "orchestrator-first&guide=installer";
         const url = `${served.base}?scenario=${scenario}&firstrun=${spec.token}${spec.bot ? `&bot=${spec.bot}` : ""}#p=atlas`;
         const { context, page, pageErrors } = await openFixture(browser, url, { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone, 1, new Date("2026-11-11T10:00:00Z"));
         const at = name;
@@ -42861,6 +42863,19 @@ describe("first-run guide: variant 1 on the real components", () => {
             if (starts.advice === null || starts.value === null) failures.push(`${name}: the advice or the Runs on value is missing`);
             else if (width >= 860 && Math.abs(starts.advice - starts.value) > 1.5) failures.push(`${name}: the advice starts at ${starts.advice}px but the value column at ${starts.value}px`);
             else if (width < 860 && starts.label !== null && starts.advice > starts.label + 1.5) failures.push(`${name}: the advice is indented to ${starts.advice}px below 860 px (label at ${starts.label}px)`);
+          }
+          /* With an orchestrator the board behind the dialog has it: no draft panel asks to create one, and the guide's first three steps are ticks. */
+          if (seated) {
+            const behind = await page.evaluate((draft) => ({
+              draft: document.body.innerText.includes(draft),
+              none: document.querySelectorAll("[data-orchestrator-badge=draft]").length > 0,
+            }), translate(lang, "orchPanel.draftTitle").replace("{project}", "atlas"));
+            if (behind.draft) failures.push(`${name}: the board behind still asks to create the orchestrator`);
+            if (behind.none) failures.push(`${name}: the board behind says the orchestrator does not exist yet`);
+            if (spec.token === "later-memory-after") {
+              const ticks = await page.evaluate(() => [...document.querySelectorAll("[data-onboarding-dialog] [data-step-mark=done]")].length);
+              if (width >= 640 && ticks < 3) failures.push(`${name}: ${ticks} settled steps in the guide, expected at least 3`);
+            }
           }
           if (spec.token === "settings-memory-after") {
             const line = await page.evaluate(() => document.querySelector("[data-memory-source-line]")?.textContent ?? "");

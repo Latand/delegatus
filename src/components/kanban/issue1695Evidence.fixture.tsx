@@ -4220,7 +4220,8 @@ const FIRST_RUN_ENGINES: "both" | "claude-only" | "codex-only" | "signed-out" | 
   FIRST_RUN === "engines-claude-only" || FIRST_RUN === "orchestrator-claude-only" ? "claude-only"
   : FIRST_RUN === "engines-codex-only" || FIRST_RUN === "orchestrator-codex-only" ? "codex-only"
   : FIRST_RUN === "engines-signed-out" ? "signed-out" : FIRST_RUN === "engines-no-cli" ? "no-cli" : "both";
-/* An orchestrator exists for the memory import once the guide was reopened after Create, and on the seat's own board. */
+/* An orchestrator exists for the memory import once the guide was reopened after Create, and on the seat's own board.
+   The driver draws those states over `scenario=orchestrator-first-walk`, so the board behind the dialog carries the seat too. */
 const FIRST_RUN_SEATED = FIRST_RUN_FORM || FIRST_RUN === "later-memory-after" || FIRST_RUN === "settings-memory-after";
 if (FIRST_RUN) { try { sessionStorage.setItem("evidence-walk", "done"); } catch { /* opaque origin */ } }
 const frNB = " ";
@@ -4285,7 +4286,9 @@ if (FIRST_RUN_FORM) seatRounds.push({ id: FIRST_RUN_REVIEW_ID, taskId: null, pro
 function firstRunAnswer(url: URL, method: string): Response | null {
   const path = url.pathname;
   if (path === "/api/onboarding" && !FIRST_RUN_FORM) {
-    const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: {}, lastHealth: null, walk: "done" };
+    /* Once an orchestrator exists, the guide's first three steps are settled: the numbers turn into ticks. */
+    const steps = FIRST_RUN_SEATED ? { engines: "done", project: "done", orchestrator: "done" } : {};
+    const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps, lastHealth: null, walk: "done" };
     return json(method === "PUT" ? { marker } : { marker, legacyState: false, seatTickCheckMinutes: 5 });
   }
   if (path === "/api/accounts" && method === "GET") return json(FIRST_RUN_ACCOUNTS);
