@@ -834,8 +834,19 @@ action and the migration route's `select-account`, which the text above did
 not list and which only checked that the account exists), and a member's
 lane (create, add-stage, override-stage and moving a draft). Naming the
 account a conversation already runs on stays allowed, so a waiting choice can
-be withdrawn. The composer's chip, the phone's sheet and the workspace page's
-line are the member's side of it. Deferred: the chip of a conversation that
+be withdrawn. Three of those answers read more than a pool, so each one
+re-checks the member's reach at the step that reads it: the switch of a
+running conversation checks live access to the project after it resolves it
+(a project moved to another workspace in between is 403 `workspace_forbidden`
+with no foreign account named), and a lane records the person first editing it
+before the account rule runs. A refusal for a service tier no account offers
+names the model and the tier only, never the accounts evaluated, where the
+project has no list and the pick is automatic. The member's read of a set pool
+selects the pool's ids before any account's credentials or quota are read, so
+accounts left out cost it nothing; only the branch with no pool lists every
+account, to say whether the engine has one signed in. The composer's chip, the
+phone's sheet and the workspace page's line are the member's side of it.
+Deferred: the chip of a conversation that
 is already running, the stage and orchestrator pickers, and a control for the
 workspace's allow-list.
 

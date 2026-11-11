@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -379,5 +379,67 @@ describe("a member's explicit account choice on a running conversation", () => {
     expect((await select(post, id, member, current)).status).toBe(200);
     expect((await select(post, id, owner, "account-b")).status).toBe(200);
     expect(dispatchedFor).toEqual(["account-a", current, "account-b"]);
+  });
+
+  test("a project moved to another workspace while the choice resolves is refused, and the new workspace's pool is not read", async () => {
+    const { registry, id, member } = await setup(["account-a"]);
+    const { teamStore } = await import("@/lib/team/store");
+    const { setWorkspaceDefaults } = await import("@/lib/team/workspaceDefaults");
+    const { createWorkspace, placeProject } = await import("@/lib/team/workspaces");
+    const routes = await import("@/lib/team/workspaceRoute");
+    const store = teamStore();
+    const owner = store.members().find(candidate => candidate.role === "owner")!;
+    const other = `w_${"7".repeat(32)}`;
+    createWorkspace(store, owner, { id: other, name: "Other", projects: [] });
+    await setWorkspaceDefaults(store, owner, other, { accounts: { codex: ["foreign-account-canary"] } });
+    /* The route's gate resolves the conversation's project once; the handler's
+       own resolution is the second read, and the move lands between the two. */
+    const original = routes.workspaceConversationProject;
+    let reads = 0;
+    const probe = spyOn(routes, "workspaceConversationProject").mockImplementation(async (identity: string) => {
+      const project = await original(identity);
+      if (++reads === 2) placeProject(store, owner, "repo", other);
+      return project;
+    });
+    let dispatched = 0;
+    const handler = createConversationMigrationPOST({ registry: () => registry, dispatchControl: async () => { dispatched++; return { status: 200, body: { ok: true } } as never; } });
+    const wrapped = routes.workspaceRoute("/api/conversations/[conversationId]/migration", handler);
+    try {
+      const response = await select(wrapped, id, member, "account-b");
+      const body = await response.json();
+      expect(reads).toBe(2);
+      expect(response.status).toBe(403);
+      expect(body.code).toBe("workspace_forbidden");
+      expect(JSON.stringify(body)).not.toContain("foreign-account-canary");
+      expect(dispatched).toBe(0);
+    } finally { probe.mockRestore(); }
+  });
+
+  test("a project moved between admission and the pool read refuses a reconfigure through the conversation host the same way", async () => {
+    const { id } = await setup(["account-a"]);
+    const { teamStore } = await import("@/lib/team/store");
+    const { setWorkspaceDefaults } = await import("@/lib/team/workspaceDefaults");
+    const { createWorkspace, placeProject } = await import("@/lib/team/workspaces");
+    const routes = await import("@/lib/team/workspaceRoute");
+    const store = teamStore();
+    const owner = store.members().find(candidate => candidate.role === "owner")!;
+    const other = `w_${"6".repeat(32)}`;
+    createWorkspace(store, owner, { id: other, name: "Other", projects: [] });
+    await setWorkspaceDefaults(store, owner, other, { accounts: { codex: ["foreign-account-canary"] } });
+    const { conversationAccountChoiceRefusal } = await import("@/lib/team/conversationAccountChoice");
+    const original = routes.workspaceConversationProject;
+    const probe = spyOn(routes, "workspaceConversationProject").mockImplementation(async (identity: string) => {
+      const project = await original(identity);
+      placeProject(store, owner, "repo", other);
+      return project;
+    });
+    const request = new NextRequest("http://127.0.0.1/api/conversation-host", { method: "POST", headers: { host: "127.0.0.1" } });
+    try {
+      const refused = await conversationAccountChoiceRefusal(request, { kind: "member", memberId: "m_member" }, id, "account-b");
+      expect(refused?.status).toBe(403);
+      const body = await refused!.json();
+      expect(body.code).toBe("workspace_forbidden");
+      expect(JSON.stringify(body)).not.toContain("foreign-account-canary");
+    } finally { probe.mockRestore(); }
   });
 });

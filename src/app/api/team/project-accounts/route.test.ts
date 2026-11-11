@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -235,6 +235,37 @@ describe("who is refused", () => {
     revokeMember(store, store.member(claimOwner(store))!, store.member("m_one")!);
     const answer = await read("repo-atlas", t.w1);
     expect([answer.status, json(answer).code]).toEqual([401, "member_required"]);
+  });
+
+  test("a set pool reads no credentials and no quota files of the accounts it leaves out, and their state changes nothing", async () => {
+    const t = team();
+    const inCodex = t.a;
+    const outCodex = createManagedCodexAccount("Account Outside Codex"); signIn(outCodex, "codex");
+    const inClaude = createManagedClaudeAccount("Account Inside Claude"); signIn(inClaude, "claude");
+    const outClaude = createManagedClaudeAccount("Account Outside Claude"); signIn(outClaude, "claude");
+    expect(bindAccountToProject("codex", inCodex, "repo-atlas").ok).toBe(true);
+    expect(bindAccountToProject("claude", inClaude.id, "repo-atlas").ok).toBe(true);
+    /* Anything inside an excluded home: its credentials, auth file and projects. The registry's own
+       check of each stored home directory entry is shared by every read of the registry. */
+    const excluded = [outCodex.home, outClaude.home];
+    const touched: string[] = [];
+    const spies = (["statSync", "lstatSync", "readFileSync", "readdirSync", "existsSync", "openSync", "accessSync", "realpathSync"] as const).map(name => {
+      const original = (fs[name] as (...args: unknown[]) => unknown).bind(fs);
+      return spyOn(fs, name as "statSync").mockImplementation(((file: unknown, ...rest: unknown[]) => {
+        if (typeof file === "string" && excluded.some(home => file.startsWith(home + path.sep))) touched.push(`${name}:${file}`);
+        return original(file, ...rest);
+      }) as never);
+    });
+    let first: { status: number; text: string };
+    try { first = await read("repo-atlas", t.w1); } finally { for (const spy of spies) spy.mockRestore(); }
+    expect(first.status).toBe(200);
+    expect(touched).toEqual([]);
+    const pools = json(first).engines as Record<string, { pool: string; accounts: { id: string }[] }>;
+    expect([pools.codex!.accounts.map(account => account.id), pools.claude!.accounts.map(account => account.id)]).toEqual([[inCodex], [inClaude.id]]);
+    /* An excluded account that vanishes or is damaged changes nothing about the answer. */
+    fs.rmSync(outCodex.home, { recursive: true, force: true });
+    fs.writeFileSync(path.join(outClaude.home, ".credentials.json"), "not json");
+    expect((await read("repo-atlas", t.w1)).text).toBe(first.text);
   });
 });
 

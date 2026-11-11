@@ -334,3 +334,45 @@ test("a pin outside a set pool is refused with the reason that says so", async (
   }), routeDependencies);
   expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 409, body: { code: "project_account_refused", reason: "outside_account_list" } });
 });
+
+test("an automatic launch by a member with no account list reveals no account in a service tier refusal, and the owner's refusal still lists them", async () => {
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { claimInstall } = await import("@/lib/team/members");
+  const { createWorkspace } = await import("@/lib/team/workspaces");
+  const { mintSession } = await import("@/lib/team/sessions");
+  const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+  const team = teamStore();
+  const owner = claimInstall(team, "Owner", { surface: "desktop", browser: "chrome" }, Date.parse("2026-10-20T09:00:00Z")).member;
+  const id = `w_${"8".repeat(32)}`;
+  createWorkspace(team, owner, { id, name: "Alpha", projects: [projectForCwd(sandbox)!] });
+  const memberId = "m_tier_member";
+  team.insertMember({ id: memberId, name: "Member", role: "member", status: "active", color: "teal", telegram: null,
+    createdAt: "2026-10-20T09:00:00.000Z", createdBy: owner.id, revokedAt: null });
+  team.putWorkspaceMember(id, memberId, "member", owner.id, "2026-10-20T09:00:00.000Z");
+  const memberCookie = mintSession(team, memberId, "claim", { surface: "desktop", browser: "chrome" }).value;
+  const ownerCookie = mintSession(team, owner.id, "claim", { surface: "desktop", browser: "chrome" }).value;
+  const hidden = createManagedCodexAccount("Hidden Account Label");
+  fs.writeFileSync(path.join(hidden.home, "auth.json"), "{}");
+  fs.writeFileSync(path.join(hidden.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6.1-sol", service_tiers: [] }] }));
+  try {
+    const { routeDependencies } = harness();
+    /* The real resolver: its tier refusal is the one that lists accounts. */
+    routeDependencies.resolveHealthySpawnAccount = (await import("@/lib/accounts/manager")).resolveHealthySpawnAccount;
+    const launch = async (clientAttemptId: string, cookie: string) => {
+      const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+        method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json", cookie: `llv_member=${cookie}` },
+        body: JSON.stringify({ ...args(), clientAttemptId, model: "gpt-6.1-sol", effort: "high", serviceTier: "ultrafast" }),
+      }), routeDependencies);
+      return { status: response.status, body: await response.json() as { error: string; code: string } };
+    };
+    const member = await launch("tier-member", memberCookie);
+    expect(member).toEqual({ status: 409, body: { code: "service_tier_unavailable", error: "no account offers serviceTier ultrafast for model gpt-6.1-sol" } });
+    expect(JSON.stringify(member.body)).not.toContain(hidden.label);
+    expect(JSON.stringify(member.body)).not.toContain(hidden.id);
+    expect(registry.spawnReceiptForClientAttempt("tier-member")).toBeNull();
+    const operator = await launch("tier-owner", ownerCookie);
+    expect(operator.status).toBe(409);
+    expect(operator.body.error).toContain(hidden.label);
+    expect(operator.body.error).toContain(hidden.id);
+  } finally { resetTeamStoreForTests(); }
+});

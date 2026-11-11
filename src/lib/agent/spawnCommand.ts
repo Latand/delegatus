@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 
-import { codexLaunchTier, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
+import { codexLaunchTier, CodexServiceTierUnavailableError, hiddenAccountsTierRefusal } from "@/lib/accounts/codexServiceTiers";
 import { NextRequest, NextResponse } from "next/server";
 import { deferSpawnWork } from "./spawnDeferral";
 
@@ -983,7 +983,12 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
          formed and the state it addresses is what is wrong — the same answer
          the reseat, the binding route and the task launch give for the same
          record, so one repair clears all of them. */
-      if (error instanceof CodexServiceTierUnavailableError) return NextResponse.json({ error: error.message, code: error.code }, { status: 409 });
+      if (error instanceof CodexServiceTierUnavailableError) {
+        /* A member's automatic pick on a project with no account list chooses
+           among accounts they are not shown, so the refusal names none. */
+        const hidden = workspacePrincipal && engine !== "copilot" && selectedModel.model && launchTier && allowedAccountIdsForProject(spawnProject, engine) === null;
+        return NextResponse.json({ error: hidden ? hiddenAccountsTierRefusal(selectedModel.model!, launchTier!) : error.message, code: error.code }, { status: 409 });
+      }
       if (error instanceof AccountProjectBindingsUnreadableError) {
         return NextResponse.json({ error: error.message }, { status: 409 });
       }

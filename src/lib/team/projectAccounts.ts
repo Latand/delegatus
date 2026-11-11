@@ -52,10 +52,14 @@ function poolAccount(engine: Engine, account: ListedAccount, observation: Durabl
 
 function enginePool(engine: Engine, project: string, now: number): EnginePool {
   const allowed = allowedAccountIdsForProject(project, engine);
-  const listed: ListedAccount[] = engine === "claude" ? listClaudeAccounts() : listCodexAccounts();
   const observations = new Map(agentRegistry().quotaObservations(engine).map(observation => [observation.accountId, observation]));
-  const rows = (allowed === null ? listed : listed.filter(account => allowed.includes(account.id)))
-    .map(account => poolAccount(engine, account, observations.get(account.id), now));
+  /* A set pool selects its ids before any account's credentials or quota are
+     read, so the work does not depend on the accounts left out. Only the
+     branch with no pool needs every account: to say whether the engine has
+     one that is signed in. */
+  const only = allowed === null ? undefined : new Set(allowed);
+  const listed: ListedAccount[] = engine === "claude" ? listClaudeAccounts(only) : listCodexAccounts(only);
+  const rows = listed.map(account => poolAccount(engine, account, observations.get(account.id), now));
   if (allowed === null) return { pool: "none", available: rows.some(row => row.signedIn) };
   return { pool: "set", accounts: rows };
 }

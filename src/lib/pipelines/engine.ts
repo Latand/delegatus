@@ -65,7 +65,7 @@ import path from "node:path";
 
 import { activeDrain, type DrainLease } from "@/lib/selfUpdate/drain";
 import { withConversationActuation } from "@/lib/deliveryActuation";
-import { codexServiceTierRefusal, tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
+import { codexServiceTierRefusal, hiddenAccountsTierRefusal, tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { codexSessionRoots, listCodexAccounts } from "@/lib/accounts/codex";
 import { accountManager, AccountAuthenticationRequiredError, ProjectAccountRefusedError, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
 import { validateMigrationTargetRoot } from "@/lib/accounts/migration/targetRoot";
@@ -711,26 +711,35 @@ function stageAccountRefusal(
   for (const [index, stage] of stages.entries()) {
     const requested = stage.account?.trim();
     const tier = stage.effectiveRole.serviceTier;
+    const engine = stage.effectiveRole.engine;
+    /* A member's lane first: where the project has no account list nothing can
+       be named, and that is answered before any account is read, so an account
+       that exists and one that does not get the same answer. */
+    if (memberBound && ports.allowedAccountIds) {
+      const read = stageAccountPool(ports, project, engine);
+      if ("refusal" in read) return read.refusal;
+      if (read.pool === null && requested) {
+        violations.push({
+          field: `stages[${index}].account`,
+          message: `stage ${stage.id} names ${engine} account ${requested}, and project ${project} has no ${engine} account list; a member's lane runs on an automatically chosen account`,
+          expected: STAGE_ACCOUNT_SHAPE,
+        });
+        continue;
+      }
+    }
     if (tier && tier !== "default" && tier !== "standard" && stage.effectiveRole.serviceTierSource === "explicit") {
       const read = stageAccountPool(ports, project, "codex");
       if ("refusal" in read) return read.refusal;
       const accounts = listCodexAccounts().filter(account => (read.pool === null || read.pool.includes(account.id)) && (!requested || account.id === requested));
       const offers = tierOffers(accounts, stage.effectiveRole.model!, tier);
-      if (!offers.offering.length) violations.push({ field: `stages[${index}].serviceTier`, message: codexServiceTierRefusal(accounts, stage.effectiveRole.model!, tier, requested), expected: "tier offered by the stage model/account" });
+      if (!offers.offering.length) violations.push({ field: `stages[${index}].serviceTier`,
+        message: memberBound && read.pool === null ? hiddenAccountsTierRefusal(stage.effectiveRole.model!, tier) : codexServiceTierRefusal(accounts, stage.effectiveRole.model!, tier, requested),
+        expected: "tier offered by the stage model/account" });
     }
     if (!requested || !ports.allowedAccountIds) continue;
-    const engine = stage.effectiveRole.engine;
     const read = stageAccountPool(ports, project, engine);
     if ("refusal" in read) return read.refusal;
     const allowed = read.pool;
-    if (allowed === null && memberBound) {
-      violations.push({
-        field: `stages[${index}].account`,
-        message: `stage ${stage.id} names ${engine} account ${requested}, and project ${project} has no ${engine} account list; a member's lane runs on an automatically chosen account`,
-        expected: STAGE_ACCOUNT_SHAPE,
-      });
-      continue;
-    }
     if (allowed === null || allowed.includes(requested)) continue;
     violations.push({
       field: `stages[${index}].account`,
@@ -829,7 +838,11 @@ async function spawnPipelineAgent(
   let offers = desiredTier ? tierOffers(candidates, input.role.model!, desiredTier) : null;
   const required = input.role.serviceTierSource !== "role-default";
   if (offers && !offers.offering.length) {
-    if (required) throw new CodexServiceTierUnavailableError(codexServiceTierRefusal(candidates, input.role.model!, desiredTier!, input.requestedAccountId));
+    /* A member's lane on a project with no account list chooses among accounts
+       they are not shown: the refusal names none of them. */
+    if (required) throw new CodexServiceTierUnavailableError(workspace && pool === null
+      ? hiddenAccountsTierRefusal(input.role.model!, desiredTier!)
+      : codexServiceTierRefusal(candidates, input.role.model!, desiredTier!, input.requestedAccountId));
     serviceTier = null;
   }
   const request = {
@@ -15538,7 +15551,21 @@ export async function createPipelineFromRequest(
      can be read before anything is stored: a stage naming an account the
      project does not allow is refused at create, not discovered at launch. */
   const project = ports.projectForCwd(repoDir) ?? path.basename(repoDir);
-  const accountRefusal = stageAccountRefusal(normalized.stages, project, ports);
+  /* Whose lane this is decides what its refusals may say, so the author is
+     resolved before any account is read; the same resolution is read again
+     below, after the awaits, where it gates the record. */
+  const authorConversationId = creator.lineage.srcConversationId;
+  const resolveWorkspace = () => {
+    const team = existingTeamStore();
+    return options.workspace ?? (options.workspaceMemberId && team
+      ? memberWorkspacePrincipal(team, options.workspaceMemberId, project)
+      : (options.refreshOf ? findPipelineRecord(options.refreshOf.pipelineId)?.workspace : null)
+        ?? conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as ViewerConversationId),
+          options.briefer?.kind === "agent" ? options.briefer.conversationId : authorConversationId));
+  };
+  const authoringWorkspace = resolveWorkspace();
+  if (authoringWorkspace && !workspacePrincipalAllows(authoringWorkspace, project)) return { error: "workspace access denied", code: "workspace_forbidden", status: 403 };
+  const accountRefusal = stageAccountRefusal(normalized.stages, project, ports, Boolean(authoringWorkspace));
   if (accountRefusal) return accountRefusal;
   if (options.briefer) {
     const sizingRefusal = stageSizingRefusal(normalized.stages, sizingBriefer(options.briefer, creator.lineage.srcConversationId, ports), ports);
@@ -15614,17 +15641,10 @@ export async function createPipelineFromRequest(
     state: req.autoStart === false ? "draft" : "provisioning",
     ...(req.publication === "internal" || req.publication === "remote-branch" ? { publication: req.publication } : {}),
   });
-  const team = existingTeamStore();
-  const workspace = options.workspace ?? (options.workspaceMemberId && team
-    ? memberWorkspacePrincipal(team, options.workspaceMemberId, project)
-    : (options.refreshOf ? findPipelineRecord(options.refreshOf.pipelineId)?.workspace : null)
-      ?? conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as ViewerConversationId),
-        options.briefer?.kind === "agent" ? options.briefer.conversationId : pipeline.srcConversationId));
+  const workspace = resolveWorkspace();
   if (workspace && !workspacePrincipalAllows(workspace, project)) return { error: "workspace access denied", code: "workspace_forbidden", status: 403 };
   if (workspace) pipeline.workspace = workspace;
-  /* Read again for the member's rule: the first reading above ran before the
-     lane's author was resolved. Nothing has been stored between the two. */
-  if (workspace) {
+  if (workspace && !authoringWorkspace) {
     const memberAccountRefusal = stageAccountRefusal(normalized.stages, project, ports, true);
     if (memberAccountRefusal) return memberAccountRefusal;
   }
@@ -16858,6 +16878,15 @@ export async function patchPipeline(
     const pipeline = pipelines.find(item => item.id === id);
     return memberInput && pipeline ? requireMemberWorkspacePrincipal(workspaceMemberId!, pipeline.project) : null;
   };
+  /* Whether this edit binds the lane to a member: the lane already is, or the
+     person editing is a member whose first edit records them (the persist
+     below). The account rule reads this before it checks any account, so an
+     edit that would store a pin the launch refuses is refused before a write. */
+  const memberBoundEdit = (pipeline: Pipeline): boolean => {
+    if (pipeline.workspace) return true;
+    const team = existingTeamStore();
+    return Boolean(memberInput && team && memberWorkspacePrincipal(team, workspaceMemberId!, null));
+  };
   const scopedMutation: typeof withPipelineMutation = (mutate, observeHold) => withPipelineMutation((pipelines, persist) => {
     assertAuthority?.();
     inputPrincipal(pipelines);
@@ -17341,7 +17370,7 @@ export async function patchPipeline(
          park, discovered later. Read before any field is assigned, so a
          refusal leaves the draft where it was rather than half-moved. */
       if (project !== pipeline.project) {
-        const movedAccountRefusal = stageAccountRefusal(pipeline.stages, project, ports, Boolean(pipeline.workspace));
+        const movedAccountRefusal = stageAccountRefusal(pipeline.stages, project, ports, memberBoundEdit(pipeline));
         if (movedAccountRefusal) return movedAccountRefusal;
       }
       pipeline.task = task;
@@ -17407,7 +17436,7 @@ export async function patchPipeline(
          which allowed set applies — is what role resolution just settled. The
          early return leaves the transaction unpersisted, as every other
          post-mutation refusal in this function does. */
-      const addedAccountRefusal = stageAccountRefusal(pipeline.stages, pipeline.project, ports, Boolean(pipeline.workspace));
+      const addedAccountRefusal = stageAccountRefusal(pipeline.stages, pipeline.project, ports, memberBoundEdit(pipeline));
       if (addedAccountRefusal) return addedAccountRefusal;
       /* The added stage, and the fix stage a review-loop conversion adds beside it. */
       const before = new Set(inputs.map((stage) => stage.id).filter((stageId) => stageId !== inserted.id));
@@ -18240,7 +18269,7 @@ export async function patchPipeline(
       // Validate the resolved runtime against the account this request leaves
       // on the stage; clearing the pin checks the project's full allowed pool.
       if (changesRoleOrRuntime || req.account !== undefined) {
-        const tierRefusal = stageAccountRefusal([target], pipeline.project, ports, Boolean(pipeline.workspace));
+        const tierRefusal = stageAccountRefusal([target], pipeline.project, ports, memberBoundEdit(pipeline));
         if (tierRefusal) return tierRefusal;
       }
       let runtimeSwitch: PipelineRuntimeSwitch | null = null;

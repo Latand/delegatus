@@ -2,13 +2,12 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { AccountProjectBindingsUnreadableError, assertMemberAccountChoice, MemberAccountRefusedError } from "@/lib/accounts/projectBindings";
 import { agentRegistry } from "@/lib/agent/registry";
-import { callerConversationId } from "@/lib/agent/operatorAuthority";
 
 import type { TeamActor } from "./contract";
 import { teamActor } from "./actor";
 import { existingTeamStore } from "./store";
-import { conversationWorkspacePrincipal, memberWorkspacePrincipal } from "./workspacePrincipal";
-import { workspaceConversationProject } from "./workspaceRoute";
+import { conversationWorkspacePrincipal, memberWorkspacePrincipal, workspacePrincipalAllows } from "./workspacePrincipal";
+import { workspaceConversationProject, workspaceDenied } from "./workspaceRoute";
 
 /*
  * A member's explicit account choice on a conversation that already runs
@@ -49,6 +48,21 @@ export async function conversationAccountChoiceRefusal(
       bound = conversationWorkspacePrincipal(id => registry.conversation(id as `conversation_${string}`), actor.conversationId) !== null;
     }
     if (!bound) return null;
+    /* The gate that admitted this request ran before the project was read
+       here, and the project can move between the two. */
+    const mayAct = (project: string | null): boolean => {
+      const store = existingTeamStore();
+      if (!store) return false;
+      if (actor.kind === "member") {
+        const principal = memberWorkspacePrincipal(store, actor.memberId, project);
+        return principal !== null && workspacePrincipalAllows(principal, project, store);
+      }
+      if (actor.kind === "agent") {
+        const principal = conversationWorkspacePrincipal(id => registry.conversation(id as `conversation_${string}`), actor.conversationId, store);
+        return principal !== null && workspacePrincipalAllows(principal, project, store);
+      }
+      return false;
+    };
     const conversation = identity.startsWith("conversation_")
       ? registry.conversation(identity as `conversation_${string}`)
       : registry.conversationForPath(identity);
@@ -57,6 +71,9 @@ export async function conversationAccountChoiceRefusal(
     /* Naming the account it already runs on is how a pending choice is withdrawn. */
     if (generation?.accountId === accountId) return null;
     const project = await workspaceConversationProject(conversation.id);
+    /* Read again after the await, in the same step as the pool: a project that
+       moved to another workspace is refused before its pool is read. */
+    if (!mayAct(project)) return workspaceDenied();
     assertMemberAccountChoice(project, conversation.engine, accountId);
     return null;
   } catch (error) {

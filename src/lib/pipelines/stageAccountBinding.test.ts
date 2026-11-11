@@ -510,6 +510,75 @@ describe("a lane bound to a member", () => {
     expect((await patchPipeline(id, { action: "override-stage", stageId: "build", account: null }, memberPorts())).error).toBeUndefined();
   });
 
+  test("a service tier refusal names no account the member is not shown, whatever account the stage names, and the owner's still does", async () => {
+    const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+    const hidden = createManagedCodexAccount("Hidden Account Label");
+    fs.writeFileSync(path.join(hidden.home, "auth.json"), "{}");
+    fs.writeFileSync(path.join(hidden.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-5.6-terra", service_tiers: [] }] }));
+    const request = (account?: string) => ({ ...draft(account), stages: [{ ...draft(account).stages[0]!, engine: "codex" as const, model: "gpt-5.6-terra", effort: "high", serviceTier: "priority" }] });
+    const ports = { ...memberPorts(), engineReadiness: () => "connected" as const };
+    const answers: string[] = [];
+    for (const account of [undefined, hidden.id, "acct-never-existed"]) {
+      const refused = await createPipelineFromRequest(request(account), ports, { workspace: principal, allowOperatorDraftWithoutLineage: true });
+      expect(refused.status).toBe(400);
+      expect(refused.pipeline).toBeUndefined();
+      answers.push(refused.error ?? "");
+      expect(refused.error).not.toContain(hidden.label);
+    }
+    /* Only the id the caller typed comes back; the stage that names none learns of no account. */
+    expect(answers[0]).not.toContain(hidden.id);
+    expect(answers[0]).toContain("no account offers serviceTier priority for model gpt-5.6-terra");
+    /* An account that exists and one that never did get the same answer. */
+    expect(answers[2]!.replaceAll("acct-never-existed", hidden.id)).toBe(answers[1]);
+    expect(loadPipelines()).toEqual([]);
+    /* The installation's own lane keeps the full diagnosis. */
+    const owner = await createPipelineFromRequest(request(), ports, { allowOperatorDraftWithoutLineage: true });
+    expect(owner.status).toBe(400);
+    expect(owner.error).toContain(hidden.label);
+  });
+
+  test("a member who first edits a lane of the owner's cannot pin an account where the project has no list, and nothing is stored", async () => {
+    const created = await createPipelineFromRequest(draft(), memberPorts(), { allowOperatorDraftWithoutLineage: true });
+    expect(created.error).toBeUndefined();
+    const id = created.pipeline!.id;
+    expect(created.pipeline?.workspace).toBeUndefined();
+    const before = JSON.stringify(loadPipelines().find(pipeline => pipeline.id === id));
+    const added = await patchPipeline(id, { action: "add-stage", stage: { id: "verify", kind: "run", prompt: "Verify", next: null, account: RESERVED } }, memberPorts(), undefined, undefined, memberId);
+    expect(added.status).toBe(400);
+    const overridden = await patchPipeline(id, { action: "override-stage", stageId: "build", account: RESERVED }, memberPorts(), undefined, undefined, memberId);
+    expect(overridden.status).toBe(400);
+    const moved = await patchPipeline(id, { action: "update-draft", repoDir: COMET_REPO, stages: [{ ...draft(RESERVED).stages[0]! }] } as never, memberPorts(), undefined, undefined, memberId);
+    expect(moved.error).toBeDefined();
+    /* No pin, no principal, no partial change. */
+    expect(JSON.stringify(loadPipelines().find(pipeline => pipeline.id === id))).toBe(before);
+    /* The owner's own edit and a member's edit that names none still go through. */
+    expect((await patchPipeline(id, { action: "override-stage", stageId: "build", account: RESERVED }, memberPorts())).error).toBeUndefined();
+    expect((await patchPipeline(id, { action: "override-stage", stageId: "build", account: null }, memberPorts(), undefined, undefined, memberId)).error).toBeUndefined();
+    expect(loadPipelines().find(pipeline => pipeline.id === id)?.workspace).toEqual(principal);
+  });
+
+  test("a member's first edit of an owner's lane may pin an account the project's list allows", async () => {
+    const created = await createPipelineFromRequest({ ...draft(), repoDir: SHARED_REPO }, memberPorts(), { allowOperatorDraftWithoutLineage: true });
+    const id = created.pipeline!.id;
+    const edited = await patchPipeline(id, { action: "override-stage", stageId: "build", account: RESERVED }, memberPorts(), undefined, undefined, memberId);
+    expect(edited.error).toBeUndefined();
+    expect(loadPipelines().find(pipeline => pipeline.id === id)).toMatchObject({ workspace: principal, stages: [{ account: RESERVED }] });
+  });
+
+  test("a member's stage that cannot get its service tier is refused at launch without naming an account, and the owner's launch names them", async () => {
+    const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+    const hidden = createManagedCodexAccount("Hidden Launch Label");
+    fs.writeFileSync(path.join(hidden.home, "auth.json"), "{}");
+    fs.writeFileSync(path.join(hidden.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-5.6-terra", service_tiers: [] }] }));
+    clearAccountFixture(BINDINGS_SOURCE);
+    const base = spawnInput(null);
+    const input = { ...base, role: { ...base.role, engine: "codex" as const, model: "gpt-5.6-terra", effort: "high", serviceTier: "priority", serviceTierSource: "explicit" as const } };
+    const memberError = await defaultPipelinePorts().spawnAgent({ ...input, workspace: principal, clientAttemptId: "member-tier-launch" }, () => {}).then(() => "", (error: Error) => error.message);
+    expect(memberError).toBe("no account offers serviceTier priority for model gpt-5.6-terra");
+    const ownerError = await defaultPipelinePorts().spawnAgent({ ...input, clientAttemptId: "owner-tier-launch" }, () => {}).then(() => "", (error: Error) => error.message);
+    expect(ownerError).toContain(hidden.label);
+  });
+
   test("moving a draft with a pinned account to a project without a list is refused and the draft stays", async () => {
     const created = await createPipelineFromRequest({ ...draft(RESERVED), repoDir: SHARED_REPO }, memberPorts(), { workspace: principal, allowOperatorDraftWithoutLineage: true });
     const id = created.pipeline!.id;
