@@ -10,6 +10,13 @@ port, the login on a separate preview site, the capture browser's network
 reach, the crop's path into the message box and what production React still
 names. §12 lists each change and what was re-checked for it.
 
+Revision 2 (2026-11-11) answers the second review round: a preview site needs
+a registrable domain of its own; the live frame's sandbox; pictures from other sites in slice 1; every page-derived
+field marked as page text; other OS accounts on the same machine. It also
+corrects what a Delegatus update ends, what slice 3 can reuse from the setup
+runner, and which open work touches the cited files. §13 lists each change
+and what was re-checked for it.
+
 ## 0. The originating requirement
 
 The board task, created 2026-10-23 from the operator's decision form on the
@@ -55,14 +62,14 @@ of other machines, or several repositories at once. Those stay deferred (§9).
 | Question | Recommendation | Why, in one line |
 | --- | --- | --- |
 | First slice | **Point at a picture**: in a conversation's full-screen image viewer, tap a spot on any picture, write a note, and the note plus a marked crop land in that conversation's message box. | No new route, process, store or trust surface; works on the phone and over the network; useful the day it ships (§6.1). |
-| How the result reaches the operator | **Pictures first, live later.** Slice 2 adds a "Capture" button that photographs the agent's running app at phone and desktop width, with an element map for precise picking. A live embedded app is slice 4. | The operator works from a phone too (every change owes a 390 px view), and a phone's browser never runs on the machine that runs the dev server. Every live option for a remote browser needs a second web address to keep the app's code away from the operator's Delegatus session (§5.2). |
+| How the result reaches the operator | **Pictures first, live later.** Slice 2 adds a "Capture" button that photographs the agent's running app at phone and desktop width, with an element map for precise picking. A live embedded app is slice 4. | The operator works from a phone too (every change owes a 390 px view), and a phone's browser never runs on the machine that runs the dev server. Every live option for a remote browser needs a web address on a site of its own, a domain that shares no registrable part with Delegatus's address, to keep the app's code away from the operator's Delegatus session (§5.2). |
 | Who owns the dev server | **The agent, as today, until the operator asks for more.** Slice 3 lets Delegatus start it from a command the operator approves once per project, boxed like the setup command. | Today an agent's dev server already ends with the agent's own process tree (§3.2). A product-owned server is needed only to look at a lane after its agent has finished. |
 | Where a comment goes | **Into the conversation's message box as a draft.** The operator sends it with Send. | The operator sees and can edit what page text goes to the agent under their name; delivery reuses the composer's receipts (§5.4). |
 | Who may use it on a team installation | Slice 1: whoever can already send to that conversation. Slices 2 to 4: **the owner only at first** (question Q3). | Slice 1 adds no path; later slices add new routes and stores. |
 
 No ADR now: slice 1 is a client control that one revert removes. Slice 4 adds
-a listener and a second web address, which is hard to reverse, and would take
-an ADR when it is chosen.
+a listener and a preview domain of its own, which is hard to reverse, and
+would take an ADR when it is chosen.
 
 ## 2. What the two competitor ideas actually do
 
@@ -197,9 +204,9 @@ one origin per dev server.
 | Tool network profile | Full-access stages run Codex with `danger-full-access`; restricted stages with `workspace-write` ([structuredSpawn.ts:226-251](../../src/lib/runtime/structuredSpawn.ts#L226-L251)) | Whether a restricted stage may listen on loopback is unverified (U7). |
 | Background work an agent leaves running | Claude records background commands, monitors and wake-ups; Codex has none ([backgroundTasks.ts:10-41](../../src/lib/pipelines/backgroundTasks.ts#L10-L41)) | A dev server started with "run in background" is recorded as harness work. The listed records have no shape for a process started with `&` inside a command, so such a server is not tracked. |
 | When a lane's host stops | "Terminal lanes and replaced attempts no longer own future work" ([hostRetirement.ts:11-17](../../src/lib/pipelines/hostRetirement.ts#L11-L17)) | The host is released once idleness is proved. |
-| What a release cuts | Releasing an idle Claude host ends "harness background work its ended turn still waits on … with its process" ([structuredDeliveryController.ts:2746-2758](../../src/lib/runtime/structuredDeliveryController.ts#L2746-L2758)); every host is released before a Viewer release hands over, except a surviving native Codex listener ([2913-2928](../../src/lib/runtime/structuredDeliveryController.ts#L2913-L2928)) | Each Delegatus update that hands the Viewer to a new release ends the dev servers of Claude agents. |
+| What a release cuts | Releasing an idle Claude host ends "harness background work its ended turn still waits on … with its process" ([structuredDeliveryController.ts:2746-2758](../../src/lib/runtime/structuredDeliveryController.ts#L2746-L2758)). Before a Viewer release hands over, every engine host is released ([2913-2928](../../src/lib/runtime/structuredDeliveryController.ts#L2913-L2928), release at [2959-2961](../../src/lib/runtime/structuredDeliveryController.ts#L2959-L2961)) except a Codex host whose live native listener is handed to the next Viewer ([2944](../../src/lib/runtime/structuredDeliveryController.ts#L2944), condition at [registry.ts:1352-1364](../../src/lib/runtime/registry.ts#L1352-L1364)) and a host whose interrupted turn could not be recorded, which is left running ([2951-2956](../../src/lib/runtime/structuredDeliveryController.ts#L2951-L2956)) | Each Delegatus update that hands the Viewer to a new release ends the dev servers of every agent whose host it releases: every Claude agent, and every Codex agent whose listener is not handed over. |
 | A product-owned process with a provable end | The owned runner starts `systemd-run --user --unit=<unit> … KillMode=control-group … MemoryMax=…`, stops it with `systemctl --user stop <unit>` and then inspects the exact cgroup ([owned-runner.ts:279-302](../../scripts/owned-runner.ts#L279-L302)) | The pattern a product-owned dev server or capture would reuse. |
-| A project command run by the product | The setup recipe is a reviewed, hash-pinned command with a relative cwd ([setupRecipe.ts:9-10](../../src/lib/projects/setupRecipe.ts#L9-L10), [37-50](../../src/lib/projects/setupRecipe.ts#L37-L50)). It runs under `bwrap … --unshare-pid …` with a private home, read-only system trees, and only the checkout and a scratch directory writable ([setupExecution.ts:30-53](../../src/lib/pipelines/setupExecution.ts#L30-L53)) | The confinement a product-run dev command would reuse. It is stronger than an agent's own domain, which binds the whole filesystem. |
+| A project command run by the product | The setup recipe is a reviewed, hash-pinned command with a relative cwd ([setupRecipe.ts:9-10](../../src/lib/projects/setupRecipe.ts#L9-L10), [37-50](../../src/lib/projects/setupRecipe.ts#L37-L50)). It runs under `bwrap … --unshare-pid …` with a private home, read-only system trees, and only the checkout and a scratch directory writable ([setupExecution.ts:30-53](../../src/lib/pipelines/setupExecution.ts#L30-L53)) | The confinement a product-run dev command would reuse. It is stronger than an agent's own domain, which binds the whole filesystem. The runner itself does not fit a long-lived server: it ties the command to the Viewer process through a parent-death supervisor ([setupExecution.ts:17](../../src/lib/pipelines/setupExecution.ts#L17), [93](../../src/lib/pipelines/setupExecution.ts#L93)), stops it after 180 seconds ([101](../../src/lib/pipelines/setupExecution.ts#L101)) or 64 KiB of output ([106](../../src/lib/pipelines/setupExecution.ts#L106)), and the recipe validator refuses `run` as the script argument ([setupRecipe.ts:44-46](../../src/lib/projects/setupRecipe.ts#L44-L46)), so `bun run dev` is not a valid recipe. |
 | CPU placement | Work runs in `delegatus-agents-work.slice` ([cpuPlacement.ts:25](../../src/lib/runtime/cpuPlacement.ts#L25)), with per-scope quotas ([116-118](../../src/lib/runtime/cpuPlacement.ts#L116-L118)) | A capture or a product-owned dev server goes there, below the Viewer. |
 
 ### 3.2 A dev server an agent starts today
@@ -238,8 +245,9 @@ reparented to the "init" process in the PID namespace of its parent"
 read 2026-11-11). Bubblewrap runs with `--die-with-parent`
 ([agent-signal-sandbox.py:400](../../bin/agent-signal-sandbox.py#L400)). So a
 server that stays inside the domain ends with the agent's engine process: at
-host release after its lane settles and at every Delegatus update for a Claude
-agent. Under memory pressure it can end sooner: when an agent's tree passes
+host release after its lane settles, and at every Delegatus update unless the
+agent is a Codex agent whose native listener is handed to the next Viewer
+(§3.1). Under memory pressure it can end sooner: when an agent's tree passes
 its limit, the memory watchdog kills the tree's largest process, and when all
 agents pass the shared budget it kills the largest process of any agent
 ([agentMemory.ts:268-285](../../src/lib/runtime/agentMemory.ts#L268-L285));
@@ -258,7 +266,11 @@ process holds the listening socket (§6.2) before it trusts a URL.
 **Where it listens.** A dev server listens on whatever address its command
 names. One bound to every address is reachable from the network on its own
 port, and that port is outside Delegatus's perimeter: no access key, no
-session and no `workspaceRoute` stand in front of it. Such a listener still
+session and no `workspaceRoute` stand in front of it. One bound to loopback
+only is still open to every OS account on the machine: Delegatus's own
+perimeter says so for its port ("loopback is shared by every OS account",
+[proxy.ts:118-119](../../src/proxy.ts#L118-L119)), and a dev server has no
+perimeter at all. Such a listener still
 accepts loopback connections, so a loopback URL proves nothing about it: a
 listener on `0.0.0.0` shows the local address `00000000` in `/proc/net/tcp`
 and one on `::` shows all zeros in `/proc/net/tcp6`, while `127.0.0.1` shows
@@ -282,6 +294,23 @@ the case is real, but it is not constant.
   stepping ([Lightbox.tsx:76-111](../../src/components/feed/Lightbox.tsx#L76-L111)).
   The conversation feed provides its picture list to the viewer
   ([LogFeed.tsx:1923](../../src/components/LogFeed.tsx#L1923)).
+- **Where the viewer's pictures load from.** The list
+  ([imageGallery.ts:41-58](../../src/components/feed/imageGallery.ts#L41-L58))
+  holds image blocks, which load from `/api/artifact` or a `data:` address
+  ([ImageCard.tsx:54](../../src/components/feed/cards/ImageCard.tsx#L54));
+  pictures the operator attached, from `/api/inbox`
+  ([InboxImage.tsx:13](../../src/components/feed/InboxImage.tsx#L13));
+  and pictures written into Markdown, where a local path loads through
+  `/api/image` and an `http(s)://` or `//` address, or a `data:` address,
+  loads straight from where it points
+  ([markdown.tsx:221-232](../../src/components/feed/markdown.tsx#L221-L232)).
+  So the viewer can show a picture from another site. A browser lets a page
+  read back the pixels of such a picture only with that site's permission:
+  drawing it marks a canvas as not origin-clean, and reading that canvas out
+  then throws a "SecurityError" DOMException
+  ([HTML, canvas](https://html.spec.whatwg.org/multipage/canvas.html), read
+  2026-11-11). The three same-origin routes answer with the bytes or an
+  error and never redirect (read in their route files).
 - **Which files are served.** Project roots serve any previewable type;
   evidence roots and the report picture store serve rasters only
   ([localFile.ts:109-133](../../src/lib/artifact/localFile.ts#L109-L133)).
@@ -431,17 +460,22 @@ computer" ([LaneReviewPhoneSheet.tsx:14-16](../../src/components/laneReview/Lane
   operator's decision of 2026-10-20 they do not contain an agent's shell
   ([workspaces.md §1, D3](workspaces.md#1-decisions-in-one-page),
   [§4](workspaces.md#4-who-can-see-and-do-what), [§12](workspaces.md#12-decision-operator-2026-10-20)).
-- **Open work in this area, read 2026-11-11.** Lane `cd072467` (PR #3861,
-  Workspaces W3) binds the report-frame token to the minting session, so
-  revocation, sign-out and expiry refuse a frame and its assets; it edits
-  `frameScope.ts`, both artifact routes and the team store. Lane `edab49ae`
-  (Workspaces W1, not yet pushed) edits the account-pool routes, `i18n`, the
-  workspace page and two evidence drivers. Lane `078240ea` (the first-run
-  guide, not yet pushed) edits the onboarding components, `i18n`, the
-  prototype-review types and the kanban driver. None of them touches
-  `Lightbox.tsx`, `ImageCard.tsx`, `LogFeed.tsx` or `ConversationComposer.tsx`.
-  This design edits none of their files; §6 says where a later slice meets
-  them.
+- **Open work in this area, re-read 2026-11-11 between 15:20 and 15:30 UTC.** Lane
+  `cd072467` (PR #3861, Workspaces W3) binds the report-frame token to the
+  minting session, so revocation, sign-out and expiry refuse a frame and its
+  assets; it edits `frameScope.ts`, both artifact routes, the team store, and
+  also `claudeStreamBrokerHost.ts`, `structuredSpawn.ts` and the runtime
+  `registry.ts`. Lane `edab49ae` (Workspaces W1, not pushed; branch head
+  read from its worktree) edits the account-pool routes,
+  `conversation-host/handlers.ts`, `i18n`, the workspace page, the
+  conversation-window fixture and driver, and the kanban and phone drivers.
+  Lane `078240ea` (the first-run guide, now PR #3867) edits the onboarding
+  components, several phone components, `i18n`, the prototype-review types
+  and the kanban driver. None of them touches `Lightbox.tsx`,
+  `ImageCard.tsx`, `LogFeed.tsx`, `imageAttachments.tsx` or
+  `ConversationComposer.tsx`. This design edits none of their files; §6 says
+  where a later slice meets them, and §11 lists what each does to the lines
+  cited here.
 
 ### 3.9 The machine
 
@@ -466,26 +500,35 @@ machine's memory and CPU.
    server's own port.
 4. **Anyone holding a copied preview link**: a link pasted into a chat, a
    screenshot of the address bar, a browser history on another computer.
+5. **Another OS account on the same machine.** Delegatus's perimeter treats
+   it as untrusted: "loopback is shared by every OS account"
+   ([proxy.ts:118-119](../../src/proxy.ts#L118-L119)). It can connect to any
+   port that listens on loopback, with no login of any kind.
 
 **The boundary this design does not move.** An agent and its dev server run
 as the installation's own OS user. On a solo installation and below
 workspace level 4, nothing here keeps that code from the machine, and this
 design claims nothing of the kind (workspaces.md D3). In particular the dev
 server itself runs on the host network and can fetch anything that user can,
-including another agent's dev server, and serve it as its own page. Nothing
-below prevents that; the claims are about what Delegatus itself opens,
+including another agent's dev server, and serve it as its own page. And a dev
+server an agent starts on loopback is open today to every other OS account
+on the machine (adversary 5). No slice changes that for a server an agent
+starts; a server Delegatus starts in slice 3 is closed to them only if the
+ADR for slice 3 chooses the network namespace (§6.3). Nothing below
+prevents either; the claims are about what Delegatus itself opens,
 registers, fetches and shows.
 
 **What this design does claim, and the check that holds each claim:**
 
 | Claim | Check that holds it |
 | --- | --- |
-| App code never runs in the operator's browser with access to Delegatus's cookies, storage or same-origin routes. | Slices 1 to 3 send the browser pictures and validated data only: bytes through `/api/artifact` and `/api/image` with `nosniff` and a raster MIME, drawn by `<img>`. Slice 4 needs a separate site (§5.2) plus the `Sec-Fetch-Site` check at [sameOrigin.ts:104-105](../../src/lib/sameOrigin.ts#L104-L105). |
-| Page text cannot pose as the operator's words. | Page-derived strings go into a labelled quote block of the draft, capped in length, and nothing is sent until the operator presses Send in the composer (§5.4). |
+| App code never runs in the operator's browser with access to Delegatus's cookies, storage or same-origin routes, and cannot plant cookies Delegatus receives. | Slices 1 to 3 send the browser pictures and validated data only: bytes through `/api/artifact` and `/api/image` with `nosniff` and a raster MIME, drawn by `<img>`. Slice 4 serves the app only on a preview site whose name shares no registrable domain with any name Delegatus answers on, checked when the proxy starts against the names of [sameOrigin.ts:35-50](../../src/lib/sameOrigin.ts#L35-L50) (§6.4); the browser then refuses a cookie whose `Domain` the preview's name does not end in, and the `Sec-Fetch-Site` check at [sameOrigin.ts:104-105](../../src/lib/sameOrigin.ts#L104-L105) refuses the app's writes. |
+| App code in the live frame cannot replace or open Delegatus's tab (slice 4). | The frame's `sandbox` grants no top navigation and no popups, so the browser refuses `top.location`, `target=_top` links and `window.open` from the app (§6.4, probe in §11). |
+| Page text cannot pose as the operator's words. | Every field that comes from the page (text, tag, id, classes, component names, owner-stack frames, file paths, the URL the page ended on) goes into a labelled quote block of the draft, one field per line, cleaned and capped in length, and nothing is sent until the operator presses Send in the composer (§5.4). |
 | A registered port is the registering agent's own (slice 2). | The kernel's socket table and the agent scope's `cgroup.procs`: every listening socket on the port must have an inode held by a process inside that scope, at registration and again before every capture (§6.2). |
-| Delegatus never registers, captures or shows a dev server whose port is reachable from the network (slices 2 to 4). | The listening socket's own local address in `/proc/net/tcp` and `/proc/net/tcp6`: every listener on the port must be loopback, checked at registration, before every capture and when a preview connection opens; a product-owned unit with any non-loopback listener is stopped (§6.2, §6.3). The URL's host name is not the check. |
+| Delegatus never registers, captures or shows a dev server whose port is reachable from other machines (slices 2 to 4). | The listening socket's own local address in `/proc/net/tcp` and `/proc/net/tcp6`: every listener on the port must be loopback, checked at registration, before every capture and when a preview connection opens; a product-owned unit with any non-loopback listener is stopped (§6.2, §6.3). The URL's host name is not the check. Loopback stays open to other OS accounts on the machine (adversary 5); this claim does not cover them. |
 | The capture browser reaches only the registered port (slice 2). | The browser runs in its own network namespace whose only reachable address is a relay to that port, so subresources, nested frames, redirects, fetch, WebSocket, EventSource, workers and beacons to any other address find no route (§6.2, probe in §11). |
-| A copied preview link opens nothing for anyone else (slice 4). | The preview site admits a request only with a cookie that a one-time login code set in the owner's own browser, checked on every HTTP request and every WebSocket upgrade against a live session (§6.4). |
+| A copied preview link opens nothing through the preview site for anyone else (slice 4). | The preview site admits a request only with a cookie that a one-time login code set in the owner's own browser, checked on every HTTP request and every WebSocket upgrade against a live session (§6.4). This covers the preview site only: the dev server's own loopback port stays open to other OS accounts on the machine (adversary 5) unless slice 3 runs the server in a network namespace (§6.3). |
 | A product-owned process ends (slices 2 and 3). | `KillMode=control-group`: "all remaining processes in the control group of this unit will be killed on unit stop" ([systemd.kill(5)](https://www.freedesktop.org/software/systemd/man/latest/systemd.kill.html), read 2026-11-11); `RuntimeMaxSec=`: a service "active for longer than the specified time … is terminated and put into a failure state" ([systemd.service(5)](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html), read 2026-11-11); then the owned runner's empty-cgroup check ([owned-runner.ts:302](../../scripts/owned-runner.ts#L302)). |
 | A member sees and comments only inside their workspace. | `workspaceRoute` on every route that names a conversation or a project ([conversation-host/route.ts:12](../../src/app/api/conversation-host/route.ts#L12), [workspaceRoute.ts:259](../../src/lib/team/workspaceRoute.ts#L259)). |
 
@@ -505,6 +548,34 @@ is … a potentially trustworthy URL"
 ([HTML, same site](https://html.spec.whatwg.org/multipage/browsers.html#same-site),
 read 2026-11-11).
 
+A third fact decides which second name is separate enough. "Cookies do not
+provide integrity guarantees for sibling domains (and their subdomains)": a
+server on `foo.example.com` "can set a cookie with a Domain attribute of
+"example.com"", and the browser "will include that cookie in HTTP requests to
+bar.example.com" ([RFC 6265 §8.6](https://www.rfc-editor.org/rfc/rfc6265#section-8.6),
+read 2026-11-11). Same site is decided by the registrable domain, the public
+suffix plus one label. The Public Suffix List lists `ts.net` (line 16173 of
+[the list](https://publicsuffix.org/list/public_suffix_list.dat), version
+`2026-11-11_13-52-29_UTC`, read 2026-11-11), so every name in one tailnet,
+`<name>.<tailnet>.ts.net`, has the registrable domain `<tailnet>.ts.net` and
+is one site with every other. Observed in Chromium 156 (probe in §11): a
+response from `web-server.<tailnet>.ts.net` that set
+`llv_auth=…; Domain=<tailnet>.ts.net` made the browser send that cookie to
+`machine.<tailnet>.ts.net`; the same held for two names under one private
+domain, where an image request from a page on one name also carried the
+other name's `SameSite=Lax` and `SameSite=Strict` cookies. Delegatus's cookies carry
+no `__Host-` prefix and are set with `Path=/` and no `Domain`
+([proxy.ts:30-38](../../src/proxy.ts#L30-L38),
+[sessions.ts:111-120](../../src/lib/team/sessions.ts#L111-L120),
+[gate.ts:147](../../src/lib/team/gate.ts#L147)), so nothing on Delegatus's
+side refuses a planted cookie of the same name. A preview on a sibling name
+could therefore shadow the operator's cookies with values of its own, which
+signs them out or signs them in as a session the app's code holds, and its
+every request to Delegatus would be same-site and carry the operator's
+cookies, with only the origin gate between it and a write and nothing
+between it and a GET that changes state. So the preview needs a registrable
+domain of its own (§5.2 R6).
+
 ## 5. The design space
 
 Every option below is compared on the same eight criteria:
@@ -522,7 +593,7 @@ Every option below is compared on the same eight criteria:
 
 | Option | C1 / C2 | C3 / C4 | C5: owner and end | C6 | C7 | C8 |
 | --- | --- | --- | --- | --- | --- | --- |
-| **A. The agent starts it, as today** | Depends on §5.2 | Depends on §5.2 | The agent's scope and PID namespace; ends with the agent's engine, at lane release, at every update for a Claude agent, or sooner when the memory watchdog picks it (§3.2). Escapes through the user manager, Docker or tmux are not covered. | Counted against the agent's cap. Minimal Vite: 112–163 MB (§5.6). | Nothing new. | The preview exists only while the agent runs. |
+| **A. The agent starts it, as today** | Depends on §5.2 | Depends on §5.2 | The agent's scope and PID namespace; ends with the agent's engine, at lane release, at every update unless a Codex listener is handed over, or sooner when the memory watchdog picks it (§3.2). Escapes through the user manager, Docker or tmux are not covered. | Counted against the agent's cap. Minimal Vite: 112–163 MB (§5.6). | Nothing new. | The preview exists only while the agent runs. |
 | **B. The agent asks Delegatus to start it** (`preview_start` on the Viewer MCP) | Same | Same | A product unit: owned-runner pattern with `KillMode=control-group`, `MemoryMax`, `RuntimeMaxSec`, idle stop, the setup recipe's sandbox. Survives the agent; ends on idle, on lane close, on worktree sweep. | One unit per previewed lane. | MCP tool, unit lifecycle, adoption across a Viewer restart. | The preview outlives the agent's turn. |
 | **C. Delegatus starts it from a command the operator approved for the project** | Same | Same | Same unit as B, started on the operator's click. | Same as B. | B plus a project setting modelled on the setup recipe. | The operator can look at any lane, including finished ones. |
 | **D. No dev server in the product**: the agent captures pictures | No app code in the browser | Works everywhere | The agent's capture ends with its command. | Capture cost lands in the agent's scope. | Nothing new. | Pictures only, when the agent takes them. |
@@ -541,7 +612,8 @@ A (and D for pictures) until the operator wants to look at finished lanes.
 | **R3. A link to the dev server's own address** | Full, in the app's own origin | Opened on the Viewer's host name, the browser sends `llv_auth` (the access key) to the dev server (RFC 6265 §8.5) | Only if the dev server listens on a public interface, which leaves its port open to the whole network with no login | None | Tiny | Full, but no picker |
 | **R4. A path proxy under the Viewer's origin, sandboxed** like report frames | Opaque origin: no cookies, no storage | None reach the app | Yes | Fits the frame-scope model ([frameScope.ts](../../src/lib/artifact/frameScope.ts)) | Medium | Apps that use storage or absolute asset paths (`/@vite/client`, `/_next/…`) break |
 | **R5. A proxy on another port of the Viewer's host name** | Full | The browser sends every Delegatus cookie to the proxy (the proxy can drop them), and app code can **write** cookies that Delegatus then receives (RFC 6265 §8.5). Over plain HTTP on a non-loopback host no `Sec-Fetch-Site` is sent and the origin gate ignores ports ([sameOrigin.ts:94-105](../../src/lib/sameOrigin.ts#L94-L105)), so app code can post to Delegatus routes with the operator's `SameSite=Lax` cookies. | Needs that port reachable | Needs a login bound to the operator's browser (§6.4) | Medium plus origin-gate hardening | Full |
-| **R6. A proxy on a separate site** (`<id>.localhost` locally; a second host name remotely) | Full, in its own site | None | Locally yes. Remotely only with a second host name and its certificate. | Needs a login on the preview site bound to the operator's browser and checked against a live session on every request (§6.4). A token in the URL or host name alone is a bearer credential that works in any browser. | Large; a new listener with WebSocket bridging for hot reload, plus the login | Full, plus a picker script |
+| **R5b. A proxy on a sibling name of the same site** (`preview.<Delegatus's name>`, or a Tailscale Service `<service>.<tailnet>.ts.net` beside the machine's `<machine>.<tailnet>.ts.net`) | Full | App code can set cookies with `Domain=<shared parent>` that Delegatus then receives, and every request it makes to Delegatus is same-site and carries the operator's `SameSite=Lax` and `Strict` cookies (RFC 6265 §8.6, Public Suffix List, observed in Chromium 156; §4). | Yes, with its certificate | Needs a login bound to the operator's browser (§6.4), which does not help: the harm is to Delegatus's own cookies | Large, as R6 | Full |
+| **R6. A proxy on a separate site** (`<id>.localhost` locally, with Delegatus opened at `127.0.0.1`; remotely a domain whose registrable domain differs from every name Delegatus answers on) | Full, in its own site | None | Locally yes. Remotely only with a domain of its own, its certificate and a route from the operator's devices to this machine (U4). | Needs a login on the preview site bound to the operator's browser and checked against a live session on every request (§6.4). A token in the URL or host name alone is a bearer credential that works in any browser. | Large; a new listener with WebSocket bridging for hot reload, plus the login | Full, plus a picker script |
 
 Observed for R6: Chromium 156 resolved `preview-a1.localhost` to the loopback
 dev server and reported a secure context (probe in §11). Vite allows
@@ -556,12 +628,32 @@ Kanban does (§2.1). `tailscale serve` provisions a certificate for the
 machine's own name and documents "Serve for a Tailscale Service with a
 distinct virtual IP"
 ([tailscale serve](https://tailscale.com/kb/1242/tailscale-serve), read
-2026-11-11); whether that gives a second, separate host name is unknown (U4).
+2026-11-11). A Service is named inside the same tailnet: "it will be
+available in your Tailnet as: https://web-server.<tailnet-name>.ts.net:443/"
+([Tailscale Services](https://tailscale.com/kb/1552), read 2026-11-11).
+With `ts.net` on the Public Suffix List, that name shares the registrable
+domain `<tailnet-name>.ts.net` with the machine's own name, so a Service
+falls under R5b.
 
-Conclusion: R3 and R5 hand the app the operator's Delegatus cookies and are
-rejected. R4 breaks the apps it is meant to show. R6 is the only sound live
-option, and remotely it needs infrastructure the operator has to choose
-(question Q4). R1 and R2 need none of that.
+Which name the local case puts Delegatus on matters too. Observed in
+Chromium 156 (probe in §11): a response from `pv1.localhost` that set a
+cookie with `Domain=localhost` or `Domain=.localhost` was sent to none of
+`localhost`, `127.0.0.1` and `pv2.localhost` afterwards; an image
+request from a page on `pv1.localhost` to `localhost` or to `127.0.0.1` was
+`Sec-Fetch-Site: cross-site` and carried neither name's `SameSite=Lax` or
+`Strict` cookies. So in Chromium a `<id>.localhost` preview is a separate
+site from Delegatus on `localhost` and on `127.0.0.1`. Whether Firefox and
+Safari treat `localhost` the same way was not observed (U11). An address
+shares no site with any name, and `127.0.0.1` is the CLI's default host
+([bin/cli.mjs:48](../../bin/cli.mjs#L48)), so local previews are opened only
+from a Delegatus page on `127.0.0.1` or `[::1]` until U11 is settled for the
+operator's browsers (§6.4).
+
+Conclusion: R3, R5 and R5b hand the app the operator's Delegatus cookies or
+the power to plant them, and are rejected. R4 breaks the apps it is meant to
+show. R6 is the only sound live option, and remotely it needs a domain and
+infrastructure the operator has to choose (question Q4). R1 and R2 need none
+of that.
 
 ### 5.3 Access control
 
@@ -573,6 +665,8 @@ option, and remotely it needs infrastructure the operator has to choose
   port listens on anything but loopback (§3.2, §6.2). Whether the machine's
   firewall closes other ports is outside this design; an agent can still open
   a public port from its shell (D3), and Delegatus then shows nothing of it.
+  A loopback port is still open to other OS accounts on the machine
+  (adversary 5, §4).
 - **Team installation, slice 1.** No new route. Who sees a picture is who can
   read the conversation; who can send the comment is who passes
   `workspaceRoute` on `/api/conversation-host`. A revoked member's next send is
@@ -586,15 +680,19 @@ option, and remotely it needs infrastructure the operator has to choose
   prototype review store is ([localFile.ts:91](../../src/lib/artifact/localFile.ts#L91)),
   and answers only through its manifest, its conversation and the workspace
   check. It is not shown in search or the task album.
-- **Slice 4.** A login on the preview site, set in the operator's own browser
-  by a one-time code that only an authenticated same-origin request to
+- **Slice 4.** A preview site whose registrable domain is not Delegatus's,
+  checked when the proxy starts and at every open (§6.4), and a login on it,
+  set in the operator's own browser by a one-time code that only an authenticated same-origin request to
   Delegatus can mint, and checked on every request (§6.4). The W3 binding
   (PR #3861, open, read 2026-11-11) is a different guarantee: its
   `verifyFrameScope` checks that the session named inside the signed token is
   still live and its member active; it does not look at the requester's own
   cookie. A copied token therefore keeps working in another browser until
   that session ends. Slice 4 reuses W3's liveness test for the grant and adds
-  the browser binding on top. Owner-only first (Q3).
+  the browser binding on top. Owner-only first (Q3). The login guards the
+  preview site only; the dev server's loopback port behind it is open to
+  other OS accounts on the machine unless slice 3 runs it in a network
+  namespace (§4, §6.3).
 - **Agents.** No agent reads a capture through a path route. An agent reaches
   previews only through the tools named in §6, fenced to its workspace by the
   existing MCP fence.
@@ -639,12 +737,25 @@ option, and remotely it needs infrastructure the operator has to choose
    and the owner stack head only when the build has one. Source mapping stays
    optional and deferred (§9).
 
-**Untrusted text.** Element text, ids and classes come from the page and may
-carry instructions planted for the agent. They go into the draft as a quote
-block labelled "Text from the page (not written by the operator)", each
-string capped at 120 characters, control characters removed. The operator
-sees exactly that before Send. The picture crop is pixels of the agent's own
-screenshot and adds nothing the agent did not already see.
+**Untrusted text.** Everything the page supplies may carry instructions
+planted for the agent, and the map and picker scripts run in the page's own
+world, where the page's code can change any value they read. So every
+page-derived field is page text: element text, tag, id and classes,
+component names (`displayName` is whatever the app's code assigns), owner
+stack frames, file paths with their line and column, and the URL the page
+ended on. They go into the draft only inside a quote block labelled "Text
+from the page (not written by the operator)", one field per line as
+`> <field>: <value>`. Each value has Unicode control and format characters
+removed (categories Cc and Cf, which include bidirectional overrides and
+zero-width characters), line breaks turned into spaces, and is cut to 120
+characters; a longer value keeps its first and last parts around "…", so a
+file path keeps its file name. A block holds at most 12 lines. The field
+names, the coordinates and the operator's note are written by Delegatus and
+the operator and stay outside the block. The operator sees exactly that
+before Send. A slice 1 crop is pixels of the agent's own screenshot and adds
+nothing the agent did not already see. A slice 2 crop is a picture of the
+page that the agent has not seen and can show text written for it, so its
+line reads "The attached crop is a picture of the page".
 
 **Delivery.** The comment goes into the conversation's composer as a draft,
 with the crop as a draft picture, handed to the mounted composer whole or not
@@ -661,7 +772,7 @@ append to one draft, up to the 16-picture limit of one message.
 | 1 | Everything: the viewer is full screen, a tap places the ring, the note field sits above the keyboard, the comment lands in the conversation's message box. |
 | 2 | Capture at 390 px and pick an element; the preview pane is the full-screen sheet ([ArtifactPreviewHost.tsx:398](../../src/components/preview/ArtifactPreviewHost.tsx#L398)). |
 | 3 | Start and stop buttons with the same states as desktop. |
-| 4 | The live app in the full-screen sheet; the app's own phone layout at the phone's width. Remote use needs the second host name (Q4). |
+| 4 | The live app in the full-screen sheet; the app's own phone layout at the phone's width. Remote use needs a preview domain of its own (Q4). |
 
 ### 5.6 Cost on a machine that already runs many agents
 
@@ -709,10 +820,13 @@ What this means, per option:
 "Add to message". The viewer closes; the conversation's message box holds a
 short text naming the picture and the spot, the note, and a crop of the
 picture with the spot ringed. Nothing is sent until Send. It works for every
-picture in that conversation: the agent's screenshots, pictures it viewed,
-pictures the operator attached. When the message box cannot take the comment
-whole, the viewer stays open with the ring and the note and says why;
-nothing is half-added.
+picture in that conversation that Delegatus itself serves or that the
+transcript carries inline: the agent's screenshots, pictures it viewed,
+pictures the operator attached, and Markdown pictures with a local path. A
+Markdown picture linked from another site shows no "Point" control, because
+the browser does not let Delegatus read back its pixels (§3.3). When the
+message box cannot take the comment whole, the viewer stays open with the
+ring and the note and says why; nothing is half-added.
 
 **Where it lives.**
 
@@ -724,11 +838,17 @@ nothing is half-added.
   mode is on; the first Esc leaves the mode, the
   next one closes the viewer as today. A one-line note field and "Add to
   message" appear once a ring is placed. The control appears only when the
-  viewer was opened from a conversation feed and a composer for that
+  viewer was opened from a conversation feed, a composer for that
   conversation is mounted (`TaskAlbum` provides no conversation, so the album
-  shows no control). "Add to message" closes the viewer only on the answer
-  `added`; on `refused` it keeps the ring and the note and shows the reason
-  in the viewer's control row.
+  shows no control), and the shown picture can be cropped: its `src`,
+  resolved against the page, is a `data:` address or has the page's own
+  origin. That admits `/api/artifact`, `/api/inbox` and `/api/image` and
+  leaves out `http(s)://` and `//` addresses on other origins (§3.3). The
+  check runs for each picture the viewer shows; stepping is off in point
+  mode, so the control is simply absent once the operator steps to a linked
+  picture. "Add to message" closes the viewer only on
+  the answer `added`; on `refused` it keeps the ring and the note and shows
+  the reason in the viewer's control row.
 - `src/components/LogFeed.tsx`: provides the conversation identity next to
   the existing gallery provider ([LogFeed.tsx:1923](../../src/components/LogFeed.tsx#L1923)),
   computed as the composer computes its own, `conversationIdentity(file)`
@@ -743,10 +863,17 @@ nothing is half-added.
     picture when it is smaller), scaled so its longest side is at most 800 px,
     with a ring of radius `max(12, side / 20)` output pixels drawn as a 3 px
     accent stroke inside a 2 px white stroke. PNG, or JPEG at quality 0.85
-    when the PNG exceeds 1 MB. The source is the same-origin `/api/artifact`
-    URL or the `data:` URL `ImageCard` already uses
-    ([ImageCard.tsx:54](../../src/components/feed/cards/ImageCard.tsx#L54)),
-    so the canvas is not tainted.
+    when the PNG exceeds 1 MB. The source is the picture's own `src`, which
+    the control's check has limited to `data:` and same-origin addresses
+    (`/api/artifact` or `data:` from
+    [ImageCard.tsx:54](../../src/components/feed/cards/ImageCard.tsx#L54),
+    `/api/inbox` from [InboxImage.tsx:13](../../src/components/feed/InboxImage.tsx#L13),
+    `/api/image` from [markdown.tsx:232](../../src/components/feed/markdown.tsx#L232)),
+    so the canvas stays origin-clean. Drawing and encoding still run inside
+    one `try`: any error there (a `SecurityError`, a picture too large to
+    draw, an encoder that returns nothing) keeps the ring and the note and
+    shows "This picture could not be cropped", and nothing is offered to the
+    composer.
   - Text, in the interface language, deterministic:
 
     ```
@@ -795,8 +922,10 @@ nothing is half-added.
   failed and file slots as they are. `replace` cannot serve: it aborts uploads
   and rebuilds the whole tray.
 - `src/lib/i18n/en.ts` and `uk.ts`: the new strings. Lanes `edab49ae` and
-  `078240ea` also edit these two files; whichever lands second resolves an
-  additive conflict.
+  `078240ea` (PR #3867) and PRs #3855 and #3719 also edit these two files;
+  whichever lands second resolves an additive conflict. The evidence cases go
+  into the conversation-window and phone drivers, which lane `edab49ae` also
+  edits, with the same rule.
 
 **Bounds.** The draft holds at most 16 pictures, the message limit
 ([runtimeImageStore.ts:22](../../src/lib/runtime/runtimeImageStore.ts#L22)).
@@ -833,18 +962,29 @@ server management.
    the agent's transcript records the image blocks.
 7. Esc in point mode leaves the mode and adds nothing; nothing is ever sent
    without Send.
-8. A member whose workspace does not hold the conversation is refused at Send
+8. In a conversation whose Markdown links a picture from another site (a
+   stub on another origin), that picture opens in the viewer with no "Point"
+   control, and stepping to it from a cropable picture hides the control;
+   the page records no unhandled error or rejection. When drawing the crop
+   throws (a test double), the viewer keeps the ring and the note, shows
+   "This picture could not be cropped", and the composer's text, tray and
+   storage are as before.
+9. A member whose workspace does not hold the conversation is refused at Send
    by the existing route, with no new path to it.
-9. Rendered evidence through the conversation-window driver and the phone
-   driver, en and uk, light and dark, at 390, 900 and 1440 px: point mode
-   before a tap; the ring with a note; the composer with the draft; the
-   16-picture refusal; the storage refusal.
+10. Rendered evidence through the conversation-window driver and the phone
+    driver, en and uk, light and dark, at 390, 900 and 1440 px: point mode
+    before a tap; the ring with a note; the composer with the draft; the
+    16-picture refusal; the storage refusal; the crop refusal; a linked
+    picture with no control.
 
 **Tests.** Pure: mapping under zoom and pan, the crop rectangle at the four
 corners and for pictures smaller than the crop, both languages of the text,
-the 16-picture limit. DOM: the control appears only with a conversation and
-a mounted composer, Esc layering, the draft text and picture appear in a
-mounted composer, a remounted composer restores both. The intake against a
+the 16-picture limit, and the cropable-source check for `data:`,
+`/api/artifact`, `/api/inbox`, `/api/image`, `https://`, `//` and a
+same-origin address written with the full origin. DOM: the control appears
+only with a conversation, a mounted composer and a cropable picture, Esc
+layering, a crop error answered in the viewer, the draft text and picture
+appear in a mounted composer, a remounted composer restores both. The intake against a
 session-storage double that throws `QuotaExceededError` on the first write,
 and one that throws only on the second: the answer is `refused` with
 `storage`, both keys hold their earlier values, and the tray and the text
@@ -909,8 +1049,10 @@ note goes to the composer as in slice 1 with an element block.
     a relay inside it that listens on the registered port on `127.0.0.1` and
     `::1`, so the page keeps its own origin;
   - the relay forwards each connection over a Unix socket in the run's
-    scratch directory to a relay outside, which connects to the registered
-    port on the host loopback and nowhere else;
+    scratch directory, which only the installation's user can open (mode
+    0700), so no other OS account can connect through it, to a relay
+    outside, which connects to the registered port on the host loopback and
+    nowhere else;
   - every other connection finds no listener and fails at once; a name
     lookup should fail the same way, since a resolver is just another
     address (an inference; the probe did not test a lookup);
@@ -945,8 +1087,11 @@ note goes to the composer as in slice 1 with an element block.
 - **The map script** records, for each visible element, tag, id, the first
   three classes, a 120-character text excerpt and the box, at most 2,000 rows
   and 256 KB, plus the nearest component names found by walking `fiber.return`
-  (up to three) and the owner stack head when the build has one (§5.4). The
-  Viewer validates the shape and the bounds before storing it.
+  (up to three) and the owner stack head when the build has one (§5.4), and
+  the URL the page ended on. The Viewer validates the shape and the bounds
+  before storing it. The script runs in the page's world, so every string it
+  returns is page text: the draft carries it only inside the labelled block,
+  cleaned and cut as §5.4 says.
 - **The store**: `state/preview-captures/<id>/`, fenced like the prototype
   review store, the newest 20 captures per conversation and none older than
   30 days, at most 512 MB per installation, served through `/api/image` with
@@ -964,7 +1109,12 @@ URL, and accepted for the same server on `127.0.0.1`; a server that rebinds to
 and B on loopback ports, a capture of A whose page reaches for B through an
 iframe, a redirect, an image, a stylesheet, fetch, WebSocket, EventSource, a
 worker and a beacon shows A, B records no connection, and the pane lists B's
-origin as blocked. A capture at 390 and 1440 appears within 10 s on the
+origin as blocked. A fixture whose component `displayName` is a
+300-character instruction to the agent with a line break and a right-to-left
+override, and whose page rewrites an owner-stack file path, puts both in the
+draft only inside the labelled page-text block, each on one line, cut to 120
+characters, with the override and the line break removed. A capture at 390
+and 1440 appears within 10 s on the
 fixture; a tap selects the element the map names, with its component name
 under production React; the draft carries the labelled page-text block; with
 no browser installed, or no network namespace available, the pane names the
@@ -976,8 +1126,17 @@ agent" and keeps the old captures.
 Only if the operator answers Q2 with B or C. A project "preview command"
 modelled on the setup recipe: reviewed, hash-pinned, relative cwd, approved
 once ([setupRecipe.ts:9-50](../../src/lib/projects/setupRecipe.ts#L9-L50)). It
-runs in the setup sandbox ([setupExecution.ts:40-53](../../src/lib/pipelines/setupExecution.ts#L40-L53))
-with `NODE_ENV=development`, `MemoryMax`, a `TasksMax` task limit, an idle
+runs with the setup sandbox's arguments ([setupExecution.ts:40-53](../../src/lib/pipelines/setupExecution.ts#L40-L53))
+under a runner of its own, because `runSetupRecipe` cannot host a server: its
+parent-death supervisor ends the command with the Viewer process, it stops
+the command after 180 seconds or 64 KiB of output, and its validator refuses
+`bun run dev` (§3.1). The preview runner starts the same `bwrap` arguments,
+without `--die-with-parent`, as an owned-runner unit that is not bound to the
+Viewer's unit, so a Viewer restart can adopt it; writes the server's output
+to a log file it rotates at a fixed size; and validates the command with a
+validator of its own that admits a package script (`bun run <script>`) as
+well as the setup recipe's direct script. It runs with
+`NODE_ENV=development`, `MemoryMax`, a `TasksMax` task limit, an idle
 stop 15 minutes after the last capture or view, `RuntimeMaxSec` of two hours,
 and a stop on lane close and on worktree sweep. Stop is by the recorded unit,
 followed by the empty-cgroup check. `preview_start` on the Viewer MCP lets
@@ -1005,19 +1164,27 @@ closed by Delegatus's own enforcement:
 - a Viewer restart adopts the unit by its recorded name and runs the same
   check before showing anything.
 
-Two stronger fences were considered and not chosen. A network namespace for
-the server itself, as for the capture browser, closes ingress by
-construction but also cuts the app off from every remote API and package
-registry. systemd's `IPAddressDeny=` filters by peer address in both
+Two stronger fences were considered and not chosen for now. A network
+namespace for the server itself, with a relay like the capture browser's,
+closes ingress by construction: the server's port is then on no host address
+at all, and Delegatus reaches it only through a Unix socket in a 0700
+directory, so neither the network nor another OS account on the machine
+(adversary 5) can connect to it. It also cuts the app off from every remote
+API and package registry; giving it outbound access back would take a
+user-mode network stack, which nothing here tested. The loopback check
+above leaves the server open to other OS accounts, as an agent's own dev
+server is today. systemd's `IPAddressDeny=` filters by peer address in both
 directions, so it cannot allow outbound traffic while refusing inbound from
 the same addresses, and its manual says the settings "will have no effect"
 where control-group eBPF is unavailable
 ([systemd.resource-control(5)](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html),
 read 2026-11-11); whether it acts in a user manager was not observed. The
 check above leaves a window of up to 10 seconds in which a misbehaving app
-can serve the network before it is stopped; the ADR for slice 3 decides
-whether that window is acceptable or the namespace's loss of outbound access
-is.
+can serve the network before it is stopped. The ADR for slice 3 decides
+between the two: the loopback check, with that window and open to other OS
+accounts, or the namespace, with no outbound access. On a machine where
+other people hold OS accounts the namespace is the one that keeps the
+preview to the owner.
 
 **Acceptance (outline).** A command that binds `0.0.0.0` or `::` is stopped
 within 10 seconds of readiness with the address named, and nothing is
@@ -1036,9 +1203,66 @@ whose messages the pane accepts only from its own frame's window and origin,
 with the payload shape and size checked. Before it forwards a connection it
 runs the loopback-listener check of §6.2 on the registered port, cached for
 at most 2 seconds. Owner only first. It needs an ADR, measured proxy and
-connection costs, and the origin-gate case of §5.2 R5 kept closed by design:
-the preview lives on a separate site and on no other port of the Viewer's
-name.
+connection costs, and the cases of §5.2 R5 and R5b kept closed by design: the
+preview lives on a site of its own, on no other port and no sibling name of
+Delegatus's.
+
+**Which site, and the check that holds it.** The preview site is a name
+whose registrable domain differs from that of every name Delegatus answers
+on: the loopback names, its `HOSTNAME`, its tailnet name, its public host and
+its configured public origin
+([sameOrigin.ts:35-50](../../src/lib/sameOrigin.ts#L35-L50)). So it is
+neither a sub-name of Delegatus's address nor another name in the same
+tailnet (§4). Two server checks hold that:
+
+- the proxy refuses to start, and names the clash, when a preview's host
+  name, `<preview id>.<preview site>`, and any of those names end in the
+  same two DNS labels or are the same IP address; the open route below runs the same check against Delegatus's
+  current names and mints no login code while it fails. Two names with the
+  same registrable domain always end in the same two labels, because a
+  registrable domain has at least two, so the check never passes a shared
+  site and needs no copy of the Public Suffix List. It is stricter than the
+  list: it also refuses, for example, a name in another tailnet under
+  `ts.net`, which Q4 does not offer anyway;
+- locally every preview name is `<id>.localhost`, directly under
+  `localhost`, and the open route mints a local login code only to a
+  Delegatus page on `127.0.0.1` or `[::1]`. An address shares no site with
+  any name, so this holds in every browser; a page on `localhost` is
+  refused with the reason until U11 shows that the operator's browsers treat
+  `localhost` and `<id>.localhost` as separate sites, as Chromium 156 does
+  (§5.2).
+
+**The frame.** The pane's frame carries
+`sandbox="allow-scripts allow-same-origin allow-forms allow-modals"`,
+`referrerpolicy="no-referrer"` as the report frame does
+([DocumentPanes.tsx:163-164](../../src/components/preview/DocumentPanes.tsx#L163-L164)),
+and no `allow` attribute, so it is delegated no browser feature.
+`allow-same-origin` lets the app keep its own cookies and storage on its own
+site; the HTML standard's warning about that keyword is for a frame "when the
+embedded page has the same origin as the page containing the iframe", which a
+separate site is not
+([HTML, iframe sandbox](https://html.spec.whatwg.org/multipage/iframe-embed-object.html#attr-iframe-sandbox),
+read 2026-11-11). The keywords it leaves out are the decision:
+
+- no `allow-top-navigation`, `allow-top-navigation-by-user-activation` or
+  `allow-top-navigation-to-custom-protocols`: the operator's click inside the
+  app is the main interaction here, and with any of them that click would let
+  the app replace Delegatus's tab with a page that imitates Delegatus's
+  sign-in;
+- no `allow-popups` and so no `allow-popups-to-escape-sandbox`: an app that
+  opens a window (a sign-in popup, a `target=_blank` link) does nothing in
+  the frame, and the operator uses "Open in its own tab" for that flow;
+- no `allow-downloads`, `allow-orientation-lock`, `allow-pointer-lock` or
+  `allow-presentation`.
+
+Observed in Chromium 156 (probe in §11): in a frame on `pv1.localhost` inside
+a page on `127.0.0.1` with exactly this sandbox, a click that ran
+`top.location.href = …` threw `SecurityError`, `window.open(…)` returned
+`null` and opened no page, and a `target=_top` link left the top page where
+it was. With `allow-top-navigation-by-user-activation allow-popups` added,
+the same clicks replaced the top page and opened a window. "Open in its own
+tab" opens the preview with `rel="noopener noreferrer"`, so the app's tab
+holds no reference to Delegatus's.
 
 **Who may open a preview: a login bound to the browser.** The host name
 names the preview; it is no credential, because the app's own code reads it
@@ -1061,7 +1285,12 @@ credential is a cookie that only the owner's browser can obtain:
    `__Host-dlg-preview=<value>` with `HttpOnly`, `Secure` and `Path=/`; the
    `__Host-` prefix keeps the cookie host-only, so a sibling preview cannot
    set or shadow it. In a frame the cookie also carries `SameSite=None` and
-   `Partitioned`; opened in its own tab it carries `SameSite=Lax`.
+   `Partitioned`; opened in its own tab it carries `SameSite=Lax`. Observed
+   in Chromium 156 on plain `http://pv1.localhost` (probe in §11): such a
+   cookie was stored and sent to `pv1.localhost` alone, and
+   `pv2.localhost` did not receive it; set inside a frame on a `127.0.0.1`
+   page, the `Partitioned` one was stored under that page's partition and
+   sent with the frame's next load.
 3. **Every request.** Each HTTP request and each WebSocket upgrade must carry
    that cookie. The proxy looks up the grant by the value's hash and admits
    only while the grant has not expired, the preview is still registered and
@@ -1079,18 +1308,24 @@ credential is a cookie that only the owner's browser can obtain:
    host-only on Delegatus's name and never reach the preview site
    ([proxy.ts:25-39](../../src/proxy.ts#L25-L39),
    [sessions.ts:111-120](../../src/lib/team/sessions.ts#L111-L120),
-   [gate.ts:147](../../src/lib/team/gate.ts#L147)). The proxy's only path of its own on the preview
+   [gate.ts:147](../../src/lib/team/gate.ts#L147)). The other direction is
+   the one the separate site closes: those cookies have no `__Host-` prefix,
+   so a cookie the app set with a shared parent `Domain` would reach
+   Delegatus beside them (§4); on a separate registrable domain the browser
+   refuses such a `Domain`. The proxy's only path of its own on the preview
    origin is `/__delegatus/login`: the app's code shares that origin, so
    stop, capture and the picker's delivery all go through the Delegatus
    origin and never through the preview's.
 
-What is not known yet: whether every browser the operator uses keeps a
-`Partitioned` cookie set inside a cross-site frame, and whether `__Host-`
-cookies work on `http://<id>.localhost` for the local case (U11). Where the
-framed cookie is refused, the frame shows the 401, and the pane offers to
-open the preview in its own tab, where the same login sets a first-party
-cookie. In its own tab the picker has no Delegatus window to post to, so
-pointing there falls back to slice 1 and 2.
+What is not known yet: whether Firefox, Safari and the phone browsers keep
+a `Partitioned` cookie set inside a cross-site frame, accept a `__Host-`
+cookie on `http://<id>.localhost`, and refuse `Domain=localhost` from
+`<id>.localhost` as Chromium 156 does, and how any browser behaves on a real
+preview domain over HTTPS (U11). Where the framed cookie is refused, the
+frame shows the 401, and the pane offers to open the preview in its own
+tab, where the same login sets a first-party cookie. In its own tab the
+picker has no Delegatus window to post to, so pointing there falls back to
+slice 1 and 2.
 
 **Acceptance (outline).** The owner's browser opens the preview, loads its
 assets and keeps hot reload. The same preview URL, and the same login URL
@@ -1101,6 +1336,18 @@ WebSocket upgrade with a foreign `Origin` is refused even with the cookie.
 Signing the member out, revoking them or moving the conversation out of
 their workspace refuses new requests within 5 seconds and closes an open
 WebSocket within 30. The upstream stub never sees a `__Host-dlg-` cookie.
+The proxy refuses to start, and the open route mints no code, for a preview
+site under a name Delegatus answers on (`preview.<that name>`) and for
+`<service>.<tailnet>.ts.net` while Delegatus answers on
+`<machine>.<tailnet>.ts.net`; the proxy starts for an unrelated domain. A local
+login code is refused to a Delegatus page on `localhost`. With the stub
+preview and Delegatus on two names the browser maps to loopback, a response
+from the preview that sets `llv_auth=…` with any parent `Domain` of the
+preview's name, or with a narrower `Path`, is never sent with a request to
+Delegatus. An app that runs `top.location = …`, calls `window.open(…)` or
+follows a `target=_top` link after the operator's click leaves Delegatus's
+tab on its page and opens no window, and the frame element carries exactly
+the sandbox above, no `allow` attribute and `referrerpolicy="no-referrer"`.
 
 ### 6.5 The requirement's example through each slice
 
@@ -1130,7 +1377,7 @@ These are the decisions only the operator can make. Each stands on its own.
   agent runs. The photographing browser can reach only that app, so a page
   that loads fonts or data from the internet shows up without them.
 - c) The live app inside Delegatus that you can click through. Large; needs a
-  second web address for previews (Q4); desktop first.
+  separate domain name for previews (Q4); desktop first.
 
 **Q2. Who should start the app's dev server when you want to look?**
 
@@ -1153,13 +1400,21 @@ These are the decisions only the operator can make. Each stands on its own.
 use?**
 
 - **a) Decide later, when the live app is next (recommended).**
-- b) A second domain name just for previews, with its own certificate. Safe:
-  the preview cannot see or use your Delegatus login. You open each preview
-  from Delegatus, which signs that browser in to it; a copied preview link
-  opens nothing for anyone else.
-- c) The same address on another port. Cheaper to set up, but your Delegatus
-  login would be sent to the preview and the app's code could change it, so it
-  is not offered as safe.
+- b) A domain name of its own just for previews, with its own certificate.
+  It must not be part of the address you open Delegatus at (so not
+  `preview.<that address>`), and not another name in the same Tailscale
+  network: a browser treats every name that ends in the same
+  `<your network>.ts.net` as one site. With such a domain the app in the
+  preview cannot use, change or replace your Delegatus login. You open each
+  preview from Delegatus, which signs that browser in to it; a copied
+  preview link opens nothing for anyone else. People with their own login on
+  the same computer can still reach the app's dev server there directly, as
+  they can today.
+- c) An address that shares a name with Delegatus's: the same address on
+  another port, a sub-address such as `preview.<your Delegatus address>`, or
+  another name in the same Tailscale network (a Tailscale Service). Cheaper
+  to set up, but the app's code could act with your Delegatus login or
+  replace it, so it is not offered as safe.
 
 ## 8. Unknowns, and the observation that settles each
 
@@ -1168,14 +1423,14 @@ use?**
 | U1 | Whether the operator ever opens Delegatus in a browser on this machine. Decides whether `*.localhost` previews (R6 local) are worth anything. | Ask, or count loopback against remote client addresses in a week of Viewer access records. |
 | U2 | Whether an installation from the npm package has a usable Chromium. | Install the published package into a scratch home and look for `CHROME_BIN`, a system Chromium and a Playwright cache; repeat on macOS. |
 | U3 | Whether Safari resolves `*.localhost` to loopback. Matters only for a local Mac browser. | Open `http://x.localhost:<port>/` in Safari against a loopback server. |
-| U4 | Whether a Tailscale Service gives a second host name usable as a separate preview site. | Configure one on a test tailnet and read the name and certificate it serves. |
+| U4 | How an installation reached remotely gets a preview domain of its own that the operator's phone and computers can reach: for example a domain the operator owns, pointed at the machine's tailnet address with a certificate from a DNS challenge, or a tunnel service. A Tailscale Service is not one: its name is in the same tailnet, and `ts.net` is on the Public Suffix List (§5.2). | On a test machine, point a test domain at its tailnet address, obtain a certificate, serve a stub on it and open it from a phone on the tailnet; record each step that needed the operator. |
 | U5 | Memory of real dev servers: `next dev` of a large application, Vite on a large single-page app. | Run the §11 probe against a scratch export of each target project. |
 | U6 | How often agents start dev servers, and for how long. | A week of 10-minute samples of dev-server processes by scope, plus a transcript count of dev-server commands. |
 | U7 | Whether a restricted stage (`workspace-write`) may listen on loopback. | In a restricted stage, run a one-line server on port 0 and record the result. |
 | U8 | Element-map size on real pages. Measured only on a 40-card fixture: 29–32 rows. | Run the map script on three real applications at both widths. |
 | U9 | Whether an owner-stack line maps to a source line through the module's source map under Vite and Next. | Fetch the module's map from the dev server and resolve the observed frame. |
 | U10 | Session-storage room for several draft crops on a phone browser. Slice 1 refuses an add that does not fit, so this decides how often the refusal shows, never whether a comment is lost. | Add sixteen 800-pixel crops on iOS Safari and Android Chrome and count the refusals. |
-| U11 | Whether the browsers the operator uses keep a `Partitioned; SameSite=None; Secure; HttpOnly` cookie set by the preview site inside a Delegatus frame (Chromium, Firefox, Safari on macOS and iOS), and whether a `__Host-` cookie works on `http://<id>.localhost`. Decides whether slice 4 is framed or opens its own tab. | In each browser, frame a stub preview site from a stub Delegatus page, run the login of §6.4 and read whether the next request carries the cookie. |
+| U11 | Whether Firefox, Safari (macOS and iOS) and the phone browsers (1) keep a `Partitioned; SameSite=None; Secure; HttpOnly` cookie set by the preview site inside a Delegatus frame, (2) accept a `__Host-` cookie on `http://<id>.localhost`, and (3) refuse `Domain=localhost` from `<id>.localhost` and treat `localhost` and `<id>.localhost` as separate sites; and whether (1) holds on a real preview domain over HTTPS. Chromium 156 did all three on loopback (probe in §11). Decides whether slice 4 is framed or opens its own tab, and whether a local preview may be opened from Delegatus on `localhost`. | In each browser, run the revision-2 probe's steps against its stub (`live-preview-design-probe/revise-2/`): set each cookie from `pv1.localhost`, framed and top-level, and read which later requests carry it; repeat (1) on a test preview domain. |
 | U12 | Which tool makes the capture browser's network namespace on each supported Linux: `unshare` worked here and bubblewrap's `--unshare-net` did not (§6.2). | On each target distribution, run the §11 network probe with both tools and record which one brings loopback up. |
 | U13 | Whether Chromium's own sandbox starts inside the capture namespace. The probes ran with `--no-sandbox`; without the sandbox a renderer exploit has the OS user's files, which the app's own server code already has (D3). | Start the headless shell inside the namespace without `--no-sandbox` and read whether it starts and which sandbox layers it reports. |
 
@@ -1195,8 +1450,12 @@ use?**
   API) through a relay that refuses loopback, private and link-local
   addresses (§6.2). Slice 2 lists what it blocked instead.
 - A network namespace for product-owned dev servers, which closes their
-  ingress by construction and cuts their outbound access (§6.3); the ADR for
-  slice 3 decides.
+  ingress from the network and from other OS accounts by construction and
+  cuts their outbound access (§6.3); the ADR for slice 3 decides.
+- Popups and top navigation from the live frame (sign-in windows,
+  `target=_blank` links); "Open in its own tab" serves those flows (§6.4).
+- Pointing at pictures linked from other sites; slice 1 shows no control on
+  them (§6.1).
 - Changing what agents inherit as `NODE_ENV` (§10); it is a separate change
   with effects beyond previews.
 - A phone frame drawn on desktop. Slice 2 captures at 390 px.
@@ -1241,10 +1500,27 @@ from the forge and the board on 2026-11-11; the two lanes without pushed
 commits were read from their worktrees with `git --no-optional-locks`.
 For revision 1, `main` was at `1037130eed9d` (#3858 added, which changes
 `scripts/local-gate.ts`, cited nowhere here); the forge's comparison from
-`662a6012b39f` showed no other cited file changed. Of the open pull requests
-read on 2026-11-11, only #3861 touches a file this design cites
-(`frameScope.ts`); none touches the composer, the picture tray, the image
-viewer or the feed.
+`662a6012b39f` showed no other cited file changed. Revision 1 also said that
+only #3861 among the open pull requests touched a cited file; that was
+wrong, and revision 2 replaces it with the reading below.
+
+For revision 2, `main` was at `266b49d0a1` (#3873, committed 2026-11-11
+15:10 UTC); `git diff --name-only 662a6012b39f origin/main` over every cited
+path still lists only `scripts/owned-runner.ts`. Code references stay at
+`662a6012b39f`. The 41 open pull requests were read from the forge between
+15:20 and 15:30 UTC, file by file. Those that touch a cited file are #3861 (W3:
+`frameScope.ts`, both artifact routes, `claudeStreamBrokerHost.ts`,
+`structuredSpawn.ts`, the runtime `registry.ts`), #2926 and #3668 (drafts),
+#3729, #3749, #3802, #3855 (`conversation-host/handlers.ts`) and #3863. For
+each of them the hunk headers of its diff were compared with the line ranges
+cited here: none overlaps a cited range. Where one lands first, cited lines
+below its hunks shift: #3861 moves `claudeStreamBrokerHost.ts:480` by +2,
+`structuredSpawn.ts:226-251` by +1 and `registry.ts:1352-1364` by +22, and
+the unpushed W1 branch (head `aa8d62f833`) moves
+`conversation-host/handlers.ts:340-357` by +7; the cited content is
+unchanged. #3719, #3855, #3867 and lane `edab49ae` edit the i18n files
+slice 1 also edits. None of them touches the composer, the picture tray, the
+image viewer or the feed.
 
 **Vendors.** Cloned with `git clone --depth 1 --filter=blob:none` into the
 stage scratch directory; revisions and licences in §2. Documentation pages
@@ -1292,6 +1568,48 @@ the stage's evidence directory under `live-preview-design-probe/`.
 - The Vibe Kanban picker re-read at `2d03b13` for its name fallback (§2.1),
   PR #3861's diff re-read for what `verifyFrameScope` checks (§5.3), and the
   systemd resource-control manual for `IPAddressDeny=` (§6.3).
+
+**Revision-2 probes**, 2026-11-11 between 15:18 and 15:21 UTC, kept under
+`live-preview-design-probe/revise-2/` with the same isolation: one Python stub
+(`stub.py`) on `127.0.0.1` port 0, stopped by its recorded PID after each run;
+Chromium 156.0.8078.4 headless shell through `playwright-core` 1.62.1, with
+`--host-resolver-rules` mapping a private test domain and
+`*.tailnet-x.ts.net` to loopback (`.localhost` names resolve to loopback on
+their own).
+
+- `run.sh` and `drive.mjs` (`result.json`): cookies set from one name and
+  read on others. `Domain=localhost` and `Domain=.localhost` from
+  `pv1.localhost` reached none of `localhost`, `127.0.0.1` and
+  `pv2.localhost`. `__Host-` cookies on plain `http://pv1.localhost`, plain
+  and `Partitioned`, were sent back to `pv1.localhost` only.
+  `Domain=localtest.example` from `preview.localtest.example` reached
+  `delegatus.localtest.example`; `Domain=tailnet-x.ts.net` from
+  `web-server.tailnet-x.ts.net` reached `machine.tailnet-x.ts.net`;
+  `Domain=ts.net` was refused (§4). The same run framed `pv1.localhost` in a
+  page on `127.0.0.1` with the slice-4 sandbox and clicked three buttons in
+  the frame: `top.location` threw `SecurityError`, `window.open` returned
+  `null` with no new page, and a `target=_top` link did nothing; with
+  `allow-top-navigation-by-user-activation allow-popups` added, the top page
+  was replaced and a window opened (§6.4).
+- `run2.sh` and `drive2.mjs` (`result2.json`): an image request from a page
+  on `preview.localtest.example` to `delegatus.localtest.example` carried
+  that name's `SameSite=Lax` and `Strict` cookies with no `Sec-Fetch-Site`
+  (plain HTTP on a name that is not loopback); the same request from
+  `pv1.localhost` to `localhost` and to `127.0.0.1` was `cross-site` and
+  carried neither (§5.2). A `Partitioned` cookie set inside the frame and
+  then read by the driver navigating the frame came back empty, while an
+  unpartitioned `SameSite=None` one came back.
+- `run3.sh` and `drive3.mjs` (`result3.json`) re-ran the framed case the way
+  the pane would load it, by the frame's own `src`, under `127.0.0.1` and
+  `localhost` pages: the `Partitioned` cookies were stored with the top
+  page's partition key and sent with the frame's next load. The empty answer
+  in `run2.sh` therefore came from how the driver navigated the frame; why
+  that navigation left the partition was not established.
+
+Sources re-read for revision 2, each on 2026-11-11: RFC 6265 §8.6; the
+Public Suffix List (`ts.net` at line 16173, version
+`2026-11-11_13-52-29_UTC`); Tailscale's Services page (kb/1552); the HTML
+standard's iframe `sandbox` attribute and canvas origin-clean rules.
 
 No dev server ran against the operator's live state, no browser was left
 open, and no product file other than this document was written.
@@ -1346,3 +1664,83 @@ code or the source behind it before the text changed.
    Changed: §3.2, §5.4, §2.1, §2.3, §6.2's map script, §6.5 and §10 now
    keep the three facts apart, and §11 says why the first probe read the
    wrong fiber.
+
+## 13. What changed in revision 2
+
+The second review round found five defects and left four notes. Each was
+re-checked against the code or the source behind it before the text
+changed.
+
+1. **A separate host name was taken for a separate site.** Revision 1 asked
+   for "a second host name" for the live preview. Re-checked: RFC 6265 §8.6
+   on sibling domains; the Public Suffix List, which lists `ts.net`;
+   Tailscale's Services page, which names a Service inside the same tailnet;
+   Delegatus's cookies, which have no `__Host-` prefix
+   (`proxy.ts:30-38`, `sessions.ts:111-120`, `gate.ts:147`); and a Chromium
+   156 probe in which a cookie set with the tailnet's `Domain` from a
+   Service-style name reached the machine-style name, and a sibling page sent
+   the other name's `Lax` and `Strict` cookies. The same probe showed that
+   `<id>.localhost` cannot set `Domain=localhost` and is cross-site to
+   `localhost` and `127.0.0.1` in Chromium. Changed: §4 adds the sibling-domain
+   fact and narrows the first claim; §5.2 adds option R5b (a sibling name of
+   the same site, including a Tailscale Service), states R6 as a different
+   registrable domain, and says which name local previews need; §6.4 adds
+   the two server checks (the proxy's start check and the open route's check
+   on two DNS labels, and local codes only for a Delegatus page on an
+   address) with acceptance; Q4 b and c say in plain words which addresses
+   count; U4 now asks how to get a separate domain; U11 records what
+   Chromium showed and what remains for other browsers; §1 and §5.5 follow.
+2. **The live frame had no sandbox.** Re-checked: the HTML standard's
+   `sandbox` keywords, the report frame's own `FRAME_SANDBOX` and
+   `referrerPolicy` (`DocumentPanes.tsx:27`, `163-164`), and a Chromium 156
+   probe of top navigation, `window.open` and `target=_top` from a framed
+   page with and without the navigation and popup keywords. Changed: §6.4
+   names the exact sandbox, the keywords left out and why (popups
+   included), no `allow` attribute, `referrerpolicy="no-referrer"`, and
+   `noopener` for the own-tab fallback, with acceptance; §4 adds the claim;
+   §9 defers popups and top navigation.
+3. **Slice 1 promised a crop of every picture.** Re-checked: the gallery
+   sources (`imageGallery.ts:41-58`, `ImageCard.tsx:54`, `InboxImage.tsx:13`,
+   `markdown.tsx:221-232`), which include Markdown pictures loaded straight
+   from other sites; the HTML canvas rules, under which such a picture makes
+   reading the canvas throw `SecurityError`; and the three same-origin routes,
+   which never redirect. Changed: §3.3 lists where the viewer's pictures load
+   from; §6.1 shows "Point" only for `data:` and same-origin sources,
+   checked per picture, catches any crop error in the viewer, and adds
+   acceptance 8, tests and evidence for both; §9 defers pointing at linked
+   pictures.
+4. **Only element text, ids and classes were marked as page text.**
+   Re-checked: component names, owner-stack frames and file paths are read
+   by a script that runs in the page's world, where the page's code can
+   change them. Changed: §5.4 marks every page-derived field, says how each
+   value is cleaned and cut and how many lines a block holds, and says that
+   a slice 2 crop is a picture of the page; §4, §6.2's map script and its
+   acceptance (a planted `displayName` and file path) follow.
+5. **Other OS accounts on the machine were missing from the threat model.**
+   Re-checked: Delegatus's own perimeter treats loopback as shared by every
+   OS account (`proxy.ts:118-119`). Changed: §4 adds adversary 5 and narrows
+   the loopback and copied-link claims to what they cover; §3.2 and §5.3 say
+   a loopback port is open to other accounts; §6.2 makes the capture relay's
+   socket directory owner-only; §6.3 names the network namespace with a
+   relay as the option that closes a product-owned server to other accounts
+   and leaves the choice to the ADR for slice 3; Q4 b says it in plain words.
+
+Notes taken up:
+
+- **What an update ends.** Re-checked `structuredDeliveryController.ts:2913-2961`
+  and `registry.ts:1352-1364`: every host is released except a Codex host
+  whose native listener is handed over and a host whose turn could not be
+  recorded. §3.1, §3.2 and §5.1 no longer say "Claude agents" only.
+- **What slice 3 can reuse.** Re-checked `setupExecution.ts:17`, `93`, `101`,
+  `106` and `setupRecipe.ts:44-46`: the setup runner ends with the Viewer,
+  stops after 180 seconds or 64 KiB, and its validator refuses `run`. §3.1
+  says so, and §6.3 specifies a runner and validator of its own around the
+  same sandbox arguments.
+- **Open work.** Re-read: PR #3861 also edits `claudeStreamBrokerHost.ts`,
+  `structuredSpawn.ts` and the runtime `registry.ts`; lane `edab49ae` now
+  edits `conversation-host/handlers.ts` and the conversation-window and phone
+  drivers; lane `078240ea` is PR #3867; seven other open pull requests touch
+  cited files, none of them a cited range. §3.8, §6.1 and §11 say so, with
+  the line shifts.
+- **Main moved** to `266b49d0a1`; of the cited files only
+  `scripts/owned-runner.ts` changed, as before (§11).
