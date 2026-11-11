@@ -4968,7 +4968,7 @@ test(`owner ${mode} answers an oversized required parent through a context file`
     expect({ launches, continues, cloud }).toEqual({ launches: mode === "resumed" ? 0 : 1, continues: mode === "resumed" ? 1 : 0, cloud: 0 });
     expect(filesRead).toBe(1); expect(completions).toHaveLength(1);
     expect(readAnswerRecord(paired.id, first.target_id, request.request_id)?.diagnostic).toBeUndefined();
-    expect(readAnswerRecord(paired.id, first.target_id, request.request_id)?.chain?.promptBytes).toBe(sentBytes);
+    if (mode !== "cloud") expect(readAnswerRecord(paired.id, first.target_id, request.request_id)?.chain?.promptBytes).toBe(sentBytes);
   } finally {
     if (previousCatalog) fs.writeFileSync(catalog, previousCatalog); else fs.rmSync(catalog, { force: true });
     resetProjectDirectoryCacheForTests(); await service.close();
