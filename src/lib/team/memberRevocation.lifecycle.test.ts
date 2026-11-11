@@ -901,7 +901,7 @@ test.each(["claude", "codex"] as const)("every claimant preserves unfinished ado
   const before = f.registry.hostEntry(f.key)!;
   const owner = captureProcessIdentity(process.pid);
   expect(f.registry.claimStructuredHost(f.key, owner, { allowUnhosted: true })).toBeNull();
-  expect(() => f.registry.claim(f.key, "another-writer")).toThrow("structured adoption cleanup is pending");
+  expect(() => f.registry.claim(f.key, before.claimOwner!)).toThrow("structured adoption cleanup is pending");
   expect(f.registry.releaseStructuredSpawnAdmissionOwner(f.saved.launchId, f.saved.admissionOwner!).released).toBe(false);
   expect(f.registry.hostEntry(f.key)).toEqual(before);
   expect(f.registry.spawnReceipt(f.saved.launchId)).toEqual(f.saved);
