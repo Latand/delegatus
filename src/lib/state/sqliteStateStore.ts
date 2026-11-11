@@ -4,6 +4,7 @@ import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/st
 import { IncompatibleSchemaError, schemaCompileFailure } from "./schemaCompatibility";
 import { blockingWaitRole, type StateLockHolder } from "@/lib/blockingWaits";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
+import { applySqliteMemoryMap } from "@/lib/sqliteMemoryMap";
 import { performanceSpans } from "@/lib/performanceSpans";
 import crypto from "node:crypto";
 import { viewerLoopMonitor, withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -389,6 +390,7 @@ function connectRawDatabase(filename: string): Database {
       db.exec("PRAGMA synchronous = FULL");
       db.exec("PRAGMA journal_size_limit = 67108864");
       db.exec("PRAGMA foreign_keys = ON");
+      applySqliteMemoryMap(db);
       return db;
     } catch (error) { db.close(); throw error; }
   });
@@ -404,6 +406,7 @@ function connectRawReadonlyDatabase(filename: string): Database {
   const db = observeSqlite(new Database(filename, { readonly: true, strict: true }), "state");
   db.exec("PRAGMA busy_timeout = 0");
   db.exec("PRAGMA foreign_keys = ON");
+  applySqliteMemoryMap(db);
   return db;
 }
 

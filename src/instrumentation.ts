@@ -38,6 +38,11 @@ export async function register(): Promise<void> {
        environment, and this covers `next start` and the container. */
     await import("../bin/envAlias.mjs");
     if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "viewer";
+    /* The serving Viewer reads its state databases through a memory map
+       (`src/lib/sqliteMemoryMap.ts`). The flag is set here, on the global
+       object and before the runtime module opens a database, because this
+       shim must reach no other module; worker processes never run it. */
+    (globalThis as typeof globalThis & { __llvSqliteMemoryMap?: boolean }).__llvSqliteMemoryMap = true;
     await registerNodeViewerRuntime(() => import("@/lib/viewerInstrumentation"));
   }
 }
