@@ -11,8 +11,6 @@ import { createManagedClaudeAccount, activeClaudeAccountId, listClaudeAccounts }
 import { selectAccount } from "@/lib/accounts/manager";
 import { successorCapability } from "@/lib/accounts/migration/provider";
 import { admitTranscriptConversationOffLoop } from "@/lib/conversation/transcriptAdmission";
-import { newRound, reserveReviewerSpawnOffLoop } from "@/lib/flows/engine";
-import type { Flow } from "@/lib/flows/types";
 import { productionDeputyCommandPorts } from "@/lib/orchestrator/deputyCommandPorts";
 import type { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
 import type { HostState } from "@/lib/runtime/engineHost";
@@ -140,23 +138,6 @@ test("deputy registration repeats seat authority inside admission", async () => 
   } finally { f.registry.close(); }
 });
 
-for (const shared of [false, true]) test(`retired flow reservation refuses before registry and account admission (shared=${shared})`, async () => {
-  const f = fixture(shared); f.seed();
-  const owner = f.registry.conversationForPath(f.artifactPath)!;
-  const flow = { id: shared ? "retired-flow-shared" : "retired-flow-isolated", project: "fixture", cwd: "/repo", implementerPath: f.artifactPath,
-    implementerConversationId: owner.id, roles: { reviewer: { engine: "codex", model: null, effort: "high" } }, rounds: [] } as unknown as Flow;
-  const round = newRound(flow, "button", null); round.reviewerBindingId = "fixed-reviewer-binding";
-  const before = f.registry.snapshot();
-  const holder = registryLockHolder(f.sqliteFilename);
-  try {
-    await holder.hold();
-    await expect(reserveReviewerSpawnOffLoop(flow, round, flow.roles.reviewer, null, f.registry, () => {
-      throw new Error("retired reservation reached its admission callback");
-    })).rejects.toMatchObject({ code: "FLOW_RETIRED" });
-    expect(f.registry.snapshot()).toEqual(before);
-  } finally { await holder.close(); f.registry.close(); }
-});
-
 for (const shared of [false, true]) test(`account selection keeps catalog and routing aligned through a child-held writer (shared=${shared})`, async () => {
   const f = fixture(shared);
   const account = createManagedClaudeAccount("Registry selection fixture");
@@ -171,72 +152,6 @@ for (const shared of [false, true]) test(`account selection keeps catalog and ro
     })).rejects.toThrow();
     expect(f.registry.engineRouting("claude")).toEqual(before);
   } finally { f.registry.close(); }
-});
-
-for (const family of ["flow"] as const) for (const phase of ["reservation", "task", "recorded"] as const) {
-  // Pre-freeze flow execution cases remain until S8; retirement is covered above.
-  test.skip(`${family} revocation after ${phase} admission durably retires its unactuated receipt`, async () => {
-    const f = fixture(); f.seed();
-    let revoked = false;
-    const current = () => {
-      const receipt = Object.values(f.registry.snapshot().receipts)[0];
-      if (!receipt) return true;
-      const taskAdmitted = loadTasks().some(task => task.assignments.some(row => row.launchId === receipt.launchId));
-      if (phase === "reservation" || (phase === "task" && taskAdmitted) || (phase === "recorded" && receipt.membershipAdmitted === true)) revoked = true;
-      return !revoked;
-    };
-    try {
-      {
-        const flow = { id: `phase-${phase}`, project: "fixture", cwd: "/repo", implementerPath: f.artifactPath,
-          implementerConversationId: f.registry.conversationForPath(f.artifactPath)!.id,
-          roles: { reviewer: { engine: "codex", model: null, effort: "high" } }, rounds: [] } as unknown as Flow;
-        const round = newRound(flow, "button", null); round.reviewerBindingId = "phase-reviewer-binding";
-        expect(await reserveReviewerSpawnOffLoop(flow, round, flow.roles.reviewer, null, f.registry, current)).toBeNull();
-        expect(round.launchId).toBeNull();
-      }
-      expect(revoked).toBe(true);
-      const receipt = Object.values(f.registry.snapshot().receipts)[0]!;
-      expect(receipt.state).toBe("failed");
-      expect(receipt.admissionOwner).toBeNull();
-      f.registry.close();
-      const reopened = new AgentRegistry(path.join(f.root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
-      try { expect(reopened.spawnRecoverySnapshot([receipt.launchId]).receipts[receipt.launchId]?.state).toBe("failed"); }
-      finally { reopened.close(); }
-    } finally { f.registry.close(); }
-  });
-}
-
-for (const family of ["flow"] as const) test.skip(`${family} reports refused revocation cleanup and a reopened writer can finish it`, async () => {
-  const f = fixture(false, 1_000); f.seed();
-  const peer = new Database(f.sqliteFilename);
-  let locked = false;
-  const current = () => {
-    const receipt = Object.values(f.registry.snapshot().receipts)[0];
-    if (!receipt?.membershipAdmitted) return true;
-    if (!locked) { peer.exec("BEGIN IMMEDIATE"); locked = true; }
-    return false;
-  };
-  try {
-    let work: Promise<unknown>;
-    {
-      const flow = { id: "cleanup-refusal", project: "fixture", cwd: "/repo", implementerPath: f.artifactPath,
-        implementerConversationId: f.registry.conversationForPath(f.artifactPath)!.id,
-        roles: { reviewer: { engine: "codex", model: null, effort: "high" } }, rounds: [] } as unknown as Flow;
-      const round = newRound(flow, "button", null); round.reviewerBindingId = "cleanup-reviewer-binding";
-      work = reserveReviewerSpawnOffLoop(flow, round, flow.roles.reviewer, null, f.registry, current);
-    }
-    await expect(work).rejects.toThrow("agent registry is busy");
-    expect(locked).toBe(true);
-    const receipt = Object.values(f.registry.snapshot().receipts)[0]!;
-    expect(receipt.state).toBe("starting");
-    peer.exec("ROLLBACK"); locked = false;
-    f.registry.close();
-    const reopened = new AgentRegistry(path.join(f.root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
-    try {
-      expect(await reopened.failSpawnOffLoop(receipt.launchId, "revoked before dispatch")).toBe(true);
-      expect(reopened.spawnRecoverySnapshot([receipt.launchId]).receipts[receipt.launchId]?.state).toBe("failed");
-    } finally { reopened.close(); }
-  } finally { if (locked) peer.exec("ROLLBACK"); peer.close(); f.registry.close(); }
 });
 
 test("actual launch account reconciliation waits and rereads the materialized receipt", async () => {

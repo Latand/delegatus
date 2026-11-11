@@ -175,7 +175,7 @@ into a path-keyed set that survives the 10s poll relayout and is pruned in
 state on every layout change. While the session is active panes go click-through, clicks
 toggle membership through the world hit-test, members carry checkmarks and
 the rest dims via one CSS class; a screen-space bottom bar fans actions out
-over `/api/conversation-host` and `/api/flows` strictly sequentially (a
+over `/api/conversation-host` strictly sequentially (a
 delivery can boot a resume host — never in parallel) with per-node results,
 failed-only retry, and inline confirms on the two killing actions. The toolbar's third
 tool arms the same session for touch, where the marquee gesture stays off.
