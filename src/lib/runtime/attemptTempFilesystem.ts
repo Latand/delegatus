@@ -827,6 +827,9 @@ export async function removeAttemptTree(directory: string, original = directory,
       if (!await guard() || !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed after permission repair");
     }
     assertAttemptMountsClear(fs.realpathSync(directory));
+    // Mount and physical-path reads may observe a changed root or protection.
+    // Admit from the final synchronous snapshots immediately before native rm.
+    if (dispatchGuard && !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed before native removal");
     try { await fs.promises.rm(directory, { recursive: true, force: true }); }
     catch (error) {
       if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;

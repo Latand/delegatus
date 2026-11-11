@@ -505,7 +505,12 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
               permissionAuthority: () => retirementAuthorityCurrent(directory, false),
               permissionChange: (file, mode, apply) => {
                 if (!dispatchEvidence?.permissionChange) throw new AttemptTempBudgetDeferred("permission protection unavailable");
-                dispatchEvidence.permissionChange(file, mode, apply);
+                dispatchEvidence.permissionChange(file, mode, () => {
+                  // Repeat negative checkout discovery after protection's last
+                  // read, only for actual writes rather than every tree entry.
+                  if (!inventory.unchangedAll()) throw new AttemptTempBudgetDeferred("checkout changed before permission repair");
+                  apply();
+                });
               } }),
         measure: async () => bytes,
         // Settlement owns freshness. Preserve the full mount/Git/readability
