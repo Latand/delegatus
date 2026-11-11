@@ -4929,7 +4929,7 @@ test(`owner ${mode} answers an oversized required parent through a context file`
   const runtime = { ownerPorts: {
     launch: async (body: Record<string, unknown>) => { launches++; inspect(String(body.prompt)); return { status: 202, body: { conversationId: "conversation_size_fixture",
       launchId: "launch_size_fixture", initialMessage: "delivered" } }; },
-    continue: async (turn: { clientAttemptId: string; conversationId?: string }, prompt: string) => {
+    continue: async (turn: import("./ownerRun").OwnerSpawnedTurn, prompt: string) => {
       continues++; inspect(prompt);
       return { ok: true as const, structured: true as const, target: turn.conversationId!, outcome: "delivered" as const,
         operationId: turn.clientAttemptId, receipt: { operationId: turn.clientAttemptId, idempotencyKey: turn.clientAttemptId,
