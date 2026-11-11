@@ -2,16 +2,64 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { BEARER_TOKEN, hardenedRedact } from "@/lib/view/compactText";
 import { storedLessonRevision, RoleMemoryRefusal } from "@/lib/memory/roleStore";
-import { withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
+import { PrivacyWorkError } from "@/lib/memory/privacyFailure";
+import { RoleMemoryChanged, withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 import { prepareControllerArtifactDirectory, protectExistingControllerArtifacts } from "./controllerArtifacts";
 import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
-import { renderStagePrompt } from "./prompts";
+import { isStagePromptContext, renderStagePrompt, type StagePromptContext } from "./prompts";
+import { loadTasksByIds } from "@/lib/tasks/store";
 import { resolveStageTestGuidance } from "./testGuidance";
 import type { EffectivePipelineRole, Pipeline, PipelineStage } from "./types";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
+
+// Redact bearer values before assignment redaction can consume their label
+// inside a substituted task or scaffold line.
+const scrubStageText = (text: string) => hardenedRedact(text.replace(BEARER_TOKEN, "[redacted]"));
+
+/** Full transport-independent input. Cloud sends these bytes in turns; local
+ * launches may replace oversized parts with protected worktree artifacts. */
+export async function composeStageText(
+  pipeline: Pipeline, stage: PipelineStage, role: EffectivePipelineRole,
+  previousOutput: string, context?: StagePromptContext,
+): Promise<string> {
+  return composeResolvedStageText(pipeline, stage, role, previousOutput, stagePromptContext(pipeline, context));
+}
+
+async function composeResolvedStageText(
+  pipeline: Pipeline, stage: PipelineStage, role: EffectivePipelineRole,
+  previousOutput: string, context: StagePromptContext,
+  checkout = !pipeline.lastPassedCommit && !fs.existsSync(pipeline.worktreeDir) ? pipeline.repoDir : pipeline.worktreeDir,
+): Promise<string> {
+  return withCurrentRoleMemory(async () => {
+    await validateStageContext(context, checkout);
+    return scrubStageText(await withoutStoredLessonsAsync(renderStagePrompt(
+      pipeline, stage, role, previousOutput, effectiveWorkerLimit(pipeline.project).value,
+      resolveStageTestGuidance(), context,
+    )));
+  });
+}
+
+async function validateStageContext(context: StagePromptContext, checkout: string): Promise<void> {
+  if (!isStagePromptContext(context)) throw new Error("Invalid stage input context");
+  if (context.skillPaths?.length) {
+    const skills = context.skillPaths.map(skill => path.posix.normalize(skill));
+    const tracked = await realExec("git", ["--literal-pathspecs", "ls-tree", "-z", "HEAD", "--", ...skills], checkout, undefined, { timeoutMs: 10_000 });
+    const files = new Set(tracked.stdout.split("\0").flatMap(entry => /^100(?:644|755) blob [a-f0-9]+\t/.test(entry) ? [entry.slice(entry.indexOf("\t") + 1)] : []));
+    if (tracked.code !== 0 || skills.some(skill => !files.has(skill))) throw new Error("Referenced skill is not tracked");
+  }
+}
+
+function stagePromptContext(pipeline: Pipeline, context?: StagePromptContext): StagePromptContext {
+  const tasks = pipeline.taskIds.length ? loadTasksByIds(new Set(pipeline.taskIds)) : [];
+  const details = tasks.filter(task => task.project === pipeline.project && task.details).map(task => task.details).join("\n\n");
+  const resolved = { ...pipeline.inputContext, ...context };
+  resolved.taskDetails = [...new Set([details, resolved.taskDetails].filter(Boolean))].join("\n\n") || undefined;
+  return { ...resolved, handoffDigest: resolved.handoffDigest ? scrubStageText(resolved.handoffDigest) : undefined };
+}
 
 /** Compose the launch message before spawn admission. The shared UI renderer
     remains pure; this server path materializes oversized parts, falling back
@@ -27,23 +75,30 @@ export async function composeStageInput(
   worktreeDir: string = pipeline.worktreeDir,
   exec: ExecPort = realExec,
   reserveBytes = 0,
+  context?: StagePromptContext,
 ): Promise<string> {
-  return withCurrentRoleMemory(() => composeCurrentStageInput(pipeline, stage, role, previousOutput, worktreeDir, exec, reserveBytes));
+  const resolved = stagePromptContext(pipeline, context);
+  return withCurrentRoleMemory(() => composeCurrentStageInput(pipeline, stage, role, previousOutput, worktreeDir, exec, reserveBytes, resolved), { revisionAttempts: 1 });
 }
 
 async function composeCurrentStageInput(
   pipeline: Pipeline, stage: PipelineStage, role: EffectivePipelineRole, previousOutput: string,
-  worktreeDir: string, exec: ExecPort, reserveBytes: number,
+  worktreeDir: string, exec: ExecPort, reserveBytes: number, context: StagePromptContext,
 ): Promise<string> {
   const revision = storedLessonRevision();
   const assertPrivacy = () => {
-    if (storedLessonRevision() !== revision) throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", "Role-memory privacy changed; nothing was sent");
+    if (storedLessonRevision() !== revision) throw new RoleMemoryChanged();
   };
   const limit = MAX_STRUCTURED_TEXT_BYTES - reserveBytes;
   const workerLimit = effectiveWorkerLimit(pipeline.project).value;
   const testGuidance = resolveStageTestGuidance();
-  const inline = await withoutStoredLessonsAsync(renderStagePrompt(pipeline, stage, role, previousOutput, workerLimit, testGuidance));
-  if (Buffer.byteLength(inline, "utf8") <= limit) {
+  await validateStageContext(context, worktreeDir || pipeline.repoDir);
+  const full = renderStagePrompt(pipeline, stage, role, previousOutput, workerLimit, testGuidance, context);
+  const filter = async (text: string) => scrubStageText(await withoutStoredLessonsAsync(text));
+  const fits = (text: string) => Buffer.byteLength(text, "utf8") <= limit;
+  let inline: string | undefined;
+  if (fits(scrubStageText(full))) inline = await filter(full);
+  if (inline !== undefined && fits(inline)) {
     await protectExistingControllerArtifacts(worktreeDir, exec);
     assertPrivacy();
     return inline;
@@ -52,41 +107,57 @@ async function composeCurrentStageInput(
   const directory = await prepareControllerArtifactDirectory(worktreeDir, exec);
 
   const artifacts: Array<{ label: string; file: string; text: string }> = [];
-  const artifact = async (label: string, text: string) => {
-    const digest = crypto.createHash("sha256").update(text).digest("hex");
+  const retainArtifact = (label: string, source: string, text: string) => {
+    const digest = crypto.createHash("sha256").update(source).digest("hex");
     const file = path.join(directory, `${label.replaceAll(" ", "-")}-${digest}.md`);
-    const part = { label, file, text: await withoutStoredLessonsAsync(text) };
+    const part = { label, file, text };
     artifacts.push(part);
     return part;
   };
+  const artifact = async (label: string, text: string) => retainArtifact(label, text, await filter(text));
   const previousFile = previousOutput ? await artifact("previous output", previousOutput) : null;
-  const render = (headBytes: number, specFile: Awaited<ReturnType<typeof artifact>> | null) => withoutStoredLessonsAsync(renderStagePrompt(
+  const render = (headBytes: number, specFile: Awaited<ReturnType<typeof artifact>> | null) => renderStagePrompt(
     specFile ? { ...pipeline, spec: artifactReference(specFile, headBytes) } : pipeline, stage, role,
     previousFile ? artifactReference(previousFile, headBytes) : previousOutput,
     workerLimit,
     testGuidance,
-  ));
-  const fit = async (specFile: Awaited<ReturnType<typeof artifact>> | null) => {
-    let prompt = "";
-    /* Count every substituted reference, labels and UTF-8 bytes too. Tight
-       prompts retain a smaller head, while both full inputs stay on disk. */
+    context,
+  );
+  // Selection is local. Only complete outgoing candidates cross privacy;
+  // filtering pieces separately would miss text spanning substitutions.
+  const choose = (specFile: Awaited<ReturnType<typeof artifact>> | null) => {
     for (const headBytes of [512, 128, 32, 4]) {
-      prompt = await render(headBytes, specFile);
-      if (Buffer.byteLength(prompt) <= limit) break;
+      const candidate = render(headBytes, specFile);
+      if (fits(scrubStageText(candidate))) return candidate;
     }
-    return prompt;
+    return undefined;
   };
-  let prompt = await fit(null);
-  const specFile = Buffer.byteLength(prompt) > limit && pipeline.spec?.trim()
-    ? await artifact("specification", pipeline.spec) : null;
-  if (specFile) prompt = await fit(specFile);
-  if (Buffer.byteLength(prompt, "utf8") > limit) {
+  let candidate = choose(null);
+  let specFile: Awaited<ReturnType<typeof artifact>> | null = null;
+  if (candidate === undefined && pipeline.spec?.trim()) {
+    specFile = await artifact("specification", pipeline.spec);
+    candidate = choose(specFile);
+  }
+  let prompt = candidate === undefined ? undefined : await filter(candidate);
+  if (prompt !== undefined && !fits(prompt)) {
+    if (!specFile && pipeline.spec?.trim()) specFile = await artifact("specification", pipeline.spec);
+    const smallest = render(4, specFile);
+    if (smallest !== candidate) prompt = await filter(smallest);
+  }
+  if (prompt === undefined || !fits(prompt)) {
     // Preserve the original renderer's bytes, including every substitution,
     // role instruction, access fence and completion contract. The reference
     // replaces the whole message; unused part references need no files.
     artifacts.length = 0;
-    const fullPrompt = await artifact("stage prompt", inline);
-    prompt = `Read the complete stage prompt below and carry out all of its instructions.\n${artifactReference(fullPrompt, 512)}`;
+    inline ??= await filter(full);
+    if (fits(inline)) {
+      assertPrivacy();
+      return inline;
+    }
+    const fullPrompt = retainArtifact("stage prompt", inline, inline);
+    prompt = await filter(`Read the complete stage prompt below and carry out all of its instructions.\n${artifactReference(fullPrompt, 512)}`);
+    if (!fits(prompt)) throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", "Filtered stage input exceeds the message byte limit; nothing was sent",
+      { cause: new PrivacyWorkError("worker-input-too-large") });
   }
   assertPrivacy();
   for (const { file, text } of artifacts) {

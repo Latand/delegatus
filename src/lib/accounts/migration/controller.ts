@@ -2,12 +2,11 @@ import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { activeClaudeAccountId, setActiveClaudeAccount } from "@/lib/accounts/claude";
-import { activeCodexAccountId, codexAccountsMutationLocked, codexLoginPaneStatus, listCodexAccounts, setActiveCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
+import { activeCodexAccountId, codexAccountsMutationLocked, listCodexAccounts, setActiveCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { agentRegistry, RegistryWriterBusyError, type AgentRegistry } from "@/lib/agent/registry";
 import { sessionKeyFromTranscript } from "@/lib/agent/sessionKey";
-import { readTranscriptHosts } from "@/lib/agent/transcriptHost";
 import { yieldToRuntime } from "@/lib/cooperative";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -25,7 +24,6 @@ import { pathForPanePid, reconcileTasks } from "@/lib/tasks/reconcile";
 import { loadTasksForList, mutateTasks } from "@/lib/tasks/store";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { reconcileWorkflowConversationOwnershipCooperatively } from "@/lib/workflows/store";
-import { paneInfo } from "@/lib/tmux";
 import { spawnViewerResidentWorker } from "@/lib/viewerWorkerLifecycle";
 
 import { reconcileMigrationInventory, reconcileMigrations, type HeldDeliveryPort } from "./coordinator";
@@ -78,7 +76,7 @@ function reconciliationWriterBusy(error: unknown): boolean {
 // Compatibility routing reads persisted membership only. Neither getter nor
 // setter may resolve a provider catalog or credentials inside this lease.
 export async function syncCompatibilityRouting(registry: AgentRegistry): Promise<void> {
-  const current = registry.readOnlySnapshot().engineRouting;
+  const current = registry.engineRoutingSnapshot();
   const claudeNeedsSync = (() => {
     try { return Boolean(current.claude.activeAccountId && current.claude.activeAccountId !== activeClaudeAccountId()); }
     catch { return true; }
@@ -89,9 +87,9 @@ export async function syncCompatibilityRouting(registry: AgentRegistry): Promise
   })();
   if (!claudeNeedsSync && !codexNeedsSync) return;
   await withAccountMutationLockAsync(() => {
-    const snapshot = registry.readOnlySnapshot();
-    const claude = snapshot.engineRouting.claude.activeAccountId;
-    const codex = snapshot.engineRouting.codex.activeAccountId;
+    const snapshot = registry.engineRoutingSnapshot();
+    const claude = snapshot.claude.activeAccountId;
+    const codex = snapshot.codex.activeAccountId;
     try { if (claude && claude !== activeClaudeAccountId()) setActiveClaudeAccount(claude); } catch { /* registry routing stays authoritative */ }
     try { if (codex && codex !== activeCodexAccountId()) setActiveCodexAccount(codex); } catch { /* registry routing stays authoritative */ }
   }, { caller: "compatibility routing" });
@@ -104,17 +102,11 @@ export async function reconcileAccountLogins(): Promise<void> {
   const mutationLocked = codexAccountsMutationLocked();
   const runtime = managedCodexRuntime();
   await Promise.all(listCodexAccounts().map(async (account) => {
-    if (account.kind === "managed") {
-      if (account.loginPane && !mutationLocked) setCodexAccountLoginPane(account.id, null);
-      if (runtime.loginUnsettled(account)) await runtime.loginSnapshot(account);
-      return;
-    }
-    /* Main's own device login (#2166) settles the way a managed one does. */
+    /* A login pane recorded by an older release names a terminal window that
+       no release opens any more; the record is dropped. Main's own device
+       login (#2166) settles the way a managed one does. */
+    if (account.loginPane && !mutationLocked) setCodexAccountLoginPane(account.id, null);
     if (runtime.loginUnsettled(account)) await runtime.loginSnapshot(account);
-    if (!account.loginPane) return;
-    const pane = await paneInfo(account.loginPane.paneId);
-    const status = codexLoginPaneStatus(account.authPresent, account.loginPane, pane);
-    if (status.clear && !mutationLocked) setCodexAccountLoginPane(account.id, null);
   }));
 }
 
@@ -152,14 +144,13 @@ export interface AccountMigrationControllerCyclePorts {
 
 async function reconcileControllerRuntime(registry: AgentRegistry, files: ControllerScan["files"]): Promise<void> {
   await reconcileAccountLogins();
-  const transcriptHosts = await readTranscriptHosts(true, files);
   try {
-    await runReaperCycle({ registry, hosts: transcriptHosts.hosts, files });
+    await runReaperCycle({ registry, files });
   } catch (error) {
     console.error("[agent reaper] lifecycle reconciliation failed", error);
   }
   try {
-    const report = await runHeadlessProcessReaper({ hosts: transcriptHosts.hosts, flows: loadFlows() });
+    const report = await runHeadlessProcessReaper({ flows: loadFlows() });
     if (report.signaled > 0) console.warn(`[headless process reaper] terminated ${report.signaled} stale process group(s)`);
   } catch (error) {
     console.error("[headless process reaper] reconciliation failed", error);
@@ -311,15 +302,23 @@ export class AccountMigrationController {
         || contextChanged.has(file.path) || (checkedPaths.has(file.path) && this.inventoryPending.has(file.path)));
     const observedBefore = new Map(changed.map(file => [file.path, checkedContexts.get(file.path) ?? contextFor(file.path)]));
     const transcriptReads = new Map<string, boolean>();
-    if (this.inventoryRevision === null || changed.length) {
+    const inventoryRan = this.inventoryRevision === null || changed.length > 0;
+    if (inventoryRan) {
       await this.ports.reconcileInventory(this.registry, changed, (pathname, complete) => transcriptReads.set(pathname, complete));
     }
     // Acknowledge the pre-write context only when the corresponding transcript
     // read completed and no concurrent registry writer changed its dependency.
     const observedContexts = new Map<string, string>();
+    // No await separates acknowledgement and pending detection. Share those
+    // reads within this phase, then discard them before the next phase yields.
+    const settledContexts = inventoryRan ? new Map<string, string>() : checkedContexts;
+    const settledContext = (pathname: string) => {
+      if (!settledContexts.has(pathname)) settledContexts.set(pathname, contextFor(pathname));
+      return settledContexts.get(pathname)!;
+    };
     for (const [pathname, context] of observedBefore) {
       if (transcriptReads.get(pathname) === false) this.inventoryPending.add(pathname);
-      else if (contextFor(pathname) === context) {
+      else if (settledContext(pathname) === context) {
         this.inventoryPending.delete(pathname);
         observedContexts.set(pathname, context);
       }
@@ -328,7 +327,7 @@ export class AccountMigrationController {
     // write. Keep dependants pending so their carried observations are replayed
     // against the newly admitted owner on the next bounded cursor visit.
     for (const pathname of checkedPaths) {
-      if (contextFor(pathname) !== checkedContexts.get(pathname)) this.inventoryPending.add(pathname);
+      if (settledContext(pathname) !== checkedContexts.get(pathname)) this.inventoryPending.add(pathname);
     }
     await yieldToRuntime();
     // Ownership stores can change independently of the scanner. Their lookups

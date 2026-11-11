@@ -196,6 +196,9 @@ test("credit rule: credit-holding accounts stop at 90 % without approval; missin
   const none = { hasCredits: false, balance: null, unlimited: false };
   const free = on().turbo!;
   const paid = on({ credits: true, creditAccounts: ["acct-a"] }).turbo!;
+  expect(turboAccountVerdict(free, "acct-a", { limits: limits(100, holding), stale: false }, now, true)).toEqual({ verdict: "spend" });
+  expect(turboAccountVerdict(free, "acct-b", { limits: limits(100, holding), stale: false }, now, false)).toMatchObject({ verdict: "hold" });
+  expect(turboAccountVerdict(free, "acct-a", { limits: limits(100, none), stale: false }, now, true)).toEqual({ verdict: "raise" });
   expect(turboAccountVerdict(free, "acct-c", { limits: limits(99, none), stale: false }, now)).toMatchObject({ verdict: "raise" });
   expect(turboAccountVerdict(free, "acct-a", { limits: limits(89.9, holding), stale: false }, now)).toMatchObject({ verdict: "raise" });
   expect(turboAccountVerdict(free, "acct-a", { limits: limits(90, holding), stale: false }, now)).toMatchObject({ verdict: "hold" });
@@ -205,10 +208,11 @@ test("credit rule: credit-holding accounts stop at 90 % without approval; missin
   expect(turboAccountVerdict(free, "acct-c", { limits: limits(10, undefined), stale: false }, now)).toMatchObject({ verdict: "raise" });
   expect(turboAccountVerdict(free, "acct-c", { limits: limits(95, undefined), stale: false }, now)).toMatchObject({ verdict: "hold" });
   expect(turboAccountVerdict(free, "acct-c", null, now)).toMatchObject({ verdict: "hold" });
-  // With the approval only the named account keeps going past 90 %.
-  expect(turboAccountVerdict(paid, "acct-a", { limits: limits(99.5, holding), stale: false }, now)).toMatchObject({ verdict: "spend" });
-  expect(turboAccountVerdict(paid, "acct-b", { limits: limits(95, holding), stale: false }, now)).toMatchObject({ verdict: "hold" });
-  expect(turboAccountVerdict(paid, "acct-a", { limits: limits(95, holding), stale: false }, now + 3 * hour)).toMatchObject({ verdict: "hold" });
+  // A project approval needs the account's durable opt-in as well.
+  expect(turboAccountVerdict(paid, "acct-a", { limits: limits(99.5, holding), stale: false }, now, false)).toMatchObject({ verdict: "hold" });
+  expect(turboAccountVerdict(paid, "acct-a", { limits: limits(99.5, holding), stale: false }, now, true)).toMatchObject({ verdict: "spend" });
+  expect(turboAccountVerdict(paid, "acct-b", { limits: limits(95, holding), stale: false }, now, false)).toMatchObject({ verdict: "hold" });
+  expect(turboAccountVerdict(paid, "acct-a", { limits: limits(95, holding), stale: false }, now + 3 * hour, true)).toMatchObject({ verdict: "spend" });
 });
 
 test("switch rows retain all pending work and bound only completed history, keyed by conversation", () => {
@@ -294,7 +298,7 @@ test("a wake with both full overlays and a full agenda stays within 4,000 charac
   expect(seatTickWakeMessage({ ...base, items: [], turbo: row.turbo, now: now + 3 * hour })).not.toContain("Turbo");
 });
 
-test("the guard admits an approved account for this project only; other projects on the same account still stop at 99 %", async () => {
+test("a project approval still requires the account spending opt-in", async () => {
   const { writeSeatTickSettings } = await import("./seatTickSettings");
   const { selectProjectAccount, admitAutomaticAccountTarget } = await import("@/lib/accounts/projectSelection");
   const observation = (accountId: string) => ({ engine: "codex" as const, accountId, authenticated: true, authCheckedAt: at,
@@ -306,13 +310,13 @@ test("the guard admits an approved account for this project only; other projects
   writeSeatTickSettings(project, change(defaultSeatTickSettings(project), { turbo: { enabled: true } }));
   expect(select(project).kind).toBe("exhausted");
   writeSeatTickSettings(project, change(defaultSeatTickSettings(project), { turbo: { enabled: true, credits: true, creditAccounts: ["acct-a"] } }));
-  expect(select(project)).toEqual({ kind: "available", accountId: "acct-a" });
+  expect(select(project).kind).toBe("exhausted");
   expect(select("another-project").kind).toBe("exhausted");
   for (const bindings of [[], [{ project, engine: "codex" as const, accountId: "acct-a", createdAt: at }]]) {
     expect(selectProjectAccount({ project, engine: "codex", accounts: [{ id: "acct-a", authPresent: true }], observations: [observation("acct-a")],
-      bindings, requestedId: "acct-a", requireCapacity: true, now }).kind).toBe("available");
+      bindings, requestedId: "acct-a", requireCapacity: true, now }).kind).toBe("exhausted");
   }
-  expect(admitAutomaticAccountTarget({ project, engine: "codex", observations: [observation("acct-a")], bindings: [], targetId: "acct-a", now }).kind).toBe("available");
+  expect(admitAutomaticAccountTarget({ project, engine: "codex", observations: [observation("acct-a")], bindings: [], targetId: "acct-a", now }).kind).toBe("exhausted");
   // Expiry ends the exemption.
   expect(selectProjectAccount({ project, engine: "codex", accounts: [{ id: "acct-a", authPresent: true }], observations: [observation("acct-a")], bindings: [], requestedId: "acct-a", now: now + 3 * hour }).kind).toBe("exhausted");
 });

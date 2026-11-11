@@ -1,6 +1,6 @@
 import { isStoredPipeline } from "./store";
 import { statePath } from "@/lib/configDir";
-import { readCompactPipelineEvidence, pipelineEvidenceRevision, stateEvidenceVersion, type CompactEvidenceCache } from "@/lib/state/sqliteStateStore";
+import { readCompactPipelineEvidence, pipelineAuthorityRevision, stateEvidenceVersion, type CompactEvidenceCache } from "@/lib/state/sqliteStateStore";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { settleStageAttemptPush } from "./stageAttemptPush";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -46,8 +46,8 @@ export function stageBranchOwnershipReader(ownerId: string) {
     const observed = stateEvidenceVersion(filename);
     if (observed === version) return true;
     // Acquiring a mutation lease writes the same database. Only pipeline-row
-    // evidence changes can invalidate peer authority, not lease bookkeeping.
-    if (revision !== null && pipelineEvidenceRevision(filename) === revision) {
+    // authority changes can invalidate peer authority, not progress or leases.
+    if (revision !== null && pipelineAuthorityRevision(filename) === revision) {
       version = observed;
       return true;
     }
@@ -57,7 +57,7 @@ export function stageBranchOwnershipReader(ownerId: string) {
     if (current()) return Promise.resolve(token);
     if (pending) return pending;
     pending = waitForStateLock("pipelines.stage-ownership", async () => {
-      const before = pipelineEvidenceRevision(filename);
+      const before = pipelineAuthorityRevision(filename);
       const next = await readCompactPipelineEvidence(filename, branchAuthorityCache, (record, collection) => {
         if (collection !== "pipelines") return { id: "", fence: "" };
         if (!isStoredPipeline(record))
@@ -71,7 +71,7 @@ export function stageBranchOwnershipReader(ownerId: string) {
         branchAuthorityCache = next;
       else if (next && next.rows.size > MAX_BRANCH_AUTHORITY_ROWS) branchAuthorityCache = undefined;
       const afterVersion = stateEvidenceVersion(filename);
-      if (!next || before === null || pipelineEvidenceRevision(filename) !== before)
+      if (!next || before === null || pipelineAuthorityRevision(filename) !== before)
         throw new Error("pipeline ownership changed during preparation");
       token = JSON.stringify([...next.rows.values()].filter(row => row.value.id && row.value.id !== ownerId).map(row => row.value.fence).sort());
       version = afterVersion;
@@ -108,10 +108,10 @@ export async function observeStageBranchProtection(pipeline: Pipeline, exec: Exe
     }
     return { ...observation, error: "the remote forge's stage branch protection cannot be verified" };
   }
-  const present = await remoteExec("timeout", ["--signal=KILL", "5s", "git", "ls-remote", "--heads", remote, `refs/heads/${branch}`], pipeline.worktreeDir);
+  const present = await remoteExec("git", ["ls-remote", "--heads", remote, `refs/heads/${branch}`], pipeline.worktreeDir, undefined, { timeoutMs: 5_000 });
   if (present.code !== 0) return { ...observation, error: "the stage branch's remote protection cannot be verified" };
   if (!present.stdout.trim()) return observation; // Unpublished local branch; no remote branch is adopted or modified.
-  const protection = await remoteExec("timeout", ["--signal=KILL", "5s", "gh", "api", `repos/${repository}/branches/${encodeURIComponent(branch)}`, "--jq", ".protected"], pipeline.worktreeDir);
+  const protection = await remoteExec("gh", ["api", `repos/${repository}/branches/${encodeURIComponent(branch)}`, "--jq", ".protected"], pipeline.worktreeDir, undefined, { timeoutMs: 5_000 });
   if (protection.code !== 0 || !["true", "false"].includes(protection.stdout.trim())) return { ...observation, error: "the stage branch's forge protection cannot be verified" };
   return { ...observation, error: protection.stdout.trim() === "true" ? "the stage is on a protected forge branch" : null };
 }

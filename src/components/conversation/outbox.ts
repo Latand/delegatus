@@ -13,7 +13,7 @@ import type { MessageTextAttachment } from "@/lib/messageTextAttachment";
  * and cancel anything that has not left for the wire yet.
  *
  * The queue is serial: exactly one entry is `delivering` at a time, so the
- * existing idempotent delivery/receipt machinery in `TmuxComposer` keeps its
+ * existing idempotent delivery/receipt machinery in `ConversationComposer` keeps its
  * one-attempt-at-a-time contract and never double-sends.
  *
  * Pure module state + sessionStorage, keyed on the stable conversation identity
@@ -764,13 +764,32 @@ function persistedQueue(cardId: string): readonly OutboxEntry[] {
   }
 }
 
+/* The conversations whose last queue write did not reach sessionStorage. Their
+   rows exist only in this page's memory until a later write lands. */
+const unstoredQueues = new Set<string>();
+
 function persist(cardId: string, queue: readonly OutboxEntry[]): void {
   try {
     if (queue.length) sessionStorage.setItem(storageKey(cardId), JSON.stringify(queue));
     else sessionStorage.removeItem(storageKey(cardId));
+    unstoredQueues.delete(cardId);
   } catch {
-    /* quota / opaque origin: the in-memory queue still carries the turn */
+    /* quota / opaque origin: the in-memory queue still carries the turn, and
+       {@link outboxStored} says a reload would not find it. */
+    unstoredQueues.add(cardId);
   }
+}
+
+/**
+ * Whether this conversation's queue, as this page holds it, is also in
+ * sessionStorage, so a reload finds every row.
+ *
+ * A composer lets go of a message's words only once a copy that outlives the
+ * page exists (2026-11-09: a send that left only a memory row could vanish
+ * with the tab, and nothing recorded that it was ever written).
+ */
+export function outboxStored(cardId: string): boolean {
+  return !unstoredQueues.has(cardId);
 }
 
 function isPersistedEcho(value: unknown): value is PersistedEchoObservation {
@@ -2252,6 +2271,7 @@ export function useOutbox(cardId: string): readonly OutboxEntry[] {
 /** Test seam: drops in-memory state so each case starts from a clean queue. */
 export function resetOutboxForTests(): void {
   queues.clear();
+  unstoredQueues.clear();
   operationReads.clear();
   listeners.clear();
   echoSnapshots.clear();

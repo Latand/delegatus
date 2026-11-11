@@ -544,7 +544,7 @@ test("seat agenda worker preserves asks and ordering from the exact board repres
 });
 
 
-test.each(["deadline", "closed-check", "source-share"] as const)("an expired seat source leaves a queued peer alone and never dispatches later: %s", async mode => {
+test.each(["deadline", "closed-check", "source-share", "timing"] as const)("seat source queue preserves peer ownership and records wait versus service: %s", async mode => {
   const { runSeatSourceInWorker } = await import("./filesResponseWorker");
   const { SeatTickWork } = await import("@/lib/monitor/seatTickWork");
   let work: InstanceType<typeof SeatTickWork> | undefined;
@@ -561,13 +561,19 @@ createInterface({ input: process.stdin }).on("line", async line => {
   if (request.type === "project") {
     fs.writeFileSync(path.join(state, "ready"), "ready");
     while (!fs.existsSync(path.join(state, "release"))) await new Promise(resolve => setTimeout(resolve, 2));
-  } else fs.appendFileSync(path.join(state, "dispatches"), "one\n");
+  } else {
+    fs.appendFileSync(path.join(state, "dispatches"), "one\n");
+    if (process.env.LLV_FIXTURE_SOURCE_TIMING === "1") {
+      fs.writeFileSync(path.join(state, "source-ready"), "ready");
+      while (!fs.existsSync(path.join(state, "source-release"))) await new Promise(resolve => setTimeout(resolve, 2));
+    }
+  }
   const directory = path.join(state, "files-response-results"); fs.mkdirSync(directory, { recursive: true });
   const bodyFile = path.join(directory, id + ".json"); fs.writeFileSync(bodyFile, "[]");
   process.stdout.write(JSON.stringify({ id, ok: true, result: { bodyFile, contentType: "application/json", etag: "", timing: "" }, rssBytes: 1 }) + "\n");
 });
 `);
-  const runtime = { ...runtimeFor(state), launch: { executable: process.execPath, workerPath: program } };
+  const runtime = { ...runtimeFor(state, mode === "timing" ? { LLV_FIXTURE_SOURCE_TIMING: "1" } : {}), launch: { executable: process.execPath, workerPath: program } };
   const peer = buildFilesResponseInWorker(request, runtime);
   let peerFailure: unknown;
   void peer.catch(error => { peerFailure = error; });
@@ -588,7 +594,22 @@ createInterface({ input: process.stdin }).on("line", async line => {
       setTimeout: (run, delay) => { const id = ++next; timers.set(id, { at: now + delay, run }); return id; },
       clearTimeout: id => { timers.delete(id as number); },
     });
-    if (mode === "deadline") {
+    if (mode === "timing") {
+      const ready = new Promise<void>(resolve => {
+        const watcher = fs.watch(state, (_, name) => { if (name === "source-ready") { watcher.close(); resolve(); } });
+      });
+      const queued = work.run(() => runSeatSourceInWorker({ type: "seat-reports", project: "fixture" }, runtime));
+      advance(17);
+      fs.writeFileSync(path.join(state, "release"), "release");
+      await ready;
+      advance(23);
+      fs.writeFileSync(path.join(state, "source-release"), "release");
+      await queued;
+      expect(work.timings.snapshot().phases).toEqual([
+        { phase: "files.seat-reports.queue", beginMs: 0, endMs: 17, cpuUs: expect.any(Number) },
+        { phase: "files.seat-reports.service", beginMs: 17, endMs: 40, cpuUs: expect.any(Number) },
+      ]);
+    } else if (mode === "deadline") {
       await expect(runSeatSourceInWorker({ type: "seat-reports", project: "fixture" }, { ...runtime, timeoutMs: 50 })).rejects.toThrow("deadline");
     } else if (mode === "source-share") {
       expect(await work.run(() => work!.source("workerAsks", async () => {
@@ -612,7 +633,11 @@ createInterface({ input: process.stdin }).on("line", async line => {
     fs.writeFileSync(path.join(state, "release"), "release");
     expect((await peer).body).toBe("[]");
     expect((await runSeatSourceInWorker({ type: "seat-reports", project: "fixture" }, runtime)).body).toBe("[]");
-    expect(fs.readFileSync(path.join(state, "dispatches"), "utf8")).toBe("one\n");
+    expect(fs.readFileSync(path.join(state, "dispatches"), "utf8")).toBe(mode === "timing" ? "one\none\n" : "one\n");
+    if (mode === "closed-check" || mode === "source-share") {
+      expect(work.timings.snapshot().phases.some(row => row.phase === "files.seat-reports.queue")).toBe(true);
+      expect(work.timings.snapshot().phases.some(row => row.phase === "files.seat-reports.service")).toBe(false);
+    }
   } finally { work?.close(); await stopTestWorker(); await peer.catch(() => undefined); fs.rmSync(state, { recursive: true, force: true }); }
 }, 15_000);
 
@@ -671,3 +696,25 @@ test("seat report worker persists outcomes once, filters foreign projects, and r
     expect(await read("fixture")).toEqual(first);
   } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
 }, 15_000);
+
+test.each(["STATE_ADMISSION_BUSY", "DEADLINE_EXCEEDED"] as const)("seat report worker preserves retryable source failure %s", async errorCode => {
+  const { runSeatSourceInWorker } = await import("./filesResponseWorker");
+  const { SeatTickWork } = await import("@/lib/monitor/seatTickWork");
+  const state = scratchState();
+  const program = path.join(state, "refusing-worker.mjs");
+  fs.writeFileSync(program, `import { createInterface } from "node:readline";
+    createInterface({ input: process.stdin }).on("line", line => {
+      const { id } = JSON.parse(line);
+      process.stdout.write(JSON.stringify({ id, ok: false, error: "report writer remains busy", errorCode: ${JSON.stringify(errorCode)} }) + "\\n");
+    });`);
+  const runtime = runtimeFor(state);
+  runtime.launch = { ...runtime.launch!, workerPath: program };
+  const work = new SeatTickWork("project-a", 10_000);
+  try {
+    await work.run(() => work.source("recordRuleReports", async () => {
+      await runSeatSourceInWorker({ type: "seat-rule-reports", project: "project-a", at: "2026-10-28T10:00:00Z" }, runtime);
+    }, undefined));
+    expect(work.skippedSources.has("recordRuleReports")).toBe(true);
+    expect(work.signal.aborted).toBe(false);
+  } finally { work.close(); await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
+});

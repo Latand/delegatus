@@ -223,7 +223,10 @@ export class LogTailStreamSession {
     } else {
       state.initial = false;
     }
-    if (chunk.offset < chunk.size) this.pending.add(state);
+    /* A partial UTF-8 append can leave bytes on disk without advancing the
+       cursor. Wait for growth/restat instead of continuously rereading it.
+       A subscriber starved by this batch still retries with a fresh budget. */
+    if (chunk.offset < chunk.size && (spent > 0 || budget < this.batchBudget)) this.pending.add(state);
     return spent;
   }
 

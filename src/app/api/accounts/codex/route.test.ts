@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-codex-app-server-route-test-"));
@@ -22,11 +22,28 @@ const { ManagedCodexRuntime, setManagedCodexRuntimeForTests } = await import("@/
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { retiredAccountArchive, setAccountRemovalCheckpointForTests } = await import("@/lib/accounts/removal");
 
+// Policy fault injections stay in this process; the real leased-worker path
+// is exercised separately by the account worker integration test.
+const removalModule = await import("@/lib/accounts/codex");
+const removalPolicy = spyOn(removalModule, "removeManagedCodexAccountAsync")
+  .mockImplementation(async id => removalModule.removeManagedCodexAccount(id));
+afterAll(() => removalPolicy.mockRestore());
+
 function deleteRequest(body: unknown) {
   return new NextRequest("http://127.0.0.1/api/accounts/codex", {
     method: "DELETE", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify(body),
   });
 }
+
+test("managed Codex removal reports an exhausted safe admission retry as busy", async () => {
+  const { AccountMutationBusyError } = await import("@/lib/accounts/accountMutation");
+  const account = createManagedCodexAccount("Busy removal fixture");
+  removalPolicy.mockRejectedValueOnce(new AccountMutationBusyError());
+  const response = await remove(deleteRequest({ id: account.id }));
+  expect(response.status).toBe(503);
+  expect(await response.json()).toMatchObject({ code: "account_store_busy" });
+  expect(fs.existsSync(account.home)).toBe(true);
+});
 
 test.skipIf(process.platform !== "linux")("cleanup reports an archived Codex home retired in place", async () => {
   const account = createManagedCodexAccount("Retired report");

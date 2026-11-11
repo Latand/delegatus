@@ -1,3 +1,5 @@
+import { AccountsPanel, MobileAccountsPanel } from "@/components/AccountsPanel";
+import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import type { Flow as ArchivedReview } from "@/lib/reviewHistory/types";
 import { RoundDeck } from "@/components/flows/RoundDeck";
 import { directReviewFlows } from "@/components/flows/directReviewGroups";
@@ -6,6 +8,8 @@ import { createChecksFixtureRoute, type ChecksFixtureMode } from "@/components/p
 import { RelayChatsView } from "@/components/externalRelay/RelayChats";
 import type { RelayChatsPayload } from "@/lib/externalRelay/relayChats";
 import { PipelineTemplatePicker } from "@/components/pipelines/PipelineTemplatePicker";
+import { createPipeline as createAcceptedPipeline } from "@/components/pipelines/pipelineModel";
+import * as acceptedFilesCache from "@/hooks/useFiles";
 import { AttentionCard } from "@/components/runtime/AttentionCard";
 import { codexAttentionActions, projectCodexAttentionActions } from "@/lib/runtime/codexAttentionActions";
 import { questionsResolution } from "@/components/runtime/ConversationAttention";
@@ -13,6 +17,8 @@ import type { RuntimeAttention } from "@/components/runtime/runtimeModel";
 import { useState } from "react";
 import { nativeAssociationForm } from "@/lib/attention/nativeAssociationForm";
 import { issueReportApprovalForm } from "@/lib/issueReports/approvalForm";
+import { appConnectForm } from "@/lib/forge/appConnectForm";
+import type { AppConnectRow } from "@/lib/forge/appConnectTypes";
 import { issueReportPreviewText } from "@/lib/issueReports/previewText";
 import type { IssueReportFinding } from "@/lib/issueReports/scrub";
 import { enqueueOutbox, OUTBOX_LIMIT, readOutbox, seedLaunchOutbox, updateOutbox } from "@/components/conversation/outbox";
@@ -30,12 +36,16 @@ import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
+import { AgentLaunchControls, useAgentLaunchDraft } from "@/components/draft/AgentLaunchControls";
+import { DraftRuntimePill } from "@/components/draft/DraftRuntimePill";
+import { RunsOnRow } from "@/components/orchestrator/RunsOnRow";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
+import { SETTINGS_SCENE, settingsEvidenceRoute } from "@/components/settings/settingsEvidence.fixture";
 import { OrchestratorDock } from "@/components/orchestrator/OrchestratorDock";
 import { LearnedRulesRow, LearnedRulesWindowHost, RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
-import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
+import { COMPANION_HEAD, COMPANION_OVER, COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceConversationPanel } from "@/components/VoiceConversation";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import { sampleCallHistory, sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
@@ -44,6 +54,7 @@ import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScena
 import { attachVoiceOutput, openVoiceMicrophone, type VoiceMicrophone } from "@/lib/audio/voiceDevices";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
+import { reconnectEvidence } from "@/components/voiceCompanion/reconnectEvidence.fixture";
 
 import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
@@ -135,7 +146,7 @@ if (COLD_BOARD) {
    answers nothing about them; the driver serves `/api/links/agents` with this install's id, the host
    and the lanes it publishes. */
 const SYNCED = SCENARIO === "synced-task";
-const PROJECT = SCENARIO === "linked-agents" || SYNCED ? `repo-${"a".repeat(32)}` : "atlas";
+const PROJECT = SCENARIO === "accepted-creation" ? new URLSearchParams(location.search).get("project")! : SCENARIO === "linked-agents" || SYNCED ? `repo-${"a".repeat(32)}` : "atlas";
 const STAGE_INSTALL = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
 const SELF_UPDATE_RELOAD = new URLSearchParams(location.search).has("self-update-reload");
 let presenceAnswers = 0;
@@ -181,6 +192,11 @@ const STAGES = SCENARIO === "retired-review" || SCENARIO === "stages" || ACCOUNT
 const FLAT = SCENARIO === "pipeline-block";
 const UK = localStorage.getItem("llv_lang") === "uk";
 const L = (en: string, uk: string) => (UK ? uk : en);
+/* A pipeline drafted from a card's conversation (variant 3,
+   docs/design/start-pipeline-from-conversation/implementation.md): one task
+   holding one conversation in a repository. The driver answers
+   `/api/pipelines/from-conversation`, so it can hold, refuse or lose them. */
+const FROM_CONVERSATION = SCENARIO === "from-conversation";
 /* A drag on a full board (the whole-card drag, docs on the smoothness gate): 48 tasks with long
    titles and descriptions over the four columns, a lane with a running stage on every second one. */
 const DRAG_BOARD = SCENARIO === "drag-board";
@@ -340,6 +356,9 @@ const FM_CASE = new URLSearchParams(location.search).get("case") ?? "p";
 const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE || STREAMING || FIRST_MESSAGE || FEED_CONTINUITY;
 /* Review round 2 of #1712: a conversation no card holds, whose reader takes the window. */
 const LOOSE = SCENARIO === "loose";
+/* A pasted `#c=` link to a conversation the plain catalog does not carry. Its own scope is a cold projection the server
+   answers with a controlled 503 until the driver lets it through (`window.__coldLink`). */
+const COLD_LINK = SCENARIO === "cold-link";
 /* #1765: one task carrying five pipelines — two running, three completed — so
    a card's rows can be read for what each pipeline actually does. */
 /* Columns balanced on large screens: every column holds a card whose
@@ -695,6 +714,9 @@ const searchImpl2 = add(conversation("search-impl-2", "Swap the alias only after
 const searchRev = add(conversation("search-rev", "Review the warm-up gate", { mtime: now - 41 * MIN, engine: "codex", model: "gpt-5.6" }));
 const searchVer1 = add(conversation("search-ver-1", "Results empty for 40 s after the swap", { mtime: now - 90 * MIN }));
 const searchVer2 = add(conversation("search-ver-2", "Re-running the rebuild with traffic", working({ plan: { current: "Re-running the rebuild with traffic" } })));
+const exportSource = FROM_CONVERSATION
+  ? add(conversation("csv-export", L("CSV export retry and streaming writes", "Повтор експорту CSV і потоковий запис"), { mtime: now - 11 * MIN, cwd: "/repo/atlas" }))
+  : null;
 
 if (FEED_FAILURES) { searchVer2.engine = "codex"; searchVer2.fmt = "codex"; }
 const roleAvatarAgent = ROLE_AVATARS ? add(conversation("ra-agent", L("Why the search results went empty", "Чому результати пошуку зникли"), { mtime: now - 20 * MIN })) : null;
@@ -944,6 +966,11 @@ if (RAIL) {
     localStorage.setItem("llvArchivedProjects", JSON.stringify(["quiet-orchard", "birch-notes"]));
   } else localStorage.removeItem("llvArchivedProjects");
 }
+/* A project row's menu (docs/design/project-rail-context-menu/README.md): the names chosen through it and the
+   server's archive shelf, which /api/projects/settings writes and /api/files reads back, as the routes do. */
+const railNames = new Map<string, string | null>();
+const railShelf = new Set<string>();
+const railNamed = (project: string, fallback: string | undefined) => railNames.get(project) ?? fallback;
 
 const searchHelper = PIPELINES ? add(conversation("search-helper", "Helper: profile the index warm-up", { mtime: now - 50 * MIN })) : null;
 const roundsBuild = PIPELINES ? add(conversation("rounds-build", "Builder: rework the retry banner", { mtime: now - 3 * 60 * MIN })) : null;
@@ -951,6 +978,11 @@ const roundsReview = PIPELINES ? add(conversation("rounds-review", "Reviewer: fi
 /* K5b: the conversation the release-notes Review gets when it starts during a save. */
 const searchRevFirst = STAGES ? add(conversation("search-rev-1", "Round 2 approved", { mtime: now - 120 * MIN, engine: "codex", model: "gpt-5.6" })) : null;
 const exportReview = LOOSE ? add(conversation("export-review", "Reviewer: two presets share a name", { mtime: now - 12 * MIN, engine: "codex", model: "gpt-5.6" })) : null;
+/* Two conversations the plain catalog never carries: only a scope pinned to one of them admits its row. */
+const coldLinkRows: FileEntry[] = COLD_LINK ? [
+  add(conversation("cold-link-first", L("Cold link: the first conversation", "Холодне посилання: перша розмова"), { mtime: now - 40 * MIN })),
+  add(conversation("cold-link-second", L("Cold link: the second conversation", "Холодне посилання: друга розмова"), { mtime: now - 25 * MIN })),
+] : [];
 const linksReview = STAGES ? add(conversation("links-review", "Reviewer: both anchors against the published notes", working({ engine: "codex", model: "gpt-5.6", plan: { current: "Reading the published notes" } }))) : null;
 
 /* #1765: each of the five pipelines on t-many gets its own pair of stages and
@@ -1070,12 +1102,18 @@ const glyphPipelines: Pipeline[] = GLYPHS ? (() => {
   };
   const done = (ago: number) => ({ completedAt: iso((ago - 6) * MIN) });
   const lane = (ids: string[]) => chain(ids.map(entry));
+  /* A glyph moves only while its stage's agent works
+     (docs/design/model-icon-motion-brief.md), so every stage at work has one. */
+  const agentAt = (id: string, name: string, title: string) => {
+    const [, , , engine, model] = entry(id);
+    return add(conversation(name, title, { model, ...(engine === "codex" ? { engine, root: "codex-sessions", fmt: "codex" } : {}), ...working() }));
+  };
   return [
     /* Every model at work: a lane runs one stage at a time, so one lane each. */
     ...GLYPH_MODELS.map((model, index) => {
       const [id, , , , , title] = model;
       return pipeline(`p-glyph-${model[1]}`, title, "t-glyphs-run", "running", chain([model]),
-        [ran(id, "running", 30 - index)], { stageId: id, state: "running", input: null, activatedBy: null }, { createdAt: iso((40 - index) * MIN) });
+        [ran(id, "running", 30 - index, {}, agentAt(id, `glyphs-run-${id}`, title))], { stageId: id, state: "running", input: null, activatedBy: null }, { createdAt: iso((40 - index) * MIN) });
     }),
     /* A draft: nine stages configured, none started, each waiting on its model. */
     pipeline("p-glyphs-wait", L("Plan the export release", "Спланувати випуск експорту"), "t-glyphs", "draft", chain(GLYPH_MODELS),
@@ -1097,7 +1135,7 @@ const glyphPipelines: Pipeline[] = GLYPHS ? (() => {
       marksStage("review", "reviewer", null, "codex", "gpt-6-astra", "high"),
     ], [
       ran("build", "passed", 40, done(40)),
-      { stageId: "review", attempts: [attempt(1, "running", null, { effectiveRole: runRole("reviewer", "codex", "gpt-6-astra", "high"), startedAt: iso(20 * MIN) })] },
+      { stageId: "review", attempts: [attempt(1, "running", agentAt("critique", "glyphs-review", "Reviewing the export dialog"), { effectiveRole: runRole("reviewer", "codex", "gpt-6-astra", "high"), startedAt: iso(20 * MIN) })] },
     ], { stageId: "review", state: "reviewing", input: null, activatedBy: null }, { createdAt: iso(50 * MIN) }),
     pipeline("p-glyphs-commit", L("Land the saved-export migration", "Завершити перенесення збережених експортів"), "t-glyphs-live", "running", lane(["migrate"]),
       [ran("migrate", "committing", 12)], { stageId: "migrate", state: "committing", input: null, activatedBy: null }, { createdAt: iso(30 * MIN) }),
@@ -1105,7 +1143,7 @@ const glyphPipelines: Pipeline[] = GLYPHS ? (() => {
       ran("design", "passed", 120, done(120)),
       /* Docs passed, and its conversation took more work after it did (#1744). */
       ran("docs", "passed", 100, done(100), add(conversation("glyphs-rework-docs", "Reworking the export guide", { model: "sonnet", ...working() }))),
-      ran("critique", "running", 60),
+      ran("critique", "running", 60, {}, agentAt("critique", "glyphs-rework-critique", "Critiquing the export guide")),
     ], { stageId: "critique", state: "running", input: null, activatedBy: null }, { createdAt: iso(130 * MIN) }),
   ];
 })() : [];
@@ -1787,7 +1825,17 @@ const cloudChecks = createChecksFixtureRoute((new URLSearchParams(location.searc
 const cloudChecksPipelines: Pipeline[] = CLOUD_CHECKS ? [pipeline("lane-cloud-checks", "Run heavy checks in Codex Cloud", "t-cloud-checks", "running",
   [stage("implement", "builder", "review"), stage("review", "reviewer", null)], [],
   { stageId: "implement", state: "running", input: null, activatedBy: null })] : [];
+/* `?scenario=stage-place`: one lane whose stage ran in the cloud, whose next one moved to this machine and keeps its cause, and one still configured for the cloud. */
+const STAGE_PLACE = SCENARIO === "stage-place";
+const stagePlacePipelines: Pipeline[] = STAGE_PLACE ? [pipeline("lane-stage-place", L("Run a stage in Claude Code cloud", "Запустити етап у хмарі Claude Code"), "t-stage-place", "running",
+  [stage("implement", "builder", "review", { runtime: "claude-cloud" }), stage("review", "builder", "verify", { runtime: "claude-cloud" }), stage("verify", "builder", null, { runtime: "claude-cloud" })],
+  [
+    { stageId: "implement", attempts: [attempt(1, "passed", null, { completedAt: iso(30 * MIN), definition: { runtime: "claude-cloud" }, cloud: { phase: "completed" } })] },
+    { stageId: "review", attempts: [attempt(1, "running", null, { definition: { runtime: "claude-cloud" }, cloud: { phase: "failed", fallback: { at: iso(5 * MIN), reason: "Claude Cloud session can write to GitHub; read-only access was not proven, so no assignment was sent. Connect GitHub read-only for this account (docs/design/claude-code-cloud.md, setup step 2)" } } })] },
+  ],
+  { stageId: "review", state: "running", input: null, activatedBy: null })] : [];
 const pipelines: Pipeline[] = [
+  ...stagePlacePipelines,
   ...cloudChecksPipelines,
   ...wallPipelines,
   ...unstartedPipelines,
@@ -2063,6 +2111,7 @@ const tasks: BoardTask[] = [
   task("t-queue", "done", "Preserve native queue recovery through journal compaction", "", 4 * 24 * 60 * MIN),
   task("t-old", "done", "An empty task someone took off the board", "", 9 * 24 * 60 * MIN, [], { board: "hidden" }),
   ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
+  ...(exportSource ? [task("t-csv-export", "assigned", L("CSV export fails on large projects: the worker runs out of memory past 50k rows", "Експорт CSV падає на великих проєктах: воркеру бракує пам’яті понад 50 тис. рядків"), L("Customers parse the file, so the format stays byte for byte.", "Клієнти розбирають файл, тож формат лишається байт у байт."), 11 * MIN, [exportSource])] : []),
   ...(SYNCED ? [
     task("t-rem-run", "assigned", L("Ship the synced task card", "Випустити картку синхронізованої задачі"), L("Show the other machine's stages on the card and mark it as managed there.", "Показати етапи з іншої машини на картці й позначити, що нею керують там."), 6 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
     task("t-rem-wait", "assigned", L("Answer the deploy question on the stage box", "Відповісти на питання про розгортання на стенді"), "", 14 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
@@ -2163,9 +2212,28 @@ const tasks: BoardTask[] = [
     task("t-finish-hold", "assigned", L("Merge when the review passes", "Мердж, коли ревʼю пройдено"), L("The setting, the runner, and its docs.", "Налаштування, мердж і документація."), 50 * MIN),
     task("t-finish-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 75 * MIN),
   ] : []),
+  ...(STAGE_PLACE ? [task("t-stage-place", "assigned", L("Run a stage in Claude Code cloud", "Запустити етап у хмарі Claude Code"), "", 5 * MIN)] : []),
   ...(CLOUD_CHECKS ? [task("t-cloud-checks", "assigned", L("Run heavy checks in Codex Cloud", "Важкі перевірки в Codex Cloud"), "", 5 * MIN)] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
+
+/* `?scenario=stages&progress=1`: the agents' estimates on the stages board's cards. Two tasks have running
+   work (a glowing track), one is a done task, one carries an estimate two days old, and the rest report none. */
+if (SCENARIO === "stages" && new URLSearchParams(location.search).has("progress")) {
+  const builder = { kind: "agent", role: "builder", conversationId: "conversation_progress-builder" } as const;
+  const estimates: Record<string, { value: number; minutesAgo: number; by: NonNullable<BoardTask["progress"]>["by"]; color?: BoardTask["color"] }> = {
+    "t-search": { value: 35, minutesAgo: 18, by: builder, color: "sky" },
+    "t-upload": { value: 65, minutesAgo: 12, by: builder },
+    "t-export": { value: 0, minutesAgo: 6, by: builder },
+    "t-links": { value: 100, minutesAgo: 9, by: builder, color: "coral" },
+    "t-limits": { value: 50, minutesAgo: 2 * 24 * 60 + 180, by: { kind: "agent", role: "architect", conversationId: null } },
+    "t-compact": { value: 100, minutesAgo: 2 * 24 * 60, by: { kind: "operator" } },
+  };
+  for (const row of tasks) {
+    const estimate = estimates[row.id];
+    if (estimate) Object.assign(row, { progress: { value: estimate.value, setAt: iso(estimate.minutesAgo * MIN), by: estimate.by }, ...(estimate.color ? { color: estimate.color } : {}) });
+  }
+}
 
 // Structured task motion, over the same real Viewer and existing fixture driver.
 if (SCENARIO === "task-motion") {
@@ -2239,7 +2307,7 @@ if (CALM) {
   const cut = "interrupted by a Delegatus restart";
   const asker = conv("calm-ask", L("Which banner copy ships?", "Який текст банера йде в реліз?"), 9 * MIN, {
     pendingQuestion: {
-      kind: "question", toolUseId: "toolu-calm-ask", transcriptPath: "/repo/calm-ask.jsonl", pid: 1, paneTarget: null, askedAt: iso(9 * MIN),
+      kind: "question", toolUseId: "toolu-calm-ask", transcriptPath: "/repo/calm-ask.jsonl", pid: 1, askedAt: iso(9 * MIN),
       questions: [{ question: L("Which banner copy ships?", "Який текст банера йде в реліз?"), header: L("Banner copy", "Текст банера"), multiSelect: false, options: [{ label: L("Short", "Короткий") }, { label: L("Long", "Довгий") }] }],
     },
   });
@@ -2698,6 +2766,12 @@ function transcriptOf(pathname: string): string {
     line(30, { type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: "fixture-failed-tool", arguments: JSON.stringify({ fixtureToolArgs: true, cmd: "pwd" }) } }),
   ].join("\n")}\n`;
   if (FEED_RECOVERY && file === searchVer2) return `${[said(120, L("Ready for the next request.", "Готовий до наступного запиту.")), ...(feedRecoveryEcho ? [asked(0, delayedLaunchText)] : [])].join("\n")}\n`;
+  if (coldLinkRows.includes(file)) {
+    const long = [asked(90 * MIN, `${file.title} — pick it up from the task text.`)];
+    for (let step = 0; step < 24; step += 1) long.push(said((88 - step * 3) * MIN, `${file.title}, step ${step + 1}: re-ran the rebuild against live traffic and checked the alias swap window.`));
+    long.push(said(2 * MIN, L("Latest message: the alias swap held under live traffic.", "Останнє повідомлення: перемикання псевдоніма витримало живий трафік.")));
+    return `${long.join("\n")}\n`;
+  }
   if (file === searchVer2) {
     const long = [asked(90 * MIN, `${file.title} — pick it up from the task text.`)];
     for (let step = 0; step < 24; step += 1) long.push(said((88 - step * 3) * MIN, `Step ${step + 1}: re-ran the rebuild against live traffic and checked the alias swap window.`));
@@ -2899,6 +2973,49 @@ function transcriptOf(pathname: string): string {
 
 const params = new URLSearchParams(location.search);
 const PIPELINE_INIT = params.get("pipelineinit");
+/* A draft prepared from a pasted PR or issue link (docs/research/competitors-2026-10.md rank 4):
+   the picker with one answer per pasted link, or the draft's editor. */
+const PIPELINE_LINK = params.get("pipelinelink");
+const LINK_SHA = "4f1c2a9e7b3d5c8a0e6f1b2d4c7a9e3f5b8d0c1a";
+const linkTasks = [
+  { id: "link-task-1", text: "Start pipelines from a pasted pull request link", updatedAt: "2026-10-22T09:00:00Z" },
+  { id: "link-task-2", text: "Review the board's pull request flow on the phone", updatedAt: "2026-10-20T09:00:00Z" },
+];
+const LONG_REPOSITORY = ("atlasmirror" + "forlongrepositorynames".repeat(5)).slice(0, 100);
+function linkSourceAnswer(link: string): Response {
+  const pr = (number: number, head: Record<string, unknown>, tasks: typeof linkTasks) => ({
+    ok: true, repoDir: "/project", source: {
+      kind: "pr", repository: "example/atlas", number, url: `https://github.com/example/atlas/pull/${number}`,
+      title: "Resolve the base and head of a pasted pull request before drafting a pipeline", state: number === 42 ? "draft" : "open",
+      base: { branch: "main" }, head: { sha: LINK_SHA, ...head }, tasks,
+      request: { task: `PR #${number}`, spec: "", baseBranch: "main", delivery: { branch: `refs/heads/${String(head.branch)}`, remote: String(head.remote), pr: number, ...(head.fork ? { prRepository: "example/atlas" } : {}) } },
+      attachLink: null,
+    },
+  });
+  if (link.includes("/pull/41")) return json(pr(41, { branch: "feature/link-source-preview", repository: "example/atlas", remote: "origin", fork: false, maintainerCanModify: null }, linkTasks));
+  if (link.includes("/pull/42")) return json(pr(42, { branch: "main", repository: "contributor/atlas", remote: "https://github.com/contributor/atlas.git", fork: true, maintainerCanModify: false }, []));
+  /* A valid repository name as long as GitHub allows, with no place to break. */
+  if (link.includes("/pull/44")) return json(pr(44, { branch: "main", repository: `contributor/${LONG_REPOSITORY}`, remote: `https://github.com/contributor/${LONG_REPOSITORY}.git`, fork: true, maintainerCanModify: true }, []));
+  if (link.includes("/pull/45")) return json({ ok: false, code: "remote_rewritten", params: { repository: `contributor/${LONG_REPOSITORY}` },
+    error: `this checkout's Git url insteadOf or pushInsteadOf settings send https://github.com/contributor/${LONG_REPOSITORY}.git to another repository than contributor/${LONG_REPOSITORY}` }, 409);
+  if (link.includes("/issues/7")) return json({ ok: true, repoDir: "/project", source: {
+    kind: "issue", repository: "example/atlas", number: 7, url: "https://github.com/example/atlas/issues/7", title: "Start work from an issue link", state: "open",
+    base: { branch: "main" }, head: null, tasks: [], request: { task: "Issue #7", spec: "", baseBranch: "main" }, attachLink: "example/atlas#7",
+  } });
+  /* The checkout's Git URL rewrites send the fork's URL elsewhere: the longest refusal the picker shows. */
+  if (link.includes("/pull/43")) return json({ ok: false, code: "remote_rewritten", params: { repository: "contributor/atlas" },
+    error: "this checkout's Git url insteadOf or pushInsteadOf settings send https://github.com/contributor/atlas.git to another repository than contributor/atlas" }, 409);
+  return json({ ok: false, code: "merged", error: "PR #9 in example/atlas is already merged", params: { repository: "example/atlas", number: 9 } }, 409);
+}
+const linkDraft = {
+  id: "link-draft", task: "PR #41: Resolve the base and head of a pasted pull request before drafting a pipeline", project: "atlas", repoDir: "/project",
+  worktreeDir: "/project-pipeline-link-draft", branch: "pipeline/link-draft", baseBranch: "main", baseRef: LINK_SHA, lastPassedCommit: LINK_SHA, baseRefPinned: false,
+  spec: "Source: https://github.com/example/atlas/pull/41",
+  stages: [{ id: "implement", kind: "run", role: { roleId: "builder" }, prompt: "{{task}}", next: null, onFail: null }],
+  runs: [{ stageId: "implement", attempts: [] }], cursor: { stageId: "implement", state: "pending", input: null, activatedBy: null },
+  state: "draft", taskIds: [], createdAt: "2026-10-23T09:00:00Z", closedAt: null,
+  delivery: { target: { repository: "repo-atlas", remote: "origin", branch: "refs/heads/feature/link-source-preview", pr: 41 }, disposition: "owner", publish: "enabled", ownerId: "link-draft", epoch: 1, active: true },
+} as unknown as Pipeline;
 
 /* The orchestrator's wires (docs/design/orchestrator-arrows.md). The seat made the lanes on five open
    tasks and spawned the export implementer; `&many=1` fills the board to about a hundred cards, a third
@@ -3016,6 +3133,8 @@ let board = {
 if (FEED_RECOVERY) searchVer2.generation = 1;
 
 const evidence = {
+  /* The stable clock used to seed this page's conversations and attempts. */
+  clockAt: iso(0),
   advanceFeedContinuity() { feedContinuityStep += 1; return getRuntimeBus().refresh(); },
   /* Replies the runtime store holds for the reloaded conversation, read after a fresh snapshot. */
   async feedReloadSnapshotReplies() {
@@ -3047,6 +3166,8 @@ const evidence = {
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
   /* #2187: what the board's merge-setting row wrote. */
   settingWrites: [] as Array<Record<string, unknown>>,
+  pipelineStageRuntime: "local" as "local" | "codex-cloud",
+  refusePipelineStageRuntime: false,
   presence: [] as Array<{ mode: string; visiblePaths: string[]; focusedPath: string | null }>,
   assignments: [] as Array<{ method: string; id: string; body: Record<string, unknown> }>,
   /* The focus handoff this page's Viewer runs, for driving an attention
@@ -3113,6 +3234,7 @@ const evidence = {
   filesDelayMs: 0,
   /* Reads of the orchestrator seat route. */
   seatReads: 0,
+  seatReadsByScope: { project: 0, all: 0 },
   /* A conversation starts waiting on the operator, arriving on the next read. */
   askDecision(pathname: string) {
     const index = files.findIndex((entry) => entry.path === pathname);
@@ -3140,6 +3262,8 @@ const evidence = {
   pipelineReads: [] as string[],
   pipelinePatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
   pipelineAnswerDelayMs: 300,
+  releasePipelinePatch: null as (() => void) | null,
+  holdPipelinePatch: false,
   /* The next pipeline write is refused with these words. */
   refuseNextPipelinePatch: null as { status: number; error: string } | null,
   /* The next pipeline write finds this stage started: the engine's race. */
@@ -3718,6 +3842,20 @@ if (DECISIONS) {
     const held = seatRounds[0]!;
     held.decision = { chosen: [], answers: [{ questionId: "place", options: [0] }, { questionId: "deploy", options: [0] }], comment: "", at: iso(MIN), delivery: { state: "sent", retryable: false } };
   }
+  if (DECISIONS?.startsWith("forge-connect")) {
+    const privateApp = DECISIONS === "forge-connect-private", permissions = DECISIONS === "forge-connect-permissions";
+    const row: AppConnectRow = { kind: "request", key: "example-owner/example-repo", requestId: "fixture-connect", repository: "example-owner/example-repo",
+      project: PROJECT, conversationId: "conversation_fixture", permissions: permissions ? { issues: "write", metadata: "read" } : { contents: "write", pull_requests: "write", metadata: "read" },
+      ownRepository: true, absentAtRequest: !permissions, createdAt: 0, expiresAt: 86_400_000, nextAt: 30_000, checks: 1, repositoryId: 1,
+      state: permissions ? "missing_permissions" : "awaiting_click",
+      discovery: { context: { appId: 1, slug: "example-app", accountId: 2, accountType: "users", settingsUrl: "https://github.com/settings/apps/example-app", prerequisite: privateApp ? "app_private" : "none" },
+        covered: permissions, installationId: permissions ? 3 : null, installationUrl: permissions ? "https://github.com/settings/installations/3" : null,
+        missingPermissions: permissions ? ["issues"] : [], missingAppPermissions: permissions ? ["issues"] : [], pending: false } };
+    const form = appConnectForm(row, UK ? "uk" : "en");
+    Object.assign(seatRounds[0]!, { title: form.title, questions: form.questions });
+    seatRounds.splice(1);
+    for (const task of Object.keys(protoRounds)) delete protoRounds[task];
+  }
   protoPublish();
   Object.assign(window, { decisionPosts });
 }
@@ -3861,7 +3999,7 @@ const needsFiles: FileEntry[] = [];
 const needsAdd = (file: FileEntry) => { needsFiles.push(file); return file; };
 const nfAsk = needsAdd(conversation("nf-ask", "Which export presets should ship first?", NEEDS_NOTHING ? { mtime: now - 20 * MIN } : {
   mtime: now - 9 * MIN, lastTurn: { startedAt: (now - 14 * MIN) * 1_000, endedAt: (now - 10 * MIN) * 1_000 },
-  pendingQuestion: { kind: "question", toolUseId: "tool-nf-ask", transcriptPath: "/repo/nf-ask.jsonl", pid: 1, paneTarget: null, askedAt: iso(9 * MIN), questions: [{ question: "Which export presets should ship first?", header: "Presets", multiSelect: false, options: [] }] },
+  pendingQuestion: { kind: "question", toolUseId: "tool-nf-ask", transcriptPath: "/repo/nf-ask.jsonl", pid: 1, askedAt: iso(9 * MIN), questions: [{ question: "Which export presets should ship first?", header: "Presets", multiSelect: false, options: [] }] },
 }));
 const nfLaneBuild = needsAdd(conversation("nf-lane-build", "Reconciling the ledger export", working({ plan: { current: "Reconciling the ledger export" } })));
 const nfClearedBuild = needsAdd(conversation("nf-cleared-build", "Rotating the search alias", { mtime: now - 40 * MIN }));
@@ -4058,14 +4196,34 @@ if (WORKSPACES) {
   if (chosen) localStorage.setItem(WORKSPACE_STORAGE_KEY, chosen === "all" ? "all" : FIXTURE_WORKSPACE_IDS[chosen as keyof typeof FIXTURE_WORKSPACE_IDS] ?? chosen);
 }
 const ROLE_MEMORY = new URLSearchParams(location.search).has("rolememory");
+/* The cold-link scopes: a scope pinned to one of the cold rows holds its first answer until `fail` lets it be the server's
+   503, answers every later request 503 too, and serves its row once `release` opens it. Every `/api/files` URL is kept. */
+const coldLink = {
+  calls: [] as string[],
+  released: new Set<string>(),
+  heldFirst: new Map<string, () => void>(),
+  fail(id: string) { this.heldFirst.get(id)?.(); this.heldFirst.delete(id); },
+  release(id: string) { this.released.add(id); this.fail(id); },
+};
+if (COLD_LINK) (window as unknown as { __coldLink: typeof coldLink }).__coldLink = coldLink;
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
+const SPEED_PARAMS_FETCH = new URLSearchParams(location.search);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  if (SETTINGS_SCENE) {
+    const asked = new URL(input instanceof Request ? input.url : String(input), location.href);
+    const answer = await settingsEvidenceRoute(asked, input instanceof Request ? input.method : init?.method ?? "GET", init);
+    if (answer) return answer;
+  }
   const url = new URL(String(input), location.origin);
-  // The driver supplies the real server projection for the liveness case.
-  if (["stale-working", "finished-work"].includes(new URLSearchParams(location.search).get("scenario") ?? "")
+  if (SCENARIO === "accepted-creation" && (url.pathname.startsWith("/api/pipelines") || url.pathname.startsWith("/fixture/")
+    || ["/api/files", "/api/team", "/api/tasks", "/api/tasks/accepted-control-task"].includes(url.pathname))) return serverFetch(input, init);
+  // The driver supplies the real server projection for the liveness case, and the task summary case's records.
+  if (["stale-working", "finished-work", "task-summary", "board-timeline"].includes(new URLSearchParams(location.search).get("scenario") ?? "")
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
+  if (SCENARIO === "spend-credits" && url.pathname.startsWith("/api/accounts")) return serverFetch(input, init);
+  if (SCENARIO === "account-row" && /^\/api\/(?:accounts|transfer\/accounts|account-project-bindings)/.test(url.pathname)) return serverFetch(input, init);
   const method = (init?.method ?? "GET").toUpperCase();
   /* The lane review case answers these from the driver's own server, through
      the real route handlers over a real repository (docs/design/lane-diff-comments.md). */
@@ -4073,10 +4231,14 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && (/^\/api\/pipelines\/[^/]+\/(?:changes|review)$/.test(url.pathname) || url.pathname.startsWith("/api/runtime/operations/"))) {
     return serverFetch(url.pathname + url.search, init);
   }
+  /* The task album's Files view reads the driver's own server: real route handlers over a real repository. */
+  if (ALBUM && /^\/api\/tasks\/[^/]+\/files(?:\/content)?$/.test(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (WORKSPACES) {
     const answered = await WORKSPACES.answer(url, init);
     if (answered) return answered;
   }
+  if (PIPELINE_LINK && url.pathname === "/api/pipelines/preflight") return json({ ok: true, repoDir: "/project", gitCommonDir: "/project/.git", worktreeParent: "/" });
+  if (PIPELINE_LINK && url.pathname === "/api/pipelines/source") return linkSourceAnswer(String(JSON.parse(String(init?.body)).link));
   if ((PIPELINE_INIT || SCENARIO === "retired-review") && url.pathname === "/api/pipelines/preflight") return PIPELINE_INIT === "refused"
     ? new Response(JSON.stringify({ error: "initialization refused for the Delegatus state directory", code: "initialization_refused", path: "/project" }), { status: 403 })
     : json({ ok: true, repoDir: "/project", gitCommonDir: "/project/.git", worktreeParent: "/" });
@@ -4122,6 +4284,28 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const variants = ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS];
     return { ...role, variants, promptPreview: role.promptScaffold, shipped: { config: role.config, variants } };
   }) });
+  /* A draft's stage configuration names the stage's own role in its select. */
+  if (FROM_CONVERSATION && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, shipped: { config: role.config } })) });
+  /* Ultra on the speed control (`service-tier&speed=…`): each Codex account's own tier catalog,
+     Account B listing ultrafast for GPT-6.1-Sol and Account D only priority, and the in-place speed action. */
+  if (SCENARIO === "service-tier" && (SPEED_PARAMS_FETCH.has("speed") || SPEED_PARAMS_FETCH.has("draft")) && url.pathname === "/api/accounts" && method === "GET") return json(accountsBody);
+  if (SCENARIO === "service-tier" && url.pathname === "/api/accounts/codex/models") {
+    const id = url.searchParams.get("account") || accountsBody.codex.active;
+    const row = accountsBody.codex.accounts.find((account) => account.id === id);
+    if (!row) return json({ error: "Codex account was not found in the requested pool" }, 404);
+    const tiers = id === "default" ? [{ id: "priority", name: "Fast" }, { id: "ultrafast", name: "Ultrafast" }] : [{ id: "priority", name: "Fast" }];
+    return json({ accounts: [{ id, label: row.label, models: [{ slug: "gpt-6.1-sol", tiers }] }] });
+  }
+  if (SCENARIO === "service-tier" && url.pathname === "/api/conversation-host" && method === "POST") {
+    const body = JSON.parse(String(init?.body ?? "{}")) as { action?: string; serviceTier?: string };
+    if (body.action === "speed") {
+      const answer = new URLSearchParams(location.search).get("speedanswer");
+      if (answer === "hold") await new Promise(() => {});
+      /* The server's own service_tier_unavailable wording (serviceTierRefusal): several lines on a phone. */
+      if (answer === "refuse") return json({ ok: false, code: "service_tier_unavailable", requestedTier: body.serviceTier, error: `no evaluated account offers serviceTier ${body.serviceTier} for model gpt-6.1-sol; evaluated pinned account "default": account "Account B" (default): gpt-6.1-sol offered: priority` }, 409);
+      return json({ ok: true, operationId: "speed-fixture", requestedTier: body.serviceTier, appliedTier: body.serviceTier, echoed: true });
+    }
+  }
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (SCENARIO === "memory-settings" && ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/asks-you"].includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (HEADER_MENU && HEADER_ROUTES.includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
@@ -4130,6 +4314,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* «Keys» (docs/design/keys-settings.md): the driver answers the section's routes, or hands them to the real ones. */
   if ((HEADER_MENU || SCENARIO === "memory-settings" || SCENARIO === "keys") && url.pathname.startsWith("/api/keys")) return serverFetch(url.pathname + url.search, init);
   if (SCENARIO === "keys" && url.pathname === "/api/transcribe/backend") return serverFetch(url.pathname + url.search, init);
+  /* What the OpenAI key serves (docs/design/openai-key-services.md): `&openai=1` hands the provider routes to the driver's real handlers. */
+  if (SCENARIO === "keys" && new URLSearchParams(location.search).has("openai")
+    && (url.pathname === "/api/openai-services" || url.pathname === "/api/voice-companion/settings" || url.pathname === "/api/asks-you")) return serverFetch(url.pathname + url.search, init);
   /* Role memory (docs/design/role-memory.md §3.1): `&rolememory=1` hands the rules window and the card's lesson line to the driver's real routes. */
   if (ROLE_MEMORY && url.pathname.startsWith("/api/role-memory")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
@@ -4137,6 +4324,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/board/maintenance/worktrees") return serverFetch(url.pathname, init);
   if ((TICK_CARDS || SEAT_TICK_DRIVER) && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
+  /* The create-by-name case answers the create request from the driver's own server (docs/design/create-project-by-name.md §7). */
+  if (url.pathname === "/api/projects/create") return serverFetch(url.pathname, init);
   if (url.pathname.startsWith("/api/links")) return serverFetch(url.pathname + url.search, init);
   if (OVERLAY_LINKS && url.pathname.startsWith("/api/artifact")) return serverFetch(url.pathname + url.search, init);
   if (PROTO && url.pathname === "/api/transcribe" && method === "POST") {
@@ -4284,6 +4473,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (SEAT_CLS && url.pathname === "/api/orchestrator/seat" && launchRun.startedAt && url.searchParams.get("scope") !== "all") {
     evidence.seatReads += 1;
+    evidence.seatReadsByScope[url.searchParams.get("scope") === "all" ? "all" : "project"] += 1;
     const adopted = Date.now() - launchRun.startedAt >= LAUNCH_ADOPT_MS;
     const at = new Date(launchRun.startedAt).toISOString();
     return json({
@@ -4302,6 +4492,29 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       engine: launchRun.engine, model: launchRun.model, effort: launchRun.effort, accountId: "primary", cwd: "/repo/atlas", transcriptPath: launchRun.path,
       liveness: { lifecycle: "running", hostState: "alive", silentForMs: 1_000 },
       context: null, transcriptFacts: null, rotation: { recommended: false, level: "none", reasons: [], thresholdUnknown: false },
+    });
+  }
+  if (COLD_LINK && url.pathname === "/api/files" && method === "GET" && url.searchParams.get("view") !== "storage-health") {
+    coldLink.calls.push(url.pathname + url.search);
+    const pin = url.searchParams.get("path");
+    const pinned = coldLinkRows.find((row) => row.conversationId === pin || row.path === pin);
+    if (pinned && !coldLink.released.has(pinned.conversationId!)) {
+      const first = !coldLink.calls.slice(0, -1).some((call) => call.includes(`path=${encodeURIComponent(pinned.conversationId!)}`) || call.includes(`path=${encodeURIComponent(pinned.path)}`));
+      /* A held request ends with its caller, as the browser's own fetch does when the page aborts it. */
+      if (first) {
+        await new Promise<void>((resolve, reject) => {
+          coldLink.heldFirst.set(pinned.conversationId!, resolve);
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")), { once: true });
+        });
+      }
+      return json({ error: "files projection unavailable", code: "files_projection_unavailable", reason: "expired" }, 503);
+    }
+    const carried = files.filter((file) => !coldLinkRows.includes(file) || file === pinned);
+    return json({
+      files: carried,
+      projectCatalog: [{ project: PROJECT, conversations: files.length, smt: Math.max(...files.map((file) => file.mtime)) }],
+      flows: [], pipelines: [], tasks: [], workflows: [], systemHealth: {},
+      ...(pinned ? { pinOverlayPaths: [pinned.path] } : {}),
     });
   }
   if (url.pathname === "/api/files") {
@@ -4341,12 +4554,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       : ORCH_FIRST || (FM_SEAT && !fm.confirmed)
       ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }, ...INSTALLER_PROJECTS], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {
-        files: shown,
+        files: RAIL && railNames.size ? shown.map((file) => (railNames.has(file.project) ? { ...file, projectName: railNamed(file.project, file.projectName) } : file)) : shown,
         projectCatalog: [...new Set(shown.map((file) => file.project))].filter((project) => !railCatalog.some((entry) => entry.project === project)).map((project) => {
           const own = shown.filter((file) => file.project === project);
           return { project, conversations: own.length, smt: Math.max(...own.map((file) => file.mtime)) };
-        }).concat(railCatalog, TELEGRAM_STEP ? [TELEGRAM_REPOSITORY] : []),
-        ...(RAIL ? { crownedProjects: [LEDGER, "harbor-docs"] } : {}),
+        }).concat(railCatalog.map((entry) => ({ ...entry, displayName: railNamed(entry.project, entry.displayName)!, ...(WORKSPACES ? { projectRoot: `/srv/projects/${entry.project}` } : {}) })), TELEGRAM_STEP ? [TELEGRAM_REPOSITORY] : []),
+        ...(RAIL ? { crownedProjects: [LEDGER, "harbor-docs"], archivedProjects: [...railShelf] } : {}),
         flows: OVERVIEW_QUIET ? [] : flows,
         pipelines: OVERVIEW_QUIET ? [] : pipelines,
         tasks,
@@ -4357,7 +4570,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const retiredBoard = SCENARIO === "retired-review" && params.get("surface") === "direct-board"
       ? { files: [orchestrator, ...directFiles], flows: [], pipelines: [], tasks: [], conversationAliases: { "old-direct-subject": "direct-subject" },
         projectCatalog: [{ project: PROJECT, conversations: directFiles.length + 1, smt: now }] } : {};
-    const body = JSON.stringify({ ...scoped, ...retiredBoard, ...((DECISIONS || REPORT_PREVIEW) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
+    const body = JSON.stringify({ ...scoped, ...retiredBoard, ...((DECISIONS || REPORT_PREVIEW) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
     if (COLD_BOARD) {
       const headers = new Headers(init?.headers);
       const required = headers.get("x-llv-files-generation");
@@ -4395,7 +4608,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.pathname === "/api/runtime/snapshot" && STRUCTURED) return json(structuredSnapshot());
   if (url.pathname === "/api/runtime/snapshot") return json({ code: RUNTIME_PLANE_ABSENT }, 503);
-  if (STRUCTURED && url.pathname === "/api/tmux" && method === "POST") {
+  if (STRUCTURED && url.pathname === "/api/conversation-host" && method === "POST") {
     evidence.pillRequests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     return json({ ok: true, structured: true });
   }
@@ -4422,15 +4635,29 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   /* #2187 §6: the project's merge setting, as the settings route answers it. */
   if (url.pathname === "/api/projects/settings") {
+    let asked = url.searchParams.get("project") ?? PROJECT;
     if (method === "PUT") {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { mergeOnReview?: unknown; bridgeReports?: unknown };
+      const body = JSON.parse(String(init?.body ?? "{}")) as { project?: string; mergeOnReview?: unknown; bridgeReports?: unknown; pipelineStageRuntime?: unknown; name?: unknown; archived?: unknown };
       evidence.settingWrites.push(body);
+      if (body.pipelineStageRuntime === "local" || body.pipelineStageRuntime === "codex-cloud") {
+        if (evidence.refusePipelineStageRuntime) return json({ error: "could not persist the setting" }, 500);
+        evidence.pipelineStageRuntime = body.pipelineStageRuntime;
+      }
       if (typeof body.mergeOnReview === "boolean") MERGE_SETTING.enabled = body.mergeOnReview;
       if (typeof body.bridgeReports === "boolean") BRIDGE_SETTING.enabled = body.bridgeReports;
+      if (body.project) asked = body.project;
+      /* The routes' own refusals: a member writes no name and no shelf. */
+      if ((body.name !== undefined || body.archived !== undefined) && WORKSPACES && WORKSPACE_PARAMS.has("member")) return json({ error: "project access changed", code: "workspace_denied" }, 403);
+      if (body.name === null || typeof body.name === "string") railNames.set(asked, typeof body.name === "string" ? body.name.trim() : null);
+      if (body.archived === true) railShelf.add(asked);
+      if (body.archived === false) railShelf.delete(asked);
     }
     return json({
       ok: true,
+      name: railNames.get(asked) ?? null,
+      archived: railShelf.has(asked),
       project: PROJECT,
+      pipelineStageRuntime: evidence.pipelineStageRuntime,
       mergeOnReview: { enabled: MERGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" },
       bridgeReports: { enabled: BRIDGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" },
       reportTelegram: REPORT_TELEGRAM,
@@ -4593,6 +4820,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     tasks[index] = next;
     return json({ ok: true, task: next });
   }
+  /* The driver's own server answers the source preview and the draft, so a
+     case can hold an answer, refuse it or lose it. A draft it answers joins
+     the page's pipelines, as the store would hold it. */
+  if (FROM_CONVERSATION && url.pathname === "/api/pipelines/from-conversation") {
+    const answer = await serverFetch(url.pathname + url.search, init);
+    const text = await answer.text();
+    const body = (() => { try { return JSON.parse(text) as { pipeline?: Pipeline }; } catch { return null; } })();
+    if (answer.ok && body?.pipeline && !pipelines.some((entry) => entry.id === body.pipeline!.id)) pipelines.push(body.pipeline);
+    return new Response(text, { status: answer.status, headers: { "content-type": "application/json" } });
+  }
   if (url.pathname.startsWith("/api/pipelines/") && url.pathname.endsWith("/checks")) {
     const answer = await cloudChecks.answer(decodeURIComponent(url.pathname.split("/")[3] ?? ""), method, url.searchParams, init?.body ? String(init.body) : null);
     return json(answer.body, answer.status);
@@ -4604,11 +4841,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "GET") {
       evidence.pipelineReads.push(id);
       const read = pipelines[index]!;
-      return json({ ok: true, pipeline: read, stageDigests: Object.fromEntries(read.stages.map((stage) => [stage.id, fixtureStageDigest(stage)])) });
+      return json({ ok: true, pipeline: read, stageDigests: Object.fromEntries(read.stages.map((stage) => [stage.id, fixtureStageDigest(stage)])), graphDigest: read.stages.map((stage) => `${stage.id}>${stage.next ?? ""}`).join(",") });
     }
     if (method === "PATCH") {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
       evidence.pipelinePatches.push({ id, body });
+      if (evidence.holdPipelinePatch) await new Promise<void>((resolve) => { evidence.releasePipelinePatch = resolve; });
       await new Promise((resolve) => setTimeout(resolve, evidence.pipelineAnswerDelayMs));
       const record = structuredClone(pipelines[index]!) as Pipeline;
       const runs = record.runs as unknown as Array<{ stageId: string; attempts: unknown[] }>;
@@ -4651,6 +4889,14 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         if (body.applyNow !== true && (record.runs.find((entry) => entry.stageId === target.id)?.attempts.length ?? 0) > 0) return json({ error: "stage has already started" }, 409);
         if (body.expectedStageDigest !== undefined && fixtureStageDigest(target) !== body.expectedStageDigest) return stageChanged("expectedStageDigest", "the stage changed since it was read; read it again before overriding it");
         if (typeof body.prompt === "string") target.prompt = body.prompt;
+        /* A waiting stage's role and runtime, as the placeholder pane sends them. */
+        if (body.applyNow !== true) {
+          const roleRef = body.role as { roleId?: string } | null | undefined;
+          if (roleRef?.roleId) { target.role = roleRef as typeof target.role; target.effectiveRole = { ...target.effectiveRole, roleId: roleRef.roleId } as typeof target.effectiveRole; }
+          if (typeof body.engine === "string") { target.engine = body.engine as typeof target.engine; target.effectiveRole = { ...target.effectiveRole, engine: body.engine as typeof target.effectiveRole.engine }; }
+          if (typeof body.model === "string") target.effectiveRole = { ...target.effectiveRole, model: body.model };
+          if (typeof body.effort === "string") target.effectiveRole = { ...target.effectiveRole, effort: body.effort };
+        }
         if (body.applyNow === true) {
           const live = record.runs.find(entry => entry.stageId === target.id)?.attempts.at(-1);
           if (!live || live.state !== "running" || record.state !== "running") return json({ error: "apply now requires a running stage" }, 409);
@@ -4697,6 +4943,21 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         record.dismissedBy = { kind: "operator" };
       } else if (body.action === "close") {
         record.state = "closed";
+      } else if (body.action === "start") {
+        if (record.state !== "draft") return json({ error: "pipeline is not a draft" }, 409);
+        const first = record.stages[0]!;
+        record.state = "running";
+        record.cursor = { stageId: first.id, state: "running", input: null, activatedBy: null } as Pipeline["cursor"];
+        record.worktreeDir = "/repo/atlas-worktrees/pipeline-csv-export";
+        (record.runs as unknown as Array<{ stageId: string; attempts: unknown[] }>).push({ stageId: first.id, attempts: [attempt(1, "running", null, { startedAt: new Date().toISOString() })] });
+      } else if (body.action === "add-stage") {
+        const stage = body.stage as Pipeline["stages"][number];
+        const after = record.stages.find((entry) => entry.id === body.after);
+        if (record.state !== "draft" || !after || !stage) return json({ error: "unsupported in the evidence fixture" }, 400);
+        const tail = record.stages.find((entry) => entry.id === after.id)!;
+        const roleId = (stage.role as { roleId: string } | undefined)?.roleId ?? "builder";
+        record.stages.push({ ...stage, next: tail.next ?? null, onFail: null, effectiveRole: { ...tail.effectiveRole, roleId } } as Pipeline["stages"][number]);
+        tail.next = stage.id;
       } else {
         return json({ error: "unsupported in the evidence fixture" }, 400);
       }
@@ -4898,7 +5159,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
   }
   if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
-  if (url.pathname === "/api/conversations") return json({ items: files, total: files.length, nextCursor: null });
+  if (url.pathname === "/api/conversations") {
+    const own = RAIL && url.searchParams.get("project") ? files.filter((file) => file.project === url.searchParams.get("project")) : files;
+    return json({ items: own, total: own.length, nextCursor: null });
+  }
   if (url.pathname === "/api/orchestrator/seat" && method === "POST" && FM_SEAT) {
     fm.posts.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     fm.confirmed = true;
@@ -4907,12 +5171,14 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.pathname === "/api/orchestrator/seat" && NO_SEAT && !(FM_SEAT && fm.confirmed)) {
     evidence.seatReads += 1;
+    evidence.seatReadsByScope[url.searchParams.get("scope") === "all" ? "all" : "project"] += 1;
     const all = { conversationIds: [], paths: [], previous: { conversationIds: [], paths: [] } };
     if (url.searchParams.get("scope") === "all") return json({ all });
     return json({ seat: null, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: false, previous: [], currentTask: null, all });
   }
   if (url.pathname === "/api/orchestrator/seat") {
     evidence.seatReads += 1;
+    evidence.seatReadsByScope[url.searchParams.get("scope") === "all" ? "all" : "project"] += 1;
     return json({
       seat: {
         project: PROJECT, seatEpoch: 3, conversationId: orchestrator.conversationId, path: orchestrator.path, mandate: ROTATION_MANDATE?.mandate ?? "Keep the project moving.",
@@ -5211,6 +5477,8 @@ function voiceCompanionScene() {
   /* The underlay: cells that count the clicks that reach them, so a driver can tell a click that passed through
      the lane from one a bubble took. They are not controls, so the character stays wherever it is put. */
   const underlay = params.get("surface") === "underlay";
+  const reconnect = params.has("reconnect") ? reconnectEvidence(UK ? "uk" : "en") : null;
+  if (reconnect) Object.assign(window, { voiceReconnect: reconnect.controls });
   const buttons = params.get("surface") === "buttons";
   const clicks: Record<string, number> = {};
   Object.assign(window, { voiceUnderlayClicks: clicks });
@@ -5229,7 +5497,7 @@ function voiceCompanionScene() {
           ))}
         </div>
       ) : <Viewer />}
-      {VOICE_PRODUCT ? null : <VoiceCompanion adapter={shown} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} seat={params.get("seat") === "none" ? false : undefined} preflight={failure ? () => failure : undefined} onOpenSettings={() => { voice.settingsOpened += 1; }} protect={COMPANION_PROTECT} rows={COMPANION_ROWS} reserve={companionReserved} ready={companionShellReady} />}
+      {VOICE_PRODUCT ? null : <VoiceCompanion adapter={reconnect?.adapter ?? shown} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} seat={params.get("seat") === "none" ? false : undefined} preflight={failure ? () => failure : undefined} onOpenSettings={() => { voice.settingsOpened += 1; }} protect={COMPANION_PROTECT} over={COMPANION_OVER} head={COMPANION_HEAD} rows={COMPANION_ROWS} reserve={companionReserved} ready={companionShellReady} />}
     </>
   );
 }
@@ -5306,6 +5574,7 @@ function RetiredReviewScene() {
 
 /* The team view is read once the fetch double above answers it. */
 if (WORKSPACES) void refreshTeamView();
+if (SCENARIO === "accepted-creation") void refreshTeamView();
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
 const diskDensity = new URLSearchParams(location.search).get("disk-density");
 // Mount the production dock beside the Viewer for shared desktop-host cases.
@@ -5330,11 +5599,75 @@ function VoicePanelScene() {
     </div>
   );
 }
+/* The seat's speed control (`service-tier&speed=1`): a structured Codex seat on GPT-6.1-Sol, on Account B
+   (whose catalog lists ultrafast) or `&account=d` Account D (priority only), at the standard tier or
+   `&tier=ultrafast` already applied. `&draft=create|rotate` is a launch draft with Ultra chosen. */
+const SPEED_PARAMS = new URLSearchParams(location.search);
+function SpeedSeatScene() {
+  const onD = SPEED_PARAMS.get("account") === "d";
+  const tier = SPEED_PARAMS.get("tier");
+  const file: FileEntry = {
+    ...searchVer2, engine: "codex", root: "codex-sessions", durableLineage: undefined,
+    path: onD ? "/fixture/accounts/codex/account-d/sessions/seat.jsonl" : searchVer2.path,
+    model: "gpt-6.1-sol", effort: "high", fast: tier === "ultrafast", serviceTier: tier,
+  };
+  return <RuntimePill file={file} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />;
+}
+function SpeedDraftScene({ mode }: { mode: string }) {
+  /* `&inherit=1`: a rotation the operator left untouched, so no speed is chosen and the incumbent's tier carries over. */
+  const seeded: Record<string, string> = { engine: "codex", model: "gpt-6.1-sol", effort: "high", speed: SPEED_PARAMS.has("inherit") ? "" : "ultrafast", accountId: SPEED_PARAMS.get("account") === "d" ? "account-d" : "default" };
+  const launch = useAgentLaunchDraft({ storage: { read: (name) => seeded[name] ?? "", write: () => {} } });
+  return (
+    <div className="flex max-w-[640px] flex-col gap-3" data-speed-draft={mode}>
+      {mode === "create" ? <RunsOnRow draft={launch} phone={innerWidth < 640} /> : <AgentLaunchControls draft={launch} stacked inheritSpeed />}
+      <div><DraftRuntimePill launch={launch} /></div>
+    </div>
+  );
+}
+
 const relayChainEvidence: RelayChatsPayload = { relays: [{ id: "fixture-relay", name: "Example relay", origin: "https://relay.example" }], chats:
   (["member", "admin", "owner"] as const).map((authority, i) => ({ id: `chain-${i}`, relayId: "fixture-relay", relayName: "Example relay", targetId: "fixture-target", targetName: "Support bot", chatKey: "fixture-chat-chain-key", authority,
     engine: "claude", turns: 3, compactions: 0, createdAt: "2026-10-17T10:00:00Z", lastTurnAt: "2026-10-17T10:00:00Z", state: "idle", file: { ...files[0]!, path: `fixture-chain-${i}`, title: `Chain ${i}` } })) };
-createRoot(document.getElementById("root")!).render(SCENARIO === "retired-review" && new URLSearchParams(location.search).has("surface") ? <RetiredReviewScene /> : SCENARIO === "workspaces-team" ? <TeamPage initialTab={WORKSPACE_PARAMS.has("members") ? "members" : "workspaces"} initialCreate={WORKSPACE_PARAMS.has("create")} />
+function SpendCreditsScene() {
+  const state = useEngineAccounts("codex");
+  return <main className="relative flex min-h-screen items-start justify-center bg-canvas p-2 pt-4 text-primary">
+    <div className="relative w-full max-w-[480px]"><AccountsPanel state={state} onClose={() => {}} placement="header" /></div>
+  </main>;
+}
+
+/* The account row on the surface the case names (`surface=dialog|phone`, `engine=claude|codex`): the real panel or the real
+   phone screen over the real store, answered by the case's own routes (`accountRowFrames.ts`). */
+function AccountRowScene() {
+  const params = new URLSearchParams(location.search);
+  const claude = useEngineAccounts("claude");
+  const codex = useEngineAccounts("codex");
+  /* `next=<id>`: the project's next pick, which the row names in its status popover. */
+  const next = params.get("next");
+  if (params.get("surface") === "phone") {
+    return <main data-account-row-scene="phone" className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-canvas text-primary"><MobileAccountsPanel project={next ? "atlas" : null} /></main>;
+  }
+  const state = params.get("engine") === "claude" ? claude : codex;
+  const projectContext = next ? { project: "atlas", nextChosenAccountId: next, restricted: false, allowed: [], carrying: [], outsidePool: [] } : undefined;
+  return <main data-account-row-scene="dialog" className="relative flex min-h-screen items-start justify-center bg-canvas p-2 pt-4 text-primary">
+    <div className="relative w-full max-w-[400px]"><AccountsPanel state={state} onClose={() => {}} placement="header" projectContext={projectContext} /></div>
+  </main>;
+}
+
+if (SCENARIO === "accepted-creation") Object.assign(window, {
+  async createAcceptedEvidence() {
+    await refreshTeamView();
+    const { savedLink, ...config } = await (await fetch("/fixture/config")).json();
+    const result = await createAcceptedPipeline(config, savedLink);
+    return { id: result.pipeline?.id, accepted: result.accepted, error: result.error, warning: result.warning };
+  },
+  // The same browser case can exercise the baseline's ordinary create echo.
+  refreshAcceptedEvidence: () => acceptedFilesCache.retryPipelineCreationRead?.(),
+});
+
+createRoot(document.getElementById("root")!).render(SCENARIO === "account-row" ? <AccountRowScene /> : SCENARIO === "spend-credits" ? <SpendCreditsScene /> : SCENARIO === "retired-review" && new URLSearchParams(location.search).has("surface") ? <RetiredReviewScene /> : SCENARIO === "workspaces-team" ? <TeamPage initialTab={WORKSPACE_PARAMS.has("members") ? "members" : "workspaces"} initialCreate={WORKSPACE_PARAMS.has("create")} />
   : SCENARIO === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />
+  /* `attach`: the draft is created and attaching its issue fails, so the picker keeps it with the reason. */
+  : PIPELINE_LINK ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => (PIPELINE_LINK === "attach" ? { pipeline: linkDraft, warning: "the pipeline store is busy; retry" } : {})} onCreated={() => {}} onClose={() => {}} />
   : PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
   <div className="flex h-full min-h-0">
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
@@ -5345,7 +5678,9 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "retired-review
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>
 ) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "native-queue-proof" ? queueProofPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
-  new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
+  SPEED_PARAMS.has("draft") ? <div className="p-6"><SpeedDraftScene mode={SPEED_PARAMS.get("draft")!} /></div>
+  : SPEED_PARAMS.has("speed") ? <div className="p-6" style={{ paddingTop: 400 }}><SpeedSeatScene /></div>
+  : new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>
 ) : <Viewer />);

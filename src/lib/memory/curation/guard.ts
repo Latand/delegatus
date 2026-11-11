@@ -10,9 +10,10 @@ import { machinePassAuthority, passForConversationAuthority, patchPass, readPass
 
 type Snapshot = ReturnType<ReturnType<typeof agentRegistry>["readOnlySnapshot"]>;
 
-/** Admission can precede the launch HTTP response. Bind only its exact receipt. */
-export function curatorCallerOf(conversationId: string | null, snapshot: Snapshot) {
-  if (!conversationId || !roleMemoryEnabled() && !curatableImportId()) throw new RoleMemoryRefusal("CURATE_CALLER", "only the live curator conversation may curate rules");
+/** Persisted ownership for observing an admitted scheduled pass. Tool and
+ * recovery callers also enforce the memory policy through curatorCallerOf. */
+export function curatorOwnerOf(conversationId: string | null, snapshot: Snapshot) {
+  if (!conversationId) throw new RoleMemoryRefusal("CURATE_CALLER", "only the live curator conversation may curate rules");
   const id = readOnlyConversationLookupFromSnapshot(snapshot).canonicalConversationId(conversationId as `conversation_${string}`);
   let pass = passForConversationAuthority(id);
   const receipt = registryRowsMatching(snapshot, "receipts", "conversationId", id).find(r => r.conversationId === id && r.agentRole === "curator" && r.clientAttemptId?.startsWith("curate_") && !r.rejection && !["failed", "conflicted"].includes(r.state));
@@ -34,6 +35,13 @@ export function curatorCallerOf(conversationId: string | null, snapshot: Snapsho
     }
   }
   if (!pass || !passIsLive(pass) || pass.clientAttemptId !== receipt.clientAttemptId || pass.conversationId !== id || machinePassAuthority()?.id !== pass.id) throw new RoleMemoryRefusal("CURATE_CALLER", "this conversation does not own the live pass");
+  return pass;
+}
+
+/** Admission can precede the launch HTTP response. Bind only its exact receipt. */
+export function curatorCallerOf(conversationId: string | null, snapshot: Snapshot) {
+  if (!conversationId || !roleMemoryEnabled() && !curatableImportId()) throw new RoleMemoryRefusal("CURATE_CALLER", "only the live curator conversation may curate rules");
+  const pass = curatorOwnerOf(conversationId, snapshot);
   // The engines position keeps an import pass of the synced import alone (memory-source-switch.md §4.9).
   if (!roleMemoryEnabled() && !syncCurationOpen(pass.importBatch?.importId)) throw new RoleMemoryRefusal("CURATE_CALLER", "only the live curator conversation may curate rules");
   return pass;

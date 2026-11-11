@@ -48,6 +48,9 @@ test("delegated Codex specs omit skills in terminal and structured launches; ope
       const config = headlessCodexThreadConfig({ config: { mcp_servers: {}, skills: { include_instructions: true } } },
         profile.allowSubagents, profile.mcpServers, profile.plugins, "stdio", [], profile.cleanMemory, profile.omitSkillsInstructions);
       expect(config.skills).toEqual(delegated ? { include_instructions: false } : undefined);
+      const inherited = headlessCodexThreadConfig({ config: { mcp_servers: {}, skills: { include_instructions: true } } },
+        profile.allowSubagents, profile.mcpServers, profile.plugins, "stdio", [], profile.cleanMemory);
+      expect(config).toEqual(delegated ? { ...inherited, skills: { include_instructions: false } } : inherited);
       expect(profile.omitSkillsInstructions === true).toBe(delegated);
     }
     const entry: FileEntry = { path: "skills-rollout.jsonl", engine: "codex", root: "codex-sessions",
@@ -190,7 +193,8 @@ test("plain Codex launch flags preserve restrictive shell policy and pin the Git
     for (const [key, value] of Object.entries(controllerCommitIdentityEnv())) {
       expect(spec.command).toContain(`shell_environment_policy.set.${key}=${JSON.stringify(value)}`);
     }
-    expect(spec.command).toContain(`shell_environment_policy.include_only=${JSON.stringify([...new Set(["PATH", "HOME", ...Object.keys(agentPublicationIdentityEnv(process.env))])])}`);
+    const storageKeys = ["TMPDIR", "LLV_EVIDENCE_DIR"].filter(key => process.env[key] !== undefined);
+    expect(spec.command).toContain(`shell_environment_policy.include_only=${JSON.stringify([...new Set(["PATH", "HOME", ...Object.keys(agentPublicationIdentityEnv(process.env)), ...storageKeys])])}`);
   } finally {
     restore();
     if (previousBinary === undefined) delete process.env.LLV_CODEX_BINARY;
@@ -761,6 +765,12 @@ test("Claude resume normalizes transcript families and omits unknown model overr
 
   expect(resumeSpecFor("claude-projects", transcript, { model: "claude-fable-20260701" })?.command)
     .toContain("'--model' 'fable'");
+  /* A pinned release resumes as itself: the `fable` alias runs Fable 5.1 on the
+     2.1.318 CLI runs Fable 5.1, so folding a Fable 5.2 conversation to it would switch it back. */
+  expect(resumeSpecFor("claude-projects", transcript, { model: "claude-fable-5-2" })?.command)
+    .toContain("'--model' 'claude-fable-5-2'");
+  expect(resumeSpecFor("claude-projects", transcript, { model: "claude-fable-5-1-20260901" })?.command)
+    .toContain("'--model' 'claude-fable-5-1'");
   expect(resumeSpecFor("claude-projects", transcript, { model: "mythos-1" })?.command)
     .not.toContain("'--model'");
 });

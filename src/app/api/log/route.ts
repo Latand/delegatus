@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import { NextRequest, NextResponse } from "next/server";
 
 import { feedPathAllowed } from "@/lib/externalRelay/feedAccess";
-import { historyReadBytes, readTailChunk } from "@/lib/logRead";
+import { historyReadBytes, readHistoryChunk, readTailChunk } from "@/lib/logRead";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { listFiles } from "@/lib/scanner";
 import { ownerTranscriptMayExist, transcriptDeletionBlocker, type DeletionSafetyDependencies } from "@/lib/scanner/deleteSafety";
@@ -39,33 +39,9 @@ async function workspaceGET(
 
   const beforeParam = req.nextUrl.searchParams.get("before");
   if (beforeParam !== null) {
-    let stat;
-    try {
-      stat = await fs.stat(path);
-    } catch {
-      stat = null;
-    }
-    if (!path || !stat?.isFile() || !allowed(path)) {
-      return NextResponse.json({ error: "path not allowed" }, { status: 403 });
-    }
-    const size = stat.size;
-    let before = Number(beforeParam);
-    if (!Number.isFinite(before) || before < 0) before = 0;
-    if (before > size) before = size;
-    const start = Math.max(0, before - historyReadBytes(req.nextUrl.searchParams.get("bytes")));
-    const fh = await fs.open(path, "r");
-    try {
-      const buf = Buffer.alloc(before - start);
-      const { bytesRead } = await fh.read(buf, 0, buf.length, start);
-      return NextResponse.json({
-        offset: start,
-        start,
-        size,
-        data: buf.subarray(0, bytesRead).toString("utf-8"),
-      });
-    } finally {
-      await fh.close();
-    }
+    const chunk = await readHistoryChunk(path, Number(beforeParam), historyReadBytes(req.nextUrl.searchParams.get("bytes")), allowed);
+    if (!chunk) return NextResponse.json({ error: "path not allowed" }, { status: 403 });
+    return NextResponse.json(chunk);
   }
 
   const chunk = await readTailChunk(path, Number(req.nextUrl.searchParams.get("offset") ?? "0"), undefined, allowed);

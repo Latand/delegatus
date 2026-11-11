@@ -1,4 +1,5 @@
-import { curationAnswer, type CurationAnswer } from "@/lib/memory/curation/answer";
+import { seatTickCheckErrorAlarm, seatTickDeliveryAlarm, type SeatTickCheckErrorAlarm, type SeatTickDeliveryAlarm } from "./seatTickWatchdog";
+import { curationAnswer, curationAnswerCooperatively, type CurationAnswer } from "@/lib/memory/curation/answer";
 import { autonomyActive, proactiveActive, type AutonomySetting } from "./autonomy";
 import { viewerOwnProjectKeys } from "./seatTickSources";
 import { releaseStatus, type ReleaseStatus } from "@/lib/release/answer";
@@ -57,6 +58,7 @@ import type { SeatTickProjectState, SeatTickRunRecord, SeatTickWakeReasonKind } 
 const STALE_CHECKS = 3;
 
 export interface SeatTickActualState {
+  deliveryAlarm?: SeatTickDeliveryAlarm | null;
   /** When a check last decided anything for this project. */
   lastCheckAt: string | null;
   lastWakeAt: string | null;
@@ -90,6 +92,7 @@ export interface SeatTickLastRun {
 }
 
 export interface SeatTickSettingsAnswer {
+  checkErrorAlarm?: SeatTickCheckErrorAlarm;
   autonomy?: { active: boolean; until: string | null; startedAt: string | null; episode: AutonomySetting | null; proactive?: { enabled: boolean } };
   /** Added by the settings route (docs/design/turbo-mode.md §2.1). */
   turbo?: import("./turboRuntime").TurboAnswer;
@@ -162,6 +165,7 @@ export interface SeatTickSettingsAnswer {
 }
 
 export interface SeatTickSettingsAnswerPorts {
+  curation?: typeof curationAnswer;
   now?: () => number;
   settings?: typeof readSeatTickSettings;
   readState?: (project: string) => SeatTickProjectState;
@@ -186,7 +190,7 @@ function recorded(row: SeatTickProjectState): boolean {
     || row.accounting !== undefined;
 }
 
-function actualState(row: SeatTickProjectState, retryGuardWakes: number): SeatTickActualState {
+function actualState(row: SeatTickProjectState, retryGuardWakes: number, now: number): SeatTickActualState {
   const guarded = Object.entries(row.wakesWithoutChange ?? {})
     .flatMap(([kind, wakes]) => (kind !== "interval" && typeof wakes === "number" && wakes >= retryGuardWakes
       ? [{ kind: kind as SeatTickWakeReasonKind, wakes }]
@@ -199,6 +203,7 @@ function actualState(row: SeatTickProjectState, retryGuardWakes: number): SeatTi
       ? { source: "children" as const, gap: row.childrenGap.gap, since: row.childrenGap.since }
       : null;
   return {
+    deliveryAlarm: seatTickDeliveryAlarm(row, now),
     lastCheckAt: row.lastCheckAt,
     lastWakeAt: row.lastWakeAt,
     lastWakeReasons: [...(row.lastWakeReasons ?? [])],
@@ -240,7 +245,7 @@ export function seatTickSettingsAnswer(
   try {
     const row = (ports.readState ?? peekSeatTickState)(project);
     autoAttempt = row.autoRotation?.lastAttempt;
-    state = recorded(row) ? actualState(row, retryGuardWakes) : null;
+    state = recorded(row) ? actualState(row, retryGuardWakes, now) : null;
   } catch (error) {
     stateError = error instanceof Error ? error.message : "the tick's record could not be read";
   }
@@ -248,8 +253,10 @@ export function seatTickSettingsAnswer(
   let lastRun: SeatTickLastRun | null = null;
   let lastDelivery: { at: string; outcome: string } | null = null;
   let journalError: string | null = null;
+  let checkErrorAlarm: SeatTickCheckErrorAlarm | null = null;
   try {
     const own = (ports.records ? ports.records(SEAT_TICK_RUN_HISTORY) : readSeatTickRecords(SEAT_TICK_RUN_HISTORY, undefined, project)).filter((entry) => entry.project === project);
+    checkErrorAlarm = seatTickCheckErrorAlarm(own);
     const record = own.at(-1) ?? null;
     lastRun = record
       ? {
@@ -269,6 +276,7 @@ export function seatTickSettingsAnswer(
   const active = orchestratorSeatForCurrentProject(project).active;
   const conversation = active?.conversationId ? agentRegistry().conversation(active.conversationId as never) : null;
   return {
+    ...(checkErrorAlarm ? { checkErrorAlarm } : {}),
     autonomy: { active: autonomyActive(settings.autonomy, now), until: settings.autonomy?.until ?? null, startedAt: settings.autonomy?.startedAt ?? null, episode: effective.autonomy ?? null, proactive: { enabled: effective.enabled && proactiveActive(effective.autonomy, now) } },
     release: { ...RELEASE_DEFAULTS, ...settings.release, available: viewerOwnProjectKeys().includes(project), status: releaseStatus(project) },
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? AUTO_ROTATE_DEFAULT_PERCENT,
@@ -276,7 +284,7 @@ export function seatTickSettingsAnswer(
       windowKnown: active ? contextWindowPolicyFor(conversation?.engine ?? active.engine ?? null, conversation?.generations.at(-1)?.launchProfile?.model ?? active.model ?? null) !== null : null,
       lastAttempt: autoAttempt?.state === "failed" ? { ...autoAttempt, nextAttemptAt: autoRotationRetryAt(autoAttempt) } : null,
       setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null },
-    curation: curationAnswer(project, effective, now),
+    curation: (ports.curation ?? curationAnswer)(project, effective, now),
     maintenance: boardMaintenanceAnswer(project, effective, { now, lastCheckAt: state?.lastCheckAt ?? null, checkIntervalMs: policy?.checkIntervalMs ?? null }),
     project,
     changed,
@@ -325,6 +333,31 @@ export function seatTickSettingsAnswer(
     lastDelivery,
     journalError,
   };
+}
+
+/** The HTTP reader awaits curation while synchronous callers retain their
+ * contract. Re-read settings after yielding so a concurrent edit cannot make
+ * the controls disagree with the curation answer. */
+export async function seatTickSettingsAnswerCooperatively(
+  project: string, changed: boolean, actor: SeatTickSettingsActor,
+  signal?: AbortSignal, ports: SeatTickSettingsAnswerPorts = {},
+): Promise<SeatTickSettingsAnswer> {
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(Error("curation panel read timed out")), 5000);
+  const requestSignal = signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal;
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      requestSignal.throwIfAborted();
+      const now = (ports.now ?? Date.now)();
+      const settings = (ports.settings ?? readSeatTickSettings)(project);
+      const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
+      const curation = await curationAnswerCooperatively(project, effective, now, requestSignal);
+      requestSignal.throwIfAborted();
+      if (JSON.stringify((ports.settings ?? readSeatTickSettings)(project)) !== JSON.stringify(settings)) continue;
+      return seatTickSettingsAnswer(project, changed, actor, { ...ports, now: () => now, settings: () => settings, curation: () => curation });
+    }
+    throw Error("seat tick settings changed while being read");
+  } finally { clearTimeout(timer); }
 }
 
 /** Compact tool reads include a failure only; successful attempts stay in the journal. */

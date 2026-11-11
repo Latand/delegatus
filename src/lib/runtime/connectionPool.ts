@@ -5,10 +5,11 @@ const MAX_QUEUED = 128;
 const IDLE_MS = 15_000;
 type Connection = { socket: net.Socket; busy: boolean; timer?: ReturnType<typeof setTimeout> };
 export type RuntimeConnectionLease = { socket: net.Socket; reused: boolean; release(reuse: boolean): void };
+export type RuntimeConnectionKind = "command" | "snapshot" | "wait";
 type Waiter = { signal: AbortSignal; resolve(lease: RuntimeConnectionLease): void; reject(error: Error): void; abort(): void };
 
 /** Exclusive, FIFO leases: one frame in flight per socket. Long polls have
-    their own sixteen slots, leaving four command slots available. A caller's
+    sixteen slots and snapshots have two, leaving four command slots available. A caller's
     single deadline includes time queued here. No mutation is replayed. */
 class EndpointPool {
   private readonly connections = new Set<Connection>();
@@ -77,13 +78,14 @@ class EndpointPool {
 // map; closing the last connection evicts its endpoint and waiting queue.
 const owner = process as typeof process & { __delegatusRuntimeConnections?: Map<string, EndpointPool> };
 const pools = owner.__delegatusRuntimeConnections ??= new Map<string, EndpointPool>();
-export function acquireRuntimeConnection(endpoint: string, longPoll: boolean, signal: AbortSignal): Promise<RuntimeConnectionLease> {
+export function acquireRuntimeConnection(endpoint: string, kind: RuntimeConnectionKind, signal: AbortSignal): Promise<RuntimeConnectionLease> {
   if (signal.aborted) return Promise.reject(new Error("runtime connection admission cancelled"));
-  const key = JSON.stringify([endpoint, longPoll]);
+  const key = JSON.stringify([endpoint, kind]);
   let pool = pools.get(key);
   if (!pool) {
     if (pools.size >= MAX_ENDPOINTS) return Promise.reject(new Error("runtime endpoint admission refused"));
-    pool = new EndpointPool(endpoint, longPoll ? 16 : 4, () => { if (pools.get(key) === pool) pools.delete(key); });
+    const limit = kind === "wait" ? 16 : kind === "snapshot" ? 2 : 4;
+    pool = new EndpointPool(endpoint, limit, () => { if (pools.get(key) === pool) pools.delete(key); });
     pools.set(key, pool);
   }
   return pool.acquire(signal);

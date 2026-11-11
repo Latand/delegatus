@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { targetedConversationAtPath, viewerMcpBindings, type TargetedConversationDependencies, type ViewerControlDependencies } from "./bindings";
+import { productionDomainDependencies, targetedConversationAtPath, viewerMcpBindings, type TargetedConversationDependencies, type ViewerControlDependencies } from "./bindings";
 import { createMcpToolService, MemoryMcpReceiptStore } from "./server";
 import { setAgentRegistryForTests } from "@/lib/agent/registry";
 import { systemScheduler } from "@/lib/deadline";
@@ -141,6 +141,8 @@ function dependencies(options: { scans?: number; projections?: number; completed
     snapshot,
     completedFileScan,
     injected: {
+      ...productionDomainDependencies,
+      callerAttribution: () => ({ kind: "unidentified", conversationId: null, role: null }),
       completedFileScan,
       registrySnapshot: () => {
         counts.projectionCalls += 1;
@@ -955,7 +957,7 @@ test("send_message resolves the conversation it named from one injected projecti
     text: "status check",
   }) as { conversationId: string | null; transcriptPath: string | null };
 
-  expect(posts).toEqual(["/api/tmux"]);
+  expect(posts).toEqual(["/api/conversation-host"]);
   /* Resolved through the injected projection — including by a path the conversation
      owns — rather than by reaching for the registry a second time. */
   expect(result.conversationId).toBe("conversation_0");

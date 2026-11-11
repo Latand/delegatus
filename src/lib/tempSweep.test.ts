@@ -4,12 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { procBackend } from "@/lib/proc";
+import { agentRegistry } from "@/lib/agent/registry";
 
 import {
   isOwnedTempConsumerName,
   isOwnedTempName,
   recordTempSweep,
   runTempSweep,
+  runTempSweepInHelper,
   scanProcesses,
   startTempSweep,
   stopTempSweep,
@@ -96,6 +98,17 @@ test("the threshold defaults to 24 h, reads hours from the environment, and 0 tu
   expect(tempSweepMaxAgeMs({ LLV_TEMP_SWEEP_MAX_AGE_HOURS: "6" })).toBe(DAY);
   expect(tempSweepMaxAgeMs({ LLV_TEMP_SWEEP_MAX_AGE_HOURS: "0" })).toBeNull();
   expect(tempSweepMaxAgeMs({ LLV_TEMP_SWEEP_MAX_AGE_HOURS: "soon" })).toBe(DAY);
+});
+
+test.each([".artifacts/report.bin", "test-results/prototype.png", "nested/report.BMP"])("legacy cleanup retains %s without a verified evidence backup", async relative => {
+  const root = tempRoot(), directory = aged(root, "llv-stage-capture", 2 * DAY);
+  const capture = path.join(directory, relative);
+  fs.mkdirSync(path.dirname(capture), { recursive: true }); fs.writeFileSync(capture, "capture bytes");
+  const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] },
+    now: () => Date.parse("2030-01-01T00:00:00Z"), maxAgeMs: DAY });
+  expect(report.removed).toEqual([]);
+  expect(report.held).toContainEqual(expect.objectContaining({ path: directory, reason: "evidence" }));
+  expect(fs.readFileSync(capture, "utf8")).toBe("capture bytes");
 });
 
 test.each(["checkout", "bare"])("an owned stale temp tree preserves a %s repository inside dependencies", async kind => {
@@ -408,6 +421,39 @@ test("the sweep clock starts once, waits for boot, and re-arms only after a swee
   finish();
   await Bun.sleep(0);
   expect(scheduled.map((entry) => entry.delayMs)).toEqual([300_000, HOUR]);
+});
+
+test("the real minute scheduler logs the attempt failure message and command cause", async () => {
+  stopTempSweep();
+  const worker = await import("./pipelines/worktreeSweepWorker");
+  const failure = Object.assign(new Error("attempt temp tick exceeded 60000 ms"), {
+    cause: Object.assign(new Error("find checkout failed"), { signal: "SIGTERM", killed: true }),
+  });
+  const run = spyOn(worker, "runAttemptTempSweepOffThread").mockRejectedValue(failure);
+  const priorMode = process.env.LLV_TEMP_SWEEP;
+  process.env.LLV_TEMP_SWEEP = "on";
+  const original = globalThis.setTimeout;
+  let callback: (() => void) | undefined;
+  const timers = spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, delay?: number) => {
+    if (delay === 60000) { callback = fn; return original(() => {}, 3600000); }
+    return original(fn, delay);
+  }) as typeof setTimeout);
+  let resolveLog: (line: string) => void = () => {};
+  const logged = new Promise<string>(resolve => { resolveLog = resolve; });
+  const log = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+    if (args[0] === "[attempt temp] tick failed") resolveLog(args.map(String).join(" "));
+  });
+  try {
+    startTempSweep();
+    expect(callback).toBeDefined(); callback!();
+    const line = await logged;
+    expect(line).toContain("attempt temp tick exceeded 60000 ms");
+    expect(line).toContain("find checkout failed");
+    expect(line).toContain("signal=SIGTERM");
+  } finally {
+    stopTempSweep(); timers.mockRestore(); log.mockRestore(); run.mockRestore();
+    if (priorMode === undefined) delete process.env.LLV_TEMP_SWEEP; else process.env.LLV_TEMP_SWEEP = priorMode;
+  }
 });
 
 test.each(["merge-batch", "review-export", "attribution"])("a %s checkout inside an owned temp root stays for Git preservation checks", async role => {
@@ -901,4 +947,93 @@ test("portable process scans include a registered config root outside system tem
     const scan = scanProcesses(path.join(root, "missing-proc"), [config]);
     expect(scan.processes.find(process => process.pid === 456)?.paths).toEqual([path.join(config, "held")]);
   } finally { descriptors.mockRestore(); list.mockRestore(); }
+});
+
+
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable retained directory does not abort the sweep or its report", async () => {
+  const root = tempRoot();
+  const a = aged(root, "llv-a", 2 * DAY), b = aged(root, "llv-b", 2 * DAY);
+  const locked = path.join(a, "locked"); fs.mkdirSync(locked); fs.chmodSync(locked, 0);
+  try {
+    const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], maxAgeMs: DAY,
+      scan: { ownNamespace: null, processes: [{ pid: 123, namespace: null, stamped: false, paths: [a] }] } });
+    expect(report.removed.map(row => row.path)).toContain(b);
+    expect(fs.existsSync(a)).toBeTrue();
+    recordTempSweep(report);
+    expect(tempSweepStatus()?.at).toBe(report.at);
+  } finally { fs.chmodSync(locked, 0o700); }
+});
+
+
+test("a refused inspection is recorded and the next candidate is still handled", async () => {
+  const root = tempRoot();
+  const held = aged(root, "llv-a-refused", 3 * DAY);
+  const stale = aged(root, "llv-b-stale", 3 * DAY);
+  const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY,
+    inspect: (directory, options) => { if (directory === held) throw new Error("fixture observation refused"); return inspectTree(directory, { ...options, threshold: Infinity }); },
+    now: () => Date.now() + 4 * DAY });
+  expect(report.errors.some(error => error.includes("fixture observation refused"))).toBeTrue();
+  expect(fs.existsSync(held)).toBeTrue();
+  expect(report.removed.map(row => row.path)).toContain(stale);
+});
+
+test("a failed production sweep records a fresh failed report before refusing", async () => {
+  const root = tempRoot();
+  const roots = [{ path: root, via: "" }];
+  const scan = { ownNamespace: null, get processes(): never { throw new Error("fixture process observation refused"); } };
+  await expect(runTempSweep({ NODE_ENV: "test", LLV_TEMP_SWEEP_MAX_AGE_HOURS: "24" }, { roots, scan })).rejects.toThrow("fixture process observation refused");
+  const status = tempSweepStatus();
+  expect(status?.failed).toBeTrue();
+  expect(status?.errors).toBe(1);
+});
+
+test("temp cleanup protects a live owner without loading full registry history", async () => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"llv-temp-projection-"));
+  const held=path.join(root,"llv-held-candidate");fs.mkdirSync(held);
+  fs.writeFileSync(path.join(held,"retained.txt"),"keep");
+  const registry=agentRegistry();
+  registry.upsert({key:{engine:"codex",sessionId:"temp-protection-fixture"},artifactPath:path.join(root,"owner.jsonl"),
+    cwd:held,status:"live",host:null,accountId:null,claimEpoch:0,claimOwner:null,pendingAction:null});
+  const full=spyOn(registry,"readOnlySnapshot").mockImplementation(()=>{throw new Error("full history must not be read for cwd protection");});
+  try {
+    const report=await runTempSweepInHelper({NODE_ENV:"test",LLV_TEMP_SWEEP:"dry-run",LLV_TEMP_SWEEP_MAX_AGE_HOURS:"24"},{
+      roots:[{path:root,via:""}],scan:{ownNamespace:null,processes:[]},now:()=>Date.now()+3*86400000});
+    expect(report?.failed).not.toBe(true);
+    expect(report?.kept.inUse).toBe(1);
+    expect(report?.removed).toEqual([]);
+    expect(fs.readFileSync(path.join(held,"retained.txt"),"utf8")).toBe("keep");
+    expect(full).not.toHaveBeenCalled();
+  } finally {full.mockRestore();fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test("a root owned by the attempt ledger is kept without a walk of its tree", async () => {
+  const root = tempRoot();
+  const owned = aged(root, "llv-stage-ledger", 2 * DAY), plain = aged(root, "llv-stage-plain", 2 * DAY);
+  fs.writeFileSync(path.join(owned, ".delegatus-attempt-owner"), "attempt-temp.sqlite\n");
+  fs.writeFileSync(path.join(owned, "payload"), "kept");
+  const inspected: string[] = [], measured: string[] = [];
+  const report = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: root, via: "" }],
+    scan: { ownNamespace: null, processes: [] }, attemptLedger: directory => directory === owned,
+    inspect: (directory, settings) => {
+      inspected.push(directory);
+      return inspectTree(directory, { ...settings, threshold: Infinity, stat: file => { const stat = fs.lstatSync(file); stat.ctimeMs = stat.mtimeMs; return stat; } });
+    },
+    measure: async directory => { measured.push(directory); return 1; } });
+  expect(report.removed.map(removal => removal.path)).toEqual([plain]);
+  expect(fs.existsSync(plain)).toBeFalse();
+  expect(fs.readFileSync(path.join(owned, "payload"), "utf8")).toBe("kept");
+  expect(report.kept.inUse).toBe(1); expect(report.held).toEqual([]);
+  expect(inspected).not.toContain(owned); expect(measured).not.toContain(owned);
+});
+
+test("a marked root the attempt ledger does not list stays and is reported as held", async () => {
+  const root = tempRoot();
+  const listed = aged(root, "llv-stage-listed", 2 * DAY), unlisted = aged(root, "llv-stage-unlisted", 2 * DAY);
+  for (const directory of [listed, unlisted]) fs.writeFileSync(path.join(directory, ".delegatus-attempt-owner"), "attempt-temp.sqlite\n");
+  const report = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: root, via: "" }],
+    scan: { ownNamespace: null, processes: [] }, attemptLedger: directory => directory === listed });
+  expect(report.removed).toEqual([]); expect(fs.existsSync(unlisted)).toBeTrue();
+  expect(report.kept.inUse).toBe(2);
+  expect(report.held).toEqual([{ path: unlisted, via: "", reason: "attempt-owner-unlisted", bytes: 0 }]);
+  expect(tempSweepStatus(report)?.heldCounts).toEqual({ "attempt-owner-unlisted": 1 });
 });

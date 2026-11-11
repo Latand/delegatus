@@ -8,8 +8,8 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { classifyArtifact } from "@/lib/artifact/classify";
 import { frameUrl, mintFrameScope } from "@/lib/artifact/frameScope";
-import { artifactEtag, artifactLimits, dispositionFilename, parseByteRange, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
-import { admittedAs, lexicalAllowedRoots, openAdmitted, realAllowedRoots, realpathAdmitted, resolveLocal, streamWindow } from "@/lib/artifact/localFile";
+import { artifactEtag, artifactLimits, artifactResponseHeaders, parseByteRange, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
+import { admittedAs, lexicalAllowedRoots, keptPictureProject, openAdmitted, readablePlace, realAllowedRoots, realpathAdmitted, resolveLocal, streamWindow } from "@/lib/artifact/localFile";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
@@ -65,30 +65,6 @@ function fail(code: FailCode, error: string): NextResponse<FailBody> {
   return NextResponse.json({ error, code }, { status: FAIL_STATUS[code] });
 }
 
-function baseHeaders(mime: string, etag: string, name: string, download: boolean): Headers {
-  const headers = new Headers({
-    "content-type": mime,
-    "x-content-type-options": "nosniff",
-    "accept-ranges": "bytes",
-    "cache-control": "private, no-store",
-    etag,
-    "content-disposition": `${download ? "attachment" : "inline"}; filename="${dispositionFilename(name)}"`,
-  });
-  /* Everything the preview serves is inert data. PDF is exempted from the
-     sandbox directive only because browser PDF viewers refuse sandboxed
-     documents on "open externally", and a PDF response can never script the
-     app origin; SVG (and everything else) stays fully sandboxed, so even a
-     direct navigation to the raw URL renders in an origin-less, script-less
-     document. */
-  headers.set(
-    "content-security-policy",
-    mime === "application/pdf"
-      ? "default-src 'none'; object-src 'none'"
-      : "sandbox; default-src 'none'; script-src 'none'; style-src 'unsafe-inline'",
-  );
-  return headers;
-}
-
 async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | NextResponse> {
   /* Same gate as every other loopback route: a drive-by page or DNS rebind
      must not pull local file bytes out of this service. */
@@ -98,7 +74,9 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
   const raw = req.nextUrl.searchParams.get("path") ?? "";
   if (!raw) return NextResponse.json({ error: "path is required" }, { status: 400 });
 
-  const abs = resolveLocal(raw);
+  /* A picture a report named is read from its kept copy once it is gone. */
+  const requested = resolveLocal(raw);
+  const abs = readablePlace(requested);
   const admission = admittedAs(abs, lexicalAllowedRoots());
   if (!admission) return fail("access-denied", "path is outside the allowed roots");
 
@@ -119,7 +97,9 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
   if (!realpathAdmitted(admission, real, await realAllowedRoots())) return fail("access-denied", "path is outside the allowed roots");
 
   const workspace = requestWorkspaceScope(req);
-  if (workspace && !workspace.canReadFile(projectForCwd(path.dirname(real)))) return workspaceDenied();
+  /* A kept copy belongs to the project its picture lay in. */
+  const kept = keptPictureProject(requested, abs);
+  if (workspace && !workspace.canReadFile(kept === undefined ? projectForCwd(path.dirname(real)) : kept)) return workspaceDenied();
   /* realpath resolved every link above; a link appearing at the final
      component or at any directory above it between then and now is a race,
      refused. A FIFO does not wedge the open — its fstat below rejects it. */
@@ -178,7 +158,7 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
       return fail("too-large", "artifact exceeds the configured byte bound");
     }
 
-    const headers = baseHeaders(mime, etag, name, download);
+    const headers = artifactResponseHeaders(mime, etag, name, download);
     const range = parseByteRange(req.headers.get("range"), stat.size);
     if (range === "unsatisfiable") {
       await handle.close();

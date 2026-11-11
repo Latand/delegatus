@@ -86,6 +86,37 @@ for (const [key, origin] of [
     .toMatchObject({ kind: "found", receipt: { state: "delivered", redirectedTo: { operationId: record.toOperationId } } });
 }, { sourceInitiallyUnavailable: true, pauseDeliveryQueue: true }));
 
+for (const revoked of [false, true]) test(`a member-directed seat redirect preserves authority or refuses revocation: ${revoked}`, async () => fixture(async (runtime, ports) => {
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { admitConversationMember } = await import("@/lib/team/authorship");
+  const store = teamStore();
+  const memberId = "m_member_redirect";
+  store.insertMember({ id: memberId, name: "Member", role: "member", status: "active", color: "teal", telegram: null,
+    createdAt: AT, createdBy: "claim", revokedAt: null });
+  try {
+    designate(runtime);
+    admitConversationMember({ kind: "member", memberId }, runtime.conversationId);
+    // No feed-author row: this authority came from server-side admission.
+    const original = await ports.enqueue({ path: runtime.artifactPath, conversationId: runtime.conversationId,
+      clientMessageId: "reused-redirect-key", text: "Workspace request", images: [], origin: { kind: "operator" }, policy: "queue" });
+    if (!original?.ok) throw new Error("fixture admission failed");
+    designate(runtime, true);
+    if (revoked) store.updateMember({ ...store.member(memberId)!, status: "revoked", revokedAt: AT });
+    const enqueue = ports.enqueue;
+    let redirects = 0;
+    ports.enqueue = request => {
+      redirects++;
+      expect(store.latestConversationMember(runtime.successor!.conversationId)).toBe(memberId);
+      return enqueue(request);
+    };
+    await reconcileSeatChannel(orchestratorRevocations().at(-1)!, ports);
+    expect(redirects).toBe(revoked ? 0 : 1);
+    expect(seatChannelRecord(original.operationId)?.outcome).toBe(revoked ? "dropped" : "redirected");
+    resetTeamStoreForTests();
+    expect(teamStore().latestConversationMember(runtime.successor!.conversationId)).toBe(revoked ? null : memberId);
+  } finally { resetTeamStoreForTests(); }
+}, { sourceInitiallyUnavailable: true, pauseDeliveryQueue: true }));
+
 test("epoch-bound board reports are failed with a record and never redirected", async () => fixture(async (runtime, ports) => {
   designate(runtime);
   const original = await ports.enqueue({ path: runtime.artifactPath, conversationId: runtime.conversationId,
@@ -138,74 +169,6 @@ test("legacy sends to a revoked id are refused while history and stop metadata r
   expect(currentSeat("channel-project")?.conversationId).toBe(runtime.successor!.conversationId);
 }));
 
-test("legacy pane sends recheck seat authority after recovery waits", async () => fixture(async runtime => {
-  designate(runtime);
-  let actuations = 0;
-  const outcome = await deliverConversationMessage({ pid: 1, path: "",
-    clientMessageId: "legacy-rotated-during-recovery", text: "Do not reach the retired pane", images: [] }, {
-    registry: runtime.registry,
-    recover: async () => null,
-    listFiles: async () => [{ pid: 1, proc: "running", engine: "codex", path: runtime.artifactPath } as never],
-    targetForKnownPid: async () => { designate(runtime, true); return "%1"; },
-    sendText: async () => { actuations++; },
-  } as never);
-
-  expect(actuations).toBe(0);
-  expect(outcome).toMatchObject({ ok: false, status: 409, successorConversationId: runtime.successor!.conversationId });
-}));
-
-test("legacy pane transport checks seat authority after waiting for its final dispatch boundary", async () => fixture(async runtime => {
-  designate(runtime);
-  let actuations = 0;
-  let enterPaneWait!: () => void;
-  let releasePaneWait!: () => void;
-  const paneWaitEntered = new Promise<void>(resolve => { enterPaneWait = resolve; });
-  const paneWait = new Promise<void>(resolve => { releasePaneWait = resolve; });
-  const pending = deliverConversationMessage({ pid: 1, path: "",
-    clientMessageId: "legacy-rotated-at-pane-lock", text: "Do not reach the retired pane", images: [] }, {
-    registry: runtime.registry,
-    recover: async () => null,
-    listFiles: async () => [{ pid: 1, proc: "running", engine: "codex", path: runtime.artifactPath } as never],
-    targetForKnownPid: async () => "%1",
-    sendText: (async (_target: string, _text: string, authorityGuard?: () => void) => {
-      enterPaneWait();
-      await paneWait;
-      authorityGuard?.();
-      actuations++;
-    }) as never,
-  } as never);
-  await paneWaitEntered;
-  designate(runtime, true);
-  releasePaneWait();
-  const outcome = await pending;
-
-  expect(actuations).toBe(0);
-  expect(outcome).toMatchObject({ ok: false, status: 409, successorConversationId: runtime.successor!.conversationId });
-}));
-
-test("legacy child relays refuse a root seat revoked while transcript lookup waits", async () => fixture(async runtime => {
-  designate(runtime);
-  designate(runtime, true);
-  const childPath = path.join(path.dirname(runtime.artifactPath), "child-session.jsonl");
-  const child = runtime.registry.ensureConversation("codex", childPath, "fixture-account");
-  let hostDeliveries = 0;
-  const outcome = await deliverConversationMessage({ pid: null, path: childPath, conversationId: child.id,
-    clientMessageId: "legacy-relay-to-revoked-root", text: "Do not relay to the retired root", images: [] }, {
-    registry: runtime.registry,
-    recover: async () => null,
-    pathAllowed: () => true,
-    listFiles: async () => [
-      { path: childPath, parent: runtime.artifactPath, engine: "codex", root: path.dirname(childPath), title: "child" } as never,
-      { path: runtime.artifactPath, parent: null, engine: "codex", root: path.dirname(runtime.artifactPath), title: "root" } as never,
-    ],
-    resumeSpecFor: (_root: string, pathname: string) => pathname === childPath ? null : ({ command: "resume", args: [], cwd: path.dirname(runtime.artifactPath), env: {} }) as never,
-    deliver: async () => { hostDeliveries++; return { ok: true as const, outcome: "resumed" as const, target: "%root" }; },
-  } as never);
-
-  expect(hostDeliveries).toBe(0);
-  expect(outcome).toMatchObject({ ok: false, status: 409, successorConversationId: runtime.successor!.conversationId });
-}));
-
 test("a project temporarily without a seat keeps its withdrawn words until activation", async () => fixture(async (runtime, ports) => {
   designate(runtime);
   const original = await ports.enqueue({ path: runtime.artifactPath, conversationId: runtime.conversationId,
@@ -248,7 +211,7 @@ test("the disposition table includes every producer namespace and preserves unkn
     expect(seatDeliveryDisposition({ clientMessageId: key })).toBe("owner");
   for (const key of ["seat-tick:project:1", boardReportMessageId("project", 1), "seat-autorotate-nudge-fixture", deputyNoteKey("ask"), "orchmandate_fixture"])
     expect(seatDeliveryDisposition({ clientMessageId: key })).toBe("epoch");
-  for (const key of ["composer", "mcp_orchestrator_fixture", bridgeDirectiveId("turn_fixture", 1), null])
+  for (const key of ["recorded-check:fixture", "composer", "mcp_orchestrator_fixture", bridgeDirectiveId("turn_fixture", 1), null])
     expect(seatDeliveryDisposition({ clientMessageId: key })).toBe("channel");
 });
 

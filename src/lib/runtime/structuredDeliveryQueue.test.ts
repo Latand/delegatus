@@ -1,5 +1,10 @@
 import { afterEach, expect, setSystemTime, test } from "bun:test";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { Database } from "bun:sqlite";
+import { RuntimeJournal } from "@/runtime-host/journal";
 
 afterEach(() => setSystemTime());
 
@@ -15,8 +20,9 @@ import {
   type StructuredDeliveryQueuePort,
 } from "./structuredDeliveryQueue";
 import { STRUCTURED_IMAGE_CAPABILITY, structuredContentDigest, type StructuredImageRef } from "./structuredContent";
+import type { DeliveryProgressSink } from "./deliveryProgress";
 import { deputySeatNoteRequest } from "@/lib/orchestrator/deputySweep";
-import { ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryCollection, storedLessonRevision } from "@/lib/memory/roleStore";
+import { ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryCollection, roleMemoryRevisionToken, storedLessonRevision } from "@/lib/memory/roleStore";
 
 const privacyFixtureId = "r:delivery-privacy-fence-test";
 afterEach(() => {
@@ -101,15 +107,14 @@ test("a role-memory change during delivery admission prevents first-message disp
     createdAt: "2026-10-19T00:00:00Z", changedAt: "2026-10-19T00:00:00Z",
   }));
   const revision = crypto.createHash("sha256").update(storedLessonRevision()).digest("hex");
-  let currentRevision = revision;
-  let currentPrompt = "filtered first message from the old revision";
+  const prompt = "filtered first message from the old revision";
   const transitions: Array<{ status: string; reason?: string | null }> = [];
   let sent = 0;
   let changed = false;
   const queue = new StructuredDeliveryQueue({
     effects: async () => [{ id: "effect:role-privacy", kind: "runtime.send", eventSeq: 1,
       payload: { kind: "send", operationId: "spawn_message_privacy_fixture", conversationId: "conversation-one",
-        text: currentPrompt, policy: "queue", roleMemoryRevision: currentRevision } }],
+        text: prompt, policy: "queue", roleMemoryRevision: revision } }],
     status: async () => {
       if (!changed) {
         changed = true;
@@ -126,22 +131,20 @@ test("a role-memory change during delivery admission prevents first-message disp
     transition: async (_id, status, options) => { transitions.push({ status, reason: options?.reason }); },
   }, () => host(async entry => {
     sent += 1;
-    expect(entry.text).toBe(currentPrompt);
+    expect(entry.text).toBe(prompt);
     return { outcome: "turn-started", turnId: "turn-privacy" };
   }));
 
   await queue.drain();
   expect(changed).toBe(true);
   expect(sent).toBe(0);
-  expect(transitions).toContainEqual({ status: "queued", reason: ROLE_MEMORY_CHANGED_MESSAGE });
+  expect(transitions).toContainEqual({ status: "failed", reason: ROLE_MEMORY_CHANGED_MESSAGE });
   expect(transitions.some(transition => transition.status === "uncertain")).toBe(false);
-  currentRevision = crypto.createHash("sha256").update(storedLessonRevision()).digest("hex");
-  currentPrompt = "filtered first message from the current revision";
   await queue.drain();
-  expect(sent).toBe(1);
+  expect(sent).toBe(0);
 });
 
-test("a role-memory change after inbox binding keeps the batch retryable", async () => {
+test("a role-memory change after inbox binding fences the stale member", async () => {
   const collection = roleMemoryCollection(true)!;
   collection.boundedPatch(1, tx => tx.put({
     kind: "rule", id: "delivery-privacy-batch-test", scope: "machine", rule: "old batch privacy fixture",
@@ -193,12 +196,142 @@ test("a role-memory change after inbox binding keeps the batch retryable", async
     await queue.drain();
     expect(changed, JSON.stringify({ transitions })).toBe(true);
     expect(sent).toBe(0);
-    expect(transitions).toContainEqual({ id: "spawn_message_one", status: "queued", reason: ROLE_MEMORY_CHANGED_MESSAGE });
+    expect(transitions).toContainEqual({ id: "spawn_message_one", status: "failed", reason: ROLE_MEMORY_CHANGED_MESSAGE });
     expect(transitions).not.toContainEqual(expect.objectContaining({ status: "uncertain" }));
   } finally {
     collection.boundedPatch(1, tx => tx.delete("r:delivery-privacy-batch-test"));
   }
 });
+
+test.each(["delivered", "uncertain", "delivering", "privacy-unreadable", "ordinary-send", "delivery-auto-retry", "retry-handoff", "legacy-handoff", "retry-race", "refusal-status-unreadable", "refusal-status-missing", "read-retry", "delivery-wins", "uncertainty-wins"] as const)(
+  "stale privacy fencing preserves durable %s evidence", async mode => {
+    setSystemTime(new Date("2026-10-29T00:00:00Z"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-privacy-evidence-"));
+    const filename = path.join(root, "runtime.sqlite");
+    let journal = new RuntimeJournal(filename, { structuredHosts: true });
+    const privacyFile = roleMemoryCollection(true)!.filename;
+    const unavailablePrivacy = path.join(root, "privacy.sqlite");
+    const operationId = mode === "ordinary-send" ? "ordinary-delivery" : "spawn_message_privacy_evidence";
+    const changePrivacy = () => {
+      roleMemoryCollection(true)!.boundedPatch(1, tx => tx.put({ kind: "rule", id: "delivery-privacy-fence-test",
+        scope: "machine", rule: "changed privacy evidence", why: "", state: "active", hints: [],
+        source: { project: "fixture", pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder",
+          fixRound: false, conversationId: "conversation_privacy_evidence" },
+        createdAt: "2026-10-19T00:00:00Z", changedAt: "2026-10-19T00:00:01Z" }));
+    };
+    try {
+      journal.append({ scope: { type: "session", id: "conversation_privacy_evidence" }, kind: "session-status", payload: {
+        conversationId: "conversation_privacy_evidence", sessionKey: { engine: "codex",
+          sessionId: ["00000000", "0000", "4000", "8000", "000000000001"].join("-") },
+        hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null, provenance: "structured",
+        capabilities: { steer: true, structuredAttention: true },
+      } });
+      journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId,
+        conversationId: "conversation_privacy_evidence", text: "durable input", policy: "queue",
+        ...(mode !== "ordinary-send" ? { roleMemoryRevision: roleMemoryRevisionToken() } : {}),
+      });
+      const effects = journal.effectBatch(100, ["runtime.send"]);
+      expect(effects).toHaveLength(1);
+      if (mode === "delivered" || mode === "uncertain" || mode === "delivering") {
+        journal.transitionOperation(operationId, "delivering", { reason: "delivering-owner:earlier@owner:old" });
+        if (mode !== "delivering") journal.transitionOperation(operationId, mode, { reason: "prior native outcome" });
+      }
+      if (mode === "delivery-auto-retry" || mode === "retry-handoff") {
+        journal.transitionOperation(operationId, "delivering");
+        journal.transitionOperation(operationId, "queued", { reason: "delivery-auto-retry" });
+      }
+      if (mode === "retry-handoff") {
+        let held = false;
+        const handoff = new StructuredDeliveryQueue({
+          effects: async () => journal.effectBatch(100, ["runtime.send"]),
+          status: async id => journal.operationResult(id)?.receipt ?? null,
+          hostClaim: async () => "owner:handoff",
+          handoffHeld: () => held,
+          transition: async (id, status, details, options) => {
+            journal.transitionOperation(id, status, details, options);
+            if (status === "delivering") held = true;
+          },
+        }, () => host(async () => { throw new Error("handoff must prevent dispatch"); }));
+        await handoff.drain();
+        expect(journal.operationResult(operationId)?.receipt).toMatchObject({ status: "queued", reason: "automatic-update-handoff" });
+      }
+      if (mode === "legacy-handoff") {
+        journal.transitionOperation(operationId, "delivering");
+        journal.transitionOperation(operationId, "queued", { reason: "delivery-auto-retry" });
+        journal.transitionOperation(operationId, "delivering");
+        journal.transitionOperation(operationId, "queued", { reason: "automatic-update-handoff" });
+      }
+      journal.close();
+      if (mode === "legacy-handoff") {
+        const database = new Database(filename);
+        try {
+          database.query("UPDATE operations SET receipt_json = json_remove(receipt_json, '$.deliveryUnverified') WHERE operation_id = ?").run(operationId);
+        } finally { database.close(); }
+      }
+      journal = new RuntimeJournal(filename, { structuredHosts: true });
+      if (mode === "legacy-handoff") {
+        const forged = { deliveryUnverified: false } as unknown as import("./contracts").RuntimeTransitionDetails;
+        expect(() => journal.transitionOperation(operationId, "delivering", forged)).toThrow("runtime delivery evidence cannot be cleared");
+        expect(journal.operationResult(operationId)?.receipt.deliveryUnverified).toBeUndefined();
+      }
+      if (mode === "privacy-unreadable") {
+        // Exercise an actual store-read refusal with the fixture's own file.
+        fs.renameSync(privacyFile, unavailablePrivacy);
+      } else if (mode !== "read-retry") {
+        changePrivacy();
+      }
+      let sends = 0;
+      let refuseStatus = false;
+      let refusedReads = 0;
+      const queue = new StructuredDeliveryQueue({
+        // A stale page retained across restart must still consult the receipt.
+        effects: async () => effects,
+        status: async id => {
+          if (refuseStatus) {
+            refuseStatus = false;
+            refusedReads++;
+            if (mode === "refusal-status-missing") return null;
+            throw new Error("receipt temporarily unreadable");
+          }
+          return journal.operationResult(id)?.receipt ?? null;
+        },
+        hostClaim: async () => "owner:current",
+        transition: async (id, status, details, options) => {
+          if (mode === "retry-race" && status === "delivering") {
+            // A peer's ambiguous send completes its requeue after our status
+            // snapshot, but before our pending/queued compare-and-set wins.
+            journal.transitionOperation(id, "delivering");
+            const retry: import("./contracts").RuntimeTransitionDetails = { reason: "delivery-auto-retry", deliveryUnverified: true };
+            journal.transitionOperation(id, "queued", retry);
+          }
+          if (status === "failed" && (mode === "delivery-wins" || mode === "uncertainty-wins")) {
+            journal.transitionOperation(id, mode === "delivery-wins" ? "delivered" : "uncertain", { reason: "native winner" });
+          }
+          journal.transitionOperation(id, status, details, options);
+          if ((mode === "refusal-status-unreadable" || mode === "refusal-status-missing") && status === "delivering") refuseStatus = true;
+        },
+      }, () => host(async () => {
+        sends++;
+        if (mode === "read-retry") {
+          changePrivacy();
+          throw new Error("request timed out: thread/read");
+        }
+        return { outcome: "turn-started", turnId: "ordinary-turn" };
+      }));
+      await queue.drain();
+      await queue.drain();
+      const receipt = journal.operationResult(operationId)!.receipt;
+      if (mode === "refusal-status-unreadable" || mode === "refusal-status-missing") expect(refusedReads).toBe(1);
+      expect(sends).toBe(mode === "ordinary-send" || mode === "read-retry" ? 1 : 0);
+      expect(receipt.status).toBe(["delivered", "ordinary-send", "delivery-wins"].includes(mode) ? "delivered" : "uncertain");
+      if (mode !== "ordinary-send") expect(receipt.reason).not.toBe(ROLE_MEMORY_CHANGED_MESSAGE);
+    } finally {
+      if (fs.existsSync(unavailablePrivacy)) fs.renameSync(unavailablePrivacy, privacyFile);
+      journal.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("only the first journal admission under a known claim supplies first-dispatch evidence", async () => {
   for (const [revision, claim] of [[1, "owner:1"], [2, "owner:1"], [undefined, "owner:1"], [1, null], [1, "?"]] as const) {
@@ -2066,6 +2199,268 @@ test("an expired explicit kill settles during startup deferral without terminati
   await queue.drain();
   expect(terminations).toBe(0);
   expect(transitions).toEqual([["expired-kill", "failed"]]);
+});
+
+for (const recoverable of [false, true]) {
+  test(`an explicit interrupt held by startup deferral settles at its ceiling${recoverable ? " when recipient recovery is permitted" : ""}`, async () => {
+    const admittedAt = Date.parse("2026-11-09T15:47:00.000Z");
+    setSystemTime(admittedAt + 1_000);
+    const statuses = new Map<string, string>();
+    const reasons = new Map<string, string | null | undefined>();
+    const queue = new StructuredDeliveryQueue({
+      deferTarget: () => true,
+      canRecoverDeferredTarget: () => recoverable,
+      effects: async () => statuses.has("held-interrupt") ? [] : [{ id: "held-interrupt", kind: "runtime.interrupt", eventSeq: 1, payload: {
+        operationId: "held-interrupt", conversationId: "conversation-held", turnId: "turn-held",
+      } }],
+      status: async id => ({ status: statuses.get(id) ?? "queued", revision: 1, admittedAt: new Date(admittedAt).toISOString() }),
+      transition: async (id, status, details) => { statuses.set(id, status); reasons.set(id, details?.reason); },
+    }, () => null);
+    try {
+      await queue.drain();
+      expect(statuses.has("held-interrupt")).toBeFalse();
+      setSystemTime(admittedAt + CONTROL_SETTLEMENT_WINDOW_MS + 1_000);
+      await queue.drain();
+      expect(statuses.get("held-interrupt")).toBe("failed");
+      expect(reasons.get("held-interrupt")).toBe("interrupt control exceeded its 2-minute settlement deadline; retry from the current conversation state");
+    } finally { queue.retire(); }
+  });
+}
+
+/* The startup shortcut that settles a held control runs outside the ordinary
+   drain, so it must carry that drain's ownership fences across its own status
+   read. Each case holds the read, changes who owns the conversation, then lets
+   an overdue queued receipt come back. "current-owner" changes nothing and
+   keeps the ordinary deadline settlement. */
+for (const interleaving of ["current-owner", "retired", "update-handoff"] as const) {
+  test(`a startup-held interrupt whose status read outlasts its owner writes nothing (${interleaving})`, async () => {
+    const admittedAt = Date.parse("2026-11-09T15:47:00.000Z");
+    setSystemTime(admittedAt + CONTROL_SETTLEMENT_WINDOW_MS + 1_000);
+    const transitions: Array<[string, string]> = [];
+    const progressWrites: string[] = [];
+    let handoff = false;
+    let releaseRead!: () => void;
+    let readEntered!: () => void;
+    const entered = new Promise<void>(resolve => { readEntered = resolve; });
+    const held = new Promise<void>(resolve => { releaseRead = resolve; });
+    const progress: DeliveryProgressSink = {
+      mark: id => { progressWrites.push(`mark:${id}`); },
+      note: id => { progressWrites.push(`note:${id}`); },
+      stalled: id => { progressWrites.push(`stalled:${id}`); },
+      deadline: id => { progressWrites.push(`deadline:${id}`); },
+      settle: (id, state) => { progressWrites.push(`settle:${id}:${state}`); },
+      get: () => null,
+      open: () => [],
+    };
+    const queue = new StructuredDeliveryQueue({
+      deferTarget: () => true,
+      canRecoverDeferredTarget: () => false,
+      handoffHeld: () => handoff,
+      progress,
+      effects: async () => transitions.length ? [] : [{ id: "owned-interrupt", kind: "runtime.interrupt", eventSeq: 1, payload: {
+        operationId: "owned-interrupt", conversationId: "conversation-owned", turnId: "turn-owned",
+      } }],
+      status: async () => {
+        readEntered();
+        await held;
+        return { status: "queued", revision: 1, admittedAt: new Date(admittedAt).toISOString() };
+      },
+      transition: async (id, status) => { transitions.push([id, status]); },
+    }, () => null);
+    try {
+      const pass = queue.drain();
+      await entered;
+      const writesBeforeRelease = progressWrites.length;
+      if (interleaving === "retired") queue.retire();
+      if (interleaving === "update-handoff") handoff = true;
+      releaseRead();
+      await pass;
+      if (interleaving === "current-owner") {
+        expect(transitions).toEqual([["owned-interrupt", "failed"]]);
+        expect(progressWrites).toContain("settle:owned-interrupt:failed");
+      } else {
+        expect(transitions).toEqual([]);
+        expect(progressWrites.slice(writesBeforeRelease).filter(write => write.endsWith(":owned-interrupt")
+          || write.startsWith("settle:owned-interrupt"))).toEqual([]);
+      }
+    } finally { queue.retire(); }
+  });
+}
+
+for (const waitAt of ["transition-ack", "fallback-status-read"] as const) {
+  for (const interleaving of ["current-owner", "retired", "update-handoff"] as const) {
+    test(`an expired startup control fences ${waitAt} after ${interleaving}`, async () => {
+      const admittedAt = Date.parse("2026-11-09T15:47:00.000Z");
+      setSystemTime(admittedAt + CONTROL_SETTLEMENT_WINDOW_MS + 1_000);
+      const transitions: Array<[string, string]> = [];
+      const progressWrites: string[] = [];
+      let handoff = false;
+      let statusReads = 0;
+      let releaseWait!: () => void;
+      let waitEntered!: () => void;
+      const entered = new Promise<void>(resolve => { waitEntered = resolve; });
+      const held = new Promise<void>(resolve => { releaseWait = resolve; });
+      let projections = 0;
+      const progress: DeliveryProgressSink = {
+        mark: id => { progressWrites.push(`mark:${id}`); },
+        note: id => { progressWrites.push(`note:${id}`); },
+        stalled: id => { progressWrites.push(`stalled:${id}`); },
+        deadline: id => { progressWrites.push(`deadline:${id}`); },
+        settle: (id, state) => { progressWrites.push(`settle:${id}:${state}`); },
+        get: () => null,
+        open: () => [],
+      };
+      const queue = new StructuredDeliveryQueue({
+        deferTarget: () => true,
+        canRecoverDeferredTarget: () => false,
+        handoffHeld: () => handoff,
+        progress,
+        effects: async () => transitions.length ? [] : [{ id: "expired-interrupt", kind: "runtime.interrupt", eventSeq: 1, payload: {
+          operationId: "expired-interrupt", conversationId: "conversation-owned", turnId: "turn-owned",
+        } }],
+        status: async () => {
+          statusReads += 1;
+          if (waitAt === "fallback-status-read" && statusReads === 2) {
+            waitEntered();
+            await held;
+          }
+          return { status: statusReads > 1 ? "failed" : "queued", revision: 1, admittedAt: new Date(admittedAt).toISOString() };
+        },
+        transition: async (id, status) => {
+          transitions.push([id, status]);
+          if (waitAt === "transition-ack") {
+            waitEntered();
+            await held;
+          } else {
+            throw new Error("transition acknowledgement lost");
+          }
+        },
+        projectTerminal: async () => { projections += 1; return true; },
+      }, () => null);
+      try {
+        const pass = queue.drain();
+        await entered;
+        const writesBeforeRelease = progressWrites.length;
+        if (interleaving === "retired") queue.retire();
+        if (interleaving === "update-handoff") handoff = true;
+        releaseWait();
+        await pass;
+        if (interleaving === "current-owner") {
+          expect(transitions).toEqual([["expired-interrupt", "failed"]]);
+          expect(progressWrites).toContain("settle:expired-interrupt:failed");
+          expect(projections).toBe(waitAt === "fallback-status-read" ? 1 : 0);
+        } else {
+          expect(transitions).toEqual([["expired-interrupt", "failed"]]);
+          expect(progressWrites.slice(writesBeforeRelease).filter(write => write.endsWith(":expired-interrupt")
+            || write.startsWith("settle:expired-interrupt"))).toEqual([]);
+          expect(projections).toBe(0);
+        }
+      } finally { queue.retire(); }
+    });
+  }
+}
+
+for (const interleaving of ["current-owner", "retired", "update-handoff"] as const) {
+  test(`killed reconfigure settlement checks ownership after each transition (${interleaving})`, async () => {
+    const transitions: Array<[string, string, string | null | undefined]> = [];
+    let releaseFirst!: () => void;
+    let firstEntered!: () => void;
+    const entered = new Promise<void>(resolve => { firstEntered = resolve; });
+    const held = new Promise<void>(resolve => { releaseFirst = resolve; });
+    let handoff = false;
+    let heldFirst = false;
+    let heldOperationId: string | null = null;
+    const reconfigures = ["configure-one", "configure-two"].map((operationId, index) => ({
+      id: operationId,
+      kind: "runtime.reconfigure",
+      eventSeq: index + 1,
+      payload: {
+        operationId,
+        conversationId: "conversation-killed",
+        sessionKey: { engine: "codex", sessionId: "thread-killed" },
+        model: "gpt-5.6-sol",
+        effort: "high",
+        fast: false,
+      },
+    }));
+    const kill = { id: "kill-one", kind: "runtime.kill", eventSeq: 3, payload: {
+      operationId: "kill-one", conversationId: "conversation-killed",
+      sessionKey: { engine: "codex", sessionId: "thread-killed" },
+    } };
+    const queue = new StructuredDeliveryQueue({
+      deferTarget: () => true,
+      effects: async () => [...reconfigures, kill],
+      status: async () => ({ status: "queued", revision: 1 }),
+      handoffHeld: () => handoff,
+      transition: async (operationId, status, details) => {
+        transitions.push([operationId, status, details?.reason]);
+        if (operationId.startsWith("configure-") && status === "failed" && !heldFirst) {
+          heldFirst = true;
+          heldOperationId = operationId;
+          firstEntered();
+          await held;
+        }
+      },
+    }, () => host(async () => ({ outcome: "turn-started", turnId: "unexpected" })), async () => true);
+    try {
+      const pass = queue.drain();
+      await entered;
+      if (interleaving === "retired") queue.retire();
+      if (interleaving === "update-handoff") handoff = true;
+      releaseFirst();
+      await pass;
+      const failedReconfigures = transitions
+        .filter(([id, status]) => id.startsWith("configure-") && status === "failed")
+        .map(([id]) => id);
+      if (interleaving === "current-owner") {
+        expect(failedReconfigures).toHaveLength(2);
+      } else {
+        expect(failedReconfigures).toEqual([heldOperationId!]);
+      }
+    } finally { queue.retire(); }
+  });
+}
+
+test("an interrupt queued before a send cannot keep a deferred idle recipient from recovery", async () => {
+  const admittedAt = Date.parse("2026-11-09T15:47:00.000Z");
+  setSystemTime(admittedAt + 1_000);
+  const statuses = new Map<string, string>();
+  const sent: string[] = [];
+  let recoveries = 0;
+  let recovered = false;
+  const effects: StructuredDeliveryEffect[] = [
+    { id: "stuck-interrupt", kind: "runtime.interrupt", eventSeq: 1, payload: {
+      operationId: "stuck-interrupt", conversationId: "conversation-idle", turnId: "turn-gone",
+    } },
+    { id: "operator-send", kind: "runtime.send", eventSeq: 2, payload: {
+      operationId: "operator-send", conversationId: "conversation-idle", text: "resume and read this", policy: "queue",
+    } },
+  ];
+  const queue = new StructuredDeliveryQueue({
+    deferTarget: () => !recovered,
+    canRecoverDeferredTarget: () => true,
+    effects: async () => effects.filter(effect => !["failed", "interrupted", "delivered"].includes(statuses.get(effect.id) ?? "")),
+    status: async id => ({ status: statuses.get(id) ?? "queued", revision: 1, admittedAt: new Date(admittedAt).toISOString() }),
+    hostClaim: async () => "owner:idle",
+    transition: async (id, status) => { statuses.set(id, status); },
+  }, () => recovered ? host(async entry => {
+    sent.push(entry.id);
+    return { outcome: "turn-started", turnId: "operator-turn" };
+  }) : null, undefined, undefined, async () => { recoveries += 1; recovered = true; return true; });
+  try {
+    await queue.drain();
+    // Inside its ceiling the interrupt still holds the send behind it, in order.
+    expect(statuses.has("stuck-interrupt")).toBeFalse();
+    expect(recoveries).toBe(0);
+    expect(sent).toEqual([]);
+    setSystemTime(admittedAt + CONTROL_SETTLEMENT_WINDOW_MS + 1_000);
+    await queue.drain();
+    expect(statuses.get("stuck-interrupt")).toBe("failed");
+    expect(recoveries).toBe(1);
+    await queue.drain();
+    expect(sent).toEqual(["operator-send"]);
+    expect(statuses.get("operator-send")).toBe("delivered");
+  } finally { queue.retire(); }
 });
 
 test("startup recovery does not let an explicit send overtake deferred configuration or automatic work", async () => {

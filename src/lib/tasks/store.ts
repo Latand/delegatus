@@ -6,6 +6,8 @@ import { readFindingKey, reconcileOpenFindings, validStoredFinding } from "./fin
 import path from "node:path";
 
 import { isTaskNote } from "./note";
+import { isTaskSummary } from "./summary";
+import { isTaskProgress } from "./progress";
 import { storedDueHistory } from "./helpers";
 
 import { statePath } from "@/lib/configDir";
@@ -48,8 +50,40 @@ export const TASKS_FILE = statePath("tasks.json");
 // Keep untouched legacy rows exactly as stored, including extension fields and
 // omitted placement/revision. Response coercion must not migrate other rows.
 const persistedRows = new WeakMap<BoardTask, unknown>();
-function committedRows(tasks: BoardTask[], before: ReturnType<typeof snapshotTasks>, replacements: boolean, sync?: { write: TaskSyncWrite; groups: ReadonlyMap<string, GroupSnapshot> }): unknown[] {
+/** For a draft array, the baseline task of a slot its callback never read. */
+const unreadDrafts = new WeakMap<BoardTask[], (index: number) => BoardTask | undefined>();
+
+const sameStoredCompletion = (stored: BoardTask, task: BoardTask) =>
+  stored.doneAt === task.doneAt && JSON.stringify(stored.doneAdmissions) === JSON.stringify(task.doneAdmissions)
+  && stored.findingKey === task.findingKey && JSON.stringify(stored.finding) === JSON.stringify(task.finding);
+
+/** The stored row a never-read draft commits as, when every step below would
+    leave it alone. Anything else returns undefined and takes the full path. A
+    write cloned and normalized every task on the board to change one (#3809). */
+function settledRow(pristine: BoardTask, before: ReturnType<typeof snapshotTasks>, canonical: (project: string) => string): unknown {
+  const stored = persistedRows.get(pristine) as BoardTask | undefined;
+  if (!stored || before.get(pristine.id)?.pristine !== pristine) return undefined;
+  if (canonical(pristine.project) !== pristine.project) return undefined;
+  if (stored.proactive !== undefined || pristine.proactive !== undefined) return undefined;
+  if (withTaskCompletion(pristine, pristine) !== pristine) return undefined;
+  return sameStoredCompletion(stored, pristine) ? stored : undefined;
+}
+
+function committedRows(drafts: BoardTask[], before: ReturnType<typeof snapshotTasks>, replacements: boolean, sync?: { write: TaskSyncWrite; groups: ReadonlyMap<string, GroupSnapshot> }): unknown[] {
   const canonical = projectAliasResolver();
+  const unread = sync ? undefined : unreadDrafts.get(drafts);
+  const settled = new Map<number, unknown>();
+  const settledIds = new Set<string>();
+  if (unread) for (let index = 0; index < drafts.length; index++) {
+    const pristine = unread(index);
+    const row = pristine && settledRow(pristine, before, canonical);
+    if (row === undefined) continue;
+    settled.set(index, row);
+    settledIds.add(pristine!.id);
+  }
+  const tasks: BoardTask[] = [];
+  if (settled.size) { for (let index = 0; index < drafts.length; index++) if (!settled.has(index)) tasks.push(drafts[index]!); }
+  else for (const task of drafts) tasks.push(task);
   for (const task of tasks) {
     task.project = canonical(task.project);
     const prior = before.get(task.id);
@@ -66,22 +100,25 @@ function committedRows(tasks: BoardTask[], before: ReturnType<typeof snapshotTas
   }
   /* A lazy legacy backfill is a real row change and gets a new fence. */
   for (const [id, prior] of before) {
+    if (settledIds.has(id)) continue;
     const stored = persistedRows.get(prior.ref) as BoardTask | undefined;
-    if (stored && (stored.doneAt !== prior.ref.doneAt || JSON.stringify(stored.doneAdmissions) !== JSON.stringify(prior.ref.doneAdmissions)
-      || stored.findingKey !== prior.ref.findingKey || JSON.stringify(stored.finding) !== JSON.stringify(prior.ref.finding))) {
-      before.set(id, { ...prior, fingerprint: taskFingerprint(stored) });
+    if (stored && !sameStoredCompletion(stored, prior.ref)) {
+      before.set(id, { ...prior, fingerprint: taskFingerprint(stored), pristine: undefined });
     }
   }
   if (sync) stampLinkedRows(tasks, sync.groups, sync.write, taskFingerprint);
   stampTaskRevisions(tasks, before, replacements);
-  return tasks.map(task => {
+  const rows = tasks.map(task => {
     const prior = before.get(task.id);
     const stored = prior ? persistedRows.get(prior.ref) as BoardTask | undefined : undefined;
-    return prior && taskRevision(task) === prior.revision && stored
-      && stored.doneAt === task.doneAt && JSON.stringify(stored.doneAdmissions) === JSON.stringify(task.doneAdmissions)
-      && stored.findingKey === task.findingKey && JSON.stringify(stored.finding) === JSON.stringify(task.finding)
+    return prior && taskRevision(task) === prior.revision && stored && sameStoredCompletion(stored, task)
       ? persistedRows.get(prior.ref) : task;
   });
+  if (!settled.size) return rows;
+  // Index access only: iterating the draft array would read every slot.
+  const merged: unknown[] = new Array(drafts.length);
+  for (let index = 0, next = 0; index < drafts.length; index++) merged[index] = settled.has(index) ? settled.get(index) : rows[next++];
+  return merged;
 }
 
 type TasksFile = { tasks?: unknown; recentCreates?: unknown; migrations?: unknown };
@@ -245,6 +282,8 @@ function coerceTask(value: unknown, canonical = canonicalProject): BoardTask | n
   }
   if (task.findingKey === undefined || !validStoredFinding(task.finding)) delete task.finding;
   if (task.note !== undefined && !isTaskNote(task.note)) delete task.note;
+  if (task.summary !== undefined && !isTaskSummary(task.summary)) delete task.summary;
+  if (task.progress !== undefined && !isTaskProgress(task.progress)) delete task.progress;
   if (task.statusBy !== undefined && !isTaskStatusBy(task.statusBy)) delete task.statusBy;
   // A rejected checklist must not survive the raw extension spread above.
   if (!steps) delete task.steps;
@@ -814,6 +853,7 @@ function taskDrafts(pristine: readonly BoardTask[]) {
       set: (value: BoardTask) => { Object.defineProperty(tasks, index, { configurable: true, enumerable: true, writable: true, value }); },
     });
   });
+  unreadDrafts.set(tasks, index => !copies.has(index) && Object.getOwnPropertyDescriptor(tasks, index)?.get ? pristine[index] : undefined);
   return { tasks, original };
 }
 
@@ -965,10 +1005,10 @@ export function mutateTaskPrototypeRound<R>(taskId: string, reviewId: string,
   });
 }
 
-/** Notes are installation-local and cannot change replicated groups, task
+/** Notes and summaries are installation-local and cannot change replicated groups, task
  * membership or tombstones. Each transaction reads and writes one named row;
  * the callback sees the latest task after asynchronous admission. */
-export async function mutateTaskNote(taskId: string,
+async function mutateTaskLocalField(field: "note" | "summary", taskId: string,
   change: (task: BoardTask) => BoardTask | undefined, filePath = TASKS_FILE,
   options: { waitMs?: number; signal?: AbortSignal } = {}): Promise<void> {
   await withViewerOperation("tasks.note", () => waitForStateLock("tasks.note", () => {
@@ -980,22 +1020,34 @@ export async function mutateTaskNote(taskId: string,
       const task = coerceTask(raw);
       if (!task) throw new Error("invalid persisted task row");
       const next = change(structuredClone(task));
-      if (!next || JSON.stringify(next.note) === JSON.stringify(task.note)) return;
+      if (!next || JSON.stringify(next[field]) === JSON.stringify(task[field])) return;
       // Retain stored extensions and pin any derived linked stamps before
-      // changing updatedAt, so a local note leaves every replicated group alone.
+      // changing updatedAt, so a local field leaves every replicated group alone.
       const row = { ...raw, updatedAt: next.updatedAt } as unknown as BoardTask;
       if (context.self && context.all.has(task.project)) {
         const stamps = { ...task.sync?.s };
         for (const group of TASK_SYNC_GROUPS) stamps[group] ??= derivedStamp(task.updatedAt, context.self.prefix);
         row.sync = { s: stamps, o: task.sync?.o ?? context.self.prefix };
       }
-      if (next.note) row.note = next.note;
-      else delete row.note;
+      if (next[field]) Object.assign(row, { [field]: next[field] });
+      else delete row[field];
       stampTaskRevisions([row], snapshotTasks([task]), false);
       tx.put(row as unknown as TaskStateRow);
     });
   }, { ...options, subject: "tasks" }));
 }
+
+export function mutateTaskNote(...args: Parameters<TaskLocalMutationArgs>): Promise<void> {
+  return mutateTaskLocalField("note", ...args);
+}
+
+export function mutateTaskSummary(...args: Parameters<TaskLocalMutationArgs>): Promise<void> {
+  return mutateTaskLocalField("summary", ...args);
+}
+
+/** Signature shared by the two local-field mutations. */
+type TaskLocalMutationArgs = (taskId: string, change: (task: BoardTask) => BoardTask | undefined,
+  filePath?: string, options?: { waitMs?: number; signal?: AbortSignal }) => Promise<void>;
 
 /** Advisory Telegram outcomes are installation-local. Touch one task row and
  * its cache revision, preserving editor, timestamps and linked group stamps. */
@@ -1050,4 +1102,16 @@ export async function patchTaskCompanion<C, R>(companion: SqliteStateCollection<
       return patch.result;
     }, undefined, { collection: companion, prepare: () => ({ records }) });
   }, { waitMs: 5_000, subject: "tasks.proactive" }));
+}
+
+/** Indexed, bounded evidence for discretionary dispatch. No busy wait: callers
+ * defer when a writer owns the store or retained history exceeds the cap. */
+export function proactiveProjectWork(projects: readonly string[], filePath = TASKS_FILE): BoardTask[] {
+  const store = taskCollection(filePath, "read");
+  if (!store) throw new Error("task capacity evidence is unavailable");
+  return store.boundedPatch(1_024, tx => tx.taskProjectRows(projects).map(raw => {
+    const task = coerceTask(raw);
+    if (!task) throw new Error("invalid task capacity evidence");
+    return task;
+  }));
 }

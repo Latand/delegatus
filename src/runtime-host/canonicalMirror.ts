@@ -103,8 +103,8 @@ export async function ensureCanonicalMirror(
 /**
  * Resolves a requested deploy revision to the immutable commit it names, in the
  * canonical mirror (#1033). A branch ref resolves to the tip the canonical
- * repository holds right now; an explicit SHA resolves to itself when the
- * mirror actually carries that object — `rev-parse --verify <40-hex>` alone
+ * repository holds right now; a full SHA already in a valid bare mirror is
+ * verified locally before refreshing. `rev-parse --verify <40-hex>` alone
  * echoes any well-formed hex string back, which is why the `^{commit}` peel is
  * the check that matters.
  */
@@ -115,10 +115,25 @@ export async function resolveCanonicalRevision(
 ): Promise<string> {
   const query = canonicalRevisionQuery(requested);
   if (!query) throw new Error(REQUESTED_REVISION_REFUSAL);
+  const readRevision = async (): Promise<string> => {
+    if (isExactRevision(requested)) {
+      // A ref whose name is 40 hex characters must not stand in for a missing
+      // object. Check its unpeeled identity before retaining commit peeling.
+      const object = await dependencies.run(["git", "--git-dir", options.mirrorDir, "rev-parse", "--verify", `${requested}^{object}`]);
+      if (object !== requested) throw new Error("canonical object does not match the requested revision");
+    }
+    return dependencies.run(["git", "--git-dir", options.mirrorDir, "rev-parse", "--verify", query]);
+  };
+  if (isExactRevision(requested) && await isValidBareMirror(options.mirrorDir, dependencies.run)) {
+    try {
+      const revision = await readRevision();
+      if (isExactRevision(revision)) return revision;
+    } catch { /* A missing or unreadable commit still takes the normal refresh. */ }
+  }
   await dependencies.ensureMirror();
   let revision: string;
   try {
-    revision = await dependencies.run(["git", "--git-dir", options.mirrorDir, "rev-parse", "--verify", query]);
+    revision = await readRevision();
   } catch {
     throw new Error(revisionNotFoundMessage(requested, options.remote));
   }

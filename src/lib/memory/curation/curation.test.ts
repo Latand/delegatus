@@ -20,14 +20,15 @@ import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
 import { claimPass, readPassAuthority, currentPassAuthority, machinePassAuthority, passForConversationAuthority, currentPass, curationPanelRuns, curationStatus, curationView, machinePass, patchPass, readPass, type CuratorPass } from "./store";
 import { curatorCallerOf } from "./guard";
 import { readCuration } from "./read";
-import { productionCurationController } from "./run";
+import { curationForSweep, productionCurationController } from "./run";
 import { permitCuratorTool } from "@/lib/mcp/toolAllowlist";
 import { reconcileSeatTick, runSeatTickCheck } from "@/lib/monitor/seatTickController";
 import { emptySeatTickState } from "@/lib/monitor/types";
+import { SeatTickWork, seatTickWorkSignal } from "@/lib/monitor/seatTickWork";
 import { writeSeatTickState } from "@/lib/monitor/seatTickState";
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
-import type { RoleMemoryRow } from "../roleTypes";
+import type { RoleMemoryRow, RoleMemoryScopeRow } from "../roleTypes";
 import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { seatTickWakeCommit, seatTickWakeCommitPlan } from "@/lib/monitor/seatTick";
 import { recoverDeadStructuredConversation } from "@/lib/runtime/structuredRecovery";
@@ -37,6 +38,7 @@ import { admitReservedLaunch } from "@/lib/tasks/launchMembership";
 import { groupHideState } from "@/lib/tasks/groupHide";
 import { commitTaskMembership } from "@/lib/tasks/membership";
 import { recordMemoryDelivery } from "../deliveryLedger";
+import { projectedScopeRows, projectViewRowsCooperatively } from "../roleViewSource";
 
 const PROJECT = "curation-fixture";
 const NOW = Date.parse("2026-10-11T00:00:00Z");
@@ -83,7 +85,62 @@ function input(scopes: Record<string, string[]>, edits: Partial<CurationApply> =
     return { scope, revision: held?.kind === "scope" ? held.revision : 0, order };
   }), ...edits };
 }
+const capacity = (id = "r_0000000000000000", ratio = 1) => Math.floor((ROLE_MEMORY_BOUND * ratio + 1) / (scopeChars([{ id, rule: "x".repeat(300), why }]) + 1));
 function ended(p: CuratorPass, delta = 1000) { patchPass(p.id, { state: "succeeded", endedAt: at(delta) }); }
+
+test("scope reads identify compressed active and budget rules without enforcing the hint", async () => {
+  const scope = roleScope(PROJECT, "builder");
+  const compressed = "Bind caller/owner/task IDs; read→validate→write; recheck proof; preserve receipts.";
+  const active = fixture(scope, { id: "r_readability_active", rule: compressed, curatedAt: at() });
+  const archived = fixture(scope, { id: "r_readability_archive", rule: compressed, state: "archived", reason: "budget" });
+  const plain = fixture(scope, { id: "r_readability_plain", rule: "Check the caller and owner before writing the receipt." });
+  const technical = fixture(scope, { id: "r_readability_technical", rule: "Read src/lib/memory/roleTypes.ts and https://example.invalid/a/b/c before editing `owner/task/id`." });
+  const p = pass();
+  const page = await readCuration(p, scope, undefined, NOW);
+  if (!("rules" in page)) throw Error("expected a scope page");
+  for (const id of [active, archived]) expect(page.rules.find(r => r.id === id)?.readabilityHint).toEqual({ needsRewrite: true, signals: ["slash-list", "arrow-chain", "fragment-chain"] });
+  for (const id of [plain, technical]) expect(page.rules.find(r => r.id === id)).not.toHaveProperty("readabilityHint");
+  // Keeping flagged text is permitted: the detector supplies evidence only.
+  applyCuration(p, input({ [scope]: [active, plain, technical] }), at(100));
+  expect(row(active).rule).toBe(compressed);
+  const rewritten = "Bind the caller, owner and task identifiers to each operation. Validate them before writing and preserve the receipt.";
+  applyCuration(p, input({ [scope]: [active, archived, plain, technical] }, { restore: [archived] }), at(200));
+  applyCuration(p, input({ [scope]: [active, archived, plain, technical] }, {
+    rewrite: [active, archived].map(id => ({ id, rule: rewritten, note: "Expand the conditions into complete sentences." })),
+  }), at(300));
+  const next = await readCuration(p, scope, undefined, NOW + 300);
+  if (!("rules" in next)) throw Error("expected a scope page");
+  for (const id of [active, archived]) {
+    expect(next.rules.find(r => r.id === id)).not.toHaveProperty("readabilityHint");
+    expect(row(id)).toMatchObject({ rule: rewritten, state: "active" });
+  }
+  expect(next.rules.find(r => r.id === active)?.earlierText).toHaveProperty("rule", compressed);
+});
+
+test("curation reads and applies the shared scope bound and refuses an overflow atomically", async () => {
+  expect(ROLE_MEMORY_BOUND).toBe(15_000);
+  const scope = roleScope(PROJECT, "builder"), ids: string[] = [];
+  // Fixed identifiers and actual injected-line sizes fill the exact code-point bound.
+  while (true) {
+    const id = `r_bound_${String(ids.length).padStart(3, "0")}`;
+    const used = scopeChars(ids.map(row));
+    const available = ROLE_MEMORY_BOUND - used - (ids.length ? 1 : 0) - scopeChars([{ id, rule: "", why }]);
+    if (available < 20) break;
+    ids.push(fixture(scope, { id, rule: "Check the owner. ".repeat(20).slice(0, Math.min(300, available)) }));
+  }
+  expect(scopeChars(ids.map(row))).toBe(ROLE_MEMORY_BOUND);
+  const extra = fixture(scope, { id: "r_bound_extra", state: "archived", reason: "budget" });
+  const p = pass();
+  expect((await readCuration(p, undefined, undefined, NOW)).scopes.find(s => s.scope === scope)?.bound).toBe(ROLE_MEMORY_BOUND);
+  const page = await readCuration(p, scope, undefined, NOW);
+  if (!("rules" in page)) throw Error("expected a scope page");
+  expect(page.bound).toBe(ROLE_MEMORY_BOUND);
+  applyCuration(p, input({ [scope]: ids }), at(100));
+  const revision = projectView(PROJECT).scopes.find(s => s.scope === scope)!.revision;
+  refusal(p, input({ [scope]: [...ids, extra] }, { restore: [extra] }), "CURATE_BOUND");
+  expect(row(extra).state).toBe("archived");
+  expect(projectView(PROJECT).scopes.find(s => s.scope === scope)).toMatchObject({ revision, chars: ROLE_MEMORY_BOUND, bound: ROLE_MEMORY_BOUND });
+});
 
 test("current curation selection and history ordering never copy the role archive", () => {
   fixture();
@@ -127,9 +184,183 @@ test("the panel keeps the most recent completed pass beside a newer live pass", 
   });
 });
 
+test("status and panel counts do not decode retained undo payloads", () => {
+  const id = fixture();
+  const completed = pass();
+  ended(completed);
+  const rule = row(id);
+  const retained = "retained-undo-body:" + "x".repeat(4 * 1024 * 1024);
+  roleMemoryCollection()!.boundedPatch(4, tx => {
+    const scope = tx.get(`s:${rule.scope}`);
+    if (scope?.kind !== "scope") throw new Error("missing scope");
+    tx.put({ ...scope, revision: 3, history: [
+      { revision: 2, at: at(2000), by: "curator", pass: completed.id,
+        counts: { ...completed.counts, calls: 3 }, added: [], merged: [], archived: [],
+        prior: [{ id, version: null, fields: { ...rule, note: retained } }] },
+      { revision: 3, at: at(3000), by: "agent", added: [id], merged: [], archived: [] },
+    ] });
+  });
+  const parse = JSON.parse;
+  let largestDecoded = 0;
+  const decoded = spyOn(JSON, "parse").mockImplementation((value, reviver) => {
+    largestDecoded = Math.max(largestDecoded, value.length);
+    return parse(value, reviver);
+  });
+  try {
+    expect(curationStatus(PROJECT, NOW + 4000)).toMatchObject({ active: true, newLessons: 1 });
+    expect(curationPanelRuns(PROJECT).last?.counts.calls).toBe(3);
+    expect(largestDecoded).toBeLessThan(100_000);
+  } finally { decoded.mockRestore(); }
+  const scope = roleMemoryCollection()!.get(`s:${rule.scope}`);
+  expect(scope?.kind === "scope" && scope.history[0]?.prior?.[0]?.fields.note).toBe(retained);
+});
+
+test("projected curation scopes isolate callers and observe committed changes", () => {
+  const id = fixture();
+  const scope = row(id).scope, key = `s:${scope}`;
+  const first = projectedScopeRows([key])[0]!;
+  first.active.length = 0;
+  first.history.push({ revision: 99, at: at(), by: "agent", added: ["caller-only"], merged: [], archived: [] });
+  expect(projectedScopeRows([key])[0]).toMatchObject({ active: [id], history: [] });
+  roleMemoryCollection()!.boundedPatch(4, tx => {
+    const held = tx.get(key);
+    if (held?.kind !== "scope") throw new Error("missing scope");
+    tx.put({ ...held, revision: 2, history: [{ revision: 2, at: at(1000), by: "agent", added: [id], merged: [], archived: [] }] });
+  });
+  expect(projectedScopeRows([key])[0]).toMatchObject({ revision: 2, active: [id], history: [{ added: [id] }] });
+});
+
+test("status polling after an unrelated lesson does not decode unchanged scope histories", () => {
+  const id = fixture(), scope = row(id).scope;
+  roleMemoryCollection()!.boundedPatch(2, tx => {
+    const held = tx.get(`s:${scope}`);
+    if (held?.kind !== "scope") throw new Error("missing scope");
+    tx.put({ ...held, revision: 6001, history: Array.from({ length: 6000 }, (_, i) => ({
+      revision: i + 2, at: at(i), by: "agent" as const,
+      added: [id], merged: [], archived: [],
+    })) });
+  });
+  const expected = curationStatus(PROJECT, NOW + 4000);
+  fixture(roleScope("unrelated-project", "builder"));
+  const parse = JSON.parse;
+  let decodedBytes = 0;
+  const decoded = spyOn(JSON, "parse").mockImplementation((value, reviver) => {
+    decodedBytes += Buffer.byteLength(value);
+    return parse(value, reviver);
+  });
+  try {
+    expect(curationStatus(PROJECT, NOW + 4000)).toEqual(expected);
+    expect(decodedBytes).toBeLessThan(100_000);
+  } finally { decoded.mockRestore(); }
+});
+
+test("a warm status observes active rule edits even when the scope membership is unchanged", () => {
+  const id = fixture();
+  expect(curationStatus(PROJECT, NOW)).toMatchObject({ active: true, pressure: false });
+  roleMemoryCollection()!.boundedPatch(2, tx => {
+    const rule = tx.get(`r:${id}`);
+    if (rule?.kind !== "rule") throw new Error("missing rule");
+    tx.put({ ...rule, rule: "x".repeat(ROLE_MEMORY_BOUND + 1) });
+  });
+  expect(curationStatus(PROJECT, NOW)).toMatchObject({ active: true, pressure: true });
+  roleMemoryCollection()!.boundedPatch(2, tx => {
+    const rule = tx.get(`r:${id}`);
+    if (rule?.kind !== "rule") throw new Error("missing rule");
+    tx.put({ ...rule, state: "archived", reason: "deleted" });
+  });
+  expect(curationStatus(PROJECT, NOW)).toMatchObject({ active: false, pressure: false });
+});
+
+test("warm status does not inventory scope rows from unrelated projects", () => {
+  fixture();
+  roleMemoryCollection()!.boundedPatch(512, tx => {
+    for (let i = 0; i < 400; i++) tx.put({ kind: "scope", scope: roleScope(`unrelated-${i}`, "builder"), revision: 1, active: [], history: [] });
+  });
+  const expected = curationStatus(PROJECT, NOW);
+  const query = Database.prototype.query;
+  let inventories = 0;
+  const reads = spyOn(Database.prototype, "query").mockImplementation((function (this: Database, sql: string, ...args: unknown[]) {
+    if (/SELECT\s+(?:\w+\.)?row_key[\s,]/i.test(sql) && sql.includes("state_rows") && sql.includes("'role_memory'")) inventories++;
+    return query.call(this, sql, ...args as []);
+  }) as typeof Database.prototype.query);
+  try {
+    expect(curationStatus(PROJECT, NOW)).toEqual(expected);
+    expect(inventories).toBe(0);
+  } finally { reads.mockRestore(); }
+  fixture(roleScope(PROJECT, "reviewer"), { rule: "x".repeat(ROLE_MEMORY_BOUND + 1) });
+  expect(curationStatus(PROJECT, NOW)).toMatchObject({ pressure: true, urgent: true });
+});
+
+test("curation status refuses malformed scope records", () => {
+  const id = fixture(), scope = row(id).scope;
+  const db = new Database(path.join(dir, "state.sqlite"));
+  try {
+    db.query("UPDATE state_rows SET value_json=?,row_revision=row_revision+1 WHERE collection='role_memory' AND row_key=?")
+      .run(JSON.stringify({ kind: "invalid-kind", scope, active: [], history: [] }), `s:${scope}`);
+    expect(() => curationStatus(PROJECT)).toThrow("invalid projected memory scope");
+  } finally { db.close(); }
+});
+
+test("curation projection retries a peer commit between base and history reads", () => {
+  const id = fixture(), scope = row(id).scope, key = `s:${scope}`;
+  const db = new Database(path.join(dir, "state.sqlite"));
+  const next = JSON.stringify({ kind: "scope", scope, revision: 2, active: ["peer"], history: [
+    { revision: 2, at: at(1000), by: "agent", added: ["peer"], merged: [], archived: [] },
+  ] });
+  const parse = JSON.parse;
+  let changed = false;
+  const hook = spyOn(JSON, "parse").mockImplementation((value, reviver) => {
+    const decoded = parse(value, reviver);
+    if (!changed && Array.isArray(decoded) && decoded[0] === "scope" && decoded[1] === scope) {
+      changed = true;
+      db.query("UPDATE state_rows SET value_json=?,row_revision=row_revision+1 WHERE collection='role_memory' AND row_key=?").run(next, key);
+    }
+    return decoded;
+  });
+  try {
+    expect(projectedScopeRows([key])[0]).toMatchObject({ revision: 2, active: ["peer"], history: [{ added: ["peer"] }] });
+    expect(changed).toBe(true);
+  } finally { hook.mockRestore(); db.close(); }
+});
+
+test("a reopened projection reader cannot reuse the replaced file's cache", () => {
+  const id = fixture(), scope = row(id).scope, key = `s:${scope}`;
+  expect(projectedScopeRows([key])[0]?.active).toEqual([id]);
+  const filename = path.join(dir, "state.sqlite"), replacement = path.join(dir, "replacement.sqlite");
+  const source = new Database(filename); source.exec("PRAGMA wal_checkpoint(TRUNCATE)"); source.close();
+  const clone = new Database(replacement);
+  clone.exec("CREATE TABLE state_rows(collection TEXT,row_key TEXT,value_json TEXT,row_revision INTEGER)");
+  clone.query("INSERT INTO state_rows VALUES ('role_memory',?,?,1)")
+    .run(key, JSON.stringify({ kind: "scope", scope, revision: 1, active: ["replacement"], history: [] }));
+  clone.close();
+  const stat = fs.statSync;
+  let swapped = false;
+  const hook = spyOn(fs, "statSync").mockImplementation(((...args: unknown[]) => {
+    const result = Reflect.apply(stat, fs, args);
+    if (!swapped && String(args[0]) === filename) { swapped = true; fs.renameSync(replacement, filename); }
+    return result;
+  }) as typeof fs.statSync);
+  try {
+    expect(projectedScopeRows([key])[0]?.active).toEqual(["replacement"]);
+    expect(swapped).toBe(true);
+  } finally { hook.mockRestore(); }
+});
+
+test("a refused curation history read releases its SQLite cursor", () => {
+  const id = fixture(), scope = row(id).scope;
+  const db = new Database(path.join(dir, "state.sqlite"));
+  try {
+    expect(db.query<{ busy: number }, []>("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(0);
+    db.query("UPDATE state_rows SET value_json=?,row_revision=row_revision+1 WHERE collection='role_memory' AND row_key=?")
+      .run(JSON.stringify({ kind: "scope", scope, revision: 2, active: [], history: [null] }), `s:${scope}`);
+    expect(() => curationStatus(PROJECT)).toThrow();
+    expect(db.query<{ busy: number }, []>("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(0);
+  } finally { db.close(); }
+});
+
 test("a successful no-op pass leaves pressure as the trigger but cannot claim again before the interval", () => {
   const scope = roleScope(PROJECT, "builder");
-  Array.from({ length: 30 }, (_, i) => fixture(scope, {
+  Array.from({ length: capacity() }, (_, i) => fixture(scope, {
     rule: `Preserve the complete operational guidance for category ${i} before changing shared state. ${"additional guidance ".repeat(25)}`.slice(0, 300),
   }));
   const initial = pass();
@@ -164,6 +395,333 @@ function hostingFixture() {
     observe: async () => ({ state: "running" as const }), archive: () => {} };
   return { sources, seats, lives, bodies, seat, ports, controller: productionCurationController(sources, ports), tick: { ...tickInput(), project: PROJECT, now: NOW } };
 }
+
+test.each([
+  { mapped: "codex", claude: "connected", codex: "signed-out", expected: "claude" },
+  { mapped: "claude", claude: "signed-out", codex: "connected", expected: "codex" },
+  { mapped: "codex", claude: "connected", codex: "cli-missing", expected: "claude" },
+  { mapped: "claude", claude: "connected", codex: "connected", expected: "claude" },
+  { mapped: "codex", claude: "signed-out", codex: "signed-out", expected: "codex" },
+  { mapped: "codex", claude: "signed-out", codex: "connected", expected: "codex" },
+] as const)("curator runtime follows engine availability %j", async scenario => {
+  const { saveRoleOverrides, loadRoleOverrides } = await import("@/lib/roles/store");
+  const { resolveSpawnRole } = await import("@/lib/roles/registry");
+  const { defaultModelFor } = await import("@/lib/agent/models");
+  saveRoleOverrides({ curator: { config: { engine: scenario.mapped, model: defaultModelFor(scenario.mapped), effort: "medium" } } });
+  const before = loadRoleOverrides();
+  fixture();
+  const f = hostingFixture(); f.seat();
+  const ports = { ...f.ports, engineReadiness: (engine: "claude" | "codex", project: string | null) => {
+    expect(project).toBe(PROJECT);
+    return scenario[engine];
+  } };
+  expect(await productionCurationController(f.sources, ports).launchIfDue(f.tick)).toContain("launched");
+  expect(f.bodies).toHaveLength(1);
+  const body = f.bodies[0];
+  const runtime = { engine: scenario.expected, model: defaultModelFor(scenario.expected), effort: scenario.expected === scenario.mapped ? "medium" : "high" };
+  const resolved = resolveSpawnRole(body);
+  expect(resolved.ok).toBe(true);
+  expect(resolved.ok && resolved.value?.config).toMatchObject(runtime);
+  expect(loadRoleOverrides()).toEqual(before);
+  const persisted = resolveSpawnRole(readPass(machinePass()!.id)!.launchBody!);
+  expect(persisted.ok && persisted.value?.config).toMatchObject(runtime);
+});
+
+test.each(["ENGINE_NOT_CONNECTED", "project_account_refused"])("curator selected engine refusal releases its pass: %s", async code => {
+  fixture();
+  const f = hostingFixture(); f.seat();
+  const ports = { ...f.ports,
+    engineReadiness: (engine: "claude" | "codex") => engine === "claude" ? "connected" as const : "signed-out" as const,
+    launch: async (body: Record<string, unknown>) => {
+      f.bodies.push(body);
+      // Credentials or account admission can change after runtime selection.
+      return { status: 409, body: { code } };
+    },
+  };
+  expect(await productionCurationController(f.sources, ports).launchIfDue(f.tick)).toContain("failed, no-account");
+  expect(f.bodies).toHaveLength(1);
+  expect(f.bodies[0]).toMatchObject({ engine: "claude", model: "opus", effort: "high" });
+  expect(readPass(String(f.bodies[0].clientAttemptId))).toMatchObject({ state: "failed", failure: "no-account", endedAt: at() });
+  expect(machinePass()).toBeNull();
+});
+
+test("curator recovery replays its persisted engine after connection changes", async () => {
+  fixture();
+  const f = hostingFixture(); f.seat();
+  const firstPorts = { ...f.ports,
+    engineReadiness: (engine: "claude" | "codex") => engine === "claude" ? "connected" as const : "signed-out" as const,
+    launch: async (body: Record<string, unknown>) => { f.bodies.push(body); return { status: 503, body: { code: "AUTO_UPDATE_DRAIN" } }; },
+  };
+  expect(await productionCurationController(f.sources, firstPorts).launchIfDue(f.tick)).toContain("held for the automatic update");
+  const saved = machinePass()!;
+  expect(saved.launchBody).toMatchObject({ engine: "claude", model: "opus", effort: "high" });
+  const code = `import {readPassAuthority} from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))}; console.log(JSON.stringify(readPassAuthority(${JSON.stringify(saved.id)}).launchBody));`;
+  const child = Bun.spawn([process.execPath, "--eval", code], { env: process.env, stdout: "pipe", stderr: "pipe" });
+  const [output, errors, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(exit, errors).toBe(0);
+  expect(JSON.parse(output)).toEqual(saved.launchBody);
+  const restarted = productionCurationController(f.sources, { ...f.ports,
+    engineReadiness: () => { throw Error("a persisted attempt must retain its runtime"); },
+  });
+  expect(await restarted.reconcile(PROJECT)).toContain("launched");
+  expect(f.bodies).toHaveLength(2);
+  expect(f.bodies[1]).toEqual(f.bodies[0]);
+  expect(machinePass()).toMatchObject({ id: saved.id, state: "running" });
+});
+
+test("one sweep shares in-flight and settled machine choices, with N host admissions", async () => {
+  const f = hostingFixture();
+  const projects = Array.from({ length: 8 }, (_, i) => `quiet-seat-${i}`);
+  for (const project of projects) f.seat(project);
+  const liveness = spyOn(f.sources, "liveness");
+  const sweep = curationForSweep(f.controller);
+  const inputs = projects.map(project => ({ ...f.tick, project }));
+  await Promise.all(inputs.map(input => sweep.launchIfDue(input)));
+  expect(liveness).toHaveBeenCalledTimes(projects.length);
+  await sweep.launchIfDue(inputs[0]);
+  expect(liveness).toHaveBeenCalledTimes(projects.length);
+  // New sweeps own a new choice; no durable eligibility cache can outlive it.
+  await curationForSweep(f.controller).launchIfDue(inputs[0]);
+  expect(liveness).toHaveBeenCalledTimes(2 * projects.length);
+  expect(f.bodies).toHaveLength(0);
+});
+
+test("review: a due project whose wake lands later in the sweep still launches", async () => {
+  let dueProject: string | null = null, choices = 0;
+  const controller = {
+    reconcile: async () => null,
+    launchIfDue: async () => { choices++; return dueProject ? `launched ${dueProject}` : null; },
+  };
+  const sweep = curationForSweep(controller, ["quiet-seat", PROJECT]);
+  const early = sweep.launchIfDue({ ...tickInput(), project: "quiet-seat" });
+  await Promise.resolve();
+  expect(choices).toBe(0);
+  // Eligibility changes after the early project requested the sweep's choice.
+  dueProject = PROJECT;
+  const due = sweep.launchIfDue({ ...tickInput(), project: PROJECT });
+  expect(await Promise.all([early, due])).toEqual([`launched ${PROJECT}`, `launched ${PROJECT}`]);
+  expect(choices).toBe(1);
+});
+
+test("review: a canceled first check cannot cancel the shared due curator admission", async () => {
+  fixture(); const f = hostingFixture();
+  f.seat("quiet-seat", at(86_400_000));
+  f.seat(PROJECT, at(-1_000));
+  const observedSignals: (AbortSignal | undefined)[] = [];
+  const liveness = f.sources.liveness;
+  f.sources.liveness = async (...args) => {
+    observedSignals.push(seatTickWorkSignal());
+    return liveness(...args);
+  };
+  const sweep = curationForSweep(f.controller, ["quiet-seat", PROJECT]);
+  const quietWork = new SeatTickWork("quiet-seat", 1_000);
+  let quietChoice!: Promise<string | null>;
+  await quietWork.run(async () => {
+    quietChoice = sweep.launchIfDue({ ...f.tick, project: "quiet-seat" });
+    quietWork.close();
+  });
+  const dueWork = new SeatTickWork(PROJECT, 1_000);
+  const dueChoice = await dueWork.run(() => sweep.launchIfDue(f.tick));
+  await quietChoice;
+  dueWork.close();
+  expect(dueChoice).toContain("launched");
+  expect(f.bodies).toHaveLength(1);
+  expect(f.bodies[0]!.project).toBe(PROJECT);
+  expect(observedSignals).toEqual([undefined]);
+});
+
+test.each([false, true])("shared incumbent recovery survives first-check cancellation: %s", async cancelFirst => {
+  fixture(); const f = hostingFixture(); f.seat();
+  const incumbent = pass();
+  const deferred = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>(done => { resolve = done; });
+    return { promise, resolve: () => resolve() };
+  };
+  const entered = deferred(), unblock = deferred();
+  const rawLiveness = f.sources.liveness;
+  let reads = 0;
+  f.sources.liveness = async request => {
+    const signal = seatTickWorkSignal();
+    if (++reads === 1) {
+      entered.resolve();
+      await unblock.promise;
+    }
+    signal?.throwIfAborted();
+    return rawLiveness(request);
+  };
+  const controller = productionCurationController(f.sources, {
+    ...f.ports,
+    launch: async (body, authorize) => { authorize(); return f.ports.launch(body); },
+  });
+  const sweep = curationForSweep(controller, ["quiet-seat", PROJECT]);
+  const firstWork = new SeatTickWork("quiet-seat", 60_000);
+  const secondWork = new SeatTickWork(PROJECT, 60_000);
+  const first = firstWork.run(() => sweep.reconcile("quiet-seat"));
+  let second: Promise<string | null> | undefined;
+  try {
+    await entered.promise;
+    expect(f.bodies).toHaveLength(0);
+    expect(readPass(incumbent.id)?.state).toBe("claimed");
+    if (cancelFirst) firstWork.close();
+    second = secondWork.run(() => sweep.reconcile(PROJECT));
+    expect(second).toBe(first);
+    unblock.resolve();
+    const results = await Promise.all([first, second]);
+    expect(f.bodies).toHaveLength(1);
+    expect(results[0]).toContain("launched");
+    expect(results[1]).toBe(results[0]);
+    expect(readPass(incumbent.id)).toMatchObject({ state: "running", failure: null });
+    expect(machinePass()?.id).toBe(incumbent.id);
+    expect(await sweep.reconcile(PROJECT)).toBe(results[0]);
+    expect(f.bodies).toHaveLength(1);
+  } finally {
+    unblock.resolve();
+    await Promise.allSettled([first, ...(second ? [second] : [])]);
+    firstWork.close(); secondWork.close();
+  }
+});
+
+for (const boundary of ["liveness", "observation", "dispatch"] as const) {
+  test.each(["demotion", "replacement"] as const)(`shared incumbent recovery refuses %s during ${boundary}`, async change => {
+    fixture(); const f = hostingFixture(); f.seat();
+    const incumbent = pass();
+    if (boundary === "observation") patchPass(incumbent.id, { state: "launching", launchedAt: at(-1_000) });
+    const deferred = () => {
+      let resolve!: () => void;
+      const promise = new Promise<void>(done => { resolve = done; });
+      return { promise, resolve: () => resolve() };
+    };
+    const entered = deferred(), unblock = deferred();
+    const hold = async () => { entered.resolve(); await unblock.promise; };
+    const rawLiveness = f.sources.liveness;
+    let reads = 0, current = true;
+    f.sources.liveness = async request => {
+      if (++reads === 1 && boundary === "liveness") await hold();
+      return rawLiveness(request);
+    };
+    const controller = productionCurationController(f.sources, {
+      ...f.ports,
+      observe: async () => {
+        if (boundary === "observation") await hold();
+        return { state: "ended", conversationId: "conversation_recovered_curator", finalText: "Checked the fixture scopes." };
+      },
+      launch: async (body, authorize) => {
+        if (boundary === "dispatch") await hold();
+        authorize();
+        return f.ports.launch(body);
+      },
+    });
+    const sweep = curationForSweep(controller, [PROJECT], () => current);
+    const work = new SeatTickWork(PROJECT, 60_000);
+    const recovery = work.run(() => sweep.reconcile(PROJECT));
+    try {
+      await entered.promise;
+      expect(f.bodies).toHaveLength(0);
+      const held = readPass(incumbent.id);
+      work.close();
+      if (change === "demotion") current = false; else f.seat(PROJECT);
+      unblock.resolve();
+      if (boundary === "dispatch") {
+        await expect(recovery).rejects.toThrow(change === "demotion" ? "curation sweep ended" : "curation admission held");
+      } else if (change === "demotion") {
+        expect(await recovery).toBeNull();
+      } else {
+        expect(await recovery).toContain("abandoned");
+      }
+      expect(f.bodies).toHaveLength(0);
+      if (change === "demotion") {
+        expect(readPass(incumbent.id)).toEqual(held);
+        // The promoted sweep may recover the pass the old release left intact.
+        expect(await curationForSweep(f.controller).reconcile(PROJECT)).toContain("launched");
+        expect(f.bodies).toHaveLength(1);
+      } else {
+        expect(readPass(incumbent.id)?.failure).toContain("abandoned");
+      }
+    } finally {
+      unblock.resolve();
+      await Promise.allSettled([recovery]);
+      work.close();
+    }
+  });
+}
+
+test("release demotion fences the shared curator launch after project checks stop", async () => {
+  const { seatTickWorkSignal } = await import("@/lib/monitor/seatTickWork");
+  fixture(); const f = hostingFixture(); f.seat();
+  const deferred = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>(done => { resolve = done; });
+    return { promise, resolve: () => resolve() };
+  };
+  const launchEntered = deferred(), unblockLaunch = deferred();
+  const controller = productionCurationController(f.sources, {
+    ...f.ports,
+    launch: async (body, authorize) => {
+      launchEntered.resolve();
+      await unblockLaunch.promise;
+      authorize();
+      return f.ports.launch(body);
+    },
+  });
+  const entered = deferred(), unblock = deferred(), completed = deferred();
+  const rawLiveness = f.sources.liveness;
+  f.sources.liveness = async request => {
+    const signal = seatTickWorkSignal();
+    entered.resolve();
+    await unblock.promise;
+    signal?.throwIfAborted();
+    return rawLiveness(request);
+  };
+  let state = emptySeatTickState();
+  const sources = {
+    ...f.sources,
+    prepareRead: async () => {},
+    seatFor: () => ({ active: null, pending: null, history: [] }),
+    activeSeats: () => [PROJECT], pipelines: () => [], archivedPipelines: () => [], tasks: () => [],
+    liveness: async () => [], lifecycleJournal: () => ({ version: 1 as const, lastSeq: 0, events: [], retired: [] }),
+    retirementReport: () => null, reports: undefined, maintenanceRuns: () => [], recordRuleReports: undefined,
+    recordDeploySnapshots: undefined, workerCounts: undefined,
+  };
+  const dependencies = {
+    sources, policy: tickInput().policy, reconcileSeat: () => null,
+    readState: () => state, writeState: (_project: string, next: typeof state) => { state = next; },
+    appendRecord: () => {}, readRecords: () => [], ensureCard: () => true,
+    curation: {
+      reconcile: controller.reconcile,
+      launchIfDue: async (input: Parameters<typeof controller.launchIfDue>[0]) => {
+        try { return await controller.launchIfDue(input); }
+        finally { completed.resolve(); }
+      },
+    },
+    release: null, maintenance: null, turbo: () => {}, recordSuccessions: () => [],
+  };
+  const running = reconcileSeatTick({ ...dependencies, ownsTraffic: () => true });
+  try {
+    await entered.promise;
+    unblock.resolve();
+    await launchEntered.promise;
+    await reconcileSeatTick({ ...dependencies, ownsTraffic: () => false });
+    unblockLaunch.resolve();
+    await running;
+    await completed.promise;
+    expect(f.bodies).toHaveLength(0);
+    expect(machinePass()?.state).not.toBe("running");
+  } finally {
+    unblock.resolve();
+    unblockLaunch.resolve();
+    await running;
+  }
+});
+
+test("a sweep starting at a disabled project still launches a due eligible project", async () => {
+  fixture(); const f = hostingFixture(); f.seat();
+  const sweep = curationForSweep(f.controller);
+  await sweep.launchIfDue({ ...f.tick, project: "disabled-seat", settings: { ...f.tick.settings, enabled: false } });
+  expect(await sweep.launchIfDue(f.tick)).toContain("launched");
+  expect(f.bodies).toHaveLength(1);
+  expect(f.bodies[0].project).toBe(PROJECT);
+});
 // Helper lease records carry kernel identities on Linux.
 test.skipIf(process.platform !== "linux")("curation fixture cleanup stops its recorded disk-pressure helper", async () => {
   const f = hostingFixture();
@@ -234,6 +792,166 @@ test("a live seat needs a delivered wake within two configured intervals", async
   expect(await f.controller.launchIfDue(f.tick)).toContain("launched");
   expect(f.bodies).toHaveLength(1);
 });
+test("scheduled custody crosses the wake boundary without a replacement launch", async () => {
+  const { scheduledCustodyFixture, CUSTODY_PROJECT, CUSTODY_NOW } = await import("./custody.fixture");
+  fixture(roleScope(CUSTODY_PROJECT, "builder"));
+  const f = scheduledCustodyFixture(dir);
+  try {
+    const { pass: initial } = await f.start();
+    f.setNow(CUSTODY_NOW + 20 * 60_000);
+    expect(await f.controller.reconcile(CUSTODY_PROJECT)).toBeNull();
+    f.setNow(CUSTODY_NOW + 20 * 60_000 + 1);
+    expect(await f.controller.reconcile(CUSTODY_PROJECT)).toBeNull();
+    expect(machinePass()).toMatchObject({ id: initial.id, conversationId: initial.conversationId, state: "running" });
+    expect(f.launches).toBe(1);
+    expect(initial.admittedHost).toEqual({ conversationId: f.seatId, seatEpoch: f.seat.seatEpoch, designatedAt: f.seat.designatedAt });
+    patchPass(initial.id, { admittedHost: { ...initial.admittedHost!, seatEpoch: 99 } });
+    expect(readPassAuthority(initial.id)?.admittedHost).toEqual(initial.admittedHost);
+    const completed = productionCurationController(f.sources, { ...f.ports, observe: async () => ({ state: "ended", finalText: "Checked the fixture scopes and retained the guidance." }) });
+    expect(await completed.reconcile(CUSTODY_PROJECT)).toContain("settled");
+    expect(readPass(initial.id)).toMatchObject({ state: "succeeded", counts: { calls: 0, changed: 0 } });
+    expect(machinePass()).toBeNull();
+  } finally { f.registry.close(); }
+});
+
+test("scheduled custody survives a process restart and retains the original finite timeout", async () => {
+  const { scheduledCustodyFixture, CUSTODY_PROJECT } = await import("./custody.fixture");
+  fixture(roleScope(CUSTODY_PROJECT, "builder"));
+  const f = scheduledCustodyFixture(dir);
+  try {
+    const { pass: initial } = await f.start();
+    const restart = async (delta: number) => {
+      const script = `
+        import { scheduledCustodyFixture, CUSTODY_PROJECT, CUSTODY_NOW } from ${JSON.stringify(path.join(import.meta.dir, "custody.fixture.ts"))};
+        import { curatorRecoveryGuard } from ${JSON.stringify(path.join(import.meta.dir, "admission.ts"))};
+        import { readPass, machinePass } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))};
+        const f = scheduledCustodyFixture(${JSON.stringify(dir)}, { seatId: ${JSON.stringify(f.seatId)}, now: CUSTODY_NOW + ${delta} });
+        let refused = null;
+        try { const guard = await curatorRecoveryGuard(${JSON.stringify(initial.conversationId)}, f.sources); guard(); }
+        catch (error) { refused = error.message; }
+        const detail = await f.controller.reconcile(CUSTODY_PROJECT);
+        console.log(JSON.stringify({ refused, detail, pass: readPass(${JSON.stringify(initial.id)}), machine: machinePass()?.id ?? null, launches: f.launches }));
+        f.registry.close();
+      `;
+      const child = Bun.spawn([process.execPath, "--eval", script], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+      const [exit, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(exit).toBe(0); expect(error).toBe("");
+      return JSON.parse(output);
+    };
+    const recovered = await restart(20 * 60_000 + 1);
+    expect(recovered).toMatchObject({ refused: null, detail: null, launches: 0, machine: initial.id,
+      pass: { id: initial.id, project: initial.project, conversationId: initial.conversationId, launchId: initial.launchId, claimedAt: initial.claimedAt, launchedAt: initial.launchedAt, state: "running" } });
+    const expired = await restart(60 * 60_000);
+    expect(expired).toMatchObject({ refused: expect.stringContaining("timed-out"), launches: 0, machine: null, pass: { state: "failed", failure: "timed-out" } });
+  } finally { f.registry.close(); }
+}, 20_000);
+
+test.each(["seat-epoch", "seat-conversation", "designation", "host-gone", "wakes-off", "curator-off", "deployment", "memory-off", "receipt-failed", "wrong-conversation", "machine-claim-lost"] as const)("scheduled custody still refuses %s after wake expiry", async kind => {
+  const { scheduledCustodyFixture, CUSTODY_PROJECT, CUSTODY_NOW } = await import("./custody.fixture");
+  const { curatorRecoveryGuard } = await import("./admission");
+  fixture(roleScope(CUSTODY_PROJECT, "builder"));
+  const f = scheduledCustodyFixture(dir);
+  try {
+    const { pass: initial } = await f.start(kind === "receipt-failed");
+    f.setNow(CUSTODY_NOW + 20 * 60_000 + 1);
+    // Positive control proves the same production recovery guard admits this pass.
+    const guard = await curatorRecoveryGuard(initial.conversationId!, f.sources); guard();
+    if (kind === "seat-epoch") {
+      f.seat.seatEpoch++;
+      writeSeatTickState(CUSTODY_PROJECT, { ...emptySeatTickState(), seatEpoch: f.seat.seatEpoch, lastWakeAt: new Date(CUSTODY_NOW + 20 * 60_000 + 1).toISOString() });
+    }
+    if (kind === "seat-conversation") f.seat.conversationId = initial.conversationId as typeof f.seat.conversationId;
+    if (kind === "designation") f.seat.designatedAt = new Date(CUSTODY_NOW + 1).toISOString();
+    if (kind === "host-gone") f.policy({ seatAlive: false });
+    if (kind === "wakes-off") f.policy({ enabled: false });
+    if (kind === "curator-off") f.policy({ curatorEnabled: false });
+    if (kind === "deployment") f.policy({ deployment: true });
+    if (kind === "memory-off") chooseSource("engines");
+    if (kind === "receipt-failed") expect(f.registry.failSpawn(initial.launchId!, "fixture launch refused")).toBe(true);
+    if (kind === "wrong-conversation") patchPass(initial.id, { conversationId: "conversation_other" });
+    if (kind === "machine-claim-lost") patchPass(initial.id, { state: "succeeded", endedAt: new Date(CUSTODY_NOW + 20 * 60_000).toISOString() });
+    await expect(curatorRecoveryGuard(initial.conversationId!, f.sources)).rejects.toThrow();
+    expect(f.launches).toBe(1);
+  } finally { chooseSource("unchosen"); f.registry.close(); }
+});
+
+test("scheduled custody does not extend an unadmitted launch or transfer to a replacement seat", async () => {
+  const { scheduledCustodyFixture, CUSTODY_PROJECT, CUSTODY_NOW } = await import("./custody.fixture");
+  fixture(roleScope(CUSTODY_PROJECT, "builder"));
+  const f = scheduledCustodyFixture(dir);
+  try {
+    let observed = false;
+    const controller = productionCurationController(f.sources, { ...f.ports,
+      launch: async (_body, authorize) => { authorize(); return { status: 202, body: { state: "starting" } }; },
+      observe: async () => { observed = true; return { state: "running" }; },
+    });
+    const { effectiveSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const settings = effectiveSeatTickSettings(f.sources.settings(CUSTODY_PROJECT), CUSTODY_NOW, 600_000);
+    await controller.launchIfDue({ project: CUSTODY_PROJECT, now: CUSTODY_NOW, settings } as never);
+    const initial = machinePass()!;
+    expect(initial.state).toBe("launching");
+    expect(f.registry.spawnReceiptForClientAttempt(initial.id)).toBeNull();
+    f.setNow(CUSTODY_NOW + 20 * 60_000 + 1);
+    expect(await controller.reconcile(CUSTODY_PROJECT)).toContain("no delivered seat wake");
+    expect(observed).toBe(false); expect(machinePass()).toBeNull();
+  } finally { f.registry.close(); }
+});
+
+test("scheduled custody rechecks the original seat after observation", async () => {
+  const { scheduledCustodyFixture, CUSTODY_PROJECT, CUSTODY_NOW } = await import("./custody.fixture");
+  fixture(roleScope(CUSTODY_PROJECT, "builder"));
+  const f = scheduledCustodyFixture(dir);
+  try {
+    const { pass: initial } = await f.start();
+    f.setNow(CUSTODY_NOW + 20 * 60_000 + 1);
+    let observed = false;
+    const controller = productionCurationController(f.sources, { ...f.ports, observe: async () => {
+      observed = true;
+      f.seat.seatEpoch++;
+      writeSeatTickState(CUSTODY_PROJECT, { ...emptySeatTickState(), seatEpoch: f.seat.seatEpoch, lastWakeAt: new Date(CUSTODY_NOW + 20 * 60_000 + 1).toISOString() });
+      return { state: "running" };
+    } });
+    expect(await controller.reconcile(CUSTODY_PROJECT)).toContain("abandoned");
+    expect(observed).toBe(true);
+    expect(readPass(initial.id)).toMatchObject({ state: "failed", failure: expect.stringContaining("designated seat changed") });
+    expect(machinePass()).toBeNull();
+  } finally { f.registry.close(); }
+});
+
+test.each(["memory-off", "deployment"] as const)("scheduled custody retains terminal observation during %s", async kind => {
+  const { scheduledCustodyFixture, CUSTODY_PROJECT, CUSTODY_NOW } = await import("./custody.fixture");
+  fixture(roleScope(CUSTODY_PROJECT, "builder"));
+  const f = scheduledCustodyFixture(dir);
+  try {
+    const { pass: initial } = await f.start();
+    f.setNow(CUSTODY_NOW + 20 * 60_000 + 1);
+    if (kind === "memory-off") chooseSource("engines"); else f.policy({ deployment: true });
+    // Terminal observation retains existing settlement behavior during a hold.
+    const controller = productionCurationController(f.sources, { ...f.ports,
+      observe: async () => ({ state: "ended", finalText: "The fixture turn ended." }),
+    });
+    expect(await controller.reconcile(CUSTODY_PROJECT)).toContain("settled");
+    expect(readPass(initial.id)).toMatchObject({ state: "succeeded", failure: null });
+    expect(machinePass()).toBeNull();
+  } finally { chooseSource("unchosen"); f.registry.close(); }
+});
+
+test("scheduled recovery keeps the timeout when launch time is absent", async () => {
+  const { scheduledCustodyFixture, CUSTODY_PROJECT, CUSTODY_NOW } = await import("./custody.fixture");
+  const { curatorRecoveryGuard } = await import("./admission");
+  fixture(roleScope(CUSTODY_PROJECT, "builder"));
+  const f = scheduledCustodyFixture(dir);
+  try {
+    const { pass: initial } = await f.start();
+    patchPass(initial.id, { launchedAt: null });
+    f.setNow(CUSTODY_NOW + 60 * 60_000);
+    writeSeatTickState(CUSTODY_PROJECT, { ...emptySeatTickState(), seatEpoch: f.seat.seatEpoch, lastWakeAt: new Date(CUSTODY_NOW + 60 * 60_000).toISOString() });
+    await expect(curatorRecoveryGuard(initial.conversationId!, f.sources)).rejects.toThrow("timed-out");
+    expect(readPass(initial.id)).toMatchObject({ state: "failed", failure: "timed-out" });
+    expect(machinePass()).toBeNull();
+  } finally { f.registry.close(); }
+});
+
 test("delayed confirmation keeps the delivery time for curator freshness", async () => {
   fixture(); const f = hostingFixture();
   const interval = f.tick.settings.wakeIntervalMs;
@@ -446,14 +1164,17 @@ test("scope rereads retain departures from every call of the current pass", asyn
 });
 test("read pages are revision bound and include scaffold, budget archives and prior text", async () => {
   const scope = roleScope(PROJECT, "builder");
-  for (let n = 0; n < 80; n++) fixture(scope, { rule: `${text} ${"Read the stored record. ".repeat(8)} ${n}` });
+  for (let n = 0; n < 80; n++) fixture(scope, { id: `r_page_${String(n).padStart(3, "0")}`, rule: `${text} Check owner/task/receipt identifiers; preserve proof; verify state; retain evidence. ${n}` });
   const archive = fixture(scope, { state: "archived", reason: "budget" });
   const p = pass(); const first = await readCuration(p, scope);
   if (!("cursor" in first)) throw Error("expected a scope page");
   expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThanOrEqual(24_000);
   expect(first).toHaveProperty("scaffold"); expect(first.cursor).toBeTruthy();
-  let cursor = first.cursor; const ids = first.rules.map(r => r.id);
-  while (cursor) { const next = await readCuration(p, scope, cursor); if (!("rules" in next)) throw Error("expected a scope page"); ids.push(...next.rules.map(r => r.id)); cursor = next.cursor; }
+  let cursor = first.cursor; const entries = [...first.rules];
+  while (cursor) { const next = await readCuration(p, scope, cursor); if (!("rules" in next)) throw Error("expected a scope page"); expect(Buffer.byteLength(JSON.stringify(next))).toBeLessThanOrEqual(24_000); entries.push(...next.rules); cursor = next.cursor; }
+  const ids = entries.map(r => r.id);
+  expect(entries.filter(r => r.kind === "active")).toHaveLength(80);
+  for (const entry of entries.filter(r => r.kind === "active")) expect(entry.readabilityHint).toHaveProperty("needsRewrite", true);
   expect(ids).toContain(archive); expect(new Set(ids).size).toBe(ids.length);
   fixture(scope);
   await expect(readCuration(p, scope, first.cursor!)).rejects.toThrow(/changed/);
@@ -624,9 +1345,9 @@ test("restoring a budget archive participates in the order and cannot exceed the
   applyCuration(p, input({ [scope]: [restored, one] }, { restore: [restored] }), at(100));
   expect(row(restored).state).toBe("active");
   expect(projectView(PROJECT).scopes.find(s => s.scope === scope)!.active.map(r => r.id)).toEqual([one, restored]);
-  const candidates = Array.from({ length: 40 }, () => fixture(scope, { state: "archived", reason: "budget", rule: "General guidance applies before writing stored scope records. ".repeat(5) }));
+  const candidates = Array.from({ length: capacity() + 3 }, () => fixture(scope, { state: "archived", reason: "budget", rule: "General guidance applies before writing stored scope records. ".repeat(5) }));
   refusal(p, input({ [scope]: [one, restored, ...candidates] }, { restore: candidates }), "CURATE_BOUND");
-  expect(ROLE_MEMORY_BOUND).toBe(10_000);
+  expect(ROLE_MEMORY_BOUND).toBe(15_000);
 });
 test("pass undo skips a later writer, keeps new arrivals and reverses several calls", () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), two = fixture(scope), p = pass();
@@ -916,7 +1637,7 @@ test("ordinary structured recovery cannot continue a curator pass after its seat
   patchPass(p.id, { state: "running", launchedAt: at(), conversationId, launchId: begun.receipt.launchId });
   let spawns = 0;
   await expect(recoverDeadStructuredConversation({ path: artifactPath, conversationId }, {
-    registry: registry as never, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+    registry: registry as never, client: {} as RuntimeHostClient, transportAvailable: () => true, park: () => null,
     resolveAccount: () => ({ engine: "codex", accountId: "codex-test", kind: "managed", home: dir, transcriptRoot: dir, env: { NODE_ENV: "test" } }),
     spawn: async () => { spawns++; throw new Error("ineligible curator recovery spawned"); },
   })).rejects.toThrow(/curation pass abandoned/);
@@ -943,7 +1664,7 @@ test("stubbed launch, restart reconcile and settle keep no board card", async ()
 
 test("pressure survives a failed pass, and the durable interval bounds retries after restart", async () => {
   const scope = roleScope(PROJECT, "builder");
-  const ids = Array.from({ length: 26 }, (_, i) => fixture(scope, { rule: `Check ownership category ${i} before publication. ${"guidance ".repeat(29)}`.slice(0, 300), curatedAt: at() }));
+  const ids = Array.from({ length: capacity(undefined, 0.9) - 1 }, (_, i) => fixture(scope, { rule: `Check ownership category ${i} before publication. ${"guidance ".repeat(29)}`.slice(0, 300), curatedAt: at() }));
   const initial = pass(); ended(initial);
   expect(curationStatus(PROJECT, NOW + 31 * 60_000).due).toBe(false);
   const added: string[] = [];
@@ -982,7 +1703,7 @@ test("aliased physical scopes share the pressure threshold within the interval",
   const oldScope = roleScope(PROJECT, "builder");
   const currentProject = "curation-pressure-renamed";
   const currentScope = roleScope(currentProject, "builder");
-  const rulesFor = (scope: string, prefix: string) => Array.from({ length: 15 }, (_, i) => fixture(scope, {
+  const rulesFor = (scope: string, prefix: string) => Array.from({ length: Math.ceil(capacity(undefined, 0.9) / 2) }, (_, i) => fixture(scope, {
     rule: `${prefix} ${i}: ${"preserve the scoped operational guidance and verify ownership before applying changes. ".repeat(4)}`.slice(0, 300),
     curatedAt: at(),
   }));
@@ -1001,7 +1722,7 @@ test("aliased physical scopes share the pressure threshold within the interval",
   const currentActive = collection.get(`s:${currentScope}`);
   if (oldActive?.kind !== "scope" || currentActive?.kind !== "scope") throw Error("aliased scope rows missing");
   const merged = [...oldActive.active, ...currentActive.active];
-  expect(merged).toHaveLength(31);
+  expect(merged).toHaveLength(oldRules.length + currentRules.length + 1);
   expect(scopeChars(oldActive.active.map(id => row(id)))).toBeLessThan(ROLE_MEMORY_BOUND * 0.9);
   expect(scopeChars(currentActive.active.map(id => row(id)))).toBeLessThan(ROLE_MEMORY_BOUND * 0.9);
   expect(scopeChars(merged.map(id => row(id)))).toBeGreaterThanOrEqual(ROLE_MEMORY_BOUND * 0.9);
@@ -1012,7 +1733,7 @@ test("aliased physical scopes share the pressure threshold within the interval",
 
 test("a scope containing only unseen lessons may exceed budget until a bounded curator partition commits", () => {
   const scope = roleScope(PROJECT, "builder");
-  const ids = Array.from({ length: 30 }, (_, i) => fixture(scope, { rule: `Check pending category ${i} before publication. ${"guidance ".repeat(30)}`.slice(0, 300) }));
+  const ids = Array.from({ length: capacity() }, (_, i) => fixture(scope, { rule: `Check pending category ${i} before publication. ${"guidance ".repeat(30)}`.slice(0, 300) }));
   const source: RuleSource = { project: PROJECT, pipelineId: "at-bound", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_bound" };
   recordLessonRequest({ ...source, at: at(2000) });
   const added = leaveLessons({ request: source, source, none: null, lessons: [{ scope: "role", rule: `Inspect new pending categories before writing. ${"guidance ".repeat(30)}`.slice(0, 300), why }], now: at(2000) }).left[0]!;
@@ -1040,10 +1761,10 @@ test("warm curation status skips payload reads and invalidates after a durable s
     try { writer.exec("CREATE TABLE unrelated_fixture (value INTEGER)"); writer.exec("INSERT INTO unrelated_fixture VALUES (1)"); } finally { writer.close(); }
     curationStatus(PROJECT, NOW + 2);
     expect(get).not.toHaveBeenCalled();
-    fixture(scope);
+    fixture(scope, { rule: "x".repeat(ROLE_MEMORY_BOUND + 1) });
     get.mockClear();
-    curationStatus(PROJECT, NOW + 2);
-    expect(snapshot).not.toHaveBeenCalled(); expect(get).toHaveBeenCalled();
+    expect(curationStatus(PROJECT, NOW + 2)).toMatchObject({ pressure: true, urgent: true });
+    expect(snapshot).not.toHaveBeenCalled(); expect(get).not.toHaveBeenCalled();
   } finally { snapshot.mockRestore(); get.mockRestore(); }
 });
 
@@ -1066,7 +1787,8 @@ test("an interval-due pressured project is dispatched while a newer quiet projec
 
 test("a successful no-op leaves pressure but cannot relaunch at the old cooldown", async () => {
   const scope = roleScope(PROJECT, "builder");
-  for (let i = 0; i < 32; i++) fixture(scope, { rule: `Inspect retained category ${i}. ${"guidance ".repeat(35)}`.slice(0, 300) });
+  const count = capacity() + 1;
+  for (let i = 0; i < count; i++) fixture(scope, { rule: `Inspect retained category ${i}. ${"guidance ".repeat(35)}`.slice(0, 300) });
   const first = pass(); ended(first);
   // Ending a turn does not rank scopes: only applyCuration stamps curatedAt.
   expect(curationStatus(PROJECT, NOW + 31 * 60_000)).toMatchObject({ pressure: true, due: false });
@@ -1246,14 +1968,15 @@ test("a curator archive, its undo and a split keep each rule's departure log for
 
 test("an over-bound append requests a pass immediately and respects the machine claim", () => {
   const scope = roleScope(PROJECT, "builder");
-  for (let i = 0; i < 32; i++) fixture(scope, { rule: `Preserve guidance category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300), curatedAt: at() });
+  const count = capacity() + 1;
+  for (let i = 0; i < count; i++) fixture(scope, { rule: `Preserve guidance category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300), curatedAt: at() });
   const initial = pass();
   ended(initial);
   const source: RuleSource = { project: PROJECT, pipelineId: "overflow", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_overflow" };
   recordLessonRequest({ ...source, at: at(2000) });
   const result = leaveLessons({ source, request: source, lessons: [{ scope: "role", rule: "Keep every condition when integrating a new operational lesson into existing guidance.", why }], none: null, now: at(2000) });
   expect(result.left[0].archived).toEqual([]);
-  expect(projectView(PROJECT).scopes.find(s => s.scope === scope)!.active).toHaveLength(33);
+  expect(projectView(PROJECT).scopes.find(s => s.scope === scope)!.active).toHaveLength(count + 1);
   expect(curationStatus(PROJECT, NOW + 2000)).toMatchObject({ due: true, pressure: true, trigger: "pressure" });
   const next = pass(NOW + 2000);
   expect(next).not.toBeNull();
@@ -1272,7 +1995,7 @@ test("a pass restores a budget archive by integrating all its conditions", () =>
   expect(readPass(p.id)!.counts).toMatchObject({ restored: 1, merged: 1 });
 });
 
-for (const count of [38, 39]) test.each(["missing", "retired", "unwoken", "gone", "unproven", "live"] as const)(`retention checks host admission with ${count} existing rules: %s`, kind => {
+for (const count of [capacity("r_host_000", 1.25) - 1, capacity("r_host_000", 1.25)]) test.each(["missing", "retired", "unwoken", "gone", "unproven", "live"] as const)(`retention checks host admission with ${count} existing rules: %s`, kind => {
   const scope = roleScope(PROJECT, "builder");
   const ids = Array.from({ length: count }, (_, i) => fixture(scope, {
     id: `r_host_${String(i).padStart(3, "0")}`, createdAt: at(i), curatedAt: at(),
@@ -1300,13 +2023,13 @@ for (const count of [38, 39]) test.each(["missing", "retired", "unwoken", "gone"
     const source: RuleSource = { project: PROJECT, pipelineId: "host-retention", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_host_retention" };
     recordLessonRequest({ ...source, at: at(2000) });
     const incoming = leaveLessons({ source, request: source, lessons: [{ scope: "role", rule: `Preserve new conditions: ${"check complete obligations ".repeat(20)}`.slice(0, 300), why }], none: null, now: at(2000) }).left[0];
-    const emergency = count === 39 && kind !== "live";
+    const emergency = count === capacity("r_host_000", 1.25) && kind !== "live";
     expect(incoming.archived).toEqual(emergency ? [ids[1]] : []);
     expect(row(ids[0]).state).toBe("active");
     expect(row(incoming.id).state).toBe("active");
     expect(row(ids[1]).state).toBe(emergency ? "archived" : "active");
     if (emergency) expect(incoming.scopeChars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND * 1.25);
-    if (count === 39 && kind === "live") expect(incoming.scopeChars).toBeGreaterThan(ROLE_MEMORY_BOUND * 1.25);
+    if (count === capacity("r_host_000", 1.25) && kind === "live") expect(incoming.scopeChars).toBeGreaterThan(ROLE_MEMORY_BOUND * 1.25);
   } finally { sources.mockRestore(); }
 });
 
@@ -1319,7 +2042,7 @@ describe("emergency retention asks every project whose pass reads the scope", ()
     { name: "a project's own rules count its own host", scope: projectScope(PROJECT), lesson: "project", seatOn: PROJECT, archived: false },
   ];
   for (const { name, scope, lesson, seatOn, archived } of cases) test(name, () => {
-    const ids = Array.from({ length: 39 }, (_, i) => fixture(scope, {
+    const ids = Array.from({ length: capacity("r_shared_00", 1.25) }, (_, i) => fixture(scope, {
       id: `r_shared_${String(i).padStart(2, "0")}`, createdAt: at(i), curatedAt: at(),
       rule: `Preserve condition category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300),
     }));
@@ -1348,7 +2071,7 @@ describe("emergency retention asks every project whose pass reads the scope", ()
 
 test("a busy curator permits emergency eviction by evidence while keeping the returned and incoming rules", () => {
   const scope = roleScope(PROJECT, "builder");
-  const ids = Array.from({ length: 39 }, (_, i) => fixture(scope, {
+  const ids = Array.from({ length: capacity("r_emergency_00", 1.25) + 1 }, (_, i) => fixture(scope, {
     id: `r_emergency_${String(i).padStart(2, "0")}`, createdAt: at(i),
     rule: `Preserve condition category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300),
     curatedAt: i === 1 ? undefined : at(),
@@ -1375,7 +2098,7 @@ test("a busy curator permits emergency eviction by evidence while keeping the re
 test.each(["unapplied", "applied"])("emergency retention credits application marks reported with the new lesson: %s", async usage => {
   const applied = usage === "applied";
   const scope = roleScope(PROJECT, "builder");
-  const ids = Array.from({ length: 39 }, (_, i) => fixture(scope, {
+  const ids = Array.from({ length: capacity(undefined, 1.25) + 1 }, (_, i) => fixture(scope, {
     id: `r_${i.toString(16).padStart(16, "0")}`, createdAt: at(i),
     rule: `Preserve condition category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300),
   }));
@@ -1451,7 +2174,7 @@ test("an archive-only machine requests recovery and an incomplete pass retries w
 
 test("curator budget archives require remaining pressure and keep a stated reason", () => {
   const scope = roleScope(PROJECT, "builder");
-  const ids = Array.from({ length: 31 }, (_, i) => fixture(scope, { id: `r_budget_${String(i).padStart(2, "0")}`, rule: `Preserve guidance class ${i}: ${"check complete conditions ".repeat(15)}`.slice(0, 300) }));
+  const ids = Array.from({ length: capacity("r_budget_00") }, (_, i) => fixture(scope, { id: `r_budget_${String(i).padStart(2, "0")}`, rule: `Preserve guidance class ${i}: ${"check complete conditions ".repeat(15)}`.slice(0, 300) }));
   const last = fixture(scope, { id: "r_budget_last", rule: `Preserve final guidance: ${"check complete conditions ".repeat(15)}`.slice(0, 300) });
   const p = pass();
   const edit = { archive: [{ id: last, reason: "budget" as const, note: "After integrating related guidance, this condition still exceeds the scope budget and has the least task support." }] };
@@ -1469,7 +2192,7 @@ test("a curator cannot budget-archive guidance that fits after integration", () 
 
 test("emergency succession ranks duplicate guidance by the tasks being combined in that write", () => {
   const scope = roleScope(PROJECT, "builder"), oldProject = "succession-before";
-  const ids = Array.from({ length: 40 }, (_, i) => fixture(scope, { id: `r_succession_${String(i).padStart(2, "0")}`, createdAt: at(-1000 + i), changedAt: at(i), rule: `Preserve guidance class ${i}: ${"check complete conditions ".repeat(15)}`.slice(0, 300) }));
+  const ids = Array.from({ length: capacity("r_succession_00", 1.25) + 1 }, (_, i) => fixture(scope, { id: `r_succession_${String(i).padStart(2, "0")}`, createdAt: at(-1000 + i), changedAt: at(i), rule: `Preserve guidance class ${i}: ${"check complete conditions ".repeat(15)}`.slice(0, 300) }));
   const duplicate = fixture(roleScope(oldProject, "builder"), { id: "r_succession_duplicate", rule: row(ids[0]).rule });
   for (const [pipelineId, project, ruleIds] of [["support-current", PROJECT, ids], ["support-old", oldProject, [duplicate]]] as const) {
     const source: RuleSource = { project, pipelineId, stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_succession" };
@@ -1488,4 +2211,123 @@ test("emergency succession ranks duplicate guidance by the tasks being combined 
   expect(row(ids[1])).toMatchObject({ state: "archived", reason: "budget" });
   const view = projectView(PROJECT).scopes.find(row => row.scope === scope)!;
   expect(view.active.find(row => row.id === ids[0])?.tasks).toBe(2);
+});
+
+
+function keyedOperation(p: CuratorPass, key = "editorial-request", digest = "a".repeat(64)) {
+  const owned = patchPass(p.id, { conversationId: "conversation_curator-fixture" })!;
+  return { owned, operation: { pass: owned.id, conversationId: owned.conversationId!, project: owned.project,
+    requestId: key, digest, assertCurrent: () => {} } };
+}
+
+test("keyed apply returns its historical revisions after later writes and Undo without effects", async () => {
+  const { readCurationOperation, curationOperationResult } = await import("./apply");
+  const scope = roleScope(PROJECT, "builder"), id = fixture(scope, { id: "r_keyed-source" });
+  const { owned, operation } = keyedOperation(pass());
+  const plan = input({ [scope]: [id] }, { rewrite: [{ id, rule: "Verify the current owner before every stored guidance edit.", note: "Keep the ownership check at the edit boundary." }] });
+  const first = applyCuration(owned, plan, at(1), { operation });
+  expect(first).toMatchObject({ disposition: "committed", revisions: [{ scope, input: 1, result: 2 }], counts: { calls: 1, rewritten: 1 } });
+  expect(curationOperationResult(readCurationOperation(operation)!)).toEqual(first);
+  const before = roleMemoryCollection()!.snapshot();
+  expect(applyCuration(owned, plan, at(2), { operation })).toEqual(first);
+  expect(roleMemoryCollection()!.snapshot()).toEqual(before);
+  applyCuration(owned, input({ [scope]: [id] }, { rewrite: [{ id, rule: "Recheck the target scope before committing any stored guidance edit.", note: "Retain the later writer's scope check." }] }), at(3));
+  expect(() => applyCuration(owned, plan, at(4), { operation: { ...operation, requestId: "unrelated-stale" } })).toThrow(/now revision/);
+  expect(applyCuration(owned, plan, at(4), { operation })).toEqual(first);
+  patchPass(owned.id, { state: "succeeded", endedAt: at(5) });
+  revertCuratorPass(owned.id, at(6));
+  const undone = roleMemoryCollection()!.snapshot();
+  // The trusted history reader can observe the saved disposition; ended-pass
+  // admission stays closed and never re-enters the editorial apply path.
+  expect(curationOperationResult(readCurationOperation(operation)!)).toEqual(first);
+  expect(() => applyCuration(owned, plan, at(7), { operation })).toThrow(/pass has ended/);
+  expect(roleMemoryCollection()!.snapshot()).toEqual(undone);
+});
+
+test.each(["role_memory", "role_memory_curation"])("%s write failure rolls editorial rows and witness back together", async collection => {
+  const { readCurationOperation } = await import("./apply");
+  const scope = roleScope(PROJECT, "builder"), id = fixture(scope, { id: "r_rollback-source" });
+  const { owned, operation } = keyedOperation(pass());
+  const plan = input({ [scope]: [id] }, { rewrite: [{ id, rule: "Check current scope ownership before committing stored guidance.", note: "Retain this scope check before writes." }] });
+  const held = roleMemoryCollection()!, before = held.snapshot();
+  const db = new Database(path.join(dir, "state.sqlite"));
+  try {
+    db.exec(`CREATE TRIGGER refuse_editorial BEFORE INSERT ON state_rows WHEN NEW.collection='${collection}' BEGIN SELECT RAISE(ABORT, 'fixture transaction refusal'); END`);
+    expect(() => applyCuration(owned, plan, at(1), { operation })).toThrow(/fixture transaction refusal/);
+    expect(held.snapshot()).toEqual(before);
+    expect(readCurationOperation(operation)).toBeNull();
+    db.exec("DROP TRIGGER refuse_editorial");
+    expect(applyCuration(owned, plan, at(2), { operation })).toMatchObject({ disposition: "committed", counts: { calls: 1 } });
+    expect(readPass(owned.id)!.counts.calls).toBe(1);
+  } finally { db.close(); }
+});
+
+test("keyed acknowledgement bound is checked before every collection effect", async () => {
+  const hugeScope = `project:${"x".repeat(140_000)}`;
+  fixture();
+  const { owned, operation } = keyedOperation(pass());
+  const { curationCollection } = await import("./store");
+  const withScope = { ...owned, scopes: [...owned.scopes, hugeScope] };
+  curationCollection()!.boundedPatch(2, tx => tx.put(withScope));
+  const held = roleMemoryCollection(true)!, before = held.snapshot();
+  expect(() => applyCuration(withScope, { scopes: [{ scope: hugeScope, revision: 0, order: [] }] }, at(1), { operation })).toThrow(/bound/);
+  expect(held.snapshot()).toEqual(before);
+});
+
+test.each(["a", "ї", "😀"])("rendered %s code points accept the exact scope bound and refuse overflow", char => {
+  const scope = roleScope(PROJECT, "builder"), id = "r_boundary";
+  // One rendered line includes bullet, brackets, identifier and spacing.
+  const overhead = Array.from(`- [${id}] `).length;
+  fixture(scope, { id, rule: char.repeat(ROLE_MEMORY_BOUND - overhead) });
+  const p = pass();
+  expect(scopeChars([row(id)])).toBe(ROLE_MEMORY_BOUND);
+  expect(applyCuration(p, input({ [scope]: [id] }), at(1)).counts.calls).toBe(1);
+  roleMemoryCollection()!.boundedPatch(2, tx => tx.put({ ...row(id), rule: row(id).rule + char }));
+  expect(scopeChars([row(id)])).toBe(ROLE_MEMORY_BOUND + 1);
+  expect(() => applyCuration(p, input({ [scope]: [id] }), at(2))).toThrow(/bound/);
+});
+
+test("an apply decodes the scopes it names and no other scope of the pass", () => {
+  const named = roleScope(PROJECT, "builder"), others = [roleScope(PROJECT, "reviewer"), roleScope(PROJECT, "architect"), projectScope(PROJECT)];
+  const one = fixture(named);
+  for (const scope of others) fixture(scope);
+  const p = pass();
+  for (const scope of others) expect(p.scopes.map(canonicalScope)).toContain(scope);
+  // An earlier call of this pass wrote to another scope; the next call still orders itself after it.
+  const moved = fixture(others[0]);
+  applyCuration(p, input({ [others[0]]: [] }, { archive: [
+    { id: (roleMemoryCollection()!.get(`s:${others[0]}`) as { active: string[] }).active[0], reason: "stale", note: "The first command was replaced." },
+    { id: moved, reason: "stale", note: "The second command was replaced." }] }), at(5_000));
+  const decoded: string[] = [];
+  const get = spyOn(SqliteStateCollection.prototype, "get");
+  try {
+    applyCuration(p, input({ [named]: [one] }), at(100));
+  } finally {
+    for (const [key] of get.mock.calls) if (typeof key === "string" && key.startsWith("s:")) decoded.push(key.slice(2));
+    get.mockRestore();
+  }
+  expect(decoded).toContain(named);
+  for (const scope of others) expect(decoded).not.toContain(scope);
+  const entry = (roleMemoryCollection()!.get(`s:${named}`) as { history: { at: string; pass?: string }[] }).history.at(-1)!;
+  expect(entry.pass).toBe(p.id);
+  expect(Date.parse(entry.at)).toBeGreaterThan(Date.parse(at(5_000)));
+});
+
+test("an apply orders itself after an earlier call committed while a cooperative view read is suspended", async () => {
+  const named = roleScope(PROJECT, "builder"), other = roleScope(PROJECT, "reviewer"), long = roleScope(PROJECT, "architect");
+  const one = fixture(named), stale = fixture(other);
+  fixture(long);
+  roleMemoryCollection()!.boundedPatch(2, tx => {
+    const row = tx.get(`s:${long}`) as RoleMemoryScopeRow;
+    tx.put({ ...row, history: Array.from({ length: 60 }, (_, index) => ({ revision: index + 1, at: at(index), by: "agent" as const, added: [], merged: [], archived: [] })) });
+  });
+  const p = pass();
+  // The view read yields with its history cursor open on the shared view connection.
+  const view = projectViewRowsCooperatively(PROJECT);
+  applyCuration(p, input({ [other]: [] }, { archive: [{ id: stale, reason: "stale", note: "The command was replaced." }] }), at(5_000));
+  applyCuration(p, input({ [named]: [one] }), at(100));
+  await view;
+  const entry = (roleMemoryCollection()!.get(`s:${named}`) as { history: { at: string; pass?: string }[] }).history.at(-1)!;
+  expect(entry.pass).toBe(p.id);
+  expect(Date.parse(entry.at)).toBeGreaterThan(Date.parse(at(5_000)));
 });

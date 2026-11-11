@@ -544,6 +544,43 @@ test("a delivery admitted while the successor is still registering lands exactly
   await close();
 });
 
+test("startup cleanup for a prior adapter leaves its successor registered", async () => {
+  const { registry, directory, client, close } = fixture("retained-successor");
+  await bindStructuredDeliveryQueue([], { registry, client });
+  const { key } = seedConversation(registry, directory, "retained-successor-session");
+  const prior = releaseCountingHost();
+  const successor = releaseCountingHost();
+  try {
+    await publishStructuredDeliveryHost({ key, host: prior.host });
+    await publishStructuredDeliveryHost({ key, host: successor.host });
+    expect(await releaseStructuredDeliveryHost(key, prior.host)).toBe(false);
+    expect(successor.releases.count).toBe(0);
+    expect(hasStructuredDeliveryHost(key)).toBe(true);
+    expect(await releaseStructuredDeliveryHost(key, successor.host)).toBe(true);
+    expect(successor.releases.count).toBe(1);
+    expect(hasStructuredDeliveryHost(key)).toBe(false);
+  } finally { await close(); }
+});
+
+test("an unpublished predecessor cannot redirect current adapter cleanup", async () => {
+  const { registry, directory, client, close } = fixture("unpublished-predecessor");
+  await bindStructuredDeliveryQueue([], { registry, client });
+  const { key } = seedConversation(registry, directory, "unpublished-predecessor-session");
+  const prior = releaseCountingHost();
+  const successor = releaseCountingHost();
+  const { retainUnpublishedStructuredLaunchHost } = await import("./structuredDeliveryController");
+  const forget = retainUnpublishedStructuredLaunchHost({ key, host: prior.host, registry, release: () => prior.host.release() });
+  try {
+    await publishStructuredDeliveryHost({ key, host: successor.host });
+    expect(await releaseStructuredDeliveryHost(key, successor.host)).toBe(true);
+    expect(successor.releases.count).toBe(1);
+    expect(prior.releases.count).toBe(0);
+    expect(hasStructuredDeliveryHost(key)).toBe(false);
+    expect(await releaseStructuredDeliveryHost(key, prior.host)).toBe(true);
+    expect(prior.releases.count).toBe(1);
+  } finally { forget(); await close(); }
+});
+
 test("a carried-over host released mid-registration is released once and stays gone (#1191)", async () => {
   const { registry, journal, directory, client, close } = fixture("handover-release");
   await bindStructuredDeliveryQueue([], { registry, client });

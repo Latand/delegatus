@@ -1,5 +1,6 @@
+import { StateLockDeferredError } from "@/lib/state/lockWait";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
-import { assertSeatTickWork, seatTickWorkRemainingMs } from "@/lib/monitor/seatTickWork";
+import { assertSeatTickWork, seatTickQueueSpan, seatTickWorkRemainingMs } from "@/lib/monitor/seatTickWork";
 import { DeadlineExceededError } from "@/lib/deadline";
 import { spawn, type ChildProcess } from "node:child_process";
 import crypto, { createHash } from "node:crypto";
@@ -51,7 +52,7 @@ export type SeatSourceWorkerRequest =
   | { type: "seat-liveness"; query: Parameters<import("@/lib/monitor/seatTickSources").SeatTickSources["liveness"]>[0]; scan: import("./scanCache").PersistedFileScanGeneration & { snapshotFile: string } }
   | { type: "seat-agenda"; bodyFile: string; project: string; now: number }
   | { type: "seat-reports"; project: string }
-  | { type: "seat-rule-reports"; project: string; at: string };
+  | { type: "seat-rule-reports"; project: string; at: string; deadlineAt?: number };
 type WorkerRequest = FilesResponseWorkerRequest | SeatSourceWorkerRequest;
 
 export interface FilesResponseWorkerRuntime {
@@ -292,7 +293,9 @@ function answer(worker: ResidentWorker, frame: string): void {
   worker.stderr = "";
   if (parsed.ok !== true) {
     const message = typeof parsed.error === "string" ? parsed.error : "files response worker failed";
-    pending.reject(new Error(`${message}${detail ? `: ${detail}` : ""}`));
+    const description = `${message}${detail ? `: ${detail}` : ""}`;
+    pending.reject(parsed.errorCode === "STATE_ADMISSION_BUSY" ? new StateLockDeferredError(description)
+      : parsed.errorCode === "DEADLINE_EXCEEDED" ? new DeadlineExceededError(description, 0) : new Error(description));
     return;
   }
   const result = representation(parsed.result);
@@ -474,7 +477,13 @@ export function buildFilesResponseInWorker(
   previous?: { body: string; etag: string },
 ): Promise<FilesResponseRepresentation> {
   const previousBuild = pool.__llvFilesResponseWorkerTail ?? Promise.resolve();
-  const current = previousBuild.catch(() => undefined).then(() => dispatch(request, runtime, previous));
+  const endQueue = seatTickQueueSpan("files.project.queue");
+  const current = previousBuild.catch(() => undefined).then(async () => {
+    endQueue();
+    const endService = seatTickQueueSpan("files.project.service");
+    try { return await dispatch(request, runtime, previous); }
+    finally { endService(); }
+  });
   pool.__llvFilesResponseWorkerTail = current.then(() => undefined, () => undefined);
   return current;
 }
@@ -485,19 +494,23 @@ export function runSeatSourceInWorker(request: SeatSourceWorkerRequest, runtime:
   assertSeatTickWork();
   const deadline = Date.now() + Math.min(runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS, seatTickWorkRemainingMs() ?? Infinity);
   const previous = pool.__llvFilesResponseWorkerTail ?? Promise.resolve();
+  const endQueue = seatTickQueueSpan(`files.${request.type}.queue`);
   let expired = false;
   let timer: ReturnType<typeof setTimeout>;
-  const current = previous.catch(() => undefined).then(() => {
+  const current = previous.catch(() => undefined).then(async () => {
+    endQueue();
     assertSeatTickWork();
     const remaining = deadline - Date.now();
     if (expired || remaining <= 0) throw new DeadlineExceededError("seat source worker deadline exceeded in queue", 0);
-    return dispatch(request, { ...runtime, timeoutMs: remaining });
+    const endService = seatTickQueueSpan(`files.${request.type}.service`);
+    try { return await dispatch(request.type === "seat-rule-reports" ? { ...request, deadlineAt: deadline } : request, { ...runtime, timeoutMs: remaining }); }
+    finally { endService(); }
   });
   pool.__llvFilesResponseWorkerTail = current.then(() => undefined, () => undefined);
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => { expired = true; reject(new DeadlineExceededError("seat source worker deadline exceeded", 0)); }, Math.max(1, deadline - Date.now()));
   });
-  return Promise.race([current, timeout]).finally(() => clearTimeout(timer));
+  return Promise.race([current, timeout]).finally(() => { endQueue(); clearTimeout(timer); });
 }
 
 export async function seatAgendaInWorker(body: string, project: string, now: number, runtime: FilesResponseWorkerRuntime = testRuntime ?? {}): Promise<import("@/lib/monitor/types").SeatTickWorkerAskInput[]> {

@@ -85,6 +85,8 @@ const calls: { url: string; method: string; body: Record<string, unknown> | null
 const realFetch = globalThis.fetch;
 /** What the pipeline answers a write with. */
 let answerPatch: () => Response = () => new Response("{}", { status: 500 });
+/** What the stage account's Codex tier catalog answers; null is no catalog. */
+let codexCatalog: unknown = null;
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
 
@@ -106,12 +108,14 @@ beforeEach(() => {
       });
     }
     if (url === "/api/pipelines/p-stage") return answerPatch();
-    if (url === "/api/tmux") return json({ ok: true, operationId: "op-parked" });
+    if (url.startsWith("/api/accounts/codex/models")) return codexCatalog ? json(codexCatalog) : json({ error: "not found" }, 404);
+    if (url === "/api/conversation-host") return json({ ok: true, operationId: "op-parked" });
     return json({ ok: true });
   }) as typeof fetch;
 });
 
 afterEach(() => {
+  codexCatalog = null;
   globalThis.fetch = realFetch;
   document.body.replaceChildren();
   localStorage.clear();
@@ -214,6 +218,27 @@ for (const edit of ["model", "effort", "account", "speed"] as const) {
   });
 }
 
+test("Ultra chosen on a running Codex stage continues the attempt on ultrafast through the pipeline", async () => {
+  const codexFile = { ...file, engine: "codex", fmt: "codex", root: "codex-sessions", path: "/state/accounts/codex/acct-a/sessions/stage.jsonl", model: "gpt-6-astra", effort: "high", fast: false } as FileEntry;
+  const lane = pipeline();
+  lane.stages[0]!.effectiveRole = { ...lane.stages[0]!.effectiveRole, engine: "codex", model: "gpt-6-astra" };
+  lane.runs[0]!.attempts[0]!.effectiveRole = lane.stages[0]!.effectiveRole;
+  await publish(lane);
+  answerPatch = () => json({ ok: true, pipeline: lane });
+  codexCatalog = { accounts: [{ id: "acct-a", label: "Account A", models: [{ slug: "gpt-6-astra", tiers: [{ id: "priority", name: "Fast" }, { id: "ultrafast", name: "Ultrafast" }] }] }] };
+  const { root } = await openSheet(codexFile);
+  try {
+    await settle();
+    expect(calls.some((call) => call.url === "/api/accounts/codex/models?account=acct-a")).toBe(true);
+    await choose("Ultra — Ultrafast tier");
+    expect(writes()).toHaveLength(1);
+    expect(writes()[0]!.body).toMatchObject({ applyNow: true, engine: "codex", model: "gpt-6-astra", serviceTier: "ultrafast" });
+    expect(calls.some((call) => call.body?.action === "speed")).toBe(false);
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
 test("a model chosen on a running stage continues the attempt on it through the pipeline", async () => {
   await publish(pipeline());
   answerPatch = () => json({ ok: true, pipeline: pipeline({ record: {} }) });
@@ -221,7 +246,7 @@ test("a model chosen on a running stage continues the attempt on it through the 
   await choose("Opus 5.5");
 
   expect(writes()).toEqual([{ url: "/api/pipelines/p-stage", method: "PATCH", body: { action: "override-stage", stageId: "build", applyNow: true, expectedAttempt: 1, expectedConversationId: "conversation_stage", engine: "claude", model: "opus", effort: "high", serviceTier: null } }]);
-  expect(calls.some((call) => call.url === "/api/tmux")).toBe(false);
+  expect(calls.some((call) => call.url === "/api/conversation-host")).toBe(false);
   expect(pill(host).textContent).toContain("Opus 5.5");
   expect(pill(host).getAttribute("aria-busy")).toBe("true");
   expect(host.querySelector("[data-runtime-switch-pending]")).not.toBeNull();
@@ -264,7 +289,7 @@ test("an account picked on a running stage moves the attempt now, and a rollback
   await settle();
 
   expect(writes().map((call) => call.body)).toEqual([{ action: "override-stage", stageId: "build", applyNow: true, expectedAttempt: 1, expectedConversationId: "conversation_stage", engine: "claude", model: "fable", effort: "high", serviceTier: null, account: "acct-b" }]);
-  expect(calls.some((call) => call.url === "/api/tmux")).toBe(false);
+  expect(calls.some((call) => call.url === "/api/conversation-host")).toBe(false);
   expect(accountLine()).toBe("runs on Account A · moving to Account B");
 
   await publish(pipeline({ record: { ...toB, phase: "rolled-back", outcome: "target account is no longer allowed" } }));
@@ -359,7 +384,7 @@ test("a conversation that is no longer the stage's agent keeps its own reconfigu
   await choose("Opus 5.5");
 
   expect(writes()).toEqual([]);
-  expect(calls.find((call) => call.url === "/api/tmux")?.body).toMatchObject({ action: "reconfigure", model: "opus" });
+  expect(calls.find((call) => call.url === "/api/conversation-host")?.body).toMatchObject({ action: "reconfigure", model: "opus" });
   await act(async () => root.unmount());
 });
 
@@ -386,7 +411,7 @@ test("a parked stage keeps the conversation's own reconfigure, and its failure i
   const { host, root } = await openSheet();
   await choose("Opus 5.5");
   expect(writes()).toEqual([]);
-  expect(calls.find((call) => call.url === "/api/tmux")?.body).toMatchObject({ action: "reconfigure", model: "opus" });
+  expect(calls.find((call) => call.url === "/api/conversation-host")?.body).toMatchObject({ action: "reconfigure", model: "opus" });
   expect(pill(host).textContent).toContain("Opus 5.5");
 
   await act(async () => {
@@ -416,3 +441,28 @@ test("a parked stage's reconfigure that applied is announced like any conversati
   expect(pill(host).getAttribute("aria-busy")).toBeNull();
   await act(async () => root.unmount());
 });
+
+/* A pill that knows no model sends none, so the stage keeps the model it runs on; one whose transcript has not
+   reported a model yet sends the model the launch asked for. */
+for (const launchModel of [null, "gpt-6-luna"] as const) {
+  test(`an effort picked on a running stage ${launchModel ? "launched on Luna before its transcript names a model sends that model" : "with no known model sends no model"}`, async () => {
+    const codexFile = { ...file, engine: "codex", fmt: "codex", root: "codex-sessions", path: "/state/accounts/codex/acct-a/sessions/stage.jsonl", model: null, launchModel, effort: "high", fast: false } as FileEntry;
+    const lane = pipeline();
+    lane.stages[0]!.effectiveRole = { ...lane.stages[0]!.effectiveRole, engine: "codex", model: "gpt-6-luna" };
+    lane.runs[0]!.attempts[0]!.effectiveRole = lane.stages[0]!.effectiveRole;
+    await publish(lane);
+    answerPatch = () => json({ ok: true, pipeline: lane });
+    const { root } = await openSheet(codexFile);
+    try {
+      await choose("xhigh");
+      expect(writes()).toHaveLength(1);
+      const body = writes()[0]!.body!;
+      expect(body).toMatchObject({ action: "override-stage", stageId: "build", applyNow: true, engine: "codex", effort: "xhigh" });
+      if (launchModel) expect(body.model).toBe(launchModel);
+      else expect("model" in body).toBe(false);
+      expect(calls.some((call) => call.url === "/api/conversation-host")).toBe(false);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+}

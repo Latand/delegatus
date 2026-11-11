@@ -1,5 +1,5 @@
-import { fileConfirmationText } from "@/lib/telegram/bot/fileConfirmationContract";
-import { describe, expect } from "bun:test";
+import { fileConfirmationText, typesetFileConfirmation } from "@/lib/telegram/bot/fileConfirmationContract";
+import { afterAll, describe, expect } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -856,7 +856,7 @@ describe("send latency slice 3: one message, one row", () => {
    * through a pile of visually different states before it settles.
    *
    * ONE page, one mounted conversation window — the production `LogFeed` and
-   * `TmuxComposer` over the production outbox store — and a configurable fake
+   * `ConversationComposer` over the production outbox store — and a configurable fake
    * host behind them. The driver types into the real field, submits through
    * the path it is exercising, and then advances the host: a receipt lands,
    * the axes move, the transcript carries the message. Every frame it
@@ -1856,8 +1856,9 @@ describe("#2075 every image an agent looks at", () => {
   /*
    * Rendered evidence for #2075: one conversation per engine viewing pictures
    * the way that engine records it (Claude Read and an MCP screenshot, a Codex
-   * code-mode exec and two app-server imageView items, a Copilot view) and a
-   * live view_image row. Every picture is a thumbnail under its line at both
+   * code-mode exec, two app-server imageView items and three generated images
+   * in their fileId, migration and inline forms, a Copilot view) and a live
+   * view_image row. Every picture is a thumbnail under its line at both
    * widths, with no "show" chip and no "[image output]" text; a tap opens the
    * viewer; a file gone from disk is a pill naming it.
    *
@@ -1874,7 +1875,7 @@ describe("#2075 every image an agent looks at", () => {
     { name: "desktop-1280", width: 1280, height: 800, touch: false, scheme: "dark" },
   ] as const;
   const LANGS = ["en", "uk"] as const;
-  const SERVED = new Set(["/w/shot.png", "/w/live.png"]);
+  const SERVED = new Set(["/w/shot.png", "/w/live.png", "/w/generated/widget.png", "/w/generated/migrated.png", "/w/generated/inline.png"]);
 
   /* A flat two-tone PNG, encoded in place so no raster is committed. */
   function png(width: number, height: number): Buffer {
@@ -1971,9 +1972,9 @@ describe("#2075 every image an agent looks at", () => {
             });
             await page.screenshot({ path: path.join(OUT, `${frame.name}-${frame.scheme}-${lang}.png`), fullPage: true });
             expect(pageErrors).toEqual([]);
-            /* Claude ×3, Codex exec + one served imageView, Copilot, the live row. */
-            expect(reading.thumbnails).toBe(7);
-            expect(reading.drawn).toBe(7);
+            /* Claude ×3, Codex exec + one served imageView + three generated, Copilot, the live row. */
+            expect(reading.thumbnails).toBe(10);
+            expect(reading.drawn).toBe(10);
             expect(reading.insideClosedDisclosure).toBe(0);
             expect(reading.chips).toBe(0);
             expect(reading.placeholderText).toBe(0);
@@ -1984,7 +1985,7 @@ describe("#2075 every image an agent looks at", () => {
             expect(reading.overflowX).toBe(0);
             if (frame.touch) expect(reading.smallControls).toBe(0);
             expect(reading.liveLeft).not.toBeNull();
-            expect(reading.settledLeft).toHaveLength(6);
+            expect(reading.settledLeft).toHaveLength(9);
             for (const left of reading.settledLeft) expect(Math.abs(left - reading.liveLeft!)).toBeLessThanOrEqual(1);
             /* The desktop keeps the feed's avatar-column indent: 36 px gutter plus the 22 px glyph inset. */
             if (!frame.touch) expect(Math.round(reading.liveLeft!)).toBe(16 + 36 + 22);
@@ -2006,6 +2007,363 @@ describe("#2075 every image an agent looks at", () => {
       served.stop();
     }
   }, 240_000);
+});
+
+describe("Viewer MCP calls read the same in Claude and Codex conversations", () => {
+  /*
+   * Rendered evidence for docs/design/codex-mcp-call-rendering-brief.md: the
+   * same Viewer calls written as Claude tool_use/tool_result records and as
+   * Codex code-mode batches (plus a partial batch and a direct call), through
+   * the production parser into the production rows, on the board's policy and
+   * in the dock's. A Codex batch keeps its group with its count, an opened
+   * group draws the named card per call, the agent calls stand alone with
+   * their link, and a spawn whose conversation is not listed yet reads as
+   * starting. Readings go to `evidence/mcp-calls/frames.json`; frames to
+   * `.artifacts/mcp-calls/`, which is not committed.
+   */
+  const OUT = path.resolve(process.env.LLV_MCP_CALLS_OUT ?? ".artifacts/mcp-calls");
+  const EVIDENCE = path.resolve("evidence/mcp-calls");
+  const FRAMES = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "desktop-1000", width: 1000, height: 700, touch: false },
+    { name: "desktop-900", width: 900, height: 900, touch: false },
+    { name: "tablet-645", width: 645, height: 900, touch: true },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+  const LANGS = ["en", "uk"] as const;
+  const SCHEMES = ["light", "dark"] as const;
+  /* The calls the fixture folds in a Codex batch, as (tool, args, result); the
+     partial batch's call the script never finished has no result. */
+  const FOLDED: Array<[string, Record<string, unknown>, Record<string, unknown> | null]> = [
+    ["list_tasks", { project: "repo-demo", openOnly: true }, { count: 4, total: 4 }],
+    ["get_pipeline", { pipelineId: "pipe_parser_lane" }, { pipelineId: "pipe_parser_lane", state: "running" }],
+    ["leave_lesson", { rule: "" }, { ok: false, error: "Input validation error: rule must not be empty", code: "tool_failed", retryable: true }],
+    ["get_task", { taskId: "task_parser_lane" }, { taskId: "task_parser_lane", task: { id: "task_parser_lane", status: "assigned" } }],
+    ["update_task", { taskId: "task_parser_lane", status: "done" }, { taskId: "task_parser_lane", ok: true }],
+    ["list_pipelines", { project: "repo-demo" }, { count: 2 }],
+    ["get_flow", { flowId: "flow_review" }, null],
+  ];
+
+  interface McpCallsReading {
+    sections: Array<{
+      engine: string;
+      surface: string;
+      groups: Array<{ block: boolean; header: string; counted: number | null; members: number; cards: number; errorCards: number; titles: string[]; failedRows: number }>;
+      standaloneTitles: string[];
+      agentCardsInGroups: number;
+    }>;
+    readyHrefs: string[];
+    pendingChips: string[];
+    startingAnchors: number;
+    errorLines: string[];
+    liveLinks: number;
+    viewerPrefixed: number;
+    cutTitles: string[];
+    cutRowParts: string[];
+    wholeOutcomes: Record<string, number>;
+    droppedMeta: number;
+    replayedStarting: Array<{ titleWidth: number; badge: string; chip: string; outcome: string; time: string; glyphs: number }>;
+    shortTargets: string[];
+    titleCutBeforeMeta: string[];
+    dotGaps: { header: number[]; card: number[] };
+    overflowX: number;
+  }
+
+  browserTest("named calls, kept groups, agent links and a starting spawn in every frame", async () => {
+    const { describeMcpCall } = await import("@/lib/mcp/presentation");
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    const readings: Record<string, McpCallsReading> = {};
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const frame of FRAMES) for (const lang of LANGS) for (const scheme of SCHEMES) {
+        const t = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate(lang, key, params);
+        const folded = FOLDED.map(([tool, args, result]) => describeMcpCall(tool, args, result, t).title);
+        const { context, page, pageErrors } = await openFixture(
+          browser, `${served.base}?case=mcp-calls&lang=${lang}`, { width: frame.width, height: frame.height }, scheme, lang, "no-preference", frame.touch,
+        );
+        try {
+          await page.waitForSelector('[data-evidence-case="mcp-calls"]');
+          await page.waitForSelector('a[data-testid="mcp-link-conversation"][href="#c=conversation_child_ready"]');
+          const key = `${frame.name}-${lang}-${scheme}`;
+          await page.screenshot({ path: path.join(OUT, `${key}-closed.png`), fullPage: true });
+          /* Open every closed group: a details summary, the phone's fold row, the phone's failed block. */
+          await page.evaluate(() => {
+            for (const summary of document.querySelectorAll<HTMLElement>("summary[data-tool-row=group]")) {
+              const details = summary.parentElement as HTMLDetailsElement;
+              if (!details.open) summary.click();
+            }
+            for (const button of document.querySelectorAll<HTMLButtonElement>("button[data-tool-row=group], [data-mobile-run=failed] > button")) {
+              if (button.getAttribute("aria-expanded") === "false") button.click();
+            }
+          });
+          await page.waitForFunction(() => document.querySelectorAll("[data-tool-row=group], [data-mobile-run=failed]").length > 0);
+          const reading: McpCallsReading = await page.evaluate(() => {
+            const groupOf = (element: Element) => element.closest("details:has(> summary[data-tool-row=group]), [data-mobile-run]");
+            const sections = [...document.querySelectorAll<HTMLElement>("section[data-evidence-surface]")].map((section) => {
+              const groups = [...section.querySelectorAll("details:has(> summary[data-tool-row=group]), [data-mobile-run=done], [data-mobile-run=failed]")]
+                .filter((group) => group.matches("[data-mobile-run=failed]") || group.querySelector("[data-tool-row=group]"))
+                .map((group) => {
+                  /* The phone's failed block of Viewer calls is their cards, one per
+                     call, with no header; a group header counts its MCP calls. */
+                  const block = group.matches("[data-mobile-run=failed]");
+                  const header = block ? "" : group.querySelector("summary[data-tool-row=group] span.truncate, button[data-tool-row=group] span.truncate")?.textContent ?? "";
+                  const match = /(\d+) MCP calls?|викликів MCP: (\d+)/.exec(header);
+                  const list = block ? group : group.querySelector("ol");
+                  const cards = list ? [...list.querySelectorAll("[data-testid=mcp-call-card]")] : [];
+                  return {
+                    block,
+                    header,
+                    counted: match ? Number(match[1] ?? match[2]) : null,
+                    members: block ? cards.length + group.querySelectorAll("[data-mobile-run-row]").length : list ? list.children.length : 0,
+                    cards: cards.length,
+                    errorCards: cards.filter((card) => card.getAttribute("data-state") === "error").length,
+                    titles: cards.map((card) => card.querySelector("[data-mcp-title]")?.textContent ?? ""),
+                    failedRows: block
+                      ? group.querySelectorAll("[data-mobile-run-row=failed]").length
+                      : list ? [...list.querySelectorAll(":scope > li")].filter((li) => !li.querySelector("[data-testid=mcp-call-card]") && /err|failed|danger/.test(li.innerHTML)).length : 0,
+                  };
+                });
+              const cards = [...section.querySelectorAll("[data-testid=mcp-call-card]")];
+              return {
+                engine: section.dataset.evidenceEngine ?? "",
+                surface: section.dataset.evidenceSurface ?? "",
+                groups,
+                standaloneTitles: cards.filter((card) => !groupOf(card)).map((card) => card.querySelector("[data-mcp-title]")?.textContent ?? ""),
+                agentCardsInGroups: cards.filter((card) => card.querySelector("[data-testid=mcp-link-conversation]") && groupOf(card)).length,
+              };
+            });
+            const visible = (element: Element) => element.getBoundingClientRect().height > 0;
+            const cutTitles: string[] = [];
+            for (const title of document.querySelectorAll<HTMLElement>("[data-mcp-title]")) {
+              if (!visible(title)) continue;
+              if (title.scrollWidth > title.clientWidth + 1 && title.getAttribute("title") !== title.textContent) cutTitles.push(title.textContent ?? "");
+            }
+            for (const chip of document.querySelectorAll<HTMLElement>("[data-link-pending]")) {
+              if (chip.scrollWidth > chip.clientWidth + 1) cutTitles.push(`pending chip: ${chip.textContent}`);
+            }
+            /* Every text range and glyph of a card's one-line row is measured against
+               each clipping ancestor and the window: it is whole on screen, or, only
+               inside the trailing metadata or the server label, wholly out of view.
+               A title or chip label that ends in an ellipsis is judged by its own
+               box; screen-reader-only text is not drawn. */
+            const cutRowParts: string[] = [];
+            const wholeOutcomes: Record<string, number> = {};
+            let droppedMeta = 0;
+            /* The window's side edges; the frames are full-page, so its height is not an edge. */
+            const viewport = { left: 0, right: innerWidth, top: -Infinity, bottom: Infinity } as DOMRect;
+            for (const summary of document.querySelectorAll<HTMLElement>("[data-testid=mcp-call-card] > details > summary")) {
+              if (!visible(summary)) continue;
+              const clipsOf = (element: Element) => {
+                const clips: DOMRect[] = [];
+                for (let node: Element | null = element; node && node !== document.documentElement; node = node.parentElement) {
+                  if (getComputedStyle(node).overflowX !== "visible") clips.push(node.getBoundingClientRect());
+                  if (node === summary) break;
+                }
+                return clips;
+              };
+              const judge = (box: DOMRect, element: Element, label: string) => {
+                if (box.width === 0 && box.height === 0) return "empty";
+                const clips = [...clipsOf(element), viewport];
+                const inside = clips.every((clip) => box.left >= clip.left - 0.5 && box.right <= clip.right + 0.5 && box.top >= clip.top - 0.5 && box.bottom <= clip.bottom + 0.5);
+                if (inside) return "whole";
+                const outside = clips.some((clip) => box.right <= clip.left + 0.5 || box.left >= clip.right - 0.5 || box.bottom <= clip.top + 0.5 || box.top >= clip.bottom - 0.5);
+                /* The trailing metadata and the server label leave whole, onto the
+                   hidden second line of their own one-line box. */
+                if (outside && element.closest("[data-mcp-meta], [data-mcp-server]")) { droppedMeta += 1; return "dropped"; }
+                cutRowParts.push(`${label} [${box.left.toFixed(2)}–${box.right.toFixed(2)}] in «${summary.textContent?.slice(0, 50)}»`);
+                return "cut";
+              };
+              const walker = document.createTreeWalker(summary, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const node = walker.currentNode;
+                const host = node.parentElement!;
+                if (!node.textContent?.trim()) continue;
+                const style = getComputedStyle(host);
+                if (style.position === "absolute" && host.getBoundingClientRect().width <= 1) continue;
+                const ellipsis = host.closest<HTMLElement>("[data-mcp-title], .truncate");
+                if (ellipsis && summary.contains(ellipsis)) {
+                  judge(ellipsis.getBoundingClientRect(), ellipsis, `ellipsis «${ellipsis.textContent}»`);
+                  continue;
+                }
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) judge(rect, host, `text «${node.textContent}»`);
+              }
+              for (const glyph of summary.querySelectorAll("svg")) judge(glyph.getBoundingClientRect(), glyph, `glyph ${glyph.getAttribute("class")?.split(" ").find((name) => name.startsWith("lucide-")) ?? "svg"}`);
+              const outcome = summary.querySelector<HTMLElement>("[data-mcp-outcome]");
+              if (outcome && judge(outcome.getBoundingClientRect(), outcome, `outcome ${outcome.dataset.mcpOutcome}`) === "whole") {
+                const state = outcome.dataset.mcpOutcome ?? "";
+                wholeOutcomes[state] = (wholeOutcomes[state] ?? 0) + 1;
+              }
+            }
+            /* The replayed spawn whose child is not listed yet is the row's densest
+               state: replay badge, starting word, outcome glyph and the time. */
+            const replayedStarting = [...document.querySelectorAll<HTMLElement>("[data-testid=mcp-call-card] > details > summary:has([data-testid=mcp-replay]):has([data-link-pending])")]
+              .filter(visible)
+              .map((summary) => {
+                const state = (element: Element | null) => {
+                  if (!element) return "absent";
+                  const box = element.getBoundingClientRect();
+                  let left = Math.max(0, box.left), right = Math.min(innerWidth, box.right), top = box.top, bottom = box.bottom;
+                  for (let node = element.parentElement; node && node !== summary.parentElement; node = node.parentElement) {
+                    const style = getComputedStyle(node);
+                    const clip = node.getBoundingClientRect();
+                    if (style.overflowX !== "visible") { left = Math.max(left, clip.left); right = Math.min(right, clip.right); }
+                    if (style.overflowY !== "visible") { top = Math.max(top, clip.top); bottom = Math.min(bottom, clip.bottom); }
+                  }
+                  if (right - left <= 0.5 || bottom - top <= 0.5) return "hidden";
+                  return left <= box.left + 0.5 && right >= box.right - 0.5 && top <= box.top + 0.5 && bottom >= box.bottom - 0.5 ? "whole" : "cut";
+                };
+                const time = [...summary.querySelectorAll("[data-mcp-meta] span")].find((span) => /^\d\d:\d\d(:\d\d)?$/.test(span.textContent ?? "")) ?? null;
+                return {
+                  titleWidth: summary.querySelector("[data-mcp-title]")!.getBoundingClientRect().width,
+                  badge: state(summary.querySelector("[data-testid=mcp-replay]")),
+                  chip: state(summary.querySelector("[data-link-pending]")),
+                  outcome: state(summary.querySelector("[data-mcp-outcome]")),
+                  time: state(time),
+                  glyphs: summary.querySelectorAll("svg").length,
+                };
+              });
+            /* A title cut by its ellipsis while any part of its metadata or the
+               server label is still drawn gave its width to a lower-value fact. */
+            const titleCutBeforeMeta: string[] = [];
+            for (const summary of document.querySelectorAll<HTMLElement>("[data-testid=mcp-call-card] > details > summary")) {
+              if (!visible(summary)) continue;
+              const title = summary.querySelector<HTMLElement>("[data-mcp-title]")!;
+              if (title.scrollWidth <= title.clientWidth + 0.5) continue;
+              const drawn = (element: HTMLElement | null, clip: HTMLElement) => {
+                if (!element || getComputedStyle(element).display === "none") return false;
+                const box = element.getBoundingClientRect();
+                const area = clip.getBoundingClientRect();
+                return box.width > 0.5 && box.left < area.right - 0.5 && box.right > area.left + 0.5 && box.top < area.bottom - 0.5 && box.bottom > area.top + 0.5;
+              };
+              const meta = summary.querySelector<HTMLElement>("[data-mcp-meta]");
+              const metaLeft = meta ? [...meta.querySelectorAll<HTMLElement>("span")].filter((span) => span.childElementCount === 0 && span.textContent?.trim() && drawn(span, meta)).map((span) => span.textContent!.trim()) : [];
+              const server = summary.querySelector<HTMLElement>("[data-mcp-server]");
+              if (drawn(server, summary.querySelector<HTMLElement>("[data-mcp-heading]") ?? summary)) metaLeft.push(server!.textContent!.trim());
+              if (metaLeft.length) titleCutBeforeMeta.push(`«${title.textContent}» beside ${metaLeft.join(", ")}`);
+            }
+            /* The dot between a duration and its tokens sits as far from each on a
+               group header as on the cards under it. */
+            const dotGap = (row: Element) => {
+              const tokens = row.querySelector<HTMLElement>("[data-context-tokens]");
+              const dot = tokens?.querySelector<HTMLElement>("[aria-hidden]");
+              const duration = tokens?.previousElementSibling;
+              if (!tokens || !dot || !duration || !visible(dot)) return null;
+              return Math.round((dot.getBoundingClientRect().left - duration.getBoundingClientRect().right) * 100) / 100;
+            };
+            const dotGaps = {
+              header: [...document.querySelectorAll("summary[data-tool-row=group]")].map(dotGap).filter((gap): gap is number => gap !== null),
+              card: [...document.querySelectorAll("[data-testid=mcp-call-card] [data-mcp-meta]")].map(dotGap).filter((gap): gap is number => gap !== null),
+            };
+            const coarse = matchMedia("(pointer: coarse)").matches;
+            const shortTargets = coarse
+              ? [...document.querySelectorAll<HTMLElement>("[data-testid=mcp-call-card] summary, summary[data-tool-row=group], button[data-tool-row=group]")]
+                .filter((target) => visible(target) && target.getBoundingClientRect().height < 44)
+                .map((target) => target.textContent?.slice(0, 60) ?? "")
+              : [];
+            return {
+              sections,
+              readyHrefs: [...document.querySelectorAll('a[data-testid="mcp-link-conversation"]')].map((link) => link.getAttribute("href") ?? ""),
+              pendingChips: [...document.querySelectorAll("[data-link-pending]")].map((chip) => chip.textContent ?? ""),
+              startingAnchors: document.querySelectorAll('a[href*="conversation_child_starting"]').length,
+              errorLines: [...document.querySelectorAll('[data-testid=mcp-call-card][data-state=error] > div')].map((line) => line.textContent ?? ""),
+              liveLinks: document.querySelectorAll("[data-evidence-engine=live] a").length,
+              /* A Viewer call never reads as the generic «viewer · tool» summary, in its
+                 card, a group header or a source-parsed row of a stopped script. */
+              viewerPrefixed: [...document.querySelectorAll("[data-mcp-title], [data-tool-row=group], [data-evidence-surface] li")]
+                .filter((node) => /(^|\s)viewer · /.test(node.textContent ?? "")).length,
+              cutTitles,
+              cutRowParts,
+              wholeOutcomes,
+              droppedMeta,
+              replayedStarting,
+              shortTargets,
+              titleCutBeforeMeta,
+              dotGaps,
+              overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+            };
+          });
+          readings[key] = reading;
+          await page.screenshot({ path: path.join(OUT, `${key}-open.png`), fullPage: true });
+          expect(pageErrors).toEqual([]);
+
+          for (const section of reading.sections) {
+            const where = `${key} ${section.engine} ${section.surface}`;
+            // The agent calls of both engines are their own rows, never inside a group.
+            expect(section.agentCardsInGroups, where).toBe(0);
+            if (section.engine === "claude") {
+              // Claude writes no batches: no group holds a Viewer call.
+              expect(section.groups.reduce((sum, group) => sum + group.cards, 0), where).toBe(0);
+              expect(section.standaloneTitles.length, where).toBe(9);
+              continue;
+            }
+            // Codex: batch A (3, one failed), batch B's two reads, the stopped script's
+            // returned call and the call it never finished, each one named card.
+            expect(section.groups.map((group) => group.cards), where).toEqual([3, 2, 2]);
+            for (const group of section.groups) expect(group.counted, `${where} ${group.header}`).toBe(group.block ? null : group.cards);
+            for (const group of section.groups) expect(group.members, `${where} ${group.header}`).toBe(group.cards);
+            expect(section.groups.flatMap((group) => group.titles), where).toEqual(folded);
+            expect(section.groups.map((group) => group.errorCards), where).toEqual([1, 0, 1]);
+            expect(section.groups.map((group) => group.failedRows), where).toEqual([0, 0, 0]);
+            // Two spawns, a message, the seat message and the direct call stand alone.
+            expect(section.standaloneTitles.length, where).toBe(5);
+          }
+          // The ready child links in every section, the seat in every section; the starting child never does.
+          expect(reading.readyHrefs.filter((href) => href === "#c=conversation_child_ready").length).toBe(4 * 2 + 2);
+          expect(reading.readyHrefs.filter((href) => href === "#c=conversation_seat").length).toBe(4);
+          expect(reading.startingAnchors).toBe(0);
+          expect(reading.pendingChips).toEqual(Array(4).fill(t("mcp.link.pending")));
+          // The rejected lesson in all four sections, the stopped script's call in the two Codex ones.
+          expect(reading.errorLines.length).toBe(6);
+          expect(reading.errorLines.filter((line) => line.includes("Input validation error: rule must not be empty")).length).toBe(4);
+          expect(reading.errorLines.filter((line) => line.includes("flow_review: request timed out")).length).toBe(2);
+          expect(reading.liveLinks).toBe(0);
+          expect(reading.viewerPrefixed).toBe(0);
+          expect(reading.cutTitles).toEqual([]);
+          // No part of a row is cut by its own edge: the starting spawn's word and glyph and the
+          // retryable failure's badge and glyph are whole in every section, metadata leaves whole.
+          expect(reading.cutRowParts).toEqual([]);
+          // The starting chip is the row's one clock: no outcome glyph repeats it.
+          expect(reading.wholeOutcomes.starting ?? 0).toBe(0);
+          expect(reading.wholeOutcomes.error).toBe(6);
+          // A wide window keeps every row whole; narrower ones give the title its width first.
+          if (frame.width >= 1000) expect(reading.droppedMeta).toBe(0);
+          // The replayed starting spawn keeps its title floor, badge, word and glyph whole in
+          // every section, and its time is whole or wholly out of view, never a fragment.
+          expect(reading.replayedStarting.length).toBe(4);
+          for (const row of reading.replayedStarting) {
+            expect(row.titleWidth).toBeGreaterThanOrEqual(95.5);
+            expect([row.badge, row.chip, row.outcome]).toEqual(["whole", "whole", "absent"]);
+            // The tool's own icon and the chip's clock.
+            expect(row.glyphs).toBe(2);
+            expect(["whole", "hidden"]).toContain(row.time);
+          }
+          expect(reading.shortTargets).toEqual([]);
+          // A title keeps its natural width until the metadata and the server label have left.
+          expect(reading.titleCutBeforeMeta).toEqual([]);
+          // Header and cards space «880ms · ~4» alike.
+          expect(reading.dotGaps.header.length).toBeGreaterThan(0);
+          expect(reading.dotGaps.card.length).toBeGreaterThan(0);
+          expect(new Set([...reading.dotGaps.header, ...reading.dotGaps.card]).size, JSON.stringify(reading.dotGaps)).toBe(1);
+          expect(reading.overflowX).toBe(0);
+
+          // The ready chip opens the child's conversation.
+          await page.locator('a[data-testid="mcp-link-conversation"][href="#c=conversation_child_ready"]').first().click();
+          expect(new URL(page.url()).hash).toBe("#c=conversation_child_ready");
+        } finally {
+          await context.close();
+        }
+      }
+      fs.writeFileSync(path.join(EVIDENCE, "frames.json"), `${JSON.stringify(readings, null, 2)}\n`);
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 480_000);
 });
 
 describe("older history of a long conversation keeps its rows, its frames and its text", () => {
@@ -2532,6 +2890,753 @@ describe("delivery check card", () => {
   }, 300_000);
 });
 
+describe("a consumed queued send leaves the composer by its own id", () => {
+  /*
+   * The `consumed-delivery` fixture: the production composer bar with Codex's
+   * queue panel (the production projection of journal-shaped entries) and the
+   * receipt list over two unconfirmed sends with the same words, plus an unsent
+   * draft with a staged image. The list waits behind the undelivered chip in
+   * the pane's own slot, and the chip opens it. «Prove» lands the canonical
+   * proof for one id. Afterwards that id has no queue row, no hint and no card
+   * and the chip counts one less, the other unconfirmed send keeps its card and
+   * status, the same-text message Codex still holds keeps its row, and the
+   * draft and its image are untouched. The composer's box keeps the pane's
+   * bound, so the transcript keeps its floor. Readings go
+   * to `evidence/consumed-delivery/frames.json`; frames to
+   * `.artifacts/consumed-delivery/`, which is not committed.
+   */
+  const VIEWPORTS = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "pane-900", width: 900, height: 800, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+
+  browserTest("before and after the proof, at 1440, 900 and 390 px, en and uk, light and dark", async () => {
+    const out = path.resolve(".artifacts/consumed-delivery");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=consumed-delivery&lang=${lang}`,
+          { width: viewport.width, height: viewport.height }, scheme, lang, "reduce", viewport.touch);
+        const key = `${viewport.name}-${lang}-${scheme}`;
+        try {
+          await page.locator('[data-testid="native-queue-panel"]').waitFor();
+          await page.waitForSelector('[data-testid="attachment-tile"][data-status="ready"]');
+          await page.evaluate(() => document.fonts.ready);
+          const read = () => page.evaluate(() => {
+            /* Whole text: every text range of a shown element sits inside the
+               window and inside each ancestor that clips. */
+            const whole = (element: Element) => {
+              const range = document.createRange(); range.selectNodeContents(element);
+              const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+              const clips: DOMRect[] = [];
+              for (let node = element.parentElement; node; node = node.parentElement) {
+                const style = getComputedStyle(node);
+                if (style.overflowX !== "visible" || style.overflowY !== "visible") clips.push(node.getBoundingClientRect());
+              }
+              return rects.length > 0 && rects.every((rect) => rect.left >= -0.5 && rect.right <= innerWidth + 0.5
+                && rect.top >= -0.5 && rect.bottom <= innerHeight + 0.5
+                && clips.every((clip) => rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5
+                  && rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5));
+            };
+            /* A control's whole box: inside the window and inside every
+               ancestor that clips, which a label-only reading would not see. */
+            const boxWhole = (element: Element) => {
+              const rect = element.getBoundingClientRect();
+              if (rect.width <= 0 || rect.height <= 0) return false;
+              if (rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.top < -0.5 || rect.bottom > innerHeight + 0.5) return false;
+              for (let node = element.parentElement; node; node = node.parentElement) {
+                const style = getComputedStyle(node);
+                if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+                const clip = node.getBoundingClientRect();
+                if (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5 || rect.left < clip.left - 0.5 || rect.right > clip.right + 0.5) return false;
+              }
+              return true;
+            };
+            /* The open list's first card: its status drawn as visible text, its
+               "why" sentence and every control whole inside the list, the
+               region and the composer's box. */
+            const firstCard = document.querySelector("[data-runtime-receipt-stack][open] [data-delivery-check-card]");
+            const first = firstCard ? (() => {
+              const status = firstCard.querySelector('[role="status"]')!;
+              const why = firstCard.querySelector("[data-receipt-uncertain-why]")!;
+              /* The sentence below the controls may sit past the list's edge
+                 when the box has no more room; it must then be reachable by
+                 the list's own scroll. Scrolled to, read, and put back. */
+              const saved = [...document.querySelectorAll<HTMLElement>("*")].filter((node) => node.scrollHeight > node.clientHeight).map((node) => [node, node.scrollTop] as const);
+              why.scrollIntoView({ block: "nearest" });
+              const whyReachable = whole(why);
+              for (const [node, top] of saved) node.scrollTop = top;
+              /* The list's closing fade never lies over the first card's own
+                 text: no text range of the card's status, message or sentence
+                 meets it. */
+              const fade = document.querySelector("[data-receipt-more-below]")?.getBoundingClientRect() ?? null;
+              const textBoxes = [...firstCard.querySelectorAll('[role="status"], [data-receipt-message], [data-receipt-uncertain-why]')].flatMap((node) => {
+                const range = document.createRange(); range.selectNodeContents(node);
+                return [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+              });
+              const fadeOverText = fade ? textBoxes.some((rect) => Math.min(rect.right, fade.right) - Math.max(rect.left, fade.left) > 0.5
+                && Math.min(rect.bottom, fade.bottom) - Math.max(rect.top, fade.top) > 0.5) : false;
+              return {
+                whyReachable,
+                fadeOverText,
+                operation: firstCard.getAttribute("data-operation"),
+                status: status.textContent?.trim() ?? "",
+                statusDrawn: !status.classList.contains("sr-only") && whole(status),
+                whyWhole: whole(why),
+                controls: [...firstCard.querySelectorAll("button")].map((button) => ({ label: button.textContent?.trim() ?? "", whole: boxWhole(button) && whole(button) })),
+              };
+            })() : null;
+            /* The region's other surfaces beside the open list: the queue panel
+               keeps its header line and the staged tile its whole box with its
+               remove button, and no surface is painted over a neighbour. */
+            const queuePanel = document.querySelector<HTMLElement>('[data-testid="native-queue-panel"]');
+            const queueHeader = queuePanel?.querySelector<HTMLElement>(":scope > header") ?? null;
+            const tile = document.querySelector<HTMLElement>('[data-testid="attachment-tile"]');
+            const tileRemove = tile?.querySelector<HTMLElement>("button") ?? null;
+            const regionKids = [...(document.querySelector('[data-testid="composer-accessories"]')?.children ?? [])]
+              .filter((kid) => kid.getClientRects().length > 0).map((kid) => kid.getBoundingClientRect());
+            const overlaps = regionKids.some((a, i) => regionKids.slice(i + 1).some((b) =>
+              Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5));
+            /* Whole where it stands, or whole once the region is scrolled to it
+               (the region is the scroller of what exceeds the box); scrolled
+               to, read, and put back. */
+            const reachable = (element: Element | null) => {
+              if (!element) return null;
+              const saved = [...document.querySelectorAll<HTMLElement>("*")].filter((node) => node.scrollHeight > node.clientHeight).map((node) => [node, node.scrollTop] as const);
+              element.scrollIntoView({ block: "nearest" });
+              const result = boxWhole(element) && whole(element);
+              for (const [node, top] of saved) node.scrollTop = top;
+              return result;
+            };
+            const panels = {
+              queueHeight: queuePanel ? Math.round(queuePanel.getBoundingClientRect().height * 10) / 10 : null,
+              queueHeaderPlaced: queueHeader ? boxWhole(queueHeader) && whole(queueHeader) : null,
+              queueHeaderReachable: reachable(queueHeader),
+              tileWhole: tile ? boxWhole(tile) : null,
+              tileReachable: reachable(tile),
+              tileRemoveReachable: reachable(tileRemove),
+              tileHeight: tile ? Math.round(tile.getBoundingClientRect().height * 10) / 10 : null,
+              /* Every control of the queue's rows lies inside the panel's own
+                 clip box, so a squeezed panel never cuts across them. */
+              queueControlsWhole: (() => {
+                const firstRow = queuePanel?.querySelector('[data-testid="native-queue-row"]');
+                if (!queuePanel || !firstRow) return null;
+                const panel = queuePanel.getBoundingClientRect();
+                return [...firstRow.querySelectorAll("button")].every((button) => {
+                  const box = button.getBoundingClientRect();
+                  return box.top >= panel.top - 0.5 && box.bottom <= panel.bottom + 0.5;
+                });
+              })(),
+              overlaps,
+              /* The region's own overflow, and whether the open list's closing
+                 frame (its bottom border) is drawn inside the region and the
+                 window rather than past the region's clip edge. */
+              regionOverflow: (() => {
+                const region = document.querySelector<HTMLElement>('[data-testid="composer-accessories"]');
+                return region ? region.scrollHeight - region.clientHeight : null;
+              })(),
+              listFrameInRegion: (() => {
+                const region = document.querySelector<HTMLElement>('[data-testid="composer-accessories"]');
+                const stack = document.querySelector<HTMLElement>("[data-runtime-receipt-stack][open]");
+                if (!region || !stack) return null;
+                const clip = region.getBoundingClientRect(); const frame = stack.getBoundingClientRect();
+                return frame.bottom <= clip.bottom + 0.5 && frame.bottom <= innerHeight + 0.5 && frame.top >= clip.top - 0.5;
+              })(),
+              geometry: (() => {
+                const region = document.querySelector<HTMLElement>('[data-testid="composer-accessories"]');
+                const rr = region?.getBoundingClientRect();
+                const hr = queueHeader?.getBoundingClientRect();
+                const holder = document.querySelector<HTMLElement>('[data-testid="composer-receipts"]');
+                const kids = [...(region?.children ?? [])].filter((kid) => kid.getClientRects().length > 0)
+                  .map((kid) => `${kid.getAttribute("data-testid") ?? kid.tagName.toLowerCase()} ${kid.getBoundingClientRect().height.toFixed(1)}`).join(", ");
+                return rr ? `region ${rr.top.toFixed(1)}-${rr.bottom.toFixed(1)} scroll ${region!.scrollTop}/${region!.scrollHeight - region!.clientHeight}; header ${hr ? `${hr.top.toFixed(1)}-${hr.bottom.toFixed(1)}` : "-"}; list floor ${holder?.style.minHeight || "-"}; kids ${kids}` : "no region";
+              })(),
+            };
+            const rows = [...document.querySelectorAll('[data-testid="native-queue-row"]')];
+            const cards = [...document.querySelectorAll("[data-delivery-check-card]")];
+            const notice = document.querySelector('[data-testid="native-queue-notice"]');
+            const chip = document.querySelector<HTMLElement>("[data-receipts-chip]");
+            const chipShown = Boolean(chip && chip.getClientRects().length > 0);
+            return {
+              chip: chipShown ? chip!.innerText.trim() : null,
+              chipAria: chip?.getAttribute("aria-label") ?? null,
+              chipWhole: !chipShown || whole(chip!),
+              /* The open list's own header carries the chip's words where the
+                 chip's line is hidden. */
+              headerCount: (() => {
+                const node = document.querySelector<HTMLElement>("[data-receipts-header-count]");
+                return node && node.getClientRects().length > 0 ? { text: node.textContent?.trim() ?? "", whole: whole(node) } : null;
+              })(),
+              first,
+              panels,
+              active: document.activeElement?.closest("[data-runtime-receipt-stack]") ? "list" : document.activeElement?.hasAttribute("data-receipts-chip") ? "chip" : document.activeElement?.tagName.toLowerCase() ?? null,
+              listOpen: (document.querySelector("[data-runtime-receipt-stack]") as HTMLDetailsElement | null)?.open ?? false,
+              listShown: (document.querySelector('[data-testid="composer-receipts"]')?.getClientRects().length ?? 0) > 0,
+              /* The composer's box against the column it shares with the
+                 transcript, and the transcript's own words. */
+              box: (() => {
+                const column = document.querySelector<HTMLElement>("[data-evidence-case=consumed-delivery]")!;
+                const style = getComputedStyle(column);
+                const content = column.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+                const form = column.querySelector("form")!.getBoundingClientRect();
+                return { height: Math.round(form.height), share: Math.round(form.height / content * 1000) / 1000 };
+              })(),
+              transcriptWhole: whole(document.querySelector("[data-evidence-transcript] > div")!),
+              images: document.querySelectorAll('[data-testid="attachment-tile"][data-status="ready"]').length,
+              rows: rows.map((row) => row.getAttribute("data-entry")),
+              rowsWhole: rows.every((row) => whole(row.querySelector("p") ?? row)),
+              notice: notice?.textContent?.trim() ?? null,
+              count: document.querySelector('[data-testid="native-queue-count"]')?.textContent?.trim() ?? null,
+              cards: cards.map((card) => card.getAttribute("data-operation")),
+              cardText: cards.map((card) => card.textContent ?? ""),
+              cardsWhole: cards.every((card) => [...card.querySelectorAll("[data-receipt-message], [data-receipt-uncertain-why]")].every(whole)),
+              notices: [...document.querySelectorAll("[data-delivery-notice] [data-delivery-notice-cause]")].map((line) => line.textContent?.trim()),
+              draft: document.querySelector("textarea")?.value ?? null,
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            };
+          });
+          /* The chip in the composer's own row opens the list behind it; the
+             list's header closes it again, as the pane does. */
+          const openList = async () => {
+            await page.locator("[data-receipts-chip]").click();
+            await page.waitForFunction(() => (document.querySelector("[data-runtime-receipt-stack]") as HTMLDetailsElement | null)?.open === true);
+            /* A phone hides the chip's line, so focus has to be in the list. */
+            if (viewport.touch) await page.waitForFunction(() => Boolean(document.activeElement?.closest("[data-runtime-receipt-stack]")));
+            /* The list reports the height its first card needs after its own
+               layout; the composer applies it a frame later. Read the settled
+               state, as a person sees it. */
+            await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          };
+          const closeList = async () => {
+            await page.locator("[data-runtime-receipt-stack] > summary").click();
+            /* Closed once the chip is drawn again: a phone hides its status
+               line while the list is open. */
+            await page.waitForFunction(() => (document.querySelector("[data-runtime-receipt-stack]") as HTMLDetailsElement | null)?.open === false
+              && (document.querySelector("[data-receipts-chip]")?.getClientRects().length ?? 0) > 0);
+            if (viewport.touch) await page.waitForFunction(() => document.activeElement?.hasAttribute("data-receipts-chip") === true);
+          };
+          const beforeRest = await read();
+          await page.screenshot({ path: path.join(out, `before-rest-${key}.png`), fullPage: true });
+          await openList();
+          const before = await read();
+          await page.screenshot({ path: path.join(out, `before-${key}.png`), fullPage: true });
+          await closeList();
+          await page.evaluate(() => (document.querySelector("[data-prove-consumed]") as HTMLButtonElement).click());
+          await page.waitForFunction(() => document.querySelector("[data-evidence-case=consumed-delivery]")?.hasAttribute("data-proven")
+            && document.querySelector<HTMLElement>('[data-testid="composer-receipts"]')?.hidden === true);
+          const afterRest = await read();
+          await page.screenshot({ path: path.join(out, `after-rest-${key}.png`), fullPage: true });
+          await openList();
+          const after = await read();
+          await page.screenshot({ path: path.join(out, `after-${key}.png`), fullPage: true });
+          /* Send pressed with the picture staged: the refusal line is drawn
+             whole below the field, the list's first card stays whole beside it,
+             and the draft and the picture are kept. */
+          await page.locator("button[type=submit]").click();
+          await page.waitForSelector('[data-testid="composer-status"]');
+          const refused = await page.evaluate(() => {
+            const line = document.querySelector<HTMLElement>('[data-testid="composer-status"]')!;
+            const form = document.querySelector("form")!;
+            const range = document.createRange(); range.selectNodeContents(line);
+            const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+            const formRect = form.getBoundingClientRect();
+            return {
+              text: line.textContent?.trim() ?? "",
+              /* Every text range inside the window and the form's own box, and
+                 the line unscrolled (it may scroll in its own cap otherwise). */
+              whole: rects.length > 0 && rects.every((rect) => rect.top >= formRect.top - 0.5 && rect.bottom <= formRect.bottom + 0.5
+                && rect.top >= -0.5 && rect.bottom <= innerHeight + 0.5 && rect.left >= -0.5 && rect.right <= innerWidth + 0.5),
+              clientHeight: line.clientHeight, scrollHeight: line.scrollHeight,
+              draft: document.querySelector("textarea")?.value ?? null,
+              images: document.querySelectorAll('[data-testid="attachment-tile"][data-status="ready"]').length,
+            };
+          });
+          await page.screenshot({ path: path.join(out, `refusal-${key}.png`), fullPage: true });
+          await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          const refusedList = await read();
+          readings[key] = { beforeRest, before, afterRest, after, refused, refusedList };
+          expect(pageErrors).toEqual([]);
+          /* At rest the list waits behind the chip, which counts the sends
+             whose fate is open: two before the proof, one after it. */
+          for (const [rest, count] of [[beforeRest, 2], [afterRest, 1]] as const) {
+            expect(rest.listOpen).toBe(false);
+            expect(rest.listShown).toBe(false);
+            /* Both counted sends have an unknown fate, so the yellow chip says
+               «Unconfirmed», never «Not delivered». */
+            expect(rest.chipAria).toBe(translate(lang, "runtime.receipt.chipUnconfirmedAria", { count }));
+            expect(rest.chip).not.toBeNull();
+            expect([translate(lang, "runtime.receipt.chipUnconfirmed", { count }), String(count)]).toContain(rest.chip ?? "");
+            expect(rest.chipWhole).toBe(true);
+            expect(rest.images).toBe(1);
+            expect(rest.draft).toBe("an unsent draft");
+          }
+          /* The transcript keeps its floor (2026-10-11): the composer's box
+             takes at most 40% of the column, a phone's at most 38dvh, and the
+             transcript stays readable in every state. */
+          for (const state of [beforeRest, before, afterRest, after]) {
+            if (viewport.touch) expect(state.box.height).toBeLessThanOrEqual(Math.min(0.38 * viewport.height, 320) + 0.5);
+            else expect(state.box.share).toBeLessThanOrEqual(0.401);
+            expect(state.transcriptWhole).toBe(true);
+          }
+          expect(before.listOpen).toBe(true);
+          expect(after.listOpen).toBe(true);
+          /* Opening the list guarantees the first card's status and every
+             control, whole inside the bounded list, at every viewport and in
+             both phases; the card leads with them, and its message and "why"
+             sentence below scroll inside the list when the box has no more
+             room (whole in place on the desktop, and reachable by that scroll
+             at every viewport). */
+          for (const state of [before, after]) {
+            expect(state.first?.status).toBe(translate(lang, "composer.deliveryCheckEnded"));
+            expect(state.first?.statusDrawn).toBe(true);
+            /* The closing fade sits on what follows the first card, never on
+               the card's own sentence. */
+            expect({ key, fadeOverText: state.first?.fadeOverText }).toEqual({ key, fadeOverText: false });
+            if (!viewport.touch) expect({ key, whyWhole: state.first?.whyWhole }).toEqual({ key, whyWhole: true });
+            expect({ key, whyReachable: state.first?.whyReachable }).toEqual({ key, whyReachable: true });
+            expect(state.first?.controls.length).toBeGreaterThanOrEqual(2);
+            expect(state.first?.controls.filter((control) => !control.whole)).toEqual([]);
+          }
+          /* A phone hides the chip's line while the list is open: focus is in
+             the list then and back on the chip once it closes, and the list's
+             own header says what the list is and how many sends it holds. */
+          if (viewport.touch) {
+            expect(before.active).toBe("list");
+            expect(afterRest.active).toBe("chip");
+            for (const [state, count] of [[before, 2], [after, 1]] as const) {
+              expect({ key, header: state.headerCount }).toEqual({ key, header: { text: translate(lang, "runtime.receipt.chipUnconfirmed", { count }), whole: true } });
+            }
+          } else {
+            expect(before.headerCount).toBeNull();
+          }
+          /* The refusal: named routes, whole below the field, nothing lost. */
+          expect(refused.text).toBe(translate(lang, viewport.touch ? "composer.context.imagesBlockedQueueTouch" : "composer.context.imagesBlockedQueue", {
+            toggle: translate(lang, "composer.context.toggle"), queue: translate(lang, "queue.queueMessage"), menu: translate(lang, "composer.sendMenuTitle") }));
+          /* A touch screen has no keyboard shortcut to name. */
+          if (viewport.touch) expect(refused.text).not.toContain("Alt+Enter");
+          expect(refused.whole).toBe(true);
+          expect(refused.scrollHeight).toBeLessThanOrEqual(refused.clientHeight + 1);
+          expect(refused.draft).toBe("an unsent draft");
+          expect(refused.images).toBe(1);
+          /* The refusal takes room from the region's other surfaces, never from
+             the open list's first card. */
+          expect(refusedList.first?.statusDrawn).toBe(true);
+          expect(refusedList.first?.controls.filter((control) => !control.whole)).toEqual([]);
+          expect(refusedList.transcriptWhole).toBe(true);
+          /* On the desktop the queue panel yields to the refusal line only in
+             whole units: its header line always, and at 1440 its first row's
+             controls too. */
+          if (!viewport.touch) {
+            expect({ key, queueHeaderPlaced: refusedList.panels.queueHeaderPlaced }).toEqual({ key, queueHeaderPlaced: true });
+            if (viewport.width >= 1440) expect({ key, queueControlsWhole: refusedList.panels.queueControlsWhole }).toEqual({ key, queueControlsWhole: true });
+          }
+          /* The phone's refusal is the two lines its touch wording allows, so
+             the staged picture and its remove button stay whole beside the
+             open list's first card. */
+          if (viewport.touch) {
+            expect({ key, tileWhole: refusedList.panels.tileWhole }).toEqual({ key, tileWhole: true });
+            expect(refused.clientHeight).toBeLessThanOrEqual(31);
+          }
+          /* Beside the open list, in the list-open and refused states alike:
+             the queue panel keeps its header line (a floor, never collapsed
+             to an empty bar), the staged picture's tile and its remove button
+             are whole, and no surface of the region is painted over another. */
+          const panelFaults = ([["before", before], ["after", after], ["refused", refusedList]] as const).flatMap(([phase, state]) =>
+            /* The desktop's remove chip appears on hover only; the phone's is always drawn. */
+            (viewport.touch ? ["queueHeaderReachable", "tileReachable", "tileRemoveReachable"] as const : ["tileReachable"] as const).filter((field) => state.panels[field] !== true)
+              .map((field) => `${key} ${phase}: ${field} ${String(state.panels[field])} (queue ${state.panels.queueHeight} px; ${state.panels.geometry})`)
+              /* Yielding is bounded on the phone, whose box is the 38dvh cap: the
+                 panels keep a box of their own, the header line and the whole
+                 row of tiles, never an empty bar. The desktop pane keeps the
+                 equal shares its card text is gated on. */
+              .concat(viewport.touch && (state.panels.queueHeight ?? 99) < 26 ? [`${key} ${phase}: the queue panel is only ${state.panels.queueHeight} px`] : [])
+              .concat((state.panels.tileHeight ?? 99) < (viewport.touch ? 47.5 : 39.5) ? [`${key} ${phase}: the staged tile is only ${state.panels.tileHeight} px`] : [])
+              .concat(state.panels.overlaps ? [`${key} ${phase}: a surface is painted over a neighbour`] : []));
+          expect(panelFaults).toEqual([]);
+          /* On the phone the open list's three floors fit its region: nothing
+             scrolls in the region, the list's closing frame is drawn inside it
+             (the first card is cut by that frame, never by the region's edge,
+             under its Retry and Discard); its message and sentence stay
+             reachable by the list's own scroll, asserted above. */
+          if (viewport.touch) for (const [phase, state] of [["before", before], ["after", after], ["refused", refusedList]] as const) {
+            expect({ key, phase, regionOverflow: state.panels.regionOverflow }).toEqual({ key, phase, regionOverflow: 0 });
+            expect({ key, phase, listFrameInRegion: state.panels.listFrameInRegion }).toEqual({ key, phase, listFrameInRegion: true });
+            /* The queue panel's header and the staged tile sit whole where they
+               stand, not only after the region is scrolled to them. */
+            expect({ key, phase, queueHeaderPlaced: state.panels.queueHeaderPlaced }).toEqual({ key, phase, queueHeaderPlaced: true });
+            expect({ key, phase, tileWhole: state.panels.tileWhole }).toEqual({ key, phase, tileWhole: true });
+          }
+          expect(before.images).toBe(1);
+          expect(after.images).toBe(1);
+          expect(before.rows).toEqual(["held-same-text", "consumed-tick"]);
+          expect(before.notice).toBe(translate(lang, "queue.noticePending", { count: 1 }));
+          expect([...before.cards].sort()).toEqual(["consumed-tick", "unknown-send"]);
+          expect(after.rows).toEqual(["held-same-text"]);
+          expect(after.notice).toBeNull();
+          expect(after.count).toBe(translate(lang, "queue.count", { count: 1 }));
+          expect(after.cards).toEqual(["unknown-send"]);
+          expect(after.cardText[0]).toContain(translate(lang, "composer.deliveryCheckEnded"));
+          expect(after.draft).toBe("an unsent draft");
+          expect(before.draft).toBe("an unsent draft");
+          /* Before the proof the queue and the list hold more than their
+             share and scroll inside it, which is the panels' own behaviour and
+             is recorded, not gated. On a phone the box's 38dvh bound keeps
+             that true after the proof as well, so there it is recorded too;
+             on the desktop the state the proof leaves is whole. */
+          expect(before.overflowX).toBe(0);
+          expect(after.overflowX).toBe(0);
+          if (!viewport.touch) {
+            expect(afterRest.rowsWhole).toBe(true);
+            expect({ key, cardsWhole: after.cardsWhole }).toEqual({ key, cardsWhole: true });
+          }
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/consumed-delivery", { recursive: true });
+      fs.writeFileSync("evidence/consumed-delivery/frames.json", JSON.stringify({ driver: "src/components/conversation/conversationWindow.browser.test.tsx", readings }, null, 2) + "\n");
+    } finally { await browser.close(); served.stop(); }
+  }, 300_000);
+});
+
+describe("the runtime pill names the model the conversation runs on", () => {
+  /*
+   * The production pill over the production composer, for a Codex stage launched
+   * on Luna before the board scanned it, a conversation with no known model, a
+   * model the catalogue does not list and four Claude cases, at the desktop
+   * width, one between it and the phone, and the phone width, both languages,
+   * both schemes. `LLV_MODEL_FACE_SIDE=before`
+   * runs the same case over a checkout that still falls back to the engine
+   * default and records what it drew under `before`; the default records
+   * `after` and gates it. Frames go to `.artifacts/runtime-model-face/`, which
+   * is not committed.
+   */
+  const side = process.env.LLV_MODEL_FACE_SIDE === "before" ? "before" : "after";
+  const VIEWPORTS = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "desktop-900", width: 900, height: 800, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+  const FILES = {
+    luna: { face: "6-Luna", never: ["Sol"] },
+    unknown: { face: null, never: ["Sol", "Opus"] },
+    unlisted: { face: "gpt-5.5", never: ["Sol"] },
+    sonnet: { face: "Sonnet 5.5", never: ["Opus"] },
+    "claude-unreported": { face: null, never: ["Opus", "Sonnet"] },
+    "opus-old": { face: "Opus 4.1", never: ["Opus 5.5"] },
+    /* The transcript's `fable-5-1` is the catalogue's Fable 5.1 row: named, and its tiers stay open. */
+    fable: { face: "Fable 5.1", never: ["Opus", "Sonnet", "Fable 5.2"] },
+    fable52: { face: "Fable 5.2", never: ["Opus", "Sonnet", "Fable 5.1"] },
+  } as const;
+
+  browserTest("the face names the observed or requested model, or none, and never the engine default", async () => {
+    const out = path.resolve(".artifacts/runtime-model-face");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const browserPid = browserServer.process().pid;
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const [name, expected] of Object.entries(FILES)) for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=runtime-model-face&lang=${lang}&file=${name}`, { width: viewport.width, height: viewport.height },
+          scheme, lang, "reduce", viewport.touch);
+        const key = `${name}-${viewport.name}-${lang}-${scheme}`;
+        try {
+          const pill = page.locator("[data-runtime-pill]");
+          await pill.waitFor();
+          const reading = await pill.evaluate((element) => {
+            const range = document.createRange();
+            const text = element.querySelector("span.truncate") ?? element;
+            range.selectNodeContents(text);
+            const drawn = range.getBoundingClientRect();
+            const box = element.getBoundingClientRect();
+            return {
+              text: element.textContent?.trim() ?? "",
+              label: element.getAttribute("aria-label") ?? "",
+              whole: (text as HTMLElement).scrollWidth <= (text as HTMLElement).clientWidth + 1,
+              inView: box.left >= 0 && box.right <= innerWidth,
+              drawnWithinBox: drawn.right <= box.right + 0.5,
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            };
+          });
+          readings[key] = reading;
+          await page.screenshot({ path: path.join(out, `${side}-${key}.png`) });
+          await pill.click();
+          await page.locator("[data-runtime-popover], [data-runtime-sheet]").first().waitFor();
+          const opened = await page.evaluate(() => {
+            /* A line as text ranges see it: whole on one measured box, inside the window and inside every clipping ancestor. */
+            const measure = (element: Element | null) => {
+              if (!element) return null;
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const rects = [...range.getClientRects()];
+              const left = Math.min(...rects.map((r) => r.left)), right = Math.max(...rects.map((r) => r.right));
+              const top = Math.min(...rects.map((r) => r.top)), bottom = Math.max(...rects.map((r) => r.bottom));
+              let clipped = false;
+              for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                const style = getComputedStyle(ancestor);
+                if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+                const box = ancestor.getBoundingClientRect();
+                if (left < box.left - 0.5 || right > box.right + 0.5 || top < box.top - 0.5 || bottom > box.bottom + 0.5) clipped = true;
+              }
+              return {
+                text: element.textContent?.trim() ?? "", lines: new Set(rects.map((r) => Math.round(r.top))).size,
+                inView: left >= 0 && right <= innerWidth && top >= 0 && bottom <= innerHeight, clipped,
+              };
+            };
+            return {
+              disabledTiers: [...document.querySelectorAll('[data-runtime-row="tier"], [data-runtime-sheet] button[disabled]')].filter((row) => row.hasAttribute("disabled")).length,
+              hold: measure(document.querySelector("[data-runtime-hold]")),
+              summary: measure(document.querySelector("[data-mobile2-next-message]")),
+            };
+          });
+          readings[`${key}-open`] = opened;
+          await page.screenshot({ path: path.join(out, `${side}-${key}-open.png`) });
+          expect(pageErrors).toEqual([]);
+          expect(reading.overflowX).toBe(0);
+          expect(reading.inView).toBe(true);
+          expect(reading.whole).toBe(true);
+          if (side === "after") {
+            for (const never of expected.never) expect(reading.text + reading.label).not.toContain(never);
+            if (expected.face) expect(reading.text).toContain(expected.face);
+            else expect(reading.text).toContain(translate(lang, "composer.modelGroup"));
+            if (name === "unknown" || name === "claude-unreported" || name === "unlisted" || name === "opus-old") {
+              expect(opened.disabledTiers).toBeGreaterThan(0);
+              /* The reason is visible text on the first screen, whole and in view, and says which hold it is. */
+              expect(opened.hold).not.toBeNull();
+              expect(opened.hold!.inView).toBe(true);
+              expect(opened.hold!.clipped).toBe(false);
+              if (viewport.touch) {
+                /* The phone sheet's summary line is whole and in view too, and names no model the conversation lacks. */
+                expect(opened.summary).not.toBeNull();
+                expect(opened.summary!.inView).toBe(true);
+                expect(opened.summary!.clipped).toBe(false);
+                for (const never of expected.never) expect(opened.summary!.text).not.toContain(never);
+              }
+              expect(opened.hold!.text).toBe(name === "unknown" || name === "claude-unreported"
+                ? translate(lang, "runtimeConfig.modelUnknown")
+                : translate(lang, "runtimeConfig.modelUnlisted", { model: name === "unlisted" ? "gpt-5.5" : "Opus 4.1" }));
+            } else {
+              expect({ key, disabled: opened.disabledTiers }).toEqual({ key, disabled: 0 });
+              expect(opened.hold).toBeNull();
+            }
+          }
+        } finally { await context.close(); }
+      }
+      const file = "evidence/runtime-model-face/face.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const recorded = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown> : {};
+      fs.writeFileSync(file, JSON.stringify({ ...recorded, [side]: readings }, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      await browserServer.close();
+      console.error(`runtime model face: closed owned browser PID ${browserPid}`);
+      served.stop();
+    }
+  }, 600_000);
+});
+
+describe("the runtime pill offers only current models and keeps a saved one", () => {
+  /*
+   * The production pill over the production composer: its model list for a
+   * conversation saved on a retired Codex model, on Terra 6.1 at its top tier,
+   * on Luna at its top tier, on the retired Haiku 4.5 and on Haiku 5.5 through
+   * its alias, at the desktop width, one between it and the phone, and the
+   * phone width, both languages, both schemes. Every model and tier row is
+   * scrolled into view and measured from its text range. Frames go to
+   * `.artifacts/runtime-model-picker/`, which is not committed.
+   */
+  const VIEWPORTS = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "desktop-900", width: 900, height: 800, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+  const reasoningLabel = (lang: "en" | "uk", tier: string) => translate(lang, `reasoningTier.${tier}` as Parameters<typeof translate>[1]);
+  const CODEX = ["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna"];
+  const CLAUDE = ["Opus 5.5", "Fable 5.2", "Sonnet", "Claude Sonnet 5.5", "Haiku 5.5"];
+  const FILES = {
+    "legacy-sol": { models: [...CODEX, "GPT-5.6-Sol"], model: "GPT-5.6-Sol", tiers: 6, tier: "high" },
+    "terra-ultra": { models: CODEX, model: "GPT-6.1-Terra", tiers: 6, tier: "ultra" },
+    "luna-max": { models: CODEX, model: "GPT-6-Luna", tiers: 5, tier: "max" },
+    "haiku-legacy": { models: [...CLAUDE, "Haiku 4.5"], model: "Haiku 4.5", tiers: null, tier: "max" },
+    haiku: { models: CLAUDE, model: "Haiku 5.5", tiers: null, tier: "high" },
+  } as const;
+
+  browserTest("each model list names the current choices, keeps the saved one checked, and every row is whole", async () => {
+    const out = path.resolve(".artifacts/runtime-model-picker");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const browserPid = browserServer.process().pid;
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const [name, expected] of Object.entries(FILES)) for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=runtime-model-face&lang=${lang}&file=${name}`, { width: viewport.width, height: viewport.height },
+          scheme, lang, "reduce", viewport.touch);
+        const key = `${name}-${viewport.name}-${lang}-${scheme}`;
+        try {
+          const pill = page.locator("[data-runtime-pill]");
+          await pill.waitFor();
+          await pill.click();
+          await page.locator("[data-runtime-popover], [data-runtime-sheet]").first().waitFor();
+          /* Each row as text ranges see it once scrolled into view: one line, inside the window and every clipping ancestor. */
+          const rows = (selector: string) => page.evaluate((selector) => [...document.querySelectorAll(selector)].map((row) => {
+            row.scrollIntoView({ block: "nearest" });
+            const text = row.querySelector(".truncate") ?? row;
+            const range = document.createRange();
+            range.selectNodeContents(text);
+            const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+            const left = Math.min(...rects.map((r) => r.left)), right = Math.max(...rects.map((r) => r.right));
+            const top = Math.min(...rects.map((r) => r.top)), bottom = Math.max(...rects.map((r) => r.bottom));
+            let clipped = (text as HTMLElement).scrollWidth > (text as HTMLElement).clientWidth + 1;
+            for (let ancestor = text.parentElement; ancestor; ancestor = ancestor.parentElement) {
+              const style = getComputedStyle(ancestor);
+              if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+              const box = ancestor.getBoundingClientRect();
+              if (left < box.left - 0.5 || right > box.right + 0.5 || top < box.top - 0.5 || bottom > box.bottom + 0.5) clipped = true;
+            }
+            const box = row.getBoundingClientRect();
+            return {
+              text: text.textContent?.trim() ?? "", checked: row.getAttribute("aria-checked") === "true",
+              lines: new Set(rects.map((r) => Math.round(r.top))).size, clipped,
+              inView: left >= 0 && right <= innerWidth && top >= 0 && bottom <= innerHeight,
+              height: Math.round(box.height), width: Math.round(box.width),
+            };
+          }), selector);
+          const group = (label: string) => `[data-runtime-sheet] [role="radiogroup"][aria-label="${label}"] [data-runtime-sheet-row]`;
+          const tierSelector = viewport.touch ? group(translate(lang, "composer.reasoningGroup")) : '[data-runtime-row="tier"]';
+          const tiers = await rows(tierSelector);
+          await page.screenshot({ path: path.join(out, `${key}-tiers.png`) });
+          if (!viewport.touch) {
+            await page.locator('[data-runtime-row="submenu"][data-runtime-value="model"]').click();
+            await page.locator('[data-runtime-row="model"]').first().waitFor();
+          }
+          const models = await rows(viewport.touch ? group(translate(lang, "composer.modelGroup")) : '[data-runtime-row="model"]');
+          const face = (await pill.textContent())?.trim() ?? "";
+          readings[key] = { face, models, tiers };
+          await page.screenshot({ path: path.join(out, `${key}-models.png`) });
+          expect(pageErrors).toEqual([]);
+          expect({ key, models: models.map((row) => row.text) }).toEqual({ key, models: [...expected.models] });
+          expect({ key, checked: models.filter((row) => row.checked).map((row) => row.text) }).toEqual({ key, checked: [expected.model] });
+          if (expected.tiers !== null) expect({ key, tiers: tiers.length }).toEqual({ key, tiers: expected.tiers });
+          const checkedTier = tiers.filter((row) => row.checked);
+          expect(checkedTier).toHaveLength(1);
+          expect(checkedTier[0]!.text).toBe(viewport.touch ? expected.tier : reasoningLabel(lang, expected.tier));
+          for (const row of [...models, ...tiers]) {
+            expect({ key, row: row.text, lines: row.lines, clipped: row.clipped, inView: row.inView }).toEqual({ key, row: row.text, lines: 1, clipped: false, inView: true });
+            if (viewport.touch) expect(row.height).toBeGreaterThanOrEqual(44);
+          }
+        } finally { await context.close(); }
+      }
+      const file = "evidence/runtime-model-picker/picker.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(readings, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      await browserServer.close();
+      console.error(`runtime model picker: closed owned browser PID ${browserPid}`);
+      served.stop();
+    }
+  }, 900_000);
+});
+
+describe("the headers name the model the conversation runs on", () => {
+  /*
+   * The pane's own header chip, the board reader's header chip and a relay
+   * chat reader's header chip over the production components, at the desktop
+   * width and one between it and the phone, both languages, both schemes; the
+   * relay reader at the phone width too.
+   * `LLV_MODEL_FACE_SIDE=before` records what a checkout that names the engine
+   * draws; the default records `after` and gates it. Frames go to
+   * `.artifacts/runtime-model-face/`, which is not committed.
+   */
+  const side = process.env.LLV_MODEL_FACE_SIDE === "before" ? "before" : "after";
+  const CASES = {
+    luna: { shown: "gpt-6-luna", never: ["Sol"] },
+    unknown: { shown: "Codex", never: ["Sol", "gpt-"] },
+    unlisted: { shown: "gpt-5.5", never: ["Sol"] },
+    sonnet: { shown: "Sonnet 5.5", never: ["Opus"] },
+    fable: { shown: "Fable 5.1", never: ["Opus", "Sonnet", "Fable 5.2"] },
+    fable52: { shown: "Fable 5.2", never: ["Opus", "Sonnet", "Fable 5.1"] },
+  } as const;
+  const VIEWPORTS = [{ name: "desktop-1440", width: 1440, height: 900 }, { name: "desktop-900", width: 900, height: 800 }] as const;
+  const PHONE = { name: "phone-390", width: 390, height: 844 } as const;
+
+  browserTest("the pane header and the reader header show the observed or requested model, or the engine's name, never the engine default", async () => {
+    const out = path.resolve(".artifacts/runtime-model-face");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const browserPid = browserServer.process().pid;
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const [name, expected] of Object.entries(CASES)) for (const part of ["branch", "reader", "relay"] as const) for (const viewport of part === "relay" ? [...VIEWPORTS, PHONE] : VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=runtime-model-face-headers&lang=${lang}&file=${name}&part=${part}`, { width: viewport.width, height: viewport.height }, scheme, lang, "reduce", viewport.width < 600);
+        const key = `${name}-${part}-${viewport.name}-${lang}-${scheme}`;
+        try {
+          await page.locator("[data-evidence-case]").waitFor({ timeout: 15_000 }).catch((error: Error) => { throw new Error(`${error.message}; page errors: ${pageErrors.join(" | ")}`); });
+          /* The relay chat opens from its row into the read-only reader, as an operator opens it. */
+          if (part === "relay") {
+            await page.locator("[data-relay-chat] button").first().click();
+            await page.locator("[data-relay-chat-reader]").waitFor({ timeout: 15_000 });
+          }
+          await page.waitForTimeout(600);
+          const reading = await page.evaluate((which) => {
+            /* The identity chips the header draws: the model chip, and the engine's name where it names no model. */
+            const chips = [...document.querySelectorAll<HTMLElement>(which === "reader"
+              ? ".ch-engine, .ch-model"
+              : which === "relay" ? "[data-relay-chat-reader] .ch-engine, [data-relay-chat-reader] .ch-model"
+              : '[data-testid="mobile-conv-meta"] span.rounded-full.font-mono, [data-testid="mobile-conv-meta"] span.rounded-full.font-bold')].filter((element) => element.getClientRects().length > 0);
+            const range = document.createRange();
+            const measured = chips.map((chip) => {
+              range.selectNodeContents(chip);
+              const drawn = range.getBoundingClientRect();
+              const box = chip.getBoundingClientRect();
+              return {
+                text: (chip.textContent ?? "").trim(),
+                whole: chip.scrollWidth <= chip.clientWidth + 1,
+                drawnInBox: drawn.left >= box.left - 0.5 && drawn.right <= box.right + 0.5,
+                inView: drawn.left >= 0 && drawn.right <= innerWidth && drawn.top >= 0 && drawn.bottom <= innerHeight,
+              };
+            });
+            return {
+              text: measured.map((chip) => chip.text).join(" | "), chips: measured,
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            };
+          }, part);
+          readings[key] = reading;
+          await page.screenshot({ path: path.join(out, `${side}-headers-${key}.png`) });
+          expect(pageErrors).toEqual([]);
+          if (side === "after") {
+            expect(reading.text).toContain(expected.shown);
+            for (const never of expected.never) expect(reading.text).not.toContain(never);
+            expect(reading.chips.length).toBeGreaterThan(0);
+            expect({ key, cut: reading.chips.filter((chip) => !(chip.whole && chip.drawnInBox && chip.inView)) }).toEqual({ key, cut: [] });
+            expect(reading.overflowX).toBe(0);
+          }
+        } finally { await context.close(); }
+      }
+      const file = "evidence/runtime-model-face/headers-desktop.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const recorded = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown> : {};
+      fs.writeFileSync(file, JSON.stringify({ ...recorded, [side]: readings }, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      await browserServer.close();
+      console.error(`runtime model face headers: closed owned browser PID ${browserPid}`);
+      served.stop();
+    }
+  }, 600_000);
+});
+
 describe("retained message notice over the composer", () => {
   /*
    * The operator's report of 2026-10-07: a boxed «Автоматичну перевірку
@@ -2933,8 +4038,13 @@ describe("the transcript keeps 60% of its column beside the composer's own row",
           const open = await record("list-open");
           if (!open.list?.aboveField) fail("list-open", "the list is not open above the field");
           if (!open.list?.retryAll?.includes("2")) fail("list-open", `«Retry failed» reads ${JSON.stringify(open.list?.retryAll)}`);
-          /* The chip names the state and the count, so the header does not say it again. */
-          if (open.list && !/^(Повторити невдалі|Retry failed)( \(\d+\))?$/.test(open.list.header)) fail("list-open", `the list's header reads ${JSON.stringify(open.list.header)}`);
+          /* The chip names the state and the count, so the desktop's header does
+             not say it again; the phone hides the chip's line while the list is
+             open, so there the header leads with the chip's own words. */
+          const headerPattern = surface.phone
+            ? /^(Не доставлено|Not delivered): \d+ (Повторити невдалі|Retry failed)( \(\d+\))?$/
+            : /^(Повторити невдалі|Retry failed)( \(\d+\))?$/;
+          if (open.list && !headerPattern.test(open.list.header)) fail("list-open", `the list's header reads ${JSON.stringify(open.list.header)}`);
           if (open.list?.firstFailed && !(open.list.firstFailed.whole && open.list.firstFailed.retryWhole)) fail("list-open", "the first failed row or its Retry is cut off");
           if (open.list && !open.list.firstFailed) fail("list-open", "no failed row with its Retry is in the list");
           if (open.list?.sliced.length) fail("list-open", `cut through mid-control: ${open.list.sliced.join(", ")}`);
@@ -4594,7 +5704,7 @@ describe("a control's hint never outlives its click", () => {
     const send = window.fetch;
     window.fetch = async (input, init) => {
       const url = String(input);
-      if (url === "/api/tmux" || url.startsWith("/api/conversation-host")) {
+      if (url === "/api/conversation-host" || url.startsWith("/api/conversation-host")) {
         await new Promise((resolve) => window.heldControls.push(resolve));
         return Response.json({ ok: true });
       }
@@ -5711,103 +6821,305 @@ describe("streamed composer attachments", () => {
 
 
 describe("owner confirmation of one Telegram file send", () => {
-  browserTest("the file, destination, warnings and decisions fit both languages and themes", async () => {
-    const output = path.resolve(".artifacts/telegram-file-confirmation");
+  /* Variant 2 of docs/design/telegram-file-confirmation/prototype: the strongest warning is the heading,
+     «Don't send» is the primary answer and the send carries the warning tone. Each case frames one width
+     and language in both themes and records its readings once all of its frames pass; geometry.json is
+     written after the describe, and only when every case's frames are recorded. */
+  const output = path.resolve(".artifacts/telegram-file-confirmation");
+  const recorded = new Map<string, Record<string, unknown>>();
+  const STATES = ["pending", "details", "status", "sending", "sent", "rejected", "expired", "uncertain", "failed", "unavailable", "owner"] as const;
+  type Frame = { width: 390 | 600 | 820 | 1000 | 1440; lang: "en" | "uk"; theme: "light" | "dark"; state: (typeof STATES)[number]; data?: "media" | "long" };
+  const LONG_FILE = `quarterly-${"revenue-".repeat(5)}export-final-v2.json`;
+  const LONG_CHAT = "Fixture reports for the regional and international operations office";
+  /* Names, captions and code tokens a Ukrainian frame may carry in Latin letters; any other Latin word is an English fallback. */
+  const LATIN_ALLOWED = /^(?:Telegram|Delegatus|HTML|SHA-256|JWT|API|handoff|codex)$/;
+  const POSTED = { id: "fixture-confirmation", digest: "a".repeat(64) };
+  const frameName = ({ width, lang, theme, state, data }: Frame) => `${width}-${lang}-${theme}-${state}${data ? `-${data}` : ""}`;
+  async function frames(list: Frame[]) {
     fs.mkdirSync(output, { recursive: true });
     const served = await serveEvidenceFixture(output, FIXTURE);
-    let browser: Browser | null = null;
-    const evidence: Array<Record<string, unknown>> = [];
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    const readings: Array<Record<string, unknown>> = [];
     try {
-      browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
-      for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 900 }]) {
-        for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
-          for (const state of ["pending", "sent", "rejected", "expired", "uncertain", "failed", "unavailable", "owner"] as const) {
-            const name = `${viewport.width}-${lang}-${theme}-${state}`;
-            const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=file-confirmation&state=${state}&lang=${lang}&id=fixture-confirmation`, viewport, theme, lang);
-            try {
-              const words = fileConfirmationText[lang];
-              const status = page.getByRole("status");
-              await page.waitForFunction(() => !/Loading|Завантаження/.test(document.querySelector('[role="status"]')?.textContent ?? "Loading"));
-              // Measure the opening screen before any action or scroll can hide a misplaced state.
-              expect(await status.textContent()).toBe(words[state]);
-              const initialStatus = await status.boundingBox();
-              expect(initialStatus).not.toBeNull();
-              expect(initialStatus!.x).toBeGreaterThanOrEqual(0);
-              expect(initialStatus!.y).toBeGreaterThanOrEqual(0);
-              expect(initialStatus!.x + initialStatus!.width).toBeLessThanOrEqual(viewport.width);
-              expect(initialStatus!.y + initialStatus!.height).toBeLessThanOrEqual(viewport.height);
-              expect(await page.locator("main").evaluate(node => node.scrollTop)).toBe(0);
-              if (state !== "pending") {
-                expect(await page.getByRole("heading", { name: words.title, exact: true }).count()).toBe(0);
-                expect(await page.getByText(words.intro, { exact: true }).count()).toBe(0);
+      for (const frame of list) {
+        const { width, lang, theme, state, data } = frame;
+        const name = frameName(frame);
+        const words = fileConfirmationText[lang];
+        const phone = width === 390;
+        const viewport = { width, height: phone ? 844 : 900 };
+        const chat = data === "long" ? LONG_CHAT : "Fixture reports";
+        const opened = ["pending", "details", "status", "sending", "sent", "rejected"].includes(state) ? "pending" : state;
+        const query = `case=file-confirmation&state=${opened}&lang=${lang}&id=fixture-confirmation${data ? `&data=${data}` : ""}${state === "sending" ? "&post=hold" : ""}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`, viewport, theme, lang, "reduce", phone);
+        try {
+          await page.locator("[data-file-confirmation-heading]").waitFor();
+          await page.evaluate(() => document.fonts.ready);
+          /* The decision's own words, from the stored view: the strongest reason leads. Ukrainian binds one-letter words to the next. */
+          const pendingHeading = typesetFileConfirmation(data === "media"
+            ? (lang === "uk" ? "Обидва зображення поза теками, з яких дозволено надсилати (handoff)" : "Both images are outside the folders files may be sent from (handoff)")
+            : (lang === "uk" ? "Схоже, у цьому файлі приватний ключ" : "This file looks like it holds a private key"), lang);
+          const heading = { pending: pendingHeading, details: pendingHeading, status: pendingHeading, sending: pendingHeading, sent: typesetFileConfirmation(words.sentTitle(chat), lang), rejected: typesetFileConfirmation(words.rejectedTitle(chat), lang), expired: words.expiredTitle, uncertain: words.uncertainTitle, failed: words.failedTitle, unavailable: words.unavailableTitle, owner: words.ownerTitle }[state];
+          const asking = ["pending", "details", "status", "sending"].includes(state);
+          /* Before any press or scroll: the heading, and while the decision is open both answers and the real file, are whole on the first screen. */
+          const firstScreen = await page.evaluate((media) => {
+            const whole = (box: DOMRect | undefined) => box ? box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth : null;
+            /* A name in the intro, measured from its own text range. */
+            const inIntro = (token: string) => {
+              const intro = document.querySelector("[data-file-confirmation-intro]");
+              if (!intro) return undefined;
+              const walker = document.createTreeWalker(intro, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const at = walker.currentNode.textContent?.indexOf(token) ?? -1;
+                if (at < 0) continue;
+                const range = document.createRange();
+                range.setStart(walker.currentNode, at);
+                range.setEnd(walker.currentNode, at + token.length);
+                return range.getBoundingClientRect();
               }
-              if (state === "pending") {
-                expect(await page.getByText("b".repeat(64), { exact: false }).count()).toBe(1);
-                expect(await page.getByText("document_secret", { exact: false }).count()).toBe(1);
-                expect(await page.getByText(`${words.requestedPath}: /sandbox/handoff/weekly-report.json`, { exact: true }).count()).toBe(1);
-                expect(await page.getByText(`${words.resolvedPath}: /sandbox/.codex/auth.json`, { exact: true }).count()).toBe(1);
-                expect(await page.getByText(words.replyTo, { exact: true }).count()).toBe(1);
-                expect(await page.getByText("42", { exact: true }).count()).toBe(1);
-                expect(await page.getByText(words.format, { exact: true }).count()).toBe(1);
-                expect(await page.getByText(words.silent, { exact: true }).count()).toBe(1);
-                expect(await page.getByText("HTML", { exact: true }).count()).toBe(1);
-                expect(await page.getByText(words.yes, { exact: true }).count()).toBe(1);
-                await page.screenshot({ path: path.join(output, `${name}-top.png`) });
-                const resolved = page.locator("[data-resolved-path]");
-                await resolved.scrollIntoViewIfNeeded();
-                await page.screenshot({ path: path.join(output, `${name}-paths.png`) });
-                const warnings = page.getByRole("region", { name: words.reasons });
-                await warnings.scrollIntoViewIfNeeded();
-                const warningText = await warnings.textContent();
-                expect(warningText).toContain("/sandbox/.codex/auth.json");
-                expect(warningText).toContain(".codex");
-                await page.screenshot({ path: path.join(output, `${name}-warnings.png`) });
-                const approve = page.getByRole("button", { name: words.approve, exact: true });
-                await approve.scrollIntoViewIfNeeded();
-                expect(await approve.isEnabled()).toBe(true);
-                await page.screenshot({ path: path.join(output, `${name}-decision.png`) });
-                await approve.click();
-                await page.getByText(words.sent, { exact: true }).waitFor();
-                await page.waitForFunction(() => {
-                  const status = document.querySelector('[role="status"]')!.getBoundingClientRect();
-                  return status.top >= 0 && status.bottom <= innerHeight;
-                });
-                await page.screenshot({ path: path.join(output, `${name}-sent.png`) });
-                expect(await page.evaluate(() => (window as unknown as { fileConfirmationSends(): number }).fileConfirmationSends())).toBe(1);
-                expect(await page.getByRole("button", { name: words.approve, exact: true }).count()).toBe(0);
-              } else {
-                await page.getByText(words[state], { exact: true }).waitFor();
-                expect(await page.getByRole("button", { name: words.approve, exact: true }).count()).toBe(0);
-                await page.screenshot({ path: path.join(output, `${name}.png`) });
-              }
-              const reading = await page.evaluate(() => {
-                const main = document.querySelector("main")!;
-                const bounds = main.getBoundingClientRect();
-                const walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT);
-                const clippedText: string[] = [];
-                while (walker.nextNode()) {
-                  const node = walker.currentNode;
-                  if (!node.textContent?.trim()) continue;
-                  const range = document.createRange(); range.selectNodeContents(node);
-                  if ([...range.getClientRects()].some(rect => rect.left < bounds.left - 1 || rect.right > bounds.right + 1)) clippedText.push(node.textContent);
-                }
-                return { overflow: main.scrollWidth - main.clientWidth, clippedText, text: main.textContent, background: getComputedStyle(main).backgroundColor };
-              });
-              expect(reading.overflow).toBeLessThanOrEqual(1);
-              expect(reading.clippedText).toEqual([]);
-              expect(reading.background).not.toBe("rgba(0, 0, 0, 0)");
-              expect(pageErrors).toEqual([]);
-              evidence.push({ frame: name, initialStatus, initialStatusText: words[state], ...reading });
-            } finally { await context.close(); }
+              return undefined;
+            };
+            const real = inIntro(media ? "board-before.png" : "auth.json");
+            return {
+              secondImage: media ? whole(inIntro("board-after.png")) : null,
+              scrollTop: document.querySelector("main")!.scrollTop,
+              heading: whole(document.querySelector("[data-file-confirmation-heading]")?.getBoundingClientRect()),
+              headingText: document.querySelector("[data-file-confirmation-heading]")?.textContent ?? "",
+              refuse: whole(document.querySelector("[data-file-confirmation-refuse]")?.getBoundingClientRect()),
+              send: whole(document.querySelector("[data-file-confirmation-send]")?.getBoundingClientRect()),
+              realFile: whole(real),
+            };
+          }, data === "media");
+          if (firstScreen.scrollTop !== 0) failures.push(`${name}: opened scrolled`);
+          if (!firstScreen.heading) failures.push(`${name}: the heading is not whole on the first screen`);
+          if (opened === "pending") {
+            if (firstScreen.headingText !== pendingHeading) failures.push(`${name}: heading «${firstScreen.headingText}»`);
+            if (!firstScreen.refuse || !firstScreen.send) failures.push(`${name}: an answer is off the first screen (${JSON.stringify(firstScreen)})`);
+            if (!firstScreen.realFile) failures.push(`${name}: ${data === "media" ? "board-before.png" : "the real file"} is not whole on the first screen`);
+            if (data === "media" && !firstScreen.secondImage) failures.push(`${name}: board-after.png is not whole on the first screen`);
+            /* Both images share one reason: the heading says it for both, and no list repeats it. */
+            if (data === "media" && await page.locator("[data-file-confirmation-reasons]").count() !== 0) failures.push(`${name}: a reason the heading already says is listed again`);
+            if (await page.getByRole("button", { name: words.refuse, exact: true }).count() !== 1 || await page.getByRole("button", { name: words.approve, exact: true }).count() !== 1) failures.push(`${name}: the two answers are not «${words.refuse}» and «${words.approve}»`);
+          } else if (firstScreen.refuse !== null || firstScreen.send !== null) failures.push(`${name}: a closed request still offers a decision`);
+          if (state === "details") {
+            await page.click("[data-file-confirmation-details] button");
+            await page.locator("[data-mobile2-menu-body]").waitFor();
+            /* The whole fold in one frame: the window grows to the page instead of scrolling it. */
+            const height = await page.evaluate(() => document.querySelector("main")!.scrollHeight);
+            await page.setViewportSize({ width, height: Math.max(viewport.height, height) });
+            const details = await page.locator("[data-mobile2-menu-body]").innerText();
+            for (const value of data === "media" ? ["/sandbox/shots/board-after.png", "1".repeat(64), "/sandbox/handoff"] : ["/sandbox/.codex/auth.json", "b".repeat(64), "a".repeat(64), "-1000000000101", "/sandbox/handoff", "document_secret (private_key"]) {
+              if (!details.includes(value)) failures.push(`${name}: Details omit ${value}`);
+            }
+            const codes = await page.locator("[data-mobile2-menu-body] dl > div", { has: page.locator("dt", { hasText: words.codes }) }).locator("dd").innerText();
+            if (data === "media" && codes !== "document_outside_roots") failures.push(`${name}: detector codes «${codes}»`);
+            /* Each image's group and the fields they share open on a hairline, so no field reads as the image above. */
+            if (data === "media") {
+              const groups = await page.evaluate(() => [...document.querySelectorAll("[data-mobile2-menu-body] [data-file-confirmation-group]")].map((group) => ({
+                head: (group.querySelector("h2") ?? group.querySelector("dt"))?.textContent ?? "",
+                rule: parseFloat(getComputedStyle(group).borderTopWidth),
+              })));
+              const heads = groups.map((group) => group.head);
+              if (heads.join("|") !== `board-before.png|board-after.png|${words.chat}`) failures.push(`${name}: Details groups «${heads.join(" | ")}»`);
+              if (groups.slice(1).some((group) => group.rule < 1)) failures.push(`${name}: a Details group opens without a hairline: ${JSON.stringify(groups)}`);
+            }
           }
-        }
+          if (state === "status") {
+            await page.click("[data-file-confirmation-status]");
+            await page.locator("[data-file-confirmation-popover]").waitFor();
+            const popover = await page.locator("[data-file-confirmation-popover]").innerText();
+            const until = await page.evaluate(() => new Intl.DateTimeFormat(document.documentElement.lang === "uk" || localStorage.getItem("llv_lang") === "uk" ? "uk-UA" : "en-GB", { hour: "2-digit", minute: "2-digit" }).format(new Date("2026-10-22T12:10:00.000Z")));
+            if (!popover.includes(words.status.pending) || !popover.includes(words.minutesLeft(10, until))) failures.push(`${name}: popover «${popover}»`);
+          }
+          if (state === "sending") {
+            await page.click("[data-file-confirmation-send]");
+            await page.locator("[data-file-confirmation-send][aria-busy=true]").waitFor();
+            if (await page.locator("[data-file-confirmation-send]").innerText() !== words.sending) failures.push(`${name}: the pressed answer does not say ${words.sending}`);
+            if (!await page.locator("[data-file-confirmation-refuse]").isDisabled() || !await page.locator("[data-file-confirmation-send]").isDisabled()) failures.push(`${name}: an answer stays pressable while the send is in flight`);
+          }
+          if (state === "sent" || state === "rejected") {
+            await page.click(state === "sent" ? "[data-file-confirmation-send]" : "[data-file-confirmation-refuse]");
+            await page.getByRole("status").filter({ hasText: heading }).waitFor();
+            const posts = await page.evaluate(() => (window as unknown as { fileConfirmationPosts(): unknown[] }).fileConfirmationPosts());
+            expect(posts).toEqual([{ ...POSTED, approve: state === "sent" }]);
+            expect(await page.evaluate(() => (window as unknown as { fileConfirmationSends(): number }).fileConfirmationSends())).toBe(state === "sent" ? 1 : 0);
+            expect(await page.locator("[data-file-confirmation-send], [data-file-confirmation-refuse]").count()).toBe(0);
+            /* The time of the press (the fixture's clock), in the browser's own zone. */
+            const at = await page.evaluate(() => new Intl.DateTimeFormat(localStorage.getItem("llv_lang") === "uk" ? "uk-UA" : "en-GB", { hour: "2-digit", minute: "2-digit" }).format(new Date(Date.now())));
+            const body = await page.locator("[data-file-confirmation-card]").innerText();
+            const expected = state === "sent"
+              ? words.sentBody(at, data === "media" ? (lang === "uk" ? "два зображення" : "two images") : words.linkSubject(".codex/auth.json", data === "long" ? LONG_FILE : "weekly-report.json"), lang === "uk" ? (data === "media" ? "два застереження" : "три застереження") : (data === "media" ? "two warnings" : "three warnings"))
+              : words.rejectedBody(at, data === "media" ? (lang === "uk" ? "два зображення" : "two images") : data === "long" ? LONG_FILE : "weekly-report.json");
+            if (!body.replace(/\s+/g, " ").includes(expected)) failures.push(`${name}: body lacks «${expected}»: ${body}`);
+            if (!body.includes(words.usedUp)) failures.push(`${name}: the used-up line is missing`);
+          }
+          if (!asking) {
+            const shown = await page.locator("[data-file-confirmation-heading]").innerText();
+            if (shown.trim() !== heading) failures.push(`${name}: heading «${shown}», expected «${heading}»`);
+          }
+          if (state === "owner") {
+            const href = await page.getByRole("link", { name: words.signIn, exact: true }).getAttribute("href");
+            if (href !== `/sign-in?next=${encodeURIComponent(`/?${query}`)}`) failures.push(`${name}: sign-in link ${href}`);
+          }
+          await page.waitForTimeout(150);
+          const reading = await page.evaluate(({ coarse, uk, strip }) => {
+            const within = (rect: DOMRect, box: DOMRect, slack = 1) => rect.left >= box.left - slack && rect.right <= box.right + slack && rect.top >= box.top - slack && rect.bottom <= box.bottom + slack;
+            const screen = new DOMRect(0, 0, innerWidth, innerHeight);
+            const main = document.querySelector("main")!;
+            const card = document.querySelector("[data-file-confirmation-card]")!;
+            const popover = document.querySelector("[data-file-confirmation-popover]");
+            const offscreen: string[] = [], clipped: string[] = [], covered: string[] = [], cut: string[] = [], small: string[] = [], latin: string[] = [], orphans: string[] = [], danglers: string[] = [];
+            const clippers: DOMRect[] = [];
+            for (let node = card.parentElement; node && node !== document.body; node = node.parentElement) {
+              const style = getComputedStyle(node);
+              if (style.overflowX !== "visible" || style.overflowY !== "visible") clippers.push(node.getBoundingClientRect());
+            }
+            const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              const text = node.textContent?.trim();
+              if (!text) continue;
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              for (const rect of range.getClientRects()) {
+                if (rect.width === 0 || rect.height === 0) continue;
+                if (!within(rect, screen)) offscreen.push(text);
+                else if (clippers.some((box) => !within(rect, box))) clipped.push(text);
+                /* The popover stands beside the words, never on them. */
+                if (popover && !popover.contains(node)) {
+                  for (const x of [rect.left + 1, (rect.left + rect.right) / 2, rect.right - 1]) {
+                    const hit = document.elementFromPoint(x, (rect.top + rect.bottom) / 2);
+                    if (hit && popover.contains(hit)) covered.push(text);
+                  }
+                }
+              }
+              /* Code tokens (paths, hashes, detector codes) stay as they are in every language. */
+              if (!node.parentElement?.closest("[data-file-confirmation-code]")) {
+                let words = text;
+                for (const value of strip) words = words.split(value).join(" ");
+                latin.push(...words.split(/[\s·,;:()?!«»"/…]+/).filter((word) => /^[A-Za-z][A-Za-z-]*$/.test(word)));
+              }
+            }
+            for (const node of card.querySelectorAll<HTMLElement>(".truncate")) if (node.scrollWidth > node.clientWidth + 1) cut.push(node.textContent?.trim() ?? "");
+            /* Every control is reachable: 44 px under a finger, 24 under a pointer. */
+            for (const control of card.querySelectorAll<HTMLElement>("button, a")) {
+              const box = control.getBoundingClientRect();
+              if (box.width === 0 || box.height === 0) continue;
+              if (Math.min(box.width, box.height) < (coarse ? 44 : 24)) small.push(`${(control.textContent || control.getAttribute("aria-label") || "").trim()} ${Math.round(box.width)}×${Math.round(box.height)}`);
+            }
+            /* A paragraph never ends on a lone short word, and a short name never breaks. */
+            for (const block of card.querySelectorAll<HTMLElement>("h1, p, li")) {
+              const words: Array<{ text: string; top: number }> = [];
+              const inner = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+              while (inner.nextNode()) {
+                const node = inner.currentNode;
+                for (const match of (node.textContent ?? "").matchAll(/\S+/g)) {
+                  const range = document.createRange();
+                  range.setStart(node, match.index!);
+                  range.setEnd(node, match.index! + match[0].length);
+                  const rect = range.getClientRects()[0];
+                  if (rect) words.push({ text: match[0], top: Math.round(rect.top) });
+                }
+              }
+              const lines = [...new Set(words.map((word) => word.top))];
+              if (lines.length < 2) continue;
+              /* Ukrainian typesetting: no line ends on a one-letter preposition or conjunction. */
+              if (uk) for (const top of lines.slice(0, -1)) {
+                const end = words.filter((word) => word.top === top).at(-1)!.text;
+                if (/^[звуіаоЗВУІАО]$/.test(end)) danglers.push(`«${end}» ends a line (${block.textContent?.trim().slice(0, 40)}…)`);
+              }
+              const last = words.filter((word) => word.top === lines.at(-1));
+              const tail = last.map((word) => word.text).join(" ");
+              if (last.length === 1 && tail.length < 10 || last.length === 2 && tail.length < 11) orphans.push(`${tail} (${block.textContent?.trim().slice(0, 40)}…)`);
+            }
+            for (const name of card.querySelectorAll(".whitespace-nowrap[data-file-confirmation-name]")) if (name.getClientRects().length > 1) orphans.push(`${name.textContent} broken across lines`);
+            /* Both answers read against their own fill: 4.5:1 or more. */
+            const channel = (value: number) => { const c = value / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+            const luminance = (css: string) => { const [r, g, b] = (css.match(/[\d.]+/g) ?? []).map(Number); return 0.2126 * channel(r!) + 0.7152 * channel(g!) + 0.0722 * channel(b!); };
+            const fill = (element: Element) => {
+              for (let node: Element | null = element; node; node = node.parentElement) {
+                const value = getComputedStyle(node).backgroundColor;
+                if (!/^rgba\(.*,\s*0\)$/.test(value) && value !== "transparent") return value;
+              }
+              return "rgb(255, 255, 255)";
+            };
+            const contrast: Record<string, number> = {};
+            for (const control of card.querySelectorAll<HTMLButtonElement>("[data-file-confirmation-send]:enabled, [data-file-confirmation-refuse]:enabled, a")) {
+              const [a, b] = [luminance(getComputedStyle(control).color), luminance(fill(control))].sort((x, y) => y - x);
+              contrast[(control.textContent ?? "").trim()] = Math.round(((a! + 0.05) / (b! + 0.05)) * 100) / 100;
+            }
+            const cardBox = card.getBoundingClientRect();
+            const popoverBox = popover?.getBoundingClientRect();
+            const dot = document.querySelector("[data-file-confirmation-status] > span")?.getBoundingClientRect();
+            const chevron = document.querySelector("[data-file-confirmation-details] button svg")?.getBoundingClientRect();
+            return {
+              offscreen, clipped, covered, cut, small, latin, orphans, danglers, contrast,
+              popover: popoverBox ? { inCard: popoverBox.top >= cardBox.top + 4 && popoverBox.bottom <= cardBox.bottom - 4 && popoverBox.left >= cardBox.left + 4 && popoverBox.right <= cardBox.right - 4, text: popover!.textContent } : null,
+              dotOffChevron: dot && chevron ? Math.round(((dot.left + dot.right) / 2 - (chevron.left + chevron.right) / 2) * 10) / 10 : null,
+              detailsRow: document.querySelector("[data-file-confirmation-details] button")?.textContent?.trim() ?? null,
+              detailsOpen: Boolean(document.querySelector("[data-mobile2-menu-body]")),
+              iso: (main.innerText.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/g) ?? []),
+              overflow: main.scrollWidth - main.clientWidth,
+              cardWidth: Math.round(cardBox.width),
+              background: getComputedStyle(main).backgroundColor,
+            };
+          }, { coarse: phone, uk: lang === "uk", strip: [chat, "Fixture reports", data === "long" ? LONG_FILE : "weekly-report.json", "Requested file", "Before", "After"] });
+          if (reading.offscreen.length) failures.push(`${name}: outside the window: ${reading.offscreen.join(" | ")}`);
+          if (reading.clipped.length) failures.push(`${name}: clipped: ${reading.clipped.join(" | ")}`);
+          if (reading.covered.length) failures.push(`${name}: the popover covers: ${reading.covered.join(" | ")}`);
+          if (reading.cut.length) failures.push(`${name}: ellipsis: ${reading.cut.join(" | ")}`);
+          if (reading.small.length) failures.push(`${name}: small controls: ${reading.small.join(" | ")}`);
+          if (reading.orphans.length) failures.push(`${name}: ${reading.orphans.join(" | ")}`);
+          if (reading.danglers.length) failures.push(`${name}: ${reading.danglers.join(" | ")}`);
+          if (reading.overflow > 1) failures.push(`${name}: sideways overflow ${reading.overflow}`);
+          if (reading.iso.length) failures.push(`${name}: ISO timestamps on the page: ${reading.iso.join(", ")}`);
+          for (const [label, ratio] of Object.entries(reading.contrast)) if (ratio < 4.5) failures.push(`${name}: «${label}» reads at ${ratio}:1`);
+          const latin = lang === "uk" ? reading.latin.filter((word) => !LATIN_ALLOWED.test(word)) : [];
+          if (latin.length) failures.push(`${name}: Latin words in a Ukrainian frame: ${[...new Set(latin)].join(", ")}`);
+          if (state === "status" && !reading.popover) failures.push(`${name}: no popover`);
+          if (reading.popover && !reading.popover.inCard) failures.push(`${name}: the popover crosses or touches the card's edge`);
+          if (state !== "owner") {
+            if (reading.dotOffChevron === null || Math.abs(reading.dotOffChevron) > 1) failures.push(`${name}: the status dot's centre is ${reading.dotOffChevron} px off the Details chevron's`);
+            if (!reading.detailsRow || /\d/.test(reading.detailsRow)) failures.push(`${name}: the Details row reads «${reading.detailsRow}»`);
+          }
+          if ((state === "details") !== reading.detailsOpen) failures.push(`${name}: Details open: ${reading.detailsOpen}`);
+          if (reading.background === "rgba(0, 0, 0, 0)") failures.push(`${name}: transparent page`);
+          if (pageErrors.length) failures.push(`${name}: page errors: ${pageErrors.join(" | ")}`);
+          await page.screenshot({ path: path.join(output, `${name}.png`) });
+          if (state === "sending") {
+            await page.evaluate(() => (window as unknown as { releaseFileConfirmation(): void }).releaseFileConfirmation());
+            await page.getByRole("status").filter({ hasText: words.sentTitle(chat) }).waitFor();
+            expect(await page.evaluate(() => (window as unknown as { fileConfirmationPosts(): unknown[] }).fileConfirmationPosts())).toEqual([{ ...POSTED, approve: true }]);
+          }
+          readings.push({ frame: name, firstScreen, ...reading, latin: undefined });
+        } finally { await context.close(); }
       }
-    } finally { await browser?.close(); served.stop(); }
+    } finally { await browser.close(); served.stop(); }
+    expect(failures).toEqual([]);
+    for (const reading of readings) recorded.set(reading.frame as string, reading);
+  }
+  const themed = (width: Frame["width"], lang: Frame["lang"]) => (["light", "dark"] as const).flatMap((theme) => STATES.map((state): Frame => ({ width, lang, theme, state })));
+  const CASES: Array<[title: string, list: Frame[]]> = [
+    ...([390, 1440] as const).flatMap((width) => (["en", "uk"] as const).map((lang): [string, Frame[]] => [`${width} px, ${lang}: every state in light and dark`, themed(width, lang)])),
+    ["820 px pending in both languages; long names at 390 px", [
+      { width: 820, lang: "en", theme: "light", state: "pending" },
+      { width: 820, lang: "uk", theme: "light", state: "pending" },
+      { width: 390, lang: "uk", theme: "light", state: "pending", data: "long" },
+    ]],
+    /* Two images that share one reason: the intro names both, the heading says the reason for both, and Details
+       list its code once, under a hairline apart from each image. One width between each pair the prototype draws. */
+    ...([390, 600, 820, 1000, 1440] as const).map((width): [string, Frame[]] => [`two images at ${width} px: pending and Details in both languages and themes`, (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).flatMap((theme) => (["pending", "details"] as const).map((state): Frame => ({ width, lang, theme, state, data: "media" }))))]),
+  ];
+  for (const [title, list] of CASES) browserTest(title, () => frames(list), 300_000);
+  /* The record covers every frame or is left as committed: a filtered or failed run writes nothing. */
+  afterAll(async () => {
+    const expected = CASES.flatMap(([, list]) => list.map(frameName));
+    if (!expected.every((name) => recorded.has(name))) return;
     fs.mkdirSync("evidence/telegram-file-confirmation", { recursive: true });
     const { createHash } = await import("node:crypto");
     const sources = ["src/components/telegram/TelegramFileConfirmation.tsx", "src/lib/telegram/bot/fileConfirmationContract.ts", "src/components/conversation/conversationWindowEvidence.fixture.tsx", "src/components/conversation/conversationWindow.browser.test.tsx"].map(file => ({ path: file, sha256: createHash("sha256").update(fs.readFileSync(file)).digest("hex") }));
-    fs.writeFileSync("evidence/telegram-file-confirmation/geometry.json", JSON.stringify({ sources, frames: evidence }, null, 2) + "\n");
-  }, 120_000);
+    fs.writeFileSync("evidence/telegram-file-confirmation/geometry.json", JSON.stringify({ sources, frames: expected.map((name) => recorded.get(name)) }, null, 2) + "\n");
+  });
 });
 
 /* docs/design/telegram-file-confirmation/prototype: three numbered variants of
@@ -6057,4 +7369,224 @@ describe("telegram file confirmation prototype (docs/design/telegram-file-confir
     fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ frames: readings, failures }, null, 2) + "\n");
     expect(failures).toEqual([]);
   }, 600_000);
+});
+
+
+describe("message document links", () => {
+  browserTest("actual message clicks read exact source-worktree bytes through authenticated artifact routes", async () => {
+    const { NextRequest } = await import("next/server");
+    const { GET } = await import("@/app/api/artifact/route");
+    const { proxy } = await import("@/proxy");
+    const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+    const { MEMBER_COOKIE, mintSession } = await import("@/lib/team/sessions");
+    const { createHash } = await import("node:crypto");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "document-links");
+    fs.mkdirSync(out, { recursive: true });
+    const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "document-links-"));
+    const previousState = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = path.join(fixture, "state");
+    const parent = path.join(fixture, "repository");
+    const source = path.join(fixture, "source-worktree");
+    const sibling = path.join(fixture, "later-worktree");
+    const report = path.join(source, "docs/report.md");
+    const denied = path.join(fixture, "private/report.md");
+    const changed = path.join(source, "docs/changed.md");
+    const bytes = Array.from({ length: 110 }, (_, i) => i === 0 ? "# Source version" : i === 101 ? "EXACT UNCOMMITTED SOURCE OUTPUT" : `Source line ${i + 1}`).join("\n");
+    const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+    const git = (...args: string[]) => {
+      const result = Bun.spawnSync(["git", ...args], { stdout: "pipe", stderr: "pipe" });
+      expect(result.exitCode).toBe(0);
+      return result.stdout.toString();
+    };
+    const commit = (directory: string, message: string) => git("-C", directory, "-c", "user.name=Fixture", "-c", "user.email=" + ["noreply", "example.invalid"].join("@"), "commit", "-qm", message, "--allow-empty");
+    git("init", "-q", parent);
+    commit(parent, "Initial fixture");
+    git("-C", parent, "worktree", "add", "--detach", source, "HEAD");
+    git("-C", parent, "worktree", "add", "--detach", sibling, "HEAD");
+    for (const [directory, body] of [[parent, "PARENT COMMITTED VERSION"], [sibling, "LATER CURRENT VERSION"], [source, bytes], [path.dirname(denied), "PRIVATE OUTPUT"]]) {
+      const file = directory === path.dirname(denied) ? denied : path.join(directory!, "docs/report.md");
+      fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, body!);
+    }
+    fs.writeFileSync(changed, "# Changed version\nOriginal bytes\n");
+    git("-C", parent, "add", "docs/report.md");
+    commit(parent, "Parent report version");
+    // The declared report is absent from both commits in a real linked
+    // checkout. A later HEAD cannot stand in for its uncommitted bytes.
+    commit(source, "Later metadata");
+    expect(git("-C", source, "ls-files", "docs/report.md")).toBe("");
+    expect(git("-C", source, "status", "--porcelain", "--untracked-files=all")).toContain("?? docs/report.md");
+    fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+    fs.writeFileSync(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), JSON.stringify({ files: {
+      source: { cwd: source, projectRoot: parent }, parent: { cwd: parent }, sibling: { cwd: sibling },
+    } }));
+    resetTeamStoreForTests();
+    const store = teamStore();
+    const now = Date.now();
+    for (const [id, role] of [["fixture_owner", "owner"], ["fixture_outsider", "member"]] as const) store.insertMember({
+      id, role, name: "Fixture", status: "active", color: "teal", telegram: null,
+      createdAt: new Date(now).toISOString(), createdBy: "fixture", revokedAt: null,
+    });
+    const owner = mintSession(store, "fixture_owner", "claim", { surface: "desktop", browser: "chrome" }, now);
+    const outsider = mintSession(store, "fixture_outsider", "claim", { surface: "desktop", browser: "chrome" }, now);
+    const reads: { path: string | null; mode: string; status: number; hash?: string }[] = [];
+    const adapter = async (request: Request) => {
+      const req = new NextRequest(request);
+      const admission = proxy(req);
+      const response = admission.headers.get("x-middleware-next") === "1" ? await GET(req) : admission;
+      const url = new URL(request.url);
+      const read: typeof reads[number] = { path: url.searchParams.get("path"), mode: url.searchParams.get("mode") ?? "body", status: response.status };
+      if (response.ok && read.mode === "body") read.hash = sha256(await response.clone().text());
+      reads.push(read);
+      if (read.path === changed && read.mode === "meta" && response.ok) fs.appendFileSync(changed, "New bytes\n");
+      return response;
+    };
+    const served = await serveEvidenceFixture(path.join(fixture, "bundle"), FIXTURE, { "/api/artifact": adapter });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const evidence: unknown[] = [];
+    try {
+      // The same adapter keeps the production perimeter and workspace checks:
+      // no mock successful fetch can stand in for these negative controls.
+      const resource = `${served.base}api/artifact?path=${encodeURIComponent(report)}`;
+      for (const suffix of ["", "&mode=meta", "&download=1"]) for (const [value, status] of [[null, 401], [outsider.value, 403], [owner.value, 200]] as const) {
+        const response = await fetch(resource + suffix, { headers: value ? { cookie: `${MEMBER_COOKIE}=${value}` } : {} });
+        expect(response.status).toBe(status); await response.arrayBuffer();
+      }
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 605, 820, 1000, 1050, 1280, 1440]) {
+        const phone = width === 390;
+        const query = new URLSearchParams({ case: "document-links", lang, cwd: source, parent, denied });
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`, { width, height: phone ? 844 : width === 1000 ? 700 : 900 }, theme, lang, "no-preference", phone);
+        await context.addCookies([{ name: MEMBER_COOKIE, value: owner.value, url: served.base }]);
+        try {
+          const input = await page.evaluate(() => ({ coarse: matchMedia("(pointer: coarse)").matches, touchPoints: navigator.maxTouchPoints }));
+          expect(input.coarse).toBe(phone);
+          expect(input.touchPoints > 0).toBe(phone);
+          const entry = page.getByRole("link", { name: "Source report", exact: true });
+          await entry.waitFor();
+          const initial = page.url();
+          const start = reads.length;
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-message.png`) });
+          if (phone) await entry.tap();
+          else await entry.click();
+          const pane = page.locator("[data-artifact-preview]");
+          await pane.waitFor();
+          const target = pane.locator("[data-preview-target]");
+          await target.waitFor();
+          expect(await target.innerText()).toContain("EXACT UNCOMMITTED SOURCE OUTPUT");
+          expect(await pane.locator('[data-preview-mode="source"]').getAttribute("aria-pressed")).toBe("true");
+          expect(reads.slice(start).some(read => read.path === report && read.mode === "meta" && read.status === 200)).toBe(true);
+          expect(reads.slice(start).some(read => read.path === report && read.hash === sha256(bytes))).toBe(true);
+          expect(page.url()).toBe(initial); expect(context.pages()).toHaveLength(1);
+          const geometry = await pane.evaluate(element => {
+            const box = element.getBoundingClientRect();
+            const target = element.querySelector("[data-preview-target]")!;
+            const range = document.createRange(); range.selectNodeContents(target);
+            return { paneFits: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight,
+              textFits: [...range.getClientRects()].every(r => r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight) };
+          });
+          expect(geometry).toEqual({ paneFits: true, textFits: true });
+          for (let tab = 0; tab < 12; tab++) {
+            await page.keyboard.press("Tab");
+            expect(await pane.evaluate(element => element.contains(document.activeElement))).toBe(true);
+          }
+          const close = pane.getByRole("button", { name: translate(lang, "preview.close"), exact: true });
+          if (phone) {
+            const box = await close.boundingBox();
+            expect(box!.width).toBeGreaterThanOrEqual(44);
+            expect(box!.height).toBeGreaterThanOrEqual(44);
+          }
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-source.png`) });
+          const rawStart = reads.length;
+          const rawPromise = context.waitForEvent("page");
+          const openExternal = pane.locator("[data-preview-open-external]");
+          if (phone) await openExternal.tap(); else await openExternal.click();
+          const raw = await rawPromise;
+          await raw.waitForLoadState();
+          expect(raw.url()).toBe(resource);
+          expect(await raw.locator("body").innerText()).toBe(bytes);
+          expect(reads.slice(rawStart).some(read => read.path === report && read.status === 200 && read.hash === sha256(bytes))).toBe(true);
+          expect(await raw.evaluate(() => window.opener === null)).toBe(true);
+          await raw.close();
+          if (phone) await close.tap(); else await close.click();
+          await pane.waitFor({ state: "detached" });
+          const heading = page.getByRole("link", { name: "Heading", exact: true });
+          if (phone) await heading.tap(); else await heading.click();
+          await pane.getByRole("heading", { name: "Source version", exact: true }).waitFor();
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-heading.png`) });
+          if (phone) await close.tap(); else await close.click();
+          const invisible = page.getByRole("link", { name: "Invisible", exact: true });
+          if (phone) await invisible.tap(); else await invisible.click();
+          await pane.locator("[data-preview-target]").waitFor();
+          expect(await pane.innerText()).toContain("EXACT UNCOMMITTED SOURCE OUTPUT");
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-invisible.png`) });
+          if (phone) await close.tap(); else await close.click();
+          for (const [label, key] of [["Missing", "preview.missing"], ["Denied", "preview.denied"], ["Changed", "preview.changed"]] as const) {
+            const link = page.getByRole("link", { name: label, exact: true });
+            if (phone) await link.tap(); else await link.click();
+            await pane.getByText(translate(lang, key), { exact: true }).waitFor();
+            const actions = pane.locator('a[download], [data-preview-open-external]');
+            expect(await actions.count()).toBe(label === "Changed" ? 2 : 0);
+            expect(page.url()).toBe(initial);
+            expect(context.pages()).toHaveLength(1);
+            const failureFits = await pane.getByRole("alert").evaluate(element => {
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                if (!walker.currentNode.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(walker.currentNode);
+                let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+                for (let parent = walker.currentNode.parentElement; parent; parent = parent.parentElement) {
+                  const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+                  if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left + parent.clientLeft); right = Math.min(right, box.left + parent.clientLeft + parent.clientWidth); }
+                  if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top + parent.clientTop); bottom = Math.min(bottom, box.top + parent.clientTop + parent.clientHeight); }
+                }
+                if ([...range.getClientRects()].some(rect => rect.left < left || rect.right > right || rect.top < top || rect.bottom > bottom)) return false;
+              }
+              return true;
+            });
+            expect(failureFits).toBe(true);
+            if (phone) {
+              expect(await close.evaluate(element => {
+                const rect = element.getBoundingClientRect();
+                return rect.width >= 44 && rect.height >= 44 && [
+                  [rect.left + 1, rect.top + rect.height / 2], [rect.right - 1, rect.top + rect.height / 2],
+                  [rect.left + rect.width / 2, rect.top + 1], [rect.left + rect.width / 2, rect.bottom - 1],
+                ]
+                  .every(([x, y]) => element.contains(document.elementFromPoint(x!, y!)));
+              })).toBe(true);
+            }
+            await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-${label.toLowerCase()}.png`) });
+            if (phone) await close.tap(); else await close.click();
+          }
+          const fragment = "#a=" + encodeURIComponent(report);
+          await page.evaluate(hash => { location.hash = hash; }, fragment);
+          await pane.getByRole("heading", { name: "Source version", exact: true }).waitFor();
+          await page.goBack(); await pane.waitFor({ state: "detached" });
+          await context.route("https://example.com/**", route => route.fulfill({ body: "External fixture" }));
+          const popupPromise = context.waitForEvent("page");
+          const external = page.getByRole("link", { name: "External", exact: true });
+          if (phone) await external.tap(); else await external.click();
+          const popup = await popupPromise;
+          await popup.waitForLoadState();
+          expect(popup.url()).toBe("https://example.com/guide");
+          expect(await popup.evaluate(() => window.opener === null)).toBe(true);
+          await popup.close();
+          expect(pageErrors).toEqual([]);
+          evidence.push({ lang, theme, width, input, sourceHash: sha256(bytes), geometry, reads: reads.slice(start).map(read => ({ ...read, path: read.path === report ? "source/docs/report.md" : read.path?.startsWith(source) ? "source/docs/" + path.basename(read.path) : "private/report.md" })) });
+        } finally { await context.close(); }
+      }
+      // A vanished source checkout must not select either duplicate.
+      fs.renameSync(source, path.join(fixture, "retained-source-worktree"));
+      const missingSource = await fetch(resource, { headers: { cookie: `${MEMBER_COOKIE}=${owner.value}` } });
+      expect(missingSource.status).toBe(404); await missingSource.arrayBuffer();
+      expect(fs.readFileSync(path.join(parent, "docs/report.md"), "utf8")).toBe("PARENT COMMITTED VERSION");
+      expect(fs.readFileSync(path.join(sibling, "docs/report.md"), "utf8")).toBe("LATER CURRENT VERSION");
+      store.revokeSessionsOf("fixture_owner", new Date(now + 1).toISOString());
+      const revoked = await fetch(resource, { headers: { cookie: `${MEMBER_COOKIE}=${owner.value}` } });
+      expect(revoked.status).toBe(401); await revoked.arrayBuffer();
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(evidence, null, 2));
+    } finally {
+      await browser.close(); served.stop(); resetTeamStoreForTests();
+      if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+      fs.rmSync(fixture, { recursive: true, force: true });
+    }
+  }, 240_000);
 });

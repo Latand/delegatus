@@ -19,7 +19,7 @@ POLICY = 1
 # The Viewer passes its own budgets; a terminal launch has no Viewer waiting.
 READINESS = int(os.environ.get("LLV_SIGNAL_READINESS_MS") or 10_000) / 1000
 ACK = int(os.environ.get("LLV_SIGNAL_ACK_MS") or 15_000) / 1000
-LAUNCH_ENV = ("LLV_SIGNAL_LAUNCHER", "LLV_SIGNAL_RECEIPT", "LLV_SIGNAL_AUTOMATIC", "LLV_SIGNAL_DIAGNOSTIC",
+LAUNCH_ENV = ("LLV_SIGNAL_LAUNCHER", "LLV_SIGNAL_RECEIPT", "LLV_SIGNAL_AUTOMATIC", "LLV_SIGNAL_DIAGNOSTIC", "LLV_SIGNAL_EXEC_ACK",
               "LLV_SIGNAL_IGNORE_NATIVE_STDIO", "LLV_SIGNAL_KEEP_NATIVE_STDERR", "LLV_SIGNAL_READINESS_MS", "LLV_SIGNAL_ACK_MS", "LLV_HOST_EXIT_RECEIPTS")
 
 
@@ -167,6 +167,13 @@ def inner(directory, command):
 
 
 def execute(command):
+    # Only the final engine changes priority, after every resident waiter forks.
+    score = os.environ.pop("LLV_SIGNAL_OOM_SCORE", None)
+    if score is not None:
+        try:
+            Path("/proc/self/oom_score_adj").write_text(str(int(score)))
+        except (OSError, ValueError):
+            print("Delegatus: workload OOM score unavailable; continuing with inherited score", file=sys.stderr, flush=True)
     # Socket engines outlive their Viewer and inherit no Viewer pipes. A caller
     # that bounds stderr itself keeps it, so a startup failure shows its cause.
     if os.environ.get("LLV_SIGNAL_IGNORE_NATIVE_STDIO") == "1":
@@ -182,9 +189,22 @@ def execute(command):
 def unprotected(options, command, reason):
     """Run the engine as main does and report that the boundary is off."""
     reason = str(reason)[:500] or "the boundary could not be established"
+    guarded = os.environ.get("LLV_SIGNAL_EXEC_ACK") == "1"
+    if guarded and not options.receipt:
+        raise RuntimeError("guarded fallback requires an exec acknowledgement receipt")
     if options.receipt:
         Path(options.receipt).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        atomic(options.receipt, {"policyVersion": POLICY, "boundary": "off", "reason": reason})
+        atomic(options.receipt, {"policyVersion": POLICY, "boundary": "off", "reason": reason,
+                                 **({"execAck": True} if guarded else {})})
+    if guarded:
+        # Scope and namespace preparation may have waited while the caller's
+        # authority changed. Use the same final approval as a protected exec.
+        directory = Path(options.receipt).parent
+        try:
+            if wait_file(directory / "exec.json", end=time.monotonic() + READINESS + 2 * ACK) is not True:
+                raise RuntimeError("guarded fallback exec acknowledgement was refused")
+        finally:
+            shutil.rmtree(directory, ignore_errors=True)
     if options.terminal or options.automatic or not options.receipt:
         # Terminal panes and headless logs carry the report; structured hosts
         # record the receipt instead of engine stderr.

@@ -78,6 +78,11 @@ function harness() {
       const args = rawArgs;
       // The publication contract needs a forge remote; an absent one parks.
       if (args[0] === "remote" && args[1] === "get-url") return { code: worktree.remote ? 0 : 2, stdout: worktree.remote, stderr: "" };
+      if (args.length === 1 && args[0] === "remote") return { code: 0, stdout: worktree.remote ? "origin\n" : "", stderr: "" };
+      if (args[0] === "-c" && args[2] === "remote" && args[3] === "-v") {
+        const probe = /^remote\.([^=]+)\.url=(.*)$/.exec(args[1]!);
+        if (probe) return { code: 0, stdout: `${probe[1]}\t${probe[2]} (fetch)\n${probe[1]}\t${probe[2]} (push)\n`, stderr: "" };
+      }
       if (args[0] === "ls-remote") return { code: 0, stdout: `${HEAD}\trefs/heads/${loadPipelines()[0]?.delivery?.target.branch ?? "fixture"}\n`, stderr: "" };
       if (args[0] === "status" && args[1] === "--porcelain") return { code: 0, stdout: worktree.status, stderr: "" };
       if (args[0] === "ls-files") return { code: 0, stdout: worktree.knownPaths, stderr: "" };
@@ -523,9 +528,11 @@ test("a second call replaces the first before settlement, and is refused after i
   const h = harness();
   await started(h.ports, [stage("build", null)]);
 
-  await h.report(1, { verdict: "fail", findings: [{ severity: "P2", text: "first answer" }], summary: "First." });
-  const replaced = await h.report(1, { verdict: "pass", summary: "Second, after more work." });
-  expect(replaced).toMatchObject({ replaced: true, report: { seq: 2, calls: 2 } });
+  await h.report(1, { verdict: "fail", findings: [{ severity: "P2", text: "first answer" }], summary: "First.", result: "First result", taskSummary: { headline: "First", text: "First state." } });
+  const replaced = await h.report(1, { verdict: "pass", summary: "Second, after more work.", result: "Second result", taskSummary: { headline: "Second", text: "Second state." } });
+  expect(replaced).toMatchObject({ replaced: true, report: { seq: 2, calls: 2, result: "Second result", taskSummary: { headline: "Second", text: "Second state." } } });
+  expect(attemptsOf("build")[0]!.report?.result).toBe("Second result");
+  expect(attemptsOf("build")[0]!.report?.taskSummary).toEqual({ headline: "Second", text: "Second state." });
   expect(attemptsOf("build")[0]!.report).toMatchObject({ seq: 2, verdict: { status: "pass" }, summary: "Second, after more work." });
   expect(current().stageReports!.map((record) => [record.seq, record.status, record.replaces]))
     .toEqual([[1, "fail", null], [2, "pass", 1]]);
@@ -1278,4 +1285,23 @@ test("an older agent note is replaced on park, in the operator's chosen language
     await tickPipelines([], h.ports);
     expect(loadTasks()[0]!.note).toBeUndefined();
   } finally { updateOperatorSettings({ locale: "uk" }); }
+});
+
+test("a picture a stage report names is kept after the stage's scratch directory is removed", async () => {
+  const { keptReportPicture } = await import("@/lib/reportMedia/lookup");
+  const scratch = path.join(process.env.LLV_STATE_DIR!, "scratch", "llv-stage-report-picture");
+  const shot = path.join(scratch, "tmp", "verified-desktop.png");
+  const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  fs.mkdirSync(path.dirname(shot), { recursive: true });
+  fs.writeFileSync(shot, bytes);
+  const h = harness();
+  await started(h.ports, [stage("build", null)]);
+  const answer = await h.report(1, { verdict: "pass", summary: `Checked on desktop. Screenshot: ${shot}` });
+  expect(answer.error).toBeUndefined();
+  /* The copy is made beside the write and never holds the report's answer. */
+  for (let waited = 0; waited < 200 && !keptReportPicture(shot); waited++) await new Promise((resolve) => setTimeout(resolve, 10));
+  fs.rmSync(scratch, { recursive: true, force: true });
+  const kept = keptReportPicture(shot);
+  expect(kept).not.toBeNull();
+  expect(fs.readFileSync(kept!).equals(bytes)).toBeTrue();
 });

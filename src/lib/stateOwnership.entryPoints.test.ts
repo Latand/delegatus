@@ -2,7 +2,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { generateKeyPairSync } from "node:crypto";
 import { OWNERSHIP_PRELOAD, ownershipSandbox } from "./state/fixtures/ownershipSandbox";
+import { workingInputsFingerprint } from "../../scripts/gate-cache";
 
 /*
  * The other half of #1905: the processes that DO own the operator's state have
@@ -26,14 +28,17 @@ const OPERATOR_HOME = sandbox.home;
    §4.2): a new install holds only `~/.config/delegatus`, an existing one only
    `~/.config/agent-log-viewer`. */
 const APP_DIRS = ["delegatus", "agent-log-viewer"] as const;
-const MCP_BUNDLE = path.join(process.cwd(), "dist", "mcp-server.mjs");
 const temporaryRoots: string[] = [];
+let bundleBuildInputs: { before: string; after: string };
 
 function temporaryRoot(): string {
   const directory = sandbox.temporaryRoot();
   temporaryRoots.push(directory);
   return directory;
 }
+
+const MCP_BUNDLE_DIRECTORY = temporaryRoot();
+const MCP_BUNDLE = path.join(MCP_BUNDLE_DIRECTORY, "mcp-server.mjs");
 
 interface RunResult {
   status: number | null;
@@ -80,13 +85,25 @@ beforeAll(() => {
   /* The bundle is what Claude actually launches on a deployed install, and a
      bundler is free to reorder what a source file makes explicit — so the
      claim is proved in the artifact, not only in the source. */
+  const before = workingInputsFingerprint(process.cwd());
+  fs.cpSync(path.join(process.cwd(), "node_modules"), path.join(MCP_BUNDLE_DIRECTORY, "node_modules"), {
+    recursive: true, verbatimSymlinks: true, mode: fs.constants.COPYFILE_FICLONE,
+  });
   const built = Bun.spawnSync({
-    cmd: [process.execPath, "scripts/build-mcp.ts"],
+    cmd: [process.execPath, "scripts/build-mcp.ts", MCP_BUNDLE_DIRECTORY],
     cwd: process.cwd(),
     stdout: "pipe",
     stderr: "pipe",
   });
   if (built.exitCode !== 0) throw new Error(`scripts/build-mcp.ts failed: ${built.stderr.toString()}`);
+  bundleBuildInputs = { before, after: workingInputsFingerprint(process.cwd()) };
+});
+
+test("building the published MCP entry preserves checkout inputs and owns its output", () => {
+  expect(bundleBuildInputs.after).toBe(bundleBuildInputs.before);
+  const relative = path.relative(path.dirname(OPERATOR_HOME), fs.realpathSync(MCP_BUNDLE));
+  expect(path.isAbsolute(relative)).toBeFalse();
+  expect(relative === ".." || relative.startsWith(`..${path.sep}`)).toBeFalse();
 });
 
 afterAll(() => {
@@ -103,6 +120,42 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
     fs.rmSync(OPERATOR_HOME, { recursive: true, force: true });
     fs.mkdirSync(STATE_DIRECTORY, { recursive: true });
   });
+
+  test("the standalone App token command records its mint in the installation's state", () => {
+    const root = temporaryRoot();
+    const credential = path.join(root, "credential.json");
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    const key = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey;
+    fs.writeFileSync(credential, JSON.stringify({ id: 7, installation_id: 42,
+      pem: key.export({ type: "pkcs8", format: "pem" }).toString() }), { mode: 0o600 });
+    fs.writeFileSync(path.join(bin, "secret-tool"), '#!/bin/sh\nexec cat "$FORGE_FIXTURE_CREDENTIAL"\n', { mode: 0o700 });
+    const api = path.join(root, "api.ts");
+    fs.writeFileSync(api, `
+      const permissions = { contents: "write", pull_requests: "write", metadata: "read" };
+      globalThis.fetch = async target => {
+        const route = new URL(target).pathname;
+        const body = route === "/repos/acme/widgets/installation"
+          ? { id: 42, app_id: 7, account: { login: "acme" }, permissions }
+          : route === "/app/installations/42/access_tokens"
+          ? { "token": "fixture-installation-value", expires_at: "2030-01-01T01:00:00Z", permissions }
+          : route === "/installation/repositories"
+          ? { total_count: 1, repositories: [{ full_name: "acme/widgets" }] } : null;
+        return Response.json(body, { status: body ? 200 : 404 });
+      };
+    `);
+    const env = operatorEnvironment();
+    delete env.LLV_AGENT_FORGE_AUDIT_FILE;
+    env.PATH = `${bin}${path.delimiter}${env.PATH}`;
+    env.FORGE_FIXTURE_CREDENTIAL = credential;
+    const result = runEntryPoint(["--preload", api, "bin/forge-app-token.mjs", "token", "--repository", "acme/widgets", "--json"], env);
+    expectNoRefusal(result);
+    expect(result.status, result.stderr).toBe(0);
+    const audit = fs.readFileSync(path.join(STATE_DIRECTORY, "forge-app-tokens.ndjson"), "utf8");
+    expect(JSON.parse(audit)).toMatchObject({ event: "mint", purpose: "token command", repository: "acme/widgets", expiresAt: "2030-01-01T01:00:00Z" });
+    expect(audit).not.toContain(JSON.parse(result.stdout).token);
+    expect(fs.existsSync(OTHER_APP_DIR)).toBe(false);
+  }, 30_000);
 
   for (const [label, command] of [
     ["the source entry", ["src/lib/mcp/entry.ts"]],

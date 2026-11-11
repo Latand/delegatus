@@ -1,9 +1,10 @@
+import { textLengthError } from "@/lib/textLimits";
 import { matchesShortId } from "@/lib/shortIds";
 import crypto from "node:crypto";
 import { readFindingKey } from "./finding";
 import { canonicalProject } from "@/lib/projects/aliases";
 
-import { readTaskHold, storedTaskHold } from "./hold";
+import { validateTaskHoldInput, readTaskHold, storedTaskHold } from "./hold";
 import { isTaskAttachment } from "./attachments";
 import { taskRevision } from "./revision";
 import { defaultTaskDue, isoNow, storedDueHistory } from "./helpers";
@@ -14,7 +15,9 @@ import { admissionSnapshot } from "./groupHide";
 import { readTaskColorInput } from "./colorRule";
 import { readTaskIconInput } from "./taskIcon";
 import { readTaskPriorityInput } from "./priority";
+import { readTaskSummaryInput } from "./summary";
 import { readTaskSteps } from "./steps";
+import { readTaskProgress } from "./progress";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
 import { applyLineEdits, LINE_EDIT_KEYS, type LineEdits } from "@/lib/lineEdits";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
@@ -46,7 +49,7 @@ export const RECENT_CREATES_CAP = 100;
 export type TaskRefusal = { ok: false; error: string; status: number; code?: string; field?: string };
 
 export type TaskCommandResult =
-  /* `notes` says what a write clamped instead of refusing (an unknown icon or colour). */
+  /* `notes` says what a write normalized instead of refusing. */
   | { ok: true; tasks: BoardTask[]; task: BoardTask; notes?: string[] }
   | TaskRefusal;
 
@@ -63,6 +66,8 @@ export type CreateTaskResult =
   | TaskRefusal;
 
 export interface CreateTaskInput {
+  /** Integer estimate from 0 to 100; null leaves it absent. */
+  progress?: unknown;
   findingKey?: unknown;
   note?: unknown;
   hold?: unknown;
@@ -95,6 +100,9 @@ export interface CreateTaskInput {
 }
 
 export interface PatchTaskInput {
+  summary?: unknown;
+  /** Integer estimate from 0 to 100; null clears, omitted preserves it. */
+  progress?: unknown;
   dueReason?: unknown;
   findingKey?: unknown;
   /** Dashboard undo only, accepted with operator authority and both fences. */
@@ -325,10 +333,10 @@ export function taskDuePatch(task: BoardTask, input: PatchTaskInput, now: string
       const reason = typeof input.dueReason === "string" ? input.dueReason.trim() : undefined;
       const slip = !!task.dueAt && Date.parse(task.dueAt) <= Date.parse(now) && next > Date.parse(task.dueAt);
       if (slip && options.actor === "agent" && (!reason || reason.length > 200)) {
-        return { ok: false, status: 400, code: "TASK_DUE_REASON_REQUIRED", field: "dueReason", error: "A slip needs a dueReason of 1 to 200 characters" };
+        return { ok: false, status: 400, code: "TASK_DUE_REASON_REQUIRED", field: "dueReason", error: typeof input.dueReason === "string" ? textLengthError("dueReason", reason?.length ?? 0, 200, "UTF-16 code units", 1) : "A slip needs a dueReason string of 1–200 UTF-16 code units after trimming" };
       }
       if (input.dueReason !== undefined && (typeof input.dueReason !== "string" || (reason?.length ?? 0) > 200)) {
-        return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "dueReason", error: "dueReason must be at most 200 characters" };
+        return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "dueReason", error: typeof input.dueReason === "string" ? textLengthError("dueReason", reason?.length ?? 0, 200, "UTF-16 code units") : "dueReason must be a string" };
       }
       const history = storedDueHistory(task.dueHistory) ?? { firstAt: task.dueAt ?? patch.dueAt, slips: 0 };
       patch.dueHistory = slip ? { ...history, slips: history.slips + 1, last: {
@@ -374,8 +382,8 @@ function normalizeSource(value: unknown): TaskSource | undefined | null {
   };
 }
 
-function textLimitError(): { ok: false; error: string; status: number } {
-  return { ok: false, error: `Task text must be no longer than ${TASK_TEXT_LIMIT} characters`, status: 400 };
+function textLimitError(actual: number): { ok: false; error: string; status: number } {
+  return { ok: false, error: textLengthError("text", actual, TASK_TEXT_LIMIT, "UTF-16 code units"), status: 400 };
 }
 
 type DetailsResult = { ok: true; details?: string } | TaskRefusal;
@@ -390,7 +398,7 @@ function normalizeDetails(value: unknown): DetailsResult {
   const details = value.trim();
   if (!details) return { ok: true };
   if (details.length > TASK_DETAILS_LIMIT) {
-    return { ok: false, error: `Task details must be no longer than ${TASK_DETAILS_LIMIT} characters`, status: 400, code: "TASK_INVALID_FIELD", field: "details" };
+    return { ok: false, error: textLengthError("details", details.length, TASK_DETAILS_LIMIT, "UTF-16 code units"), status: 400, code: "TASK_INVALID_FIELD", field: "details" };
   }
   return { ok: true, details };
 }
@@ -405,9 +413,14 @@ export function createTask(
   if (!project) return { ok: false, error: "project is required", status: 400 };
   const text = normalizeText(input.text);
   if (!text) return { ok: false, error: "task text is required", status: 400 };
-  if (text.length > TASK_TEXT_LIMIT) return textLimitError();
+  if (text.length > TASK_TEXT_LIMIT) return textLimitError(text.length);
   const details = normalizeDetails(input.details);
   if (!details.ok) return details;
+  const now = deps.now?.() ?? isoNow();
+  const progress = Object.hasOwn(input, "progress")
+    ? readTaskProgress(input.progress, now, deps.statusActor ?? taskProgressActor(deps))
+    : { ok: true as const, progress: undefined };
+  if (!progress.ok) return progress;
 
   if (deps.requireDue && (input.dueAt === undefined || input.dueAt === null || input.dueAt === "")) {
     return { ok: false, error: "A dueAt date is required for a new task", status: 400, code: "TASK_DUE_REQUIRED", field: "dueAt" };
@@ -431,15 +444,16 @@ export function createTask(
   const key = findingKey.key;
   // Keyed admission uses the same project identity the store persists.
   if (key !== undefined) project = canonicalProject(project);
-  const now = deps.now?.() ?? isoNow();
   const receipt = (taskId: string, matched = false): RecentCreate[] => clientRequestId
     ? [...recentCreates.filter(entry => entry.clientRequestId !== clientRequestId), { clientRequestId, taskId, ...(key !== undefined ? { matched } : {}) }].slice(-RECENT_CREATES_CAP)
     : recentCreates;
   if (key !== undefined) {
     const prior = existing.find(task => task.project === project && task.findingKey === key && task.status !== "done");
     if (prior) {
-      // Only the current note and occurrence metadata change on a match.
-      const updated = patchTask(existing, prior.id, { note: input.note ?? null }, now, deps);
+      // A recurring report preserves the estimate unless it supplies a new one.
+      const updated = patchTask(existing, prior.id, { note: input.note ?? null,
+        ...(Object.hasOwn(input, "progress") ? { progress: input.progress } : {}),
+      }, now, deps);
       if (!updated.ok) return updated;
       const task: BoardTask = { ...updated.task, finding: { ...prior.finding, count: (prior.finding?.count ?? 1) + 1, lastSeenAt: now } };
       return { ok: true, tasks: updated.tasks.map(row => row.id === task.id ? task : row), task, recentCreates: receipt(task.id, true), replay: false, matched: true };
@@ -477,7 +491,8 @@ export function createTask(
 
   const board = Object.hasOwn(input, "board") ? normalizeBoardVisibility(input.board) : undefined;
   if (board === null) return { ok: false, error: "invalid board visibility", status: 400, code: "TASK_INVALID_FIELD", field: "board" };
-  const steps = readTaskSteps(input.steps, now, deps.actor ?? "operator", deps.conversationId);
+  const notes: string[] = [];
+  const steps = readTaskSteps(input.steps, now, deps.actor ?? "operator", deps.conversationId, [], notes);
   if (!steps.ok) return steps;
   /* The bound is on bands, so only a task that will occupy one is counted
      against it: a task created off the board joins the history, which has no
@@ -487,7 +502,9 @@ export function createTask(
     return boardFullError("project");
   }
 
-  const hold = readTaskHold(input.hold, now, deps.actor ?? "operator", undefined, deps.conversationId);
+  const holdError = validateTaskHoldInput(input.hold);
+  if (holdError) return holdError;
+  const hold = readTaskHold(input.hold, now, deps.actor ?? "operator", undefined, deps.conversationId, notes);
   const id = deps.id?.() ?? crypto.randomUUID();
   const previous = key === undefined ? undefined : existing
     .filter(row => row.project === project && row.findingKey === key && row.status === "done")
@@ -500,6 +517,7 @@ export function createTask(
       ...(previous ? { previousTaskId: previous.id } : {}),
     } } : {}),
     status: hold ? "blocked" : "inbox",
+    ...(progress.progress ? { progress: progress.progress } : {}),
     ...(deps.statusActor ? { statusBy: { actor: structuredClone(deps.statusActor), from: null, at: now } } : {}),
     ...(hold ? { hold } : {}),
     text,
@@ -525,12 +543,13 @@ export function createTask(
     task = noted.task;
   }
   const nextRecent = receipt(id);
-  const notes = [icon, color, priority].flatMap((field) => field.kind === "clamped" ? [field.note] : []);
+  notes.push(...[icon, color, priority].flatMap((field) => field.kind === "clamped" ? [field.note] : []));
   return { ok: true, tasks: [...existing, task], task, recentCreates: nextRecent, replay: false, ...(key !== undefined ? { matched: false } : {}), ...(notes.length ? { notes } : {}) };
 }
 
-/** Presentation of a task, never work on it: `updatedAt` stays (see below). */
-const PRESENTATION_KEYS: ReadonlySet<string> = new Set(["color", "icon", "priority", "hide", "attachLinks", "detachLinks", "linkKind"]);
+/** Presentation of a task, never work on it: `updatedAt` stays (see below). A
+    progress estimate carries its own `setAt`, so reporting one moves no age either. */
+const PRESENTATION_KEYS: ReadonlySet<string> = new Set(["color", "icon", "priority", "hide", "attachLinks", "detachLinks", "linkKind", "progress"]);
 
 function editTaskWorkLinks(
   task: BoardTask,
@@ -564,6 +583,12 @@ function editTaskWorkLinks(
   return { ok: true, links: edit.links, changed: edit.changed };
 }
 
+function taskProgressActor(options: Pick<PatchTaskOptions, "actor" | "conversationId">): PauseResumeActor {
+  return options.actor === "agent"
+    ? { kind: "agent", role: null, conversationId: options.conversationId ?? null }
+    : { kind: "operator" };
+}
+
 export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInput, now = isoNow(), options: PatchTaskOptions = {}): TaskCommandResult {
   const index = existing.findIndex((task) => task.id === id);
   if (index < 0) return { ok: false, error: "task not found", status: 404 };
@@ -589,7 +614,19 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
       return { ok: false, status: 409, code: "TASK_REVISION_MISMATCH", field: "expectedRevision", error: "expectedRevision is stale; read the task and reconsider the request" };
     }
   }
+  const notes: string[] = [];
   const patch: Partial<BoardTask> = {};
+  if (Object.hasOwn(input, "summary")) {
+    const author = options.noteAuthor ?? (options.actor === "agent" ? { kind: "agent" as const, conversationId: null } : { kind: "operator" as const });
+    const summary = readTaskSummaryInput(input.summary, now, author);
+    if (!summary.ok) return summary;
+    patch.summary = summary.summary;
+  }
+  if (Object.hasOwn(input, "progress")) {
+    const progress = readTaskProgress(input.progress, now, options.statusActor ?? taskProgressActor(options));
+    if (!progress.ok) return progress;
+    patch.progress = progress.progress;
+  }
   if (Object.hasOwn(input, "findingKey")) {
     const key = readFindingKey(input.findingKey);
     if (!key.ok) return key;
@@ -602,7 +639,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     }
     const text = typeof input.note === "string" ? input.note.replace(/\s+/g, " ").trim() : "";
     if (text.length > TASK_NOTE_LIMIT) {
-      return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "note", error: `note must be at most ${TASK_NOTE_LIMIT} characters` };
+      return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "note", error: textLengthError("note", text.length, TASK_NOTE_LIMIT, "UTF-16 code units") };
     }
     const author = options.noteAuthor ?? (options.actor === "agent" ? { kind: "agent" as const, conversationId: null } : { kind: "operator" as const });
     patch.note = text ? { text, author, updatedAt: now } : undefined;
@@ -611,7 +648,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   if (Object.hasOwn(input, "text")) {
     const text = normalizeText(input.text);
     if (!text) return { ok: false, error: "task text is required", status: 400 };
-    if (text.length > TASK_TEXT_LIMIT) return textLimitError();
+    if (text.length > TASK_TEXT_LIMIT) return textLimitError(text.length);
     patch.text = text;
     patch.chosen = options.explicit ? true : undefined;
     /* An operator's edit names a placeholder for good: a later agent
@@ -639,7 +676,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     /* Stored as edited: trimming the whole field, as a whole-field write does,
        would strip the indent of the line an edit uncovers at the top. */
     if (edited.value !== null && edited.value.length > TASK_DETAILS_LIMIT) {
-      return { ok: false, error: `Task details must be no longer than ${TASK_DETAILS_LIMIT} characters`, status: 400, code: "TASK_INVALID_FIELD", field: "details" };
+      return { ok: false, error: textLengthError("details", edited.value.length, TASK_DETAILS_LIMIT, "UTF-16 code units"), status: 400, code: "TASK_INVALID_FIELD", field: "details" };
     }
     patch.details = edited.value ?? undefined;
   }
@@ -650,11 +687,13 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   }
   if (Object.hasOwn(input, "restoreHold")) {
     if (options.actor !== "operator" || Object.hasOwn(input, "hold")) return { ok: false, status: 400, error: "restoreHold is reserved for fenced operator undo" };
-    patch.hold = storedTaskHold(input.restoreHold);
+    patch.hold = storedTaskHold(input.restoreHold, notes);
     if (input.restoreHold !== null && !patch.hold) return { ok: false, status: 400, error: "invalid hold snapshot" };
   }
   if (Object.hasOwn(input, "hold")) {
-    patch.hold = readTaskHold(input.hold, now, options.actor ?? "operator", task.hold, options.conversationId);
+    const holdError = validateTaskHoldInput(input.hold);
+    if (holdError) return holdError;
+    patch.hold = readTaskHold(input.hold, now, options.actor ?? "operator", task.hold, options.conversationId, notes);
     if (patch.hold) patch.status = "blocked";
     else if (!Object.hasOwn(input, "status") && task.status === "blocked") {
       patch.status = task.assignments.some(a => ["delivered", "spawning", "handoff", "linked"].includes(a.state)) ? "assigned" : "inbox";
@@ -663,7 +702,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     patch.hold = readTaskHold({ kind: "unstated" }, now, options.actor ?? "operator", undefined, options.conversationId);
   }
   if (Object.hasOwn(input, "steps")) {
-    const steps = readTaskSteps(input.steps, now, options.actor ?? "operator", options.conversationId, task.steps);
+    const steps = readTaskSteps(input.steps, now, options.actor ?? "operator", options.conversationId, task.steps, notes);
     if (!steps.ok) return steps;
     patch.steps = steps.steps;
   }
@@ -710,7 +749,6 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (priority.kind === "clamped") return { ok: false, error: `priority must be one of ${TASK_PRIORITIES.join(", ")}`, status: 400, code: "TASK_INVALID_FIELD", field: "priority" };
     patch.priority = priority.kind === "set" ? priority.priority : undefined;
   }
-  const notes: string[] = [];
   if (Object.hasOwn(input, "icon")) {
     const icon = readTaskIconInput(input.icon);
     patch.icon = icon.kind === "set" ? icon.icon : undefined;
@@ -785,6 +823,8 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     delete updated.dueHistory;
   }
   if (Object.hasOwn(patch, "note") && patch.note === undefined) delete updated.note;
+  if (Object.hasOwn(patch, "summary") && patch.summary === undefined) delete updated.summary;
+  if (Object.hasOwn(patch, "progress") && patch.progress === undefined) delete updated.progress;
   if (Object.hasOwn(patch, "findingKey") && patch.findingKey === undefined) delete updated.findingKey;
   if (Object.hasOwn(patch, "finding") && patch.finding === undefined) delete updated.finding;
   if (updated.placement === "unplaced") delete updated.pos;

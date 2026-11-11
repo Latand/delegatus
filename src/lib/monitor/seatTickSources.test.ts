@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -39,6 +39,45 @@ const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBro
 const { structuredContentDigest } = await import("@/lib/runtime/structuredContent");
 const { wakeRecordPorts } = await import("./seatTickSources");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+
+test.each(["recipient", "alias", "key"] as const)("registry wake lookup preserves %s semantics without a whole read", async semantics => {
+  const { registryDeliveryFor } = await import("./seatTickSources");
+  const sqliteFilename = path.join(SANDBOX, `keyed-wake-${semantics}.sqlite`);
+  const registry = new AgentRegistry(path.join(SANDBOX, `keyed-wake-${semantics}.json`), () => false, undefined, { sqliteMode: "sqlite", sqliteFilename });
+  await registry.prepareRecoveryIndexes();
+  const recipient = registry.ensureConversation("codex", path.join(SANDBOX, "recipient.jsonl"), null);
+  const other = registry.ensureConversation("codex", path.join(SANDBOX, "other.jsonl"), null);
+  const key = "seat-tick:fixture:exact-key";
+  const hold = (id: string, messageKey: string) => registry.holdDelivery(id as `conversation_${string}`, "Check pending work.", messageKey, "text", [], undefined,
+    { kind: "send", policy: "interrupt-active", origin: { kind: "agent", role: "seat-tick" } });
+  // Insert the foreign recipient first: a whole-file key search picks it.
+  hold(other.id, key);
+  const expected = hold(recipient.id, key);
+  const suffixed = hold(recipient.id, `${key}:suffix`);
+  const alias = "conversation_wake_alias";
+  const store = new SqliteAgentRegistryStore(sqliteFilename, { initialSnapshot: () => registry.snapshot(), normalize: normalizeRegistry });
+  store.mutate(file => { file.conversationAliases[alias as `conversation_${string}`] = recipient.id; });
+  store.close();
+  const fullRead = spyOn(registry, "readOnlySnapshot").mockImplementation(() => { throw Error("whole registry read"); });
+  setAgentRegistryForTests(registry);
+  const wake = { conversationId: recipient.id, clientMessageId: key } as SeatTickOutstandingWake;
+  try {
+    expect(registryDeliveryFor(wake)).toEqual({ id: expected.id, state: expected.state, operationId: expected.command.operationId });
+    if (semantics === "alias") {
+      expect(registryDeliveryFor({ ...wake, conversationId: alias })).toEqual(registryDeliveryFor(wake));
+      const writer = new SqliteAgentRegistryStore(sqliteFilename, { initialSnapshot: () => registry.snapshot(), normalize: normalizeRegistry });
+      try { writer.mutate(file => { file.heldDeliveries[expected.id]!.conversationId = alias as `conversation_${string}`; }); }
+      finally { writer.close(); }
+      expect(registryDeliveryFor(wake)).toEqual({ id: expected.id, state: expected.state, operationId: expected.command.operationId });
+    } else if (semantics === "key") {
+      expect(registryDeliveryFor({ ...wake, clientMessageId: `${key}:suffix` })?.id).toBe(suffixed.id);
+      expect(registryDeliveryFor({ ...wake, clientMessageId: "absent-key" })).toBeNull();
+    } else {
+      expect(registryDeliveryFor({ ...wake, conversationId: "conversation_absent" })).toBeNull();
+    }
+    expect(fullRead).not.toHaveBeenCalled();
+  } finally { fullRead.mockRestore(); setAgentRegistryForTests(null); registry.close(); }
+});
 
 test("self-update sends one wait or off signal from its durable state", () => {
   const quiet = { waitingTarget: null, lastBlockers: null, pending: null };
@@ -162,6 +201,53 @@ function boardCard(over: Record<string, unknown> = {}): Record<string, unknown> 
     ...over,
   };
 }
+
+for (const autonomous of [false, true]) for (const overdue of [false, true]) {
+  test(`monitor information cards never become task wake reasons (autonomy=${autonomous}, overdue=${overdue})`, async () => {
+    const { changeAutonomy } = await import("./autonomy");
+    const settings = { ...defaultSeatTickSettings(PROJECT), autonomy: autonomous ? changeAutonomy(null, { enabled: true }, {
+      at: new Date(NOW - 60_000).toISOString(),
+      actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
+    }, PROJECT, true) : null };
+    const notice = boardCard({ id: "notice", status: autonomous ? "inbox" : "assigned", text: "Cadence notice",
+      details: "monitor-ref: seat-tick-settings", ...(overdue ? { dueAt: new Date(NOW - 60_000).toISOString(), dueTz: "UTC" } : {}) });
+    let tasks = [notice];
+    const ports = sources({ pipelines: [], settings });
+    ports.tasks = () => tasks as never;
+    ports.overdueTasks = () => overdue ? tasks as never : [];
+    const state = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - DAY_MS).toISOString() };
+    const gathered = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
+    for (const input of [gathered, refreshSeatTickInput(gathered, ports)]) {
+      expect(reasonsOf(seatTickDecision(input))).not.toContain("unstarted-task");
+      expect(reasonsOf(seatTickDecision(input))).not.toContain("overdue-task");
+    }
+    tasks = [notice, boardCard({ ...notice, id: "real-task", text: "Implement feature", details: "" })];
+    const real = refreshSeatTickInput(gathered, ports);
+    expect(reasonsOf(seatTickDecision(real))).toContain(overdue ? "overdue-task" : "unstarted-task");
+    expect(real.tasks.map(task => task.id)).toEqual(["real-task"]);
+    // A marker added after gathering is also respected by the refresh projection.
+    tasks = tasks.map(task => ({ ...task, text: `${task.text}\n\nmonitor-ref: seat-tick-source-children` }));
+    expect(reasonsOf(seatTickDecision(refreshSeatTickInput(real, ports)))).not.toContain(overdue ? "overdue-task" : "unstarted-task");
+  });
+}
+
+test("dated monitor notices cannot fill the bounded overdue window ahead of real work", async () => {
+  const { loadTasksForList, saveTasksFile, overdueTasks } = await import("@/lib/tasks/store");
+  const file = path.join(fs.mkdtempSync(path.join(SANDBOX, "notice-overdue-")), "tasks.json");
+  const dueAt = new Date(NOW - 60_000).toISOString();
+  const notices = Array.from({ length: 70 }, (_, index) => boardCard({ id: `notice-${String(index).padStart(2, "0")}`,
+    text: "Monitor notice\n\nmonitor-ref: seat-tick-settings", dueAt, dueTz: "UTC" }));
+  const real = boardCard({ id: "work-last", text: "Real overdue work", dueAt, dueTz: "UTC" });
+  saveTasksFile({ tasks: [...notices, real] as unknown as import("@/lib/tasks/types").BoardTask[], recentCreates: [] }, file);
+  const ports = sources({ pipelines: [] });
+  ports.tasks = () => loadTasksForList(file);
+  ports.overdueTasks = (project, now, shown, cursor, known) => overdueTasks(project, now, file, shown, cursor, known);
+  const input = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  for (const observed of [input, refreshSeatTickInput(input, ports)]) {
+    expect(observed.overdueTasks?.map(task => task.id)).toEqual(["work-last"]);
+    expect(reasonsOf(seatTickDecision(observed))).toContain("overdue-task");
+  }
+});
 
 function livenessRow(over: Partial<AgentLivenessRecord> = {}): AgentLivenessRecord {
   return {
@@ -2060,7 +2146,10 @@ test("a read with no settlement port is inert: an in-flight record is reported r
 
 test("an in-flight record is ended by the tick's own settlement, and classified by its answer (#1465)", async () => {
   const still = await classify(found(receipt({})), { settle: receipt({}) });
-  expect(still).toMatchObject({ state: "retained", calls: ["lookup", "settle"] });
+  expect(still).toMatchObject({ state: "retained", calls: ["lookup", "settle", "journal"] });
+  expect(await classify(found(receipt({})), { settle: receipt({}), runtime: "landed" }))
+    .toMatchObject({ state: "landed", calls: ["lookup", "settle", "journal", "record:op-wake-1"] });
+  expect((await classify(found(receipt({})), { settle: receipt({}), runtime: "dropped" })).state).toBe("dropped");
   expect((await classify(found(receipt({})), { settle: receipt({ state: "delivered", resend: "not-needed" }) })).state).toBe("landed");
   expect((await classify(found(receipt({})), { settle: receipt({ state: "failed", resend: "safe" }) })).state).toBe("dropped");
   expect((await classify(found(receipt({})), { settle: receipt({ state: "failed", resend: "verify-first" }) })).state).toBe("uncertain");
@@ -2842,10 +2931,11 @@ test("maintenance gather offers only unannounced ended project runs and moves th
    inside the write it waited for. Another process holds the SQLite writer;
    once it lets go, the switch is cancelled and an attempt claims the row in
    the same tick, before the withdrawal's next probe. */
-async function withdrawalRace(name: string, withdraw: (registry: InstanceType<typeof AgentRegistry>, held: { id: string; operationId: string; key: string }) => Promise<string>) {
+async function withdrawalRace(name: string, withdraw: (registry: InstanceType<typeof AgentRegistry>, held: { id: string; operationId: string; key: string; conversationId: string }) => Promise<string>) {
   const dir = fs.mkdtempSync(path.join(SANDBOX, `${name}-`));
   const sqlitePath = path.join(dir, "agent-registry.sqlite");
   const registry = new AgentRegistry(path.join(dir, "agent-registry.json"), () => false, undefined, { sqliteMode: "sqlite", sqliteFilename: sqlitePath });
+  await registry.prepareRecoveryIndexes();
   const conversation = registry.ensureConversation("codex", path.join(dir, `${crypto.randomUUID()}.jsonl`), null);
   registry.setConversationMigration(conversation.id, {
     intentId: `${name}-intent`, phase: "requested", targetId: "default", revision: 1, error: null, updatedAt: new Date().toISOString(),
@@ -2859,7 +2949,7 @@ async function withdrawalRace(name: string, withdraw: (registry: InstanceType<ty
   holder.exec("PRAGMA busy_timeout = 5000");
   holder.exec("BEGIN IMMEDIATE");
   try {
-    const withdrawing = withdraw(registry, { id: held.id, operationId: held.command.operationId, key });
+    const withdrawing = withdraw(registry, { id: held.id, operationId: held.command.operationId, key, conversationId: conversation.id });
     await new Promise((resolve) => setTimeout(resolve, 60));
     holder.exec("ROLLBACK");
     registry.setConversationMigration(conversation.id, null);
@@ -2881,7 +2971,7 @@ test("a held-wake withdrawal that waited for the writer leaves a row an attempt 
   process.env.LLV_RUNTIME_HOST_SOCKET = "";
   try {
     const { answer, row } = await withdrawalRace("seat-withdraw-race", (_registry, held) =>
-      defaultSeatTickSources().withdrawWake({ ...WAKE, clientMessageId: held.key, operationId: null }, "the seat rotated"));
+      defaultSeatTickSources().withdrawWake({ ...WAKE, conversationId: held.conversationId, clientMessageId: held.key, operationId: null }, "the seat rotated"));
     expect(answer).toBe("unknown");
     expect(row).toMatchObject({ state: "delivery-uncertain", text: "wake the seat" });
   } finally {
@@ -2894,6 +2984,7 @@ test("a held-wake withdrawal that finds its row still held after the wait ends i
   const { defaultSeatTickSources } = await import("./seatTickSources");
   const dir = fs.mkdtempSync(path.join(SANDBOX, "seat-withdraw-held-"));
   const registry = new AgentRegistry(path.join(dir, "agent-registry.json"), () => false, undefined, { sqliteMode: "sqlite", sqliteFilename: path.join(dir, "agent-registry.sqlite") });
+  await registry.prepareRecoveryIndexes();
   const conversation = registry.ensureConversation("codex", path.join(dir, `${crypto.randomUUID()}.jsonl`), null);
   registry.setConversationMigration(conversation.id, {
     intentId: "held-intent", phase: "requested", targetId: "default", revision: 1, error: null, updatedAt: new Date().toISOString(),
@@ -2901,7 +2992,7 @@ test("a held-wake withdrawal that finds its row still held after the wait ends i
   const held = registry.holdDelivery(conversation.id, "wake the seat", "seat-withdraw-held-key");
   setAgentRegistryForTests(registry);
   try {
-    expect(await defaultSeatTickSources().withdrawWake({ ...WAKE, clientMessageId: "seat-withdraw-held-key", operationId: null }, "the seat rotated")).toBe("withdrawn");
+    expect(await defaultSeatTickSources().withdrawWake({ ...WAKE, conversationId: conversation.id, clientMessageId: "seat-withdraw-held-key", operationId: null }, "the seat rotated")).toBe("withdrawn");
     expect(registry.readOnlySnapshot().heldDeliveries[held.id]).toMatchObject({ state: "failed", text: "" });
   } finally {
     setAgentRegistryForTests(null);

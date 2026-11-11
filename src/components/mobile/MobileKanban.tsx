@@ -1,8 +1,12 @@
 "use client";
+import { useMaterializedCreationIds } from "@/hooks/useFiles";
 
 import { CardStatusBadge } from "@/components/CardStatusBadge";
 
 import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
+import { BoardTimeline } from "@/components/kanban/BoardTimeline";
+import { resolvedTimelineMembers } from "@/lib/board/taskTimelineMembers";
+import { useBoardTimeline } from "@/components/kanban/boardTimelineStore";
 import { ArrowDown, ArrowLeftRight, ArrowRight, ArrowUp, Ban, Check, CircleCheck, EyeOff, Inbox, MessageSquare, Plus, TriangleAlert, UserRoundCheck } from "lucide-react";
 import {
   useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
@@ -22,6 +26,7 @@ import { SeatActionWires } from "@/components/kanban/SeatActionWires";
 import { TaskMotionLine } from "@/components/kanban/TaskMotionLine";
 import { cardAnswers, cardState, formAnswerTarget, type CardState } from "@/components/kanban/cardState";
 import { CardStateLine } from "@/components/kanban/CardStateLine";
+import { progressLine } from "@/components/kanban/TaskProgressBar";
 import { TaskSpendMarks, useTaskSpendLabel } from "@/components/kanban/TaskSpend";
 import { hasTaskMeta, TaskMeta } from "@/components/kanban/TaskMeta";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
@@ -34,7 +39,7 @@ import { remoteCardsFor, useRemoteFeed, type RemoteCard } from "@/components/kan
 import { remoteLaneNote, remoteLaneSummary } from "@/components/pipelines/remoteLaneSummary";
 import { cardWaitsForCpu, pipelineTitle } from "@/components/kanban/PipelineSection";
 import { useTaskMutations, type StatusMoveOutcome, type StatusMoveOptions, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
-import { PipelineBlock, stageAt } from "@/components/pipelines/PipelineBlock";
+import { PipelineBlock, PipelineCreationBlock, stageAt } from "@/components/pipelines/PipelineBlock";
 import { attemptNavTarget, resolveStageNavFile } from "@/components/pipelines/pipelineModel";
 import { latestAttempt } from "@/lib/pipelines/stageChip";
 import { formatConversationHash } from "@/lib/accounts/identity";
@@ -536,7 +541,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStag
   /* The task's limit spend: passive marks on the state line, read into the face's one label. */
   const spendTask = item.kind === "task" && card.task && !remote ? card.task.id : null;
   const spendLabel = useTaskSpendLabel(spendTask);
-  const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), priority ? t(`kanban.priorityMark.${priority}`) : null, item.waitsOnPrototype ? t(card.task?.prototypeReview?.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready") : null, project, state ? spendLabel : null].filter(Boolean).join(", ");
+  const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), priority ? t(`kanban.priorityMark.${priority}`) : null, item.waitsOnPrototype ? t(card.task?.prototypeReview?.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready") : null, project, state && item.kind === "task" && card.task?.progress ? progressLine(t, card.task.progress, nowMs) : null, state ? spendLabel : null].filter(Boolean).join(", ");
   const body = (
     <>
       {project ? (
@@ -575,10 +580,12 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStag
         <NeedBadge item={item} />
       </span>
       {state ? (
-        <CardStateLine state={state} nowMs={nowMs} title={title} phone motion={motion} spend={spendTask ? <TaskSpendMarks taskId={spendTask} interactive={false} /> : undefined} />
+        <CardStateLine state={state} nowMs={nowMs} title={title} phone motion={motion} spend={spendTask ? <TaskSpendMarks taskId={spendTask} interactive={false} /> : undefined}
+          progress={item.kind === "task" && card.task?.progress ? { progress: card.task.progress, running: card.workingSinceMs !== null, color: card.color ? TASK_COLOR_HEX[card.color] : null } : undefined} />
       ) : motion}
       {item.kind === "task" && card.task && hasTaskMeta(card.task) ? <span className="card-meta-line"><TaskMeta task={card.task} nowMs={nowMs} /></span> : null}
       <TaskStepsLine summary={card.stepSummary} />
+      {card.creations?.map(creation => <PipelineCreationBlock key={creation.id} creation={creation} controls={false} />)}
       {/* The needs-you question has its own slot below motion. */}
       {item.kind === "task" ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} /> : null}
       {item.shown && !loose ? (
@@ -919,6 +926,8 @@ function HiddenSheet({ rows, nowMs, projectLabel, onShowGroup, onShowTask, onClo
 export function MobileKanban(props: MobileKanbanProps) {
   const { t } = useLocale();
   const { project, allTasks: storedTasks, now } = props;
+  const timeline = useBoardTimeline(project);
+  const timelineShown = !props.projectLabel && timeline.preference.view === "timeline";
   const nav = useMobileNavStore();
   const navState = useMobileNav();
   const ids = useId().replace(/:/g, "");
@@ -933,7 +942,11 @@ export function MobileKanban(props: MobileKanbanProps) {
      is still drawn here after ‹. */
   const own = useTaskMutations(storedTasks, props.mutationPorts);
   const { controller, statuses, edits } = props.mutations ?? own;
-  const { model, modelNow } = usePhoneBoardModel(props, { statuses, edits });
+  const { model, modelNow, projection } = usePhoneBoardModel(props, { statuses, edits });
+  const timelineTasks = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown).flatMap(card => card.task ? [card.task] : []), [model]);
+  const timelineMembers = useMemo(() => [...KANBAN_STATUSES.flatMap(status => model.columns[status].shown)
+    .flatMap(card => card.task ? card.members.filter(member => member.working).map(member => ({ taskId: card.task!.id, file: member.file })) : []),
+  ...resolvedTimelineMembers(projection, timelineTasks)], [model, projection, timelineTasks]);
   const doneShown = usePhoneKanbanDoneShown(project);
   const phone = useMemo(
     () => buildPhoneKanban({ model, attention: props.attention, doneShown, closing: props.closing, now: modelNow }),
@@ -958,6 +971,36 @@ export function MobileKanban(props: MobileKanbanProps) {
     if (smooth && typeof element.scrollTo === "function") element.scrollTo({ left, behavior: reducedMotion() ? "auto" : "smooth" });
     else element.scrollLeft = left;
   }, []);
+  const revealedCreations = useRef(new Set<string>());
+  const revealedMaterialized = useRef(new Set<string>());
+  const materializedCreationIds = useMaterializedCreationIds();
+  const [creationOpen, setCreationOpen] = useState<string | null>(null);
+  const creationCards = [...model.unlinkedShown, ...Object.values(model.columns).flatMap(column => column.shown)]
+    .flatMap(card => card.creations ?? []);
+  const openedCreation = creationCards.find(creation => creation.id === creationOpen);
+  useEffect(() => {
+    const cards = [...model.unlinkedShown, ...Object.values(model.columns).flatMap(column => column.shown)];
+    for (const id of materializedCreationIds) {
+      const card = cards.find(card => card.pipelines.some(summary => summary.pipeline.id === id));
+      if (card && !revealedMaterialized.current.has(id)) {
+        revealedMaterialized.current.add(id);
+        writePlace(project, { column: card.status }); place(card.status, false);
+      }
+    }
+    for (const id of revealedMaterialized.current) if (!materializedCreationIds.includes(id)) revealedMaterialized.current.delete(id);
+    const current = new Set(cards.flatMap(card => card.creations?.map(creation => creation.id) ?? []));
+    for (const id of revealedCreations.current) if (!current.has(id)) {
+      revealedCreations.current.delete(id);
+      const materialized = cards.find(card => card.pipelines.some(summary => summary.pipeline.id === id));
+      if (materialized) { writePlace(project, { column: materialized.status }); place(materialized.status, false); }
+    }
+    for (const card of cards) for (const creation of card.creations ?? []) {
+      if (revealedCreations.current.has(creation.id)) continue;
+      revealedCreations.current.add(creation.id);
+      writePlace(project, { column: card.status });
+      place(card.status, false);
+    }
+  }, [model, project, place, materializedCreationIds]);
   /* The board opens where the operator left it: the column, then each page's
      offset, before the first paint. */
   useLayoutEffect(() => {
@@ -982,6 +1025,7 @@ export function MobileKanban(props: MobileKanbanProps) {
     return () => observer.disconnect();
   }, [project, place]);
   const choose = (status: TaskStatus) => {
+    timeline.update({ view: "board" });
     steering.current = { to: status, until: performance.now() + 900 };
     writePlace(project, { column: status });
     place(status, true);
@@ -999,14 +1043,16 @@ export function MobileKanban(props: MobileKanbanProps) {
     if (status !== readPlace(project).column) writePlace(project, { column: status });
   };
   const onTabKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const index = KANBAN_STATUSES.indexOf(active);
-    const next = event.key === "ArrowRight" ? KANBAN_STATUSES[index + 1]
-      : event.key === "ArrowLeft" ? KANBAN_STATUSES[index - 1]
-        : event.key === "Home" ? KANBAN_STATUSES[0]
-          : event.key === "End" ? KANBAN_STATUSES[KANBAN_STATUSES.length - 1] : undefined;
+    const tabs = props.projectLabel ? [...KANBAN_STATUSES] : [...KANBAN_STATUSES, "timeline"];
+    const index = tabs.indexOf(timelineShown ? "timeline" : active);
+    const next = event.key === "ArrowRight" ? tabs[index + 1]
+      : event.key === "ArrowLeft" ? tabs[index - 1]
+        : event.key === "Home" ? tabs[0]
+          : event.key === "End" ? tabs[tabs.length - 1] : undefined;
     if (!next) return;
     event.preventDefault();
-    choose(next);
+    if (next === "timeline") timeline.update({ view: "timeline" });
+    else choose(next as TaskStatus);
     document.getElementById(`${ids}-tab-${next}`)?.focus();
   };
 
@@ -1206,6 +1252,7 @@ export function MobileKanban(props: MobileKanbanProps) {
   };
 
   const open = (item: PhoneCard): (() => void) | null => {
+    if (!item.card.task && item.card.creations?.length) return () => setCreationOpen(item.card.creations![0]!.id);
     if (item.kind === "task") {
       const task = item.card.task;
       return task ? () => props.onOpenTask(tasksById.current.get(task.id) ?? task) : null;
@@ -1249,7 +1296,7 @@ export function MobileKanban(props: MobileKanbanProps) {
   );
 
   return (
-    <div ref={boardRoot} data-phone-kanban="" data-phone-kanban-active={active} className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <div ref={boardRoot} data-phone-kanban="" data-phone-kanban-active={timelineShown ? "timeline" : active} className="flex min-h-0 min-w-0 flex-1 flex-col">
       {props.projectLabel ? null : <SeatActionWires rootRef={boardRoot} phone seatRefs={props.seatRefs ?? null} tasks={storedTasks} pipelines={props.pipelines} files={props.files} />}
       {props.seat ? <div className="shrink-0 pb-1 pt-1.5">{props.seat}</div> : null}
       <div
@@ -1257,12 +1304,12 @@ export function MobileKanban(props: MobileKanbanProps) {
         aria-label={t("mobile2.kanban.columns")}
         data-phone-kanban-tabs=""
         data-walk-anchor="board"
-        className="grid shrink-0 grid-cols-4 gap-1 border-b border-border px-1.5 pt-1"
+        className={`grid shrink-0 ${props.projectLabel ? "grid-cols-4" : "grid-cols-5"} gap-1 border-b border-border px-1.5 pt-1`}
         onKeyDown={onTabKey}
       >
         {KANBAN_STATUSES.map((status) => {
           const column = phone.columns[status];
-          const selected = status === active;
+          const selected = !timelineShown && status === active;
           return (
             <button
               key={status}
@@ -1285,11 +1332,19 @@ export function MobileKanban(props: MobileKanbanProps) {
             </button>
           );
         })}
+        {props.projectLabel ? null : <button type="button" role="tab" id={`${ids}-tab-timeline`} aria-controls={`${ids}-panel-timeline`} aria-selected={timelineShown} tabIndex={timelineShown ? 0 : -1}
+          data-phone-kanban-tab="timeline" className={`relative flex min-h-11 min-w-0 items-center justify-center rounded-t-[10px] px-1 pb-2 pt-1.5 text-ui font-semibold text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${timelineShown ? "bg-card text-primary" : "active:bg-sunken"}`}
+          onClick={() => timeline.update({ view: "timeline" })}><span data-phone-tab-label="">{t("timeline.title")}</span>{timelineShown ? <span aria-hidden className="absolute inset-x-[20%] bottom-0 h-0.5 rounded-full bg-accent" /> : null}</button>}
       </div>
+      {timelineShown ? <div id={`${ids}-panel-timeline`} role="tabpanel" aria-labelledby={`${ids}-tab-timeline`} className="flex min-h-0 flex-1 flex-col">
+        <BoardTimeline project={project} tasks={timelineTasks} members={timelineMembers}
+          pipelines={props.pipelines} nowMs={now * 1000} preference={timeline.preference} onPreference={timeline.update} phone />
+      </div> : null}
       <div
         ref={pager}
         data-phone-kanban-pager=""
-        className="flex min-h-0 flex-1 snap-x snap-mandatory overflow-x-auto overflow-y-hidden overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className={`${timelineShown ? "hidden" : "flex"} min-h-0 flex-1 snap-x snap-mandatory overflow-x-auto overflow-y-hidden overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`}
+        inert={timelineShown}
         onScroll={onPagerScroll}
       >
         {KANBAN_STATUSES.map((status) => {
@@ -1340,6 +1395,9 @@ export function MobileKanban(props: MobileKanbanProps) {
         })}
       </div>
       <ColumnDock />
+      {openedCreation ? <MobileSheet name="card" title={openedCreation.receipt?.title ?? t("pipelineCreation.restoring")} onClose={() => setCreationOpen(null)}>
+        <div className="p-3"><PipelineCreationBlock creation={openedCreation} /></div>
+      </MobileSheet> : null}
       {sheetItem ? (
         <CardSheet
           title={t("kanban.cardActions", { title: shortTitle(t, sheetItem) })}

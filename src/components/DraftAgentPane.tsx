@@ -54,6 +54,7 @@ import {
 } from "./draftSpawn";
 import { draftWorkingDirectory } from "./projectModel";
 import { cleanTitle } from "@/lib/title";
+import { speedBody } from "@/components/ReasoningControls";
 
 type Engine = "claude" | "codex" | "copilot";
 
@@ -65,7 +66,7 @@ export { EngineRadioGroup };
 
 const STRUCTURED_IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 type SpawnImageNegotiation = {
-  spawnTransport: "tmux" | "structured";
+  spawnTransport: "structured";
   imageInput: Record<Engine, RuntimeImageCapability>;
 };
 type SpawnImageNegotiationState =
@@ -89,7 +90,7 @@ function runtimeImageCapabilityValue(value: unknown): RuntimeImageCapability | n
 function spawnImageNegotiationValue(value: unknown): SpawnImageNegotiation | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
-  if (candidate.spawnTransport !== "tmux" && candidate.spawnTransport !== "structured") return null;
+  if (candidate.spawnTransport !== "structured") return null;
   if (!candidate.imageInput || typeof candidate.imageInput !== "object" || Array.isArray(candidate.imageInput)) return null;
   const imageInput = candidate.imageInput as Record<string, unknown>;
   const claude = runtimeImageCapabilityValue(imageInput.claude);
@@ -501,14 +502,7 @@ export function DraftAgentPane({
     writeField(draftId, "boot", value ? JSON.stringify(value) : "");
   }, [draftId]);
   const readySpawnImageNegotiation = spawnImageNegotiation.status === "ready" ? spawnImageNegotiation.value : null;
-  /* The composer host capability the draft already negotiates (issue #266): a
-     structured (pane-less) spawn has no tmux window, so every launch-copy that
-     names tmux drops it. The default `tmux` transport keeps the legacy wording,
-     as does the pre-negotiation window (the server defaults to tmux too). */
-  const structuredSpawn = readySpawnImageNegotiation?.spawnTransport === "structured";
-  const negotiatedSpawnImageCapability = readySpawnImageNegotiation?.spawnTransport === "structured"
-    ? readySpawnImageNegotiation.imageInput[engine]
-    : null;
+  const negotiatedSpawnImageCapability = readySpawnImageNegotiation?.imageInput[engine] ?? null;
   const structuredSpawnImageCapability = negotiatedSpawnImageCapability && engine === "codex" && !codexModelSupportsImages(model)
     ? { ...negotiatedSpawnImageCapability, supported: false, reason: t("composer.codexImagesTextOnly") }
     : negotiatedSpawnImageCapability;
@@ -775,7 +769,8 @@ export function DraftAgentPane({
       model,
       cwd: launchCwd,
       effort: launchEffort,
-      fast: engine === "codex" && speed ? speed === "fast" : null,
+      fast: null,
+      ...speedBody(engine, speed),
       accountId: launch.launchAccountId,
       "prompt": payloadText,
       images: attachments.images.map((image) => ({ base64: image.base64, mime: image.mime })),
@@ -804,12 +799,11 @@ export function DraftAgentPane({
   /* Display phase drives the status line. `busy` (POST in flight) shows as
      `launching`; a durable attempt shows booting/booting-slow/confirming/attention. */
   const phase = displayPhase(attempt, busy, slowBoot);
-  const target = attempt?.target ?? "";
   const sent = Boolean(attempt);
   /* The launch speaks in words only once it needs the operator: it is slow, it
      could not be confirmed, or it failed. Until then the loading shape says it. */
   const launchStatus = attempt && (phase === "booting-slow" || phase === "confirming-slow" || phase === "attention" || attempt.error)
-    ? <DraftLaunchStatus ref={attentionRef} phase={phase} target={target} structured={structuredSpawn} error={attempt.error ?? null} />
+    ? <DraftLaunchStatus ref={attentionRef} phase={phase} error={attempt.error ?? null} />
     : null;
   const blockedReason = attempt
     ? undefined
@@ -924,7 +918,7 @@ export function DraftAgentPane({
         ) : null}
         <ComposerBar
           composer={composer}
-          placeholder={structuredSpawn ? t("draft.placeholderStructured") : t("draft.placeholder")}
+          placeholder={t("draft.placeholderStructured")}
           textareaAriaLabel={t("draft.promptTextAria")}
           imageAriaLabel={t("draft.addImages")}
           sendLabelIdle={t("composer.launchAgent")}

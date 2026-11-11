@@ -1,4 +1,4 @@
-import { captureTaskDueFrames } from "@/components/kanban/issue1695BrowserHarness";
+import { captureAppConnectForms, withAppConnectBrowserTemp, captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -8,7 +8,7 @@ import { chromium, type BrowserContext, type CDPSession, type Page } from "playw
 
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { deliverConversationMessage } from "@/lib/delivery";
+import { seedStoredDeliveredMessage } from "@/test-helpers/storedDelivery";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
@@ -18,9 +18,9 @@ import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
 import { heldDeliveryOccurrences, orchestratorMandateDeliveries } from "@/lib/runtime/deliveredMessageOccurrences";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
-import type { FileEntry } from "@/lib/types";
 import type { TranscriptEntry } from "@/lib/voiceCompanion/transcriptRecord";
-import { captureAttentionRing, captureLaneReviewFrames, captureTaskTimelinePrototype, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { firedSentence } from "@/lib/voiceCompanion/timerWords";
+import { captureProjectSetupHosts, captureAttentionRing, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture, captureLaneReviewFrames, captureTaskTimelinePrototype } from "@/components/kanban/issue1695BrowserHarness";
 import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { stubVoiceDevices } from "@/test-helpers/voiceDevicesStub";
@@ -54,6 +54,28 @@ import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
  */
 
 const browserTest = process.env.LLV_SWIPE_BROWSER_TEST === "1" ? test : test.skip;
+
+describe("accepted queued creation continuity", () => {
+  browserTest("real create, missing catalogs, reload and terminal readback on the phone", async () => {
+    const { captureAcceptedCreation, ownedBrowserSocketEnvironment } = await import("@/components/kanban/issue1695BrowserHarness");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "accepted-creation-phone");
+    fs.mkdirSync(out, { recursive: true });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, env: sockets.env, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { expect(await captureAcceptedCreation(browser, out, true)).toHaveLength(12); }
+    finally { await browser.close(); sockets.close(); }
+  }, 600_000);
+});
+
+describe("GitHub App connection forms", () => {
+  browserTest("GitHub links and confirmation fit the phone Decisions sheet", async () => {
+    await withAppConnectBrowserTemp(async () => {
+      const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+      try { expect(await captureAppConnectForms(browser, path.resolve(".artifacts/forge-app-connect/phone"), true)).toHaveLength(12); }
+      finally { await browser.close(); }
+    });
+  }, 180_000);
+});
 const OUT = path.resolve(".artifacts/issue-1671");
 /** The fixture's running conversation, under its managed account's home. */
 const runningPath = (account: string) => `/state/agent-log-viewer/shared/accounts/claude/${account}/projects/atlas/running.jsonl`;
@@ -146,6 +168,91 @@ describe("phone markdown links", () => {
       }
     } finally { await browser.close(); served.stop(); }
   }, 180_000);
+});
+
+/* A fired voice timer's toast and the Telegram switch (docs/design/voice-timers.md), through the shell's own hosts: the
+   toast on one host only, whole and on screen at each width, and the switch whole in its dialog. Readings go to
+   `evidence/voice-timers/screens.json`; frames to `.artifacts/voice-timers/`, which is not committed. */
+describe("voice timers", () => {
+  browserTest("voice timers: one whole toast on one host and the Telegram switch at 390 and 1440, en and uk, light and dark", async () => {
+    const out = path.resolve(".artifacts/voice-timers"); fs.mkdirSync(out, { recursive: true });
+    const timer = { label: "tea with lemon and a long walk around the block", minutes: 15, createdAt: Date.UTC(2026, 10, 1, 8, 5), dueAt: Date.UTC(2026, 10, 1, 8, 20), timeZone: "Europe/Kyiv" };
+    const { base, stop } = await serveFixture({ "/evidence/timer-words": { en: firedSentence(timer, "en", "due"), uk: firedSentence(timer, "uk", "due") } });
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    const whole = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) return { found: false };
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const rects = [...range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0);
+      const box = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+      return { found: true, text: element.textContent, box: { x: box.x, y: box.y, width: box.width, height: box.height },
+        onScreen: rects.every(rect => rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight), reachable: !!hit && (hit === element || element.contains(hit)) };
+    };
+    try {
+      for (const size of [{ width: 390, height: 844 }, { width: 1440, height: 900 }]) for (const lang of ["en", "uk"]) for (const scheme of ["light", "dark"] as const) for (const screen of ["overview", "dashboard"] as const) {
+        const prefix = `${size.width}-${lang}-${scheme}-${screen}`;
+        const phone = size.width < 500;
+        const context = await browser.newContext({ viewport: size, hasTouch: phone, isMobile: phone, colorScheme: scheme });
+        try {
+          await context.addInitScript((language) => localStorage.setItem("llv_lang", language), lang);
+          const page = await context.newPage();
+          await page.goto(screen === "overview" ? `${base}/?voice=timer&overview=1&seatnoise=ii&runtime=structured#p=__overview__` : `${base}/?voice=timer&seatnoise=ii&runtime=structured`);
+          await page.locator("[data-task-toasts] [role=status]").waitFor({ timeout: 30_000 });
+          await page.waitForTimeout(300);
+          const toast = await page.evaluate(whole, "[data-task-toasts] [role=status]");
+          const hosts = await page.locator("[data-task-toasts]").count();
+          const toasts = await page.locator("[data-task-toasts] [role=status]").count();
+          const floating = await page.locator("[data-task-toasts]").evaluate(element => getComputedStyle(element).position);
+          await page.screenshot({ path: path.join(out, `${prefix}-toast.png`) });
+          /* The toast would otherwise cover the row measured next, for the 6 s it stays. */
+          await page.locator("[data-task-toasts] button").click();
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
+          const row = page.locator("[data-timer-telegram]");
+          await row.waitFor({ timeout: 30_000 });
+          await row.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(200);
+          const setting = await page.evaluate(whole, "[data-timer-telegram]");
+          const control = await page.locator("[data-timer-telegram] input[role=switch]").boundingBox();
+          await page.screenshot({ path: path.join(out, `${prefix}-setting.png`) });
+          readings.push({ size: size.width, lang, scheme, screen, hosts, toasts, floating, toast, setting, control });
+          if (hosts !== 1 || toasts !== 1) failures.push(`${prefix}: ${hosts} hosts, ${toasts} toasts`);
+          /* The overview has no dashboard, so the shell's own host floats there; the dashboard keeps its place. */
+          if ((floating === "fixed") !== (screen === "overview")) failures.push(`${prefix}: the toast's host is ${floating}`);
+          if (!toast.onScreen || !toast.reachable) failures.push(`${prefix}: the toast is cut off or covered`);
+          if (!setting.onScreen || !setting.reachable) failures.push(`${prefix}: the Telegram switch's row is cut off or covered`);
+          if (!control || control.height < 24) failures.push(`${prefix}: the Telegram switch has no room`);
+        } finally { await context.close(); }
+      }
+      /* Five timers at once at the narrowest width: three on screen and whole, and the rest as those leave. */
+      const burst: unknown[] = [];
+      for (const lang of ["en", "uk"]) for (const scheme of ["light", "dark"] as const) {
+        const prefix = `390-${lang}-${scheme}-burst`;
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, colorScheme: scheme });
+        try {
+          await context.addInitScript((language) => localStorage.setItem("llv_lang", language), lang);
+          const page = await context.newPage();
+          await page.goto(`${base}/?voice=timer-burst&overview=1&seatnoise=ii&runtime=structured#p=__overview__`);
+          const rows = page.locator("[data-task-toasts] [role=status]");
+          await rows.nth(2).waitFor({ timeout: 30_000 });
+          await page.waitForTimeout(300);
+          const first = await rows.evaluateAll(all => all.map(row => { const box = row.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth; }));
+          await page.screenshot({ path: path.join(out, `${prefix}.png`) });
+          await page.waitForFunction(() => (window as unknown as { timerToastsWaiting: string[] }).timerToastsWaiting.length === 0, undefined, { timeout: 30_000 });
+          const second = await rows.evaluateAll(all => all.map(row => { const box = row.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth; }));
+          burst.push({ lang, scheme, first, second });
+          if (first.length !== 3 || first.includes(false)) failures.push(`${prefix}: the first three are ${JSON.stringify(first)}`);
+          if (!second.length || second.length > 3 || second.includes(false)) failures.push(`${prefix}: the last are ${JSON.stringify(second)}`);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/voice-timers", { recursive: true });
+      fs.writeFileSync("evidence/voice-timers/screens.json", JSON.stringify({ readings, burst, failures }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); stop(); }
+  }, 300_000);
 });
 
 describe("machine worker limit", () => {
@@ -338,6 +445,7 @@ describe("shared memory settings", () => {
     const memory = await import("@/app/api/memory/settings/route");
     const keysList = await import("@/app/api/keys/route");
     const keyWrite = await import("@/app/api/keys/[id]/route");
+    const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
     const { setSharedMemoryEnabled } = await import("@/lib/memory/settings");
     const { memoryIndex } = await import("@/lib/memory/service");
     const { writeAsksYouSettings } = await import("@/lib/asks/settings");
@@ -380,18 +488,19 @@ describe("shared memory settings", () => {
         fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
         fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "viewer-release.json"), JSON.stringify({ endpoint: "http://127.0.0.1:9875" }));
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings`, { width, height: 900 }, "light", lang, "reduce", width === 390);
+        /* The operator's own browser session, as the Viewer's page navigation sets it. */
+        await context.addCookies([{ name: "llv_operator", value: soloBrowserSession(), url: server.base }]);
         try {
           /* Shared memory and «Keys» are pages of the header menu (docs/design/header-menu.md, keys-settings.md):
              the rail's ⋯ on the desktop, the board menu's sheet on the phone, Settings, then the row. */
           const phone = width === 390;
-          const container = phone ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]";
+          const container = phone ? "[data-mobile2-sheet='settings']" : "[data-settings-window]";
           const openPage = async (row: "memory" | "keys") => {
-            if (!(await page.locator(container).count())) await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().click();
-            if (await page.locator(phone ? '[data-mobile2-menu-row="back"]' : "[data-rail-menu-back]").count()) {
-              await page.locator(phone ? '[data-mobile2-menu-row="back"]' : "[data-rail-menu-back]").click();
-            }
-            if (await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").count()) {
+            if (!(await page.locator(container).count())) {
+              await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().click();
               await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
+            } else if (phone && await page.locator(`${container} [data-settings-back]`).count()) {
+              await page.locator(`${container} [data-settings-back]`).click();
             }
             await page.locator(phone ? `[data-mobile2-menu-row="${row}"]` : `[data-rail-menu-${row}]`).click();
             await page.locator(row === "memory" ? "[data-memory-page]" : "[data-keys-page] [data-keys-row]").first().waitFor();
@@ -420,10 +529,6 @@ describe("shared memory settings", () => {
             }, !phone);
             expect(geometry.left).toBeGreaterThanOrEqual(0); expect(geometry.right).toBeLessThanOrEqual(width);
             expect(geometry.top).toBeGreaterThanOrEqual(0); expect(geometry.bottom).toBeLessThanOrEqual(900);
-            /* header-menu.md's 360 px; «Keys» is 370 px as approved (six rows, the back row and two transfer rows), and an open field or the staging notice passes it (keys-settings.md §15). */
-            const keysList = state === "key-saved" || state === "environment";
-            const open = ["invalid-key", "write-failed", "staging-env", "staging-file"].includes(state);
-            if (!phone && !open) expect(geometry.height).toBeLessThanOrEqual(keysList ? 380 : 360);
             expect(geometry.overflow).toBeLessThanOrEqual(1);
             expect(geometry.controls.every(control => control.left >= geometry.left && control.right <= geometry.right)).toBe(true);
             expect(geometry.overlaps).toEqual([]);
@@ -1452,21 +1557,8 @@ async function admittedAgentEvidence(): Promise<{ feed: string; provenance: unkn
     const recipient = registry.ensureConversation("claude", RUNNING_PATH, "default");
     const origin = agentMessageOrigin(registry.readOnlySnapshot(), sender.id, "orchestrator");
     const text = "The review found one issue. I am sending the handoff to this seat.";
-    let engineInput = "";
-    const outcome = await deliverConversationMessage({
-      pid: 1, path: RUNNING_PATH, conversationId: recipient.id, text, images: [],
-      clientMessageId: "agent-label-evidence-delivery", origin,
-    }, {
-      recover: async () => null,
-      pathAllowed: () => true,
-      listFiles: async () => [{ root: "claude-projects", path: RUNNING_PATH, project: "wardrobe-agent", mtime: 0, size: 0 } as FileEntry],
-      resumeSpecFor: (() => ({ command: "resume", transcript: RUNNING_PATH, launchProfile: emptyLaunchProfile() })) as never,
-      deliver: async ({ payload }: { payload: string }) => {
-        engineInput = payload;
-        return { ok: true as const, outcome: "resumed" as const, target: "%7" };
-      },
-    });
-    if (!outcome.ok || engineInput !== text) throw new Error("agent evidence delivery did not settle");
+    const engineInput = text;
+    seedStoredDeliveredMessage(registry, { conversationId: recipient.id, text, clientMessageId: "agent-label-evidence-delivery", origin });
     const delivery = Object.values(registry.readOnlySnapshot().heldDeliveries).find((row) => row.clientMessageId === "agent-label-evidence-delivery");
     if (!delivery?.deliveredAt) throw new Error("agent evidence has no durable settlement");
     const feed = [
@@ -8240,6 +8332,67 @@ describe("«Готово» in the phone sheet", () => {
   }, 420_000);
 });
 
+browserTest("where a stage ran: the cloud and a local fallback read apart with no hover on the phone's card and stage rows, with the cause, in both languages and themes", async () => {
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium().catch((error) => { stop(); throw error; });
+  const out = path.resolve(".artifacts/stage-place");
+  fs.mkdirSync(out, { recursive: true });
+  const failures: string[] = [];
+  /* The word and mark in each stage's holder, and whether the word stays inside it and the window. */
+  const readPlaces = (page: Page, scope: string) => page.evaluate((selector) => Object.fromEntries(Array.from(document.querySelectorAll<HTMLElement>(selector)).map((row) => {
+    const mark = row.querySelector<HTMLElement>(".iplace");
+    const range = document.createRange();
+    if (mark) range.selectNodeContents(mark);
+    const text = range.getBoundingClientRect(), box = row.getBoundingClientRect();
+    return [row.dataset.stage!, { place: mark?.dataset.stagePlace ?? null, word: mark?.innerText.trim() ?? "", shape: mark?.querySelector("svg")?.innerHTML ?? "",
+      inside: text.left >= box.left - 0.5 && text.right <= box.right + 0.5 && text.right <= innerWidth }];
+  })), scope);
+  try {
+    for (const lang of ["en", "uk"] as const) for (const theme of SCHEMES) {
+      const key = `phone-${lang}-${theme}`;
+      const words = lang === "uk" ? { cloud: "хмара", local: "локально", cause: "перенесено на цю машину" } : { cloud: "cloud", local: "local", cause: "moved to this machine" };
+      const context = await browser.newContext({ viewport: VIEWPORTS[0], isMobile: true, hasTouch: true, colorScheme: theme });
+      try {
+        await context.addInitScript(([locale, scheme]) => { localStorage.setItem("llv_lang", locale!); localStorage.setItem("llv-theme", scheme!); }, [lang, theme]);
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.goto(`${base}/?kanban=1&stage-place=1#p=atlas`);
+        const verify = (surface: string, read: Awaited<ReturnType<typeof readPlaces>>) => {
+          const { implement, review } = read;
+          /* A card folds a passed stage to fit its line, so only a drawn one answers there. */
+          if (surface === "rows" || implement) {
+            if (implement?.place !== "cloud" || implement.word !== words.cloud) failures.push(`${key} ${surface} cloud: ${JSON.stringify(implement)}`);
+            if (!implement?.shape || implement.shape === review?.shape) failures.push(`${key} ${surface}: the two places draw one mark`);
+          }
+          if (review?.place !== "moved-local" || review.word !== words.local) failures.push(`${key} ${surface} local: ${JSON.stringify(review)}`);
+          for (const [stage, row] of Object.entries(read)) if (!row.inside) failures.push(`${key} ${surface} ${stage}: the word leaves its box`);
+        };
+        const face = '[data-phone-card="task:t-data"]';
+        await page.locator(face).waitFor();
+        verify("card", await readPlaces(page, `${face} .pb-pill[data-stage]`));
+        await page.screenshot({ path: path.join(out, `${key}-card.png`) });
+        /* The card's title: a tap on a pill opens that stage's conversation instead. */
+        await page.locator(face).click({ position: { x: 60, y: 20 } });
+        await page.locator('[data-phone-task-lane="lane-decision"] [data-open-stages]').click();
+        const screen = '[data-mobile2-pipeline="lane-decision"]';
+        await page.locator(`${screen} .pb-stage[data-stage="review"]`).waitFor();
+        verify("rows", await readPlaces(page, `${screen} .pb-stage[data-stage]`));
+        const cause = await page.locator(`${screen} .pb-stage[data-stage="review"] [data-stage-place-line]`).evaluate((element) => {
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          const text = range.getBoundingClientRect();
+          return { text: (element as HTMLElement).innerText, place: (element as HTMLElement).dataset.stagePlace, inside: text.left >= 0 && text.right <= innerWidth };
+        });
+        if (cause.place !== "moved-local" || !cause.text.includes(words.cause) || !cause.text.includes("setup step 2") || !cause.inside) failures.push(`${key} cause: ${JSON.stringify(cause)}`);
+        await page.screenshot({ path: path.join(out, `${key}-rows.png`) });
+        if (errors.length) failures.push(`${key} page errors: ${errors.join("; ")}`);
+      } finally { await context.close(); }
+    }
+  } finally { await browser.close(); stop(); }
+  expect(failures).toEqual([]);
+}, 240_000);
+
 browserTest("stage agent row: conversations, parked questions and earlier attempts at phone and desktop widths", async () => {
   const { base, stop } = await serveFixture();
   const browser = await launchChromium().catch((error) => { stop(); throw error; });
@@ -8781,7 +8934,7 @@ describe("whole-card drag on the phone", () => {
         await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
         /* LLV_DRAG_ANIMATIONS=running keeps the board's glyph animations going while a card is held:
            the ablation that shows what they cost a drag. */
-        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
+        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .mglyph[data-live=\"1\"] > svg, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
         const from = await grabPoint(page);
         /* The lift (the hold's end: the ghost, the dock, the board standing still) and the drag are read apart:
            the first is one frame's work the operator feels as the card coming up, the second is the 3 s that follow. */
@@ -11847,6 +12000,22 @@ describe("phone voice call history", () => {
 });
 
 describe("phone voice drop", () => {
+  /* Whether the head's bubble stands inside the window with every glyph inside its clipping ancestors. */
+  const voiceBubbleGeometry = (node: Element) => {
+    const rect = node.getBoundingClientRect(); const range = document.createRange(); range.selectNodeContents(node);
+    const clipped: number[] = [];
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const text = walker.currentNode; range.selectNodeContents(text);
+      for (const glyph of range.getClientRects()) for (let parent = text.parentElement; parent; parent = parent.parentElement) {
+        const box = parent.getBoundingClientRect(), style = getComputedStyle(parent);
+        if (style.overflowX !== "visible" && (glyph.left < box.left - 1 || glyph.right > box.right + 1)
+          || style.overflowY !== "visible" && (glyph.top < box.top - 1 || glyph.bottom > box.bottom + 1)) clipped.push(glyph.width);
+      }
+    }
+    return { text: node.textContent, inside: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight, clipped,
+      clamped: [...node.querySelectorAll<HTMLElement>(".vc-text")].some(text => text.scrollHeight > text.clientHeight + 1) };
+  };
   /*
    * A call whose connection drops keeps what was said, offers the same call back in one tap, still does after a
    * reload, and goes on with its history (docs/design/voice-call-memory.md, "A dropped call resumes"). The phone
@@ -11857,6 +12026,145 @@ describe("phone voice drop", () => {
    *
    * Frames go to `.artifacts/voice-companion/phone-drop/` and are never committed.
    */
+  browserTest("automatic voice reconnect: reconnecting, back and gave up at 390 px in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/voice-reconnect/phone"); fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: unknown[] = [];
+    type Controls = ReturnType<typeof import("@/components/voiceCompanion/reconnectEvidence.fixture").reconnectEvidence>["controls"];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, colorScheme: scheme, reducedMotion: "reduce" });
+        try {
+          await context.addInitScript(lang => localStorage.setItem("llv_lang", lang), lang);
+          const page = await context.newPage(); const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+          await page.clock.install({ time: Date.UTC(2026, 10, 4, 12) }); await page.clock.pauseAt(Date.UTC(2026, 10, 4, 12, 1));
+          await page.goto(`${base}/?voice=reconnect&voice-long=1&seatnoise=ii&runtime=structured#c=conversation_running`);
+          await page.clock.runFor(1_500);
+          const head = page.locator("[data-phone-voice-head]");
+          for (let frame = 0; frame < 50 && !(await head.count()); frame++) await page.clock.runFor(100);
+          await head.tap(); await page.clock.runFor(100); await page.locator("[data-phone-voice-talk]").tap();
+          await page.clock.runFor(100);
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") === "idle");
+          const control = (action: "drop" | "release" | "fail") => page.evaluate(action => (window as unknown as { voiceReconnect: Controls }).voiceReconnect[action](), action);
+          const capture = async (state: string) => {
+            await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 1000; } });
+            await page.clock.runFor(400);
+            const bubble = page.locator("[data-phone-voice-bubble]"); await bubble.waitFor();
+            const geometry = await bubble.evaluate(voiceBubbleGeometry);
+            expect(geometry.inside).toBe(true); expect(geometry.clipped).toEqual([]); expect(geometry.clamped).toBe(false);
+            const frame = `${lang}-${scheme}-${state}.png`; await page.screenshot({ path: path.join(out, frame) }); readings.push({ lang, scheme, state, frame, ...geometry });
+          };
+          await control("drop"); await page.clock.runFor(300);
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") === "reconnecting");
+          await head.tap(); expect(await page.locator("[data-phone-voice-resume]").count()).toBe(0); expect(await page.locator("[data-phone-voice-end]").isEnabled()).toBe(true); await head.tap();
+          await capture("reconnecting");
+          await head.tap();
+          const mute = page.locator("[data-phone-voice-mute]"); expect(await mute.isEnabled()).toBe(true); await mute.tap();
+          expect((await mute.innerText()).trim()).toBe(translate(lang, "voiceCompanion.unmute"));
+          expect((await page.evaluate(() => (window as unknown as { voiceReconnect: Controls }).voiceReconnect.read())).muted).toBe(true);
+          await head.tap();
+          await page.clock.runFor(5_000); await head.tap(); await page.clock.runFor(1_000);
+          const beforeClock = await page.locator("[data-phone-voice-clock]").innerText();
+          const seconds = (value: string) => { const parts = value.match(/(\d+):(\d+)/)!; return Number(parts[1]) * 60 + Number(parts[2]); };
+          expect(seconds(beforeClock)).toBeGreaterThanOrEqual(5); await head.tap();
+          await control("release"); await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") === "idle");
+          await head.tap(); expect((await mute.innerText()).trim()).toBe(translate(lang, "voiceCompanion.unmute"));
+          expect((await page.evaluate(() => (window as unknown as { voiceReconnect: Controls }).voiceReconnect.read())).muted).toBe(true); await head.tap();
+          await head.tap(); expect(seconds(await page.locator("[data-phone-voice-clock]").innerText())).toBeGreaterThanOrEqual(seconds(beforeClock)); await head.tap();
+          await capture("back");
+          await control("fail"); await control("drop"); await page.clock.runFor(60_000);
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") === "offline");
+          await capture("gave-up"); await head.tap(); expect(await page.locator("[data-phone-voice-resume]").isEnabled()).toBe(true);
+          const observed = await page.evaluate(() => (window as unknown as { voiceReconnect: Controls }).voiceReconnect.read());
+          expect(observed.opens).toBe(1); expect(observed.sounds.filter(sound => sound === "give-up")).toHaveLength(1); expect(errors).toEqual([]);
+          await page.locator("[data-phone-voice-resume]").tap();
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice-bubble]")?.textContent?.length);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/voice-companion", { recursive: true });
+      fs.writeFileSync("evidence/voice-companion/reconnect-phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", synthetic: true, readings }, null, 2) + "\n");
+    } finally { await browser.close(); stop(); }
+  }, 240_000);
+
+  browserTest("automatic voice reconnect: End with an attempt unanswered leaves no line; End during backoff keeps the drop line and Reconnect, at 390 px in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/voice-reconnect/phone"); fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: unknown[] = [];
+    type Controls = ReturnType<typeof import("@/components/voiceCompanion/reconnectEvidence.fixture").reconnectEvidence>["controls"];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, colorScheme: scheme, reducedMotion: "reduce" });
+        try {
+          await context.addInitScript(lang => localStorage.setItem("llv_lang", lang), lang);
+          const page = await context.newPage(); const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+          await page.clock.install({ time: Date.UTC(2026, 10, 4, 12) }); await page.clock.pauseAt(Date.UTC(2026, 10, 4, 12, 1));
+          await page.goto(`${base}/?voice=reconnect&voice-long=1&seatnoise=ii&runtime=structured#c=conversation_running`);
+          await page.clock.runFor(1_500);
+          const head = page.locator("[data-phone-voice-head]"), bubble = page.locator("[data-phone-voice-bubble]");
+          for (let frame = 0; frame < 50 && !(await head.count()); frame++) await page.clock.runFor(100);
+          const phase = (value: string) => page.waitForFunction(value => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") === value, value);
+          const control = (action: "drop" | "release" | "fail") => page.evaluate(action => (window as unknown as { voiceReconnect: Controls }).voiceReconnect[action](), action);
+          const starts = () => page.evaluate(() => (window as unknown as { voiceReconnect: Controls }).voiceReconnect.read().starts);
+          const offline = translate(lang, "voiceCompanion.phase.offline");
+          const frame = async (state: string) => {
+            await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 1000; } });
+            const name = `${lang}-${scheme}-${state}.png`; await page.screenshot({ path: path.join(out, name) }); return name;
+          };
+          const talk = async () => { await head.tap(); await page.clock.runFor(100); await page.locator("[data-phone-voice-talk]").tap(); await page.clock.runFor(100); await phase("idle"); };
+          const end = async () => { await head.tap(); await page.clock.runFor(100); await page.locator("[data-phone-voice-end]").tap(); await phase("offline"); };
+
+          /* The attempt's start is held by the fixture, so End finds it unanswered. */
+          await talk();
+          await control("drop"); await page.clock.runFor(1_000); await phase("reconnecting");
+          expect(await bubble.getAttribute("data-code")).toBe("RECONNECTING");
+          const dialled = await starts(); expect(dialled).toBe(2);
+          await end();
+          expect(await bubble.count(), "no line the moment the call ended").toBe(0);
+          for (const advance of [1_400, 18_600, 45_000]) {
+            await page.clock.runFor(advance);
+            expect(await bubble.count(), `no line ${advance} ms further on`).toBe(0);
+            expect(await head.getAttribute("aria-label")).toBe(`Delegatus · ${offline}`);
+          }
+          const ended = await frame("ended-unanswered");
+          /* The answer that comes after End brings no call and no line back. */
+          await control("release"); await page.clock.runFor(1_000);
+          expect(await page.locator("[data-phone-voice]").getAttribute("data-phase")).toBe("offline");
+          expect(await bubble.count()).toBe(0); expect(await starts()).toBe(dialled);
+          await head.tap(); await page.clock.runFor(100);
+          expect(await page.locator("[data-phone-voice-resume]").count()).toBe(0);
+          expect(await page.locator("[data-phone-voice-talk]").isEnabled()).toBe(true);
+          const endedMenu = await frame("ended-unanswered-menu");
+          await head.tap(); await page.clock.runFor(100);
+          readings.push({ lang, scheme, state: "ended-unanswered", frame: ended, menuFrame: endedMenu, bubbles: 0, label: offline });
+
+          /* A later call of the same page says its own reconnect again; its attempt is refused, and End lands in the backoff. */
+          await talk();
+          await control("fail"); await control("drop"); await page.clock.runFor(300); await phase("reconnecting");
+          expect(await bubble.getAttribute("data-code"), "the later reconnect says its line").toBe("RECONNECTING");
+          expect(await starts()).toBe(dialled + 2);
+          await end();
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice-bubble]")?.getAttribute("data-code") === "CONNECTION_LOST");
+          await page.clock.runFor(12_400);
+          expect(await bubble.getAttribute("data-code"), "the drop line stays past the linger while the call is offered").toBe("CONNECTION_LOST");
+          const geometry = await bubble.evaluate(voiceBubbleGeometry);
+          expect(geometry.inside).toBe(true); expect(geometry.clipped).toEqual([]); expect(geometry.clamped).toBe(false);
+          const backoff = await frame("ended-backoff");
+          await head.tap(); await page.clock.runFor(100);
+          const resume = page.locator("[data-phone-voice-resume]");
+          expect(await resume.isEnabled()).toBe(true);
+          expect((await resume.innerText()).trim()).toBe(translate(lang, "voiceCompanion.reconnect"));
+          const backoffMenu = await frame("ended-backoff-menu");
+          readings.push({ lang, scheme, state: "ended-backoff", frame: backoff, menuFrame: backoffMenu, ...geometry });
+          expect(errors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/voice-companion", { recursive: true });
+      fs.writeFileSync("evidence/voice-companion/reconnect-phone-end.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", synthetic: true, readings }, null, 2) + "\n");
+    } finally { await browser.close(); stop(); }
+  }, 240_000);
+
   browserTest("history after a drop, the one-tap reconnect, a reload, and the restored call at 390 px", async () => {
     const out = path.resolve(".artifacts/voice-companion/phone-drop");
     fs.mkdirSync(out, { recursive: true });
@@ -11956,7 +12264,9 @@ describe("phone voice drop", () => {
           await pause(page, 900);
 
           /* The network goes mid-call. */
+          await page.clock.install(); await page.clock.pauseAt(new Date());
           await page.evaluate(() => (window as unknown as { phoneVoice: { lose(): void } }).phoneVoice.lose());
+          await head.tap(); await page.locator("[data-phone-voice-end]").tap();
           await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") === "offline");
           await bubble.waitFor();
           expect(closes.at(-1)).toMatchObject({ action: "close", sessionId: "drop-call-1", reason: "transport" });
@@ -11976,6 +12286,7 @@ describe("phone voice drop", () => {
           const dropped = await readHistory("3-history", said.map(([, text]) => text));
 
           /* A reload: nothing in the page's memory, the call still offered and readable. */
+          await page.clock.resume();
           await page.reload();
           await head.waitFor(); await pause(page, 900);
           await head.tap(); await resumeRow.waitFor();
@@ -11990,7 +12301,7 @@ describe("phone voice drop", () => {
           expect(starts.at(-1)).toMatchObject({ action: "start", resume: "drop-call-1" });
           await bubble.waitFor();
           await page.waitForFunction((text) => document.querySelector("[data-phone-voice-bubble]")?.textContent?.replace(/\u00a0/gu, " ") === text,
-            lang === "uk" ? "Зʼєднання відновлено. Розмова триває з того місця, де обірвалася." : "Connection restored. The conversation goes on where it stopped.");
+            lang === "uk" ? "Зʼєднання відновлено." : "Connection restored.");
           expect(inside(await bubble.boundingBox())).toBe(true);
           await settled();
           await page.screenshot({ path: path.join(out, `${prefix}-6-restored.png`) });
@@ -12319,6 +12630,7 @@ describe("keys settings", () => {
     const backend = await import("@/app/api/transcribe/backend/route");
     const { setTelegramConnectForTests } = await import("@/lib/keys/store");
     const { KEY_IDS } = await import("@/lib/keys/shared");
+    const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
     const { saveBotToken } = await import("@/lib/telegram/bot/transport");
     const { botIdFromToken } = await import("@/lib/telegram/bot/contracts");
     const { claimInstall, createInvite, redeemJoin } = await import("@/lib/team/members");
@@ -12428,14 +12740,15 @@ describe("keys settings", () => {
         const base = `${server.base}?scenario=keys&header=1`;
         const { context, page, pageErrors } = await openFixture(browser, base, viewport, theme, lang, "reduce", phone, 2);
         await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: server.base.replace(/\/$/, "") });
-        const surface = phone ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]";
+        const surface = phone ? "[data-mobile2-sheet='settings']" : "[data-settings-window]";
         const row = (id: string) => page.locator(`${surface} [data-keys-row="${id}"]`).first();
         const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
         const tap = async (selector: string) => { const target = page.locator(selector).first(); await target.scrollIntoViewIfNeeded(); await target.click(); };
 
         const openSection = async (state: State) => {
           await context.clearCookies();
-          if (memberCookie) await context.addCookies([{ name: MEMBER_COOKIE, value: memberCookie, url: server.base }]);
+          /* The operator's own browser session, as the Viewer's page navigation sets it, or a team member's. */
+          await context.addCookies([memberCookie ? { name: MEMBER_COOKIE, value: memberCookie, url: server.base } : { name: "llv_operator", value: soloBrowserSession(), url: server.base }]);
           await page.goto(base);
           if (state === "from-dictation") return;
           await tap(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]");
@@ -12672,6 +12985,472 @@ describe("keys settings", () => {
 });
 
 /*
+ * What a saved OpenAI key serves (docs/design/openai-key-services.md, variant 3):
+ * the list under the OpenAI row and each feature's own page on the real header
+ * menu and phone menu sheet, over the real `/api/openai-services`, `/api/keys`,
+ * dictation, read-aloud and voice routes and the real provider policy, in a
+ * throw-away config and state directory, at 1440 and 390 px (the Keys list also
+ * at 820), light and dark, en and uk. Seeded states frame the list and the
+ * eighteen feature pages; in every context the real sequence then runs once:
+ * open Dictation, pick OpenAI, go back, «⋯ → Remove → Remove», let «Asks you»
+ * go by pressing OpenRouter on its held page, save a key in the field, each
+ * step asserted on visible text. Every frame is read from text ranges before
+ * its screenshot.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 LLV_OPENAI_FRAMES=<dir> CHROME_BIN=… bun test \
+ *     src/components/mobile/issue1671Evidence.browser.test.tsx -t "openai key services"
+ */
+describe("openai key services", () => {
+  browserTest("What the OpenAI key serves: list, feature pages, removal and restore, 1440, 820 and 390, light and dark, en and uk", async () => {
+    const { NextRequest } = await import("next/server");
+    const list = await import("@/app/api/keys/route");
+    const write = await import("@/app/api/keys/[id]/route");
+    const services = await import("@/app/api/openai-services/route");
+    const stt = await import("@/app/api/transcribe/backend/route");
+    const tts = await import("@/app/api/tts/backend/route");
+    const voice = await import("@/app/api/voice-companion/settings/route");
+    const asksYou = await import("@/app/api/asks-you/route");
+    const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
+    const { configFilePath } = await import("@/lib/configDir");
+    const { chooseService, resolveService } = await import("@/lib/openaiServices/policy");
+    const { writeTtsBackend } = await import("@/lib/ttsBackend");
+    const { writeTranscribeBackend } = await import("@/lib/transcribeBackend");
+    const { CompanionStorage } = await import("@/lib/voiceCompanion/storage");
+    const { saveBotToken } = await import("@/lib/telegram/bot/transport");
+    const { botIdFromToken } = await import("@/lib/telegram/bot/contracts");
+    const { KEY_IDS } = await import("@/lib/keys/shared");
+
+    const FRAMES = path.resolve(process.env.LLV_OPENAI_FRAMES ?? ".artifacts/openai-key-services");
+    const only = process.env.LLV_OPENAI_ONLY ? process.env.LLV_OPENAI_ONLY.split(",") : null;
+    fs.mkdirSync(FRAMES, { recursive: true });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-openai-services-browser-"));
+    const VARIABLES = ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "ELEVENLABS_API_KEY", "SONIOX_API_KEY", "FISH_AUDIO_API_KEY", "DELEGATUS_TELEGRAM_BOT_TOKEN", "LLV_TTS_BACKEND", "LLV_TRANSCRIBE_BACKEND", "LLV_STAGING"];
+    const DIRS = ["XDG_CONFIG_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"];
+    const previous = Object.fromEntries([...DIRS, ...VARIABLES].map((name) => [name, process.env[name]]));
+    const setEnv = (name: string, value: string | undefined) => { if (value === undefined) delete process.env[name]; else process.env[name] = value; };
+    for (const name of DIRS) setEnv(name, path.join(root, name));
+    for (const name of VARIABLES) setEnv(name, undefined);
+    /* Placeholders built at run time from runs of one digit; a frame shows only masked tails. */
+    const value = {
+      openrouter: ["sk", "or", "v1", `${"0".repeat(60)}7f3c`].join("-"),
+      openai: ["sk", "proj", `${"2".repeat(44)}a91e`].join("-"),
+      elevenlabs: `sk_${"1".repeat(44)}5d20`,
+      soniox: `${"4".repeat(60)}c3b8`,
+      telegram: `${"7".repeat(9)}:${"6".repeat(31)}Qm4x`,
+    };
+    const put = (name: string, text: string) => { const file = configFilePath(name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text, { mode: 0o600 }); };
+    type Feature = "asks" | "memory" | "rules" | "dictation" | "read" | "voice";
+    const FEATURES: Feature[] = ["asks", "memory", "rules", "dictation", "read", "voice"];
+    const OPENAI_ID = (feature: Feature) => feature === "voice" ? "api" : "openai";
+    /* The invented installation: OpenRouter, ElevenLabs, Soniox and Telegram saved, Fish Audio absent; dictation on Soniox, read aloud on ElevenLabs, voice on Codex V3. */
+    const seed = async (scene: { key: boolean; chosen?: Feature[]; legacyRead?: boolean; locked?: boolean }) => {
+      fs.rmSync(path.join(root, "XDG_CONFIG_HOME"), { recursive: true, force: true });
+      /* The state directory keeps the operator session's signing key; only the bot's state is reset. */
+      fs.rmSync(path.join(root, "LLV_STATE_DIR", "telegram"), { recursive: true, force: true });
+      setEnv("LLV_TRANSCRIBE_BACKEND", undefined);
+      put("openrouter-api-key", value.openrouter);
+      put("elevenlabs-api-key", `${value.elevenlabs}\n`);
+      put("soniox-api-key", `${value.soniox}\n`);
+      saveBotToken(value.telegram, botIdFromToken(value.telegram));
+      if (!scene.legacyRead) writeTtsBackend("elevenlabs");
+      writeTranscribeBackend("soniox");
+      new CompanionStorage().updateSettings({ backend: "codex" });
+      put("openai-api-key", `${value.openai}\n`);
+      for (const feature of scene.chosen ?? []) await chooseService(feature, OPENAI_ID(feature));
+      if (!scene.key) fs.rmSync(configFilePath("openai-api-key"));
+      if (scene.locked) setEnv("LLV_TRANSCRIBE_BACKEND", "soniox");
+    };
+    const params = (id: string) => ({ params: Promise.resolve({ id }) });
+    const routes: Record<string, (request: Request) => Response | Promise<Response>> = {
+      "/api/keys": (request) => list.GET(new NextRequest(request)),
+      "/api/openai-services": (request) => request.method === "PUT" ? services.PUT(new NextRequest(request)) : services.GET(new NextRequest(request)),
+      "/api/transcribe/backend": (request) => request.method === "POST" ? stt.POST(new NextRequest(request)) : stt.GET(),
+      "/api/tts/backend": (request) => request.method === "POST" ? tts.POST(new NextRequest(request)) : tts.GET(),
+      "/api/voice-companion/settings": (request) => request.method === "PUT" ? voice.PUT(new NextRequest(request)) : voice.GET(new NextRequest(request)),
+      "/api/asks-you": (request) => request.method === "PUT" ? asksYou.PUT(new NextRequest(request)) : asksYou.GET(),
+    };
+    for (const id of KEY_IDS) routes[`/api/keys/${id}`] = (request) => request.method === "DELETE" ? write.DELETE(new NextRequest(request), params(id)) : write.PUT(new NextRequest(request), params(id));
+    const server = await serveEvidenceFixture(path.join(FRAMES, "bundle-root"), undefined, {
+      ...routes,
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+      /* Memory's month is invented; the provider it names is the one the policy resolves now. */
+      "/api/memory/settings": () => Response.json({ enabled: true, reasons: [], provider: resolveService("memory").effective, keySource: "file", capUsd: 5, spentUsd: 1.214, month: "2026-10",
+        counts: { decisions: 214, delivered: 61, prepared: 69, noCandidates: 48, noMatches: 97, skipped: 12, failed: 5 } }),
+      "/api/asks-you/key": { present: true, source: "file" },
+      "/api/team": { mode: "solo" },
+    });
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    /* What the frame is about, as visible text: each listed selector's words must contain `words` and lie whole on the first screen. */
+    type Defining = { selector: string; words: string }[];
+    type Seeded = { name: string; scene: Parameters<typeof seed>[0]; page: Feature | null; defining: (lang: "en" | "uk") => Defining; check?: (page: Page) => Promise<string | null> };
+    const say = (lang: "en" | "uk", key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate(lang, key, params).replace(/\s+/g, " ");
+    const PREVIOUS: Record<Feature, string> = { asks: "OpenRouter", memory: "OpenRouter", rules: "OpenAI", dictation: "Soniox", read: "ElevenLabs", voice: "Codex V3" };
+    /* The selected choice says what serves a feature: Voice calls its API choice by what it does. */
+    const servedBy = (lang: "en" | "uk", feature: Feature, name: string) => feature === "voice" && name === "OpenAI" ? say(lang, "voiceCompanion.settings.backend.api") : name;
+    const nowRow = (feature: Feature, words: string) => ({ selector: `[data-openai-service="${feature}"] [data-openai-service-now]`, words });
+    const optionReason = `[data-openai-option-reason]`;
+    const SEEDED: Seeded[] = [
+      { name: "keys-none", scene: { key: false }, page: null, defining: (lang) => [{ selector: "[data-openai-services] > p", words: say(lang, "openaiServices.group") }, { selector: '[data-keys-row="openai"]', words: say(lang, "keys.state.missing") }] },
+      { name: "keys-saved", scene: { key: true }, page: null, defining: (lang) => [{ selector: "[data-openai-services-codex]", words: say(lang, "openaiServices.codex") }] },
+      { name: "keys-switched", scene: { key: true, chosen: ["asks", "dictation", "voice"] }, page: null, defining: () => (["asks", "dictation", "voice"] as const).map((feature) => nowRow(feature, "OpenAI")) },
+      { name: "keys-all", scene: { key: true, chosen: FEATURES }, page: null, defining: () => FEATURES.map((feature) => nowRow(feature, "OpenAI")) },
+      ...FEATURES.flatMap((feature): Seeded[] => [
+        { name: `${feature}-none`, scene: { key: false }, page: feature, defining: (lang) => [{ selector: `[data-openai-option="${OPENAI_ID(feature)}"] ${optionReason}`, words: say(lang, "openaiServices.noKeyYet", { name: "OpenAI" }) }, { selector: `[data-openai-option="${OPENAI_ID(feature)}"] [data-openai-add-key]`, words: say(lang, "openaiServices.addKey") }] },
+        { name: `${feature}-chosen`, scene: { key: true, chosen: [feature] }, page: feature, defining: (lang) => [{ selector: "[data-openai-feature-now]", words: servedBy(lang, feature, "OpenAI") }],
+          check: async (page) => await page.locator(`[data-openai-option="${OPENAI_ID(feature)}"] input`).first().isChecked() ? null : "OpenAI is not checked" },
+        { name: `${feature}-removed`, scene: { key: false, chosen: [feature] }, page: feature, defining: (lang) => [{ selector: "[data-openai-feature-now]", words: servedBy(lang, feature, PREVIOUS[feature]) }, { selector: `[data-openai-option="${OPENAI_ID(feature)}"] [data-openai-option-reason="held"]`, words: say(lang, "openaiServices.held") }] },
+      ]),
+      { name: "read-legacy", scene: { key: false, legacyRead: true }, page: "read", defining: (lang) => [{ selector: "[data-openai-feature-now]", words: "OpenAI" }, { selector: `[data-openai-option="openai"] ${optionReason}`, words: say(lang, "openaiServices.noKeyYet", { name: "OpenAI" }) }],
+        check: async (page) => { const radio = page.locator('[data-openai-option="openai"] input').first(); return await radio.isChecked() && await radio.isDisabled() ? null : "legacy OpenAI is not checked and disabled"; } },
+      { name: "dictation-locked", scene: { key: true, locked: true }, page: "dictation", defining: (lang) => [{ selector: "[data-openai-feature-locked]", words: say(lang, "onboarding.voice.locked") }],
+        check: async (page) => (await page.locator("[data-openai-option] input").evaluateAll((inputs) => inputs.every((input) => (input as HTMLInputElement).disabled))) ? null : "a radio is enabled under the lock" },
+    ];
+    const KEYS_ONLY = new Set(["keys-none", "keys-saved", "keys-switched", "keys-all"]);
+    const wanted = (name: string) => !only || only.some((term) => name.includes(term));
+    const LATIN_OK = new Set(["OpenAI", "OpenRouter", "ElevenLabs", "Scribe", "Soniox", "Fish", "Audio", "Codex", "V3", "Delegatus", "Faster", "Whisper", "ChatGPT", "Voice", "API", "LLV_TRANSCRIBE_BACKEND", "LLV_TTS_BACKEND", "Telegram"]);
+
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 820, 390] as const) {
+        const phone = width === 390;
+        const viewport = phone ? { width: 390, height: 844 } : { width, height: 900 };
+        const base = `${server.base}?scenario=keys&header=1&openai=1`;
+        const { context, page, pageErrors } = await openFixture(browser, base, viewport, theme, lang, "reduce", phone, 2);
+        /* The operator's own browser session, as the Viewer's page navigation sets it. */
+        await context.addCookies([{ name: "llv_operator", value: soloBrowserSession(), url: server.base }]);
+        const surface = phone ? "[data-mobile2-sheet='settings']" : "[data-settings-window]";
+        const tap = async (selector: string) => { const target = page.locator(selector).first(); await target.scrollIntoViewIfNeeded(); await target.click(); };
+        let last: { key: string; text: string } | null = null;
+        const openKeys = async () => {
+          await page.goto(base);
+          await tap(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]");
+          await tap(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]");
+          await tap(phone ? '[data-mobile2-menu-row="keys"]' : "[data-rail-menu-keys]");
+          await page.locator(`${surface} [data-openai-services] [data-openai-service="voice"]`).waitFor();
+        };
+        /* Waits, under one deadline, for a reading to reach the value the step expects. */
+        const until = async <T,>(read: () => T | Promise<T>, want: T, what: string) => {
+          const deadline = Date.now() + 5_000;
+          let seen = await read();
+          while (seen !== want && Date.now() < deadline) { await page.waitForTimeout(100); seen = await read(); }
+          if (seen !== want) throw new Error(`${what}: ${String(seen)} instead of ${String(want)}`);
+        };
+        const openFeature = async (feature: Feature) => {
+          await tap(`${surface} [data-openai-service="${feature}"]`);
+          await page.locator(`${surface} [data-openai-feature-page="${feature}"] [data-openai-option]`).first().waitFor();
+        };
+
+        /** Reads the frame from text ranges, then writes the screen and, on the desktop, a crop around the menu. */
+        const frame = async (name: string, defining: Defining, extra: string | null = null, at = surface) => {
+          await page.waitForTimeout(150);
+          /* The sheet may still be moving after a change (a saved key, a removed one): wait, under one deadline, until two readings 200 ms apart agree. */
+          const layout = () => page.evaluate((selector) => [...document.querySelectorAll(`${selector} *`)].slice(0, 400).map((node) => Math.round(node.getBoundingClientRect().top)).join(","), at);
+          for (let tries = 0, before = await layout(); tries < 15; tries++) {
+            await page.waitForTimeout(200);
+            const after = await layout();
+            if (after === before) break;
+            before = after;
+          }
+          /* A sheet taller than the window scrolls: settle it at the nearest position where both of its edges fall between text lines and the defining words stay whole. */
+          await page.evaluate(({ surface, defining }) => {
+            const host = document.querySelector<HTMLElement>(surface);
+            const scroller = host && [host, ...host.querySelectorAll<HTMLElement>("*")].find((node) => /auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1);
+            if (!scroller) return;
+            const lines = () => {
+              const all: DOMRect[] = [];
+              const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+              for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                if (!node.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(node);
+                all.push(...[...range.getClientRects()].filter((rect) => rect.height));
+              }
+              return all;
+            };
+            const clean = () => {
+              const edge = scroller.getBoundingClientRect();
+              const top = edge.top, bottom = Math.min(edge.bottom, innerHeight);
+              if (lines().some((rect) => (rect.top < top - 0.5 && rect.bottom > top + 0.5) || (rect.top < bottom - 0.5 && rect.bottom > bottom + 0.5))) return false;
+              return defining.every(({ selector }) => [...(host!.querySelector(selector)?.getClientRects() ?? [])].every((rect) => rect.top >= top - 0.5 && rect.bottom <= bottom + 0.5));
+            };
+            const start = scroller.scrollTop;
+            for (let step = 0; step <= 160; step++) {
+              for (const at of [start + step, start - step]) {
+                if (at < 0 || at > scroller.scrollHeight - scroller.clientHeight) continue;
+                scroller.scrollTop = at;
+                if (clean()) return;
+              }
+            }
+            scroller.scrollTop = start;
+          }, { surface: at, defining });
+          const reading = await page.evaluate(({ surface, phone, defining, lang, latinOk }) => {
+            const host = document.querySelector<HTMLElement>(surface);
+            if (!host) return null;
+            const box = host.getBoundingClientRect();
+            /* The surfaces this change draws; the Keys rows around them keep their own case. */
+            const ours = [...host.querySelectorAll<HTMLElement>("[data-openai-services], [data-openai-feature-page], [data-keys-remove]")];
+            const rectsOf = (node: Node) => { const range = document.createRange(); range.selectNodeContents(node); return [...range.getClientRects()].filter((rect) => rect.width && rect.height); };
+            const clipped = (element: Element, rect: DOMRect) => {
+              for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+                const style = getComputedStyle(parent);
+                if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+                const clip = parent.getBoundingClientRect();
+                if (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5 || rect.left < clip.left - 0.5 || rect.right > clip.right + 0.5) return true;
+              }
+              return false;
+            };
+            const cutByEdge: string[] = [];
+            const truncated: string[] = [];
+            const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+              const text = node.textContent?.trim();
+              const parent = node.parentElement;
+              if (!text || !parent || !parent.getClientRects().length) continue;
+              /* What shows of a line: the window, the surface and every clipping ancestor, intersected. */
+              let top = Math.max(box.top, 0), bottom = Math.min(box.bottom, innerHeight);
+              for (let clip = parent.parentElement; clip && clip !== document.body; clip = clip.parentElement) {
+                const style = getComputedStyle(clip);
+                if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+                const r = clip.getBoundingClientRect();
+                top = Math.max(top, r.top); bottom = Math.min(bottom, r.bottom);
+              }
+              for (const rect of rectsOf(node)) {
+                /* Under half a pixel inside an edge is not drawn; a line partly shown is cut, however little. */
+                const visible = rect.top < bottom - 0.5 && rect.bottom > top + 0.5;
+                if (visible && (rect.bottom > bottom + 0.5 || rect.top < top - 0.5)) cutByEdge.push(`${text.slice(0, 40)} ${rect.top.toFixed(1)}–${rect.bottom.toFixed(1)} in ${top.toFixed(1)}–${bottom.toFixed(1)}`);
+              }
+              if (parent.scrollWidth > parent.clientWidth + 1 && getComputedStyle(parent).overflowX !== "visible" && ours.some((area) => area.contains(parent))) truncated.push(text.slice(0, 60));
+            }
+            /* The words a frame is about, whole on the first screen: every line inside the window, the surface and every clipping ancestor. */
+            const definingMisses: string[] = [];
+            for (const { selector, words } of defining) {
+              const element = host.querySelector(selector);
+              const text = (element?.textContent ?? "").replace(/\s+/g, " ").trim();
+              if (!element) { definingMisses.push(`${selector}: missing`); continue; }
+              if (!text.includes(words)) { definingMisses.push(`${selector}: "${text.slice(0, 60)}" lacks "${words}"`); continue; }
+              const lines = [...element.querySelectorAll("*"), element].flatMap((node) => [...node.childNodes].filter((child) => child.nodeType === Node.TEXT_NODE && child.textContent?.trim()).flatMap((child) => rectsOf(child).map((rect) => ({ rect, owner: node as Element }))));
+              for (const { rect, owner } of lines) {
+                if (rect.top < 0 || rect.bottom > innerHeight || rect.left < 0 || rect.right > innerWidth || rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5 || clipped(owner, rect)) { definingMisses.push(`${selector}: a line at ${Math.round(rect.top)}–${Math.round(rect.bottom)} is not whole on the first screen`); break; }
+              }
+              /* Contrast of the defining words against what is drawn behind them. */
+              const owner = element.querySelector("*:not(:has(*))") ?? element;
+              const rgb = (value: string) => (value.match(/[\d.]+/g) ?? []).map(Number);
+              const color = rgb(getComputedStyle(owner).color);
+              let background: number[] = [];
+              for (let node: Element | null = owner; node; node = node.parentElement) {
+                const value = rgb(getComputedStyle(node).backgroundColor);
+                if (value.length >= 3 && (value.length < 4 || value[3] > 0.5)) { background = value; break; }
+              }
+              if (!background.length) background = rgb(getComputedStyle(document.body).backgroundColor);
+              const lum = ([r, g, b]: number[]) => [r, g, b].map((c) => { const s = c / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; }).reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
+              const [a, b] = [lum(color), lum(background)].sort((x, y) => y - x);
+              const ratio = (a + 0.05) / (b + 0.05);
+              if (ratio < 4.5) definingMisses.push(`${selector}: contrast ${ratio.toFixed(2)}`);
+            }
+            /* Targets: 44 px under a finger, 24 px under a pointer; a radio's target is its label. */
+            const smallTargets: string[] = [];
+            const offscreen: string[] = [];
+            const nested: string[] = [];
+            for (const area of ours) {
+              for (const control of area.querySelectorAll<HTMLElement>("button, a, [role=button], label")) {
+                if (control.tagName === "LABEL" && !control.querySelector("input")) continue;
+                if (control.tagName !== "LABEL" && control.closest("label")) nested.push((control.textContent ?? "").trim().slice(0, 30));
+                const r = control.getBoundingClientRect();
+                if (!r.width) continue;
+                const floor = phone ? 43.5 : 23.5;
+                if (r.height < floor || (phone && r.width < floor)) smallTargets.push(`${(control.getAttribute("aria-label") ?? control.textContent ?? "").trim().slice(0, 30)} ${Math.round(r.width)}×${Math.round(r.height)}`);
+                if (r.left < box.left - 1 || r.right > box.right + 1 || r.right > innerWidth + 0.5) offscreen.push((control.textContent ?? "").trim().slice(0, 30));
+              }
+            }
+            /* No line of ours ends on a one-letter word; a Ukrainian frame names no Latin word but products and providers. */
+            const loneLetters: string[] = [];
+            const latin = new Set<string>();
+            for (const area of ours) {
+              const texts = document.createTreeWalker(area, NodeFilter.SHOW_TEXT);
+              for (let node = texts.nextNode(); node; node = texts.nextNode()) {
+                const text = node.textContent ?? "";
+                if (lang === "uk") for (const word of text.match(/[A-Za-z][A-Za-z0-9_]*/g) ?? []) if (!latinOk.includes(word) && !/^(sk|or|v1|proj)$/.test(word) && !/[0-9]{4}/.test(text)) latin.add(word);
+                const words = [...text.matchAll(/\S+/g)];
+                let top: number | null = null;
+                let previous: string | null = null;
+                for (const match of words) {
+                  const range = document.createRange();
+                  range.setStart(node, match.index!); range.setEnd(node, match.index! + match[0].length);
+                  const rect = range.getClientRects()[0];
+                  if (!rect) continue;
+                  if (top !== null && rect.top > top + 2 && previous && /^[A-Za-zА-ЩЬЮЯЄІЇҐа-щьюяєіїґ]$/.test(previous)) loneLetters.push(`${previous} | ${text.trim().slice(0, 40)}`);
+                  top = rect.top; previous = match[0];
+                }
+              }
+            }
+            return {
+              surface: { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) },
+              overflowX: host.scrollWidth - host.clientWidth, cutByEdge, truncated, definingMisses, smallTargets, offscreen, nested, loneLetters, latin: [...latin],
+              text: (host.innerText ?? "").replace(/\s+/g, " ").trim(),
+            };
+          }, { surface: at, phone, defining, lang, latinOk: [...LATIN_OK] });
+          const key = `openai-${name}-${lang}-${theme}-${width}`;
+          await page.screenshot({ path: path.join(FRAMES, `${key}.png`) });
+          let crop: string | null = null;
+          if (!phone && reading) {
+            const s = reading.surface;
+            const x = Math.max(0, s.left - 8), y = Math.max(0, s.top - 8);
+            crop = `${key}-crop.png`;
+            await page.screenshot({ path: path.join(FRAMES, crop), clip: { x, y, width: Math.min(width - x, s.width + 16), height: Math.min(900 - y, s.height + 16) } });
+          }
+          const text = reading?.text ?? "";
+          const valueOnScreen = /([0-9])\1{15}/.test(text);
+          readings.push({ key, state: name, lang, theme, width, file: `${key}.png`, crop, valueOnScreen, pageErrors: [...pageErrors], ...reading, text: text.slice(0, 900) });
+          if (!reading) { failures.push(`${key}: surface missing`); return; }
+          if (reading.overflowX > 1) failures.push(`${key}: horizontal overflow ${reading.overflowX}`);
+          for (const [label, list] of [["cut by an edge", reading.cutByEdge], ["cut text", reading.truncated], ["defining", reading.definingMisses], ["small targets", reading.smallTargets], ["controls outside", reading.offscreen], ["controls inside a label", reading.nested], ["lines ending on one letter", reading.loneLetters], ["Latin words", reading.latin]] as const) {
+            if (list.length) failures.push(`${key}: ${label}: ${list.join(" | ")}`);
+          }
+          if (extra) failures.push(`${key}: ${extra}`);
+          if (valueOnScreen) failures.push(`${key}: a key value is on screen`);
+          if (last && last.text === text) failures.push(`${key}: reads the same as ${last.key}`);
+          last = { key, text };
+          if (pageErrors.length) failures.push(`${key}: ${pageErrors.join("; ")}`);
+        };
+
+        try {
+          for (const state of SEEDED) {
+            if (width === 820 && !KEYS_ONLY.has(state.name)) continue;
+            if (!wanted(`${state.name}-${lang}-${theme}-${width}`)) continue;
+            try {
+              await seed(state.scene);
+              await openKeys();
+              if (state.page) await openFeature(state.page);
+              await frame(state.name, state.defining(lang), state.check ? await state.check(page) : null);
+            } catch (error) {
+              failures.push(`openai-${state.name}-${lang}-${theme}-${width}: ${String(error).split("\n")[0]}`);
+              await page.screenshot({ path: path.join(FRAMES, `failed-openai-${state.name}-${lang}-${theme}-${width}.png`) }).catch(() => {});
+            }
+          }
+          /* «Asks you» and memory on OpenAI: each one's own explanation, on the memory page and beside the «Asks you» switch, names OpenAI. */
+          if (width !== 820 && wanted(`explains-${lang}-${theme}-${width}`)) try {
+            last = null;
+            await seed({ key: true, chosen: ["asks", "memory"] });
+            await page.goto(base);
+            await tap(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]");
+            await tap(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]");
+            await tap(phone ? '[data-mobile2-menu-row="memory"]' : "[data-rail-menu-memory]");
+            const memoryHint = say(lang, "memoryPage.openai.explains");
+            await page.locator(`${surface} [data-memory-setting]`).filter({ hasText: memoryHint }).first().waitFor();
+            await frame("memory-openai", [{ selector: "[data-memory-setting]", words: memoryHint }],
+              (await page.locator(`${surface} [data-memory-page]`).innerText()).match(/OpenRouter|Jev/) ? "the memory page names OpenRouter" : null);
+            /* «Asks you» sits on the board menu's «Orchestrator» page on the desktop and under «Rules» in the phone's ⋯ sheet. */
+            await page.goto(base);
+            const asksMenu = phone ? "[data-mobile2-sheet='menu']" : "[data-bar-more-menu]";
+            const toastDismiss = page.locator("[data-attention-toast] [data-attention-toast-dismiss]:visible");
+            const asksHint = say(lang, "asksYou.openai.off");
+            if (phone) {
+              await tap('[data-mobile2-open="menu"]');
+              await tap('[data-mobile2-menu-row="rules"]');
+              await page.locator(`${asksMenu} [data-asks-you]`).filter({ hasText: asksHint }).first().waitFor();
+              /* The phone sheet scrolls; the desktop menu is drawn whole and redraws its row when the setting is read. */
+              await page.locator(`${asksMenu} [data-asks-you]`).first().scrollIntoViewIfNeeded();
+            } else {
+              /* The fixture's «needs you» toast can arrive while the board loads, over the menu's rows: it is put away
+                 first, as the operator would, which also closes an open menu, and the menu opened again. The ⋯ is pressed
+                 again while the first paint redraws the bar and drops the menu, and the «Orchestrator» row only where it
+                 is the element under its own centre. */
+              const head = page.locator('[data-bar-menu-head="seat"]');
+              const seat = page.locator('[data-bar-more-menu][data-bar-menu-view="seat"]');
+              const settled = async () => await seat.isVisible() && !(await toastDismiss.count())
+                && await page.locator(`${asksMenu} [data-asks-you]`).filter({ hasText: asksHint }).count() > 0;
+              for (let tries = 0; tries < 8 && !(await settled()); tries++) {
+                for (let round = 0; round < 5 && await toastDismiss.count(); round++) await toastDismiss.first().click();
+                if (await seat.isVisible()) {
+                  await page.locator(`${asksMenu} [data-asks-you]`).filter({ hasText: asksHint }).first().waitFor();
+                  continue;
+                }
+                if (!(await head.isVisible())) await page.locator('[data-bar-group="more"] button').first().click();
+                const centre = await head.count() ? await head.first().evaluate((node) => {
+                  const box = node.getBoundingClientRect();
+                  const x = box.left + box.width / 2, y = box.top + box.height / 2;
+                  const hit = document.elementFromPoint(x, y);
+                  return { x, y, hit: Boolean(hit && node.contains(hit)) };
+                }) : null;
+                if (!centre?.hit) continue;
+                await page.mouse.click(centre.x, centre.y);
+                /* Either the page opened, or a redraw took the menu away. */
+                await page.waitForFunction(() => document.querySelector('[data-bar-more-menu][data-bar-menu-view="seat"]') || !document.querySelector("[data-bar-more-menu]"));
+              }
+              if (!(await settled())) throw new Error("the «Orchestrator» page of ⋯ never showed «Asks you» clear of a toast");
+            }
+            await frame("asks-openai", [{ selector: '[data-asks-you] [role="status"]', words: asksHint }],
+              (await page.locator(`${asksMenu} [data-asks-you]`).innerText()).match(/OpenRouter|Jev/) ? "the «Asks you» row names OpenRouter" : null, asksMenu);
+          } catch (error) {
+            failures.push(`openai-explains-${lang}-${theme}-${width}: ${String(error).split("\n")[0]}`);
+            await page.screenshot({ path: path.join(FRAMES, `failed-openai-explains-${lang}-${theme}-${width}.png`) }).catch(() => {});
+          }
+          /* The real sequence: «Asks you» and voice already moved, Dictation picked here, the key removed, «Asks you» let go, and the key saved again. */
+          if (wanted(`interaction-${lang}-${theme}-${width}`)) try {
+            last = null;
+            await seed({ key: true, chosen: ["asks", "voice"] });
+            await openKeys();
+            await openFeature("dictation");
+            await tap(`${surface} [data-openai-option="openai"] label`);
+            /* Optimistic: OpenAI is selected at once, then the policy agrees. */
+            expect((await page.locator(`${surface} [data-openai-feature-now]`).innerText()).replace(/\s+/g, " ")).toBe("OpenAI");
+            await page.waitForFunction(() => !document.querySelector("[data-openai-feature-error]"));
+            await until(() => resolveService("dictation").effective, "openai", "the policy after the pick");
+            await tap(`${surface} [data-settings-back]`);
+            await page.locator(`${surface} [data-openai-service="dictation"]`).waitFor();
+            await until(async () => (await page.locator(`${surface} [data-openai-service="dictation"] [data-openai-service-now]`).innerText()).trim(), "OpenAI", "the Dictation row after the pick");
+            await tap(`${surface} [data-keys-more="openai"]`);
+            await tap(`${surface} [data-keys-menu-item="remove"]`);
+            await page.locator(`${surface} [data-keys-remove]`).waitFor();
+            await frame("keys-remove-confirm", [{ selector: "[data-keys-remove] p", words: say(lang, "keys.removeConfirm") }]);
+            await tap(`${surface} [data-keys-remove-go]`);
+            await page.locator(`${surface} [data-keys-row="openai"][data-keys-source="missing"]`).waitFor();
+            await page.locator(`${surface} [data-openai-service="dictation"][data-held]`).waitFor();
+            expect(fs.existsSync(configFilePath("openai-api-key"))).toBe(false);
+            expect(resolveService("dictation")).toMatchObject({ requested: "openai", effective: "soniox", held: true });
+            await frame("keys-removed", (["asks", "dictation", "voice"] as const).map((feature) => nowRow(feature, say(lang, "openaiServices.noKey", { name: PREVIOUS[feature] }))));
+            /* The held page's checked provider, pressed: the decision to stay on it, which a saved key no longer undoes. */
+            await openFeature("asks");
+            await tap(`${surface} [data-openai-option="openrouter"] label`);
+            await page.locator(`${surface} [data-openai-option-reason="held"]`).waitFor({ state: "detached" });
+            await page.waitForFunction(() => !document.querySelector("[data-openai-feature-error]"));
+            await until(() => resolveService("asks").requested, "openrouter", "the policy after letting «Asks you» go");
+            await frame("asks-kept", [{ selector: "[data-openai-feature-now]", words: "OpenRouter" }, { selector: `[data-openai-option="openai"] ${optionReason}`, words: say(lang, "openaiServices.noKeyYet", { name: "OpenAI" }) }],
+              await page.locator(`${surface} [data-openai-option="openrouter"] input`).first().isChecked() ? null : "OpenRouter is not checked");
+            await tap(`${surface} [data-settings-back]`);
+            await page.locator(`${surface} [data-openai-service="asks"]:not([data-held])`).waitFor();
+            await tap(`${surface} [data-keys-add="openai"]`);
+            await page.locator(`${surface} [data-keys-field="openai"] input`).fill(value.openai);
+            await tap(`${surface} [data-keys-field="openai"] [data-keys-save]`);
+            await page.locator(`${surface} [data-keys-row="openai"][data-keys-source="file"]`).waitFor();
+            await until(async () => (await page.locator(`${surface} [data-openai-service="dictation"] [data-openai-service-now]`).innerText()).trim(), "OpenAI", "the Dictation row after the key is saved again");
+            expect(resolveService("dictation").effective).toBe("openai");
+            expect(resolveService("asks")).toMatchObject({ requested: "openrouter", effective: "openrouter", held: false });
+            await frame("keys-restored", [nowRow("asks", "OpenRouter"), ...(["dictation", "voice"] as const).map((feature) => nowRow(feature, "OpenAI"))]);
+          } catch (error) {
+            failures.push(`openai-interaction-${lang}-${theme}-${width}: ${String(error).split("\n")[0]}`);
+            await page.screenshot({ path: path.join(FRAMES, `failed-openai-interaction-${lang}-${theme}-${width}.png`) }).catch(() => {});
+          }
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close(); server.stop();
+      for (const [name, was] of Object.entries(previous)) setEnv(name, was);
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.writeFileSync(path.join(FRAMES, "readings.json"), JSON.stringify({ failures, frames: readings }, null, 2) + "\n");
+      if (!only) {
+        fs.mkdirSync("evidence/openai-key-services", { recursive: true });
+        fs.writeFileSync("evidence/openai-key-services/frames.json", JSON.stringify({
+          driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", block: "openai key services", failures,
+          frames: readings.map(({ text: _text, pageErrors: _errors, ...reading }) => reading),
+        }, null, 2) + "\n");
+      }
+    }
+    expect(failures).toEqual([]);
+  }, 3_600_000);
+});
+
+/*
  * «Delegatus memory» (docs/design/memory-source-switch.md §3.4): the Settings
  * row of the memory source switch in every state on the phone's menu sheet,
  * at 360, 375 and 390 px, light and dark, en and uk. Each state is real state
@@ -12730,7 +13509,8 @@ describe("memory source settings", () => {
               await page.goto(`${server.base}?scenario=keys&header=1`);
               await page.locator('[data-mobile2-open="menu"]').first().click();
               await page.locator('[data-mobile2-menu-row="settings"]').first().click();
-              const row = page.locator("[data-mobile2-sheet='menu'] [data-header-menu-memory-source]");
+              await page.locator("[data-mobile2-sheet='settings'] [data-settings-section-row='memory']").click();
+              const row = page.locator("[data-mobile2-sheet='settings'] [data-header-menu-memory-source]");
               await row.waitFor();
               const first = state === "pressed" ? "unchosen" : state === "refused" ? "active" : MEMORY_SOURCE_FRAME_ROW[state];
               await page.waitForFunction((want) => document.querySelector("[data-header-menu-memory-source]")?.getAttribute("data-memory-source-state") === want, first);
@@ -12746,7 +13526,7 @@ describe("memory source settings", () => {
               await row.scrollIntoViewIfNeeded();
               await page.waitForTimeout(120);
               const geometry = await page.evaluate(() => {
-                const sheet = document.querySelector<HTMLElement>("[data-mobile2-sheet='menu']")!;
+                const sheet = document.querySelector<HTMLElement>("[data-mobile2-sheet='settings']")!;
                 const host = document.querySelector<HTMLElement>("[data-header-menu-memory-source]")!;
                 const line = host.querySelector<HTMLElement>("[data-memory-source-line]")!;
                 const title = host.querySelector<HTMLElement>("[data-memory-source-title]")!;
@@ -13022,7 +13802,7 @@ describe("team workspaces slice (a) on the phone", () => {
             if (pageErrors.length) failures.push(`${tag} P1/P2: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
         }
-        /* P3: All, a heading per workspace and Unassigned with Move; Move to… expands under the row and lands. */
+        /* P3: All, a heading per workspace and Unassigned; a long press opens the row's menu, whose Move to… page lands. */
         {
           const { context, page, pageErrors } = await open("overview=1&scenario=workspaces&ws=all");
           try {
@@ -13031,23 +13811,29 @@ describe("team workspaces slice (a) on the phone", () => {
             await page.locator('[data-mobile2-bar] [data-mobile2-open="projects"]').click();
             await page.locator("[data-mobile2-workspace-section='unassigned']").waitFor();
             await page.locator("[data-mobile2-workspace-section='unassigned']").scrollIntoViewIfNeeded();
-            /* The rows carry the projects' names, whole: Move takes the marks' place on the Unassigned row. */
+            /* The rows carry the projects' names, whole, and no Move control (docs/design/project-rail-context-menu/README.md). */
             const label = await page.locator(`[data-mobile2-project='${delegatus}'] .truncate`).first().evaluate((element) => ({ text: (element.textContent ?? "").trim(), cut: element.scrollWidth > element.clientWidth + 0.5 }));
             readings.push({ tag, state: "P3-unassigned-label", ...label });
             if (label.text !== "delegatus" || label.cut) failures.push(`${tag} P3: the Unassigned row reads ${JSON.stringify(label)}`);
             await frame(page, tag, "P3-all", [
               ["[data-mobile2-workspace-section='unassigned']", words(lang, "workspaces.unassigned")],
-              ["[data-mobile2-workspace-section='unassigned']", words(lang, "workspaces.move")],
               [`[data-mobile2-project='${delegatus}']`, "delegatus"],
               ["[data-mobile2-sheet='projects']", "atlas-docs"],
             ]);
-            const move = page.locator(`[data-mobile2-movable='${delegatus}'] [data-mobile2-move]`);
+            if (await page.locator("[data-mobile2-move]").count()) failures.push(`${tag} P3: a row still carries Move`);
+            /* A held press, through the row's own pointer handlers. */
+            const held = (await page.locator(`[data-mobile2-longpress='${delegatus}']`).boundingBox())!;
+            await page.mouse.move(held.x + held.width / 3, held.y + held.height / 2);
+            await page.mouse.down();
+            const move = page.locator(`[data-row-menu='${delegatus}'] [data-row-menu-item='move']`);
+            try { await move.waitFor(); }
+            finally { await page.mouse.up(); }
             const target = await move.boundingBox();
-            if (!target || target.height < 44) failures.push(`${tag} P3: Move is ${target?.height ?? 0} px tall`);
+            if (!target || target.height < 44) failures.push(`${tag} P3: Move to… is ${target?.height ?? 0} px tall`);
             await move.click();
-            await page.locator(`[data-mobile2-movable='${delegatus}'] [data-mobile2-move-list]`).scrollIntoViewIfNeeded();
-            await frame(page, tag, "P3-move", [[`[data-mobile2-movable='${delegatus}'] [data-mobile2-move-list]`, words(lang, "workspaces.moveTo")], [`[data-mobile2-movable='${delegatus}'] [data-mobile2-move-list]`, client[lang]]]);
-            await page.locator(`[data-mobile2-movable='${delegatus}'] [data-mobile2-move-to='${CLIENT_ID}']`).click();
+            await page.locator("[data-row-menu-page='move']").waitFor();
+            await frame(page, tag, "P3-move", [["[data-row-menu-page='move']", words(lang, "workspaces.moveTo")], ["[data-row-menu-page='move']", client[lang]]]);
+            await page.locator(`[data-row-menu-space='${CLIENT_ID}']`).click();
             await page.locator(`[data-mobile2-workspace-section='${CLIENT_ID}'] [data-mobile2-project='${delegatus}']`).waitFor();
             if (pageErrors.length) failures.push(`${tag} P3: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
@@ -13191,6 +13977,27 @@ browserTest("digest preview boundaries and literal hints stay distinct without a
     }
   } finally { await browser.close(); server.stop(); }
 }, 180_000);
+
+/* The one Settings window at 390 px (docs/design/settings-redo/build-brief.md §7). `LLV_SETTINGS_WINDOW_ONLY=<substring,…>`
+   reruns a subset and `LLV_SETTINGS_WINDOW_OUT` says where its frames go. */
+describe("the Settings window", () => {
+  browserTest("every state renders whole on the phone, with its numbers read", async () => {
+    const { captureSettingsWindowFrames, serveEvidenceFixture } = await import("@/components/kanban/issue1695BrowserHarness");
+    const out = path.resolve(process.env.LLV_SETTINGS_WINDOW_OUT ?? ".artifacts/settings-window", "phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"],
+      ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }),
+    }).catch(error => { if (tempFd !== null) fs.closeSync(tempFd); server.stop(); throw error; });
+    const subset = (process.env.LLV_SETTINGS_WINDOW_ONLY ?? "").split(",").map((part) => part.trim()).filter(Boolean);
+    try {
+      const { readings, failures } = await captureSettingsWindowFrames(browser, server.base, out, true, subset.length ? (frame) => subset.some((part) => frame.includes(part)) : undefined);
+      expect(readings.length).toBeGreaterThan(0);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 3_000_000);
+});
 
 describe("Telegram multiple bots", () => {
   browserTest("Telegram multiple bots settings and refused chats", async () => {
@@ -13344,6 +14151,19 @@ describe("phone composer tools row", () => {
   }, 300_000);
 });
 
+describe("project setup phone host", () => {
+  browserTest("pipeline screen shows the lane's latest setup as one line", async () => {
+    const out = path.resolve(".artifacts/project-setup/mobile"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try {
+      const evidence = await captureProjectSetupHosts(browser, server.base, out, ["mobile"], [{ width: 390, height: 844 }]);
+      fs.mkdirSync("evidence/project-setup", { recursive: true });
+      fs.writeFileSync("evidence/project-setup/mobile.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 600_000);
+});
+
 /*
  * The phone bar's meta line never cuts a word without an ellipsis (seat finding from the 1.16.0 critique:
  * «● done · 30m ago · ✳ Opus 5.5 · h»). At 360, 375, 390, 403 and 416 px, in en and uk, in the running, question,
@@ -13484,6 +14304,106 @@ describe("new task default deadline", () => {
   }, 300_000);
 });
 
+/*
+ * The task's «Summary» panel, first under the title on the phone's task
+ * screen, and the timeline's result lines (variant 3 «Панеллю», 2026-10-26)
+ * at 390 and 430, in en and uk, light and dark: `captureTaskSummaryFrames` in
+ * the harness. Frames go to `.artifacts/task-summary/phone/`; the readings to
+ * `evidence/task-summary/phone.json`.
+ */
+describe("task summary panel and result lines", () => {
+  browserTest("summary panel first under the title, result lines and answer links", async () => {
+    const out = path.resolve(".artifacts/task-summary/phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx", taskSummaryResponses());
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
+    try { await captureTaskSummaryFrames(browser, server.base, out, true); }
+    finally { await browser.close(); server.stop(); }
+  }, 600_000);
+});
+
+describe("the phone names the model the conversation runs on", () => {
+  /*
+   * The chat header's identity line and the conversation menu's identity line,
+   * over a Codex conversation launched on Luna that the transcript has not named
+   * yet, one nobody has named, one the transcript names differently from the
+   * launch, and a Fable conversation, at the phone widths, both languages, both
+   * schemes. `LLV_MODEL_FACE_SIDE=before` records the same case over a checkout
+   * that names the engine instead; the default records `after` and gates it.
+   *
+   *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=… bun test \
+   *     src/components/mobile/issue1671Evidence.browser.test.tsx -t "names the model"
+   */
+  const side = process.env.LLV_MODEL_FACE_SIDE === "before" ? "before" : "after";
+  const CASES = {
+    luna: { shown: "gpt-6-luna", never: ["Sol", "Codex"] },
+    unknown: { shown: "Codex", never: ["Sol", "gpt-"] },
+    observed: { shown: "gpt-6-astra", never: ["Sol", "gpt-6-luna"] },
+    fable: { shown: "Fable 5.1", never: ["Opus", "Sonnet"] },
+  } as const;
+  browserTest("the chat header and the menu show the observed or requested model, or the engine's name, never the engine default", async () => {
+    const out = path.resolve(".artifacts/runtime-model-face/phone-headers");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
+    const base = served.base.replace(/\/$/, "");
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
+    const readings: Record<string, unknown> = {};
+    /* The line's deciding fact is the model (or the engine's name): that text range has to be whole, inside the line's own box and in view.
+       The reasoning tier after it may end in the ellipsis the line is built to draw, so `whole` records the full line and is not gated. */
+    const measure = ({ selector, shown }: { selector: string; shown: string }) => {
+      const element = document.querySelector(selector) as HTMLElement | null;
+      if (!element) return null;
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      let node: Text | null = null;
+      for (let next = walker.nextNode(); next; next = walker.nextNode()) if ((next.textContent ?? "").includes(shown)) { node = next as Text; break; }
+      const range = document.createRange();
+      if (node) { const at = node.textContent!.indexOf(shown); range.setStart(node, at); range.setEnd(node, at + shown.length); }
+      else range.selectNodeContents(element);
+      const drawn = range.getBoundingClientRect();
+      const box = element.getBoundingClientRect();
+      return {
+        text: element.textContent?.trim() ?? "",
+        whole: element.scrollWidth <= element.clientWidth + 1,
+        modelWhole: drawn.left >= box.left - 0.5 && drawn.right <= box.right + 0.5,
+        inView: drawn.left >= 0 && drawn.right <= innerWidth && drawn.top >= 0 && drawn.bottom <= innerHeight,
+        overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+      };
+    };
+    try {
+      for (const [name, expected] of Object.entries(CASES)) for (const viewport of [{ width: 390, height: 844 }, { width: 360, height: 780 }]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { page, context, pageErrors } = await openFixture(browser, `${base}/?runtime=structured&modelface=${name}#c=conversation_running`, viewport, scheme, lang, "reduce", true);
+        const key = `${name}-${viewport.width}-${lang}-${scheme}`;
+        try {
+          await page.locator("[data-mobile2-chat-model]").first().waitFor({ timeout: 20_000 });
+          await page.mouse.move(0, 0);
+          const header = await page.evaluate(measure, { selector: "[data-mobile2-chat-model]", shown: expected.shown });
+          await page.screenshot({ path: path.join(out, `${side}-${key}-header.png`) });
+          await page.locator('[data-mobile2-open="menu"]').first().click();
+          await page.locator('[data-mobile2-sheet="menu"] [data-mobile2-chat-identity]').waitFor();
+          const menu = await page.evaluate(measure, { selector: '[data-mobile2-sheet="menu"] [data-mobile2-chat-identity] .truncate', shown: expected.shown });
+          await page.screenshot({ path: path.join(out, `${side}-${key}-menu.png`) });
+          readings[key] = { header, menu };
+          expect(pageErrors).toEqual([]);
+          if (side === "after") {
+            for (const [part, reading] of [["header", header], ["menu", menu]] as const) {
+              expect({ key, part, present: reading !== null }).toEqual({ key, part, present: true });
+              /* The chat header ends its line in an ellipsis below the named 390 px (its floor is six characters), so 360 only records. */
+              const gatesModel = part === "menu" || viewport.width >= 390;
+              expect({ key, part, overflowX: reading!.overflowX, inView: reading!.inView, modelWhole: gatesModel ? reading!.modelWhole : true }).toEqual({ key, part, overflowX: 0, inView: true, modelWhole: true });
+              expect(reading!.text).toContain(expected.shown);
+              for (const never of expected.never) expect(reading!.text).not.toContain(never);
+            }
+          }
+        } finally { await context.close(); }
+      }
+      const file = "evidence/runtime-model-face/headers-phone.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const recorded = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown> : {};
+      fs.writeFileSync(file, JSON.stringify({ ...recorded, [side]: readings }, null, 2) + "\n");
+    } finally { await browser.close(); served.stop(); }
+  }, 900_000);
+});
+
 /* docs/design/task-timeline/prototype-v2/: the task summary and timeline
    prototype's three variants on the phone's task screen at 390 px, the summary
    first under the title, in both languages and themes. */
@@ -13596,4 +14516,216 @@ describe("phone composer multiline growth", () => {
       }
     } finally { await browser.close(); server.stop(); }
   }, 300_000);
+});
+
+/* docs/design/model-icon-motion-brief.md, variant B: the same motion on the
+   phone's board at 390 px with a coarse pointer, light and dark, uk and en.
+   Output goes to `.artifacts/model-icon-motion/phone` unless
+   LLV_MODEL_MOTION_OUT names another directory. */
+describe("model icon motion", () => {
+  browserTest("glyphs move only for working agents, at the applied tier's pace, on the phone's board", async () => {
+    const { captureModelIconMotion } = await import("@/components/kanban/issue1695BrowserHarness");
+    const out = path.resolve(process.env.LLV_MODEL_MOTION_OUT ?? ".artifacts/model-icon-motion/phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/kanban/modelGlyphMotion.fixture.tsx");
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureModelIconMotion(browser, server.base, out, true); }
+    finally { await browser.close(); server.stop(); }
+  }, 600_000);
+});
+
+describe("a task card without inline conversations, on the phone", () => {
+  /* docs/design/task-card-no-inline-conversations.md §6: the phone does not
+     change. Its card never held a conversation, a first message or a graph; a
+     started stage opens full screen, and a stage that has not started leads
+     to the pipeline screen with that stage's ⚙ sheet already open, which
+     shows the message it will be sent and edits it. The kanban fixture's
+     `stages` scenario at 390×844 with a touch screen, in English and
+     Ukrainian, light and dark: the board, the task screen, a started stage
+     tapped, a waiting stage tapped on the task screen (its sheet, then its
+     editor), and the same stage's row tapped on the pipeline screen. Frames go
+     to LLV_NO_INLINE_PHONE_OUT
+     (default `.artifacts/task-card-no-inline-conversations-phone`), readings to
+     evidence/task-card-no-inline-conversations/phone.json. */
+  browserTest("390×844, en and uk, light and dark: no card holds a conversation, a first message or a graph; stages open their own screens", async () => {
+    const out = path.resolve(process.env.LLV_NO_INLINE_PHONE_OUT ?? ".artifacts/task-card-no-inline-conversations-phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    /* A short browser-owned temp path avoids the Linux singleton socket limit. */
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}), ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const INLINE = ":is([data-stage-detail], .readers, [data-graph], .pgraph-box, .pgraph, [data-kanban-reader], [data-draft-message], [data-graph-toggle])";
+    const LANE = '[data-phone-task-lane="p-search"]';
+    try {
+      for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        const label = `390-${lang}-${scheme}`;
+        const fail = (message: string) => failures.push(`${label}: ${message}`);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width: 390, height: 844 }, scheme, lang, "reduce", true);
+        const taskScreen = async () => {
+          await page.waitForSelector('[data-phone-kanban] [data-phone-card="task:t-search"]', { timeout: 30_000 });
+          await page.locator('[data-phone-card="task:t-search"]').first().tap();
+          await page.waitForSelector(`${LANE} [data-stage-open="merge"]`, { timeout: 15_000 });
+          await page.locator(`${LANE} [data-stage-open="merge"]`).scrollIntoViewIfNeeded();
+          await pause(page, 500);
+        };
+        try {
+          await page.waitForSelector('[data-phone-kanban] [data-phone-card="task:t-search"]', { timeout: 30_000 });
+          await pause(page, 600);
+          const onCards = await page.evaluate((inline) => document.querySelectorAll(`[data-phone-card] ${inline}`).length, INLINE);
+          if (onCards) fail(`${onCards} phone cards hold a conversation, a first message or a graph`);
+          await page.screenshot({ path: path.join(out, `${label}-board.png`) });
+          await taskScreen();
+          const onTask = await page.evaluate(([lane, inline]) => document.querySelectorAll(`${lane} ${inline}`).length, [LANE, INLINE] as const);
+          if (onTask) fail(`the task screen's lane holds ${onTask} conversations, first messages or graphs`);
+          await page.screenshot({ path: path.join(out, `${label}-task.png`) });
+          /* A started stage opens its conversation full screen (the passed ones are folded on this screen). */
+          await page.locator(`${LANE} [data-open-conversation="verify"]`).tap();
+          await page.waitForSelector("[data-mobile2-chat-title]", { timeout: 15_000 });
+          await pause(page, 600);
+          const chat = await page.evaluate(() => document.querySelector("[data-mobile2-chat-title]")?.textContent ?? null);
+          await page.screenshot({ path: path.join(out, `${label}-started.png`) });
+          /* A waiting stage opens the pipeline screen on its own ⚙ sheet: the
+             message it will be sent and the control that edits it are whole
+             on the first screen after the tap. */
+          await page.goto(`${server.base}?scenario=stages`);
+          await taskScreen();
+          await page.locator(`${LANE} [data-stage-open="merge"]`).tap();
+          const SHEET = '[data-mobile2-sheet="stage"] [data-mobile2-stage-config="merge"]';
+          await page.waitForSelector(SHEET, { timeout: 15_000 });
+          await page.waitForFunction(() => {
+            const sheet = document.querySelector<HTMLElement>('[data-mobile2-sheet="stage"]');
+            if (!sheet || sheet.getAnimations({ subtree: true }).some((animation) => animation.playState === "running")) return false;
+            return sheet.getBoundingClientRect().top < window.innerHeight - 100;
+          }, undefined, { polling: "raf", timeout: 15_000 });
+          const editLabel = translate(lang, "groupOverride.applyStage");
+          const promptLabel = translate(lang, "pipelineSlot.promptLabel");
+          /* Text is whole when every line box of its range lies inside the
+             viewport and inside each ancestor that clips. */
+          const whole = (selectors: string[]) => page.evaluate((list) => {
+            const clipped = (rect: DOMRect, from: Element) => {
+              if (rect.width === 0 || rect.height === 0) return true;
+              if (rect.left < -0.5 || rect.top < -0.5 || rect.right > window.innerWidth + 0.5 || rect.bottom > window.innerHeight + 0.5) return true;
+              for (let node = from.parentElement; node; node = node.parentElement) {
+                const style = getComputedStyle(node);
+                if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+                const box = node.getBoundingClientRect();
+                if (rect.left < box.left - 0.5 || rect.top < box.top - 0.5 || rect.right > box.right + 0.5 || rect.bottom > box.bottom + 0.5) return true;
+              }
+              return false;
+            };
+            return list.map((selector) => {
+              const element = document.querySelector<HTMLElement>(selector);
+              if (!element) return { selector, text: null, cut: true };
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const rects = element.textContent?.trim() ? [...range.getClientRects()] : [element.getBoundingClientRect()];
+              return { selector, text: element.textContent?.trim() ?? "", cut: rects.length === 0 || rects.some((rect) => clipped(rect, element)) };
+            });
+          }, selectors);
+          const sheetRead = await page.evaluate(([sheet, edit, label]) => {
+            const root = document.querySelector<HTMLElement>(sheet)!;
+            const prompt = [...root.querySelectorAll<HTMLElement>("p")].find((element) => element.textContent?.trim() === label) ?? null;
+            const message = prompt?.nextElementSibling as HTMLElement | null;
+            prompt?.setAttribute("data-evidence-prompt-label", "");
+            message?.setAttribute("data-evidence-first-message", "");
+            root.querySelector(`button[aria-label="${edit}"]`)?.setAttribute("data-evidence-edit", "");
+            return {
+              screen: document.querySelector("[data-mobile2-screen]")?.getAttribute("data-mobile2-screen") ?? null,
+              message: message?.textContent?.trim() ?? null,
+              graph: document.querySelectorAll("[data-mobile2-screen] :is(.pgraph, [data-graph])").length,
+              scrollWidth: document.documentElement.scrollWidth,
+            };
+          }, [SHEET, editLabel, promptLabel] as const);
+          /* The first message's opening line stands for its text: the preview is clamped by design. */
+          const firstLine = await page.evaluate(() => {
+            const message = document.querySelector<HTMLElement>("[data-evidence-first-message]");
+            if (!message?.firstChild) return null;
+            const range = document.createRange();
+            range.selectNodeContents(message);
+            const first = range.getClientRects()[0];
+            return first ? { top: first.top, bottom: first.bottom } : null;
+          });
+          const sheetWhole = await whole(['[data-mobile2-sheet="stage"] h2', "[data-evidence-prompt-label]", "[data-evidence-edit]"]);
+          if (sheetRead.screen !== "pipeline" || sheetRead.graph || sheetRead.scrollWidth > 390) fail(`the waiting stage's screen: ${JSON.stringify(sheetRead)}`);
+          if (!sheetRead.message) fail("the waiting stage's sheet shows no first message");
+          if (!firstLine || firstLine.top < 0 || firstLine.bottom > 844) fail(`the first message's first line is off the first screen: ${JSON.stringify(firstLine)}`);
+          for (const read of sheetWhole) if (read.cut) fail(`cut on the waiting stage's sheet: ${JSON.stringify(read)}`);
+          await page.screenshot({ path: path.join(out, `${label}-waiting.png`) });
+          /* Its edit control opens the editor for that message, in the same sheet. */
+          await page.locator("[data-evidence-edit]").tap();
+          const FIELD = `${SHEET} textarea[id^="slot-prompt-"]`;
+          await page.waitForSelector(FIELD, { timeout: 10_000 });
+          await page.locator(FIELD).scrollIntoViewIfNeeded();
+          await page.evaluate((field) => document.querySelector(field)!.closest("form")!.querySelector("label")!.setAttribute("data-evidence-field-label", ""), FIELD);
+          const editor = await whole(["[data-evidence-field-label]"]);
+          const field = await page.evaluate((selector) => {
+            const element = document.querySelector<HTMLTextAreaElement>(selector)!;
+            const rect = element.getBoundingClientRect();
+            return { disabled: element.disabled, inside: rect.top >= 0 && rect.bottom <= window.innerHeight && rect.left >= 0 && rect.right <= window.innerWidth };
+          }, FIELD);
+          for (const read of editor) if (read.cut) fail(`cut on the waiting stage's editor: ${JSON.stringify(read)}`);
+          if (field.disabled || !field.inside) fail(`the waiting stage's message field: ${JSON.stringify(field)}`);
+          await page.screenshot({ path: path.join(out, `${label}-waiting-edit.png`) });
+          /* Back closes only the sheet; the stage's row on the pipeline screen opens the same sheet. */
+          await page.goBack();
+          await page.waitForSelector('[data-mobile2-sheet="stage"]', { state: "detached", timeout: 10_000 });
+          const pipeline = await page.evaluate(() => ({
+            screen: document.querySelector("[data-mobile2-screen]")?.getAttribute("data-mobile2-screen") ?? null,
+            graph: document.querySelectorAll("[data-mobile2-screen] :is(.pgraph, [data-graph])").length,
+            scrollWidth: document.documentElement.scrollWidth,
+          }));
+          if (pipeline.screen !== "pipeline" || pipeline.graph || pipeline.scrollWidth > 390) fail(`the pipeline screen under the sheet: ${JSON.stringify(pipeline)}`);
+          await page.locator('[data-mobile2-screen="pipeline"] [data-stage-configure="merge"]').scrollIntoViewIfNeeded();
+          await page.locator('[data-mobile2-screen="pipeline"] [data-stage-configure="merge"]').tap();
+          await page.waitForSelector(SHEET, { timeout: 10_000 });
+          const fromRow = await page.locator(SHEET).count() === 1;
+          if (!fromRow) fail("the pipeline screen's waiting row opens no sheet");
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          readings[label] = { onCards, onTask, chat, sheet: { ...sheetRead, firstLine, whole: sheetWhole }, editor: { whole: editor, field }, pipeline, fromRow };
+        } catch (error) {
+          fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+          await page.screenshot({ path: path.join(out, `${label}-failed.png`) }).catch(() => {});
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      if (fd !== null) fs.closeSync(fd);
+    }
+    fs.mkdirSync("evidence/task-card-no-inline-conversations", { recursive: true });
+    fs.writeFileSync("evidence/task-card-no-inline-conversations/phone.json", `${JSON.stringify({ fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
+describe("account row on the phone", () => {
+  /* The phone's accounts screen draws the same row as the dialog, with 44 px targets: every state at 360, 390 and 430 px,
+     in both languages and both schemes, then the keyboard and reduced motion. `LLV_ACCOUNT_ROW_OUT=<dir>` keeps the
+     frames and `readings.json`; `LLV_ACCOUNT_ROW_ONLY=<substring,…>` and `LLV_ACCOUNT_ROW_WIDTHS=<px,…>` rerun a subset. */
+  browserTest("390 px: every state of the row on the accounts screen, in both languages and schemes, with the keyboard and reduced motion", async () => {
+    const { accountRowRoutes, captureAccountRowFrames, captureAccountRowKeyboard, captureAccountRowReveal } = await import("@/components/accountRowFrames");
+    const out = path.resolve(process.env.LLV_ACCOUNT_ROW_OUT ?? ".artifacts/account-row", "phone"); fs.mkdirSync(out, { recursive: true });
+    const rows = accountRowRoutes();
+    const server = await serveEvidenceFixture(out, undefined, rows.routes);
+    const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    try {
+      // `LLV_ACCOUNT_ROW_CASE=reveal` runs only the case of a row opened below the fold.
+      if (process.env.LLV_ACCOUNT_ROW_CASE === "reveal") {
+        expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "phone", width: 390, height: 844 })).toEqual([]);
+        return;
+      }
+      const only = process.env.LLV_ACCOUNT_ROW_ONLY?.split(",");
+      const { frames, failures } = await captureAccountRowFrames({ browser, base: server.base, out, routes: rows, surface: "phone", widths: process.env.LLV_ACCOUNT_ROW_WIDTHS?.split(",").map(Number) ?? [360, 390, 430], height: 844, only });
+      expect(failures).toEqual([]);
+      expect(frames).toBeGreaterThan(0);
+      if (!only) {
+        expect(await captureAccountRowKeyboard({ browser, base: server.base, out, routes: rows, surface: "phone", width: 390, height: 844 })).toEqual([]);
+        expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "phone", width: 390, height: 844 })).toEqual([]);
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 7_200_000);
 });

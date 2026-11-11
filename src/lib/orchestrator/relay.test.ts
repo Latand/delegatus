@@ -14,6 +14,7 @@ process.env.XDG_CONFIG_HOME = path.join(root, "config");
 delete process.env.LLV_ROOT_CONVERSATION_ID;
 
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+const { structuredHostFixture } = await import("@/lib/agent/registryTestFixtures");
 const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/capabilityHeader");
 const { requireOperatorAuthority } = await import("@/lib/agent/operatorAuthority");
 const { setDeputyRootResolverForTests } = await import("./deputyAsker");
@@ -63,8 +64,9 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-function actor(project?: string, role = "builder", engine: "claude" | "codex" = "codex") {
+function actor(project?: string, role = "builder", engine: "claude" | "codex" = "codex", fixtureId?: `conversation_${string}`) {
   const spawn = registry.beginSpawnRequest({ engine, cwd: root, explicitProject: project,
+    ...(fixtureId ? { conversationId: fixtureId } : {}),
     launchProfile: { cwd: root, title: "Relay fixture conversation", role: role === "root" ? "root" : "worker" } });
   if (spawn.kind !== "created") throw new Error("fixture spawn was not created");
   const receipt = spawn.receipt;
@@ -78,6 +80,225 @@ function actor(project?: string, role = "builder", engine: "claude" | "codex" = 
   if (project) designate(project, id);
   return { id, capability };
 }
+
+const nativeTest = process.platform === "linux" ? test : test.skip;
+
+/** The recurrence's real producer: no inherited capability, a live native
+ * peer, production ancestry resolution and the production HTTP request builder.
+ * Only the destination runtime is simulated; no installed server is contacted. */
+async function nativeRelayFixture(hooks: {
+  scan?: () => void;
+  http?: (req: NextRequest) => void;
+} = {}) {
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const { productionDomainDependencies, productionViewerControlDependencies } = await import("@/lib/mcp/bindings");
+  const { runAsMcpHttpCaller } = await import("@/lib/mcp/callerContext");
+  const { nativePeerProof, verifyNativePeer } = await import("@/lib/mcp/nativePeer");
+  const sender = actor("project-a", "orchestrator", "codex", "conversation_native_sender");
+  const recipient = actor("project-b", "orchestrator", "codex", "conversation_native_recipient");
+  const entry = Object.values(registry.readOnlySnapshot().entries).find(row => row.artifactPath === registry.conversation(sender.id)!.generations.at(-1)!.path)!;
+  const identity = captureProcessIdentity(process.pid);
+  registry.upsert({ ...entry, structuredHost: structuredHostFixture(identity, "codex-app-server") });
+  delete process.env.LLV_SPAWN_CAPABILITY;
+  const envelopes: Record<string, unknown>[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async request => {
+    expect(new URL(request.url).pathname).toBe("/api/orchestrator/message");
+    const req = new NextRequest(request);
+    envelopes.push(await req.clone().json());
+    expect(req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)).toBe(false);
+    hooks.http?.(req);
+    return orchestratorPOST(req);
+  } });
+  const oldEndpoint = process.env.LLV_VIEWER_CONTROL_URL;
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  const domain = { ...productionDomainDependencies,
+    lastCompletedCatalog: () => {
+      if (hooks.scan) queueMicrotask(hooks.scan);
+      return { files: [], projectCatalog: [] };
+    },
+    completedFileScan: async () => {
+      hooks.scan?.();
+      return { generation: 1, targetGeneration: 1, cacheStatus: "hit", requestCount: 1, cloneDurationMs: 0,
+        snapshot: { files: [], complete: true, projectCatalog: [
+          { project: "project-a", displayName: "Sender", smt: 1, conversations: 1 },
+          { project: "project-b", displayName: "Recipient", smt: 1, conversations: 1 },
+        ] } };
+    },
+  } as ViewerMcpDomainDependencies;
+  const tools = viewerMcpBindings(undefined, productionViewerControlDependencies(true), domain);
+  const store = new MemoryMcpReceiptStore();
+  const service = createMcpToolService(tools, store, undefined, { recovery: viewerMcpRecoverableTools(domain) });
+  const args = { clientRequestId: "native-relay", project: "project-b", text: "Please inspect the queued work.",
+    origin: { kind: "operator" }, callerConversationId: recipient.id };
+  return { sender, recipient, envelopes, entry,
+    call: async (peer?: typeof identity) => {
+      const body = JSON.stringify({ name: "send_message_to_orchestrator", arguments: args });
+      const proof = await nativePeerProof(body);
+      try {
+        const verified = await verifyNativePeer(proof.header, body);
+        return await runAsMcpHttpCaller({ nativePeer: peer ?? verified }, () => service.callTool("send_message_to_orchestrator", args));
+      } finally { proof.close(); }
+    },
+    close: async () => {
+      await server.stop(true);
+      if (oldEndpoint === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+      else process.env.LLV_VIEWER_CONTROL_URL = oldEndpoint;
+    },
+  };
+}
+
+nativeTest("native MCP relay crosses the production HTTP handoff with the original envelope and one attributed receipt", async () => {
+  realAdmission();
+  const f = await nativeRelayFixture();
+  try {
+    const first = await f.call();
+    expect(first).toMatchObject({ ok: true, conversationId: f.recipient.id });
+    const rows = Object.values(registry.readOnlySnapshot().heldDeliveries);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.command.origin).toEqual({ kind: "agent", role: "orchestrator", project: "project-a", conversationId: f.sender.id });
+    expect(rows[0]!.text).toContain("Relay from the orchestrator of project project-a.");
+    expect(f.envelopes).toHaveLength(1);
+    expect(f.envelopes[0]).toMatchObject({ project: "project-b", conversationId: f.recipient.id, text: "Please inspect the queued work.", images: [], policy: "steer-or-queue" });
+    expect(await f.call()).toMatchObject({ ok: true, operationId: rows[0]!.command.operationId });
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(1);
+    expect(f.envelopes).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
+for (const change of ["seat", "native-host"] as const) {
+  for (const boundary of ["project-resolution", "http", "outer-json", "inner-json", "operator-activity", "attachment-import", "attachment-stage", "runtime-read", "reservation"] as const) {
+    nativeTest(`native relay rechecks ${change} replacement after ${boundary} await before any reservation`, async () => {
+      let changed = false;
+      const replace = () => {
+        if (changed) return;
+        changed = true;
+        if (change === "seat") actor("project-a", "orchestrator", "codex", "conversation_native_successor");
+        else registry.upsert({ ...f.entry, host: null });
+      };
+      realAdmission(boundary === "runtime-read" ? replace : undefined);
+      const f = await nativeRelayFixture({
+        scan: boundary === "project-resolution" ? replace : undefined,
+        http: req => {
+          if (boundary === "http") replace();
+          if (boundary === "outer-json") {
+            const json = req.json.bind(req);
+            req.json = async () => { const body = await json(); replace(); return body; };
+          }
+        },
+      });
+      let restore = () => {};
+      if (boundary === "inner-json") {
+        const json = spyOn(NextRequest.prototype, "json").mockImplementation(async function (this: NextRequest) {
+          const body = JSON.parse(await this.text());
+          if (body.orchestratorRelayProject) replace();
+          return body;
+        });
+        restore = () => json.mockRestore();
+      }
+      if (boundary === "operator-activity") {
+        setConversationHostDependenciesForTests({ collectImagePayloads: () => { queueMicrotask(replace); return { images: [], error: null }; } });
+      }
+      if (boundary === "attachment-import" || boundary === "attachment-stage") {
+        const inbox = await import("@/lib/inboxFiles");
+        if (boundary === "attachment-import") {
+          const original = inbox.inboxFileBatchToken;
+          const token = spyOn(inbox, "inboxFileBatchToken").mockImplementation(key => { replace(); return original(key); });
+          restore = () => token.mockRestore();
+        } else {
+          const original = inbox.stageInboxFilesAsync;
+          const stage = spyOn(inbox, "stageInboxFilesAsync").mockImplementation(async (...args) => { const saved = await original(...args); replace(); return saved; });
+          restore = () => stage.mockRestore();
+        }
+      }
+      if (boundary === "reservation") {
+        const original = registry.holdDelivery.bind(registry);
+        const write = spyOn(registry, "holdDelivery").mockImplementation((...args) => { replace(); return original(...args); });
+        restore = () => write.mockRestore();
+      }
+      try {
+        const result = await f.call();
+        expect(changed).toBe(true);
+        expect(result.ok).toBe(false);
+        expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(0);
+        expect(delivered).toHaveLength(0);
+      } finally { restore(); await f.close(); }
+    });
+  }
+}
+
+for (const threat of ["unknown-peer", "reused-peer", "foreign-host", "retired-seat", "foreign-project", "changed-envelope", "invented-identity"] as const) {
+  nativeTest(`native relay refuses ${threat} through the real producer and HTTP guard`, async () => {
+    realAdmission();
+    const f = await nativeRelayFixture({ http: req => {
+      if (threat === "changed-envelope") {
+        const json = req.json.bind(req);
+        req.json = async () => ({ ...await json(), text: "Different words" });
+      }
+      if (threat === "invented-identity") req.headers.set("x-delegatus-native-relay", "conversation_native_sender");
+    } });
+    try {
+      const { captureProcessIdentity } = await import("@/lib/processIdentity");
+      const peer = captureProcessIdentity(process.pid);
+      if (threat === "foreign-host") registry.upsert({ ...f.entry, host: null });
+      if (threat === "retired-seat") actor("project-a", "orchestrator", "codex", "conversation_native_successor");
+      if (threat === "foreign-project") designate("project-c", f.sender.id);
+      const result = await f.call(threat === "unknown-peer" ? { ...peer, pid: 0 }
+        : threat === "reused-peer" ? { ...peer, startIdentity: "replaced" } : undefined);
+      expect(result.ok).toBe(false);
+      expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(0);
+      expect(delivered).toHaveLength(0);
+    } finally { await f.close(); }
+  });
+}
+
+for (const late of [false, true]) {
+  nativeTest(`native relay keeps current destination designation (replacement after admission: ${late})`, async () => {
+    const replace = () => actor("project-b", "orchestrator", "codex", "conversation_native_destination_successor");
+    realAdmission(late ? replace : undefined);
+    const f = await nativeRelayFixture({ http: late ? undefined : replace });
+    try {
+      const result = await f.call();
+      const rows = Object.values(registry.readOnlySnapshot().heldDeliveries);
+      if (late) {
+        expect(result.ok).toBe(false);
+        expect(rows).toHaveLength(0);
+      } else {
+        expect(result).toMatchObject({ ok: true, conversationId: "conversation_native_destination_successor" });
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.conversationId).toBe("conversation_native_destination_successor");
+      }
+    } finally { await f.close(); }
+  });
+}
+
+nativeTest("native relay retains its admitted receipt and author when the sender rotates after reservation", async () => {
+  realAdmission();
+  const f = await nativeRelayFixture();
+  const original = registry.holdDelivery.bind(registry);
+  let rotated = false;
+  const write = spyOn(registry, "holdDelivery").mockImplementation((...args) => {
+    const admitted = original(...args);
+    if (!rotated) {
+      rotated = true;
+      actor("project-a", "orchestrator", "codex", "conversation_native_successor");
+    }
+    return admitted;
+  });
+  try {
+    const result = await f.call();
+    expect(rotated).toBe(true);
+    expect(result.ok).toBe(true);
+    write.mockRestore();
+    const filename = registry.filename;
+    registry.close();
+    registry = new AgentRegistry(filename);
+    setAgentRegistryForTests(registry);
+    const rows = Object.values(registry.readOnlySnapshot().heldDeliveries);
+    expect(rows).toHaveLength(1);
+    expect(result).toMatchObject({ operationId: rows[0]!.command.operationId });
+    expect(rows[0]!.command.origin).toEqual({ kind: "agent", role: "orchestrator", project: "project-a", conversationId: f.sender.id });
+  } finally { write.mockRestore(); await f.close(); }
+});
 function designate(project: string, id: string) {
   const key = `fixture-seat-${id}`;
   beginOrchestratorSeatIntent({ project, mandate: "fixture mandate", clientRequestId: key, mode: "spawn" });
@@ -339,11 +560,12 @@ for (const engine of ["claude", "codex"] as const) test(`a spoken request and th
 
 /** Keep the HTTP handler and durable reservation real; only the runtime peer
  * is private. A busy peer leaves the admitted command on the delivery queue. */
-function realAdmission() {
+function realAdmission(afterRuntimeRead?: () => void) {
   const client = {
     readSession: async ({ conversationId }: { conversationId: string }) => {
       const conversation = registry.conversation(conversationId as `conversation_${string}`)!;
       const generation = conversation.generations.at(-1)!;
+      afterRuntimeRead?.();
       return { conversationId, sessionKey: { engine: conversation.engine, sessionId: generation.id },
         hostKind: conversation.engine === "claude" ? "claude-broker" : "codex-app-server", host: "hosted", turn: "busy", provenance: "structured", revision: 1,
         artifactPath: generation.path, cwd: root, activeTurnId: "fixture-turn", attentionIds: [], recentReceipts: [],
@@ -365,64 +587,6 @@ function realAdmission() {
     }),
     recordOperatorRequest: () => null,
   });
-}
-
-for (const [mount, post] of [POST, legacyPOST, orchestratorPOST].entries()) {
-  for (const compaction of ["count", "age"] as const) {
-    for (const rotate of [false, true]) {
-      test(`compacted legacy relay retry does not actuate: mount ${mount}, ${compaction}, rotation ${rotate}`, async () => {
-        const sender = actor("project-a");
-        const recipient = actor("project-b");
-        const recipientPath = registry.conversation(recipient.id as `conversation_${string}`)!.generations.at(-1)!.path;
-        fs.writeFileSync(recipientPath, "");
-        const typed: string[] = [];
-        setConversationHostDependenciesForTests({
-          collectImagePayloads: () => ({ images: [], error: null }),
-          enqueueStructuredMessage: async () => null,
-          deliverConversationMessage: (message) => deliverConversationMessage(message, {
-            recover: async () => null,
-            pathAllowed: () => true,
-            listFiles: async () => [{ root: "codex-sessions", path: recipientPath, project: "project-b", mtime: 0, size: 0 } as never],
-            resumeSpecFor: () => ({ command: "codex", args: [], cwd: root, env: {} }) as never,
-            deliver: async ({ payload }) => { typed.push(payload); return { ok: true, outcome: "delivered-to-live", target: "%7" }; },
-          }),
-          recordOperatorRequest: () => null,
-        });
-        const body = { ...relayBody(recipient.id, "report"), project: "project-b", clientMessageId: "legacy-compacted" };
-        expect((await post(request(sender.capability, body))).status).toBe(200);
-        expect(typed).toHaveLength(1);
-        const original = Object.values(registry.readOnlySnapshot().heldDeliveries)[0]!;
-        expect(original.state).toBe("delivered");
-        if (compaction === "count") {
-          await Bun.sleep(2);
-          const generation = registry.conversation(recipient.id as `conversation_${string}`)!.generations.at(-1)!.id;
-          for (let index = 0; index < 100; index++) {
-            const later = registry.holdDelivery(recipient.id as `conversation_${string}`, `later ${index}`, `legacy-later-${index}`);
-            registry.beginDeliveryAttempt(later.id, generation);
-            registry.recordDeliveryOutcome(later.id, "delivered", null, "delivered");
-          }
-        }
-        if (rotate) actor("project-b");
-        const filename = registry.filename;
-        registry.close();
-        registry = new AgentRegistry(filename, undefined, undefined, compaction === "age" ? { now: () => Date.now() + 8 * 86_400_000 } : {});
-        setAgentRegistryForTests(registry);
-        const before = registry.readOnlySnapshot();
-        expect(before.heldDeliveries[original.id]).toBeUndefined();
-        expect(before.deliveryOperationOwners[original.command.operationId]).toMatchObject({ terminalState: "delivered" });
-        const retryBody = mount === 2 ? { ...body, conversationId: undefined } : body;
-        const retry = await post(request(sender.capability, retryBody));
-        expect(retry.status).toBe(200);
-        expect(typed).toHaveLength(1);
-        expect(await retry.json()).toMatchObject({ operationId: original.command.operationId, outcome: "delivered",
-          receipt: { operationId: original.command.operationId, status: "delivered", conversationId: recipient.id } });
-        const other = actor("project-c");
-        expect((await post(request(other.capability, body))).status).toBe(409);
-        expect(typed).toHaveLength(1);
-        expect(registry.readOnlySnapshot().heldDeliveries).toEqual(before.heldDeliveries);
-      });
-    }
-  }
 }
 
 for (const [name, attachment] of [

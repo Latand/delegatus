@@ -46,7 +46,18 @@ const admission = spyOn(registry, "accountMutationWrite").mockImplementation(asy
       if (!new TextDecoder().decode(held.value).includes("held")) throw Error("writer did not acquire");
     } finally { reader.releaseLock(); }
   }
-  return write(label, operation, guard, options);
+  const result = await write(label, operation, guard, options);
+  // Admission has refused at the cutoff. Release the fixture writer before
+  // custody cleanup, whose asynchronous writer does not use deliveryWriteNow.
+  if (!result.acquired && mode === "cutoff" && writer && !release) {
+    const child = writer;
+    const stdin = child.stdin as import("bun").FileSink;
+    stdin.write("release\n");
+    stdin.end();
+    release = child.exited.then(code => { if (code !== 0) throw Error(`writer exited with ${code}`); });
+    await release;
+  }
+  return result;
 });
 const delivery = spyOn(registry, "deliveryWriteNow").mockImplementation(<T>(correlation: Parameters<AgentRegistry["deliveryWriteNow"]>[0], operation: () => T,
   options?: Parameters<AgentRegistry["deliveryWriteNow"]>[2]) => {

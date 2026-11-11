@@ -1,7 +1,9 @@
+import { recordedAgentScope } from "./agentScope";
 import { recordHostStop, withHostStopOrigin } from "./hostExit";
-import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
+import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { startupHostSnapshot } from "./startupSnapshot";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
+import { assertStageGitRehostProvable, stageGitEnvironment } from "./stageGitEnvironment";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { DEPLOY_ADMISSION_BUDGET_MS, structuredSetupStartedAt } from "./admissionBudget";
 import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
@@ -9,6 +11,8 @@ import { spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { AgentMemoryCell, planAgentMemory } from "./agentMemory";
 import { agentMemoryScopes, agentMemoryCapForPlan, PIPELINE_MEMORY_DEFAULT_ROLE } from "./agentMemorySettings";
 import { planAgentCpu, workloadForMemberships } from "./cpuPlacement";
+import { attemptTempConfigParent } from "./attemptTempPaths";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,7 +29,7 @@ import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
-import { identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
+import { RegistryWriterBusyError, identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { readRuntimeSnapshot } from "./snapshotReads";
@@ -42,12 +46,12 @@ import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
 import { fetchClaudeLimits } from "@/lib/limits";
 import { procBackend } from "@/lib/proc";
-import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity, systemBootEpoch } from "@/lib/processIdentity";
 import { signalProcessGroup } from "@/lib/processGroup";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
-import { buildImagePayload, deleteInboxImages, spawnAgentWithPrompt } from "@/lib/tmux";
 import { hardenedRedact } from "@/lib/view/compactText";
+import { withoutOperationLease } from "@/lib/operationLease";
 
 import { ClaudeStreamBrokerHost, type ClaudeStreamBrokerHostOptions } from "./claudeStreamBrokerHost";
 import { CodexAppServerHost, type CodexAppServerHostOptions } from "./codexAppServerHost";
@@ -61,13 +65,13 @@ import { bindClaudeHostPersistence, bindCodexHostPersistence, bindCopilotHostPer
 import { CopilotAcpHost, type CopilotAcpHostOptions } from "./copilotAcpHost";
 import { publishStructuredDeliveryHost, releaseStructuredDeliveryHost, structuredDeliveryLastError, structuredDeliveryHostForConversation, retainUnpublishedStructuredLaunchHost, StructuredDeliveryControllerUnavailableError } from "./structuredDeliveryController";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
-import { runtimeImageCapability, runtimeImageStore } from "./runtimeImageStore";
+import { runtimeImageCapability } from "./runtimeImageStore";
 import { publishFilesRevision } from "./filesRevision";
 import { parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "./structuredContent";
 import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 import { STAGED_RECOVERY_PREFIX, stagedLaunchRecovery, type StagedLaunchRecovery } from "./stagedRecovery";
 import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
-import { RoleMemoryChanged, withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
+import { roleMemoryDeferralReason, RoleMemoryChanged, RoleMemoryPreparationDeferred, withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { AttemptTempStore, type AttemptTempOwner } from "./attemptTempRetention";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { roleMemoryRevisionToken, ROLE_MEMORY_CHANGED_MESSAGE } from "@/lib/memory/roleStore";
@@ -191,15 +195,6 @@ export function materializeStructuredHostAccess(
   };
   const explicitAxes = typeof policy !== "boolean";
   const restricted = explicitAxes ? policy.sandbox === "restricted" : policy;
-  if (!restricted && !explicitAxes) {
-    return {
-      env: baseEnv,
-      codex: { sandbox: "danger-full-access" },
-      host: { forwardGitHubConfig: true },
-      scratchDirectory: null,
-      cleanup: () => {},
-    };
-  }
 
   const resolvedScratchParent = scratchParent ?? statePath("scratch");
   fs.mkdirSync(resolvedScratchParent, { recursive: true, mode: 0o700 });
@@ -207,12 +202,17 @@ export function materializeStructuredHostAccess(
   let configDirectory: string | undefined;
   try {
     fs.chmodSync(scratchDirectory, 0o700);
+    const evidenceId = owner?.pipelineId ?? `agents/${createHash("sha256").update(owner?.launchId ?? path.basename(scratchDirectory)).digest("hex").slice(0, 32)}`;
+    if (!/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)?$/.test(evidenceId)) throw new Error("invalid evidence owner");
+    const evidenceDirectory = statePath("evidence", evidenceId);
+    fs.mkdirSync(evidenceDirectory, { recursive: true, mode: 0o700 });
+    baseEnv.LLV_EVIDENCE_DIR = evidenceDirectory;
     const temporaryDirectory = path.join(scratchDirectory, "tmp");
     fs.mkdirSync(temporaryDirectory, { mode: 0o700 });
     if (owner) {
       // The mounted home has the same path in the Viewer and agent mount
       // namespaces. Container /tmp and host /tmp can name different inodes.
-      const configParent = path.join(sourceEnv.HOME || os.homedir(), ".cache", "delegatus", "attempt-temp");
+      const configParent = attemptTempConfigParent(sourceEnv);
       fs.mkdirSync(configParent, { recursive: true, mode: 0o700 });
       configDirectory = fs.mkdtempSync(path.join(configParent, "llv-stage-config-"));
       const store = new AttemptTempStore();
@@ -245,10 +245,11 @@ export function materializeStructuredHostAccess(
       };
     }
     const codex = explicitAxes
-      ? { sandbox: "workspace-write" }
+      ? { sandbox: "workspace-write", permissionProfile: "llv-stage",
+          permissionProfileConfig: `permissions.llv-stage={extends=":workspace",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}` }
       : {
           permissionProfile: READ_ONLY_STAGE_PERMISSION_PROFILE,
-          permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(scratchDirectory)}="write"}}`,
+          permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}`,
         };
     return {
       env: {
@@ -271,17 +272,30 @@ export function materializeStructuredHostAccess(
   }
 }
 
-function tempOwnerForSpawn(input: StructuredSpawnInput) {
-  const memberships = input.registry.readOnlySnapshot().memberships[input.registry.canonicalConversationId(input.receipt.conversationId)] ?? [];
+export function tempOwnerForConversation(registry: AgentRegistry, conversationId: string | undefined, launchId: string) {
+  const id = conversationId?.startsWith("conversation_") ? registry.canonicalConversationId(conversationId as ViewerConversationId) : null;
+  const memberships = id ? registry.readOnlySnapshot().memberships[id] ?? [] : [];
   const owners = memberships.filter(member => member.kind === "pipeline");
-  // Two lanes cannot both own one attempt root. An ambiguous conversation
-  // keeps the unowned contract: its scratch goes with the host.
-  return owners.length === 1 ? { pipelineId: owners[0]!.containerId, launchId: input.receipt.launchId, retainUntilClose: false } : undefined;
+  return { pipelineId: owners.length === 1 ? owners[0]!.containerId : null, launchId, retainUntilClose: false };
+}
+
+function tempOwnerForSpawn(input: StructuredSpawnInput) {
+  return tempOwnerForConversation(input.registry, input.receipt.conversationId, input.receipt.launchId);
+}
+
+export function materializeOwnedStructuredHostAccess(
+  policy: StructuredHostAccessPolicy, sourceEnv: NodeJS.ProcessEnv, capability: string | null,
+  owner: () => NonNullable<Parameters<typeof materializeStructuredHostAccess>[4]>,
+) {
+  return waitForStateLock("temp.attempt-register", () => stateLockAttempt("temp.attempt-register", () =>
+    materializeStructuredHostAccess(policy, sourceEnv, capability, undefined, owner())));
 }
 
 async function materializeAttemptAccess(input: StructuredSpawnInput, capability: string | null) {
-  return waitForStateLock("temp.attempt-register", () => stateLockAttempt("temp.attempt-register", () =>
-    materializeStructuredHostAccess(structuredHostAccessPolicy(input.spec.launchProfile), input.account.env, capability, undefined, tempOwnerForSpawn(input))));
+  // Queued starts and resume successors reconstruct the account environment.
+  // Recover the exact launch's binding before either engine builds its policy.
+  const guard = await stageGitEnvironment(input.registry, input.receipt.conversationId, input.receipt.launchId, input.spec.cwd);
+  return materializeOwnedStructuredHostAccess(structuredHostAccessPolicy(input.spec.launchProfile), { ...input.account.env, ...guard }, capability, () => tempOwnerForSpawn(input));
 }
 
 /** Runtime admission calls carry the durable launch id as their idempotency
@@ -423,11 +437,13 @@ async function terminateVerifiedStructuredSpawnProcess(expected: ProcessIdentity
 }
 
 function structuredSpawnFailureReason(error: unknown): string {
+  const deferral = roleMemoryDeferralReason(error);
+  if (deferral) return deferral;
   if (isRuntimeHostTransportFailure(error)) {
     return supervisedRuntimeHostUnavailableReason("structured spawn runtime host");
   }
   const message = error instanceof Error ? error.message : "structured spawn failed";
-  return hardenedRedact(message).replace(/\s+/g, " ").trim().slice(0, 240) || "structured spawn failed";
+  return hardenedRedact(message).replace(/\s+/g, " ").trim().slice(0, 500) || "structured spawn failed";
 }
 
 function admissionTransportReason(error: unknown): string {
@@ -964,7 +980,6 @@ export interface StructuredSpawnRecoveryOptions {
   resolveSpawnAccount?: (engine: "claude" | "codex" | "copilot", accountId: string | null) => AccountContext;
   resolvePinnedSpawnAdmission?: (engine: "claude" | "codex" | "copilot", account: AccountContext) => Promise<SpawnAccountAdmission>;
   spawnStructuredConversation?: typeof spawnStructuredConversation;
-  spawnTmuxAgent?: typeof spawnAgentWithPrompt;
   publishFilesRevision?: typeof publishFilesRevision;
   /** Recovery-only override for isolated admission fixtures. */
   curationSources?: SeatTickSources;
@@ -979,6 +994,8 @@ async function curatorReceiptAdmission(receipt: SpawnReceipt, registry: AgentReg
     ...(sources ?? defaultSeatTickAdmissionSources()), registry: () => registry,
   });
 }
+
+const RETIRED_TERMINAL_TRANSPORT_REASON = "this launch was recorded for the removed terminal transport; launch it again";
 
 async function failQueuedPinnedSpawn(
   registry: AgentRegistry,
@@ -1027,9 +1044,11 @@ async function actuateQueuedPinnedSpawn(
     assertActive();
     return failQueuedPinnedSpawn(registry, receipt, structuredSpawnFailureReason(error));
   }
-  const admissionClaim = receipt.transport === "tmux"
-    ? (await registry.deliveryWriteOrBusy({ label: "registry.claimTmuxSpawnActuation" }, registry.claimTmuxSpawnActuation.bind(registry, receipt.launchId)))
-    : (await registry.deliveryWriteOrBusy({ label: "registry.claimStartingStructuredSpawn" }, registry.claimStartingStructuredSpawn.bind(registry, receipt.launchId)));
+  /* A launch queued by a release that hosted agents in terminal panes names a
+     transport no release has. It ends here, unclaimed, with a reason the
+     operator can act on; nothing is started. */
+  if (receipt.transport === "tmux") return failQueuedPinnedSpawn(registry, receipt, RETIRED_TERMINAL_TRANSPORT_REASON);
+  const admissionClaim = await registry.deliveryWriteOrBusy({ label: "registry.claimStartingStructuredSpawn" }, registry.claimStartingStructuredSpawn.bind(registry, receipt.launchId));
   if (!admissionClaim.claimed || !admissionClaim.receipt.admissionOwner) return admissionClaim.receipt;
   const releaseIfCancelled = async () => {
     try { assertActive(); }
@@ -1065,7 +1084,7 @@ async function actuateQueuedPinnedSpawn(
     if (account.engine !== receipt.engine || account.accountId !== launchAccountId) {
       throw new Error("queued pinned spawn resolved a different account");
     }
-    admission = claimedQueue.admissionDeadlineAt || (receipt.transport === "tmux" && Boolean(admissionClaim.receipt.pane))
+    admission = claimedQueue.admissionDeadlineAt
       ? { kind: "admissible", basis: "current", stale: false, retryAt: null }
       : await (options.resolvePinnedSpawnAdmission ?? resolvePinnedSpawnAdmission)(receipt.engine, account);
   } catch (error) {
@@ -1101,67 +1120,30 @@ async function actuateQueuedPinnedSpawn(
   if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
     return failQueuedPinnedSpawn(registry, admissionClaim.receipt, "owner relay queued launch authorization revoked");
   let response: SpawnResponse | null = null;
-  let tmuxImagePaths: string[] = [];
   try {
-    if (receipt.transport === "tmux") {
-      await releaseIfCancelled();
-      curatorAuthorize();
-      const images = claimedQueue.imageRefs.length
-        ? (() => {
-            const imageStore = runtimeImageStore();
-            return claimedQueue.imageRefs.map((ref) => ({
-              base64: imageStore.read(ref).toString("base64"),
-              mime: ref.mime,
-            }));
-          })()
-        : [];
-      const bundle = buildImagePayload(claimedQueue.prompt, images);
-      tmuxImagePaths = bundle.imagePaths;
-      assertActive();
-      await (options.spawnTmuxAgent ?? spawnAgentWithPrompt)(
-        claimedQueue.spec,
-        bundle.payload,
-        admissionClaim.receipt,
-      );
-      assertActive();
-      const launched = registry.spawnReceipt(receipt.launchId);
-      if (launched?.state === "prompt-delivered" || launched?.state === "host-verified") {
-        (await registry.deliveryWriteOrBusy({ label: "registry.markSpawnPathPending" }, registry.markSpawnPathPending.bind(registry, receipt.launchId)));
-      }
-    } else {
-      if (!client) {
-        throw new Error(supervisedRuntimeHostUnavailableReason("structured spawn runtime host"));
-      }
-      assertActive();
-      response = await (options.spawnStructuredConversation ?? spawnStructuredConversation)({
-        engine: receipt.engine,
-        receipt: admissionClaim.receipt,
-        spec: claimedQueue.spec,
-        account,
-        ["prompt"]: claimedQueue.prompt,
-        imageRefs: claimedQueue.imageRefs,
-        registry,
-        client,
-        admissionActive: assertActive,
-        ...(claimedQueue.admissionDeadlineAt ? { admissionRetryMs: 0 } : {}),
-        authorize: () => {
-          assertActive();
-          if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
-            throw new Error("owner relay queued launch authorization revoked");
-          curatorAuthorize();
-        },
-      });
+    if (!client) {
+      throw new Error(supervisedRuntimeHostUnavailableReason("structured spawn runtime host"));
     }
+    assertActive();
+    response = await (options.spawnStructuredConversation ?? spawnStructuredConversation)({
+      engine: receipt.engine,
+      receipt: admissionClaim.receipt,
+      spec: claimedQueue.spec,
+      account,
+      ["prompt"]: claimedQueue.prompt,
+      imageRefs: claimedQueue.imageRefs,
+      registry,
+      client,
+      admissionActive: assertActive,
+      ...(claimedQueue.admissionDeadlineAt ? { admissionRetryMs: 0 } : {}),
+      authorize: () => {
+        assertActive();
+        if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
+          throw new Error("owner relay queued launch authorization revoked");
+        curatorAuthorize();
+      },
+    });
   } catch (error) {
-    if (receipt.transport === "tmux") {
-      await registry.failSpawnOffLoop(receipt.launchId, structuredSpawnFailureReason(error));
-      const failed = registry.spawnReceipt(receipt.launchId) ?? admissionClaim.receipt;
-      if (!failed.pane) deleteInboxImages(tmuxImagePaths);
-      if (failed.queuedPinnedSpawn && failed.admissionOwner) {
-        return (await registry.deliveryWriteOrBusy({ label: "registry.releaseSpawnActuation" }, registry.releaseSpawnActuation.bind(registry, failed.launchId, failed.admissionOwner))).receipt;
-      }
-      return failed;
-    }
     const current = registry.spawnReceipt(receipt.launchId);
     if (current?.queuedPinnedSpawn && current.admissionOwner) {
       (await registry.deliveryWriteOrBusy({ label: "registry.releaseSpawnActuation" }, registry.releaseSpawnActuation.bind(registry, receipt.launchId, admissionClaim.receipt.admissionOwner)));
@@ -1329,21 +1311,15 @@ export async function terminalizeStaleStructuredSpawns(
     const createdMs = structuredSetupStartedAt(receipt);
     if (!stagedLaunchRecovery(receipt) && (!Number.isFinite(createdMs) || now() - createdMs < timeoutMs)) continue;
     if (receipt.transport === "tmux") {
-      const ownerlessPreSettlement = receipt.state === "starting"
-        && !receipt.key
-        && !receipt.pane
-        && !receipt.admissionOwner;
-      if (!ownerlessPreSettlement) continue;
+      /* No release hosts a terminal pane, so a launch an older release left
+         in flight on that transport has no agent to wait for. */
       examined += 1;
       try {
-        await registry.failSpawnOffLoop(
-          receipt.launchId,
-          `tmux spawn interrupted before durable queue publication or pane binding: ${receipt.launchId}`,
-        );
+        await registry.failSpawnOffLoop(receipt.launchId, RETIRED_TERMINAL_TRANSPORT_REASON);
         const failed = registry.spawnReceipt(receipt.launchId);
         if (failed?.state === "failed" || failed?.state === "conflicted") terminalized.push(receipt.launchId);
       } catch (error) {
-        spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] stale tmux spawn reconciliation failed", {
+        spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] stale terminal-transport spawn reconciliation failed", {
           launchId: receipt.launchId,
           error,
         });
@@ -2188,13 +2164,23 @@ export async function claudeStructuredHostOptions(
  * keeps its class and its controls across restarts. Throws
  * CpuContainmentUnavailable for work that cannot be contained.
  */
-export function structuredHostCell(registry: AgentRegistry, engine: string, sessionKey: string, conversationId: ViewerConversationId | null | undefined, receipt?: SpawnReceipt): AgentMemoryCell | null {
+export function structuredHostCell(registry: AgentRegistry, engine: AgentEngine, sessionKey: string, conversationId: ViewerConversationId | null | undefined, receipt?: SpawnReceipt): AgentMemoryCell | null {
   const { liveAgents, memberships, conversation } = registry.structuredHostPlanningFacts(conversationId);
   const cpu = planAgentCpu(workloadForMemberships(memberships));
   const profile = receipt?.launchProfile ?? conversation?.launchProfile;
   const scopes = agentMemoryScopes({ cwd: receipt?.cwd ?? profile?.cwd ?? "", project: receipt?.explicitProject ?? conversation?.project ?? profile?.project,
     role: receipt?.agentRole ?? conversation?.agentRole ?? (memberships.some(row => row.kind === "pipeline") ? PIPELINE_MEMORY_DEFAULT_ROLE : null), profile });
   const plan = planAgentMemory({ engine, sessionKey, liveAgents, cpu, memoryScopes: scopes });
+  // Reconnecting the same native process keeps its original cgroup. A fresh
+  // launch cannot replace this row until that scope has been retired.
+  if (plan && !receipt && (engine === "codex" || engine === "claude" || engine === "copilot")) {
+    const key: SessionKey = { engine, sessionId: sessionKey.startsWith(`${engine}:`) ? sessionKey.slice(engine.length + 1) : sessionKey };
+    const retained = recordedAgentScope(startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredHost);
+    if (retained) {
+      if (retained.bootEpoch !== systemBootEpoch()) throw new Error("retained agent scope boot identity is unavailable");
+      plan.unit = retained.unit;
+    }
+  }
   return plan ? new AgentMemoryCell(plan) : null;
 }
 
@@ -2689,7 +2675,7 @@ export async function recoverStagedStructuredLaunch(
         return read();
       }
       assertProactiveTaskExecution([...(receipt.failureReporting?.taskIds ?? []),
-        ...proactiveConversationTaskIds([receipt.conversationId, receipt.parentConversationId], registry)]);
+        ...proactiveConversationTaskIds([receipt.conversationId, receipt.parentConversationId], registry)], undefined, () => proactiveConversationContext(receipt.conversationId, registry, { id: receipt.accountId, engine: receipt.engine as "claude" | "codex", model: receipt.launchProfile.model }));
       if (!ownsHost || !host || !receipt.key || !receipt.artifactPath) throw new RuntimeHostUnavailableError("staged host is awaiting its original owner", "HOST_BUSY");
       if (continuation && !await continuation.owns()) return read();
       if (!current()) return read();
@@ -2698,7 +2684,7 @@ export async function recoverStagedStructuredLaunch(
         const curator = await curatorReceiptAdmission(receipt, registry, options.curationSources);
         curatorAuthorize = () => {
           assertProactiveTaskExecution([...(receipt.failureReporting?.taskIds ?? []),
-            ...proactiveConversationTaskIds([receipt.conversationId, receipt.parentConversationId], registry)]);
+            ...proactiveConversationTaskIds([receipt.conversationId, receipt.parentConversationId], registry)], undefined, () => proactiveConversationContext(receipt.conversationId, registry, { id: receipt.accountId, engine: receipt.engine as "claude" | "codex", model: receipt.launchProfile.model }));
           curator();
         };
         options.assertActive?.();
@@ -2764,8 +2750,24 @@ export async function recoverStagedStructuredLaunch(
       return read();
     } catch (error) {
       if (!current()) return read();
-      if (error instanceof RoleMemoryChanged) {
-        const failed = await failStagedResume(launchId, registry, client, error.message, {
+      const privacyDeferral = roleMemoryDeferralReason(error);
+      if (privacyDeferral) {
+        if (error instanceof RoleMemoryPreparationDeferred) {
+          const reason = stagedRecoveryFailureReason(error);
+          spawnDiagnosticErrorFor(receipt.clientAttemptId, "[spawn] staged role-memory preparation deferred", {
+            launchId, phase: recovery.phase, cause: reason,
+          });
+          try {
+            await persist({ ...recovery, reason });
+          } catch (diagnosticWriteError) {
+            // A lost diagnostic ACK cannot replace the original privacy refusal
+            // or skip the fenced cleanup of this already-dispatched launch.
+            spawnDiagnosticErrorFor(receipt.clientAttemptId, "[spawn] staged role-memory recovery diagnostic write failed", {
+              launchId, phase: recovery.phase, cause: stagedRecoveryFailureReason(diagnosticWriteError),
+            });
+          }
+        }
+        const failed = await failStagedResume(launchId, registry, client, privacyDeferral, {
           ...options.reap, assertActive: options.assertActive,
         });
         return failed.receipt ?? read();
@@ -2788,10 +2790,10 @@ export async function spawnStructuredConversation(
   const authorize = input.authorize;
   input = { ...input, authorize: async () => {
     assertProactiveTaskExecution([...(input.receipt.failureReporting?.taskIds ?? []),
-      ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)]);
+      ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)], undefined, () => proactiveConversationContext(input.receipt.conversationId, input.registry, { id: input.receipt.accountId, engine: input.receipt.engine as "claude" | "codex", model: input.receipt.launchProfile.model }));
     await authorize?.();
     assertProactiveTaskExecution([...(input.receipt.failureReporting?.taskIds ?? []),
-      ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)]);
+      ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)], undefined, () => proactiveConversationContext(input.receipt.conversationId, input.registry, { id: input.receipt.accountId, engine: input.receipt.engine as "claude" | "codex", model: input.receipt.launchProfile.model }));
   } };
   const startHost = dependencies.startHost ?? defaultStartHost;
   const bindHost = dependencies.bindHost ?? defaultBindHost;
@@ -2807,6 +2809,8 @@ export async function spawnStructuredConversation(
   const resumeKey = resumeSessionId ? sessionKey(input.engine, resumeSessionId) : null;
   const resumeIdentity = resumeIdentityForReceipt(input.registry, input.receipt);
   let host: SpawnedStructuredHost | null = null;
+  let runtimeAdmitted = false;
+  let hostStartRequested = false;
   const binding: HostBinding = { stopPersistence: () => {}, unregister: async () => {} };
   let key: SessionKey | null = null;
   let forgetUnpublishedHost = () => {};
@@ -2817,6 +2821,7 @@ export async function spawnStructuredConversation(
   let adoptionClaimContended = false;
   let durableSetupTimedOut = false;
   let durableSetupDeadline = 0;
+  let caughtFailure: unknown;
   let materializationPending = false;
   let durableSetupTimer: ReturnType<typeof setTimeout> | null = null;
   let durableSetupTimeout: Promise<never> | null = null;
@@ -2896,11 +2901,15 @@ export async function spawnStructuredConversation(
         });
       });
       adoptionClaim = await claimResume();
-      /* A terminal row over a live engine process refuses the claim (#2790).
-         That process has no stream left and would write beside the resumed
-         one, so it and every process it started are stopped by their
-         recorded identities and the claim asked once more. A live writer
-         claim still keeps it, and a survivor stays captured on the row. */
+      /* Retire the exact orphan custody before retrying a refused claim.
+         Terminal rows can still record a live engine (#2790); a nonterminal
+         row qualifies only with a proven-dead engine. The termination ladder
+         settles the scope and descendants, preserving live or uncertain
+         writer claims and any unresolved survivors. */
+      /* A stage resume the binding check below will refuse must be refused
+         here, while the recorded process is still running (#3811): stopping
+         it first left a parked attempt with neither its host nor a resume. */
+      if (!adoptionClaim?.claimOwner) await assertStageGitRehostProvable(input.registry, input.receipt.conversationId, input.spec.cwd);
       if (!adoptionClaim?.claimOwner
         && await stopTerminalStructuredOrphan(input.registry, resumeKey, dependencies.orphanStop)) {
         assertResumeSurvivorsRetired();
@@ -2938,6 +2947,7 @@ export async function spawnStructuredConversation(
       });
     }, { ...admissionRetry, ...(admissionDeadline !== null
       ? { deadlineMs: Math.min(input.admissionRetryMs ?? ADMISSION_RETRY_DEADLINE_MS, Math.max(0, admissionDeadline - now())) } : {}) });
+    runtimeAdmitted = true;
     input = admittedStructuredLaunchInput(input);
     assertResumeSurvivorsRetired();
     assertAdmissionCurrent();
@@ -2971,6 +2981,7 @@ export async function spawnStructuredConversation(
       }, durableSetupTimeoutMs);
       durableSetupTimer.unref?.();
     });
+    hostStartRequested = true;
     const startingHost = startHost(input, capability);
     void startingHost.then(async (lateHost) => {
       if (!durableSetupTimedOut) return;
@@ -3213,131 +3224,154 @@ export async function spawnStructuredConversation(
       transport: "structured",
     };
   } catch (error) {
-    clearDurableSetupTimeout();
-    const pending = input.registry.spawnReceipt(operationId) ?? undefined;
-    if (!host && !key && !(error instanceof StructuredHostAdoptionCleanupError)
-      && pending?.queuedPinnedSpawn) input.admissionActive?.();
-    if (!host && !adoptionClaim && !(error instanceof StructuredHostAdoptionCleanupError)
-      && (!pending || ["failed", "conflicted", "completed"].includes(pending.state)
-      || (foregroundAdmissionOwner && (!pending.admissionOwner
-        || !sameRecordedProcessIdentity(foregroundAdmissionOwner, pending.admissionOwner))))) throw error;
-    if (!host && !key && !adoptionClaim && !(error instanceof StructuredHostAdoptionCleanupError)
-      && foregroundAdmissionOwner && pending?.queuedPinnedSpawn?.admissionDeadlineAt) {
-      if (isRuntimeHostTransportFailure(error)
-        && await input.registry.deliveryWriteOrBusy({ label: "spawn.defer-admission", operationId }, () =>
-          input.registry.deferStructuredSpawnAdmission(operationId, foregroundAdmissionOwner, now(), admissionTransportReason(error)))) {
-        admissionDeferred = true;
-        return { ok: true, target: null, path: null, launchId: operationId, conversationId: input.receipt.conversationId,
-          launched: false, retrySafe: false, initialMessage: "queued", state: "starting", transport: "structured" };
-      }
-      const reason = isRuntimeHostTransportFailure(error) ? admissionTransportReason(error) : structuredSpawnFailureReason(error);
-      const failed = await input.registry.failStructuredSpawnOffLoop(operationId, reason, { recoveryFence: (_file, current) =>
-        current.state === "starting" && !current.key && !current.pane && Boolean(current.admissionOwner
-          && sameRecordedProcessIdentity(foregroundAdmissionOwner, current.admissionOwner)) });
-      if (failed.claimed) await input.client.transitionOperation(operationId, "failed", { reason }).catch(() => {});
-      throw error;
-    }
-    const recovery = stagedLaunchRecovery(pending);
-    if (host && key && recovery && !durableSetupTimedOut && isTransientStagedLaunchFailure(error)) {
-      await writeStagedRecovery(input.registry, operationId, { ...recovery, reason: stagedRecoveryFailureReason(error) });
-      (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredSpawnAdmissionOwner" }, input.registry.releaseStructuredSpawnAdmissionOwner.bind(input.registry, operationId, input.receipt.admissionOwner ?? processIdentity())));
-      return { ok: true, target: null, path: null, launchId: operationId, memoryCap: pending?.memoryCap, conversationId: input.receipt.conversationId,
-        launched: true, retrySafe: false, initialMessage: "queued", state: "path-pending", transport: "structured" };
-    }
-    stagedContinuations.delete(operationId);
-    forgetUnpublishedHost();
-    const failureReason = structuredSpawnFailureReason(error);
-    await input.client.transitionOperation(operationId, "failed", {
-      reason: failureReason,
-    }).catch(() => {});
-    if (!host && error instanceof StructuredHostAdoptionCleanupError) {
-      host = error.host as SpawnedStructuredHost;
-      if (resumeKey && adoptionClaim?.claimOwner) {
-        key = resumeKey;
-        binding.stopPersistence = await bindHost(
-          input.registry,
-          resumeKey,
-          host,
-          adoptionClaim.claimOwner,
-          adoptionClaim.claimEpoch,
-          "dead",
-        );
-      }
-    }
-    let cleanupError: unknown = null;
-    try {
-      await cleanupHost(host, binding, input.receipt.launchId);
-    } catch (failure) {
-      cleanupError = failure;
-    }
-    const transcriptFailureMustSettle = input.receipt.purpose === "launch"
-      && (error instanceof StructuredTranscriptMaterializationError
-        || error instanceof StructuredSessionMaterializationError);
-    if (cleanupError !== null && !transcriptFailureMustSettle) throw error;
-    let failedEntry: AgentRegistryEntry | null = null;
-    let failedIdentity = resumeIdentity;
-    if (key) {
-      const entry = startupHostSnapshot(input.registry, key).entries[sessionKeyId(key)];
-      if (entry) {
-        failedEntry = entry;
-        failedIdentity = { key, artifactPath: entry.artifactPath };
-      }
-    } else {
-      if (resumeIdentity) {
-        failedEntry = startupHostSnapshot(input.registry, resumeIdentity.key).entries[sessionKeyId(resumeIdentity.key)] ?? null;
-      }
-    }
-    if (typeof failedEntry?.structuredHostOperationId === "string"
-      && failedEntry.structuredHostOperationId !== input.receipt.launchId) {
-      failedIdentity = null;
-    }
-    let projectionSucceeded = cleanupError === null;
-    if (failedIdentity && !adoptionClaimContended && cleanupError === null) {
-      try {
-        await projectDeadStructuredSpawn(
-          input.client,
-          input.receipt,
-          failedEntry ?? { accountId: input.account.accountId, cwd: input.spec.cwd },
-          `structured-spawn-failed:${input.receipt.launchId}`,
-          failedIdentity,
-        );
-      } catch {
-        projectionSucceeded = false;
-      }
-    }
-    if (adoptionClaim && (!adoptionClaimTransferred || !projectionSucceeded)) {
-      await releaseAdoptionClaim(input.registry, adoptionClaim, projectionSucceeded);
-    }
-    const terminalFreshLaunch = input.receipt.purpose === "launch";
-    if (projectionSucceeded || terminalFreshLaunch) {
-      if (key) {
-        await input.registry.failStructuredSpawnOffLoop(input.receipt.launchId, failureReason, {
-          retainRegisteredHost: cleanupError !== null,
-        });
-      } else {
-        if (foregroundAdmissionOwner && input.receipt.queuedPinnedSpawn?.admissionDeadlineAt) {
-          await input.registry.failStructuredSpawnOffLoop(input.receipt.launchId, failureReason, {
-            recoveryFence: (_file, current) => current.state === "starting" && !current.key && !current.pane
-              && Boolean(current.admissionOwner && sameRecordedProcessIdentity(foregroundAdmissionOwner, current.admissionOwner)),
-          });
-        } else {
-          await input.registry.failSpawnOffLoop(input.receipt.launchId, failureReason);
+    caughtFailure = error;
+    try { return await withoutOperationLease(async () => {
+        clearDurableSetupTimeout();
+        const pending = input.registry.spawnReceipt(operationId) ?? undefined;
+        // Admission succeeded, but this owner never called startHost. Preserve the
+        // existing prepublication class; recovery still requires the original journal.
+        const preHostReason = input.receipt.purpose === "launch" && runtimeAdmitted && !hostStartRequested
+          && error instanceof RegistryWriterBusyError
+          ? `structured spawn interrupted before identity staging: ${structuredSpawnFailureReason(error)}` : null;
+        if (!host && !key && !(error instanceof StructuredHostAdoptionCleanupError)
+          && pending?.queuedPinnedSpawn) input.admissionActive?.();
+        if (!host && !adoptionClaim && !(error instanceof StructuredHostAdoptionCleanupError)
+          && (!pending || ["failed", "conflicted", "completed"].includes(pending.state)
+          || (foregroundAdmissionOwner && (!pending.admissionOwner
+            || !sameRecordedProcessIdentity(foregroundAdmissionOwner, pending.admissionOwner))))) throw error;
+        if (!host && !key && !adoptionClaim && !(error instanceof StructuredHostAdoptionCleanupError)
+          && foregroundAdmissionOwner && pending?.queuedPinnedSpawn?.admissionDeadlineAt) {
+          if (isRuntimeHostTransportFailure(error)
+            && await input.registry.deliveryWriteOrBusy({ label: "spawn.defer-admission", operationId }, () =>
+              input.registry.deferStructuredSpawnAdmission(operationId, foregroundAdmissionOwner, now(), admissionTransportReason(error)))) {
+            admissionDeferred = true;
+            return { ok: true, target: null, path: null, launchId: operationId, conversationId: input.receipt.conversationId,
+              launched: false, retrySafe: false, initialMessage: "queued", state: "starting", transport: "structured" };
+          }
+          const reason = preHostReason ?? (isRuntimeHostTransportFailure(error) ? admissionTransportReason(error) : structuredSpawnFailureReason(error));
+          const failed = await input.registry.failStructuredSpawnOffLoop(operationId, reason, { recoveryFence: (_file, current) =>
+            current.state === "starting" && !current.key && !current.pane && Boolean(current.admissionOwner
+              && sameRecordedProcessIdentity(foregroundAdmissionOwner, current.admissionOwner)) });
+          if (failed.claimed) await input.client.transitionOperation(operationId, "failed", { reason }).catch(() => {});
+          throw error;
         }
-      }
+        const recovery = stagedLaunchRecovery(pending);
+        if (host && key && recovery && !durableSetupTimedOut && isTransientStagedLaunchFailure(error)) {
+          await writeStagedRecovery(input.registry, operationId, { ...recovery, reason: stagedRecoveryFailureReason(error) });
+          (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredSpawnAdmissionOwner" }, input.registry.releaseStructuredSpawnAdmissionOwner.bind(input.registry, operationId, input.receipt.admissionOwner ?? processIdentity())));
+          return { ok: true, target: null, path: null, launchId: operationId, memoryCap: pending?.memoryCap, conversationId: input.receipt.conversationId,
+            launched: true, retrySafe: false, initialMessage: "queued", state: "path-pending", transport: "structured" };
+        }
+        stagedContinuations.delete(operationId);
+        forgetUnpublishedHost();
+        const failureReason = preHostReason ?? structuredSpawnFailureReason(error);
+        await input.client.transitionOperation(operationId, "failed", {
+          reason: failureReason,
+        }).catch(() => {});
+        if (!host && error instanceof StructuredHostAdoptionCleanupError) {
+          host = error.host as SpawnedStructuredHost;
+          if (resumeKey && adoptionClaim?.claimOwner) {
+            key = resumeKey;
+            binding.stopPersistence = await bindHost(
+              input.registry,
+              resumeKey,
+              host,
+              adoptionClaim.claimOwner,
+              adoptionClaim.claimEpoch,
+              "dead",
+            );
+          }
+        }
+        let cleanupError: unknown = null;
+        try {
+          await cleanupHost(host, binding, input.receipt.launchId);
+        } catch (failure) {
+          cleanupError = failure;
+        }
+        const transcriptFailureMustSettle = input.receipt.purpose === "launch"
+          && (error instanceof StructuredTranscriptMaterializationError
+            || error instanceof StructuredSessionMaterializationError);
+        if (cleanupError !== null && !transcriptFailureMustSettle) throw error;
+        let failedEntry: AgentRegistryEntry | null = null;
+        let failedIdentity = resumeIdentity;
+        if (key) {
+          const entry = startupHostSnapshot(input.registry, key).entries[sessionKeyId(key)];
+          if (entry) {
+            failedEntry = entry;
+            failedIdentity = { key, artifactPath: entry.artifactPath };
+          }
+        } else {
+          if (resumeIdentity) {
+            failedEntry = startupHostSnapshot(input.registry, resumeIdentity.key).entries[sessionKeyId(resumeIdentity.key)] ?? null;
+          }
+        }
+        if (typeof failedEntry?.structuredHostOperationId === "string"
+          && failedEntry.structuredHostOperationId !== input.receipt.launchId) {
+          failedIdentity = null;
+        }
+        let projectionSucceeded = cleanupError === null;
+        if (failedIdentity && !adoptionClaimContended && cleanupError === null) {
+          try {
+            await projectDeadStructuredSpawn(
+              input.client,
+              input.receipt,
+              failedEntry ?? { accountId: input.account.accountId, cwd: input.spec.cwd },
+              `structured-spawn-failed:${input.receipt.launchId}`,
+              failedIdentity,
+            );
+          } catch {
+            projectionSucceeded = false;
+          }
+        }
+        if (adoptionClaim && (!adoptionClaimTransferred || !projectionSucceeded)) {
+          await releaseAdoptionClaim(input.registry, adoptionClaim, projectionSucceeded);
+        }
+        const terminalFreshLaunch = input.receipt.purpose === "launch";
+        if (projectionSucceeded || terminalFreshLaunch) {
+          if (key) {
+            await input.registry.failStructuredSpawnOffLoop(input.receipt.launchId, failureReason, {
+              retainRegisteredHost: cleanupError !== null,
+            });
+          } else {
+            if (foregroundAdmissionOwner && input.receipt.queuedPinnedSpawn?.admissionDeadlineAt) {
+              await input.registry.failStructuredSpawnOffLoop(input.receipt.launchId, failureReason, {
+                recoveryFence: (_file, current) => current.state === "starting" && !current.key && !current.pane
+                  && Boolean(current.admissionOwner && sameRecordedProcessIdentity(foregroundAdmissionOwner, current.admissionOwner)),
+              });
+            } else {
+              await input.registry.failSpawnOffLoop(input.receipt.launchId, failureReason);
+            }
+          }
+        }
+        if (cleanupError !== null) {
+          spawnDiagnosticErrorFor(input.receipt.clientAttemptId, "[spawn] failed host cleanup remained unconfirmed", {
+            launchId: input.receipt.launchId,
+            error: structuredSpawnFailureReason(cleanupError),
+          });
+        }
+        throw error;
+    }); } catch (cleanupFailure) {
+      // Keep the proven pre-delivery refusal through lost cleanup/write ACKs.
+      // This grants only reconciliation of the original launch, never a resend.
+      if (roleMemoryDeferralReason(error)) throw error;
+      throw cleanupFailure;
     }
-    if (cleanupError !== null) {
-      spawnDiagnosticErrorFor(input.receipt.clientAttemptId, "[spawn] failed host cleanup remained unconfirmed", {
-        launchId: input.receipt.launchId,
-        error: structuredSpawnFailureReason(cleanupError),
-      });
-    }
-    throw error;
   } finally {
     // This call no longer advances setup, including when cleanup/projection
     // failed. Hand recovery back without releasing a newer admission owner.
     if (foregroundAdmissionOwner && !admissionDeferred) {
-      await input.registry.deliveryWrite({ label: "spawn.admission.release", operationId },
-        () => input.registry.releaseStructuredSpawnAdmissionOwner(operationId, foregroundAdmissionOwner));
+      try {
+        await withoutOperationLease(() => input.registry.deliveryWrite({ label: "spawn.admission.release", operationId },
+          () => input.registry.releaseStructuredSpawnAdmissionOwner(operationId, foregroundAdmissionOwner)));
+      } catch (releaseError) {
+        const privacyDeferral = roleMemoryDeferralReason(caughtFailure);
+        spawnDiagnosticErrorFor(input.receipt.clientAttemptId, "[spawn] structured admission owner release acknowledgement failed", {
+          launchId: operationId,
+          error: admissionTransportReason(releaseError),
+          ...(privacyDeferral ? { preservedFailure: privacyDeferral } : {}),
+        });
+        if (!privacyDeferral) throw releaseError;
+      }
     }
   }
 }

@@ -103,8 +103,9 @@ export function installRegistryArchive(db: Database): void {
   installRegistryEndings(db);
 }
 
-/* Each archivable collection's own test, in the order the pass reads them. */
-const ARCHIVE_CANDIDATE_BRANCHES = [
+/* Each archivable collection's own test, in the order the pass reads them.
+   `intentOwned` says whether a hot conversation still names the intent in `r`. */
+const archiveCandidateBranches = (intentOwned: string) => [
   `(collection='entries' AND json_extract(value_json,'$.status')='dead'
     AND json_extract(value_json,'$.host') IS NULL
     AND json_extract(value_json,'$.structuredHost.process') IS NULL
@@ -139,25 +140,48 @@ const ARCHIVE_CANDIDATE_BRANCHES = [
       AND json_extract(s.value_json,'$.state') NOT IN ('completed','failed','conflicted')))`,
   `(collection IN ('lineageEdges','memberships') AND EXISTS (
     SELECT 1 FROM registry_cold c WHERE c.collection='conversations' AND c.row_key=r.row_key))`,
+  /* A stopped intent whose sweep still has opt-outs to write stays hot: the
+     sweep and the readers that honour its decision find it by enumeration. */
   `(collection='migrationIntents' AND json_extract(value_json,'$.state') IN ('complete','stopped')
-    AND NOT EXISTS (SELECT 1 FROM registry_hot_rows c WHERE c.collection='conversations'
-      AND json_extract(c.value_json,'$.migration.intentId')=+r.row_key))`,
+    AND json_extract(value_json,'$.stopSweep') IS NULL
+    AND NOT ${intentOwned})`,
   `(collection='heldDeliveries' AND json_extract(value_json,'$.state') IN ('delivered','failed','cancelled','superseded'))`,
   `(collection='deliveryOperationOwners' AND json_extract(value_json,'$.terminalState') IN ('delivered','failed'))`,
 ] as const;
+
+/* The confirmation of one preselected row, under the lock. */
+const ARCHIVE_CANDIDATE_BRANCHES = archiveCandidateBranches(`EXISTS (SELECT 1 FROM registry_hot_rows c WHERE c.collection='conversations'
+      AND json_extract(c.value_json,'$.migration.intentId')=+r.row_key)`);
 
 export type ArchiveCandidate = { collection: string; row_key: string };
 
 // Unary + removes the outer TEXT affinity without changing its value. SQLite
 // can then use the JSON expression indexes for the correlated identity reads.
 // CROSS JOIN keeps each generation ahead of its primary-key entry lookup.
-/* One indexed pass per collection. A single predicate over every row kept
-   SQLite from using the collection indexes across the disjunction; it parsed
-   every payload, holding the write lock for 0.7 s per reaper
-   cycle whether or not anything moved (#2761). The collections are disjoint,
-   so the union selects exactly what the disjunction did. */
-const ARCHIVE_CANDIDATES = `SELECT collection,row_key FROM (${ARCHIVE_CANDIDATE_BRANCHES.map(branch =>
-  `SELECT collection,row_key,row_order FROM registry_hot_rows r WHERE ${branch}`).join("\n    UNION ALL ")})
+/* One pass per collection, each over the hot rows alone. A single predicate
+   over every row kept SQLite from using the collection indexes across the
+   disjunction; it parsed every payload, holding the write lock for 0.7 s per
+   reaper cycle whether or not anything moved (#2761). The collections are
+   disjoint, so the union selects exactly what the disjunction did.
+
+   `registry_rows` keeps a copy of every archived row, and a branch that
+   started from a field index visited those copies before it asked whether a
+   row is hot: a search that found nothing still read the payload of the whole
+   archive on every reaper cycle. The hot keys are found first, from the two
+   primary keys, and each branch reads only those rows. A settled intent that
+   a live conversation still names stays hot for as long as that conversation
+   does; the intents hot conversations name are read once for the same reason,
+   where each such intent searched every conversation's copy. */
+export const ARCHIVE_CANDIDATES = `WITH hot(hot_collection,hot_key) AS MATERIALIZED (
+    SELECT x.collection,x.row_key FROM registry_rows x
+    WHERE NOT EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection=x.collection AND c.row_key=x.row_key)),
+  owned(intent_id) AS MATERIALIZED (
+    SELECT DISTINCT json_extract(o.value_json,'$.migration.intentId') FROM hot CROSS JOIN registry_rows o
+      ON o.collection=hot_collection AND o.row_key=hot_key
+    WHERE hot_collection='conversations' AND json_extract(o.value_json,'$.migration.intentId') IS NOT NULL)
+  SELECT collection,row_key FROM (${archiveCandidateBranches("EXISTS (SELECT 1 FROM owned WHERE intent_id=+r.row_key)").map(branch =>
+  `SELECT r.collection,r.row_key,r.row_order FROM hot CROSS JOIN registry_rows r
+      ON r.collection=hot_collection AND r.row_key=hot_key WHERE ${branch}`).join("\n    UNION ALL ")})
     ORDER BY row_order LIMIT ?`;
 
 /**

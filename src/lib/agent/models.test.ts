@@ -13,6 +13,8 @@ import {
   codexModelSupportsImages,
   defaultModelFor,
   claudeCatalogModelId,
+  claudePinnedModelId,
+  CLAUDE_ALIAS_RELEASES,
   ENGINE_MODELS,
   modelDisplayName,
   modelFromBody,
@@ -24,11 +26,12 @@ test("the model catalog exposes Opus 5.5 and GPT-6.1-Sol as launch defaults whil
   expect(ENGINE_MODELS.codex).toEqual([
     { id: CODEX_ASTRA_MODEL, label: "GPT-6-Astra", shortLabel: "6-Astra", use: "review" },
     { id: CODEX_GPT61_SOL_MODEL, label: "GPT-6.1-Sol", shortLabel: "6.1-Sol", use: "review" },
-    { id: CODEX_GPT6_SOL_MODEL, label: "GPT-6-Sol", shortLabel: "6-Sol", use: "review" },
+    { id: CODEX_GPT61_TERRA_MODEL, label: "GPT-6.1-Terra", shortLabel: "6.1-Terra", use: "implement" },
     { id: CODEX_GPT6_LUNA_MODEL, label: "GPT-6-Luna", shortLabel: "6-Luna", use: "general" },
-    { id: CODEX_SOL_MODEL, label: "GPT-5.6-Sol", shortLabel: "5.6-Sol", use: "review" },
-    { id: CODEX_TERRA_MODEL, label: "GPT-5.6-Terra", shortLabel: "5.6-Terra", use: "implement" },
-    { id: CODEX_LUNA_MODEL, label: "GPT-5.6-Luna", shortLabel: "5.6-Luna", use: "general" },
+    { id: CODEX_GPT6_SOL_MODEL, label: "GPT-6-Sol", shortLabel: "6-Sol", use: "review", retired: true },
+    { id: CODEX_SOL_MODEL, label: "GPT-5.6-Sol", shortLabel: "5.6-Sol", use: "review", retired: true },
+    { id: CODEX_TERRA_MODEL, label: "GPT-5.6-Terra", shortLabel: "5.6-Terra", use: "implement", retired: true },
+    { id: CODEX_LUNA_MODEL, label: "GPT-5.6-Luna", shortLabel: "5.6-Luna", use: "general", retired: true },
   ]);
   expect(defaultModelFor("codex")).toBe(CODEX_GPT61_SOL_MODEL);
   expect(defaultModelFor("claude")).toBe("opus");
@@ -55,7 +58,7 @@ test("GPT-6.1-Sol is launchable, takes image input and sits right after Astra", 
   expect(CODEX_GPT61_SOL_MODEL).toBe("gpt-6.1-sol");
   expect(validateLaunchModel("codex", CODEX_GPT61_SOL_MODEL)).toEqual({ model: CODEX_GPT61_SOL_MODEL });
   expect(codexModelSupportsImages(CODEX_GPT61_SOL_MODEL)).toBeTrue();
-  expect(ENGINE_MODELS.codex.map((option) => option.id).slice(0, 3)).toEqual([CODEX_ASTRA_MODEL, CODEX_GPT61_SOL_MODEL, CODEX_GPT6_SOL_MODEL]);
+  expect(ENGINE_MODELS.codex.map((option) => option.id).slice(0, 3)).toEqual([CODEX_ASTRA_MODEL, CODEX_GPT61_SOL_MODEL, CODEX_GPT61_TERRA_MODEL]);
   // Catalogue order does not determine the shipped launch fallback.
   expect(defaultModelFor("codex")).toBe(CODEX_GPT61_SOL_MODEL);
 });
@@ -99,6 +102,8 @@ test("a card names a Claude model by its CLI display name and leaves other ids a
   // An Opus 5 conversation keeps reading as Opus 5.
   expect(modelDisplayName("claude", "opus-5")).toBe("Opus 5");
   expect(modelDisplayName("claude", "fable-5-1")).toBe("Fable 5.1");
+  expect(modelDisplayName("claude", "fable-5-2")).toBe("Fable 5.2");
+  expect(modelDisplayName("claude", "claude-fable-5-2")).toBe("Fable 5.2");
   expect(modelDisplayName("claude", "haiku-4-5")).toBe("Haiku 4.5");
   // The CLI names the `-0` releases without a minor version.
   expect(modelDisplayName("claude", "sonnet-4-0")).toBe("Sonnet 4");
@@ -112,7 +117,43 @@ test("a live conversation's launch alias reads like the resolved id its transcri
   expect(modelDisplayName("claude", "haiku")).toBe(modelDisplayName("claude", "haiku-5-5"));
   expect(modelDisplayName("claude", "haiku")).toBe("Haiku 5.5");
   expect(modelDisplayName("claude", "opus")).toBe("Opus 5.5");
+  /* `fable` names no release: it runs whatever the installed CLI resolves it to,
+     so it reads as the family and a transcript's id names the release. */
+  expect(modelDisplayName("claude", "fable")).toBe("Fable");
   expect(modelDisplayName("codex", "haiku")).toBe("haiku");
+});
+
+test("the fable alias names the release the installed CLI runs, and Fable 5.2 launches by its own id", () => {
+  /* Claude Code 2.1.321's catalogue resolves `fable` to claude-fable-5-2; the
+     2.1.318 catalogue resolves it to claude-fable-5-1 and lists no 5.2, yet a
+     print-mode call with --model claude-fable-5-2 on 2.1.318 ran that model.
+     The pinned row is how a fresh launch asks for Fable 5.2 on either. */
+  expect(CLAUDE_ALIAS_RELEASES.fable).toBe("claude-fable-5-2");
+  const catalogue318 = { fable: "claude-fable-5-1" };
+  const launched = listedModels("claude").find((option) => option.label === "Fable 5.2")!;
+  expect(launched.id).toBe("claude-fable-5-2");
+  expect(launched.id).not.toBe(catalogue318.fable);
+  expect(launched.id).not.toBe("fable");
+  expect(ENGINE_MODELS.claude.find((option) => option.id === "fable")).toEqual({ id: "fable", label: "Fable", shortLabel: "Fable", use: "general", retired: true });
+  expect(ENGINE_MODELS.claude.find((option) => option.id === "claude-fable-5-2")).toEqual({ id: "claude-fable-5-2", label: "Fable 5.2", shortLabel: "Fable 5.2", use: "general" });
+  expect(ENGINE_MODELS.claude.find((option) => option.id === "claude-fable-5-1")).toEqual({
+    id: "claude-fable-5-1", label: "Fable 5.1", shortLabel: "Fable 5.1", use: "general", retired: true,
+  });
+  expect(claudeCatalogModelId("claude-fable-5-1")).toBe("claude-fable-5-1");
+  expect(claudeCatalogModelId("claude-fable-5-2")).toBe("claude-fable-5-2");
+  expect(claudeCatalogModelId("claude-fable-5-2-20261109")).toBe("claude-fable-5-2");
+  expect(claudeCatalogModelId("fable")).toBe("fable");
+  expect(claudePinnedModelId("fable")).toBeNull();
+  expect(claudePinnedModelId("claude-fable-5-2")).toBe("claude-fable-5-2");
+  expect(validateLaunchModel("claude", "claude-fable-5-2")).toEqual({ model: "claude-fable-5-2" });
+  expect(validateLaunchModel("claude", "claude-fable-5-1")).toEqual({ model: "claude-fable-5-1" });
+  expect(validateLaunchModel("claude", "fable")).toEqual({ model: "fable" });
+  expect(normalizeClaudeLaunchModel("claude-fable-5-2")).toBe("fable");
+  expect(claudeSpawnTier("claude-fable-5-2")).toBe("fable");
+  // Fresh menus offer the pinned Fable 5.2 row; the alias and 5.1 are listed only while current.
+  expect(listedModels("claude").map((option) => option.id)).toEqual(["opus", "claude-fable-5-2", "sonnet", "claude-sonnet-5-5", "claude-haiku-5-5"]);
+  expect(listedModels("claude", "claude-fable-5-1").map((option) => option.id)).toEqual(["opus", "claude-fable-5-2", "claude-fable-5-1", "sonnet", "claude-sonnet-5-5", "claude-haiku-5-5"]);
+  expect(listedModels("claude", "fable").map((option) => option.id)).toEqual(["opus", "fable", "claude-fable-5-2", "sonnet", "claude-sonnet-5-5", "claude-haiku-5-5"]);
 });
 
 test("unknown or unsafe Claude transcript model ids omit the launch override", () => {
@@ -156,7 +197,7 @@ test("the provider's own label names the row, and a codenamed bucket is never sh
 
 test("Claude Sonnet 5.5 is a pinned catalog row that launches and displays as Sonnet 5.5", () => {
   const ids = ENGINE_MODELS.claude.map((option) => option.id);
-  expect(ids).toEqual(["opus", "fable", "sonnet", "claude-sonnet-5-5", "haiku", "claude-haiku-5-5", "claude-haiku-4-5"]);
+  expect(ids).toEqual(["opus", "fable", "claude-fable-5-2", "claude-fable-5-1", "sonnet", "claude-sonnet-5-5", "haiku", "claude-haiku-5-5", "claude-haiku-4-5"]);
   expect(ENGINE_MODELS.claude.find((option) => option.id === "claude-sonnet-5-5")).toEqual({
     id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", shortLabel: "Sonnet 5.5", use: "implement",
   });
@@ -181,8 +222,8 @@ test("claudeCatalogModelId keeps a pinned catalog id and folds every other id to
 });
 
 test("Haiku 5.5 and the previous Haiku launch with pinned ids and keep their display identities", () => {
-  for (const [model, label] of [["claude-haiku-5-5", "Haiku 5.5"], ["claude-haiku-4-5", "Haiku 4.5"]]) {
-    expect(ENGINE_MODELS.claude.find((option) => option.id === model)).toEqual({ id: model, label, shortLabel: label, use: "general" });
+  for (const [model, label, retired] of [["claude-haiku-5-5", "Haiku 5.5", false], ["claude-haiku-4-5", "Haiku 4.5", true]] as const) {
+    expect(ENGINE_MODELS.claude.find((option) => option.id === model)).toEqual({ id: model, label, shortLabel: label, use: "general", ...(retired ? { retired } : {}) });
     expect(validateLaunchModel("claude", model)).toEqual({ model });
     expect(modelFromBody({ model })).toEqual({ model });
     expect(modelDisplayName("claude", model)).toBe(label);
@@ -210,4 +251,44 @@ test("Haiku 5.5 is listed once while the CLI alias stays a valid launch id", () 
   expect(launchModelIds("codex")).toContain(CODEX_TERRA_MODEL);
   expect(validateLaunchModel("codex", "gpt-6.2-terra")).toHaveProperty("error");
   expect(codexModelSupportsImages("gpt-6.2-terra")).toBeFalse();
+});
+
+test("fresh menus offer only the current Codex choices and one Haiku 5.5 row", () => {
+  expect(listedModels("codex").map((option) => option.id)).toEqual(["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"]);
+  expect(listedModels("codex", "").map((option) => option.id)).toEqual(listedModels("codex").map((option) => option.id));
+  expect(listedModels("claude").map((option) => option.id)).toEqual(["opus", "claude-fable-5-2", "sonnet", "claude-sonnet-5-5", "claude-haiku-5-5"]);
+  // Every offered row launches and carries the effort ladder the backend admitted.
+  for (const engine of ["claude", "codex"] as const) {
+    for (const option of listedModels(engine)) expect(validateLaunchModel(engine, option.id)).toEqual({ model: option.id });
+  }
+});
+
+test("a saved retired selection stays listed under its own label in its catalogue place", () => {
+  for (const [engine, model, label] of [
+    ["codex", CODEX_SOL_MODEL, "GPT-5.6-Sol"],
+    ["codex", CODEX_TERRA_MODEL, "GPT-5.6-Terra"],
+    ["codex", CODEX_LUNA_MODEL, "GPT-5.6-Luna"],
+    ["codex", CODEX_GPT6_SOL_MODEL, "GPT-6-Sol"],
+    ["claude", "claude-haiku-4-5", "Haiku 4.5"],
+  ] as const) {
+    const listed = listedModels(engine, model);
+    expect(listed.filter((option) => option.retired).map((option) => [option.id, option.label])).toEqual([[model, label]]);
+    expect(listed).toHaveLength(listedModels(engine).length + 1);
+    // Saved values still launch, so retiring a row never rewrites a stored role, stage or resume value.
+    expect(validateLaunchModel(engine, model)).toEqual({ model });
+  }
+  // A current choice changes nothing; whitespace around a stored value still names it.
+  expect(listedModels("codex", CODEX_GPT61_TERRA_MODEL).map((option) => option.id)).toEqual(listedModels("codex").map((option) => option.id));
+  expect(listedModels("codex", ` ${CODEX_GPT6_SOL_MODEL} `).map((option) => option.id)).toContain(CODEX_GPT6_SOL_MODEL);
+});
+
+test("several current choices keep each retired row and one row per Haiku release", () => {
+  expect(listedModels("codex", [CODEX_GPT61_TERRA_MODEL, CODEX_SOL_MODEL, null, undefined]).map((option) => option.id))
+    .toEqual(["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", CODEX_SOL_MODEL]);
+  // The drafted choice decides between the alias and its pinned row: never two Haiku 5.5 rows.
+  const haikuRows = (current: string[]) => listedModels("claude", current).filter((option) => option.label === "Haiku 5.5").map((option) => option.id);
+  expect(haikuRows(["claude-haiku-5-5", "haiku"])).toEqual(["claude-haiku-5-5"]);
+  expect(haikuRows(["haiku", "claude-haiku-5-5"])).toEqual(["haiku"]);
+  expect(haikuRows(["claude-haiku-4-5", "haiku"])).toEqual(["haiku"]);
+  expect(listedModels("claude", ["claude-haiku-4-5", "haiku"]).map((option) => option.id)).toContain("claude-haiku-4-5");
 });

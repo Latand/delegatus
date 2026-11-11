@@ -1,3 +1,4 @@
+import { keepReportPicturesSoon } from "@/lib/reportMedia/paths";
 import { workspaceRoute, assertWorkspaceProject } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -24,7 +25,7 @@ export const dynamic = "force-dynamic";
 const TASK_REQUEST_FIELDS = ["text", "details", "status", "hold", "restoreHold", "steps"] as const;
 /* What the team audit names as a change to a task (§7.3): its words, where it
    stands, and whether it is on the board. Placement and decoration are not. */
-const TEAM_TASK_FIELDS = ["note", "text", "details", "status", "hold", "restoreHold", "steps", "hide", "board", "priority", "dueAt"] as const;
+const TEAM_TASK_FIELDS = ["note", "progress", "text", "details", "status", "hold", "restoreHold", "steps", "hide", "board", "priority", "dueAt"] as const;
 
 type TaskRouteContext = {
   params: Promise<{ id: string }>;
@@ -72,6 +73,7 @@ async function workspacePATCH(
       { status: result.status },
     );
   }
+  if (Object.hasOwn(body, "text") || Object.hasOwn(body, "details")) keepReportPicturesSoon([result.task.text, result.task.details]);
   /* An edit of what the task says or where it stands instructs its agents; a
      move, a colour, an icon, a link or a hide does not, and is not recorded. */
   if (TASK_REQUEST_FIELDS.some((field) => Object.hasOwn(body, field)) && directOperatorActivityAuthority(req).ok) {

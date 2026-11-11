@@ -1,3 +1,4 @@
+import { runAccountRemoval } from "./removalWorker";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { procBackend } from "@/lib/proc";
@@ -5,18 +6,17 @@ import os from "node:os";
 import path from "node:path";
 
 import { stateDir, statePath } from "@/lib/configDir";
+import { hotStateSqliteWriterReady } from "@/lib/state/hotStateAuthority";
 
 import { CODEX_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
-import { isShellCommand } from "@/lib/status";
 import { accountProbeIdentity, withAccountMutationLockAsync, AccountMutationBusyError, withAccountMutationLock } from "./accountMutation";
-import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retireAccountInPlace, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
+import { AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, AccountArchiveUnavailableError, retireAccountInPlace, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
 import type { AccountPathRewrite, AccountRetirementReport } from "@/lib/agent/registry";
 
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const DEFAULT_ID = "default";
 const REGISTRY_VERSION = 1;
 const REGISTRY_LOCK_STALE_MS = 30_000;
-export const LOGIN_STARTUP_GRACE_MS = 15_000;
 /* Shared, read-mostly capability state. Account tokens, sessions, plugin data,
    and MCP OAuth state deliberately have no link and remain home-local. */
 const OVERLAY_LINKS = ["skills", "prompts", "config.toml", "AGENTS.md", "memories", "rules"] as const;
@@ -28,6 +28,7 @@ export interface LoginPane {
 }
 
 export interface CodexAccount {
+  spendCredits?: boolean;
   id: string;
   label: string;
   kind: "legacy" | "managed";
@@ -59,6 +60,7 @@ interface RetiredAccount {
 }
 
 interface Registry {
+  spendCredits?: string[];
   version: number;
   active: string;
   accounts: StoredAccount[];
@@ -235,7 +237,10 @@ function normalizeRegistry(value: unknown, sourceKey: string): LoadedRegistry {
     reportStoreErrorOnce(`${sourceKey}:invalid-removals`, "registry has an unreadable removal journal; serving the default account");
     return { registry: defaultRegistry(), corrupt: true };
   }
-  return { registry: { version: REGISTRY_VERSION, active: raw.active, accounts, retired, removals, ...(raw.legacyHidden === true ? { legacyHidden: true as const } : {}) }, corrupt: rejected };
+  const spendCredits = Array.isArray(raw.spendCredits) && raw.spendCredits.every(id => typeof id === "string")
+    ? [...new Set(raw.spendCredits)].filter(id => id === DEFAULT_ID ? raw.legacyHidden !== true
+      : accounts.some(account => account.id === id) && !removals.some(removal => removal.id === id)) : undefined;
+  return { registry: { version: REGISTRY_VERSION, active: raw.active, accounts, retired, removals, ...(spendCredits ? { spendCredits } : {}), ...(raw.legacyHidden === true ? { legacyHidden: true as const } : {}) }, corrupt: rejected };
 }
 
 /* The registry is the `accounts` collection of state.sqlite (#1870, slice 7).
@@ -376,7 +381,30 @@ export function codexAccountsForPrivacy(): readonly { id: string; label: string 
 export function listCodexAccounts(): CodexAccount[] {
   recoverRemovalsAtStartup();
   const loaded = readRegistry();
-  return [...(loaded.registry.legacyHidden ? [] : [defaultAccount()]), ...loaded.registry.accounts.map(asAccount)];
+  return [...(loaded.registry.legacyHidden ? [] : [defaultAccount()]), ...loaded.registry.accounts.map(asAccount)]
+    .map(account => ({ ...account, spendCredits: !loaded.corrupt && loaded.registry.spendCredits?.includes(account.id) === true }));
+}
+
+/** No credential or home is read to decide the paid-spending policy. */
+export function codexAccountSpendsCredits(accountId: string | null | undefined): boolean {
+  if (!accountId) return false;
+  try {
+    const { registry, corrupt } = readRegistry();
+    return !corrupt && (accountId === DEFAULT_ID ? !registry.legacyHidden : registry.accounts.some(account => account.id === accountId)
+      && !registry.removals.some(removal => removal.id === accountId)) && registry.spendCredits?.includes(accountId) === true;
+  } catch { return false; }
+}
+
+/** Called only behind the operator HTTP boundary, under account mutation admission. */
+export function setCodexAccountSpendCredits(accountId: string, enabled: boolean): void {
+  withRegistryLock(() => {
+    const registry = mutableRegistry();
+    if (accountId === DEFAULT_ID ? registry.legacyHidden : !registry.accounts.some(account => account.id === accountId)
+      || registry.removals.some(removal => removal.id === accountId)) throw new UnknownAccountError(accountId);
+    registry.spendCredits = (registry.spendCredits ?? []).filter(id => id !== accountId);
+    if (enabled) registry.spendCredits.push(accountId);
+    writeRegistry(registry);
+  });
 }
 
 /** True once the operator removed Main from Delegatus. */
@@ -652,17 +680,19 @@ function withAccountRetired(registry: Registry, id: string): Registry {
   return {
     ...registry,
     active: registry.active === id ? fallbackAccountId(registry, id) ?? DEFAULT_ID : registry.active,
+    spendCredits: registry.spendCredits?.filter(accountId => accountId !== id),
     accounts: registry.accounts.filter((account) => account.id !== id),
     retired: [...registry.retired.filter((account) => account.id !== id), { id, label, retiredAt: previous?.retiredAt ?? Date.now(), archived: true }],
     removals: withAccountRemovalJournal(registry.removals, id, "scrubbing"),
   };
 }
 
-function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } {
+function recoverRemovalsLocked(accountId?: string): { recovered: string[]; unresolved: string[] } {
   const registry = mutableRegistry();
   const recovered: string[] = [];
   const unresolved: string[] = [];
   for (const entry of registry.removals) {
+    if (accountId !== undefined && entry.id !== accountId) continue;
     if (accountRemovalInFlight("codex", entry.id)) continue;
     let settled: "retired" | "restored" | null = null;
     try {
@@ -689,8 +719,8 @@ function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } 
 
 /** Settles removals a crash interrupted (issue #1857): an unfinished move is
     undone, a committed one is finished. */
-export function recoverInterruptedCodexAccountRemovals(): { recovered: string[]; unresolved: string[] } {
-  return withRegistryLock(() => recoverRemovalsLocked(), false);
+export function recoverInterruptedCodexAccountRemovals(accountId?: string): { recovered: string[]; unresolved: string[] } {
+  return withRegistryLock(() => recoverRemovalsLocked(accountId), false);
 }
 
 let startupRecoveryDone = false;
@@ -698,6 +728,7 @@ let startupRecoveryDone = false;
     means another mutation is running; the next listing tries again. */
 function recoverRemovalsAtStartup(): void {
   if (startupRecoveryDone) return;
+  if (!hotStateSqliteWriterReady(stateDir())) return;
   const loaded = readRegistry();
   if (loaded.corrupt || loaded.registry.removals.length === 0) {
     startupRecoveryDone = true;
@@ -757,6 +788,16 @@ export function removeManagedCodexAccount(id: string): AccountArchiveRemovalRepo
   }, false);
 }
 
+
+export async function removeManagedCodexAccountAsync(id: string): Promise<AccountArchiveRemovalReport> {
+  try { return await runAccountRemoval("codex", id); }
+  catch (error) {
+    const prototypes: Record<string, object> = { AccountHistoryInventoryBlockedError: AccountHistoryInventoryBlockedError.prototype, AccountRemovalBlockedError: AccountRemovalBlockedError.prototype, AccountArchiveUnavailableError: AccountArchiveUnavailableError.prototype, AccountMutationBusyError: AccountMutationBusyError.prototype, UnknownAccountError: UnknownAccountError.prototype, CorruptCodexAccountsError: CorruptCodexAccountsError.prototype, UnsafeCodexHomeError: UnsafeCodexHomeError.prototype, CodexLoginBusyError: CodexLoginBusyError.prototype };
+    if (error instanceof Error && prototypes[error.name]) Object.setPrototypeOf(error, prototypes[error.name]);
+    throw error;
+  }
+}
+
 /**
  * Removes Main from Delegatus. Nothing under its home is touched: the
  * registry records it as hidden, so it leaves every list and is never picked
@@ -772,7 +813,7 @@ export function hideLegacyCodexAccount(): AccountRetirementReport {
       engine: "codex",
       accountId: DEFAULT_ID,
       fallbackAccountId: fallback,
-      commit: () => writeRegistry({ ...mutableRegistry(), legacyHidden: true, ...(registry.active === DEFAULT_ID && fallback ? { active: fallback } : {}) }),
+      commit: () => writeRegistry({ ...mutableRegistry(), legacyHidden: true, spendCredits: registry.spendCredits?.filter(id => id !== DEFAULT_ID), ...(registry.active === DEFAULT_ID && fallback ? { active: fallback } : {}) }),
     });
   });
 }
@@ -874,28 +915,4 @@ export function setCodexAccountLoginPane(id: string, loginPane: LoginPane | null
     accounts[index] = { ...accounts[index]!, loginPane };
     writeRegistry({ ...registry, accounts });
   });
-}
-
-export type CodexLoginState = "pending" | "idle" | "authenticated";
-
-/** Pure reconciliation rule for the tracked device-login pane. */
-export function codexLoginPaneStatus(
-  authPresent: boolean,
-  loginPane: LoginPane | null,
-  pane: Pick<{ windowName: string; command: string }, "windowName" | "command"> | null,
-  now = Date.now(),
-): { state: CodexLoginState; clear: boolean } {
-  if (authPresent) return { state: "authenticated", clear: loginPane !== null };
-  if (!loginPane) return { state: "idle", clear: false };
-  const withinGrace = now - loginPane.startedAt < LOGIN_STARTUP_GRACE_MS;
-  // A null pane can mean a transient tmux failure (nsenter wrapper hiccup, non-zero
-  // exit) as easily as a genuinely dead window. During the startup grace keep the
-  // login pending so one blip can't permanently strand a device login; only at or
-  // past the deadline does a missing pane become idle and clear the tracked pane.
-  if (!pane) return withinGrace ? { state: "pending", clear: false } : { state: "idle", clear: true };
-  if (pane.windowName !== loginPane.windowName) return { state: "idle", clear: true };
-  if (isShellCommand(pane.command)) {
-    return withinGrace ? { state: "pending", clear: false } : { state: "idle", clear: true };
-  }
-  return { state: "pending", clear: false };
 }

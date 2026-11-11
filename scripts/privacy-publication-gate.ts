@@ -6,6 +6,7 @@ import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve,
 import { isDeepStrictEqual } from "node:util";
 import { domainToASCII } from "node:url";
 import { inflateSync } from "node:zlib";
+import { readSafeRegularFile } from "./privacy-safe-path";
 
 import { preparedPrivacyText } from "./privacy-text-preparation";
 import { privacyMarkupSpans, stripPrivacyHtml } from "./privacy-markup";
@@ -1025,12 +1026,6 @@ function safePath(path: string): SafePathResult {
   return { metadata, status: "safe" };
 }
 
-function readSafeRegularFile(path: string): Buffer {
-  const result = safePath(path);
-  if (result.status !== "safe" || !result.metadata?.isFile()) throw new Error("unsafe file path");
-  return readFileSync(resolve(path));
-}
-
 type PreparedKnownValue = Readonly<KnownValue & {
   primary: string;
   fingerprintNeedle: string;
@@ -1251,6 +1246,105 @@ function changedPaths(arguments_: string[], repository: string, resolvedBase?: s
     for (const path of result.paths) paths.add(resolve(repository, path));
   }
   return { error: false, paths: [...paths] };
+}
+
+function commitInputGit(repository: string, args: string[], env: Record<string, string | undefined> = withoutUnsupportedApiCredentials(process.env), stdin?: Buffer): Buffer {
+  const result = Bun.spawnSync({
+    cmd: ["git", "--no-replace-objects", "--literal-pathspecs", "-C", repository, ...args],
+    env, stdin, stdout: "pipe", stderr: "pipe",
+  });
+  if (result.exitCode !== 0) throw new Error("commit input unreadable");
+  return result.stdout;
+}
+
+/** New-side text from changed hunks, including three context lines, without removed text or diff syntax. */
+function addedHunks(patch: string): Array<{ line: number; text: string }> {
+  const hunks: Array<{ line: number; text: string }> = [];
+  let current: { line: number; lines: string[]; changed: boolean } | undefined;
+  let oldRemaining = 0, newRemaining = 0;
+  const finish = () => {
+    if (oldRemaining !== 0 || newRemaining !== 0) throw new Error("incomplete commit hunk");
+    if (current?.changed) hunks.push({ line: current.line, text: current.lines.join("\n") });
+    current = undefined;
+  };
+  for (const line of patch.split("\n")) {
+    const header = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (header) {
+      finish();
+      oldRemaining = Number(header[1] ?? 1); newRemaining = Number(header[3] ?? 1);
+      current = { line: Number(header[2]), lines: [], changed: false };
+    } else if (current && (oldRemaining > 0 || newRemaining > 0)) {
+      if (line.startsWith("\\ No newline at end of file")) continue;
+      if (line[0] === " " || line[0] === "+") {
+        current.lines.push(line.slice(1)); newRemaining -= 1;
+        if (line[0] === "+") current.changed = true;
+      }
+      if (line[0] === " " || line[0] === "-") oldRemaining -= 1;
+      if (line[0] === "-") current.changed = true;
+      if (![" ", "+", "-"].includes(line[0]) || oldRemaining < 0 || newRemaining < 0) {
+        throw new Error("invalid commit hunk");
+      }
+    }
+  }
+  finish();
+  return hunks;
+}
+
+type CommitInput = { commit: string; path: string; blob: string } & (
+  | { kind: "text"; hunks: Array<{ line: number; text: string }> }
+  | { kind: "blob" | "unsafe" }
+);
+
+/** Read immutable commit objects. Checkout, index and untracked bytes cannot enter this selection. */
+function* commitInputs(repository: string, base: string): Generator<CommitInput> {
+  const commits = commitInputGit(repository, ["rev-list", "--parents", `${base}..HEAD`]).toString().trim();
+  const binaryBlobs = new Set<string>();
+  for (const row of commits ? commits.split("\n") : []) {
+    const [commit, ...parents] = row.split(" ");
+    if (![commit, ...parents].every(hash => COMMIT_HASH.test(hash))) throw new Error("invalid commit input");
+    // A merge can add a resolution which appears in neither parent's own diff.
+    const endpoints = parents.length ? [parents[0], commit] : [commit];
+    const options = ["diff-tree", "--root", "--no-commit-id", "--no-renames", "--no-abbrev", "--no-ext-diff", "--no-textconv", "-r", "-z"];
+    const raw = new TextDecoder("utf-8", { fatal: true }).decode(commitInputGit(repository, [...options, "--raw", ...endpoints])).split("\0");
+    if (raw.pop() !== "") throw new Error("unframed commit paths");
+    const attributeOutput = commitInputGit(repository, ["check-attr", "--source", commit, "-z", "diff", "--stdin"], undefined,
+      Buffer.from(raw.filter((_, index) => index % 2 === 1).map(path => `${path}\0`).join(""))).toString().split("\0");
+    if (attributeOutput.pop() !== "" || attributeOutput.length % 3 !== 0) throw new Error("invalid commit attributes");
+    const diffAttributes = new Map<string, string>();
+    for (let index = 0; index < attributeOutput.length; index += 3) {
+      if (attributeOutput[index + 1] !== "diff") throw new Error("invalid commit attribute name");
+      diffAttributes.set(attributeOutput[index], attributeOutput[index + 2]);
+    }
+    for (let index = 0; index < raw.length; index += 2) {
+      const metadata = /^:(\d{6}) (\d{6}) ([a-f0-9]{40}) ([a-f0-9]{40}) [AMDT]$/.exec(raw[index]);
+      const path = raw[index + 1];
+      if (!metadata || !path) throw new Error("invalid commit path");
+      const [, oldMode, mode, oldBlob, blob] = metadata;
+      if (mode === "000000") continue;
+      const input = { commit, path, blob };
+      if (mode !== "100644" && mode !== "100755") { yield { ...input, kind: "unsafe" }; continue; }
+      const oldWasRegular = oldMode === "100644" || oldMode === "100755";
+      const changedFromNonRegular = oldMode !== "000000" && !oldWasRegular;
+      if (oldBlob === blob && oldWasRegular) continue;
+      const size = Number(commitInputGit(repository, ["cat-file", "-s", blob]).toString().trim());
+      if (!Number.isSafeInteger(size) || size < 0 || size > maxPublicationBytes) throw new Error("commit blob too large");
+      // A symlink blob stores its target as bytes. Materializing those same
+      // bytes as a regular file publishes content the old-side diff omits.
+      if (changedFromNonRegular) { yield { ...input, kind: "blob" }; continue; }
+      let binary = binaryBlobs.has(blob) || diffAttributes.get(path) === "unset" || extensionMediaKind(path) !== undefined;
+      if (!binary) {
+        const bytes = commitInputGit(repository, ["cat-file", "blob", blob]);
+        binary = signatureMediaKind(bytes) !== undefined || bytes.some(byte => byte < 32 && ![9, 10, 13].includes(byte));
+        if (!binary) {
+          try { new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { binary = true; }
+        }
+      }
+      if (binary) { binaryBlobs.add(blob); yield { ...input, kind: "blob" }; continue; }
+      const patch = commitInputGit(repository, ["diff-tree", "--root", "--no-commit-id", "--no-renames", "-r",
+        "--no-ext-diff", "--no-textconv", "--no-color", "--text", "--unified=3", "-p", ...endpoints, "--", path]);
+      yield { ...input, kind: "text", hunks: addedHunks(new TextDecoder("utf-8", { fatal: true }).decode(patch)) };
+    }
+  }
 }
 
 function addFinding(findings: Map<FindingClass, number>, finding: FindingClass): void {
@@ -1859,6 +1953,10 @@ export function sensitiveClasses(text: string): Set<FindingClass> {
   return findings;
 }
 
+function isTextLikePath(path: string): boolean {
+  return textExtensions.has(extname(path).toLowerCase()) || textBasenames.has(basename(path));
+}
+
 function inspectText(path: string, kind: MediaKind | undefined): Set<FindingClass> {
   if (kind) return new Set();
   try {
@@ -1912,8 +2010,7 @@ function inspectText(path: string, kind: MediaKind | undefined): Set<FindingClas
     if (views.slice(1).some(view => matchesStandaloneIdentity(normalizedSensitiveText(view).exactSearchable))) {
       findings.add("known_value");
     }
-    const extension = extname(path).toLowerCase();
-    const textLike = textExtensions.has(extension) || textBasenames.has(basename(path));
+    const textLike = isTextLikePath(path);
     const controlBytes = contents.reduce((count, byte) => {
       const allowedWhitespace = byte === 0x09 || byte === 0x0a || byte === 0x0d;
       return count + (byte < 0x20 && !allowedWhitespace ? 1 : 0);
@@ -2367,6 +2464,13 @@ function trustedVendorExemptions(path: string, inspectionRoot: string | undefine
     : new Set();
 }
 
+function inspectFileContents(path: string, kind: MediaKind | undefined): Set<FindingClass> {
+  return new Set([
+    ...inspectRasterMetadata(path, kind), ...inspectRaster(path, kind),
+    ...inspectAnimated(path, kind), ...inspectText(path, kind),
+  ]);
+}
+
 export function inspectPaths(
   paths: string[],
   configurationError = false,
@@ -2374,6 +2478,7 @@ export function inspectPaths(
   inspectionRoot = repositoryRoot,
   trustedBase?: string,
   attributionNotices: string[] = [],
+  inspectContents = inspectFileContents,
 ): Map<FindingClass, number> {
   const findings = new Map<FindingClass, number>();
   if (knownValues.error || configurationError || (requireKnownValues && knownValues.fingerprints.length === 0)) {
@@ -2393,12 +2498,8 @@ export function inspectPaths(
       addFinding(findings, "inspection_error");
       continue;
     }
-    const pathFindings = new Set<FindingClass>();
     const kind = mediaKind(path);
-    for (const finding of inspectRasterMetadata(path, kind)) pathFindings.add(finding);
-    for (const finding of inspectRaster(path, kind)) pathFindings.add(finding);
-    for (const finding of inspectAnimated(path, kind)) pathFindings.add(finding);
-    for (const finding of inspectText(path, kind)) pathFindings.add(finding);
+    const pathFindings = new Set(inspectContents(path, kind));
     if (kind && kind !== "audio") {
       const provenance = provenanceFor(path, inspectionRoot, trustedBase);
       if (provenance.status === "missing") pathFindings.add("provenance_missing");
@@ -2434,6 +2535,76 @@ export function inspectPaths(
         attributionNotices.push(`file-sha256:${pathDigest} ${finding}`);
       }
     }
+  }
+  return findings;
+}
+
+function inspectCommitAdditions(repository: string, base: string, requireKnownValues: boolean, notices: string[], deferMedia: boolean): Map<FindingClass, number> {
+  const findings = inspectPaths([], false, requireKnownValues, repository, base, notices);
+  let scratch: string | undefined, snapshot: string | undefined, snapshotCommit: string | undefined;
+  // Cache detector results, never provenance: a copied blob still needs the
+  // manifest and generator at its own path and commit. Kinds can depend on the
+  // extension, so an opaque blob renamed to an image cannot inherit a text pass.
+  const content = new Map<string, Set<FindingClass>>();
+  const snapshotEnv = Object.fromEntries(Object.entries(withoutUnsupportedApiCredentials(process.env)).filter(([name]) => !name.startsWith("GIT_")));
+  Object.assign(snapshotEnv, { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" });
+  const snapshotAt = (commit: string): string => {
+    if (!scratch) {
+      scratch = mkdtempSync(join(tmpdir(), "llv-privacy-commits-"));
+      snapshot = join(scratch, "tree");
+      const result = Bun.spawnSync({ cmd: ["git", "clone", "--quiet", "--shared", "--no-checkout", "--template=", "--", repository, snapshot],
+        env: snapshotEnv, stdout: "pipe", stderr: "pipe" });
+      if (result.exitCode !== 0) throw new Error("commit snapshot unavailable");
+      const attributes = join(snapshot, ".git", "info", "attributes");
+      mkdirSync(dirname(attributes), { recursive: true });
+      // Preserve blob bytes while retaining a commit tree for provenance reads.
+      // info/attributes outranks committed .gitattributes files.
+      writeFileSync(attributes, "* -filter -ident -working-tree-encoding -text\n");
+    }
+    if (snapshotCommit !== commit) {
+      commitInputGit(snapshot!, ["-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false", "checkout", "--quiet", "--force", "--detach", "--no-recurse-submodules", commit], snapshotEnv);
+      snapshotCommit = commit;
+    }
+    return snapshot!;
+  };
+  try {
+    for (const input of commitInputs(repository, base)) {
+      const pathDigest = createHash("sha256").update(input.path).digest("hex");
+      const location = `commit_content: ${input.commit.slice(0, 12)} file-sha256:${pathDigest}`;
+      if (input.kind === "unsafe") {
+        addFinding(findings, "unsafe_path"); notices.push(`${location} unsafe_path`); continue;
+      }
+      if (input.kind === "text") {
+        for (const hunk of input.hunks) {
+          const detected = sensitiveClasses(hunk.text);
+          if (detected.size && input.path.startsWith(`${trustedTelegramVendor.relativeRoot}/`)) {
+            const root = snapshotAt(input.commit);
+            for (const finding of trustedVendorExemptions(join(root, input.path), root)) detected.delete(finding);
+          }
+          for (const finding of detected) {
+            addFinding(findings, finding); notices.push(`${location}:${hunk.line} ${finding}`);
+          }
+        }
+        continue;
+      }
+      const root = snapshotAt(input.commit);
+      const detected = inspectPaths([join(root, input.path)], false, false, root, base, [], (path, kind) => {
+        // inspectText's refusal depends on whether this particular filename
+        // is classified as text, even when the blob bytes and media kind match.
+        const key = `${input.blob}:${kind ?? "text"}:${isTextLikePath(path) ? "text-like" : "other"}`;
+        let result = content.get(key);
+        if (!result) { result = inspectFileContents(path, kind); content.set(key, result); }
+        return result;
+      });
+      if (deferMedia && detected.delete("tool_unavailable")) notices.push(`${location} media OCR deferred to required hosted check (tool unavailable)`);
+      for (const [finding, count] of detected) {
+        findings.set(finding, (findings.get(finding) ?? 0) + count); notices.push(`${location} ${finding}`);
+      }
+    }
+  } catch {
+    addFinding(findings, "inspection_error"); notices.push("commit_content: input unreadable");
+  } finally {
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
   }
   return findings;
 }
@@ -2909,18 +3080,21 @@ if (import.meta.main) {
   const repositoryPath = safePath(inspectionRoot);
   const repositoryError = repositoryPath.status !== "safe" || !repositoryPath.metadata?.isDirectory();
   const explicitPaths = requestedPaths(arguments_);
+  const addedLines = arguments_.includes("--added-lines");
   const range = !repositoryError && (explicitPaths === undefined || arguments_.includes("--check-commits"))
     ? publicationRange(inspectionRoot, requestedBase)
     : { base: requestedBase, error: false, notices: [] };
   const trustedBase = range.base;
-  const selection = explicitPaths === undefined
+  const selection = addedLines ? { error: explicitPaths !== undefined, paths: [] } : explicitPaths === undefined
     ? changedPaths(arguments_, inspectionRoot, trustedBase)
     : {
       error: explicitPaths.length === 0,
       paths: explicitPaths.map((path) => isAbsolute(path) ? path : resolve(inspectionRoot, path)),
     };
   const notices: string[] = [...range.notices];
-  const pathFindings = inspectPaths(
+  const pathFindings = addedLines && !range.error && !repositoryError
+    ? inspectCommitAdditions(inspectionRoot, trustedBase, arguments_.includes("--require-known-values"), notices, arguments_.includes("--defer-unavailable-media"))
+    : inspectPaths(
     selection.paths,
     false,
     arguments_.includes("--require-known-values"),

@@ -1,4 +1,4 @@
-import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
+import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import { spawnDiagnosticError, spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
@@ -12,6 +12,7 @@ import {
   readOnlyConversationLookupFromSnapshot,
   DeliveryReservationConflictError,
   REGISTRY_WRITER_BUSY,
+  RegistryWriterBusyError,
   type AgentRegistry,
   type RegistryConversation,
 } from "@/lib/agent/registry";
@@ -91,7 +92,7 @@ export interface StructuredMessageRequest {
   clientMessageId?: string | null;
   operationId?: string;
   kind?: "send" | "steer" | "inject";
-  policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
+  policy?: "queue" | "context-or-queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
   onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
   text: string;
@@ -146,7 +147,7 @@ export interface StructuredMessageDependencies {
   enabled?: () => boolean;
   client?: () => RuntimeHostClient | null;
   registry?: () => AgentRegistry;
-  kick?: (freshAdmission?: boolean) => void;
+  kick?: (freshAdmission?: boolean, conversationId?: string) => void;
   requestMigrationTick?: () => void;
   startupFailed?: () => boolean;
   startupRecovered?: () => void;
@@ -428,16 +429,6 @@ function ownershipUnavailable(condition: ConversationDeliverabilityCondition = "
   });
 }
 
-function legacyCommandUnavailable(): StructuredMessageResult {
-  return refusedBeforeReservation({
-    ok: false,
-    structured: true,
-    outcome: "failed",
-    error: "legacy delivery cannot preserve structured command semantics",
-    status: 409,
-  });
-}
-
 /** A send addressed to a terminally superseded round (issue #383) never forks
     it through implicit recovery — it answers with the live chain end. */
 function supersededRejection(
@@ -455,23 +446,16 @@ function supersededRejection(
   });
 }
 
-function requiresStructuredCommand(request: StructuredMessageRequest): boolean {
-  return request.operationId !== undefined
-    || (request.kind ?? "send") !== "send"
-    || (request.policy !== "steer-or-queue" && (request.policy ?? "interrupt-active") !== "interrupt-active")
-    || request.turnId !== undefined;
-}
-
-function requiresStructuredHeldCommand(request: HeldStructuredMessageRequest): boolean {
-  const command = request.command;
-  return command !== undefined
-    && (command.operationId !== request.deliveryId
-      || command.kind !== "send"
-      || (command.policy !== "steer-or-queue" && command.policy !== "interrupt-active")
-      || command.turnId !== undefined);
+/** The reservation write never got the delivery record's lock, so nothing
+    exists under the send's key (#3782). The message stays the shared one. */
+class ReservationWriterBusyError extends Error {
+  constructor() { super(REGISTRY_WRITER_BUSY); this.name = "ReservationWriterBusyError"; }
 }
 
 function deliveryFailure(error: unknown): Extract<StructuredMessageResult, { ok: false }> {
+  if (error instanceof ReservationWriterBusyError) return refusedBeforeReservation({
+    ok: false, structured: true, outcome: "failed", error: error.message, status: 503,
+  });
   if (error instanceof DeliveryAdmissionRefusedError) return refusedBeforeReservation({
     ok: false, structured: true, outcome: "failed", error: error.message, code: error.code, status: "status" in error && error.status === 503 ? 503 : 409,
     ...("successorConversationId" in error && typeof error.successorConversationId === "string"
@@ -533,7 +517,7 @@ function commandInput(request: StructuredMessageRequest) {
 }
 
 type PersistedMessageOwner = {
-  kind: "structured" | "legacy";
+  kind: "structured";
   conversation: RegistryConversation;
 };
 
@@ -549,17 +533,7 @@ async function persistedCurrentOwner(
   const snapshot = registry.conversationDeliverySnapshot(request);
   const entry = snapshot.entries[`${conversation.engine}:${generation.id}`];
   if (!entry || entry.artifactPath !== generation.path) return null;
-  const deliverability = await conversationDeliverabilityFromRecord(snapshot, {
-    conversationId: conversation.id,
-    transcriptPath: generation.path,
-  });
-  /* A current legacy host wins over retained structured adapter metadata, the
-     same verdict conversation_deliverability exposes. This keeps a stale
-     runtime projection from recovering over the pane resume just settled. */
-  if (deliverability.deliverable && deliverability.transport === "legacy") {
-    return { kind: "legacy", conversation };
-  }
-  if (entry.host === null && entry.structuredHost !== null && entry.structuredHost !== undefined) {
+  if (entry.structuredHost !== null && entry.structuredHost !== undefined) {
     return { kind: "structured", conversation };
   }
   return null;
@@ -575,10 +549,8 @@ async function heldOutcomeDuringRuntimeSynchronization(
   // not dispatched yet and must keep a reason-bearing bounded deferral.
   if (request.reconcileUncertain) return "delivery-uncertain";
   const owner = await persistedCurrentOwner(request, registry);
-  // This path runs before command dispatch. Legacy ownership still belongs to
-  // its fallback path; every structured or unresolved owner gets a bounded
-  // retry that retains the runtime-read cause.
-  if (owner?.kind === "legacy") return requiresStructuredHeldCommand(request) ? "failed" : null;
+  // This path runs before command dispatch: every structured or unresolved
+  // owner gets a bounded retry that retains the runtime-read cause.
   const ownerHint = owner?.kind === "structured" ? "structured runtime owner is synchronizing" : "runtime owner is unavailable";
   return heldForRetry(`${ownerHint}: ${cause}`, "evidence-unreadable");
 }
@@ -647,7 +619,6 @@ async function holdDuringRuntimeSynchronization(
   const persistedConversation = owner?.conversation ?? unresolvedConversation!;
   const rejectedHold = supersededRejection(registry, persistedConversation);
   if (rejectedHold) return rejectedHold;
-  if (owner?.kind === "legacy") return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
   const conversation = persistedConversation;
   /**
    * #1560: the last way an injection could become a held reservation.
@@ -746,7 +717,7 @@ async function holdDuringRuntimeSynchronization(
           ...(needsAccountReseat ? { reseatToActiveAccount: { launchId: request.launchId } } : {}) },
         request.admissionGuardAsync,
       );
-      if (!held) throw new Error(REGISTRY_WRITER_BUSY);
+      if (!held) throw new ReservationWriterBusyError();
       return held;
     };
     /* Publication and reservation are one section per key, as on the live
@@ -1206,10 +1177,6 @@ async function deliverHeldAttempt(
   if (afterRuntimeRead !== undefined) return afterRuntimeRead;
   recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredRuntimeSessionRecovered);
   if (!session || (isStructuredHostKind(session.hostKind) && (session.host === "dead" || session.host === "unhosted"))) {
-    const owner = await persistedCurrentOwner(request, registry);
-    if (owner?.kind === "legacy") {
-      return heldOutcomeDuringRuntimeSynchronization(request, registry, "runtime session is unavailable");
-    }
     const deliverability = await conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
       conversationId: request.conversationId,
       transcriptPath: request.path,
@@ -1282,7 +1249,6 @@ async function deliverHeldAttempt(
     if (invalidAuthority !== undefined) return invalidAuthority;
     return heldForRetry(`the recipient's host could not be made ready: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (session.hostKind === "tmux-legacy") return requiresStructuredHeldCommand(request) ? "failed" : null;
   if (!isStructuredHostKind(session.hostKind)) return heldForRetry("the recipient's runtime session is not a structured host");
   try {
     const refs = request.imageRefs ?? [];
@@ -1469,10 +1435,6 @@ export async function enqueueStructuredMessage(
       message: refusal.error, ...refusal,
     });
   } };
-  const durableOwner = await persistedCurrentOwner(request, registry);
-  if (durableOwner?.kind === "legacy") {
-    return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
-  }
   const progress = progressPort(dependencies.progress);
   const client = (dependencies.client ?? runtimeHostClient)();
   if (!client) {
@@ -1606,7 +1568,6 @@ export async function enqueueStructuredMessage(
       { progress, reason: "awaiting-host", detail: "no runtime session is registered for the conversation" },
     );
   }
-  if (session.hostKind === "tmux-legacy") return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
   if (!isStructuredHostKind(session.hostKind)) {
     const deliverability = await conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
       conversationId: request.conversationId,
@@ -1755,7 +1716,7 @@ export async function enqueueStructuredMessage(
           ...(needsAccountReseat && request.kind !== "inject" ? { reseatToActiveAccount: { launchId: request.launchId } } : {}) },
         request.admissionGuardAsync,
       );
-      if (!held) throw new Error(REGISTRY_WRITER_BUSY);
+      if (!held) throw new ReservationWriterBusyError();
       return held;
     };
     return rawImages.length && dependencies.withImageAdmissionLock ? dependencies.withImageAdmissionLock(admit) : admit();
@@ -2098,18 +2059,58 @@ export async function enqueueStructuredMessage(
       lastWritten = written;
       try {
         if (!ownerFirstPromptAllowed(registry, assigned.command.operationId)) throw new Error("owner relay first prompt authorization revoked");
-        assertProactiveTaskExecution(proactiveConversationTaskIds([conversation.id], registry));
+        assertProactiveTaskExecution(proactiveConversationTaskIds([conversation.id], registry), undefined, () => proactiveConversationContext(conversation.id, registry, { id: conversation.generations.at(-1)?.accountId ?? null, engine: conversation.engine as "claude" | "codex", model: conversation.generations.at(-1)?.launchProfile.model }));
         await dependencies.authorizeDispatch?.();
-        assertProactiveTaskExecution(proactiveConversationTaskIds([conversation.id], registry));
+        assertProactiveTaskExecution(proactiveConversationTaskIds([conversation.id], registry), undefined, () => proactiveConversationContext(conversation.id, registry, { id: conversation.generations.at(-1)?.accountId ?? null, engine: conversation.engine as "claude" | "codex", model: conversation.generations.at(-1)?.launchProfile.model }));
         if (!ownerFirstPromptAllowed(registry, assigned.command.operationId)) throw new Error("owner relay first prompt authorization revoked");
       }
       catch (error) {
+        if (error instanceof RegistryWriterBusyError) {
+          // Admission failed before client.command: this attempt never wrote
+          // to the journal. Another process may have re-armed this reservation
+          // during authorization or writer admission. Decide loss from the
+          // live row under the settlement lock, preserving any other attempt's
+          // unknown fate and the registry's absorbing delivered outcome.
+          let reason = error.message;
+          // Admission already reached its cutoff. Ask for the writer without
+          // waiting, retaining its claim across the live read and mutation on
+          // both backends. A refusal leaves the uncertain reservation intact.
+          const ended = registry.deliveryWriteNow({ label: "delivery.admission-cutoff", operationId: assigned.command.operationId },
+            () => {
+              const current = registry.deliverySnapshotForOperation(assigned.command.operationId).heldDeliveries[assigned.id];
+              const firstAttempt = current?.attempts === 1 && current.generationId === claimed.generationId
+                && current.state === "delivery-uncertain";
+              reason = firstAttempt ? error.message
+                : `${error.message}; a prior delivery attempt may have been delivered because its journal outcome is unknown`;
+              return registry.recordDeliveryOutcome(assigned.id, "failed", reason, firstAttempt ? "lost" : "unverified");
+            });
+          return { admissionFailure: {
+            ...deliveryFailure(error),
+            operationId: assigned.command.operationId,
+            error: ended.acquired ? reason : `${reason}; failure settlement awaits the registry writer`,
+          } };
+        }
         // Nothing reached the journal: terminalize the reservation so recovery
         // cannot dispatch this first prompt later as an uncertain send.
         const privacyChanged = error instanceof RoleMemoryChanged;
         const refusal = privacyChanged ? error.message : "autonomous first prompt authorization revoked";
+        // Authorization ran before this call's journal admission. Only an
+        // absent operation and the unchanged first claim prove that no earlier
+        // attempt could have delivered it. Unknown journal outcomes stay fenced.
+        let journalAbsent = false;
+        if (privacyChanged) {
+          try { journalAbsent = await client.operationStatus(assigned.command.operationId) === null; }
+          catch { /* Unavailable evidence retains the uncertain outcome. */ }
+        }
         const ended = await registry.deliveryWrite({ label: "delivery.owner-cutoff", operationId: assigned.command.operationId },
-          () => registry.terminalizeHeldDelivery(assigned.id, refusal));
+          () => {
+            const current = registry.deliverySnapshotForOperation(assigned.command.operationId).heldDeliveries[assigned.id];
+            if (privacyChanged && journalAbsent && current?.attempts === 1
+              && current.generationId === claimed.generationId && current.state === "delivery-uncertain") {
+              return registry.recordDeliveryOutcome(assigned.id, "failed", refusal, "lost");
+            }
+            return registry.terminalizeHeldDelivery(assigned.id, refusal);
+          });
         if (!ended.acquired) return "caller-revocation-pending" as const;
         return privacyChanged ? "role-memory-changed" as const : "caller-revoked" as const;
       }
@@ -2140,6 +2141,7 @@ export async function enqueueStructuredMessage(
     if (admitted === "role-memory-changed") return { ok: false, structured: true, outcome: "failed", error: "Role-memory privacy changed; retrying before dispatch", status: 409 };
     if (admitted === "caller-revocation-pending") return { ok: false, structured: true, outcome: "failed", error: "autonomous first prompt cancellation awaits the registry writer", status: 503, operationId: assigned.command.operationId, transportUncertain: true };
     if (admitted === "continuation-cancelled") return continuationRefused("stage eligibility changed before runtime admission");
+    if (admitted && "admissionFailure" in admitted) return admitted.admissionFailure;
     if (!admitted) {
       /* A migration took the conversation, or an earlier admission still waits: the drain delivers this one in order.
          The requeue waits for the lock off the loop; refused, the reservation stays assigned and unclaimed. */
@@ -2200,7 +2202,7 @@ export async function enqueueStructuredMessage(
     // Only a newly committed pending operation owns an immediate admission
     // wake. Replays and observer kicks retain the listing failure backoff.
     const kick = dependencies.kick ?? kickStructuredDeliveryQueue;
-    if (result.replayed === false && (receipt.status === "queued" || receipt.status === "pending")) kick(true);
+    if (result.replayed === false && (receipt.status === "queued" || receipt.status === "pending")) kick(true, assigned.runtimeConversationId);
     else kick();
     const outcome = receipt.status === "delivering" || receipt.status === "delivered" ? receipt.status : "queued";
     return {

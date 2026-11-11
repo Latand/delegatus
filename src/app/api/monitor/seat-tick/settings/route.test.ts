@@ -373,7 +373,7 @@ test("the module's rules hold verbatim, and a refusal stores nothing", async () 
     [{ project: PROJECT, enabled: false }, "instructions (reason) are required when the tick is disabled or its wake interval changes"],
     [{ project: PROJECT, wakeIntervalMinutes: -5, reason: "why" }, "wakeIntervalMinutes must be a positive number of minutes, or null for the default"],
     [{ project: PROJECT, wakeIntervalMinutes: SEAT_TICK_MAX_WAKE_INTERVAL_MINUTES + 1, reason: "far too long" }, `must be at most ${SEAT_TICK_MAX_WAKE_INTERVAL_MINUTES}`],
-    [{ project: PROJECT, monitorPrompt: "x".repeat(SEAT_TICK_PROMPT_LIMIT + 1) }, `the limit is ${SEAT_TICK_PROMPT_LIMIT}`],
+    [{ project: PROJECT, monitorPrompt: "x".repeat(SEAT_TICK_PROMPT_LIMIT + 1) }, `monitorPrompt must be at most ${SEAT_TICK_PROMPT_LIMIT} UTF-16 code units; actual length is ${SEAT_TICK_PROMPT_LIMIT + 1}`],
     [{ project: PROJECT, enabled: false, reason: "quiet", untilMinutes: 0 }, "untilMinutes must be a positive number of minutes"],
     [{ enabled: false, reason: "no project named" }, "project is required"],
   ] as const;
@@ -763,4 +763,39 @@ test("only the operator browser can replace seat instructions", async () => {
   expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual([
     { text: "Operator replacement.", author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, at: readSeatTickSettings(PROJECT, settingsFile).updatedAt },
   ]);
+});
+
+test("the operator browser edits lines with no known author and removes seat notes by place, keeping the rest of each entry", async () => {
+  setSystemTime(new Date("2026-10-01T12:00:00.000Z"));
+  seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  writeSeatTickSettings(PROJECT, { ...readSeatTickSettings(PROJECT, settingsFile), reason: "Older line.\nOlder line to edit." }, settingsFile);
+  setCallerConversationResolverForTests(() => SEAT_CONVERSATION);
+  await put({ project: PROJECT, reason: "First seat note.\nSecond seat note." }, { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY });
+  setCallerConversationResolverForTests(() => null);
+  const seeded = readSeatTickSettings(PROJECT, settingsFile).instructionLines!;
+  expect(seeded.map(line => line.author?.kind ?? null)).toEqual([null, null, "manager", "manager"]);
+
+  const edited = await put({ project: PROJECT, clearUnknownInstructions: true, reason: "Older line.\nEdited line." });
+  expect(edited.status).toBe(200);
+  const afterEdit = readSeatTickSettings(PROJECT, settingsFile).instructionLines!;
+  expect(afterEdit).toEqual([seeded[0]!, { text: "Edited line.", author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, at: readSeatTickSettings(PROJECT, settingsFile).updatedAt }, seeded[2]!, seeded[3]!]);
+
+  /* A seat request cannot remove notes, even from the operator's browser. */
+  setCallerConversationResolverForTests(() => SEAT_CONVERSATION);
+  const seatAttempt = await put({ project: PROJECT, removeSeatNotes: [{ index: 2, text: "First seat note.", at: seeded[2]!.at }] }, { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY });
+  expect(seatAttempt.status).toBe(403);
+  setCallerConversationResolverForTests(() => null);
+  expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual(afterEdit);
+
+  const removed = await put({ project: PROJECT, removeSeatNotes: [{ index: 2, text: "First seat note.", at: seeded[2]!.at }] });
+  expect(removed.status).toBe(200);
+  expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual([afterEdit[0]!, afterEdit[1]!, afterEdit[3]!]);
+  /* The panel still names the note at its old place: refused, nothing stored. */
+  const stale = await put({ project: PROJECT, removeSeatNotes: [{ index: 2, text: "First seat note.", at: seeded[2]!.at }] });
+  expect(stale.status).toBe(400);
+  expect(((await stale.json()) as { error: string }).error).toBe("a seat note to remove is no longer stored as the panel read it. Nothing was stored — check the notes and save again");
+  expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual([afterEdit[0]!, afterEdit[1]!, afterEdit[3]!]);
+  const last = await put({ project: PROJECT, removeSeatNotes: [{ index: 2, text: "Second seat note.", at: seeded[3]!.at }] });
+  expect(last.status).toBe(200);
+  expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual([afterEdit[0]!, afterEdit[1]!]);
 });

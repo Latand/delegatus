@@ -15,7 +15,7 @@ import type { Flow } from "@/lib/flows/types";
 import type { FileScanSnapshot } from "@/lib/scanner/scanCache";
 import type { FileEntry } from "@/lib/types";
 import { installHistoryProjection, readHistoryProjection, historyHeadlessFlows, historyPipelineRef } from "@/lib/state/historyProjection";
-import { buildPipeline, isStoredPipeline } from "@/lib/pipelines/store";
+import { buildPipeline, isStoredPipeline, loadPipelines, savePipelines } from "@/lib/pipelines/store";
 
 import { completedGenerationSelection, type CompletedGenerationRead } from "./inventorySelection";
 import {
@@ -30,9 +30,122 @@ import {
 } from "./liveness";
 import { censusIndex, ownerProcessAlive, registryOwners } from "./owners";
 import { projectLivenessEvents } from "./projector";
+import { retainedLivenessFixture, retainedTerminatedHost, retainedWriterPathMove } from "./liveness.retained.fixture";
 import { readLivenessTranscriptEvidence, type LivenessTranscript, type LivenessTranscriptEvidence } from "./transcript";
 
 const sandboxes: string[] = [];
+
+for (const count of [120, 360]) for (const mode of ["path", "conversation", "corpus"] as const) {
+  test(`retained registry: ${mode} preserves terminated host exits among ${count} conversations`, async () => {
+    const f = retainedLivenessFixture(count);
+    try {
+      const exits = retainedTerminatedHost(f);
+      f.payloadReads.clear();
+      const request = mode === "path" ? { transcriptPath: f.worker.transcript }
+        : mode === "conversation" ? { conversationId: f.conversationId } : { liveOnly: true };
+      const answer = await agentLivenessSnapshot({ ...request, answerBudgetMs: 800 }, f.sources);
+      expect(answer.conversations).toHaveLength(1);
+      const row = answer.conversations[0]!;
+      expect(row).toMatchObject({ conversationId: f.conversationId, host: { state: "gone" }, ...exits });
+      expect(livenessRecordIsLive(row)).toBe(false);
+      expect(f.payloadReads.get("entries") ?? 0).toBeLessThanOrEqual(8);
+      expect(f.payloadReads.get("conversations") ?? 0).toBeLessThanOrEqual(8);
+    } finally { f.close(); }
+  });
+}
+
+for (const mode of ["path", "corpus"] as const) for (const replace of [false, true]) {
+  test(`retained registry: ${mode} holds terminated owner across peer ${replace ? "replacement" : "path move"}`, async () => {
+    const f = retainedLivenessFixture();
+    try {
+      const live = structuredClone(f.registry.readOnlySnapshot().entries[f.worker.key]!);
+      const exits = retainedTerminatedHost(f);
+      const describe = f.sources.describeTranscript;
+      let changed = false;
+      f.sources.describeTranscript = async (...args) => {
+        const result = await describe(...args);
+        if (!changed) {
+          changed = true;
+          f.peer.mutate(file => {
+            if (replace) {
+              delete file.entries[f.worker.key];
+              const replacement = structuredClone(live);
+              replacement.key.sessionId = "terminal-replacement";
+              file.entries["codex:terminal-replacement"] = replacement;
+            } else file.entries[f.worker.key]!.artifactPath = path.join(f.directory, "moved.jsonl");
+          });
+        }
+        return result;
+      };
+      const request = { answerBudgetMs: 800, ...(mode === "path" ? { transcriptPath: f.worker.transcript } : { liveOnly: true }) };
+      const held = await agentLivenessSnapshot(request, f.sources);
+      expect(changed).toBe(true);
+      expect(held.conversations).toHaveLength(1);
+      expect(held.conversations[0]).toMatchObject({ host: { state: "gone" }, ...exits });
+      expect(livenessRecordIsLive(held.conversations[0]!)).toBe(false);
+      const fresh = await agentLivenessSnapshot(request, f.sources);
+      expect(fresh.conversations[0]!.host.state).toBe(replace ? "alive" : "unknown");
+      expect(fresh.conversations[0]!.previousHostExit).toBeUndefined();
+      expect(f.payloadReads.get("entries") ?? 0).toBeLessThanOrEqual(12);
+    } finally { f.close(); }
+  });
+}
+
+for (const replace of [false, true]) for (const targeted of [false, true]) {
+  test(`retained registry: missing captured writer survives peer ${replace ? "replacement" : "path move"} during ${targeted ? "targeted" : "corpus"} description`, async () => {
+    const f = retainedLivenessFixture();
+    try {
+      const move = retainedWriterPathMove(f, replace);
+      const request = { answerBudgetMs: 800, ...(targeted ? { conversationId: f.conversationId } : { liveOnly: true }) };
+      const held = await agentLivenessSnapshot(request, f.sources);
+      expect(move.changed()).toBe(true);
+      expect(held.conversations).toHaveLength(1);
+      expect(held.conversations[0]).toMatchObject({ verified: false, evidenceSource: "unreadable" });
+      expect(held.selection.unreadable).toBe(1);
+      const fresh = await agentLivenessSnapshot(request, f.sources);
+      expect(fresh.conversations).toHaveLength(1);
+      expect(fresh.conversations[0]).toMatchObject({ conversationId: f.conversationId,
+        verified: true, host: { state: "alive", pid: process.pid } });
+      expect(fresh.selection.unreadable).toBe(0);
+      expect(f.payloadReads.get("entries") ?? 0).toBeLessThanOrEqual(12);
+    } finally { f.close(); }
+  });
+}
+
+test.each([120, 360])("retained registry: production liveness reads only relevant payloads among %i conversations", async count => {
+  const f = retainedLivenessFixture(count);
+  try {
+    expect(f.dataset.coldRows).toBeGreaterThan(count);
+    for (const request of [{ liveOnly: true }, { transcriptPath: f.worker.transcript }]) {
+      f.payloadReads.clear();
+      const snapshot = await agentLivenessSnapshot({ ...request, answerBudgetMs: 800 }, f.sources);
+      expect(snapshot.conversations).toHaveLength(1);
+      expect(snapshot.conversations[0]).toMatchObject({ conversationId: f.conversationId,
+        verified: true, host: { state: "alive" }, pipeline: { pipelineId: f.pipeline.id } });
+      expect(snapshot.selection).toMatchObject({ projected: 0, unreadable: 0, recoveryPending: 0 });
+      expect(f.payloadReads.get("conversations") ?? 0).toBeLessThanOrEqual(8);
+      expect(f.payloadReads.get("entries") ?? 0).toBeLessThanOrEqual(8);
+    }
+  } finally { f.close(); }
+});
+
+test("retained registry: pipeline changes during inventory are current when narrow projection begins", async () => {
+  const f = retainedLivenessFixture();
+  const select = f.sources.selectInventory!;
+  f.sources.selectInventory = async (...args) => {
+    const result = await select(...args);
+    f.pipeline.runs[0]!.attempts[0]!.state = "passed";
+    f.pipeline.state = "completed";
+    f.pipeline.cursor = null;
+    savePipelines(loadPipelines().map(row => row.id === f.pipeline.id ? f.pipeline : row));
+    return result;
+  };
+  try {
+    const result = await agentLivenessSnapshot({ liveOnly: true, answerBudgetMs: 800 }, f.sources);
+    expect(result.conversations[0]!.pipeline).toMatchObject({ pipelineId: f.pipeline.id,
+      reportedState: "passed", reportedPipelineState: "completed" });
+  } finally { f.close(); }
+});
 
 test("headless round verdicts reuse unchanged dead owners and recheck live identities",()=>{
   let now=10,probes=0,identity="start-a";
@@ -134,26 +247,6 @@ function structuredEntry(artifactPath: string, pid: number): AgentRegistryEntry 
     claimOwner: null,
     pendingAction: null,
     updatedAt: new Date(FROZEN_AT).toISOString(),
-  };
-}
-
-function dualHostEntry(
-  artifactPath: string,
-  status: AgentRegistryEntry["status"] = "live",
-): AgentRegistryEntry {
-  return {
-    ...structuredEntry(artifactPath, 2222),
-    status,
-    host: {
-      kind: "tmux",
-      endpoint: "/tmp/tmux.sock",
-      server: { pid: 1000, startIdentity: "tmux-server" },
-      paneId: "%1",
-      panePid: { pid: 1111, startIdentity: "tmux-pane" },
-      windowName: "agent",
-      agent: { pid: 1112, startIdentity: "tmux-agent" },
-      argv: ["agent"],
-    },
   };
 }
 
@@ -491,39 +584,6 @@ test("a live host with a fresh turn is running, and a live host with a settled t
   expect(waiting.conversations[0]!.lifecycle).toBe("waiting");
   expect(waiting.conversations[0]!.reason).toBe("host_alive_turn_idle");
   expect(waiting.conversations[0]!.stalledForMs).toBeNull();
-});
-
-test.each([
-  { name: "dead tmux with live structured host", alive: new Set([2222]), status: "live", lifecycle: "running", kind: "structured" },
-  { name: "live tmux with dead structured host", alive: new Set([1112]), status: "live", lifecycle: "running", kind: "tmux" },
-  { name: "both hosts live", alive: new Set([1112, 2222]), status: "live", lifecycle: "running", kind: "tmux" },
-  { name: "both hosts dead", alive: new Set<number>(), status: "live", lifecycle: "stalled", kind: "tmux" },
-  { name: "terminal registry status with live ownership", alive: new Set([1112, 2222]), status: "dead", lifecycle: "running", kind: "tmux" },
-] as const)("$name reports combined dual-host liveness", async ({ alive, status, lifecycle, kind }) => {
-  const dir = sandbox();
-  const agentPath = path.join(dir, "dual-host.jsonl");
-  fs.writeFileSync(agentPath, "{}\n", "utf8");
-  const registry = {
-    entries: { "codex:dual-host": dualHostEntry(agentPath, status) },
-    conversations: {},
-  } as unknown as RegistryFile;
-
-  const snapshot = await agentLivenessSnapshot({}, sources({
-    probe: {
-      now: () => NOW,
-      pidAlive: (pid) => alive.has(pid),
-      processIdentity: (pid) => alive.has(pid)
-        ? pid === 2222 ? "start-token-of-a-dead-host" : pid === 1112 ? "tmux-agent" : "tmux-pane"
-        : null,
-    },
-    listFiles: async () => [fileEntry({ path: agentPath, activity: "live" })],
-    registrySnapshot: () => registry,
-    pipelines: () => [],
-    transcriptEvidence: async () => ({ turn: "busy" as const, lastRecordTs: NOW - 30_000 }),
-  }));
-
-  expect(snapshot.conversations[0]!.lifecycle).toBe(lifecycle);
-  expect(snapshot.conversations[0]!.host.kind).toBe(kind);
 });
 
 /** A Claude transcript replayed from the shape this got wrong: one prose
@@ -1159,6 +1219,7 @@ function productionShapedCorpus(dir: string): ProductionCorpus {
 
 interface GenerationStub {
   read: CompletedGenerationRead;
+  describe: AgentLivenessSources["describeTranscript"];
   starts: () => number;
   reads: () => number;
 }
@@ -1187,7 +1248,14 @@ function publishedGeneration(files: FileEntry[], options: { coldDelayMs?: number
       cloneDurationMs: 0,
     };
   };
-  return { read, starts: () => starts, reads: () => reads };
+  const byPath = new Map(files.map(entry => [entry.path, entry]));
+  return { read, starts: () => starts, reads: () => reads, describe: async target => {
+    const entry = byPath.get(target);
+    if (!entry) throw new Error("host description missing from fixture");
+    return { path: entry.path, project: entry.project, title: entry.title, engine: entry.engine,
+      mtimeMs: entry.mtime * 1000, sizeBytes: entry.size, conversationId: entry.conversationId ?? null,
+      activity: entry.activity ?? null, activityReason: entry.activityReason ?? null };
+  } };
 }
 
 function corpusSources(
@@ -1205,9 +1273,7 @@ function corpusSources(
       completedFileScan: generation.read,
       signal: options?.signal ?? null,
     }),
-    describeTranscript: async () => {
-      throw new Error("a project-scoped read describes nothing by path");
-    },
+    describeTranscript: generation.describe,
     registrySnapshot: () => ({ entries: {}, conversations: {} }) as unknown as RegistryFile,
     pipelines: () => [],
     transcriptEvidence: readLivenessTranscriptEvidence,
@@ -1332,7 +1398,7 @@ test.each(ownerSelectionCases)("verified owner survives recovery: cached=$activi
     describeTranscript: async (target) => {
       described.push(target);
       return {
-        path: target, project: PROJECT, title: "owner", engine: "codex",
+        path: target, project: target === outside ? "other-project" : PROJECT, title: "owner", engine: "codex",
         mtimeMs: target === current ? ownerMtime : ownerMtime - 1_000,
         sizeBytes: 4096, conversationId: null, activity: null, activityReason: null,
       };
@@ -1346,13 +1412,16 @@ test.each(ownerSelectionCases)("verified owner survives recovery: cached=$activi
 
   expect(project.conversations.map((row) => row.transcriptPath)).toEqual([current]);
   expect(project.conversations[0]).toMatchObject({ lifecycle: "running", host: { state: "alive", kind: "headless", pid: process.pid } });
+  // The outside owner consumes one description slot; a catalogued current
+  // owner is selected rather than recovered.
   expect(project.selection).toMatchObject({
-    recovered: capped ? HOSTED_RECOVERY_MAX : present ? 0 : 1,
+    recovered: capped ? HOSTED_RECOVERY_MAX - (present ? 2 : 1) : present ? 0 : 1,
     recoveryTruncated: capped, selected: 1, hydrated: 1, evidenceBytes: 4096, freshScan: false,
   });
-  expect(described).toHaveLength(capped ? HOSTED_RECOVERY_MAX : present ? 0 : 1);
-  expect(described.includes(current)).toBe(!present);
-  expect(described).not.toContain(outside);
+  expect(described).toHaveLength(capped ? HOSTED_RECOVERY_MAX : 2);
+  expect(described).toContain(current);
+  expect(described).toContain(outside);
+  expect(described).not.toContain(history);
   expect(hydrated).toEqual([current]);
   expect(generation.reads()).toBe(1);
 
@@ -1981,7 +2050,7 @@ test("identity recovery honours the project filter and the row limit (#860)", as
   expect(snapshot.selection).toMatchObject({ recovered: 1, selected: 1 });
 });
 
-test("a hosted transcript the generation already contains is never re-described (#860)", async () => {
+test("a catalogued hosted transcript refreshes identity without counting as recovery (#860)", async () => {
   const dir = sandbox();
   const hosted = path.join(dir, "hosted.jsonl");
   fs.writeFileSync(hosted, liveTranscriptText(NOW - 1_000), "utf8");
@@ -2010,7 +2079,7 @@ test("a hosted transcript the generation already contains is never re-described 
   );
 
   expect(snapshot.conversations.map((record) => record.transcriptPath)).toEqual([hosted]);
-  expect(describes).toBe(0);
+  expect(describes).toBe(1);
   expect(snapshot.selection.recovered).toBe(0);
 });
 
@@ -2398,13 +2467,6 @@ test("seat reconciliation reads the current structured owner when a live predece
   expect((await f.read()).conversations[0]).toMatchObject({ turnState: "idle", reason: "host_alive_turn_idle" });
   const general = await agentLivenessSnapshot({ conversationId: "conversation_seat" }, f.injected);
   expect(general.conversations[0]!.turnState).toBe("busy");
-});
-
-test("a tmux owner retaining structured columns has no writer for seat reconciliation", async () => {
-  const f = recoveredIdleWriter();
-  const identity = f.entry.structuredHost!.process!;
-  f.entry.host = { kind: "tmux", agent: identity, panePid: identity } as AgentRegistryEntry["host"];
-  expect((await f.read()).conversations[0]!.turnState).toBe("busy");
 });
 
 test("strict transcript evidence keeps I/O errors visible while verifying the native tail identity", async () => {

@@ -1,5 +1,6 @@
 import { withoutUnsupportedApiCredentials } from "../environmentIsolation";
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { findAgentBinary } from "../../../bin/agent-binaries.mjs";
 import { CodexPinnedProtocol, installedCodexVersion, resolveCodexProtocol, type CodexSchemaGenerator } from "./codexPinnedProtocol";
@@ -34,6 +35,8 @@ export interface CodexAppServerClock {
 }
 
 export interface CodexAppServerOptions {
+  /** Local caller custody, checked after launch preparation and before spawn. */
+  assertCurrent?: () => void;
   home: string;
   /** Executable used for launch admission; tests and embedded callers can pin a private fixture. */
   launchBinary?: string;
@@ -265,6 +268,7 @@ export class CodexAppServerClient {
   private readonly requestListeners = new Set<(request: AppServerRequest) => unknown | Promise<unknown>>();
   private readonly lifecycleListeners = new Set<(event: CodexAppServerLifecycleEvent) => void>();
   private nextId = 1;
+  private readonly stdoutDecoder = new StringDecoder("utf8");
   private stdoutChunks: string[] = [];
   private stdoutBufferBytes = 0;
   private stderrTail = "";
@@ -281,7 +285,7 @@ export class CodexAppServerClient {
     private readonly maxStdoutBufferBytes: number,
     private readonly signalProcess: ProcessSignal,
   ) {
-    child.stdout.on("data", (chunk: Buffer | string) => this.acceptStdout(String(chunk)));
+    child.stdout.on("data", (chunk: Buffer | string) => this.acceptStdout(typeof chunk === "string" ? chunk : this.stdoutDecoder.write(chunk)));
     child.stderr?.on("data", (chunk: Buffer | string) => {
       this.stderrTail = redactAppServerDetail((this.stderrTail + String(chunk)).slice(-2_000));
     });
@@ -307,6 +311,7 @@ export class CodexAppServerClient {
       : options.protocolProfile === "voice"
       ? protocol.initializeCapabilities(["account/read", "account/rateLimits/read", "thread/start", "thread/realtime/start", "thread/realtime/appendSpeech", "thread/realtime/stop"])
       : protocol.initializeCapabilities(["account/read", "account/rateLimits/read", "account/login/start"]);
+    options.assertCurrent?.();
     const client = new CodexAppServerClient(
       options.spawn ? options.spawn(options.home, options.args ?? CODEX_ACCOUNT_APP_SERVER_ARGS)
         : spawnCodexAppServer(options.home, options.args ?? CODEX_ACCOUNT_APP_SERVER_ARGS, binary),
@@ -324,6 +329,7 @@ export class CodexAppServerClient {
         capabilities,
       });
       if (!isRecord(response)) throw protocolError("initialize response must be an object");
+      options.assertCurrent?.();
       client.notify("initialized");
       return client;
     } catch (error) {
@@ -391,7 +397,7 @@ export class CodexAppServerClient {
         primary: optionalWindow(snapshot.primary, "account/rateLimits/read"),
         secondary: optionalWindow(snapshot.secondary, "account/rateLimits/read"),
         planType: typeof snapshot.planType === "string" ? snapshot.planType : null,
-        ...(paidCredits(snapshot.credits) ? { credits: paidCredits(snapshot.credits) } : {}),
+        ...(paidCredits(snapshot.credits) ? { credits: paidCredits(snapshot.credits, Date.now() / 1000) } : {}),
       },
       resetCredits: optionalResetCredits(response.rateLimitResetCredits),
       ...(typeof snapshot.rateLimitReachedType === "string" || snapshot.rateLimitReachedType === null
@@ -414,8 +420,10 @@ export class CodexAppServerClient {
     return response.outcome as AppServerResetCreditOutcome;
   }
 
-  async forkThread(threadId: string): Promise<AppServerThreadRef> {
-    const response = await this.request("thread/fork", { threadId });
+  async forkThread(threadId: string, options: { omitSkillsInstructions?: boolean } = {}): Promise<AppServerThreadRef> {
+    const response = await this.request("thread/fork", { threadId,
+      ...(options.omitSkillsInstructions ? { config: { skills: { include_instructions: false } } } : {}),
+    });
     const thread = isRecord(response) && isRecord(response.thread) ? response.thread : response;
     if (!isRecord(thread)) throw protocolError("thread/fork response is malformed");
     return {
@@ -425,6 +433,7 @@ export class CodexAppServerClient {
   }
 
   async resumeThread(threadId: string, options: {
+    omitSkillsInstructions?: boolean;
     path?: string | null;
     cwd?: string;
     model?: string | null;
@@ -433,13 +442,15 @@ export class CodexAppServerClient {
     serviceTier?: string | null;
     approvalPolicy?: string | null;
     sandbox?: string | null;
+    /** Local authority only; never serialized into the provider request. */
+    assertCurrent?: () => void;
   } = {}): Promise<AppServerThreadRef> {
     const effectiveConfig = await this.request("config/read", {
       ...(options.cwd ? { cwd: options.cwd } : {}),
       includeLayers: false,
     });
     const config = {
-      ...headlessCodexThreadConfig(effectiveConfig),
+      ...headlessCodexThreadConfig(effectiveConfig, false, undefined, undefined, "stdio", [], false, options.omitSkillsInstructions === true),
       ...(options.effort ? { model_reasoning_effort: options.effort } : {}),
     };
     const resumeParams = {
@@ -453,12 +464,14 @@ export class CodexAppServerClient {
       config,
     };
     let response: unknown;
+    options.assertCurrent?.();
     try {
       response = await this.request("thread/resume", resumeParams);
     } catch (error) {
       /* Paginated threads refuse full-history resume (#1332); this consumer
          only reads id and path, so metadata plus live state is enough. */
       if (!(error instanceof Error && /not supported/i.test(error.message))) throw error;
+      options.assertCurrent?.();
       response = await this.request("thread/resume", { ...resumeParams, excludeTurns: true });
     }
     const thread = isRecord(response) && isRecord(response.thread) ? response.thread : response;

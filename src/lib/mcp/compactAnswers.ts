@@ -297,6 +297,7 @@ export function compactDeployment(deployment: ViewerDeploymentStatus) {
     startedAt: deployment.createdAt ?? null,
     finishedAt: deployment.terminal ? deployment.updatedAt ?? null : null,
     error: clampChars(deployment.error, ERROR_CHARS),
+    ...(deployment.servingProgress ? { servingProgress: clampChars(deployment.servingProgress, ERROR_CHARS)! } : {}),
   };
 }
 
@@ -331,6 +332,7 @@ export function compactLiveness(snapshot: AgentLivenessSnapshot) {
   return {
     observedAt: snapshot.observedAt,
     count: snapshot.count,
+    ...(snapshot.unresolvedProjectCount ? { unresolvedProjectCount: snapshot.unresolvedProjectCount } : {}),
     stalledCount: snapshot.stalledCount,
     stalledConfirmedCount: snapshot.stalledConfirmedCount,
     conversations: snapshot.conversations.map(compactLivenessRow),
@@ -342,7 +344,7 @@ export type AccountLimitEngine = "claude" | "codex" | "copilot";
 export type AccountLimitsInput = {
   engine?: AccountLimitEngine;
   accountId?: string;
-  accounts: Record<AccountLimitEngine, ReadonlyArray<{ accountId: string; authPresent?: boolean }>>;
+  accounts: Record<AccountLimitEngine, ReadonlyArray<{ accountId: string; authPresent?: boolean; spendCredits?: boolean }>>;
   active: Record<AccountLimitEngine, string | null>;
   observations: Record<AccountLimitEngine, Readonly<Record<string, DurableQuotaObservation>>>;
   /** Server-resolved project and bindings used by the actual automatic selector. */
@@ -393,6 +395,7 @@ export function accountLimitRows(input: AccountLimitsInput) {
           /* No label: it is free text the operator typed and may name a person;
              the account id is the one identity this answer carries. */
           accountId: account.accountId,
+          ...(engine === "codex" ? { spendCredits: account.spendCredits === true, credits: limits?.credits ?? null } : {}),
           active: input.active[engine] === account.accountId,
           ...(nextChosenId ? { nextChosen: nextChosenId === account.accountId } : {}),
           /* Whether the observation is recent enough for the automatic switch to

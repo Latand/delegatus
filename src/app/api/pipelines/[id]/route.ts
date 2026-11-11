@@ -1,4 +1,4 @@
-import { workspaceRoute } from "@/lib/team/workspaceRoute";
+import { assertWorkspaceReadProject, WorkspaceRefusal, workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
@@ -11,7 +11,7 @@ import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from 
 import { carryingTaskWorkLinks, pipelineWorkLinks } from "@/lib/forge/resolve";
 import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
-import { queuedPipelineCreationMessage, queuedPipelineCreationStatus } from "@/lib/pipelines/creationQueue";
+import { readPipelineCreationReceipt } from "@/lib/pipelines/creationQueue";
 import { getPipeline, patchPipeline, type PipelineCloseReport, type PipelinePatchResult } from "@/lib/pipelines/engine";
 import type { LegacyReviewPreview } from "@/lib/pipelines/legacyReviewDefinition";
 import { loadPipelines, pipelineRevision } from "@/lib/pipelines/store";
@@ -22,6 +22,8 @@ import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ENGINE_NOT_CONNECTED, EngineNotConnectedDetails } from "@/lib/accounts/engineConnection";
 import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import type { ApiError } from "@/lib/types";
+import { refuseAnonymous, teamActor } from "@/lib/team";
+import { TeamError } from "@/lib/team/members";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,7 +33,7 @@ const ACTIONS = new Set<PipelineAction>(PIPELINE_ACTIONS);
 const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review", "accept-head", "retry-merge"]);
 
 type PipelineApiError = ApiError & {
-  code?: "RUNTIME_SWITCH_IN_PROGRESS" | "STAGE_ALREADY_REPORTED" | "ATTEMPT_STARTING" | "RUNTIME_SWITCH_UNAVAILABLE" | PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy" | typeof ENGINE_NOT_CONNECTED
+  code?: TeamError["code"] | "workspace_forbidden" | "RUNTIME_SWITCH_IN_PROGRESS" | "STAGE_ALREADY_REPORTED" | "ATTEMPT_STARTING" | "RUNTIME_SWITCH_UNAVAILABLE" | PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy" | typeof ENGINE_NOT_CONNECTED
     | "WORK_LINK_INVALID" | "WORK_LINK_AUTO" | "WORK_LINK_LIMIT" | "orchestrator_seat_revoked" | "orchestrator_seat_authority_unavailable" | "TASK_RUNS_ELSEWHERE" | "STAGE_KIND_RETIRED";
   /** With ENGINE_NOT_CONNECTED: the stage, role and engine (#1876). */
   details?: EngineNotConnectedDetails;
@@ -65,24 +67,32 @@ function pipelineControlAdmission(req: NextRequest): { actor: PauseResumeActor }
 }
 
 async function workspaceGET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ): Promise<NextResponse<{ ok: true; pipeline: Pipeline; revision: string; stageDigests: Record<string, string>; graphDigest: string } | ApiError>> {
   const { id } = await ctx.params;
   try {
-    const pipeline = getPipeline(id);
+    let pipeline = getPipeline(id);
     if (!pipeline) {
-      /* #1835: a create queued during a handover was answered with this id. */
-      const queued = queuedPipelineCreationStatus(id);
-      return NextResponse.json(queued
-        ? { error: queuedPipelineCreationMessage(id, queued), code: queued.state === "queued" ? "pipeline_queued" : "pipeline_creation_refused", queuedCreation: queued }
-        : { error: "pipeline not found" }, { status: 404 });
+      const read = await readPipelineCreationReceipt(id);
+      pipeline = getPipeline(id);
+      if (!pipeline) {
+        if (read.kind !== "found") return read.kind === "unavailable"
+          ? NextResponse.json({ error: "creation status unavailable" }, { status: 503 })
+          : NextResponse.json({ error: "pipeline not found" }, { status: 404 });
+        assertWorkspaceReadProject(req, read.receipt.project);
+        return NextResponse.json({ error: read.receipt.state === "queued" ? "creation queued" : "creation refused",
+          code: read.receipt.state === "queued" ? "pipeline_queued" : "pipeline_creation_refused",
+          queuedCreation: read.receipt }, { status: 404 });
+      }
     }
     /* #1695 C7 and graph slice 1: the digests a guarded graph edit names as
        `expectedStageDigest` — a stage's for override-stage and set-edge, the
        whole plan's for add-stage, remove-stage and reorder-stage. */
+    assertWorkspaceReadProject(req, pipeline.project);
     return NextResponse.json({ ok: true, pipeline, revision: pipelineRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) });
   } catch (error) {
+    if (error instanceof WorkspaceRefusal) throw error;
     return NextResponse.json({ error: error instanceof Error ? error.message : "pipeline registry unreadable" }, { status: 500 });
   }
 }
@@ -95,6 +105,9 @@ async function workspacePATCH(
   if (rejection) return rejection;
   const admission = pipelineControlAdmission(req);
   if ("refusal" in admission) return admission.refusal;
+  const human = teamActor(req);
+  const anonymous = refuseAnonymous(human);
+  if (anonymous) return anonymous;
   let body: PatchPipelineRequest;
   try {
     const raw = await req.json();
@@ -117,7 +130,7 @@ async function workspacePATCH(
       || body.action === "publish"
       ? admission.actor
       : undefined;
-    const result = await patchPipeline(id, body, undefined, actor);
+    const result = await patchPipeline(id, body, undefined, actor, undefined, human.kind === "member" ? human.memberId : undefined);
     if (!result.pipeline) return NextResponse.json({
       error: result.error ?? "could not update pipeline",
       /* A malformed guard names its field without a code: each travels on its own. */
@@ -147,6 +160,7 @@ async function workspacePATCH(
       taskWorkLinks: carryingTaskWorkLinks(result.pipeline, loadTasks(), loadPipelines()),
     } : {}) });
   } catch (error) {
+    if (error instanceof TeamError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     /* #1766: nothing was admitted, so the same action may be repeated. */
     if (error instanceof StoreBusyBeforeAdmissionError) {
       return NextResponse.json({ error: error.message, code: "store_busy", retryable: true }, { status: 503 });

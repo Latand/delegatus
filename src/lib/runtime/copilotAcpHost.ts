@@ -42,6 +42,7 @@ import {
   type RuntimeEventStore,
 } from "./eventStore";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
+import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { readCopilotTranscriptQuotaSnapshot } from "@/lib/limits/copilotTranscriptLimits";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
 import { copilotModelsFromConfigOptions, writeCopilotModelCatalog } from "@/lib/agent/copilotModels";
@@ -154,6 +155,7 @@ const CHILD_ENV_ALLOWLIST = [
   "DBUS_SESSION_BUS_ADDRESS", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
   "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
   VIEWER_SPAWN_CAPABILITY_ENV,
+  "LLV_EVIDENCE_DIR",
   "LLV_STATE_DIR", "LLV_VIEWER_DEPLOY_TARGET", "LLV_VIEWER_PORT",
 ] as const;
 
@@ -425,6 +427,9 @@ export class CopilotAcpHost implements EngineHost {
     const releaseCleanup = () => { for (const cleanup of cleanups.splice(0)) { try { cleanup(); } catch { /* best effort */ } } };
     let child: ChildProcessWithoutNullStreams;
     try {
+      // Resolve repository policy before the child environment allowlist drops
+      // the identity binding. This path is shared by fresh starts and adopts.
+      options = { ...options, env: await repositoryPublicationSource(options.cwd, options.env ?? process.env) };
       const env = copilotChildEnv(options.env ?? process.env, options.copilotHome, options.providerEnv);
       const viewer = options.viewerMcpServer === undefined
         ? (options.mcpServers ?? ["viewer"]).includes("viewer") ? copilotViewerMcpServer(options.env ?? {}) : null

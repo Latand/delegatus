@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { ORCHESTRATOR_WITHOUT_MANDATE_RULES, ROLE_DEFAULTS, WORKING_RULES } from "@/lib/roles/defaults";
+import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { FRONTEND_GUIDANCE, resolveRole } from "@/lib/roles/registry";
 import { ROLE_VARIANT_IDS } from "@/lib/roles/types";
 import { VARIANT_PARAMS } from "@/lib/roles/paramConfig";
@@ -240,15 +240,6 @@ test("operator role params substitute into the resolved prompt scaffold", () => 
   );
   expect(resolved.role?.promptScaffold).toContain("Change under review: PR#100");
   expect(resolved.role?.promptScaffold).toContain("Lens: scope.");
-});
-
-/* Review of #2301: a pipeline stage never carries the seat mandate, so an
-   orchestrator stage gets the worker rule the mandate would give it; the
-   working rules are its scaffold's, and the stage wrapper names the tools. */
-test("an orchestrator pipeline stage carries the working rules and the worker limit", () => {
-  const scaffold = pipelineRoleLookup("orchestrator", { mode: "standard" })?.promptScaffold ?? "";
-  expect(scaffold.split(WORKING_RULES)).toHaveLength(2);
-  expect(scaffold).toBe(`You are the Orchestrator. Mode: standard.\n\n${ORCHESTRATOR_WITHOUT_MANDATE_RULES}\n\nSafety fences:\n- Act on Delegatus only through its MCP tools, launching with your own transcript as src lineage.\n- Workers start in fresh, empty sessions; never fork one.`);
 });
 
 /* A stage stores its scaffold at the store cap (MAX_SCAFFOLD_LENGTH), and an

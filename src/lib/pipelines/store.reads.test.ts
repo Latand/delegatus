@@ -146,7 +146,7 @@ test("closed-inclusive pages preserve filters, order and details without decodin
 });
 
 
-test("done, album and seat readers share the frozen archive and observe revisions immediately", async () => {
+test("done and seat readers share the frozen archive and task-local albums observe its revisions", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-archive-reads-"));
   const prior = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = root;
@@ -171,8 +171,8 @@ test("done, album and seat readers share the frozen archive and observe revision
     const album = productionAlbumWorld();
     const sources = defaultSeatTickSources();
     expect(sources.archivedPipelines()).toBe(frozen);
-    expect(album.pipelines()[0]).toBe(frozen[0]!);
-    expect(productionDoneWorld().pipelines()[0]).toBe(frozen[0]!);
+    expect(album.pipelines("task-fixture")[0]).toEqual(frozen[0]!);
+    expect((await productionDoneWorld().pipelines())[0]).toBe(frozen[0]!);
     expect(taskAlbumTranscripts("task-fixture", { ...album,
       task: () => ({ assignments: [] } as unknown as import("@/lib/tasks/types").BoardTask) })).toEqual([]);
     expect(pipelineSummary(frozen[0]!)).toBeDefined();
@@ -187,15 +187,15 @@ test("done, album and seat readers share the frozen archive and observe revision
     const mutable = loadArchivedPipelines(); mutable[0]!.stages[0]!.prompt = "Caller overlay";
     expect(JSON.stringify(loadArchivedPipelinesForList())).toBe(original);
     const next = buildPipeline({ id: "new-archive-fixture", task: lane.task, project: lane.project,
-      repoDir: lane.repoDir, stages: lane.stages, srcPath: null, srcConversationId: null, now: lane.createdAt });
+      taskIds: ["task-fixture"], repoDir: lane.repoDir, stages: lane.stages, srcPath: null, srcConversationId: null, now: lane.createdAt });
     next.state = "closed"; next.cursor = null; next.closedAt = lane.closedAt;
     savePipelines([next]);
     await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"));
     const updated = loadArchivedPipelinesForList();
     expect(updated).not.toBe(frozen);
     expect(updated.map(row => row.id)).toEqual([lane.id, next.id]);
-    expect(productionAlbumWorld().pipelines()).toHaveLength(2);
-    expect(productionDoneWorld().pipelines()).toHaveLength(2);
+    expect(productionAlbumWorld().pipelines("task-fixture")).toHaveLength(2);
+    expect(await productionDoneWorld().pipelines()).toHaveLength(2);
     expect(sources.archivedPipelines()).toBe(updated);
     expect(Object.isFrozen(updated[1]!.stages[0]!)).toBe(true);
   } finally {

@@ -1,6 +1,9 @@
 # Codex Cloud stage runtime
 
-A pipeline run stage selects `runtime: "local"` or `runtime: "codex-cloud"`.
+A pipeline run stage selects `runtime: "local"`, `runtime: "codex-cloud"` or
+`runtime: "claude-cloud"`. The Codex provider is described here; the Claude
+provider shares this path and its setup and differences are in
+`docs/design/claude-code-cloud.md` §1.13.
 Cloud supports Codex reviewer, verifier and writable builder stages, including
 builders reached by a fail edge. Worktree output declarations remain local.
 An explicit Cloud stage names its model; a stage inheriting Cloud from the
@@ -178,7 +181,8 @@ deadline so waiting cloud work does not trigger a whole-store scan.
 
 Submission and polls run in bounded controller jobs outside the lane mutation
 lease. Delays grow from two seconds to thirty seconds. A persisted thirty minute
-deadline spans restarts; each job additionally has a thirty second deadline.
+deadline spans restarts. Ordered input submission uses the remaining stage
+budget; jobs that poll or read results have an additional thirty second deadline.
 The Viewer tick never sleeps waiting for cloud work. This change claims no
 performance gain. The clean accepted head must match the published branch before
 submission and completion. Internal, released or moved lanes fail. A first Cloud stage publishes the

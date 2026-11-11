@@ -65,10 +65,10 @@ beforeEach(() => {
     if (url === "/api/accounts") {
       return new Response(JSON.stringify({
         claude: { active: "acct-a", accounts: ACCOUNTS, migration: null, autoBalance: null },
-        codex: { active: null, accounts: [], migration: null, autoBalance: null },
+        codex: { active: "acct-a", accounts: ACCOUNTS, migration: null, autoBalance: null },
       }), { status: 200, headers: { "content-type": "application/json" } });
     }
-    if (url === "/api/tmux") return await new Promise<Response>((resolve) => { answerReconfigure = resolve; });
+    if (url === "/api/conversation-host") return await new Promise<Response>((resolve) => { answerReconfigure = resolve; });
     return new Response(JSON.stringify({ keepCurrent: "released" }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
 });
@@ -164,7 +164,7 @@ test("a pick mid-turn shows on the sheet in the same frame, sends no migration, 
   /* What left the page: this conversation's reconfigure naming the account, and nothing else. */
   const sent = calls.filter((call) => call.url !== "/api/accounts");
   expect(sent).toHaveLength(1);
-  expect(sent[0]!.url).toBe("/api/tmux");
+  expect(sent[0]!.url).toBe("/api/conversation-host");
   expect(sent[0]!.body).toMatchObject({ action: "reconfigure", path: file.path, accountId: "acct-b" });
   expect(calls.some((call) => call.url.includes("/active") || call.url.includes("/migration"))).toBe(false);
 
@@ -189,7 +189,7 @@ test("picking the running account again takes the pick back at once", async () =
   act(() => { row("acct-a").click(); });
   expect(header()).toBe("runs on Account A");
   expect(row("acct-a").getAttribute("data-runtime-account-next")).toBe("true");
-  expect(calls.filter((call) => call.url === "/api/tmux").map((call) => call.body)).toMatchObject([{ action: "reconfigure", accountId: "acct-a" }]);
+  expect(calls.filter((call) => call.url === "/api/conversation-host").map((call) => call.body)).toMatchObject([{ action: "reconfigure", accountId: "acct-a" }]);
   await act(async () => root.unmount());
 });
 
@@ -230,7 +230,7 @@ test("the desktop popover says where the next message goes, and its Account pane
   expect(wayBack.textContent).toBe("cancel switch");
   expect(wayBack.className).toContain("text-accent");
   act(() => { rows[0]!.click(); });
-  expect(calls.filter((call) => call.url === "/api/tmux").map((call) => call.body)).toMatchObject([{ action: "reconfigure", accountId: "acct-a" }]);
+  expect(calls.filter((call) => call.url === "/api/conversation-host").map((call) => call.body)).toMatchObject([{ action: "reconfigure", accountId: "acct-a" }]);
   await act(async () => root.unmount());
 });
 
@@ -374,7 +374,7 @@ test("a pick a message already engaged offers no cancel on the sheet, and a tap 
   expect(row("acct-a").disabled).toBe(true);
   act(() => { row("acct-a").click(); });
   expect(header()).toBe("runs on Account A · next on Account B");
-  expect(calls.filter((call) => call.url === "/api/tmux")).toEqual([]);
+  expect(calls.filter((call) => call.url === "/api/conversation-host")).toEqual([]);
   await act(async () => root.unmount());
 });
 
@@ -391,7 +391,7 @@ test("a claimed pick whose receipt went back to queued still offers no cancel on
   expect(row("acct-a").querySelector("[data-runtime-account-switching]")!.textContent).toBe("switching now");
   expect(row("acct-a").disabled).toBe(true);
   act(() => { row("acct-a").click(); });
-  expect(calls.filter((call) => call.url === "/api/tmux")).toEqual([]);
+  expect(calls.filter((call) => call.url === "/api/conversation-host")).toEqual([]);
   await act(async () => root.unmount());
 });
 
@@ -415,6 +415,35 @@ test("a pick a message already engaged offers no cancel in the desktop popover's
   act(() => { running.click(); });
   expect(document.querySelector("[data-runtime-popover-account]")?.textContent ?? "runs on Account A · next on Account B")
     .toBe("runs on Account A · next on Account B");
-  expect(calls.filter((call) => call.url === "/api/tmux")).toEqual([]);
+  expect(calls.filter((call) => call.url === "/api/conversation-host")).toEqual([]);
+  await act(async () => root.unmount());
+});
+
+/* A move is a reconfigure, and a reconfigure names a model. A conversation whose model is not known holds the
+   move and says why; one whose transcript has not reported a model yet moves on the model its launch asked for. */
+const codexFile: FileEntry = {
+  ...file,
+  path: "/state/accounts/codex/acct-a/sessions/2026/10/27/rollout-luna.jsonl",
+  root: "codex-sessions", name: "rollout-luna.jsonl", engine: "codex", fmt: "codex", model: null, launchModel: null,
+} as FileEntry;
+const codexSession = (): RuntimeSession => ({ ...session(null), sessionKey: { engine: "codex", sessionId: "session-intent" }, hostKind: "codex-app-server", artifactPath: codexFile.path });
+
+test("a move picked from the pill on a conversation with no known model sends no reconfigure and says why", async () => {
+  const { host, root } = await openSheet(<><TaskToastHost /><RuntimePill file={codexFile} surface="structured" runtimeSession={codexSession()} /></>);
+  act(() => { row("acct-b").click(); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+  expect(calls.filter((call) => call.url === "/api/conversation-host")).toEqual([]);
+  expect(header()).toBe("runs on Account A");
+  expect(host.textContent).toContain("No model reported yet — pick a model before moving to another account");
+  await act(async () => root.unmount());
+});
+
+test("a move picked from the pill before the transcript reports a model sends the launch's model", async () => {
+  const launched = { ...codexFile, launchModel: "gpt-6-luna" } as FileEntry;
+  const { root } = await openSheet(<RuntimePill file={launched} surface="structured" runtimeSession={codexSession()} />);
+  act(() => { row("acct-b").click(); });
+  expect(header()).toBe("runs on Account A · next on Account B");
+  expect(calls.filter((call) => call.url === "/api/conversation-host").map((call) => call.body))
+    .toMatchObject([{ action: "reconfigure", path: launched.path, accountId: "acct-b", model: "gpt-6-luna" }]);
   await act(async () => root.unmount());
 });

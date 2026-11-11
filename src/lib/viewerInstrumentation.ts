@@ -106,6 +106,7 @@ interface CurrentReleaseControllerLoaders {
   loadDeputySweep?: () => Promise<{ startDeputySweep: () => void }>;
   /** Optional for the same reason. */
   loadTempSweep?: () => Promise<{ startTempSweep: () => void }>;
+  loadDiskPressureWatch?: () => Promise<{ startDiskPressureWatch: () => void }>;
   /** Optional for the same reason. */
   loadTurboSweep?: () => Promise<{ startTurboSweep: () => void }>;
   /** Optional for the same reason. */
@@ -119,7 +120,10 @@ interface CurrentReleaseControllerLoaders {
   loadDoneSweep?: () => Promise<{ startDoneSweep: () => void }>;
   loadSeatChannel?: () => Promise<{ startSeatChannel: () => void }>;
   loadPrototypeDelivery?: () => Promise<{ startPrototypeDeliveryWorker: () => void }>;
+  loadAppConnect?: () => Promise<{ startAppConnectPoller: () => void }>;
+  loadVoiceTimers?: () => Promise<{ startVoiceTimers: () => void }>;
   loadSelfUpdateAuto?: () => Promise<{ startSelfUpdateAuto: () => Promise<void> | void }>;
+  loadCloudEnvironmentController?: () => Promise<{ startCloudEnvironmentController: () => void }>;
 }
 
 interface ViewerRuntimeActivationSteps {
@@ -396,6 +400,7 @@ export async function startCurrentReleaseControllers(
     loadStructuredHostRetirement: () => import("@/lib/runtime/structuredHostRetirement"),
     loadSeatTick: () => import("@/lib/monitor/seatTickController"),
     loadTempSweep: () => import("@/lib/tempSweep"),
+    loadDiskPressureWatch: () => import("@/lib/state/diskPressureWatch"),
     loadTurboSweep: () => import("@/lib/monitor/turboRuntime"),
     loadWorktreeSweep: () => import("@/lib/pipelines/worktreeSweep"),
     loadDeputySweep: () => import("@/lib/orchestrator/deputySweep"),
@@ -406,7 +411,10 @@ export async function startCurrentReleaseControllers(
     loadDoneSweep: () => import("@/lib/done/sweep"),
     loadSeatChannel: () => import("@/lib/orchestrator/seatChannel"),
     loadPrototypeDelivery: () => import("@/lib/prototypeReview/deliveryWorker"),
+    loadAppConnect: () => import("@/lib/forge/appConnect"),
+    loadVoiceTimers: () => import("@/lib/voiceCompanion/voiceTimersServer"),
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
+    loadCloudEnvironmentController: () => import("@/lib/projects/cloudEnvironmentController"),
   },
 ): Promise<void> {
   /* Stale role mapping rows (docs/design/model-sizing-tiers.md §5) are reset
@@ -432,6 +440,8 @@ export async function startCurrentReleaseControllers(
   }
   const { startFlowPipelineController } = await loaders.loadFlowPipelineController();
   startFlowPipelineController();
+  try { (await loaders.loadCloudEnvironmentController?.())?.startCloudEnvironmentController(); }
+  catch { console.error("[cloud environments] preparation controller unavailable"); }
   /* The shared Telegram connector dies with the viewer container it is a child
      of (#1133), and the supervisor only ever started one when a consumer asked
      — so the Daily Report run after a restart was the thing that discovered it
@@ -517,7 +527,17 @@ export async function startCurrentReleaseControllers(
      sweeping the same roots would only find nothing left to remove.
      `LLV_TEMP_SWEEP_MAX_AGE_HOURS=0` turns it off. */
   try {
+    const pressure = await loaders.loadDiskPressureWatch?.();
+    pressure?.startDiskPressureWatch();
+  } catch (error) {
+    console.error("[disk pressure] watch start failed", error instanceof Error ? error.name : "unknown");
+  }
+  try {
     const tempSweep = await loaders.loadTempSweep?.();
+    if (tempSweep) {
+      const { AttemptTempStore } = await import("./runtime/attemptTempRetention");
+      new AttemptTempStore().close();
+    }
     tempSweep?.startTempSweep();
   } catch (error) {
     console.error("[temp sweep] start failed", error instanceof Error ? error.name : "unknown");
@@ -590,6 +610,15 @@ export async function startCurrentReleaseControllers(
     prototypeDelivery?.startPrototypeDeliveryWorker();
   } catch (error) {
     console.error("[prototype delivery] start failed", error instanceof Error ? error.name : "unknown");
+  }
+  try { (await loaders.loadAppConnect?.())?.startAppConnectPoller(); }
+  catch (error) { console.error("[forge app connect] start failed", error instanceof Error ? error.name : "unknown"); }
+  /* Voice timers fire whether or not a page is open, and one that came due during a restart fires now. */
+  try {
+    const voiceTimers = await loaders.loadVoiceTimers?.();
+    voiceTimers?.startVoiceTimers();
+  } catch (error) {
+    console.error("[voice timers] start failed", error instanceof Error ? error.name : "unknown");
   }
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
   const { startAccountMigrationController } = await loaders.loadAccountMigrationController();
@@ -1004,6 +1033,8 @@ export async function registerViewerRuntime(): Promise<void> {
     startupAbort.signal.throwIfAborted();
   };
   const releaseHosts = async () => {
+    const { stopRecordedCheckObserver } = await import("@/lib/recordedChecks/observer");
+    stopRecordedCheckObserver();
     const { releaseStructuredHostsForViewerDemotion } = await import("@/lib/runtime/startup");
     await releaseStructuredHostsForViewerDemotion({ boundary: viewerReleaseBoundary() });
   };
@@ -1030,6 +1061,8 @@ export async function registerViewerRuntime(): Promise<void> {
     try { sweepOldLearnedRulesFiles(); } catch { console.warn("[role-memory] old launch-file cleanup unavailable"); }
     const { startRoleSelectionRetention } = await import("@/lib/memory/roleSelectionRetention");
     startRoleSelectionRetention();
+    const { startRoleHistoryDrain } = await import("@/lib/memory/roleHistoryDrain");
+    startRoleHistoryDrain();
     const authority = await initializeHotStateStoresAtStartup(boundary, { signal: startupAbort.signal });
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();
@@ -1086,7 +1119,11 @@ export async function registerViewerRuntime(): Promise<void> {
         await reconcileAttentionOnce(undefined, assertStartupActive);
         assertStartupActive();
       })),
-      startControllers: startCurrentReleaseControllers,
+      startControllers: async () => {
+        await startCurrentReleaseControllers();
+        const { startRecordedCheckObserver } = await import("@/lib/recordedChecks/observer");
+        await startRecordedCheckObserver();
+      },
       publishHotStateActivation: () => {
         if (authority) activatedAuthority = markHotStateActivationReady(hotStateDirectory, authority);
         // A predecessor adapter launches by port. Once this process claims
@@ -1134,6 +1171,7 @@ export async function registerViewerRuntime(): Promise<void> {
       await ensureLegacyCollectionsImported();
     },
     onDemoted: async ({ fenced }) => {
+      (await import("@/lib/projects/cloudEnvironmentController")).stopCloudEnvironmentController();
       try {
         const relays = await import("@/lib/externalRelay/poller");
         relays.stopExternalRelayPollers();

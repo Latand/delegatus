@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { act, type ReactNode } from "react";
 import type { Root } from "react-dom/client";
+import { listedModels } from "@/lib/agent/models";
 import type { TFunction } from "@/lib/i18n";
 
 import { installActEnv } from "@/test-helpers/actEnv";
@@ -252,20 +253,42 @@ test("the model keeps the effort only where the new model has it, and the effort
   const select = (label: string) => row.querySelector<HTMLSelectElement>(`select[aria-label="${label} · Support bot"]`);
   const patches = () => harness.calls.filter((call) => call.method === "PATCH").map((call) => [call.url, call.body]);
 
-  /* GPT-6 Sol has «ultra» too, so the effort goes along; GPT-6 Luna has no «ultra», so it falls back to the default. */
-  await choose(select("Model"), "gpt-6-sol");
+  /* GPT-6.1 Terra has «ultra» too, so the effort goes along; GPT-6 Luna has no «ultra», so it falls back to the default. */
+  await choose(select("Model"), "gpt-6.1-terra");
   await choose(select("Model"), "gpt-6-luna");
   /* An effort is saved as picked, and «Default» as none. */
   await choose(select("Effort"), "high");
   await choose(select("Effort"), "");
   await choose(select("At once"), "3");
   expect(patches()).toEqual([
-    ["/api/external-relay/relays/relay-1", { target: { id: "bot-1", model: "gpt-6-sol", effort: "ultra" } }],
+    ["/api/external-relay/relays/relay-1", { target: { id: "bot-1", model: "gpt-6.1-terra", effort: "ultra" } }],
     ["/api/external-relay/relays/relay-1", { target: { id: "bot-1", model: "gpt-6-luna", effort: null } }],
     ["/api/external-relay/relays/relay-1", { target: { id: "bot-1", effort: "high" } }],
     ["/api/external-relay/relays/relay-1", { target: { id: "bot-1", effort: null } }],
     ["/api/external-relay/relays/relay-1", { target: { id: "bot-1", concurrency: 3 } }],
   ]);
+});
+
+test("a target saved on a retired model keeps it selected under its label beside only the current choices", async () => {
+  accounts({ codex: [signedIn("work")], claude: [signedIn("main")] });
+  answers.relay = { relays: [relay({ targets: [
+    target({ engine: "codex", model: "gpt-5.6-sol", effort: "high", answered_by: "install" }),
+    target({ id: "bot-2", name: "Sales bot", engine: "claude", model: "claude-haiku-4-5", answered_by: "install" }),
+    target({ id: "bot-3", name: "Cloud bot", engine: "codex-cloud", model: "gpt-6.1-sol", answered_by: "install" }),
+  ] })], pending: [], status: [] };
+  const earlier = harness.calls.length;
+  const host = await mount(<ExternalRelaySection />);
+  const modelOf = async (id: string, name: string) => {
+    const row = await unfold(host.querySelector(`[data-external-relay-target=${id}]`)!);
+    const select = row.querySelector<HTMLSelectElement>(`select[aria-label="Model · ${name}"]`)!;
+    return { value: select.value, chosen: select.selectedOptions[0]?.textContent, options: Array.from(select.options).map((option) => option.value) };
+  };
+  expect(await modelOf("bot-1", "Support bot")).toEqual({ value: "gpt-5.6-sol", chosen: "GPT-5.6-Sol", options: [...listedModels("codex").map((option) => option.id), "gpt-5.6-sol"] });
+  expect(await modelOf("bot-2", "Sales bot")).toEqual({ value: "claude-haiku-4-5", chosen: "Haiku 4.5", options: [...listedModels("claude").map((option) => option.id), "claude-haiku-4-5"] });
+  // The Cloud runtime stays fixed to GPT-6.1 Sol.
+  expect(await modelOf("bot-3", "Cloud bot")).toEqual({ value: "gpt-6.1-sol", chosen: "GPT-6.1 Sol", options: ["gpt-6.1-sol"] });
+  // Reading a saved choice writes nothing back.
+  expect(harness.calls.slice(earlier).filter((call) => call.method === "PATCH")).toEqual([]);
 });
 
 test("the switch routes a target to this install or back to the service, and the card fetches nothing a chat said", async () => {

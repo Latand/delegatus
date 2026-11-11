@@ -1150,6 +1150,22 @@ test("two quiet probes persist a web request; a fresh process continues with the
   service.stop();
 });
 
+test("a persisted untested-tree verdict is refreshed after upgrading the reader", async () => {
+  const h = scenario();
+  writeAuto(join(h.dir, "auto.json"), { ...readAuto(join(h.dir, "auto.json")), green: { [TARGET]: { state: "untested-tree" } } });
+  let fresh: boolean | undefined;
+  h.deps.green = { read: async (_remote: string, _branch: string, _target: string, _repo: string, _first?: string, reread?: boolean) => {
+    fresh = reread; return { state: "green" };
+  } } as unknown as ServiceDeps["green"];
+  const service = h.service();
+  try {
+    await service.autoTick();
+    expect(fresh).toBe(true);
+    expect(readAuto(join(h.dir, "auto.json")).green[TARGET]?.state).toBe("green");
+    await Bun.sleep(500);
+  } finally { service.stop(); }
+});
+
 test.each(["pending", "red", "unknown"] as const)("a cached green changed to %s during the quiet wait cannot restart, even after reconstruction", async (state) => {
   const h = scenario();
   let service = h.service();

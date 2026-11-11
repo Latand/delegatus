@@ -5,7 +5,7 @@ import { rowStateWord } from "@/components/mobile/mobileBoardModel";
 import { isSettledLaunchPlaceholder } from "@/components/launchHistoryModel";
 
 import { Bot, Flag } from "lucide-react";
-import { memo, useState } from "react";
+import { memo, useRef, useState } from "react";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { useLocale, type TFunction } from "@/lib/i18n";
@@ -19,7 +19,10 @@ import { EngineMark } from "@/components/EngineMark";
 import { cleanTitle, fmtAge } from "@/components/utils";
 import { taskChipTitle } from "@/lib/selection/selectedContext";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
-import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { PipelineBlock, PipelineCreationBlock } from "@/components/pipelines/PipelineBlock";
+import type { ConversationDrafts } from "@/components/pipelines/conversationDraftClient";
+import { conversationDraftLane, DraftStartButton, DraftStartNote } from "@/components/pipelines/DraftStageControls";
+import { conversationRefusalText, useConversationDraftAttempt, useDroppedFocus } from "@/components/pipelines/useConversationDraft";
 import { laneMergeUnsettled } from "@/components/pipelines/pipelineBlockModel";
 import { needLabel } from "@/components/attention/decision";
 import type { NeedReason } from "@/components/attention/needReason";
@@ -39,6 +42,7 @@ import { useSeatSignal } from "./kanbanSeatStore";
 import { useTaskChipAttached, useTaskChipsFull, type TaskChip } from "@/components/orchestrator/taskChips";
 import { askOrchestratorAboutTask } from "./askOrchestrator";
 import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
+import { noteShownBesideSummary, TaskSummaryPanel } from "@/components/tasks/TaskSummaryPanel";
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
@@ -54,7 +58,6 @@ import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline, Kanba
 import { cardWaitsForCpu, PastAttempts, stageNames } from "./PipelineSection";
 import type { PastAttempt } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
-import { StageDraftPanel } from "./StageDraft";
 import { RemoteAgents, type RemoteAgentView } from "./RemoteAgents";
 import { HostChip, RemoteLanes } from "./RemoteLanes";
 import type { RemoteCard } from "./remoteFeed";
@@ -111,10 +114,10 @@ export function statusLabel(t: TFunction, status: TaskStatus): string {
 
 /** The stages whose latest own attempt's conversation is open in the agent
     window's list (the attempt a node opens, never a lineage-adopted helper),
-    or whose first message is open in a panel. */
-function selectedStages(pipeline: Pipeline, readerKeys: readonly string[], panels: readonly StagePanelLine[]): Set<string> {
+    or whose first message is. */
+function selectedStages(pipeline: Pipeline, readerKeys: readonly string[], drafts: readonly OpenDraftLine[]): Set<string> {
   const open = new Set(readerKeys);
-  const selected = new Set<string>(panels.filter((panel) => panel.pipelineId === pipeline.id).map((panel) => panel.stageId));
+  const selected = new Set<string>(drafts.filter((draft) => draft.pipelineId === pipeline.id).map((draft) => draft.stageId));
   for (const run of pipeline.runs) {
     const attempt = latestAttempt(pipeline, run.stageId);
     const identity = attempt?.conversationId ?? attempt?.agentPath;
@@ -123,19 +126,16 @@ function selectedStages(pipeline: Pipeline, readerKeys: readonly string[], panel
   return selected;
 }
 
-/** A waiting stage's panel on the card, as the board encodes it: `pipelineId\tstageId\tfolded`. */
-interface StagePanelLine {
+/** A waiting stage of this card whose first message is open in the agent window, as the board encodes it: `pipelineId\tstageId`. */
+interface OpenDraftLine {
   pipelineId: string;
   stageId: string;
-  folded: boolean;
 }
 
-export const stagePanelKey = (cardId: string, pipelineId: string, stageId: string) => `${cardId}\t${pipelineId}\t${stageId}`;
-
-function parsePanels(encoded: string): StagePanelLine[] {
+function parseOpenDrafts(encoded: string): OpenDraftLine[] {
   return encoded ? encoded.split("\n").map((line) => {
-    const [pipelineId = "", stageId = "", folded = "0"] = line.split("\t");
-    return { pipelineId, stageId, folded: folded === "1" };
+    const [pipelineId = "", stageId = ""] = line.split("\t");
+    return { pipelineId, stageId };
   }) : [];
 }
 
@@ -223,9 +223,6 @@ export interface KanbanCardProps {
   /** The icon before the title opens the task icon picker (#2102). Absent,
       the icon is drawn and changes nothing. */
   onIconMenu?: (card: KanbanCardModel, anchor: HTMLElement) => void;
-  /** The operator's graph-or-summary choices, by `cardId|pipelineId`. */
-  graphChoices: ReadonlyMap<string, boolean>;
-  onToggleGraph: (cardId: string, pipelineId: string, open: boolean) => void;
   /** Open the conversation an earlier attempt or review round kept. */
   onOpenAttempt: (conversation: PastAttempt["conversation"]) => void;
   /** Dismiss launches of this task that did not start: one row's, or all of
@@ -235,19 +232,17 @@ export interface KanbanCardProps {
       conversation identity, one per line — a string so an unchanged set never
       re-renders the card. The card only marks them; it never hosts one. */
   readerKeys: string;
-  /** Waiting stages open on this card, one per line (see `StagePanelLine`). */
-  stagePanels: string;
+  /** This card's waiting stages whose first message is open in the agent
+      window, one per line (see `OpenDraftLine`). The card only marks them. */
+  openDrafts: string;
   /** Pipeline actions this page sent and the server has not answered: `pipelineId\taction` per line. */
   acting: string;
   drafts: StageDrafts;
   pipelinePorts: PipelinePorts;
-  onOpenSheet: (cardId: string, pipeline: Pipeline) => void;
+  onOpenSheet: (cardId: string, pipeline: Pipeline, stageId?: string, options?: { graph?: boolean }) => void;
   onPipelineMenu: (cardId: string, pipeline: Pipeline, anchor: HTMLElement) => void;
   /** A manual answer pressed as a link on a lane's stop entry. */
   onLaneAnswer: (cardId: string, pipeline: Pipeline, answer: LaneAnswerItem) => void;
-  onStagePanelFold: (panelKey: string, folded: boolean) => void;
-  onStagePanelClose: (panelKey: string) => void;
-  onStagePanelMenu: (panelKey: string, anchor: HTMLElement) => void;
   /** «+ Agent» in the footer: a draft on this card, seeded with the task's text (K9a). */
   onAddAgent?: (card: KanbanCardModel) => void;
   /** «Ask» attached this task's chip: the board confirms it where the press was. */
@@ -267,6 +262,63 @@ export interface KanbanCardProps {
   onAnswerCard?: (card: KanbanCardModel, state: CardState, anchor: HTMLElement) => void;
   /** The project's seat conversations: the timeline names their answers the orchestrator's. */
   seatConversationIds?: readonly string[];
+  /** Drafts made from a conversation the card holds: the one being made, and Start on a draft lane. */
+  conversationDrafts?: ConversationDrafts;
+}
+
+/** A draft being made from the card's conversation, or the answer that it was not (variant 3). */
+function ConversationDraftNotice({ store, taskId }: { store: ConversationDrafts; taskId: string }) {
+  const { t } = useLocale();
+  const attempt = useConversationDraftAttempt(store, taskId);
+  const ref = useRef<HTMLDivElement>(null);
+  useDroppedFocus(ref, attempt?.phase ?? null);
+  if (!attempt) return null;
+  const title = cleanTitle(attempt.source.title, 90);
+  if (attempt.phase === "creating") {
+    return (
+      <div ref={ref} className="draft-notice info" role="status" data-conversation-draft="creating">
+        <span className="msg-text">{t("kanban.fromConversation.preparing", { title, branch: attempt.source.branch })}</span>
+      </div>
+    );
+  }
+  if (attempt.phase === "checking") {
+    return (
+      <div ref={ref} className="draft-notice info" role="status" data-conversation-draft="checking">
+        <span className="msg-text">{t("kanban.fromConversation.checking", { title })}</span>
+      </div>
+    );
+  }
+  if (attempt.phase === "checked" && attempt.checked) {
+    /* What the conversation reads now, before anything is posted for it. */
+    const checked = attempt.checked;
+    return (
+      <div ref={ref} className="draft-notice info" role="status" data-conversation-draft="checked">
+        <span className="msg-text">{t("kanban.fromConversation.checked", { title, branch: attempt.source.branch })}</span>
+        <span className="acts">
+          <button type="button" data-conversation-draft-create="" onClick={() => void store.create(taskId, checked)}>{t("kanban.fromConversation.create")}</button>
+          <button type="button" data-conversation-draft-dismiss="" onClick={() => store.dismiss(taskId)}>{t("common.close")}</button>
+        </span>
+      </div>
+    );
+  }
+  if (attempt.phase === "unknown") {
+    return (
+      <div ref={ref} className="draft-notice warn" role="status" data-conversation-draft="unknown">
+        <span className="msg-text">{t("kanban.fromConversation.unknown")}</span>
+        <button type="button" data-conversation-draft-check="" onClick={() => void store.retry(taskId)}>{t("kanban.pipelineAct.checkAgain")}</button>
+      </div>
+    );
+  }
+  const changed = !attempt.refusal?.retryable;
+  return (
+    <div ref={ref} className="draft-notice error" role="alert" data-conversation-draft="refused" data-conversation-draft-code={attempt.refusal?.code ?? ""}>
+      <span className="msg-text">{t("kanban.fromConversation.notCreated", { reason: conversationRefusalText(t, attempt.refusal) })}</span>
+      <span className="acts">
+        <button type="button" data-conversation-draft-retry="" onClick={() => void store.retry(taskId)}>{changed ? t("kanban.fromConversation.refresh") : t("kanban.retry")}</button>
+        <button type="button" data-conversation-draft-dismiss="" onClick={() => store.dismiss(taskId)}>{t("common.close")}</button>
+      </span>
+    </div>
+  );
 }
 
 /** The card's reason, for its label: the oldest one's, and how many more there are. */
@@ -414,12 +466,12 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
      the prototype; tiles are the conversations that run outside a pipeline. */
   const tiles = card.members.filter((member) => member.stage === null);
   const readerKeys = props.readerKeys ? props.readerKeys.split("\n") : [];
-  const panels = parsePanels(props.stagePanels);
+  const openDrafts = parseOpenDrafts(props.openDrafts);
   const acting = parseActing(props.acting);
-  /* An agent opened from the card opens in the agent window and leaves the
-     card as it was: only a waiting stage's first message and an agent draft,
-     which are forms with no agent yet, stand in the card. */
-  const reading = !collapsed && (panels.length > 0 || card.drafts.length > 0);
+  /* An agent or a waiting stage's first message opened from the card opens in
+     the agent window and leaves the card as it was: only an agent draft, a
+     launch form with no agent yet, stands in the card. */
+  const reading = !collapsed && card.drafts.length > 0;
   const openKeys = new Set(readerKeys);
   /* A card that waits with no reason of its own waits on its prototype
      review: its review button says so in words, and the card's label names
@@ -490,22 +542,29 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       nowMs={nowMs}
       taskTitle={card.titlePending ? null : card.title}
       taskId={card.task?.id ?? null}
-      graphOpen={props.graphChoices.get(`${card.id}|${summary.pipeline.id}`) ?? false}
-      selected={selectedStages(summary.pipeline, readerKeys, panels)}
+      selected={selectedStages(summary.pipeline, readerKeys, openDrafts)}
       acting={acting.get(summary.pipeline.id) ?? null}
-      onToggleGraph={(open) => props.onToggleGraph(card.id, summary.pipeline.id, open)}
+      onOpenGraph={(pipeline) => props.onOpenSheet(card.id, pipeline, undefined, { graph: true })}
       onOpenStage={(pipeline, stage) => props.onOpenStage(pipeline, stage, card.id)}
       onOpenStages={(pipeline) => props.onOpenSheet(card.id, pipeline)}
       /* A task's card has one ⋯, and the lane's actions are a group in it. A
          pipeline on no task has no card menu, so its lane keeps its own. */
       onMenu={card.task ? undefined : (pipeline, anchor) => props.onPipelineMenu(card.id, pipeline, anchor)}
       onWorkLinks={onWorkLinks}
+      start={props.conversationDrafts && conversationDraftLane(summary.pipeline)
+        ? <DraftStartButton pipeline={summary.pipeline} title={title} store={props.conversationDrafts} drafts={props.drafts} ports={props.pipelinePorts} variant="board" />
+        : undefined}
+      startNote={props.conversationDrafts && conversationDraftLane(summary.pipeline)
+        ? <DraftStartNote pipeline={summary.pipeline} store={props.conversationDrafts} drafts={props.drafts} ports={props.pipelinePorts} variant="board" />
+        : undefined}
     />
   );
   /* The closed card's one chain row (§6.1): the lane on top, the PR at its
      end, and how many other lanes are still open. */
   const topLane = livePipelines[0] ?? endedPipelines[0] ?? null;
   const otherOpen = Math.max(0, livePipelines.length - (topLane && livePipelines[0] === topLane ? 1 : 0));
+  /* A summary written after the agent's note says more: the note shows only when newer. */
+  const shownNote = noteShownBesideSummary(card.task?.note, card.task?.summary);
   const chronology = collapsed ? [] : taskChronology({
     taskCreatedAt: card.task?.createdAt ?? null,
     pipelines: card.pipelines.map((summary) => summary.pipeline),
@@ -663,6 +722,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           spend={card.task && !remote ? <TaskSpendMarks taskId={card.task.id} interactive /> : undefined}
           onToggle={motionLinks ? undefined : () => props.onToggleCollapsed(card.id)}
           expanded={!collapsed}
+          progress={card.task?.progress ? { progress: card.task.progress, running: card.workingSinceMs !== null, color: hex } : undefined}
         />
       ) : collapsed && card.task && card.priority !== "normal" ? (
         /* A closed card that has not started keeps its priority mark, which is how the Inbox reads at a glance. */
@@ -684,6 +744,9 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           </button>
         </div>
       ) : null}
+      {/* The task's summary, under its state: what a returning person reads first. */}
+      {!collapsed && card.task?.summary ? <TaskSummaryPanel summary={card.task.summary} pipelines={card.pipelines.map((summary) => summary.pipeline)} nowMs={nowMs} /> : null}
+      {card.creations?.map(creation => <PipelineCreationBlock key={creation.id} creation={creation} />)}
       {collapsed && topLane ? (
         <div className="card-chain" data-card-chain={topLane.pipeline.id}>
           <PipelineBlock
@@ -701,7 +764,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       {props.holdEditing && props.onSaveHold && props.onCancelHold ? <TaskHoldEditor hold={card.task?.hold} onSave={hold => props.onSaveHold?.(card, hold)} onCancel={props.onCancelHold} /> : null}
       {/* Slot reserved for the needs-you question from the sibling card lane. */}
       {card.titlePending && editing?.field !== "title" ? <p className="pending-line">{t("kanban.namePending")}</p> : null}
-      {collapsed ? null : <TaskStatusNote note={card.task?.note} nowMs={nowMs} />}
+      {collapsed ? null : <TaskStatusNote note={shownNote} nowMs={nowMs} />}
       {/* #2059: the task's own links and every pipeline's, deduplicated. The
           closed card draws only its top lane's PR, on its chain row. */}
       {card.task && !collapsed ? (
@@ -722,19 +785,23 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           onCancel={() => props.onCancelEdit(card.id)}
         />
       ) : card.task && (card.description || workspace) ? (
-        <button
-          type="button"
-          className={`desc${card.description ? "" : " placeholder"}`}
-          data-describe={card.id}
-          aria-label={card.description ? t("kanban.editDescription") : t("kanban.addDescription")}
-          onClick={() => props.onStartEdit(card, "description")}
-        >
-          <span className="clamp">{card.description || t("kanban.addDescription")}</span>
-        </button>
+        <>
+          {/* Under a summary the description carries its label, so it never reads as the summary's last sentence. */}
+          {card.task.summary ? <h4 className="chronology-head desc-head" data-describe-head="">{t("mobile2.task.description")}</h4> : null}
+          <button
+            type="button"
+            className={`desc${card.description ? "" : " placeholder"}`}
+            data-describe={card.id}
+            aria-label={card.description ? t("kanban.editDescription") : t("kanban.addDescription")}
+            onClick={() => props.onStartEdit(card, "description")}
+          >
+            <span className="clamp">{card.description || t("kanban.addDescription")}</span>
+          </button>
+        </>
       ) : card.description ? (
         <p className="desc"><span className="clamp">{card.description}</span></p>
       ) : null}
-      {!collapsed ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} full /> : null}
+      {!collapsed ? <TaskStatusNote note={shownNote} nowMs={nowMs} full /> : null}
       {/* The standing tick notice opens the panel that holds the setting it
           describes. */}
       {!collapsed && card.task && isSeatTickNotice(card.task.text) ? <SeatTickNoticeButton project={card.project} /> : null}
@@ -857,37 +924,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
             </div>
           ) : null}
           {remote ? <RemoteLanes remote={remote} title={title} nowMs={nowMs} /> : null}
+          {card.task && props.conversationDrafts ? <ConversationDraftNotice store={props.conversationDrafts} taskId={card.task.id} /> : null}
         </>
-      ) : null}
-
-      {!collapsed && panels.length ? (
-        <div className="readers">
-          {panels.map((panel) => {
-            const summary = card.pipelines.find((entry) => entry.pipeline.id === panel.pipelineId);
-            const stage = summary?.pipeline.stages.find((entry) => entry.id === panel.stageId);
-            if (!summary || !stage) return null;
-            const key = stagePanelKey(card.id, panel.pipelineId, panel.stageId);
-            const attempt = latestAttempt(summary.pipeline, stage.id);
-            const recorded = attempt && (attempt.agentPath || attempt.conversationId) ? { path: attempt.agentPath, conversationId: attempt.conversationId } : null;
-            return (
-              <StageDraftPanel
-                key={key}
-                panelKey={key}
-                cardTitle={title}
-                pipeline={summary.pipeline}
-                stage={stage}
-                names={stageNames(t, summary.pipeline)}
-                folded={panel.folded}
-                drafts={props.drafts}
-                ports={props.pipelinePorts}
-                onFold={(folded) => props.onStagePanelFold(key, folded)}
-                onClose={() => props.onStagePanelClose(key)}
-                onMenu={(anchor) => props.onStagePanelMenu(key, anchor)}
-                onOpenConversation={recorded ? () => props.onOpenAttempt(recorded) : null}
-              />
-            );
-          })}
-        </div>
       ) : null}
 
       {!collapsed && tiles.length ? (
@@ -950,6 +988,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
             title={title}
             pipelines={card.pipelines.map((summary) => summary.pipeline)}
             files={card.members.map((member) => member.file)}
+            filesAvailable={!remote && card.pipelines.length > 0}
           />
           {/* The orchestrator's composer takes a reference to this task as a chip
               (never text in the input). Not on the Overview, where cards of

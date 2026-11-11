@@ -1,3 +1,4 @@
+import { agentScopeCommand, differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, type AgentScopeIdentity } from "./agentScope";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,7 +12,7 @@ import { activeOrchestratorSeatsOrUnknown, revokedOrchestratorSeatConversationsO
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
 import type { ProcessMemory } from "@/lib/proc/types";
-import { processIdentityStatus, systemBootEpoch, type ProcessIdentityProbe } from "@/lib/processIdentity";
+import { processIdentityStatus, sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentityProbe } from "@/lib/processIdentity";
 import type { StructuredHostKillRef } from "@/lib/resources";
 import { RESOURCE_STRUCTURED_HOST_LIMIT } from "@/lib/types";
 
@@ -130,7 +131,66 @@ export function structuredHostRetirementBatch(
 
 const REPORT_FILE = () => statePath("host-retirement-report.json");
 const JOURNAL_FILE = () => statePath("host-retirement-journal.ndjson");
+const CURSOR_FILE = () => statePath("host-retirement-cursor.json");
 const JOURNAL_ROTATE_BYTES = 4 * 1024 * 1024;
+
+/** A key survives row removal and insertion, unlike an offset in a shrinking list. */
+function readRetirementCursor(): string | null {
+  let value: unknown;
+  try {
+    const fd = fs.openSync(CURSOR_FILE(), "r");
+    try {
+      const buffer = Buffer.alloc(257);
+      const length = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      if (length > 256) throw new Error("retirement cursor exceeds its byte budget");
+      value = JSON.parse(buffer.subarray(0, length).toString("utf8"));
+    } finally { fs.closeSync(fd); }
+  }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new Error(`retirement cursor could not be read: ${safeReason(error)}`);
+  }
+  return parseRetirementCursor(value);
+}
+
+function parseRetirementCursor(value: unknown): string | null {
+  const cursor = value as { version?: unknown; afterKey?: unknown } | null;
+  if (cursor?.version !== 1 || !(cursor.afterKey === null
+    || typeof cursor.afterKey === "string" && /^(claude|codex):[0-9a-f-]{36}$/i.test(cursor.afterKey))) {
+    throw new Error("retirement cursor is invalid");
+  }
+  return cursor.afterKey;
+}
+
+export interface StructuredHostRetirementPss {
+  /** Null when any process could not be measured; never an RSS substitute. */
+  bytes: number | null;
+  measuredProcesses: number;
+}
+
+function observedPidAlive(pid: number): Determinable<boolean> {
+  if (process.platform !== "linux") return determined(procBackend.pidAlive(pid));
+  try { fs.statSync(`/proc/${pid}`); return determined(true); }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT"
+      ? determined(false)
+      : undetermined(`process presence could not be established (${code ?? "unknown"})`);
+  }
+}
+
+async function treePss(pids: readonly number[]): Promise<StructuredHostRetirementPss> {
+  let bytes = 0;
+  let measuredProcesses = 0;
+  const signal = AbortSignal.timeout(1_000);
+  if (process.platform === "linux") for (const pid of pids) {
+    try {
+      const match = /^Pss:\s+(\d+) kB$/m.exec(await fs.promises.readFile(`/proc/${pid}/smaps_rollup`, { encoding: "utf8", signal }));
+      if (match) { bytes += Number(match[1]) * 1024; measuredProcesses++; }
+    } catch { /* Missing or unreadable processes leave the total unknown. */ }
+  }
+  return { bytes: measuredProcesses === pids.length ? bytes : null, measuredProcesses };
+}
 
 /** Receipt states that settle a launch. Anything else still names work whose
     outcome depends on this host being there. */
@@ -213,6 +273,8 @@ export interface StructuredHostRetirementSubject {
   cwd: string;
   transcriptPath: string;
   process: ProcessIdentity;
+  scope?: AgentScopeIdentity | null;
+  observedProcessDead?: boolean;
   status: AgentHostStatus;
   activeTurnRef: string | null;
   /** Undetermined when no conversation record establishes a turn state. */
@@ -422,6 +484,8 @@ const CLAUSE_CHECKS: Record<
     if (!recordedStart.determined) return recordedStart;
     const recordedBoot = recordedBootEpoch(subject);
     if (!recordedBoot.determined) return recordedBoot;
+    if (subject.scope && subject.observedProcessDead && subject.observedBootEpoch.determined
+      && subject.scope.bootEpoch === subject.observedBootEpoch.value) return PASSES;
     if (!subject.observedStartIdentity.determined) return subject.observedStartIdentity;
     if (!subject.observedBootEpoch.determined) return subject.observedBootEpoch;
     const observedStartIdentity = subject.observedStartIdentity.value;
@@ -496,6 +560,7 @@ export interface StructuredHostRetirementRecord {
   via: Extract<StructuredHostTerminationOutcome, { ok: true }>["via"];
   pids: number[];
   reclaimed: StructuredHostRetirementReclaim;
+  pss?: StructuredHostRetirementPss;
 }
 
 export interface StructuredHostRetirementRefusal {
@@ -546,8 +611,23 @@ export interface StructuredHostRetirementReport {
       every refused host is the one to look at: an advertisement nobody named
       refuses every host that carries it, forever (#2137). */
   refusedByFlag: Record<string, number>;
+  /** Proven live identities refused by the live-host predicate. Older reports
+      omit this census; unverified identities are never counted as live. */
+  liveRefused?: { count: number; byClause: Partial<Record<StructuredHostRetirementClause, number>> };
   failed: StructuredHostRetirementFailure[];
   reclaimed: StructuredHostRetirementReclaim;
+  /** Optional for reports persisted by earlier releases. */
+  progress?: {
+    beforeKey: string | null;
+    afterKey: string | null;
+    wrapped: boolean;
+    candidates: number;
+    /** Candidates still owed a turn past the continuation checkpoint. */
+    unvisited: number;
+    /** Registry age beyond the checkpoint; never kill authority. */
+    oldestUnvisited: { key: string; updatedAt: string } | null;
+  };
+  gone?: { key: string; conversationId: string | null; process: ProcessIdentity }[];
 }
 
 /**
@@ -564,6 +644,11 @@ export interface StructuredHostRetirementReport {
  * again: past this boundary there is one way to say unknown and one place that
  * decides what it means.
  */
+type GoneHostReconciliation =
+  | { status: "gone" }
+  | { status: "changed"; reason: string }
+  | { status: "failed"; reason: string };
+
 export interface StructuredHostRetirementDependencies {
   publicationState?: () => "ready" | "rebinding" | "unbound";
   snapshot?: () => RegistryFile;
@@ -582,6 +667,14 @@ export interface StructuredHostRetirementDependencies {
       unreadable path is undetermined. */
   transcriptStat?: (pathname: string) => Determinable<{ mtimeMs: number } | null>;
   processIdentity?: (pid: number) => Determinable<string>;
+  pidAlive?: (pid: number) => Determinable<boolean>;
+  /** Read-only scope observation. No kill/stop or runtime release belongs on
+      the gone path; a loaded or unreadable scope retains its custody. */
+  scopeLoadState?: (scope: AgentScopeIdentity) => Promise<string>;
+  reconcileGone?: (entry: RegistryFile["entries"][string]) => Promise<GoneHostReconciliation>;
+  readCursor?: () => string | null;
+  writeCursor?: (afterKey: string | null) => void;
+  treePss?: (pids: readonly number[]) => StructuredHostRetirementPss | Promise<StructuredHostRetirementPss>;
   bootEpoch?: () => Determinable<string>;
   processMemory?: (pids: Iterable<number>) => Map<number, ProcessMemory>;
   ppidMap?: () => Map<number, number>;
@@ -914,11 +1007,11 @@ interface RetirementSources {
   revokedConversations: () => Determinable<ReadonlySet<string>>;
 }
 
-function retirementInputs(sources: RetirementSources, nowMs: number): RetirementInputs {
+function retirementInputs(sources: RetirementSources, nowMs: number, keys: readonly string[]): RetirementInputs {
   const file = sources.snapshot();
   const conversationsBySession = new Map<string, RegistryFile["conversations"][string]>();
-  for (const entry of retirementCandidates(file)) {
-    const key = sessionKeyId(entry.key);
+  for (const key of keys) {
+    if (!file.entries[key]) continue;
     // The indexed selector preserves collection order. The complete reader's
     // last matching conversation wins, even when generations overlap.
     const conversation = registryConversationsForEntryKey(file, key).at(-1);
@@ -949,11 +1042,12 @@ interface RetirementReaders {
 /** Candidate rows: registry-recorded structured hosts only. */
 function retirementCandidates(file: RegistryFile) {
   return registryLivenessRows(file).entries
-    .filter((entry) => Boolean(entry.structuredHost?.process)
-      && (entry.key.engine === "claude" || entry.key.engine === "codex")
-      /* A pane-hosted entry belongs to the tmux lifecycle, not to this one. */
-      && entry.host === null)
-    .slice(0, RESOURCE_STRUCTURED_HOST_LIMIT);
+    .filter((entry) => Boolean(recordedScopeProcess(entry.structuredHost))
+      && (entry.key.engine === "claude" || entry.key.engine === "codex"))
+    .sort((left, right) => {
+      const a = sessionKeyId(left.key), b = sessionKeyId(right.key);
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
 }
 
 /**
@@ -995,7 +1089,7 @@ function retirementSubject(
   readers: RetirementReaders,
 ): StructuredHostRetirementSubject {
   const columns = entry.structuredHost!;
-  const hostProcess = columns.process!;
+  const hostProcess = recordedScopeProcess(columns)!;
   const key = entry.key as SessionKey & { engine: "claude" | "codex" };
   const keyId = sessionKeyId(key);
   const conversation = inputs.conversationsBySession.get(keyId) ?? null;
@@ -1016,6 +1110,8 @@ function retirementSubject(
     cwd: entry.cwd || generation?.launchProfile.cwd || "",
     transcriptPath: entry.artifactPath || "",
     process: hostProcess,
+    scope: recordedAgentScope(columns),
+    observedProcessDead: !procBackend.pidAlive(hostProcess.pid),
     status: entry.status,
     activeTurnRef: columns.activeTurnRef,
     turnBusy: conversation === null
@@ -1101,7 +1197,12 @@ function refuse(
   subject: StructuredHostRetirementSubject,
   verdict: Extract<StructuredHostRetirementVerdict, { retire: false }>,
   changed: boolean,
+  live = false,
 ): void {
+  if (live && report.liveRefused) {
+    report.liveRefused.count++;
+    report.liveRefused.byClause[verdict.clause] = (report.liveRefused.byClause[verdict.clause] ?? 0) + 1;
+  }
   const flags = verdict.clause === "no-active-flags" ? blockingHostActivityFlags(subject.activeFlags) : [];
   for (const flag of flags) report.refusedByFlag[flag] = (report.refusedByFlag[flag] ?? 0) + 1;
   report.refused.push({
@@ -1158,16 +1259,29 @@ export async function runStructuredHostRetirementSweep(
   const owned = dependencies.owned ?? hasStructuredDeliveryHost;
   const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef) => {
     const observed = snapshot().entries[`${ref.engine}:${ref.sessionId}`];
+    const scope = recordedAgentScope(observed?.structuredHost);
     return terminateStructuredHostTree(ref, {
+    ...(scope ? { authorize: () => {
+      if (publicationState() !== "ready") return { status: 409 as const, error: "scope retirement publication changed" };
+      const inputs = retirementInputs(sources, now(), [`${ref.engine}:${ref.sessionId}`]);
+      const entry = inputs.file.entries[`${ref.engine}:${ref.sessionId}`];
+      if (!entry || !recordedScopeProcess(entry.structuredHost) || entry.claimEpoch !== observed?.claimEpoch || entry.claimOwner !== observed?.claimOwner
+        || entry.structuredHost?.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch
+        || !sameAgentScope(recordedAgentScope(entry.structuredHost), scope)
+        || !structuredHostRetirementVerdict(retirementSubject(entry, inputs, readers), { now: now(), idleMs }).retire) {
+        return { status: 409 as const, error: "scope retirement target changed" };
+      }
+      return null;
+    } } : {}),
     stopOrigin: { path: "idle-retirement-sweep", operationId: `${startedAtMs}:${ref.sessionId}` },
     graceMs,
     deadlineMs: graceMs + TERMINATION_DEADLINE_MARGIN_MS,
     persistCapturedTree: identities => ref.sessionId !== null
       && agentRegistry().deliveryWriteOrBusy({ label: "registry.idle-stop-capture" }, () => {
         if (publicationState() !== "ready") return false;
-        const inputs = retirementInputs(sources, now());
+        const inputs = retirementInputs(sources, now(), [`${ref.engine}:${ref.sessionId}`]);
         const entry = inputs.file.entries[`${ref.engine}:${ref.sessionId}`];
-        if (!entry?.structuredHost?.process || entry.claimOwner !== observed?.claimOwner || entry.claimEpoch !== observed?.claimEpoch
+        if (!entry?.structuredHost || !recordedScopeProcess(entry.structuredHost) || entry.claimOwner !== observed?.claimOwner || entry.claimEpoch !== observed?.claimEpoch
           || entry.structuredHost.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) return false;
         const subject = retirementSubject(entry, inputs, readers);
         if (!structuredHostRetirementVerdict(subject, { now: now(), idleMs }).retire) return false;
@@ -1181,6 +1295,74 @@ export async function runStructuredHostRetirementSweep(
   });
   const record = dependencies.record ?? recordRetirementReport;
   const publicationState = dependencies.publicationState ?? structuredDeliveryPublicationState;
+  const pidAlive = dependencies.pidAlive ?? observedPidAlive;
+  const measurePss = dependencies.treePss ?? treePss;
+  const processStatus = (process: ProcessIdentity, alive = pidAlive(process.pid)) => {
+    if (!alive.determined) return "unverified";
+    if (!alive.value) return "dead";
+    const start = readers.processIdentity(process.pid);
+    const boot = readers.bootEpoch();
+    return processIdentityStatus(process, {
+      pidAlive: () => true,
+      processIdentity: () => start.determined ? start.value : null,
+      bootEpoch: () => boot.determined ? boot.value : null,
+    });
+  };
+  const scopeLoadState = dependencies.scopeLoadState
+    ?? ((scope: AgentScopeIdentity) => agentScopeCommand(["show", "--value", "-p", "LoadState", scope.unit]));
+  const reconcileGone = dependencies.reconcileGone ?? (async (observed: RegistryFile["entries"][string]): Promise<GoneHostReconciliation> => {
+    const registry = agentRegistry();
+    const expected = recordedScopeProcess(observed.structuredHost);
+    const scope = recordedAgentScope(observed.structuredHost);
+    const boot = readers.bootEpoch();
+    if (!expected || processStatus(expected) !== "dead") return { status: "failed", reason: "host exit can no longer be verified" };
+    if (scope) {
+      if (!scope.bootEpoch || !boot.determined) return { status: "failed", reason: "scope boot identity cannot be verified" };
+      // A previous kernel cannot retain its transient unit. On the same boot,
+      // observe collection without stopping anything, including descendants.
+      if (!differentKernelBoot(scope.bootEpoch, boot.value)
+        && (scope.bootEpoch !== boot.value || await scopeLoadState(scope) !== "not-found")) {
+        return { status: "failed", reason: "agent scope is still loaded or its boot identity differs" };
+      }
+    }
+    // Admission waits asynchronously under the registry's deadline, with an origin.
+    return registry.deliveryWriteOrBusy({ label: "registry.idle-reconcile-gone" }, (): GoneHostReconciliation => {
+      if (publicationState() !== "ready") return { status: "failed", reason: "retirement publication is no longer ready" };
+      const current = registry.hostEntry(observed.key);
+      const process = recordedScopeProcess(current?.structuredHost);
+      const currentBoot = readers.bootEpoch();
+      if (scope && (!boot.determined || !currentBoot.determined || currentBoot.value !== boot.value)) {
+        return { status: "failed", reason: "scope boot identity changed during reconciliation" };
+      }
+      const custodyChanged = (entry: typeof current) => {
+        const identity = recordedScopeProcess(entry?.structuredHost);
+        return !entry || !identity || !sameRecordedProcessIdentity(identity, expected)
+          || !sameAgentScope(recordedAgentScope(entry.structuredHost), scope)
+          || entry.claimOwner !== observed.claimOwner || entry.claimEpoch !== observed.claimEpoch
+          || entry.structuredHost?.writerClaimEpoch !== observed.structuredHost?.writerClaimEpoch;
+      };
+      const changed = { status: "changed" as const, reason: "already-exited host custody was cleared or replaced" };
+      if (!current || !process || custodyChanged(current)) {
+        // Another owner may have finished cleanup or installed a successor.
+        // Neither grants this sweep authority to mutate the current row.
+        return changed;
+      }
+      if (processStatus(process) !== "dead") return { status: "failed", reason: "host exit can no longer be verified" };
+      const retained = current.structuredTerminationSurvivors ?? [];
+      if (retained.some(identity => processIdentityStatus(identity) !== "dead")) {
+        return { status: "failed", reason: "retained descendant is alive or its exit cannot be verified" };
+      }
+      const retired = registry.terminateStructuredHost(observed.key, expected, retained, {
+        process: expected, claimOwner: observed.claimOwner, claimEpoch: observed.claimEpoch,
+        writerClaimEpoch: observed.structuredHost?.writerClaimEpoch ?? null,
+      }, scope);
+      if (retired) return { status: "gone" };
+      // Another writer can win after our read and before the registry CAS.
+      // A lost CAS proves no cleanup failure until its current custody is read.
+      if (custodyChanged(registry.hostEntry(observed.key))) return changed;
+      return { status: "failed", reason: "registry retirement refused retained custody" };
+    });
+  });
 
   const report: StructuredHostRetirementReport = {
     version: 1,
@@ -1193,8 +1375,10 @@ export async function runStructuredHostRetirementSweep(
     retired: [],
     refused: [],
     refusedByFlag: {},
+    liveRefused: { count: 0, byClause: {} },
     failed: [],
     reclaimed: { rssBytes: 0, swapBytes: 0, processes: 0 },
+    gone: [],
   };
 
   const publication = publicationState();
@@ -1209,36 +1393,120 @@ export async function runStructuredHostRetirementSweep(
     return report;
   }
 
-  const planned = retirementInputs(sources, startedAtMs);
-  const candidates = retirementCandidates(planned.file);
+  const file = snapshot();
+  const all = retirementCandidates(file);
+  const beforeKey = (dependencies.readCursor ?? readRetirementCursor)();
+  const next = beforeKey === null ? 0 : all.findIndex(entry => sessionKeyId(entry.key) > beforeKey);
+  const start = next < 0 ? 0 : next;
+  const count = Math.min(all.length, RESOURCE_STRUCTURED_HOST_LIMIT);
+  const candidates = Array.from({ length: count }, (_, index) => all[(start + index) % all.length]!);
+  const planned = retirementInputs({ ...sources, snapshot: () => file }, startedAtMs, candidates.map(entry => sessionKeyId(entry.key)));
   report.evaluated = candidates.length;
 
   const qualified: StructuredHostRetirementSubject[] = [];
-  for (const entry of candidates) {
+  const goneCandidates: typeof candidates = [];
+  let continuationCount = candidates.length;
+  for (const [index, entry] of candidates.entries()) {
+    const publication = publicationState();
+    if (publication !== "ready") {
+      report.standDown = publication;
+      continuationCount = Math.min(continuationCount, index);
+      break;
+    }
+    const process = recordedScopeProcess(entry.structuredHost)!;
+    const alive = pidAlive(process.pid);
+    const identity = processStatus(process, alive);
+    if (identity === "dead") {
+      // Gone identities reconcile before live-work clauses. This path never
+      // enters runtime release, native release or a signal ladder.
+      goneCandidates.push(entry);
+      continue;
+    }
     const subject = retirementSubject(entry, planned, readers);
+    if (!alive.determined) {
+      refuse(report, subject, { retire: false, clause: "process-identity", reason: alive.why, undetermined: true }, false);
+      continue;
+    }
     const verdict = structuredHostRetirementVerdict(subject, { now: startedAtMs, idleMs });
     if (!verdict.retire) {
-      refuse(report, subject, verdict, false);
+      refuse(report, subject, verdict, false, identity === "alive");
       continue;
     }
     if (qualified.length >= batch) {
       report.deferred += 1;
+      // These hosts qualified but were never admitted to an attempt. Keep the
+      // checkpoint before the first one, even if the admitted batch all refuses.
+      continuationCount = Math.min(continuationCount, index);
       continue;
     }
     qualified.push(subject);
   }
 
+  const visited = new Set(candidates.slice(0, continuationCount).map(entry => sessionKeyId(entry.key)));
+  const unvisited = all.filter(entry => !visited.has(sessionKeyId(entry.key)));
+  const oldest = unvisited.reduce<typeof unvisited[number] | null>((oldest, entry) =>
+    oldest === null || entry.updatedAt < oldest.updatedAt ? entry : oldest, null);
+  const afterKey = continuationCount ? sessionKeyId(candidates[continuationCount - 1]!.key) : all.length ? beforeKey : null;
+  report.progress = { beforeKey, afterKey, wrapped: beforeKey !== null && (next < 0 || start + continuationCount > all.length),
+    candidates: all.length, unvisited: unvisited.length,
+    oldestUnvisited: oldest ? { key: sessionKeyId(oldest.key), updatedAt: oldest.updatedAt } : null };
+
+  // Persist the attempted-work boundary before the first admission/termination
+  // await. A failed write aborts visibly; restart resumes before deferred work.
+  (dependencies.writeCursor ?? ((afterKey) => {
+    const cursor = { version: 1, afterKey };
+    parseRetirementCursor(cursor);
+    atomicWrite(CURSOR_FILE(), cursor);
+  }))(afterKey);
+
+  const reconcileGoneAndReport = async (entry: RegistryFile["entries"][string], conversationId: string | null) => {
+    const process = recordedScopeProcess(entry.structuredHost)!;
+    const key = sessionKeyId(entry.key);
+    try {
+      const outcome = await reconcileGone(entry);
+      if (outcome.status === "gone") report.gone!.push({ key, conversationId, process });
+      else if (outcome.status === "changed") report.refused.push({ key, conversationId,
+        clause: "process-identity", reason: outcome.reason, changed: true });
+      else report.failed.push({ key, conversationId,
+        error: `host already exited; cleanup failed: ${outcome.reason}`, remaining: [] });
+    } catch (error) {
+      report.failed.push({ key, conversationId, error: `host already exited; cleanup failed: ${safeReason(error)}`, remaining: [] });
+    }
+  };
+  for (const entry of goneCandidates) {
+    const publication = publicationState();
+    if (publication !== "ready") { report.standDown = publication; break; }
+    const key = sessionKeyId(entry.key);
+    await reconcileGoneAndReport(entry, planned.conversationsBySession.get(key)?.id ?? null);
+  }
+
   let parents: Map<number, number> | null = null;
   for (const planning of qualified) {
+    const publication = publicationState();
+    if (publication !== "ready") { report.standDown = publication; break; }
+    // Kernel PSS accounting may be slow. Do it off the event loop and re-prove
+    // every live fact after the await, before handing any authority to a stop.
+    parents ??= ppids();
+    const tree = descendantPids(planning.process.pid, parents);
+    const measured = memoryOf(tree);
+    const pss = await withViewerOperation("hosts.retirement", () => measurePss(tree));
+    const afterMeasurement = publicationState();
+    if (afterMeasurement !== "ready") { report.standDown = afterMeasurement; break; }
     /* The re-check. Everything durable is re-read, and so is every fact that
        lives on the machine rather than in the registry: an earlier termination
        in this same sweep may have taken a grace ladder, and the checks that
        admitted this host are that much older than the signal about to be sent
        (the race `structuredHostKillRefusal` exists for on the interactive
        path). A row that vanished in the meantime is nothing to retire. */
-    const current = retirementInputs(sources, now());
+    const current = retirementInputs(sources, now(), [planning.keyId]);
     const fresh = current.file.entries[planning.keyId] ?? null;
-    if (fresh === null || !fresh.structuredHost?.process) {
+    const freshProcess = recordedScopeProcess(fresh?.structuredHost);
+    const observed = file.entries[planning.keyId]!;
+    if (fresh === null || !freshProcess
+      || !sameRecordedProcessIdentity(freshProcess, planning.process)
+      || !sameAgentScope(recordedAgentScope(fresh.structuredHost), planning.scope ?? null)
+      || (planning.scope && (fresh.claimEpoch !== observed.claimEpoch || fresh.claimOwner !== observed.claimOwner
+        || fresh.structuredHost?.writerClaimEpoch !== observed.structuredHost?.writerClaimEpoch))) {
       report.refused.push({
         key: planning.keyId,
         conversationId: planning.conversationId,
@@ -1248,10 +1516,16 @@ export async function runStructuredHostRetirementSweep(
       });
       continue;
     }
+    // Planning may have observed a live host before the asynchronous memory
+    // read. Its disappearance cannot admit a scope stop or a native release.
+    if (processStatus(freshProcess) === "dead") {
+      await reconcileGoneAndReport(fresh, planning.conversationId);
+      continue;
+    }
     const subject = retirementSubject(fresh, current, readers);
     const verdict = structuredHostRetirementVerdict(subject, { now: now(), idleMs });
     if (!verdict.retire) {
-      refuse(report, subject, verdict, true);
+      refuse(report, subject, verdict, true, processStatus(subject.process) === "alive");
       continue;
     }
     const hostProcess = subject.process;
@@ -1259,9 +1533,6 @@ export async function runStructuredHostRetirementSweep(
 
     /* Measured before anything is signalled: a tree that is already gone
        reports nothing, and a reclaim claimed after the kill would be zero. */
-    parents ??= ppids();
-    const tree = descendantPids(hostProcess.pid, parents);
-    const measured = memoryOf(tree);
     const reclaimed: StructuredHostRetirementReclaim = { rssBytes: 0, swapBytes: 0, processes: measured.size };
     for (const usage of measured.values()) {
       reclaimed.rssBytes += usage.rssBytes;
@@ -1289,15 +1560,29 @@ export async function runStructuredHostRetirementSweep(
     try {
       outcome = await terminate(ref);
     } catch (error) {
-      report.failed.push({ key: subject.keyId, conversationId: subject.conversationId, error: String(error), remaining: [] });
+      const reason = safeReason(error);
+      report.failed.push({ key: subject.keyId, conversationId: subject.conversationId,
+        error: processStatus(hostProcess) === "dead" ? `host already exited; cleanup failed: ${reason}` : reason, remaining: [] });
       continue;
     }
     if (!outcome.ok) {
+      // The host can finish while termination awaits its runtime or writer.
+      // Reconcile only a tree with no unresolved members; the gone path must
+      // still prove scope collection and current registry custody itself.
+      const exited = processStatus(hostProcess) === "dead";
+      const staleIdentityRefusal = outcome.status === 409 && outcome.stale === true;
+      const registryCasRefusal = outcome.status === 409
+        && outcome.error === "structured host changed before registry retirement";
+      if ((staleIdentityRefusal || registryCasRefusal)
+        && outcome.remaining.length === 0 && outcome.survivors.length === 0 && exited) {
+        await reconcileGoneAndReport(fresh, subject.conversationId);
+        continue;
+      }
       /* Either the host is retired and its descendants are collected, or the
          attempt is abandoned and the host left intact. The ladder keeps the
          registry row for anything it could not finish, so nothing here is
          half-retired. */
-      report.failed.push({ key: subject.keyId, conversationId: subject.conversationId, error: outcome.error, remaining: outcome.remaining });
+      report.failed.push({ key: subject.keyId, conversationId: subject.conversationId, error: exited ? `host already exited; cleanup failed: ${outcome.error}` : outcome.error, remaining: outcome.remaining });
       continue;
     }
     report.retired.push({
@@ -1315,6 +1600,7 @@ export async function runStructuredHostRetirementSweep(
       via: outcome.via,
       pids: outcome.pids,
       reclaimed,
+      pss,
     });
     report.reclaimed.rssBytes += reclaimed.rssBytes;
     report.reclaimed.swapBytes += reclaimed.swapBytes;
@@ -1378,7 +1664,15 @@ export function startStructuredHostRetirement(ports: {
   if (retirementHost.__llvStructuredHostRetirementTimer) return;
   const schedule = ports.scheduleInterval ?? ((callback, delayMs) => setInterval(callback, delayMs));
   const sweep = ports.sweep ?? (() => reconcileStructuredHostRetirement());
-  const timer = schedule(() => { void withViewerOperation("hosts.retirement", sweep); }, ports.intervalMs ?? STRUCTURED_HOST_RETIREMENT_INTERVAL_MS);
+  let running = false;
+  const timer = schedule(() => {
+    if (running) return;
+    running = true;
+    void withViewerOperation("hosts.retirement", async () => {
+      try { await sweep(); }
+      finally { running = false; }
+    }).catch(error => console.error("[host retirement] sweep failed", error));
+  }, ports.intervalMs ?? STRUCTURED_HOST_RETIREMENT_INTERVAL_MS);
   timer.unref?.();
   retirementHost.__llvStructuredHostRetirementTimer = timer;
 }

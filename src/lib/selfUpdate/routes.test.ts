@@ -3,6 +3,8 @@ import os from "node:os";
 import { POST as updatePost } from "@/app/api/self-update/update/route";
 import { POST as deployPost } from "@/app/api/runtime/deployments/route";
 import { ledgerDeployment } from "@/lib/runtime/deploymentLedger";
+import { compactDeployment } from "@/lib/mcp/compactAnswers";
+import { viewerDeploymentPage, viewerDeploymentSummary } from "@/lib/runtime/contracts";
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -18,6 +20,7 @@ import { requestViewerDeployment, setDeploymentRuntimeForTests } from "@/lib/run
 
 import { installAction, launcherService, runInstallAction, unitRunsLauncher } from "./actions";
 import { checkoutDeployments, saveCheckoutDeployment } from "./deployments";
+import * as deploymentAdmission from "./deploymentAdmission";
 import { initialAuto, writeAuto } from "./auto";
 import { GreenReader, type GreenVerdict } from "./green";
 import { buildEnv } from "./env";
@@ -909,8 +912,16 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
     const response = await deployPost(post("/runtime/deployments", { revision: firstSha, idempotencyKey: "already-serving" }));
     expect(response.status).toBe(202);
-    expect(JSON.parse(readFileSync(join(h.deps.dir, "deployments.json"), "utf8"))[0]).toMatchObject({ phase: "succeeded", terminal: true });
+    expect(JSON.parse(readFileSync(join(h.deps.dir, "deployments.json"), "utf8"))[0]).toMatchObject({ phase: "succeeded", terminal: true,
+      servingProgress: "Already serving the requested revision; nothing was restarted." });
     expect(existsSync(join(h.deps.dir, "apply.json"))).toBe(false); expect(existsSync(record.requestFile)).toBe(false);
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const status = checkoutDeployments(h.deps.dir)[0]!;
+    const notice = "Already serving the requested revision; nothing was restarted.";
+    expect(status.servingProgress).toBe(notice);
+    expect(compactDeployment(status)).toMatchObject({ servingProgress: notice });
+    expect(viewerDeploymentSummary(status)).toMatchObject({ servingProgress: notice });
+    expect(viewerDeploymentPage([status], 1, null, true).deployments[0]).toMatchObject({ servingProgress: notice });
   });
 
   test.each(["missing", "done"] as const)("cold exact deployment reconciles a receipt with %s apply persistence", async completion => {
@@ -965,6 +976,123 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     const ledgerFile = join(h.deps.dir, "deployments.json");
     expect(existsSync(ledgerFile) ? JSON.parse(readFileSync(ledgerFile, "utf8")) : []).toEqual([]);
     h.releaseBuild?.(); await until(next => next.update.steps.some(step => step.name === "switch"));
+  });
+
+  test.each([false, true])("attributable exact deployment rechecks authority after green lookup (revoked: %s)", async revoked => {
+    const h = harness({ holdBuild: true });
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8")); record.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    let releaseGreen!: (value: GreenVerdict) => void; let entered!: () => void; let greenReady = false;
+    const reading = new Promise<void>(resolve => { entered = resolve; });
+    h.deps.green = { read: () => { entered(); return greenReady ? Promise.resolve({ state: "green" })
+      : new Promise<GreenVerdict>(resolve => { releaseGreen = resolve; }); } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    await postCheck(post("/check")); await until(next => next.check.state === "update-available");
+    let allowed = true;
+    const attempt = h.service.deployRevision({ revision: tipSha, idempotencyKey: `attributable-${revoked}` },
+      () => { if (!allowed) throw new Error("proactive deployment authority revoked"); });
+    const observed = attempt.then(value => ({ value, error: null }), error => ({ value: null, error: error as Error }));
+    await reading;
+    allowed = !revoked;
+    greenReady = true;
+    releaseGreen({ state: "green" });
+    const result = await observed;
+    if (revoked) {
+      expect(result.error?.message).toBe("proactive deployment authority revoked");
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+      expect(existsSync(record.requestFile)).toBe(false);
+      allowed = true;
+      expect(await h.service.deployRevision({ revision: tipSha, idempotencyKey: `attributable-${revoked}` },
+        () => { if (!allowed) throw new Error("proactive deployment authority revoked"); }))
+        .toMatchObject({ state: "accepted", revision: tipSha });
+    } else {
+      expect(result.value).toMatchObject({ state: "accepted", revision: tipSha });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+    }
+    await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
+    await until(() => existsSync(record.requestFile));
+  });
+
+  test("checkout reconciliation closes a key during green lookup before a delayed POST can admit", async () => {
+    const h = harness({ holdBuild: true });
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8")); record.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    const entered = Promise.withResolvers<void>(), held = Promise.withResolvers<GreenVerdict>();
+    h.deps.green = { read: () => { entered.resolve(); return held.promise; } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    await postCheck(post("/check")); await until(next => next.check.state === "update-available");
+    const request = { revision: tipSha, idempotencyKey: "checkout-fenced-key" };
+    const attempt = deployPost(post("/runtime/deployments", request));
+    try {
+      await entered.promise;
+      const reconciliation = await deployPost(post("/runtime/deployments", { ...request, reconcileOnly: true }));
+      expect(reconciliation.status).toBe(409);
+      expect(await reconciliation.json()).toMatchObject({ code: "deploy_not_admitted", outcome: "not-executed", evidence: "not-admitted" });
+      held.resolve({ state: "green" });
+      expect(await (await attempt).json()).toMatchObject({ code: "deploy_not_admitted" });
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+      expect(existsSync(record.requestFile)).toBe(false);
+      h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+      expect(await (await deployPost(post("/runtime/deployments", request))).json()).toMatchObject({ code: "deploy_not_admitted" });
+      expect(await (await deployPost(post("/runtime/deployments", { ...request, revision: firstSha, reconcileOnly: true }))).json()).toMatchObject({ error: "idempotency-conflict" });
+      const child = Bun.spawn([process.execPath, "-e", `
+        import { SelfUpdateService } from "./src/lib/selfUpdate/service";
+        import { productionDeps } from "./src/lib/selfUpdate/instance";
+        const service = new SelfUpdateService({ ...productionDeps(), dir: process.argv[1],
+          mode: async () => { throw Error("closed keys must not reach launcher reads"); } });
+        try {
+          await service.deployRevision(JSON.parse(process.argv[2]));
+          console.log("unexpected admission");
+        } catch (error) { console.log(error.code); }
+        finally { service.stop(); }
+      `, h.deps.dir, JSON.stringify(request)], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+      const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect({ code, stderr, answer: stdout.trim() }).toEqual({ code: 0, stderr: "", answer: "deploy_not_admitted" });
+    } finally { held.resolve({ state: "green" }); await attempt; }
+  });
+
+  test("HTTP proactive deployment retains its authority check through the service's green wait", async () => {
+    const h = harness({ holdBuild: true });
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8")); record.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    let releaseGreen!: (value: GreenVerdict) => void; let entered!: () => void; let greenReady = false;
+    const reading = new Promise<void>(resolve => { entered = resolve; });
+    h.deps.green = { read: () => { entered(); return greenReady ? Promise.resolve({ state: "green" })
+      : new Promise<GreenVerdict>(resolve => { releaseGreen = resolve; }); } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    await postCheck(post("/check")); await until(next => next.check.state === "update-available");
+    const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+    const { candidate, context, authority } = await import("@/lib/tasks/proactive.fixture");
+    const { agentRegistry } = await import("@/lib/agent/registry");
+    const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+    const project = "proactive-http-deploy";
+    const { task } = await admitProactiveTask({ ...candidate("http-deploy"), project }, { ...context(), project }, undefined, authority());
+    const decide = (decision: "adopt" | "reject") => decideProactiveTask(task.id, decision, "operator", proactiveDecisionToken(task));
+    await decide("adopt");
+    const registry = agentRegistry();
+    const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: checkout, taskIds: [task.id], origin: { kind: "operator" } });
+    if (begun.kind !== "created") throw new Error("expected a fresh launch");
+    const capability = registry.rotateSpawnCapabilityForReceipt(begun.receipt.launchId);
+    const request = () => {
+      const value = post("/runtime/deployments", { revision: tipSha, idempotencyKey: "proactive-http-green-wait" });
+      value.headers.set(VIEWER_SPAWN_CAPABILITY_HEADER, capability);
+      return value;
+    };
+    try {
+      const response = deployPost(request());
+      await Promise.race([reading, response.then(async result => { throw new Error(`HTTP completed before green (${result.status}): ${await result.text()}`); })]);
+      await decide("reject"); greenReady = true; releaseGreen({ state: "green" });
+      expect((await response).status).toBe(403);
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+      await decide("adopt");
+      expect((await deployPost(request())).status).toBe(202);
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+      await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
+      await until(() => existsSync(record.requestFile));
+    } finally {
+      registry.failStructuredSpawn(begun.receipt.launchId, "fixture completed before dispatch", { announce: false });
+      greenReady = true; releaseGreen?.({ state: "green" });
+    }
   });
 
   /* A launcher started in a multiplexer pane sits in that unit's cgroup.
@@ -1025,8 +1153,22 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), revisionNumber: 1,
     });
     const joinKey = `same-sha-join-${proof.replace(" ", "-")}`;
-    expect(await h.service.deployRevision({ revision: tipSha, idempotencyKey: joinKey }))
-      .toMatchObject({ state: "accepted", deploymentId, revision: tipSha, replayed: false });
+    const originalAdmission = deploymentAdmission.checkoutAdmission;
+    let admissionCalls = 0;
+    const hook = spyOn(deploymentAdmission, "checkoutAdmission").mockImplementation((directory, request, authorize, admit) => {
+      if (request.idempotencyKey !== joinKey || ++admissionCalls !== 2) return originalAdmission(directory, request, authorize, admit);
+      return originalAdmission(directory, request, () => {
+        authorize?.();
+        const current = checkoutDeployments(directory).find(row => row.deploymentId === deploymentId)!;
+        saveCheckoutDeployment(directory, { ...current, phase: "post-promotion-health", servingProgress: "waiting for readiness", revisionNumber: 2 });
+      }, admit);
+    });
+    try {
+      expect(await h.service.deployRevision({ revision: tipSha, idempotencyKey: joinKey }))
+        .toMatchObject({ state: "accepted", deploymentId, revision: tipSha, replayed: false });
+      expect(checkoutDeployments(h.deps.dir).find(row => row.deploymentId === deploymentId))
+        .toMatchObject({ phase: "post-promotion-health", servingProgress: "waiting for readiness", revisionNumber: 2 });
+    } finally { hook.mockRestore(); }
     expect(await h.service.deployRevision({ revision: "b".repeat(40), idempotencyKey: `different-sha-${proof.replace(" ", "-")}` }))
       .toMatchObject({ state: "busy", deploymentId });
     const joined = checkoutDeployments(h.deps.dir).find(row => row.deploymentId === deploymentId)!;

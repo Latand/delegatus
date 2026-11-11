@@ -31,5 +31,8 @@ export function acceptsGzip(request: Request): boolean {
 /** Compress on the zlib thread pool, so a large body never blocks the
     request thread while it compresses. */
 export async function gzipBody(body: string | Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await gzipAsync(body, { level: 6 }));
+  // Large projections otherwise need hundreds of 16 KiB output callbacks.
+  // A busy serving loop delays every callback even while zlib runs off-thread.
+  const chunkSize = body.length >= 1024 * 1024 ? 1024 * 1024 : 16 * 1024;
+  return new Uint8Array(await gzipAsync(body, { level: 6, chunkSize }));
 }

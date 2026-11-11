@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,23 +9,26 @@ import { statePath } from "@/lib/configDir";
 import { claudeProjectRoots } from "@/lib/accounts/claude";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import type { ExternalRelayRequester, ExternalRelayRequest } from "./protocol";
-import { externalRelayFile, withFileLock, withFileLockAsync, writeRelayFile, type PairedRelay, type RelayTargetSettings, type RunRecord } from "./store";
+import { externalRelayFile, runHoldsConversation, withFileLock, withFileLockAsync, writeRelayFile, type PairedRelay, type RelayTargetSettings, type RunRecord } from "./store";
+import { relayRequestInFlight } from "./activity";
 export type ConversationAuthority = "member" | "admin" | "owner" | "owner-tier";
 export type RelayConversation = {
   id: string; relayId: string; targetId: string; chatKey: string; requesterKey: string; authority: ConversationAuthority; anchors: string[]; conversationId: string | null;
   engine: "claude" | "codex"; sessionId: string | null; accountId: string | null; cwd: string | null;
   turns: number; turnsSinceCompaction: number; createdAt: string; lastTurnAt: string;
   seen: string[]; staticDigest: string | null; lastPromptTokens: number | null; compactions: number;
+  /** Latest accepted owner answer, bound to the native conversation that produced it. */
+  answerWitness?: { conversationId: string; inReplyTo: string; textSha256: string };
   pendingCursor?: { operationId: string; seen: string[]; staticDigest: string };
   state: "idle" | "running" | "broken"; runningRequestId: string | null;
 };
 const file = () => statePath("external-relay/conversations.json");
 type ConversationCacheEntry = { size: number; mtimeMs: number; ino: number; rows: RelayConversation[]; scopes: Map<string, RelayConversation[]> };
 const cacheHost = globalThis as typeof globalThis & { __llvRelayConversationCache?: Map<string, ConversationCacheEntry> };
-const conversationCache = cacheHost.__llvRelayConversationCache ??= new Map<string, ConversationCacheEntry>();
+const conversationCache = cacheHost.__llvRelayConversationCache ??= new MeasuredCache<string, ConversationCacheEntry>("conversations", "externalRelay/conversations");
 type RunLedgerCacheEntry = { size: number; mtimeMs: number; ino: number; runs: RunRecord[] };
 const runCacheHost = globalThis as typeof globalThis & { __llvRelayRunLedgerCache?: Map<string, RunLedgerCacheEntry> };
-const runLedgerCache = runCacheHost.__llvRelayRunLedgerCache ??= new Map<string, RunLedgerCacheEntry>();
+const runLedgerCache = runCacheHost.__llvRelayRunLedgerCache ??= new MeasuredCache<string, RunLedgerCacheEntry>("run-ledgers", "externalRelay/conversations");
 function sameFileVersion(left: Pick<fs.Stats, "size" | "mtimeMs" | "ino">, right: Pick<fs.Stats, "size" | "mtimeMs" | "ino">): boolean {
   return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ino === right.ino;
 }
@@ -168,6 +172,9 @@ function rowsFromValue(input: unknown, migrate = false): RelayConversation[] {
     version === 2 && (typeof r.requesterKey !== "string" || !["member", "admin", "owner", "owner-tier"].includes(r.authority) ||
       !Array.isArray(r.anchors) || r.anchors.length > 200 || r.seen.length > 200 ||
       [...r.anchors, ...r.seen].some(id => typeof id !== "string") ||
+      r.answerWitness !== undefined && (!r.answerWitness || typeof r.answerWitness.conversationId !== "string" ||
+        typeof r.answerWitness.inReplyTo !== "string" || typeof r.answerWitness.textSha256 !== "string" ||
+        !/^[a-f0-9]{64}$/.test(r.answerWitness.textSha256)) ||
       r.pendingCursor !== undefined && (!r.pendingCursor || typeof r.pendingCursor.operationId !== "string" ||
         !Array.isArray(r.pendingCursor.seen) || r.pendingCursor.seen.length > 200 ||
         r.pendingCursor.seen.some(id => typeof id !== "string") || typeof r.pendingCursor.staticDigest !== "string"));
@@ -242,7 +249,7 @@ async function freshAsync(record: RelayConversation) {
   resetConversationFields(record);
 }
 function resetConversationFields(record: RelayConversation) {
-  Object.assign(record, { conversationId: null, sessionId: null, seen: [], staticDigest: null, turnsSinceCompaction: 0, lastPromptTokens: null, state: "idle", runningRequestId: null });
+  Object.assign(record, { conversationId: null, sessionId: null, seen: [], staticDigest: null, answerWitness: undefined, turnsSinceCompaction: 0, lastPromptTokens: null, state: "idle", runningRequestId: null });
 }
 const capIds = (ids: string[]) => [...new Set(ids)].slice(-200);
 function scopedChat(row: RelayConversation, relay: PairedRelay, target: RelayTargetSettings, request: ExternalRelayRequest) {
@@ -396,10 +403,10 @@ export async function reserveChainConversationAsync(relay: PairedRelay, target: 
 export function releaseConversation(id: string, patch: Partial<RelayConversation> = {}) {
   change((rows) => { const record = rows.find((r) => r.id === id); if (record) Object.assign(record, { state: "idle", runningRequestId: null }, patch); });
 }
-export async function releaseConversationAsync(id: string, patch: Partial<RelayConversation>, until: number): Promise<void> {
+export async function releaseConversationAsync(id: string, patch: Partial<RelayConversation>, until: number, requestId?: string): Promise<void> {
   await changeAsync(rows => {
     const record = rows.find(r => r.id === id);
-    if (!record) return false;
+    if (!record || requestId !== undefined && record.runningRequestId !== requestId) return false;
     const before = JSON.stringify(record);
     Object.assign(record, { state: "idle", runningRequestId: null }, patch);
     return before !== JSON.stringify(record);
@@ -486,8 +493,12 @@ export async function sweepConversationsAsync(relays: PairedRelay[], now: number
       if (onlyRelayId && record.relayId !== onlyRelayId) continue;
       const relay = relays.find(item => item.id === record.relayId);
       const target = relay?.targets.find(item => item.id === record.targetId);
-      if (record.state === "running" && !runs.some(run => run.requestId === record.runningRequestId)) {
-        record.state = "idle"; record.runningRequestId = null; changed = true;
+      const run = runs.find(run => run.requestId === record.runningRequestId);
+      if (record.state === "running" && (!run || !runHoldsConversation(run) && (run.ownerTurn?.quarantinedAt || !relayRequestInFlight(run.requestId)))) {
+        // Quarantine leaves uncertain delivery in the run ledger. Its cursor
+        // must stop reserving this chain so the next turn starts fresh.
+        if (run?.ownerTurn?.quarantinedAt) delete record.pendingCursor;
+        record.state = run?.ownerTurn?.quarantinedAt ? "broken" : "idle"; record.runningRequestId = null; changed = true;
       }
       if (record.state === "running") continue;
       const expired = record.relayId === removeRelayId || !target || (target.engine === "codex-cloud" ? "codex" : target.engine) !== record.engine ||
@@ -501,7 +512,11 @@ function sweepAction(relays: PairedRelay[], runs: RunRecord[], now: number, remo
   return (rows: RelayConversation[]) => {
     for (let i = rows.length - 1; i >= 0; i--) {
       const record = rows[i]!; if (onlyRelayId && record.relayId !== onlyRelayId) continue; const relay = relays.find((r) => r.id === record.relayId); const target = relay?.targets.find((t) => t.id === record.targetId);
-      if (record.state === "running" && !runs.some((r) => r.requestId === record.runningRequestId)) { record.state = "idle"; record.runningRequestId = null; }
+      const run = runs.find(run => run.requestId === record.runningRequestId);
+      if (record.state === "running" && (!run || !runHoldsConversation(run) && (run.ownerTurn?.quarantinedAt || !relayRequestInFlight(run.requestId)))) {
+        if (run?.ownerTurn?.quarantinedAt) delete record.pendingCursor;
+        record.state = run?.ownerTurn?.quarantinedAt ? "broken" : "idle"; record.runningRequestId = null;
+      }
       if (record.state === "running") continue;
       if (record.relayId === removeRelayId || !target || (target.engine === "codex-cloud" ? "codex" : target.engine) !== record.engine || now - Date.parse(record.lastTurnAt) > 3 * 86400000 || sizes && transcriptBytes(record) > 32 * 1024 * 1024) {
         deleteConversationFiles(record); rows.splice(i, 1);

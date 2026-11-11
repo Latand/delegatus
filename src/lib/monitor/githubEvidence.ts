@@ -3,7 +3,8 @@ import { promisify } from "node:util";
 
 import { forgeAppWriter, type ForgeAppWriter } from "@/lib/forge/appWrite";
 import { isForgeAppRepository } from "@/lib/git/agentForgeCredentials";
-import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
+import { githubRepositoryOfRemote, type ProposalIssue } from "@/lib/forge/workLinks";
+export type { ProposalIssue } from "@/lib/forge/workLinks";
 
 import { productionPorts, readGhApiArgs } from "../../../bin/forge-app-token.mjs";
 
@@ -98,7 +99,14 @@ export function githubRunner(cwd: string, timeoutMs: number, options: GithubRunn
   const declared = options.declared ?? isForgeAppRepository;
   return async (args) => {
     const target = await readRepository(args, cwd);
-    return target && declared(target.repository) ? asApp(target.args, target.repository) : exec(args);
+    try {
+      return await (target && declared(target.repository) ? asApp(target.args, target.repository) : exec(args));
+    } catch (error) {
+      // Preserve the runner budget alongside execFile diagnostics for callers
+      // that persist a bounded failure reason. Both credential paths use it.
+      if (error instanceof Error) Object.assign(error, { timeoutMs });
+      throw error;
+    }
   };
 }
 
@@ -152,13 +160,6 @@ export function githubEvidenceSource(options: GithubEvidenceOptions): () => Prom
  *
  * Nothing here ever creates an issue.
  * ------------------------------------------------------------------------- */
-
-export interface ProposalIssue {
-  number: number;
-  title: string;
-  labels: string[];
-  updatedAt: string | null;
-}
 
 const PROPOSAL_TITLE_LIMIT = 200;
 

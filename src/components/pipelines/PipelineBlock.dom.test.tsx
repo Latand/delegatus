@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import type { Root } from "react-dom/client";
 
+import { cpuQueueDetail } from "@/lib/runtime/cpuQueueText";
 import { laneRouteKey } from "@/lib/attention/routeTypes";
 import type { FilesWorkLinks, ResolvedWorkLinks, WorkLink } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -40,6 +41,7 @@ const { summarizePipeline } = await import("@/components/kanban/kanbanModel");
 const { WorkLinksProvider } = await import("@/components/workLinks/workLinksContext");
 const { setLocale, translate } = await import("@/lib/i18n");
 const { stageNames } = await import("./pipelineModel");
+const { pipelineProgress } = await import("@/components/kanban/PipelineSection");
 
 const roots: Root[] = [];
 afterEach(() => {
@@ -196,7 +198,7 @@ test("the column-balance reader finds every stage pill through its current name 
 });
 
 test.each(["card", "task"] as const)("CPU waiting preserves %s work links and stage controls", density => {
-  const pipeline = searchPipeline({ stateDetail: "Waiting for the CPU queue · 2nd · up to 7 min" });
+  const pipeline = searchPipeline({ stateDetail: cpuQueueDetail(2, 7 * 60_000) });
   for (const lang of ["en", "uk"] as const) {
     setLocale(lang);
     const opened: string[] = [];
@@ -401,10 +403,10 @@ test("the stage chain is the lane's head where the card's ⋯ holds its actions;
   const opened: string[] = [];
   const menus: string[] = [];
   const summary = summarizePipeline(searchPipeline());
-  const chain = mount(<PipelineBlock summary={summary} density="task" nowMs={NOW_MS} taskTitle="Restore search results after the index rebuild" onOpenStage={() => {}} onToggleGraph={() => {}} onOpenStages={(pipeline) => opened.push(pipeline.id)} />);
+  const chain = mount(<PipelineBlock summary={summary} density="task" nowMs={NOW_MS} taskTitle="Restore search results after the index rebuild" onOpenStage={() => {}} onOpenGraph={() => {}} onOpenStages={(pipeline) => opened.push(pipeline.id)} />);
   expect(chain.querySelector(".pb-head")).toBeNull();
   const row = chain.querySelector(".pb-chain")!;
-  /* One row: the pills, then the graph toggle and the age with its chevron,
+  /* One row: the pills, then «Graph» and the age with its chevron,
      which ends the row. */
   expect([...row.children].map((child) => child.className)).toEqual(["pb-pills", "pb-tail"]);
   expect([...row.querySelector(".pb-tail")!.children].map((child) => child.getAttribute("data-graph-toggle") !== null ? "graph" : child.getAttribute("data-open-stages") !== null ? "open" : child.className)).toEqual(["graph", "open"]);
@@ -450,16 +452,20 @@ test("a stop the orchestrator handles takes no amber, and the closed card's chai
   expect(card.querySelector<HTMLElement>(".pblock")?.dataset.seatStop).toBe("1");
 });
 
-test("the graph is the operator's toggle on the task row, and it replaces the chain in place", () => {
-  const toggles: boolean[] = [];
-  const closed = mount(<PipelineBlock summary={summarizePipeline(searchPipeline())} density="task" nowMs={NOW_MS} onOpenStage={() => {}} onToggleGraph={(open) => toggles.push(open)} />);
-  click(closed.querySelector("[data-graph-toggle]"));
-  expect(toggles).toEqual([true]);
-  expect(closed.querySelector(".pb-graph")).toBeNull();
-  const open = mount(<PipelineBlock summary={summarizePipeline(searchPipeline())} density="task" nowMs={NOW_MS} graphOpen onOpenStage={() => {}} onToggleGraph={() => {}} />);
-  expect(open.querySelector("[data-graph-toggle]")?.getAttribute("aria-pressed")).toBe("true");
-  expect(open.querySelector('.pb-graph[data-open="1"]')).toBeTruthy();
-  expect(open.querySelector(".pb-chain")).toBeNull();
+test("«Graph» on the task row opens the pipeline's graph outside the card, and the row keeps its chain (docs/design/task-card-no-inline-conversations.md §3)", () => {
+  const graphs: string[] = [];
+  const row = mount(<PipelineBlock summary={summarizePipeline(searchPipeline())} density="task" nowMs={NOW_MS} onOpenStage={() => {}} onOpenGraph={(pipeline) => graphs.push(pipeline.id)} />);
+  const button = row.querySelector<HTMLElement>("[data-graph-toggle]")!;
+  /* It opens and toggles nothing: no pressed state. */
+  expect(button.hasAttribute("aria-pressed")).toBe(false);
+  click(button);
+  click(button);
+  expect(graphs).toEqual(["p-search", "p-search"]);
+  expect(row.querySelector(".pgraph, [data-graph]")).toBeNull();
+  expect(row.querySelector(".pb-chain .pb-pills")).toBeTruthy();
+  /* With nothing to open it, the row draws no «Graph». */
+  const bare = mount(<PipelineBlock summary={summarizePipeline(searchPipeline())} density="task" nowMs={NOW_MS} onOpenStage={() => {}} />);
+  expect(bare.querySelector("[data-graph-toggle]")).toBeNull();
 });
 
 /* A completed lane whose Implement conversation took more work (#1744): the
@@ -470,7 +476,7 @@ test("a settled stage whose conversation works again says so on its row and its 
     runs: searchPipeline().runs.map((run) => ({ ...run, attempts: run.attempts.map((entry) => ({ ...entry, state: "passed", completedAt: iso(600) })) })),
   } as Partial<Pipeline>);
   const reworked = done.runs.find((run) => run.stageId === "implement")!.attempts[1]!;
-  const summary = summarizePipeline(done, new Map(), new Set([reworked.agentPath!]));
+  const summary = summarizePipeline(done, new Map(), new Map([[reworked.agentPath!, "ordinary"]]));
   for (const lang of ["en", "uk"] as const) {
     setLocale(lang);
     const again = translate(lang, "kanban.graph.workingAgain");
@@ -505,7 +511,7 @@ test("a settled stage whose conversation works again says so on its row and its 
 test("the screen density keeps a reworking passed stage out of the passed fold", () => {
   const lane = searchPipeline();
   const reworked = lane.runs.find((run) => run.stageId === "implement")!.attempts.at(-1)!;
-  const summary = summarizePipeline(lane, new Map(), new Set([reworked.agentPath!]));
+  const summary = summarizePipeline(lane, new Map(), new Map([[reworked.agentPath!, "ordinary"]]));
   expect(summary.views.get("implement")?.rework).toBe(true);
   for (const lang of ["en", "uk"] as const) {
     setLocale(lang);
@@ -597,5 +603,49 @@ test("screen stage rows disclose only the latest attempt memory cap", () => {
       ? `${translate("en", "agentMemory.cap", { size: 8 })} ${translate("en", "agentMemory.clamped", { size: 12 })}`
       : translate("en", "agentMemory.unenforced"));
     expect(host.querySelector('[data-stage="review"] [data-agent-memory-cap]')).toBeNull();
+  }
+});
+
+
+test.each(["en", "uk"] as const)("%s capacity backoff and exhaustion are visible at every lane density", locale => {
+  setLocale(locale);
+  for (const state of ["running", "needs_decision"] as const) for (const density of ["card", "task", "screen"] as const) {
+    const pipeline = searchPipeline({ state });
+    const attempt = pipeline.runs.find(run => run.stageId === "verify")!.attempts.at(-1)!;
+    attempt.state = state;
+    pipeline.stageReports = [{seq:1,at:iso(3000),actor:{kind:"agent",role:"verifier",conversationId:"prior-turn"},
+      stageId:"verify",attempt:1,status:"fail",findings:0,replaces:null,summary:"Prior stage report"}];
+    attempt.providerWait = {
+      condition: { kind: "transient", label: "model at capacity", scope: null, resetLabel: null },
+      text: "Selected model is at capacity. Please try again later.", turnTs: NOW_MS, accountId: null,
+      tries: state === "running" ? 0 : 3, startedAt: iso(0), resumeAt: "2026-09-23T12:01:00.000Z", resetsAt: null,
+    };
+    const host = mount(<PipelineBlock summary={summarizePipeline(pipeline)} density={density} nowMs={NOW_MS} />);
+    const text = host.textContent!.replaceAll("\u00a0", " ").replaceAll("\u2011", "-");
+    const t = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(locale, key, params);
+    expect(pipelineProgress(t, summarizePipeline(pipeline), stage => stage.id)).toContain(locale === "en" ? "Model at capacity" : "Модель перевантажена");
+    expect(text).toContain(locale === "en" ? "Model at capacity" : "Модель перевантажена");
+    expect(text).toContain(state === "running" ? "2026-09-23 12:01 UTC" : locale === "en" ? "retry budget exhausted after 3 tries" : "вичерпано ліміт повторів: 3 спроби");
+    if (state === "running") {
+      expect(host.querySelector('.pb-pill.st-running')).toBeNull();
+      expect(host.querySelector('[data-stage-now]')?.textContent ?? "").not.toMatch(/running|працює/);
+      const header = mount(<PipelineStateLine summary={summarizePipeline(pipeline)} nowMs={NOW_MS} />);
+      expect(header.querySelector('[data-pstate="waiting"]')?.textContent).toBe(locale === "en" ? "Waiting" : "Очікує");
+    }
+  }
+});
+
+
+test("a cancelled capacity retry keeps the ended turn visibly stopped", () => {
+  const pipeline = searchPipeline();
+  pipeline.runs.find(run => run.stageId === "verify")!.attempts.at(-1)!.providerWait = {
+    condition: {kind:"transient",label:"model at capacity",scope:null,resetLabel:null}, text:"capacity", turnTs:NOW_MS,
+    accountId:null, tries:0, startedAt:iso(0), resumeAt:iso(0), resetsAt:null, retryCancelled:true,
+  };
+  for (const density of ["card","task","screen"] as const) {
+    const host = mount(<PipelineBlock summary={summarizePipeline(pipeline)} density={density} nowMs={NOW_MS} />);
+    expect(host.textContent).toContain("Model at capacity · recovery needs a decision");
+    expect(host.textContent).not.toContain("next try");
+    expect(host.querySelector('.st-running, [data-stage-state="running"]')).toBeNull();
   }
 });

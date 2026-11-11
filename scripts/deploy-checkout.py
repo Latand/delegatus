@@ -10,6 +10,7 @@ import select
 import shlex
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,101 @@ import uuid
 
 CPU_SLICE = "delegatus.slice"
 CPU_WEIGHT = "1000"
+
+
+class BaselineReadinessError(RuntimeError):
+    def __init__(self, serving, target):
+        checks = serving.get("checks", {})
+        failed = {name for name in ["http", "runtimeSocket", "mcp", "service"]
+                  if checks.get(name) is not True}
+        # ready() also requires every serving process to report the reviewed
+        # baseline SHA and healthy state. Attribute those failures to the
+        # corresponding public readiness check so the refusal stays useful.
+        for role, name in [("viewer", "http"), ("runtimeHost", "runtimeSocket"), ("launcher", "service")]:
+            process = serving.get(role, {})
+            if process.get("sha") != target or process.get("healthy") is not True:
+                failed.add(name)
+        self.checks = [name for name in ["http", "runtimeSocket", "mcp", "service"] if name in failed]
+        super().__init__("baseline serving health unavailable")
+
+
+def census_environment(state):
+    # The census needs filesystem and interpreter settings only. An allowlist
+    # also excludes credentials whose names do not contain "token" or "secret".
+    allowed = {"PATH", "HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR",
+               "TMPDIR", "TMP", "TEMP", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "TZ",
+               "SYSTEMROOT", "WINDIR", "LD_LIBRARY_PATH"}
+    environment = {key: value for key, value in os.environ.items() if key in allowed}
+    environment["LLV_STATE_DIR"] = str(state)
+    environment["LLV_VIEWER_CONTROL_URL"] = "http://127.0.0.1:1"
+    return environment
+
+
+def protected_host_census(release, bun, state, target, timeout):
+    """One owned child, bounded by the capture's remaining wall-clock allowance."""
+    if not 0 < timeout <= 30:
+        raise RuntimeError("census deadline")
+    deadline = time.monotonic() + timeout
+    child = subprocess.Popen([bun, "--no-env-file", str(release / "scripts/protected-host-census.ts"), target,
+                              str(max(0, int(timeout * 1000)))], cwd=release,
+                             env=census_environment(state), stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+    data = bytearray()
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("census deadline")
+            if not select.select([child.stdout], [], [], remaining)[0]:
+                raise RuntimeError("census deadline")
+            chunk = os.read(child.stdout.fileno(), 65536)
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(data) > 4 * 1024 * 1024:
+                raise RuntimeError("census output oversized")
+        if child.wait(timeout=max(0, deadline - time.monotonic())) != 0:
+            raise RuntimeError("census unavailable")
+        answer = json.loads(data)
+        if (not isinstance(answer, dict) or answer.get("targetRevision") != target
+                or not isinstance(answer.get("conversations"), list)
+                or type(answer.get("registryRevision")) is not int or answer["registryRevision"] < 0
+                or not isinstance(answer.get("observedAt"), str) or not answer["observedAt"]
+                or not isinstance(answer.get("selection"), dict)):
+            raise RuntimeError("census output malformed")
+        selection = answer["selection"]
+        for key in ["matched", "selected", "recoveryPending", "projected", "unreadable"]:
+            if type(selection.get(key)) is not int or selection[key] < 0:
+                raise RuntimeError("census output malformed")
+        if (type(selection.get("recoveryTruncated")) is not bool
+                or selection.get("cacheStatus") not in ["hit", "miss", "pending", "stale"]
+                or type(answer.get("unselectedCount")) is not int or answer["unselectedCount"] < 0
+                or type(answer.get("undescribedHostCount")) is not int or answer["undescribedHostCount"] < 0
+                or selection["selected"] != len(answer["conversations"])):
+            raise RuntimeError("census output malformed")
+        for row in answer["conversations"]:
+            if (not isinstance(row, dict) or "pipeline" not in row
+                    or not isinstance(row.get("host"), dict)):
+                raise RuntimeError("census row malformed")
+            host, pipeline = row["host"], row.get("pipeline")
+            if (host.get("state") not in ["alive", "gone", "unknown"]
+                    or host.get("kind") not in ["structured", "tmux", "headless", "none"]
+                    or (host.get("state") == "alive" and (type(host.get("pid")) is not int or host["pid"] <= 0))
+                    or row.get("turnState") not in ["busy", "idle", "unknown"]
+                    or row.get("evidenceSource") not in ["transcript", "projection", "unreadable"]
+                    or (row.get("conversationId") is not None and not isinstance(row["conversationId"], str))
+                    or (pipeline is not None and (not isinstance(pipeline, dict)
+                        or not all(isinstance(pipeline.get(key), str) and pipeline[key] for key in ["pipelineId", "stageId"])
+                        or type(pipeline.get("attempt")) is not int or pipeline["attempt"] < 1))):
+                raise RuntimeError("census row malformed")
+        return answer
+    finally:
+        # Kill the process group even when the leader exited with a pipe held by
+        # a descendant. Only this child's newly-created session is owned here.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(child.pid, signal.SIGKILL)
+        child.wait()
+        child.stdout.close()
 
 
 class Clock:
@@ -276,16 +372,55 @@ def file_identity(path):
 def obligation_places(directory, pending):
     """Every place a record can be, by what would change if one moved: the
     pending journal and each import claim by file identity, the record
-    directory by its names. A rename, an append, a publication and a deleted
-    claim each change one of them."""
+    directory by its names, or the sealed source by its marker and database
+    identity. A rename, append, publication or deleted claim changes one."""
     try:
         beside = sorted(os.listdir(directory.parent))
     except FileNotFoundError:
         beside = []
     claims = tuple((name, file_identity(directory.parent / name))
                    for name in beside if name.startswith(PENDING_JOURNAL + ".claim-"))
-    names = tuple(sorted(os.listdir(directory))) if os.path.lexists(directory) else ()
+    if directory.is_file():
+        database = directory.parent / "state.sqlite"
+        status = database.stat()
+        names = (file_identity(directory), (status.st_dev, status.st_ino))
+    else:
+        names = tuple(sorted(os.listdir(directory))) if os.path.lexists(directory) else ()
     return file_identity(pending), claims, names
+
+
+def read_sqlite_obligations(directory, unreadable):
+    """Reads the canonical source without migrating, repairing or opening a writer."""
+    try:
+        marker = json.loads(directory.read_text())
+    except (OSError, ValueError) as error:
+        raise OSError("canonical cut source is unreadable") from error
+    try:
+        database = directory.parent / "state.sqlite"
+        status = database.stat()
+        collection = "interruption_obligations:" + directory.name
+        if (not isinstance(marker, dict) or marker.get("format") != "interruption-sqlite-v2"
+                or marker.get("collection") != collection or not isinstance(marker.get("epoch"), str)
+                or marker.get("databaseIdentity") != str(status.st_dev) + ":" + str(status.st_ino)):
+            raise ValueError("incompatible cut source")
+        with contextlib.closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=0)) as db:
+            db.execute("BEGIN")
+            meta = db.execute("SELECT schema_version,migration_id FROM state_collections WHERE collection=?", (collection,)).fetchone()
+            if meta != (2, "interruption-source-v2"):
+                raise ValueError("incomplete cut collection")
+            records = {}
+            for key, payload in db.execute("SELECT row_key,value_json FROM state_rows WHERE collection=? ORDER BY row_order,row_key", (collection,)):
+                try:
+                    record = json.loads(payload)
+                    if not isinstance(record, dict) or record.get("id") != key:
+                        raise ValueError("incompatible cut row")
+                    records[key] = record
+                except (ValueError, TypeError):
+                    unreadable.append(key + ":shape")
+            return records
+    except (OSError, ValueError, sqlite3.Error) as error:
+        unreadable.append(directory.name + ":" + type(error).__name__)
+        return {}
 
 
 def read_obligations(directory, pending, claims):
@@ -294,8 +429,10 @@ def read_obligations(directory, pending, claims):
     read_journal(pending, journaled, unreadable)
     for name in claims:
         read_journal(directory.parent / name, journaled, unreadable)
-    records = {}
-    names = sorted(os.listdir(directory)) if os.path.lexists(directory) else []
+    records = read_sqlite_obligations(directory, unreadable) if directory.is_file() else {}
+    if not directory.is_file() and directory.with_name(directory.name + ".source.json").exists():
+        unreadable.append(directory.name + ":incomplete")
+    names = sorted(os.listdir(directory)) if directory.is_dir() else []
     for name in names:
         if not (name.startswith("interruption-continuation-") and name.endswith(".json")):
             continue
@@ -323,8 +460,10 @@ def interrupted_conversations(state, since, hosts=()):
 
     A record can wait in the pending journal, and an import takes that journal
     by renaming it to a claim beside it, writes its records into the
-    directory, returns the ones the directory refused to the journal and only
-    then deletes the claim. A later import takes over a claim one died holding
+    canonical source, returns refused records to the journal and only then
+    deletes the claim. A sealed SQLite source is read in one read-only snapshot;
+    its marker and database identity join the same journal-movement inventory.
+    Unrelated collection writes cannot invalidate that coherent cut snapshot. A later import takes over a claim one died holding
     by renaming it to a claim of its own. A record can therefore move while it
     is read, so a read counts only when every place it can be is unchanged
     across it. A read that never finds them still is reported as unreadable,
@@ -702,9 +841,11 @@ class Checkout:
 
     def __init__(self, config, run_id=None, *, process_read=proc_field, http=http_read,
                  runtime=socket_health, execute=command, clock=None, mcp_factory=Mcp,
-                 cgroup_root="/sys/fs/cgroup", signal_process=pidfd_signal):
+                 cgroup_root="/sys/fs/cgroup", signal_process=pidfd_signal,
+                 census=protected_host_census):
         self.clock = clock or Clock()
         self.signal_process = signal_process
+        self.census_adapter = census
         self.relocation = None
         self.cgroup_root = pathlib.Path(cgroup_root)
         self.agents = {}
@@ -750,6 +891,9 @@ class Checkout:
     def close(self):
         self.mcp.close()
 
+    def census(self, timeout=30):
+        return self.census_adapter(self.release, self.plan["bun"], self.state, self.target, timeout)
+
     def process(self, entry):
         return read_process(entry, self.process_read)
 
@@ -787,11 +931,13 @@ class Checkout:
         if "KillMode=process" not in properties.splitlines() or "ActiveState=active" not in properties.splitlines() or self.jobs():
             raise RuntimeError("agent preservation or idle service fence unavailable")
         def baseline_ready():
-            if not ready(self.serving(), self.baseline["sha"], placement=False):
-                raise RuntimeError("baseline serving health unavailable")
+            serving = self.serving()
+            if not ready(serving, self.baseline["sha"], placement=False):
+                raise BaselineReadinessError(serving, self.baseline["sha"])
         retry(baseline_ready, self.clock, 30)
+        capture_deadline = self.clock.now() + 30
         def capture():
-            answer = self.mcp.call("agent_activity", {"liveOnly": True, "compact": False, "limit": 200})
+            answer = self.census(max(0, capture_deadline - self.clock.now()))
             return complete_activity(answer)
         rows = retry(capture, self.clock, 30)
         hosts = []
@@ -976,7 +1122,7 @@ class Checkout:
         Each is held as PID and start identity; only these, and processes
         whose parents still reach them, can later be proven leftovers."""
         record = json.loads(self.record_file.read_text())
-        rows = complete_activity(self.mcp.call("agent_activity", {"liveOnly": True, "compact": False, "limit": 200}))
+        rows = complete_activity(self.census())
         for row in rows:
             host = row.get("host") or {}
             if host.get("state") == "alive" and isinstance(host.get("pid"), int):
@@ -1424,7 +1570,10 @@ def main():
                               "phase": "before-switch", **({"leftovers": leftovers} if leftovers else {})})
         for line in leftover_lines(leftovers or []):
             print(line, file=sys.stderr)
-        print("Procedure stopped: " + type(error).__name__, file=sys.stderr)
+        if isinstance(error, BaselineReadinessError):
+            print("Procedure stopped: " + ", ".join(error.checks), file=sys.stderr)
+        else:
+            print("Procedure stopped: " + type(error).__name__, file=sys.stderr)
         return 2
     finally:
         if adapter:

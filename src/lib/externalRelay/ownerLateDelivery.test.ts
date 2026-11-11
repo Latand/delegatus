@@ -63,8 +63,12 @@ for (const [name, delivery] of [
   try {
     expect(await f.send()).toMatchObject({ delivery: "unconfirmed" });
     expect(f.pending()).toMatchObject({ body, status: "pending-delivery-context" });
+    expect(readRunLedger().runs.find(row => row.requestId === `context_${name}`)?.capacityReleased).toBe(true);
     expect(calls).toBe(0);
     expect(log.mock.calls.some(args => String(args[0]).includes("pending-delivery-context"))).toBe(true);
+    expect(await f.send()).toMatchObject({ delivery: "unconfirmed" });
+    expect(log.mock.calls).toHaveLength(1);
+    expect(calls).toBe(0);
     expect(requestSchema.parse({ ...contextRequest, owner_delivery: delivery }).owner_delivery).toBeUndefined();
   } finally { log.mockRestore(); await f.close(); }
 });
@@ -211,7 +215,8 @@ test(`${code} owner completion keeps delivery uncertain (lost ACK: ${lostFirst})
   });
   try {
     const until = Date.now() + 10000;
-    expect(await completeRelayRequest(f.relay, "complete_uncertain", body, () => until, () => true)).toEqual({ body, delivery: "unconfirmed" });
+    expect(await completeRelayRequest(f.relay, "complete_uncertain", body, () => until, () => true)).toEqual({ body, delivery: "unconfirmed",
+      ...(code === "lease_lost" ? { refusalCode: code } : {}) });
     expect(calls).toBe(lostFirst ? 2 : 1);
   } finally { await f.close(); }
 });

@@ -1,3 +1,5 @@
+import { cacheCounter } from "../cacheTelemetry";
+
 /** Decoded data only: connections, decoders and mutation sessions stay local to
  * each compiled module. Eviction clears the slot even if a collection holds it.
  * The budgets count UTF-16 input bytes; decoded graphs can occupy more heap. */
@@ -6,12 +8,34 @@ type CacheHost = typeof globalThis & {
   __llvCollectionReadCachesV1?: Map<string, ReadCacheSlot<unknown>>;
   __llvArchiveReadCacheV1?: { key: string; slot: ReadCacheSlot<unknown> };
   __llvReadCacheEvictionAt?: number;
+  __llvReadCacheTelemetry?: { hot: ReturnType<typeof cacheCounter>; archive: ReturnType<typeof cacheCounter> };
 };
 const host = globalThis as CacheHost;
 const slots = host.__llvCollectionReadCachesV1 ??= new Map();
-const MAX_SLOTS = 8;
+const telemetry = host.__llvReadCacheTelemetry ??= {
+  hot: cacheCounter(slots, "hot", "state/collectionReadCache", "source-utf16"),
+  archive: cacheCounter(slots, "archive", "state/collectionReadCache", "source-utf16"),
+};
+function updateTelemetry() {
+  let count = 0, bytes = 0;
+  for (const slot of slots.values()) if (slot.value !== null) { count++; bytes += slot.bytes; }
+  telemetry.hot.set(count, bytes);
+  const archive = host.__llvArchiveReadCacheV1?.slot;
+  telemetry.archive.set(archive?.value != null ? 1 : 0, archive?.bytes ?? 0);
+}
+// Every document collection, the task and pipeline lists and each controller
+// row cache take one slot. Eight slots rotated about thirty live collections,
+// so the task and pipeline lists were read and decoded whole again on the
+// serving loop every few seconds (#3809). The byte budget is the memory bound.
+export const READ_CACHE_MAX_SLOTS = 64;
+const MAX_SLOTS = READ_CACHE_MAX_SLOTS;
 const MAX_BYTES = 256 * 1024 * 1024;
-const ARCHIVE_MAX_BYTES = 512 * 1024 * 1024;
+// Evicting the archive after every read made each seat decode it again and
+// multiplied live heaps. Keep one generation resident with headroom, still
+// outside the hot-row LRU. The pipeline archive defers its long text
+// (`deferTextLongerThan`), so its entry holds each lane's structure and short
+// values: about an eighth of the stored bytes.
+const ARCHIVE_MAX_BYTES = 1024 * 1024 * 1024;
 
 /** One archive generation across compiled modules, separate from the hot LRU. */
 export function collectionReadCache<T>(key: string, archive = false): ReadCacheSlot<T> {
@@ -21,12 +45,14 @@ export function collectionReadCache<T>(key: string, archive = false): ReadCacheS
     if (held) { held.slot.value = null; held.slot.bytes = 0; }
     const slot = { value: null, bytes: 0 };
     host.__llvArchiveReadCacheV1 = { key, slot };
+    updateTelemetry();
     return slot;
   }
   const slot = slots.get(key) ?? { value: null, bytes: 0 };
   slots.delete(key);
   slots.set(key, slot);
   while (slots.size > MAX_SLOTS) evict(slots.keys().next().value!);
+  updateTelemetry();
   return slot as ReadCacheSlot<T>;
 }
 
@@ -58,6 +84,7 @@ export function rememberCollectionReadCache<T>(slot: ReadCacheSlot<T>, value: T,
       slot.value = null;
       slot.bytes = 0;
     }
+    updateTelemetry();
     return;
   }
   let total = 0;
@@ -67,4 +94,5 @@ export function rememberCollectionReadCache<T>(slot: ReadCacheSlot<T>, value: T,
     total -= held.bytes;
     evict(key, MAX_BYTES);
   }
+  updateTelemetry();
 }

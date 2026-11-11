@@ -1099,7 +1099,7 @@ test("the published update_task schema advertises replaceable notes without auth
   await withProtocolClient(inertBindings(), async client => {
     const tool = (await client.listTools()).tools.find(tool => tool.name === "update_task")!;
     const properties = tool.inputSchema.properties!;
-    expect(properties.note).toMatchObject({ type: ["string", "null"] });
+    expect(properties.note).toMatchObject({ anyOf: [{ type: "string" }, { type: "null" }] });
     expect(properties.author).toBeUndefined();
     expect(properties.noteAuthor).toBeUndefined();
   });
@@ -1163,5 +1163,35 @@ test("Cloud execution choices are available through MCP with strict values", asy
     expect((await client.callTool({ name: "pipeline_checks", arguments: { clientRequestId: "cloud-stage-choice", pipelineId: "lane-fixture", scope: "stage", stageId: "verify", execution: "cloud" } })).isError).not.toBe(true);
     expect(received).toMatchObject({ scope: "stage", stageId: "verify", execution: "cloud" });
     expect((await client.callTool({ name: "pipeline_checks", arguments: { clientRequestId: "cloud-invalid", pipelineId: "lane-fixture", scope: "lane", execution: "invalid" } })).isError).toBe(true);
+  });
+});
+
+
+test("stage_report and update_task expose bounded summary fields through MCP", async () => {
+  const received: Array<{ tool: string; args: unknown }> = [];
+  await withProtocolClient(inertBindings({
+    stage_report: async args => { received.push({ tool: "stage_report", args }); return {}; },
+    update_task: async args => { received.push({ tool: "update_task", args }); return {}; },
+  }), async client => {
+    const summary = { headline: "h".repeat(120), text: "t".repeat(600), left: "l".repeat(200) };
+    const tools = (await client.listTools()).tools;
+    expect(tools.find(tool => tool.name === "stage_report")!.inputSchema.properties).toHaveProperty("result");
+    expect(tools.find(tool => tool.name === "stage_report")!.inputSchema.properties).toHaveProperty("taskSummary");
+    expect(tools.find(tool => tool.name === "update_task")!.inputSchema.properties).toHaveProperty("summary");
+    let sequence = 0;
+    const call = (name: string, args: Record<string, unknown>) => client.callTool({ name, arguments: { clientRequestId: "summary-schema-" + ++sequence, ...args } });
+    expect((await call("stage_report", { verdict: "pass", result: "r".repeat(160), taskSummary: summary })).isError).not.toBe(true);
+    expect(received.at(-1)).toMatchObject({ tool: "stage_report", args: { taskSummary: summary, result: "r".repeat(160) } });
+    expect((await call("update_task", { taskId: "summary-task", summary })).isError).not.toBe(true);
+    expect(received.at(-1)).toMatchObject({ tool: "update_task", args: { summary } });
+    expect((await call("update_task", { taskId: "summary-task", summary: null })).isError).not.toBe(true);
+    const count = received.length;
+    for (const args of [{ result: "r".repeat(161) }, { result: 42 }, { taskSummary: { ...summary, headline: "h".repeat(121) } }, { taskSummary: { ...summary, text: "t".repeat(601) } }, { taskSummary: { ...summary, left: "l".repeat(201) } }]) {
+      expect((await call("stage_report", { verdict: "pass", ...args })).isError).toBe(true);
+    }
+    for (const bad of [{ ...summary, headline: "h".repeat(121) }, { ...summary, text: "t".repeat(601) }, { ...summary, left: "l".repeat(201) }, { ...summary, headline: 42 }]) {
+      expect((await call("update_task", { taskId: "summary-task", summary: bad })).isError).toBe(true);
+    }
+    expect(received.length).toBe(count);
   });
 });

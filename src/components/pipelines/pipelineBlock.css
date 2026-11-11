@@ -123,7 +123,6 @@
    screen has no hover, so there it stays in view. */
 @media (hover: hover) and (pointer: fine) {
   .pblock .pb-graph-toggle { opacity: 0; transition: opacity var(--motion-fast); }
-  .pblock .pb-graph-toggle[aria-pressed="true"],
   .pblock:hover .pb-graph-toggle,
   .pblock:focus-within .pb-graph-toggle { opacity: 1; }
 }
@@ -155,7 +154,6 @@
    dot at the end of the first line and the age alone on the next. */
 .kb .board.narrow .card.shelf .pblock .pb-meta { flex-shrink: 1; min-width: 0; flex-direction: column; align-items: flex-end; gap: 0; }
 .kb .board.narrow .card.shelf .pblock .pb-meta .pb-sep { display: none; }
-.pblock .pb-graph { min-width: 0; }
 
 .pblock .stage-report { margin: 2px 0 0; font-size: var(--text-label); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pblock .stage-findings { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
@@ -194,6 +192,7 @@
 .pblock .pb-merge-note[data-merge-note="merged"] { color: var(--color-success); }
 .pblock .pb-answer .stage-report[data-merge-stop] { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 /* The one line on why a lane stopped on a review (#2187 §3.4) is a sentence, and wraps whole. */
+.pblock .pb-answer .stage-report[data-provider-wait] { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 .pblock .pb-answer .stage-report[data-review-stop] { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 /* The buttons share a line when they fit and wrap when they do not; their
    words are never cut. */

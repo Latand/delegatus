@@ -4,7 +4,7 @@ import type { MandateDelivery } from "@/lib/runtime/messageOrigin";
 
 /* The draft spawn lifecycle, as a pure module the pane renders from.
  *
- * Issue #67: a fresh spawn opens a durable server receipt before tmux launches,
+ * Issue #67: a fresh spawn opens a durable server receipt before the host starts,
  * and `/api/resources` can observe the live pane before the POST resolves. The
  * fixed backend therefore never errors once a pane exists — it returns HTTP 200
  * with a launched receipt (settled, or path-pending when the transcript is not
@@ -42,6 +42,8 @@ export interface RecoverableSpawnRequest {
   cwd: string;
   effort: string;
   fast: boolean | null;
+  /** A named Codex tier `fast` cannot carry (ultrafast); absent on every other launch. */
+  serviceTier?: string;
   accountId: string;
   /* Quoted key: keeps the `prompt` field identical at runtime while keeping the
      token off a line start, which the privacy publication gate's transcript
@@ -74,7 +76,7 @@ export interface SpawnAttempt {
   clientAttemptId: string;
   /** Launch moment (ms) — the mtime floor for heuristic transcript matching. */
   at: number;
-  /** tmux target the pane launched into, or "" when the outcome was ambiguous
+  /** Target a stored launch recorded, or "" when the outcome was ambiguous
       (transport loss / opaque 5xx) and the client never learned it. */
   target: string;
   /** Exact transcript path the fresh session will write, when the server
@@ -147,6 +149,7 @@ export function hasRecoverableRequest(attempt: SpawnAttempt): attempt is SpawnAt
     typeof request.cwd === "string" && request.cwd.length > 0 &&
     typeof request.effort === "string" &&
     (request.fast === null || typeof request.fast === "boolean") &&
+    (request.serviceTier === undefined || (typeof request.serviceTier === "string" && /^[a-z][a-z0-9_-]{0,31}$/.test(request.serviceTier))) &&
     typeof request.accountId === "string" &&
     typeof request.prompt === "string" &&
     typeof request.src === "string" && request.src === attempt.src &&
@@ -170,6 +173,7 @@ export function spawnRequestBody(attempt: SpawnAttempt & { request: PersistedSpa
     cwd: request.cwd,
     ...(request.effort ? { effort: request.effort } : {}),
     ...(request.fast === null ? {} : { fast: request.fast }),
+    ...(request.serviceTier ? { serviceTier: request.serviceTier } : {}),
     ...(request.accountId ? { accountId: request.accountId } : {}),
     ["prompt"]: request.prompt,
     images: request.images,
@@ -227,7 +231,7 @@ export interface SpawnResponseBody {
   state?: "settled" | "path-pending" | "starting" | "failed" | "conflict";
   /** The transport the receipt actually launched over (issue #919): a
       structured receipt is the trigger for the instant receipt-keyed attach. */
-  transport?: "structured" | "tmux";
+  transport?: "structured";
   error?: string;
 }
 
@@ -389,8 +393,8 @@ export function admittedSpawn(attempt: Pick<SpawnAttempt, "conversationId" | "la
  * for the files feed to deliver it. The feed's copy later replaces this one by
  * path/conversation identity (never duplicating it), and the live window it
  * opens subscribes to the structured host's stream by conversation id on its
- * own. Null when the receipt cannot prove a structured conversation (tmux
- * transport, missing identity, terminal failure/conflict) — those keep the
+ * own. Null when the receipt cannot prove a structured conversation (a
+ * retired transport, missing identity, terminal failure/conflict) — those keep the
  * legacy transcript watch.
  *
  * `mandate` marks the prompt as a seat's mandate (#2006): the window renders it
@@ -459,6 +463,7 @@ export function provisionalSpawnFile(
     ...(attempt.request?.model ? { launchModel: attempt.request.model } : {}),
     ...(attempt.request?.effort ? { effort: attempt.request.effort } : {}),
     ...(typeof attempt.request?.fast === "boolean" ? { fast: attempt.request.fast } : {}),
+    ...(attempt.request?.serviceTier ? { fast: true, serviceTier: attempt.request.serviceTier } : {}),
     pendingQuestion: null,
     waitingInput: null,
     conversationId: outcome.conversationId,

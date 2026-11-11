@@ -58,7 +58,7 @@ function checksFixture() {
   for (const sha of [main, cut]) {
     responses.set(endpoint(sha, "check-runs?per_page=100"), { check_runs: pushChecks.map(success) });
     responses.set(endpoint(sha, "status?per_page=100"), { statuses: [] });
-    responses.set(workflowEndpoint(sha), readFileSync(new URL("../../../.github/workflows/bun-runtime.yml", import.meta.url), "utf8"));
+    responses.set(workflowEndpoint(sha), "on: pull_request\njobs:\n  runtime-gate:\n    runs-on: ubuntu-latest\n");
     responses.set(endpoint(sha, "pulls?per_page=100"), [{ merged_at: "2026-10-17T00:00:00Z", merge_commit_sha: sha,
       base: { ref: "main", repo: { full_name: repo } }, head: { sha: heads[sha] } }]);
     responses.set(endpoint(heads[sha]!, "check-runs?per_page=100"), { check_runs: [success("runtime-gate")] });

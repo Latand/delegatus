@@ -15,7 +15,10 @@ unknown keys cannot be placed by managers. Local file routes require both
 catalog membership and project access, including when an older placement
 already names an undiscovered key. Other writes require workspace membership.
 Project-settings reads allow members; `PUT /api/projects/settings` requires
-the project's workspace manager or the owner. Resource-panel pane targets
+the project's workspace manager or the owner. `POST /api/projects/create` makes
+its own checks: a member names a workspace they belong to and gets a new folder
+chosen by the server, and only the owner may bind an existing folder
+(`docs/design/create-project-by-name.md`). Resource-panel pane targets
 and the `kill-target` action on `/api/conversation-host` and `/api/tmux`
 require the owner, including beside an authorized conversation identity.
 A person with no workspace opens the Team page and its own sign-in/session surface. Foreign project requests return
@@ -97,7 +100,6 @@ served API route has no declared decision or a project handler loses its gate.
 | `/api/activity/tokens` | GET | collection |
 | `/api/agent` | GET | owner |
 | `/api/agent/snapshot` | POST | owner |
-| `/api/answer` | POST | project |
 | `/api/artifact` | GET | project |
 | `/api/artifact/frame/[...rest]` | GET | capability |
 | `/api/asks-you` | GET, PUT | owner |
@@ -156,6 +158,7 @@ served API route has no declared decision or a project handler loses its gate.
 | `/api/logs` | POST | project |
 | `/api/logs/stream` | GET | project |
 | `/api/mcp` | DELETE, GET, POST | capability |
+| `/api/memory/history-rows` | GET, PUT | owner |
 | `/api/memory/inject` | POST | owner |
 | `/api/memory/settings` | GET, PUT | owner |
 | `/api/memory/source` | GET, PUT | owner |
@@ -164,6 +167,7 @@ served API route has no declared decision or a project handler loses its gate.
 | `/api/monitor/seat-tick/settings` | GET, PUT | owner |
 | `/api/onboarding` | GET, PUT | owner |
 | `/api/onboarding/health` | DELETE, GET, POST | owner |
+| `/api/operator/heap` | GET | owner |
 | `/api/operator/settings` | GET, PUT | owner |
 | `/api/operator/worker-limit` | GET, PUT | owner |
 | `/api/orchestrator/ghost` | GET, POST | project |
@@ -181,7 +185,7 @@ served API route has no declared decision or a project handler loses its gate.
 | `/api/pipelines/preflight` | POST | project |
 | `/api/pipelines/tick` | POST | owner |
 | `/api/proc` | POST | project |
-| `/api/projects/create` | POST | owner |
+| `/api/projects/create` | POST | team |
 | `/api/projects/crown` | POST | project |
 | `/api/projects/decisions` | GET, POST | project |
 | `/api/projects/directories` | GET | owner |
@@ -251,7 +255,6 @@ served API route has no declared decision or a project handler loses its gate.
 | `/api/tasks/[id]/prototypes` | GET, POST | project |
 | `/api/tasks/[id]/prototypes/[reviewId]/video/[mediaId]` | GET | project |
 | `/api/tasks/[id]/send` | POST | project |
-| `/api/tasks/[id]/spawn` | POST | project |
 | `/api/tasks/curator` | GET, POST | project |
 | `/api/team` | GET | team |
 | `/api/team/claim` | POST | team |
@@ -390,7 +393,6 @@ unchanged base copy. No workflow files change.
 - `src/app/api/activity/route.test.ts`
 - `src/app/api/activity/route.ts`
 - `src/app/api/activity/tokens/route.ts`
-- `src/app/api/answer/route.ts`
 - `src/app/api/artifact/route.ts`
 - `src/app/api/attach-command/route.ts`
 - `src/app/api/attention/dismissals/route.ts`
@@ -452,7 +454,6 @@ unchanged base copy. No workflow files change.
 - `src/app/api/tasks/[id]/prototypes/route.ts`
 - `src/app/api/tasks/[id]/route.ts`
 - `src/app/api/tasks/[id]/send/route.ts`
-- `src/app/api/tasks/[id]/spawn/route.ts`
 - `src/app/api/tasks/curator/route.ts`
 - `src/app/api/tasks/route.ts`
 - `src/app/api/team/events/route.ts`

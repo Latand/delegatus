@@ -424,7 +424,10 @@ async function serveOnce(root: string, sandbox: string): Promise<{ status: numbe
   });
   const log = collector(child, "server");
   let exited = false;
-  child.once("exit", () => { exited = true; });
+  const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
+    child.once("exit", (code, signal) => { exited = true; resolve({ code, signal }); });
+    child.once("error", () => { exited = true; resolve({ code: 1, signal: null }); });
+  });
   const started = Date.now();
   try {
     for (;;) {
@@ -460,10 +463,23 @@ async function serveOnce(root: string, sandbox: string): Promise<{ status: numbe
   } finally {
     // The owned runner has bounded TERM/KILL cleanup. Its original handle
     // waits for the service stop or portable guardian before it exits.
-    await stopFixtureProcess(child, contained ? 7_000 : 500, contained ? 10_000 : 2_000);
-    if (contained && (child.signalCode !== null || ![0, 143].includes(child.exitCode ?? -1))) {
-      throw new Error("served probe service shutdown was not confirmed");
-    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const confirmation = contained ? Promise.race([
+      exit,
+      new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 10_000); }),
+    ]) : null;
+    try {
+      await stopFixtureProcess(child, contained ? 7_000 : 500, contained ? 10_000 : 2_000);
+      // Kernel exit can precede the ChildProcess notification. The runner's
+      // exit verdict confirms its descendants finished cleanup; wait for that
+      // verdict within the existing shutdown bound before judging it.
+      if (confirmation) {
+        const status = await confirmation;
+        if (!status || status.signal !== null || ![0, 143].includes(status.code ?? -1)) {
+          throw new Error("served probe service shutdown was not confirmed");
+        }
+      }
+    } finally { clearTimeout(timer); }
   }
 }
 

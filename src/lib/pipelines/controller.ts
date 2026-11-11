@@ -1,5 +1,6 @@
 import { startupDiagnostic, startupDiagnosticsQuiet } from "@/lib/startupDiagnostics";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { OperationLease, withoutOperationLease } from "@/lib/operationLease";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -68,6 +69,7 @@ export interface FlowPipelineControllerPorts {
   /** Fire-and-forget completion notices to spawn launchers
       (docs/design/spawn-completion-notice.md §3); one pass at a time. */
   sweepSpawnNotices?: () => void;
+  sweepProviderRecovery?: () => void;
   log?: (message: string, error?: unknown) => void;
 }
 
@@ -125,6 +127,10 @@ function productionPorts(): FlowPipelineControllerPorts {
     // cache starts stale revalidation in the background for the next pass.
     scan: controllerFileScan,
     tickPipelines: tickPipelinesController,
+    sweepProviderRecovery: () => {
+      void import("./providerRecovery").then(({ scheduleProviderRecovery }) => scheduleProviderRecovery())
+        .catch(error => console.error("[pipelines] provider recovery sweep could not start", error));
+    },
     handoffHeld: autoHandoffHeld,
     publishHeartbeat: writeFlowPipelineControllerHeartbeat,
     sweepForgeLinks: () => scheduleForgeSweep({ loadPipelines: loadPipelinesForList, loadTasks: loadTasksForList }),
@@ -171,6 +177,7 @@ export class FlowPipelineController {
       sweepForgeLinks: ports.sweepForgeLinks ?? (() => undefined),
       sweepAutoMerge: ports.sweepAutoMerge ?? (() => undefined),
       sweepSpawnNotices: ports.sweepSpawnNotices ?? (() => undefined),
+      sweepProviderRecovery: ports.sweepProviderRecovery ?? (() => undefined),
       log: ports.log ?? ((message, error) => {
         if (error === undefined) console.error(message);
         else console.error(message, error);
@@ -183,6 +190,7 @@ export class FlowPipelineController {
 
   tick(trigger = "signal"): Promise<void> {
     if (this.ports.handoffHeld()) return Promise.resolve();
+    this.sweepProviderRecovery();
     if (this.running) {
       this.trailingCycleRequested = true;
       this.trailingTrigger = trigger;
@@ -193,19 +201,25 @@ export class FlowPipelineController {
       this.scheduledFollowup = null;
     }
     this.requestDeadline = this.ports.monotonicNow() + this.requestDeadlineMs;
-    this.running = withoutControllerPipelineScope(() => this.runRequestedCycles(trigger).finally(() => {
+    this.running = withoutOperationLease(() => withoutControllerPipelineScope(() => this.runRequestedCycles(trigger).finally(() => {
       // A failed generation settles immediately. Later work gets a fresh
       // request and cannot hold this generation's observers or error alive.
       const followupTrigger = this.trailingCycleRequested ? this.trailingTrigger : null;
       this.running = null;
       this.trailingCycleRequested = false;
       if (followupTrigger !== null) this.scheduleFollowup(followupTrigger);
-    }));
+    })));
     return this.running;
   }
 
   poll(): Promise<void> {
+    if (this.running && !this.ports.handoffHeld()) this.sweepProviderRecovery();
     return this.running ?? this.tick("watchdog");
+  }
+
+  private sweepProviderRecovery(): void {
+    try { this.ports.sweepProviderRecovery(); }
+    catch (error) { this.ports.log("[pipelines] provider recovery sweep failed to start", error); }
   }
 
   recover(): Promise<void> {
@@ -378,7 +392,10 @@ export class FlowPipelineController {
 
     const startedAt = this.ports.now();
     this.publish({ cycle, pass, trigger, phase, state: "running", startedAt });
-    const promise = Promise.resolve().then(() => withViewerOperation(`controller.${phase}`, work));
+    const operationLease = phase === "pipelines" ? new OperationLease() : null;
+    const promise = Promise.resolve().then(() => operationLease
+      ? operationLease.run(() => withViewerOperation(`controller.${phase}`, work))
+      : withViewerOperation(`controller.${phase}`, work));
     const lease: ActivePhase<T> = { startedAt, promise };
     this.activePhases.set(phase, lease);
     void promise.then(
@@ -387,7 +404,16 @@ export class FlowPipelineController {
     );
 
     let releaseDeadline = () => {};
-    const deadline = new Promise<{ state: "timed-out" }>((resolve) => { releaseDeadline = () => resolve({ state: "timed-out" }); });
+    const deadline = new Promise<{ state: "timed-out" }>((resolve) => { releaseDeadline = () => {
+      // Capture names before cancellation unwinds the open awaits. This line
+      // is emitted even when a responsive event loop has no loop-gap report.
+      if (operationLease) {
+        this.ports.log(`[flow pipeline controller] ${phase} pending at deadline ${JSON.stringify(operationLease.snapshot())}`);
+        if (this.activePhases.get(phase) === lease) this.activePhases.delete(phase);
+      }
+      resolve({ state: "timed-out" });
+      operationLease?.expire();
+    }; });
     const timer = this.ports.scheduleTimeout(releaseDeadline, Math.min(this.phaseDeadlineMs, Math.max(0, this.requestDeadline - this.ports.monotonicNow())));
     const outcome = await Promise.race<PhaseOutcome<T>>([
       promise.then(
@@ -460,9 +486,12 @@ export function startFlowPipelineControllerRuntime(
   state.__llvFlowPipelineUnregister = ports.registerTick(() => controller.tick("signal"));
   if (!state.__llvFlowPipelineWatchdog) {
     state.__llvFlowPipelineWatchdog = ports.scheduleInterval(() => {
+      // poll also admits independent terminal recovery while the ordinary
+      // pass is retained. Keep just one error observer on that shared pass.
+      const pending = controller.poll();
       if (state.__llvFlowPipelinePolling) return;
       state.__llvFlowPipelinePolling = true;
-      void controller.poll().catch((error) => {
+      void pending.catch((error) => {
         ports.log("[flow pipeline controller] watchdog reconciliation failed", error);
       }).finally(() => { state.__llvFlowPipelinePolling = false; });
     }, FLOW_PIPELINE_WATCHDOG_MS);

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { runDoctor } from "../../../../../bin/doctor.mjs";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,6 +12,11 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
+  if (req.nextUrl.searchParams.get("loop") === "1") {
+    // Retained process-memory splits and cache estimates from the same loop
+    // ticks; this read never samples the heap or materializes cached rows.
+    return NextResponse.json(viewerLoopMonitor.memorySamples(), { headers: { "cache-control": "no-store" } });
+  }
   try {
     const report = await runDoctor({ port: Number(process.env.PORT || "8898") });
     return NextResponse.json(report, { headers: { "cache-control": "no-store" } });

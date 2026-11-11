@@ -47,7 +47,7 @@ class FakeChild extends EventEmitter {
     return true;
   }
 
-  output(value: string): void {
+  output(value: string | Buffer): void {
     this.emit("stdout", value);
   }
 
@@ -123,14 +123,14 @@ test("an unsupported executable is refused before spawning an account app-server
     generateProtocolSchemas,
     signalProcess: signalFakeGroup,
     spawn: () => { spawned = true; return new FakeChild() as never; },
-  })).rejects.toThrow("CLI 0.999.0 has no pinned schema and is not an additive extension of pin 0.164.0. Pin the CLI");
+  })).rejects.toThrow("CLI 0.999.0; Supported: 0.167.0, 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.167.0");
   await expect(CodexAppServerClient.start({
     home: "/fake/home",
     launchBinary: "/fixture/codex",
     readProtocolVersion: () => "0.150.0",
     signalProcess: signalFakeGroup,
     spawn: () => { spawned = true; return new FakeChild() as never; },
-  })).rejects.toThrow("CLI 0.150.0 has no pinned schema and no older pin");
+  })).rejects.toThrow("CLI 0.150.0; Supported: 0.167.0, 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: no older pin");
   expect(spawned).toBe(false);
 });
 
@@ -162,7 +162,7 @@ test("account-management app-server retains zero-MCP process isolation", async (
   client.close();
 });
 
-test.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0", "0.164.0"])("a voice caller can choose app-server arguments and send experimental requests (%s)", async version => {
+test.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0", "0.164.0", "0.165.0", "0.166.0", "0.167.0"])("a voice caller can choose app-server arguments and send experimental requests (%s)", async version => {
   const child = new FakeChild();
   child.onWrite = message => { if (message.id) child.respond(requestId(message), {}); };
   let args: readonly string[] = [];
@@ -199,6 +199,56 @@ test("JSON-RPC initialization frames lines, correlates ids, and sends initialize
   await expect(client.readAccount()).resolves.toEqual({ account: { type: "chatgpt", planType: "pro" }, requiresOpenaiAuth: false });
   client.close();
   expect(child.killed).toBe(1);
+});
+
+test.each(["coalesced", "bytewise", "strings"])("JSON-RPC preserves text across %s stdout reads", async (reads) => {
+  const f = clientWith((child, message) => {
+    if (message.method === "initialize") child.respond(requestId(message), {});
+  });
+  const client = await f.start({ protocolProfile: "voice" });
+  const received: unknown[] = [];
+  client.onNotification(notification => received.push(notification.params));
+  try {
+    // The provider's flat transcript notifications carry literal UTF-8 and
+    // JSON-escaped whitespace on the same stdio transport as account replies.
+    const params = [
+      { threadId: "fixture", role: "assistant", delta: "Hello " },
+      { threadId: "fixture", role: "assistant", delta: " " },
+      { threadId: "fixture", role: "assistant", delta: "world Привіт ї😀\t\n`a  b`\u200b " },
+      { threadId: "fixture", role: "assistant", text: "Hello  world Привіт ї😀\t\n`a  b`\u200b " },
+    ];
+    const wire = params.map((value, index) => JSON.stringify({
+      method: `thread/realtime/transcript/${index === 3 ? "done" : "delta"}`, params: value,
+    }) + "\n").join("");
+    if (reads === "bytewise") {
+      const bytes = Buffer.from(wire, "utf8");
+      for (let index = 0; index < bytes.length; index++) f.child.output(bytes.subarray(index, index + 1));
+    } else f.child.output(reads === "strings" ? wire : Buffer.from(wire, "utf8"));
+    expect(received).toEqual([
+      { threadId: "fixture", role: "assistant", delta: "Hello " },
+      { threadId: "fixture", role: "assistant", delta: " " },
+      { threadId: "fixture", role: "assistant", delta: "world Привіт ї😀\t\n`a  b`\u200b " },
+      { threadId: "fixture", role: "assistant", text: "Hello  world Привіт ї😀\t\n`a  b`\u200b " },
+    ]);
+    const deltas = received.slice(0, 3) as { delta: string }[];
+    expect(deltas.map(value => value.delta).join("")).toBe("Hello  world Привіт ї😀\t\n`a  b`\u200b ");
+    expect(Buffer.from(deltas[2]!.delta).equals(Buffer.from("world Привіт ї😀\t\n`a  b`\u200b "))).toBe(true);
+  } finally { client.close(); }
+});
+
+test("a child closing mid-codepoint rejects its pending response without publishing partial text", async () => {
+  const f = clientWith((child, message) => {
+    if (message.method === "initialize") child.respond(requestId(message), {});
+    if (message.method === "thread/read") {
+      const bytes = Buffer.from(`{"id":${requestId(message)},"result":{"text":"ї`);
+      child.output(bytes.subarray(0, bytes.length - 1));
+      child.exit();
+    }
+  });
+  const client = await f.start({ protocolProfile: "thread-control" });
+  try {
+    await expect(client.request("thread/read", { threadId: "fixture" })).rejects.toThrow("exited");
+  } finally { client.close(); }
 });
 
 test("headerless app-server responses, notifications, and requests keep the client healthy", async () => {
@@ -318,6 +368,26 @@ test("successor thread methods use the structured fork, resume, read, name, and 
     },
   });
   client.close();
+});
+
+test.each([false, true])("account fork and validation resume preserve skills policy (delegated=%s)", async (delegated) => {
+  const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const { start } = clientWith((fake, message) => {
+    if (message.method === "initialized") return;
+    if (message.method === "config/read") return fake.respond(requestId(message), { config: { mcp_servers: {} } });
+    if (message.method === "initialize") return fake.respond(requestId(message), {});
+    requests.push(message as typeof requests[number]);
+    fake.respond(requestId(message), { thread: { id: "skills-thread" } });
+  });
+  const client = await start({ protocolProfile: "thread-control" });
+  try {
+    const options = { omitSkillsInstructions: delegated };
+    await client.forkThread("source", options);
+    await client.resumeThread("skills-thread", options);
+    expect(requests.map(row => row.method)).toEqual(["thread/fork", "thread/resume"]);
+    for (const row of requests) expect((row.params.config as Record<string, unknown> | undefined)?.skills)
+      .toEqual(delegated ? { include_instructions: false } : undefined);
+  } finally { client.close(); }
 });
 
 test("account thread resume reads all five memory states on the same client", async () => {
@@ -720,4 +790,47 @@ test("consuming a reset credit sends the idempotency key and returns the backend
   expect(sent[1]).toEqual({ idempotencyKey: "attempt-two", creditId: "credit-one" });
   outcome = "surprise";
   await expect(client.consumeRateLimitResetCredit({ idempotencyKey: "attempt-three" })).rejects.toThrow("rateLimitResetCredit/consume response is malformed");
+});
+
+
+test.each(["config", "fallback", "allowed"] as const)("resume authority after %s response", async (boundary) => {
+  let allowed = true;
+  let resumes = 0;
+  const { start } = clientWith((fake, message) => {
+    if (message.method === "initialize") return fake.respond(requestId(message), {});
+    if (message.method === "initialized") return;
+    if (message.method === "config/read") {
+      if (boundary === "config") allowed = false;
+      return fake.respond(requestId(message), { config: { mcp_servers: {} } });
+    }
+    if (message.method === "thread/resume") {
+      resumes++;
+      expect(message.params).not.toHaveProperty("assertCurrent");
+      if (boundary === "fallback" && resumes === 1) {
+        allowed = false;
+        return fake.failRequest(requestId(message), "not supported");
+      }
+      return fake.respond(requestId(message), { thread: { id: "source" } });
+    }
+    throw new Error("unexpected fixture method");
+  });
+  const client = await start();
+  try {
+    const resume = client.resumeThread("source", { assertCurrent() { if (!allowed) throw new Error("ownership changed"); } });
+    if (boundary === "allowed") await expect(resume).resolves.toEqual({ id: "source", path: null });
+    else await expect(resume).rejects.toThrow("ownership changed");
+    expect(resumes).toBe(boundary === "config" ? 0 : 1);
+  } finally { client.close(); }
+});
+
+
+test("migration client rechecks caller custody after protocol preparation before spawn", async () => {
+  let allowed = true;
+  let spawned = false;
+  await expect(CodexAppServerClient.start({ home: "/fixture/home", launchBinary: "/fixture/codex",
+    readProtocolVersion: () => { allowed = false; return "0.162.1"; },
+    assertCurrent() { if (!allowed) throw new Error("launch owner changed"); },
+    spawn: () => { spawned = true; throw new Error("unexpected spawn"); },
+  })).rejects.toThrow("launch owner changed");
+  expect(spawned).toBe(false);
 });

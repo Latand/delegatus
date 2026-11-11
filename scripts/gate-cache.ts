@@ -111,12 +111,14 @@ const declaredInputs = (env: Partial<NodeJS.ProcessEnv>) => new Set((env.LLV_GAT
 export function checkEnvironment(env: Partial<NodeJS.ProcessEnv>): NodeJS.ProcessEnv {
   const declared = declaredInputs(env), result = {} as NodeJS.ProcessEnv;
   for (const [name, value] of Object.entries(env)) {
+    // Only the gate parent and its native hook hold publication custody.
+    if (name.startsWith("LLV_GATE_PUBLICATION_")) continue;
     if (value !== undefined && (KEYED.test(name) || declared.has(name) || TRANSPORT.test(name) || ROOTS.has(name))) result[name] = value;
   }
   // The agent's forge directory shadows git and gh with credentialed shims.
   const forge = env.LLV_AGENT_FORGE_DIR ? path.resolve(env.LLV_AGENT_FORGE_DIR) : undefined;
   if (result.PATH !== undefined) result.PATH = result.PATH.split(path.delimiter)
-    .filter(entry => !(entry && (path.resolve(entry) === forge || /[/\\]delegatus[/\\]agent-forge[/\\]/.test(`${path.resolve(entry)}/`)))).join(path.delimiter);
+    .filter(entry => !(entry && (path.resolve(entry) === forge || /[/\\]delegatus[/\\](?:agent-forge|agent-git-hooks)[/\\]/.test(`${path.resolve(entry)}/`)))).join(path.delimiter);
   return result;
 }
 
@@ -163,10 +165,18 @@ export function environmentFingerprint(env: Partial<NodeJS.ProcessEnv>): string 
 
 /** Each caller owns a namespace. Atomic, immutable-key records; corrupt,
  * oversized, expired or unavailable entries are misses. No values are logged.
- * Concurrent writers may briefly exceed the cap until the next write.
+ * Concurrent writers may briefly exceed the cap until the next write. Every
+ * lane of a repository writes to the same namespace, so a caller that records
+ * many entries per run sizes `limits` for all lanes together.
  */
 export class GateCache<T> {
-  constructor(readonly directory: string, private readonly valid: (value: unknown) => value is T, private readonly maxAgeMs = 7 * 24 * 60 * 60_000) {}
+  private readonly maxEntries: number;
+  private readonly maxBytes: number;
+  constructor(readonly directory: string, private readonly valid: (value: unknown) => value is T, private readonly maxAgeMs = 7 * 24 * 60 * 60_000,
+    limits: { entries?: number; bytes?: number } = {}) {
+    this.maxEntries = limits.entries ?? 256;
+    this.maxBytes = limits.bytes ?? 32 * 1024 * 1024;
+  }
   read(key: string): T | undefined {
     try {
       const file = path.join(this.directory, `${fingerprint(key)}.json`);
@@ -192,7 +202,7 @@ export class GateCache<T> {
       let bytes = Buffer.byteLength(contents);
       for (const [index, file] of files.entries()) {
         bytes += file.size;
-        if (index >= 255 || bytes > 32 * 1024 * 1024 || Date.now() - file.time > this.maxAgeMs) rmSync(file.target, { force: true });
+        if (index >= this.maxEntries - 1 || bytes > this.maxBytes || Date.now() - file.time > this.maxAgeMs) rmSync(file.target, { force: true });
       }
       temporary = path.join(this.directory, `.write-${randomUUID()}`);
       writeFileSync(temporary, contents, { flag: "wx", mode: 0o600 });

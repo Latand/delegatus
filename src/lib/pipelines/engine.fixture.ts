@@ -29,6 +29,7 @@ import { CONTROLLER_ARTIFACT_GIT_PATHS } from "./controllerArtifacts";
 import { realExec } from "@/lib/workflows/provision";
 import { worktreeDiskWait } from "@/lib/state/diskPressure";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
@@ -187,6 +188,12 @@ function harness() {
       /* Review ingress requires a publishable remote, so the default repo has
          one. A test that needs the no-origin case overrides this. */
       if (args[0] === "remote" && args[1] === "get-url") return { code: 0, stdout: "git@example.invalid:owner/repo.git\n", stderr: "" };
+      if (args.length === 1 && args[0] === "remote") return { code: 0, stdout: "origin\n", stderr: "" };
+      // Model the command-line-only remote used to validate a stored URL.
+      if (args[0] === "-c" && args[2] === "remote" && args[3] === "-v") {
+        const probe = /^remote\.([^=]+)\.url=(.*)$/.exec(args[1]!);
+        if (probe) return { code: 0, stdout: `${probe[1]}\t${probe[2]} (fetch)\n${probe[1]}\t${probe[2]} (push)\n`, stderr: "" };
+      }
       if (args[0] === "ls-remote") {
         const branch = loadPipelines()[0]?.branch ?? "pipeline/test";
         return { code: 0, stdout: `${ORIGIN_MAIN_SHA}\trefs/heads/${branch}\n`, stderr: "" };
@@ -340,8 +347,8 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   const { realExec } = await import("@/lib/workflows/provision");
   const { realProvisionExec } = await import("./git");
   const h = harness();
-  // Model the identity pinned into a launched agent, independently of the
-  // runner's author/committer variables and the repository's Fixture config.
+  // Upstream writers use a fixed machine identity. Dispatched agents below
+  // bind the repository identity through the production launch helper.
   const { GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL } = agentPublicationIdentityEnv(process.env);
   const identity = { GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL };
   let agentEnv: Record<string, string | undefined> = identity;
@@ -354,7 +361,8 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
     const spawned = await spawnAgent(input, async reservation => {
       await onReserved({ ...reservation, launchId });
       const guard = await prepareStageGitGuard(launchId, input.cwd, realExec, h.ports.now(), () => onReserved({ ...reservation, launchId }));
-      agentEnv = { ...guard, ...agentPublicationIdentityEnv({ ...process.env, ...guard }) };
+      const source = await repositoryPublicationSource(input.cwd, { ...process.env, ...guard }, realExec);
+      agentEnv = { ...guard, ...agentPublicationIdentityEnv(source) };
       agentWorktree = input.cwd;
     });
     return { ...spawned, launchId };
@@ -1315,6 +1323,10 @@ async function interruptedPublication() {
   pipeline.stages[0]!.next = "review";
   pipeline.stages.push(reviewStage);
   pipeline.runs.push(reviewRun);
+  // The failed read above only builds the accepted-head fixture. The writer
+  // interrupted below is this scenario's first publication failure.
+  delete pipeline.publicationRecovery;
+  delete pipeline.runs[0]!.attempts[0]!.publicationRetry;
   pipeline.delivery!.operation!.state = "pending";
   delete pipeline.delivery!.operation!.result;
   savePipelines([pipeline]);
@@ -1721,7 +1733,7 @@ function productionHostSeams(f: Awaited<ReturnType<typeof stagedRecoveryHarness>
     spawnReceipt: (launchId: string) => ports().spawnReceipt(launchId),
     transcriptPresent: (pathname: string) => ports().transcriptPresent!(pathname),
     failStageLaunch: (launchId: string, conversationId: string, reason: string) => ports().failStageLaunch!(launchId, conversationId, reason),
-    failStoppedStageLaunch: (launchId: string, conversationId: string, reason: string, eligible: () => boolean) => ports().failStoppedStageLaunch!(launchId, conversationId, reason, eligible),
+    failStoppedStageLaunch: (...args: Parameters<NonNullable<PipelinePorts["failStoppedStageLaunch"]>>) => ports().failStoppedStageLaunch!(...args),
     releaseFailedStageLaunchContinuation: (launchId: string, conversationId: string) => ports().releaseFailedStageLaunchContinuation!(launchId, conversationId),
     conversationHostUnavailableSince: (conversationId: string) => ports().conversationHostUnavailableSince!(conversationId),
     conversationHostProcess: (conversationId: string) => ports().conversationHostProcess!(conversationId),
@@ -1758,9 +1770,9 @@ function expectPipelineLeaseFree() {
   finally { db.close(); }
 }
 
-async function reserveActivationOnly() {
+async function reserveActivationOnly(stages = RUN_STAGES as never) {
   const h = harness();
-  await create(h.ports);
+  await create(h.ports, stages);
   await tickPipelines([], h.ports);
   process.env.LLV_PIPELINE_ACTIVATION_DRAIN = "1";
   let checks = 0;
@@ -2083,6 +2095,7 @@ function expectProviderParkAt(pipeline: Pipeline, at: string): void {
 
 async function providerRecoveryHarness(engine: "claude" | "codex", errorClass: string, text: string, resetDelay: number | null = null, pinned = false) {
   const h = harness();
+  h.ports.providerRecoveryRandom = defaultPipelinePorts({ providerRecoveryRandom: () => 1 }).providerRecoveryRandom;
   await runningStructuredStage(h);
   // Recovery successors use the same structured hosting as the initial stage.
   const baseSpawn = h.ports.spawnAgent;

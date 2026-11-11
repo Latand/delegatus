@@ -1,3 +1,5 @@
+import { conversationWorkspaceReach, memberWorkspacePrincipal, type WorkspacePrincipal, type WorkspaceReach } from "@/lib/team/workspacePrincipal";
+import { existingTeamStore } from "@/lib/team/store";
 import { resolveSeatProject } from "./seatProjectIdentity";
 import { ProjectNameRefusal } from "@/lib/projects/nameResolution";
 import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
@@ -38,6 +40,9 @@ import { telegramSetUp } from "@/lib/telegram/launchReadiness";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
 import { captureSeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
+import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
+import { readTurboSettings } from "@/lib/monitor/seatTickSettings";
+import { turboActive } from "@/lib/monitor/turbo";
 import { automaticReplacementHold } from "./seatTurnFence";
 
 import {
@@ -58,7 +63,6 @@ import {
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_SYSTEM_PROMPT,
   orchestratorMandateForDelivery,
-  orchestratorMandateStale,
   orchestratorMandateUpgraded,
   orchestratorMandateWithRoleTable,
   orchestratorRoleTable,
@@ -75,6 +79,7 @@ import {
   orchestratorSeatFor,
   repairOrchestratorSeatRuntimeIdentity,
   prepareOrchestratorSeatAuthCredentialBaseline,
+  seatWorkspaceFromMessage,
   type OrchestratorSeat,
   type OrchestratorSeatTerminalization,
   type StillbornSeatRollback,
@@ -114,8 +119,40 @@ import {
  * duplicated.
  */
 
-/** Trusted in-process restrictions; request JSON cannot supply admission. */
+/**
+ * Trusted in-process restrictions; request JSON cannot supply admission.
+ *
+ * A person's designation binds the seat to that person. An agent's or an
+ * automatic designation inherits the reach of the conversation behind it and
+ * keeps its kind: a launch or designation binding stays a binding, while a
+ * fence that came from a member's message stays message authority
+ * (`fromMessage`), so one message never becomes a permanent binding.
+ */
+function seatWorkspace(project: string, admission: SeatLaunchAdmission | undefined, trigger: OrchestratorSeatTrigger | null, incumbent: OrchestratorSeat | null): WorkspaceReach {
+  const store = existingTeamStore();
+  // A message fences the seat for its own project, whatever the registry
+  // records about the conversation's project.
+  const reach = (id: string): WorkspaceReach => {
+    const found = conversationWorkspaceReach((id: string) => agentRegistry().conversation(id as `conversation_${string}`), id);
+    return found.fromMessage && found.principal && store ? { principal: memberWorkspacePrincipal(store, found.principal.memberId, project), fromMessage: true } : found;
+  };
+  if (admission?.workspaceMemberId && store) return { principal: memberWorkspacePrincipal(store, admission.workspaceMemberId, project), fromMessage: false };
+  if (trigger?.conversationId) {
+    const triggered = reach(trigger.conversationId);
+    if (triggered.fromMessage) return { principal: admission?.workspace ?? triggered.principal, fromMessage: true };
+    if (!admission?.workspace) return triggered;
+  }
+  if (admission?.workspace) return { principal: admission.workspace, fromMessage: false };
+  if (incumbent?.workspace && !seatWorkspaceFromMessage(incumbent)) return { principal: incumbent.workspace, fromMessage: false };
+  return incumbent?.conversationId ? reach(incumbent.conversationId) : { principal: null, fromMessage: false };
+}
+function seatWorkspaceInput(reach: WorkspaceReach): { workspace?: WorkspacePrincipal; workspaceFromMessage?: boolean } {
+  return reach.principal ? { workspace: reach.principal, ...(reach.fromMessage ? { workspaceFromMessage: true } : {}) } : {};
+}
+
 export interface SeatLaunchAdmission {
+  workspaceMemberId?: string;
+  workspace?: import("@/lib/team/workspacePrincipal").WorkspacePrincipal;
   autonomous?: boolean;
   automaticReplacement?: { conversationId: string; seatEpoch: number };
   assertAccount?(accountId: string): void;
@@ -292,6 +329,9 @@ async function postSpawnInProcess(body: Record<string, unknown>, autonomous = fa
     json: async () => body,
   } as unknown as NextRequest;
   const response = await executeSpawnRequest(request, { ...productionSpawnCommandDependencies,
+    /* The seat record is the launch's whole workspace decision, an unbound
+       seat included: the handover parent never binds the successor. */
+    workspacePrincipal: admission?.workspace ?? null,
     // Seat ticks have no Next request lifetime. Select the shared background
     // scheduler explicitly; operator requests keep response-close deferral.
     defer: autonomous ? startDeferredSpawnWork : productionSpawnCommandDependencies.defer,
@@ -1164,9 +1204,18 @@ async function runOrchestratorSeatRequest(
       : null;
     if (adoptedSizing) return adoptedSizing;
 
+    /* An adopted conversation with a durable launch binding of its own keeps a
+       binding. Otherwise a member's message stays message authority, and the
+       adopted conversation is fenced by it before the mandate reaches it, so
+       the fence also holds once it leaves the seat. */
+    const adoptedBinding = agentRegistry().conversation(target.conversationId as `conversation_${string}`)?.generations.at(-1)?.launchProfile?.workspace;
+    const inherited = seatWorkspace(project, admission, triggeredBy, null);
+    const adopted = adoptedBinding && !adoptedBinding.fromMessage ? { ...inherited, fromMessage: false } : inherited;
+    if (adopted.principal && adopted.fromMessage) existingTeamStore()?.admitConversationMember(target.conversationId, adopted.principal.memberId);
     const begun = beginOrchestratorSeatIntent({
       project,
       mandate,
+      ...seatWorkspaceInput(adopted),
       roleTable: orchestratorRoleTable(loadRoleDefinitionsOrDefaults()),
       clientRequestId,
       mode: "existing",
@@ -1288,6 +1337,7 @@ async function runOrchestratorSeatRequest(
   const begun = beginOrchestratorSeatIntent({
     project,
     mandate,
+    ...seatWorkspaceInput(seatWorkspace(project, admission, triggeredBy, incumbent)),
     roleTable: orchestratorRoleTable(loadRoleDefinitionsOrDefaults()),
     clientRequestId,
     mode: "spawn",
@@ -1330,7 +1380,7 @@ async function runOrchestratorSeatRequest(
      otherwise conflict with its own first attempt. */
   const spawnMandate = orchestratorMandateWithRoleTable(begun.seat.mandate, begun.seat.roleTable ?? null);
 
-  const spawnFields = ["cwd", "effort", "fast", "accountId", "images", "roleParams", "allowSubagents"] as const;
+  const spawnFields = ["cwd", "effort", "fast", "serviceTier", "inheritedServiceTier", "accountId", "images", "roleParams", "allowSubagents"] as const;
   const spawnRuntime = begun.kind === "replay"
     ? {
         ...(begun.seat.engine ? { engine: begun.seat.engine } : {}),
@@ -1384,7 +1434,8 @@ async function runOrchestratorSeatRequest(
     title: derivedSpawnTitle("orchestrator", spawnMandate, project),
     clientAttemptId: clientRequestId,
   };
-  const spawnAdmission: SeatLaunchAdmission = { ...admission, prepareAccount: async (accountId) => {
+  const spawnAdmission: SeatLaunchAdmission = { ...admission,
+    workspace: begun.seat.workspace && { ...begun.seat.workspace, ...(seatWorkspaceFromMessage(begun.seat) ? { fromMessage: true as const } : {}) }, prepareAccount: async (accountId) => {
     const commitCaller = await admission?.prepareAccount?.(accountId);
     const commitBaseline = prepareOrchestratorSeatAuthCredentialBaseline(project, clientRequestId, begun.seat.seatEpoch, launchEngine, accountId);
     return () => { commitCaller?.(); commitBaseline(); };
@@ -1532,8 +1583,9 @@ export function handleOrchestratorRotationRequest(
   request: Pick<NextRequest, "headers">,
   rawBody: Record<string, unknown>,
   dependencies: SeatCommandDependencies = activeSeatCommandDependencies(),
+  admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
-  return executeOrchestratorRotation(rawBody, dependencies, rotationActor(request));
+  return executeOrchestratorRotation(rawBody, dependencies, rotationActor(request), admission);
 }
 
 let seatCommandDependenciesForTests: SeatCommandDependencies | null = null;
@@ -1694,16 +1746,15 @@ async function runOrchestratorRotation(
     notes: notes || null,
   };
 
-  /* An omitted mandate preserves the incumbent's core and bounded history,
-     even when its prompt version is older. Only an explicit mandate replaces
-     the core. The recorded version follows that choice (#1452). */
+  /* A successor starts on the current default. The predecessor contributes
+     bounded handoff history, never its stamped core or version. An explicit
+     custom mandate has no default-version stamp. */
   const requested = text(rawBody.mandate);
   const base = requested || incumbent.mandate;
-  const promptVersion = base === ORCHESTRATOR_SYSTEM_PROMPT
+  const core = requested ? splitMandate(requested).core : ORCHESTRATOR_SYSTEM_PROMPT;
+  const promptVersion = !requested || core === ORCHESTRATOR_SYSTEM_PROMPT
     ? ORCHESTRATOR_PROMPT_VERSION
-    : base !== incumbent.mandate && orchestratorMandateStale(incumbent.promptVersion)
-      ? null
-      : incumbent.promptVersion;
+    : null;
   /* Awaited ONLY when there is something to summarize. A rotation with nothing
      to compact must reach its durable `begin` with no await point, which is
      what serializes it against a concurrent designation for the same project. */
@@ -1711,6 +1762,7 @@ async function runOrchestratorRotation(
     project,
     clientRequestId,
     base,
+    core,
     handoff,
     predecessor: predecessor ? { path: predecessor.path, engine: predecessor.engine } : null,
     roleParams: rawBody.roleParams,
@@ -1738,6 +1790,21 @@ async function runOrchestratorRotation(
   }
   if (composed.kind === "too_large") return { status: 413, body: { ...composed.body, admission: "refused", rotatedFrom, triggeredBy } };
 
+  let inheritedServiceTier: string | undefined;
+  if (rawBody.fast === undefined && rawBody.serviceTier === undefined && incumbent.engine === "codex"
+    && (rawBody.engine === undefined || rawBody.engine === "codex")
+    && (rawBody.model === undefined || rawBody.model === incumbent.model)) {
+    const generation = agentRegistry().conversation(incumbent.conversationId as `conversation_${string}`)?.generations.at(-1);
+    if (generation && generation.launchProfile.model === incumbent.model) {
+      inheritedServiceTier = launchServiceTier(generation.launchProfile);
+      const turbo = readTurboSettings(project).turbo;
+      const row = turboActive(turbo, Date.now()) ? turbo?.switches.find(row => row.conversationId === incumbent.conversationId
+        && row.accountId === generation.accountId && row.model === generation.launchProfile.model
+        && row.state !== "reverted" && row.state !== "skipped" && row.state !== "failed"
+        && (row.appliedTier === undefined ? row.to : row.appliedTier) === inheritedServiceTier) : undefined;
+      if (row) inheritedServiceTier = row.from ?? undefined;
+    }
+  }
   const outcome = await executeOrchestratorSeatRequest({
     project,
     mandate: composed.mandate,
@@ -1758,6 +1825,8 @@ async function runOrchestratorRotation(
         ? { model: incumbent.model } : {}),
     ...(rawBody.effort !== undefined ? { effort: rawBody.effort } : {}),
     ...(rawBody.fast !== undefined ? { fast: rawBody.fast } : {}),
+    ...(rawBody.serviceTier !== undefined ? { serviceTier: rawBody.serviceTier } : {}),
+    ...(inheritedServiceTier !== undefined ? { inheritedServiceTier } : {}),
     /* Issue #903: a rotation without an explicit cwd continues in the
        predecessor's checkout rather than falling through to the generic
        resolver — the successor inherits the incumbent's mandate, so it
@@ -1783,7 +1852,7 @@ async function runOrchestratorRotation(
       /* Who ordered it, on the answer as well as on the durable record, so the
          caller reads back the attribution its rotation was recorded under. */
       triggeredBy: attributedTrigger(outcome.body, triggeredBy),
-      mandateDisposition: requested ? "replaced" : "preserved",
+      mandateDisposition: "replaced",
       ...(composed.handoff ? { handoff: composed.handoff } : {}),
     },
   };
@@ -1833,6 +1902,7 @@ interface RotationComposition {
   project: string;
   clientRequestId: string;
   base: string;
+  core: string;
   handoff: HandoffParts;
   predecessor: { path: string; engine: "claude" | "codex" } | null;
   roleParams: unknown;
@@ -1853,7 +1923,7 @@ function composeRotationMandate(
   /* First rotation: no prior handoffs to compact, so no summarizer run — the
      fresh handoff already names the predecessor and its bounded message read. */
   if (split.history === null && split.handoffs.length === 0) {
-    return renderRotationMandate(input, split.core, null, "none", null);
+    return renderRotationMandate(input, input.core, null, "none", null);
   }
   return (async (): Promise<RotationMandate> => {
     let outcome: HandoffDigestOutcome;
@@ -1870,10 +1940,10 @@ function composeRotationMandate(
       outcome = { kind: "fallback", reason: "error" };
     }
     if (outcome.kind === "digest") {
-      return renderRotationMandate(input, split.core, boundHistoryBody(outcome.text), "digest", null);
+      return renderRotationMandate(input, input.core, boundHistoryBody(outcome.text), "digest", null);
     }
     console.warn(`orchestrator rotation for ${input.project} used the verbatim handoff fallback: ${outcome.reason}`);
-    return renderRotationMandate(input, split.core, fallbackHistory(split.history, split.handoffs, outcome.reason), "fallback", outcome.reason);
+    return renderRotationMandate(input, input.core, fallbackHistory(split.history, split.handoffs, outcome.reason), "fallback", outcome.reason);
   })();
 }
 

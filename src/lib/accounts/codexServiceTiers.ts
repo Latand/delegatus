@@ -1,10 +1,11 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentEngine } from "@/lib/agent/cli";
 
 export const SERVICE_TIER_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 export type CodexTierOffer = { id: string; name: string };
-const cache = new Map<string, { key: string; models: unknown[] }>();
+const cache = new MeasuredCache<string, { key: string; models: unknown[] }>("models", "accounts/codexServiceTiers");
 
 function catalogModels(home: string): unknown[] | null {
   const file = path.join(home, "models_cache.json");
@@ -40,6 +41,12 @@ export function codexModelServiceTiers(home: string, model: string): CodexTierOf
   }
   return row.service_tiers.filter((tier): tier is CodexTierOffer => !!tier && typeof tier.id === "string" && SERVICE_TIER_PATTERN.test(tier.id))
     .map(tier => ({ id: tier.id, name: typeof tier.name === "string" ? tier.name : tier.id }));
+}
+
+export function codexServiceTierCatalog(home: string): { slug: string; tiers: CodexTierOffer[] | null }[] {
+  return (catalogModels(home) ?? []).filter(catalogRow)
+    .filter((row): row is Record<string, unknown> & { slug: string } => typeof row.slug === "string")
+    .map(row => ({ slug: row.slug, tiers: codexModelServiceTiers(home, row.slug) }));
 }
 
 export type TierDiagnosticAccount = {
@@ -101,17 +108,21 @@ export class CodexServiceTierUnavailableError extends Error {
   readonly code = "service_tier_unavailable";
 }
 
-export type LaunchTier = { tier: string | null; required: boolean; source: "explicit" | "fast" | "role-default" | null };
+export type LaunchTier = { tier: string | null; required: boolean; source: "explicit" | "fast" | "inherited" | "role-default" | null };
 export function codexLaunchTier(input: {
   engine: AgentEngine; model: string | null; fast: unknown; serviceTier: unknown;
-  roleDefault?: string | null; roleDefaultApplies: boolean;
+  inheritedServiceTier?: unknown; roleDefault?: string | null; roleDefaultApplies: boolean;
 }): LaunchTier | { error: string } {
   const explicit = input.serviceTier !== undefined && input.serviceTier !== null;
   if (explicit && (typeof input.serviceTier !== "string" || !SERVICE_TIER_PATTERN.test(input.serviceTier))) return { error: "serviceTier must be a catalog tier id" };
   if (explicit && input.engine !== "codex") return { error: "serviceTier is Codex only" };
   if (explicit && input.fast != null && (input.fast === true ? input.serviceTier !== "priority" : input.serviceTier !== "default" && input.serviceTier !== "standard")) return { error: "fast and serviceTier disagree: fast:true is serviceTier priority; send one of them" };
+  const inherited = input.inheritedServiceTier;
+  if (inherited != null && (typeof inherited !== "string" || !SERVICE_TIER_PATTERN.test(inherited))) return { error: "inheritedServiceTier must be a catalog tier id" };
+  if (inherited != null && input.engine !== "codex") return { error: "inheritedServiceTier is Codex only" };
+  const useInherited = !explicit && input.fast == null && typeof inherited === "string";
   const tier = explicit ? input.serviceTier as string : input.fast === true && input.engine === "codex" ? "priority"
-    : input.fast == null && input.roleDefaultApplies && input.engine === "codex" ? input.roleDefault ?? null : null;
+    : useInherited ? inherited as string : input.fast == null && input.roleDefaultApplies && input.engine === "codex" ? input.roleDefault ?? null : null;
   if (tier && !input.model) return { error: "serviceTier needs a model: the account's default model is only known after launch" };
-  return { tier, required: explicit || input.fast === true, source: explicit ? "explicit" : tier ? input.fast === true ? "fast" : "role-default" : null };
+  return { tier, required: explicit || input.fast === true, source: explicit ? "explicit" : tier ? input.fast === true ? "fast" : useInherited ? "inherited" : "role-default" : null };
 }

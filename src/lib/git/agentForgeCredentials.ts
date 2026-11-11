@@ -6,10 +6,11 @@ import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { stableMcpRuntimeRoot } from "@/runtime-host/mcpRuntimeRelease";
+import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 
 import type { AgentEnvironment } from "./agentHistoryGuard";
 
-import { FORGE_DIR_ENV, FORGE_PUSH_BASE as PUSH_BASE, FORGE_REPOSITORIES_ENV, HELPER_FILE as HELPER, parseRepository } from "../../../bin/forge-app-token.mjs";
+import { FORGE_AUDIT_ENV, FORGE_DIR_ENV, FORGE_PUSH_BASE as PUSH_BASE, FORGE_REPOSITORIES_ENV, HELPER_FILE as HELPER, parseRepository } from "../../../bin/forge-app-token.mjs";
 
 /* Joined here so the sources hold no address-shaped literal for the publication gate. */
 const at = (user: string, host: string) => [user, host].join("@");
@@ -44,6 +45,22 @@ export function forgeAppRepositories(file: string = statePath(FORGE_APP_REPOSITO
     throw new Error(`The App repository declaration ${FORGE_APP_REPOSITORIES_FILE} must be a JSON array of owner/name strings`);
   }
   return [...new Set(slugs as string[])];
+}
+
+/** Publish only after the helper proved the stored item's single-repository token. */
+export async function declareForgeAppRepository(repository: string, file = statePath(FORGE_APP_REPOSITORIES_FILE), beforeWrite: () => void = () => {}): Promise<boolean> {
+  const slug = parseRepository(repository);
+  if (!slug || [".", ".."].includes(slug.split("/")[1]!)) throw new Error("invalid App repository");
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  return withFileTransactionAsync(file, "App repository declaration is busy", () => {
+    beforeWrite();
+    const entries = forgeAppRepositories(file);
+    if (isForgeAppRepository(slug, entries)) return false;
+    const pending = `${file}.${crypto.randomUUID()}`;
+    fs.writeFileSync(pending, JSON.stringify([...entries, slug]) + "\n", { mode: 0o600, flag: "wx", flush: true });
+    fs.renameSync(pending, file);
+    return true;
+  });
 }
 
 /** Whether the engine's own write to `repository` is under the App rule. */
@@ -269,6 +286,7 @@ export function agentForgeWriteEnv(source: AgentEnvironment, declared: readonly 
     PATH: [directory, ...rest].join(separator),
     [FORGE_DIR_ENV]: directory,
     [FORGE_REPOSITORIES_ENV]: declared.join(","),
+    [FORGE_AUDIT_ENV]: statePath("forge-app-tokens.ndjson"),
     GIT_CONFIG_COUNT: String(entries.length),
   };
   entries.forEach(([key, value], index) => {

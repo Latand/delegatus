@@ -159,16 +159,15 @@ test.each(["high", "max"])("switching a stage at %s to an unresolved model keeps
   host.remove();
 });
 
-test.each(["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"])("a codex stage on %s offers the GPT-6 models and that model's own tiers", (model) => {
+test.each(["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"])("a codex stage on %s offers the current models, keeps its own, and that model's own tiers", (model) => {
   const effectiveRole = { ...stage().effectiveRole, engine: "codex" as const, model, effort: "max" };
   const { host, root } = mount(<StagePlaceholderPane slot={slot({ stage: { effectiveRole } })} interactive />);
   openConfig(host);
   const [, modelSelect, effortSelect] = [...host.querySelectorAll("select")] as HTMLSelectElement[];
   expect(modelSelect!.value).toBe(model);
   const labels = [...modelSelect!.options].map((option) => option.textContent);
-  expect(labels).toContain("GPT-6.1-Sol");
-  expect(labels).toContain("GPT-6-Sol");
-  expect(labels).toContain("GPT-6-Luna");
+  // The retired GPT-6-Sol is offered only to the stage already saved on it.
+  expect(labels.slice(1)).toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna", ...(model === "gpt-6-sol" ? ["GPT-6-Sol"] : [])]);
   expect(effortSelect!.value).toBe("max");
   expect(Boolean(effortSelect!.querySelector('option[value="ultra"]'))).toBe(model !== "gpt-6-luna");
   flushSync(() => root.unmount());

@@ -6,7 +6,9 @@ import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, normalizeRegistry } from "./registry";
 import { registryConversationsForPath, registryLivenessRows, registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
-import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
+import { ARCHIVE_CANDIDATES, archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
+import { normalizeHostMemory } from "@/lib/runtime/agentMemoryState";
+import { codexHostColumns } from "@/lib/runtime/registry";
 
 const directories: string[] = [];
 const stores: SqliteAgentRegistryStore[] = [];
@@ -96,6 +98,96 @@ function archiveAll(store: SqliteAgentRegistryStore) {
   }
   throw new Error("archive pass did not converge");
 }
+
+function scopedFixture(legacy: boolean) {
+  const f = fixture();
+  const unit = "delegatus-agent-projection-fixture.scope";
+  const columns = codexHostColumns({ status: "dead", sessionKey: id(0), endpoint: "stdio:released", pid: null,
+    processStartIdentity: null, eventCursor: 0, protocolVersion: null, activeTurnRef: null,
+    pendingAttention: [], activeFlags: [], account: null, ...(legacy
+      ? { memory: normalizeHostMemory({ mechanism: "scope", limitBytes: 2 ** 30, unit, kills: 0, lastKill: null })! }
+      : { scope: { unit, bootEpoch: "fixture-boot" } }) }, 1);
+  const key = `codex:${id(0)}`;
+  f.initial.entries[key]!.structuredHost = columns;
+  return { ...f, key, columns };
+}
+
+test.each([false, true])("liveness retains a process-free scope through writes and pinned snapshots (legacy=%s)", legacy => {
+  const { open, initial, key, columns } = scopedFixture(legacy);
+  const store = open();
+  const entry = structuredClone(initial.entries[key]!);
+  const keys = (file: ReturnType<typeof normalizeRegistry>) => registryLivenessRows(file).entries.map(row => `codex:${row.key.sessionId}`);
+  const held = store.readOnlySnapshot().file;
+  expect(keys(held)).toContain(key);
+  store.mutate(file => { file.entries[key]!.structuredHost = null; });
+  expect(keys(store.readOnlySnapshot().file)).not.toContain(key);
+  expect(keys(held)).toContain(key);
+  store.mutate(file => { file.entries[key]!.structuredHost = columns; });
+  expect(keys(store.readOnlySnapshot().file)).toContain(key);
+  store.mutate(file => { delete file.entries[key]; });
+  store.mutate(file => { file.entries[key] = entry; });
+  expect(keys(store.readOnlySnapshot().file)).toContain(key);
+});
+
+test.each([false, true])("a read-only registry without a projection table still selects process-free scopes (legacy=%s)", legacy => {
+  const { open, filename, initial } = scopedFixture(legacy);
+  open().close();
+  const db = new Database(filename);
+  try {
+    for (const kind of ["insert", "update", "delete"]) db.run(`DROP TRIGGER registry_liveness_${kind}`);
+    db.run("DROP TABLE registry_liveness_entries");
+    db.run("DROP TABLE registry_liveness_receipts");
+    // The entry selector falls back when no table exists. Keep its later
+    // receipt join resolvable without supplying a materialized projection.
+    db.run("CREATE VIEW registry_liveness_entries AS SELECT row_key,row_order FROM registry_rows WHERE collection='entries'");
+    // Select through SQL alone, without pinned-row recovery adding the row.
+    db.run("DROP TABLE registry_changes");
+    const reader = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry, readOnly: true });
+    stores.push(reader);
+    expect(registryLivenessRows(reader.readOnlySnapshot().file).entries.map(row => row.key.sessionId)).toContain(id(0));
+  } finally { db.close(); }
+});
+
+test.each([false, true])("scope projection upgrade rolls back a failed backfill and retries in a fresh process (legacy=%s)", legacy => {
+  const { open, filename, key, columns } = scopedFixture(legacy);
+  open().close();
+  const db = new Database(filename);
+  try {
+    // Recreate the previous projection: neither trigger selected scope-only rows.
+    for (const name of ["registry_liveness_insert", "registry_liveness_update"]) {
+      const sql = db.query<{ sql: string }, [string]>("SELECT sql FROM sqlite_master WHERE name=?").get(name)!.sql;
+      db.run(`DROP TRIGGER ${name}`);
+      db.run(sql.split("\n").filter(line => !line.includes("$.structuredHost.scope.unit") && !line.includes("$.structuredHost.memory.unit")).join("\n"));
+    }
+    db.run("UPDATE registry_meta SET value='1' WHERE key='liveness_projection_version'");
+    db.run("DELETE FROM registry_liveness_entries WHERE row_key=?", [key]);
+    const oldTriggers = db.query("SELECT name,sql FROM sqlite_master WHERE name IN ('registry_liveness_insert','registry_liveness_update') ORDER BY name").all();
+    db.run(`CREATE TRIGGER refuse_scope_backfill BEFORE INSERT ON registry_liveness_entries
+      WHEN NEW.row_key='${key}' BEGIN SELECT RAISE(ABORT,'scope backfill refused'); END`);
+    const restart = () => Bun.spawnSync([process.execPath, "-e", `
+      const { SqliteAgentRegistryStore, registryLivenessRows } = await import(${JSON.stringify(path.resolve("src/lib/agent/sqliteRegistryStore.ts"))});
+      const { normalizeRegistry } = await import(${JSON.stringify(path.resolve("src/lib/agent/registry.ts"))});
+      const store = new SqliteAgentRegistryStore(process.argv[1], { initialSnapshot: () => { throw new Error("unexpected import"); }, normalize: normalizeRegistry });
+      console.log(JSON.stringify(registryLivenessRows(store.readOnlySnapshot().file).entries.map(row => row.key.sessionId)));
+      store.close();
+    `, filename], { stdout: "pipe", stderr: "pipe", timeout: 15_000 });
+    const refused = restart();
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr.toString()).toContain("scope backfill refused");
+    expect(db.query("SELECT value FROM registry_meta WHERE key='liveness_projection_version'").get()).toEqual({ value: "1" });
+    expect(db.query("SELECT name,sql FROM sqlite_master WHERE name IN ('registry_liveness_insert','registry_liveness_update') ORDER BY name").all()).toEqual(oldTriggers);
+    expect(db.query("SELECT row_key FROM registry_liveness_entries WHERE row_key=?").get(key)).toBeNull();
+    db.run("DROP TRIGGER refuse_scope_backfill");
+    const recovered = restart();
+    expect(recovered.exitCode, recovered.stderr.toString()).toBe(0);
+    expect(JSON.parse(recovered.stdout.toString())).toContain(id(0));
+    expect(db.query("SELECT value FROM registry_meta WHERE key='liveness_projection_version'").get()).toEqual({ value: "2" });
+    const store = open();
+    store.mutate(file => { file.entries[key]!.structuredHost = null; });
+    store.mutate(file => { file.entries[key]!.structuredHost = columns; });
+    expect(registryLivenessRows(store.readOnlySnapshot().file).entries.map(row => row.key.sessionId)).toContain(id(0));
+  } finally { db.close(); }
+});
 
 test("keyed archive reads use the cold identity index after upgrading an existing view", () => {
   const { open, filename } = fixture();
@@ -555,6 +647,28 @@ test("an archive pass confirms under the lock what it selected before it, and a 
   } finally { db.close(); }
 });
 
+/* registry_rows keeps a copy of every archived row. A search that starts
+   from a field index reads those copies, payload included, before it learns
+   that none of them is hot. */
+test("the candidate search reads registry rows by key from the hot set, never through the retained copies of the archive", () => {
+  const { open,filename } = fixture();
+  const store = open();
+  const db = new Database(filename);
+  try {
+    const selected = archiveCandidates(db,1_000);
+    expect(selected.length).toBeGreaterThan(0);
+    archiveAll(store);
+    expect(archiveCandidates(db,1_000)).toEqual([]);
+    const plan = db.query<{ detail: string }, [number]>(`EXPLAIN QUERY PLAN ${ARCHIVE_CANDIDATES}`).all(1_000).map(row => row.detail);
+    /* Seven collections' branches, each driven by the hot keys. */
+    const driven = plan.flatMap((detail,index) => detail === "SCAN hot" ? [plan[index+1]] : []).slice(-7);
+    expect(driven).toHaveLength(7);
+    for (const detail of driven) expect(detail).toBe("SEARCH r USING INDEX sqlite_autoindex_registry_rows_1 (collection=? AND row_key=?)");
+    /* No part of the search walks one collection's rows, archived copies included. */
+    expect(plan.filter(detail => /^SEARCH \w+ USING (?:COVERING )?INDEX \S+ \(collection=\?\)$/.test(detail))).toEqual([]);
+  } finally { db.close(); }
+});
+
 test("cold independent lineage still denies a forged root grant, and external evidence changes redecide it", () => {
   const { open,filename,initial,conversationId } = fixture();
   const reader = open();
@@ -736,6 +850,9 @@ test("terminal migration history goes cold while draining and referenced intents
     initial.migrationIntents[key] = { id: key,engine: "codex",targetId: "fixture-account",origin: "manual",revision: 1,
       state,createdAt: time,updatedAt: time,requestIds: [key],evidence: null,stoppedAt: state === "stopped" ? time : null };
   }
+  /* A stopped intent whose opt-out sweep is unfinished is found by enumeration, so it stays hot. */
+  initial.migrationIntents["migration-sweeping"] = { ...initial.migrationIntents["migration-stopped"]!,id: "migration-sweeping",
+    requestIds: ["migration-sweeping"],stopSweep: { stampedAt: time,optOut: true } };
   initial.conversations[conversationId(0)]!.migration = { intentId: "migration-referenced",phase: "committed",
     targetId: "fixture-account",revision: 1,error: null,errorCode: null,operationId: "migration-operation",
     sourceGenerationId: id(0),providerReceipt: null,pendingContinuityPaths: [],boardProject: null,
@@ -745,7 +862,7 @@ test("terminal migration history goes cold while draining and referenced intents
   const db = new Database(filename,{ readonly: true });
   try {
     expect(db.query("SELECT row_key FROM registry_hot_rows WHERE collection='migrationIntents' ORDER BY row_key").all())
-      .toEqual([{ row_key: "migration-draining" },{ row_key: "migration-referenced" }]);
+      .toEqual([{ row_key: "migration-draining" },{ row_key: "migration-referenced" },{ row_key: "migration-sweeping" }]);
     expect(db.query("SELECT row_key FROM registry_cold WHERE collection='migrationIntents' ORDER BY row_key").all())
       .toEqual([{ row_key: "migration-complete" },{ row_key: "migration-stopped" }]);
   } finally { db.close(); }

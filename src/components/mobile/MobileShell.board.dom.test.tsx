@@ -5,6 +5,7 @@ import { flushSync } from "react-dom";
 
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import { translate } from "@/lib/i18n";
+import { keyEntries } from "@/lib/keys/store";
 import type { FileEntry } from "@/lib/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
@@ -75,6 +76,7 @@ const OVERRIDES: Record<string, unknown> = {
   fetch: (async (input: string | URL | Request, init?: RequestInit) => {
     if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     const url = String(input);
+    if (url === "/api/keys") return jsonResponse({ keys: keyEntries(false), staging: false, owner: false });
     if (url.startsWith("/api/board")) {
       if (init?.method === "PATCH") {
         const body = JSON.parse(String(init.body)) as {
@@ -93,7 +95,9 @@ const OVERRIDES: Record<string, unknown> = {
     /* The accounts screen's limits blocks read this; an unavailable answer
        leaves them in their loading state, which is all this file needs. */
     if (url.startsWith("/api/limits")) return { ok: false, status: 503, json: async () => ({}), text: async () => "" };
-    return jsonResponse({});
+    // An unimplemented fixture route is unavailable, with no fabricated
+    // successful body for the Settings readers to interpret.
+    return Response.json({ error: "fixture route unavailable" }, { status: 503 });
   }) as unknown as typeof fetch,
 };
 
@@ -186,7 +190,7 @@ const dashboardProps = (over: Partial<React.ComponentProps<typeof ProjectDashboa
   files: [conversation], flows: [], pipelines: [], workflows: [], tasks: [task],
   project: PROJECT, loaded: true, openNonce: 0, archived: false,
   catalogKnown: true, catalogConversationCount: 1,
-  projectCwd: "/repo", onArchive: (project: string) => { archived.push(project); }, onUnarchive: (project: string) => { unarchived.push(project); },
+  projectCwd: "/repo", onArchive: async (project: string) => { archived.push(project); return { ok: true as const }; }, onUnarchive: async (project: string) => { unarchived.push(project); return { ok: true as const }; },
   onOpenSearch: () => { searchOpens += 1; },
   mobileShell: host,
   ...over,
@@ -311,7 +315,7 @@ test("⋯ opens the board menu over the board: create cells, the places as rows,
      (#2098). The header's entries follow docs/design/header-menu.md:
      Activity, Team and Update as cells, then Settings and Help and learning;
      the project's switches and Archive are a page behind «Project rules». */
-  expect(rows()).toEqual(["new-agent", "new-task", "new-pipeline", "tasks", "pipelines", "hidden", "view-board", "view-catalog", "accounts", "host", "activity", "team", "self-update", "settings", "help", "rules"]);
+  expect(rows()).toEqual(["new-agent", "new-task", "new-pipeline", "review-history", "tasks", "pipelines", "hidden", "view-board", "view-catalog", "accounts", "host", "activity", "team", "self-update", "settings", "help", "rules"]);
   expect(q(root, '[data-mobile2-menu-row="pipelines"]')!.getAttribute("data-mobile2-go")).toBe("pipelines");
   /* Every target is at least 44 px: a row by its own height, a cell by its 60. */
   for (const row of root.querySelectorAll("[data-mobile2-menu-row]")) expect((row as unknown as HTMLElement).className).toMatch(/min-h-11|min-h-\[60px\]/);
@@ -320,11 +324,6 @@ test("⋯ opens the board menu over the board: create cells, the places as rows,
   /* Delete project is cut on the phone (README §6): nothing in the menu is
      in danger colour. */
   expect(q(root, '[data-mobile2-sheet="menu"]')!.querySelector(".text-danger")).toBeNull();
-  /* The device-local settings ride as rows of the Settings page. */
-  click(q(root, '[data-mobile2-menu-row="settings"]'));
-  await settle();
-  expect(q(root, '[data-mobile2-sheet="menu"]')!.textContent).toContain(translate("en", "mobile2.menu.sound"));
-  expect(rows()).toEqual(["back", "memory", "key", "agent-mapping", "dictation", "linked-settings", "external-relay", "ping"]);
 });
 
 test("both board faces stay one tap away inside the menu, announced as radio rows, and still switch the board", async () => {
@@ -401,6 +400,7 @@ test("Archive project acts on the tap and answers with a receipt whose Restore u
   click(q(root, '[data-mobile2-menu-row="archive"]'));
   expect(archived).toEqual([PROJECT]);
   expect(q(root, '[data-mobile2-sheet="menu"]')).toBeNull();
+  await settle();
   const receipt = q(root, '[data-mobile2-receipt-placement="flow"]')!;
   expect(receipt).not.toBeNull();
   expect(receipt.textContent).toContain(translate("en", "mobile2.menu.archived"));

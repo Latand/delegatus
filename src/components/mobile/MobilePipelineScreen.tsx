@@ -1,4 +1,5 @@
 "use client";
+import { StageSetupResult, latestSetup } from "@/components/pipelines/StageSetupResult";
 
 import { Boxes, Check, CircleX, Eye, FileDiff, GitMerge, ListChecks, Pause, Play, RotateCcw, SkipForward, Undo2 } from "lucide-react";
 
@@ -31,6 +32,7 @@ import {
   pipelineLinkedTasks,
   resolveStageNavFile,
   stageAttempts,
+  stageConfigurable,
   stageNames,
   type StageNavTarget,
 } from "../pipelines/pipelineModel";
@@ -38,6 +40,10 @@ import { PipelineBlock, PipelineStateLine } from "../pipelines/PipelineBlock";
 import { checkChoiceGroups, checkRowValue, publishingStage, usePipelineChecks, type CheckTerms } from "../pipelines/PipelineCheckSettings";
 import { blockAgeSeconds, type PipelineAnswer } from "../pipelines/pipelineBlockModel";
 import { StagePlaceholderPane } from "../pipelines/StagePlaceholderPane";
+import type { ConversationDrafts } from "../pipelines/conversationDraftClient";
+import { AddStageControl, conversationDraftLane, DraftStartButton, DraftStartNote } from "../pipelines/DraftStageControls";
+import { StageDraftMessage } from "../kanban/StageDraft";
+import { StageDrafts } from "../kanban/stageDrafts";
 import type { StageSlot } from "../scheme/layout";
 import { humanizeDuration } from "../turnDuration";
 import { nowFragment, pipelineHiddenFromBoard } from "./mobileBoardModel";
@@ -48,6 +54,7 @@ import { useWorkLinks } from "@/components/workLinks/workLinksContext";
 import { MobileSheet, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
 import { MobileShell, type MobileShellHost, type SheetRenderer } from "./MobileShell";
 import { useMobileNav, useMobileNavStore, useMobileScreenState, useMobileScrollMemory, useSheetSelection } from "./mobileNav";
+import { takeRequestedStage } from "./pipelineStageRequest";
 
 /*
  * One pipeline on the phone: the Stages view (#2072 slice 6,
@@ -412,6 +419,10 @@ export interface MobilePipelineScreenProps {
   acts?: PendingPipelineActs;
   /** Test seam: the pipeline route. Production reads the browser's. */
   ports?: PipelinePorts;
+  /** The first messages being edited, the board's own store; the screen keeps one when absent. */
+  drafts?: StageDrafts;
+  /** Drafts made from a conversation: Start at the foot of such a draft. */
+  conversationDrafts?: ConversationDrafts;
 }
 
 /**
@@ -452,8 +463,16 @@ export function MobilePipelineScreen({
   cameFromTask = null,
   acts = pendingPipelineActs,
   ports = browserPipelinePorts,
+  drafts: sharedDrafts,
+  conversationDrafts,
 }: MobilePipelineScreenProps) {
   const { t } = useLocale();
+  const [ownDrafts] = useState(() => (sharedDrafts ? null : new StageDrafts()));
+  const drafts = sharedDrafts ?? ownDrafts!;
+  /* A draft made from a conversation (variant 3): its stages, then the first
+     stage's first message with Edit, then Start at the foot. */
+  const fromConversation = Boolean(conversationDrafts) && conversationDraftLane(pipeline);
+  const firstStage = pipeline.stages[0] ?? null;
   const nav = useMobileNavStore();
   const navState = useMobileNav();
   const links = useWorkLinks().of({ kind: "pipeline", id: pipeline.id });
@@ -474,7 +493,21 @@ export function MobilePipelineScreen({
      open (§3.3: one history entry, which Back closes); this says which stage. The pane inside is the desktop's own
      editor, so a change made from the phone is the same `override-stage`
      PATCH the board sends. */
-  const [configuring, setConfiguring] = useState<string | null>(null);
+  /* A tap on a stage that has not started, on the task screen,
+     opens this screen on that stage's sheet. */
+  const [configuring, setConfiguring] = useState<string | null>(() => {
+    const requestedStage = takeRequestedStage(pipeline.id);
+    return requestedStage && stageConfigurable(pipeline, requestedStage) ? requestedStage : null;
+  });
+  const openedOnStage = useRef(configuring);
+  useEffect(() => {
+    if (openedOnStage.current) nav.openSheet("stage");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, for the stage the screen opened on
+  }, []);
+  const configureStage = (stage: PipelineStage): void => {
+    setConfiguring(stage.id);
+    nav.openSheet("stage");
+  };
   const configStage = navState.sheet === "stage" && configuring
     ? pipeline.stages.find((stage) => stage.id === configuring) ?? null
     : null;
@@ -635,8 +668,8 @@ export function MobilePipelineScreen({
     };
     return (
       <MobileSheet name="stage" title={t("mobile2.pipeline.configureTitle", { stage: names.get(configStage.id) ?? configStage.id })} onClose={close}>
-        <div data-mobile2-stage-config={configStage.id} className="flex h-[min(620px,72dvh)] min-h-0 flex-col px-3 pb-3 [&_button]:min-h-11 [&_button]:min-w-11">
-          <StagePlaceholderPane slot={slot} interactive />
+        <div data-mobile2-stage-config={configStage.id} className="flex flex-col px-3 pb-3 [&_button]:min-h-11 [&_button]:min-w-11">
+          <StagePlaceholderPane slot={slot} interactive flow />
         </div>
       </MobileSheet>
     );
@@ -659,6 +692,12 @@ export function MobilePipelineScreen({
       title={barTitle}
       host={host}
       renderSheet={sheets}
+      dock={fromConversation && conversationDrafts ? (
+        <div data-phone-draft-start-foot={pipeline.id} className="flex flex-col gap-1">
+          <DraftStartNote pipeline={pipeline} store={conversationDrafts} drafts={drafts} ports={ports} variant="phone" />
+          <DraftStartButton pipeline={pipeline} title={title} store={conversationDrafts} drafts={drafts} ports={ports} variant="phone" />
+        </div>
+      ) : undefined}
     >
       <div ref={body} data-mobile2-pipeline-body className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden px-3 pb-4 pt-2.5">
         {dismissed ? (
@@ -683,12 +722,23 @@ export function MobilePipelineScreen({
           stageConversation={stageConversation}
           onOpenStage={openStage}
           onOpenAttempt={openAttempt}
-          onConfigureStage={(_pipeline, stage) => {
-            setConfiguring(stage.id);
-            nav.openSheet("stage");
-          }}
+          onConfigureStage={(_pipeline, stage) => configureStage(stage)}
           onWorkLinks={() => nav.openSheet("links")}
+          afterStages={fromConversation ? <AddStageControl pipeline={pipeline} ports={ports} variant="phone" /> : undefined}
         />
+        {/* Setup runs once per lane, before its first Builder: the phone shows its latest outcome. */}
+        <StageSetupResult setup={latestSetup(pipeline)} worktreeDir={pipeline.worktreeDir} />
+        {fromConversation && firstStage ? (
+          <section data-phone-draft-first-message={firstStage.id} className="flex shrink-0 flex-col gap-1.5">
+            <h3 className="m-0 flex min-h-[30px] items-center text-ui font-semibold text-secondary">
+              {t("kanban.fromConversation.firstMessage", { stage: names.get(firstStage.id) ?? firstStage.id })}
+            </h3>
+            {/* The board's own editor and store, so Save, conflicts and an unconfirmed write behave as on the card. */}
+            <div className="kb" data-surface="phone-first-message">
+              <StageDraftMessage pipeline={pipeline} stage={firstStage} name={names.get(firstStage.id) ?? firstStage.id} drafts={drafts} ports={ports} fromConversation />
+            </div>
+          </section>
+        ) : null}
         {linked.length ? (
           <section data-mobile2-section="tasks" className="flex shrink-0 flex-col gap-1.5">
             <h3 className="flex min-h-[30px] items-center gap-1.5 text-ui font-semibold text-secondary">

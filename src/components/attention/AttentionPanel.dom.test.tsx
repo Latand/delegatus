@@ -62,7 +62,7 @@ function conversation(path: string, project: string, over: Partial<FileEntry> = 
 const spawned = (role: string) => ({ durableLineage: { kind: "spawn", role, parentConversationId: null, reviewsConversationId: null, memberships: [] } }) as unknown as Partial<FileEntry>;
 
 function question(header: string, secondsAgo: number): FileEntry["pendingQuestion"] {
-  return { kind: "question", toolUseId: `toolu-${header}`, transcriptPath: "", pid: null, paneTarget: null, askedAt: iso(secondsAgo), questions: [{ header, question: `${header}?`, multiSelect: false, options: [] }] } as unknown as FileEntry["pendingQuestion"];
+  return { kind: "question", toolUseId: `toolu-${header}`, transcriptPath: "", pid: null, askedAt: iso(secondsAgo), questions: [{ header, question: `${header}?`, multiSelect: false, options: [] }] } as unknown as FileEntry["pendingQuestion"];
 }
 
 function lane(id: string, project: string, state: Pipeline["state"] = "needs_decision"): Pipeline {

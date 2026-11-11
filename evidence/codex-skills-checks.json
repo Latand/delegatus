@@ -1,709 +1,1612 @@
 {
-  "observedAt": "2026-10-27T15:53:02.814124+00:00",
-  "baseRevision": "4b98a80796b028ec31397be9c3d6266ff5582c7c",
-  "gateWrapper": "$HOME/.cache/delegatus/self-update/bb38046574072bf9/releases/ddb91806e944/scripts/gate-slot.sh",
-  "commands": {
-    "measurement": "rtk proxy python3 scripts/observe-codex-skills.py --output \"$TMPDIR/codex-skills-observation-production-copied.json\"",
-    "head": "LLV_OWNED_RUN_TIMEOUT_MS=3600000 bash \"$GATE\" --record \"$TMPDIR/touched-tests-2.log\" bun \"$TMPDIR/run-tests.ts\" \"$TMPDIR/check-tree\" \"$TMPDIR/selected-tests.json\"",
-    "additional": "LLV_OWNED_RUN_TIMEOUT_MS=3600000 bash \"$GATE\" --record \"$TMPDIR/extra-tests.log\" bun \"$TMPDIR/run-tests.ts\" \"$TMPDIR/check-tree\" \"$TMPDIR/extra-tests.json\"",
-    "baseline": "LLV_OWNED_RUN_TIMEOUT_MS=3600000 bash \"$GATE\" --record \"$TMPDIR/base-tests.log\" bun \"$TMPDIR/run-tests.ts\" \"$TMPDIR/base-tree\" \"$TMPDIR/base-failures.json\"",
-    "projectComparison": "LLV_OWNED_RUN_TIMEOUT_MS=3600000 bash \"$GATE\" --record \"$TMPDIR/comparisons.log\" bun \"$TMPDIR/run-comparisons.ts\" \"$TMPDIR/check-tree\" \"$TMPDIR/base-failures.json\"",
-    "removalControls": "LLV_OWNED_RUN_TIMEOUT_MS=3600000 bash \"$GATE\" --record \"$TMPDIR/mutations-final.log\" bun \"$TMPDIR/run-mutations.ts\" \"$TMPDIR/check-tree\" \"$TMPDIR/mutations.json\"",
-    "lint": "git diff --cached --name-only -- \"*.ts\" | xargs bun node_modules/eslint/bin/eslint.js",
-    "privacy": "LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE=scripts/privacy-known-value-fingerprints.json bun scripts/privacy-publication-gate.ts --require-known-values --base \"$(git rev-parse HEAD)\""
-  },
-  "environment": "Detached Git exports with copied dependencies; checkEnvironment then isolatedEnvironment per file/control, Viewer control URL on port 1, setsid --wait and closed stdin. Heavy checks ran sequentially.",
-  "testRuntime": "Bun 1.4.0",
-  "uniqueTestFiles": 81,
-  "passingFiles": 74,
-  "preExistingFailureFiles": 7,
-  "newFailures": 0,
-  "confirmedPreExistingFailures": 49,
-  "lint": {
-    "exit": 0,
-    "errors": 0,
-    "warnings": 6,
-    "sameWarningsOnBase": true
-  },
-  "privacy": {
-    "exit": 0
-  },
-  "files": [
-    {
-      "path": "src/lib/accounts/migration/contracts.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/accounts/migration/provider.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/agent/attachCommand.test.ts",
-      "result": "confirmed pre-existing failures"
-    },
-    {
-      "path": "src/lib/agent/cli.integration.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/agent/cli.mcp.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/agent/cli.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/agent/codexSpawnPolicy.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/agent/mcpAllowlist.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/agent/spawnCommand.contention.test.ts",
-      "result": "confirmed pre-existing failures"
-    },
-    {
-      "path": "src/lib/agent/spawnCommand.locale.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/agent/spawnCommand.registryLock.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/agent/spawnCommand.telegram.test.ts",
-      "result": "confirmed pre-existing failures"
-    },
-    {
-      "path": "src/lib/agent/spawnPolicy.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/codexHeadlessConfig.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/flows/engine.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/memory/source.launch.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.accountGuard.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.activation.test.ts",
-      "result": "confirmed pre-existing failures"
-    },
-    {
-      "path": "src/lib/pipelines/engine.cloud.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.containment.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.controllerPass.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.controllerSnapshot.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.cpuQueue.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.creation.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.fencedMessage.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.pauseMetadata.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.ports.part2.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.ports.part3.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.ports.test.ts",
-      "result": "confirmed pre-existing failures"
-    },
-    {
-      "path": "src/lib/pipelines/engine.providerBudget.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.providerBudgetChains.part2.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.providerBudgetChains.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.providerBudgetOutput.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.providerChains.part2.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.providerChains.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.providerReset.part2.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.providerReset.part3.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.providerReset.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.providerSignals.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.provisioning.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.publication.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.recoveredPending.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.recovery.part2.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.recovery.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.recoveryAdmission.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.recoveryAuthority.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.rolePrivacy.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.routing.test.ts",
-      "result": "confirmed pre-existing failures"
-    },
-    {
-      "path": "src/lib/pipelines/engine.settlement.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.spawnSilence.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.succession.part2.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.succession.part3.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.succession.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/pipelines/engine.watchdogRegression.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/runtime/codexAppServerHost.compact.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/runtime/codexAppServerHost.inject.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/runtime/codexAppServerHost.injectCli.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/runtime/codexAppServerHost.injectResponses.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/runtime/codexAppServerHost.integration.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/runtime/codexAppServerHost.pluginGrant.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/runtime/codexAppServerHost.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/runtime/codexAppServerHost.tier.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/runtime/codexSkillsInstructions.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/runtime/startup.handoverRetry.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/runtime/startup.quarantine.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/runtime/startup.test.ts",
-      "result": "confirmed pre-existing failures"
-    },
-    {
-      "path": "src/lib/runtime/structuredRecovery.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/runtime/structuredSpawn.cpuPlacement.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/runtime/structuredSpawn.integration.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/runtime/structuredSpawn.memory.test.ts",
-      "result": "pass"
-    },
-    {
-      "path": "src/lib/runtime/structuredSpawn.terminalize.test.ts",
-      "result": "pass"
+  "recordPolicy": "Historical check evidence retained under the one-shot driver rule; historical commands may name a removed driver. Current merged-tree verification is recorded separately.",
+  "historicalChecks": {
+    "observedAt": "2026-10-27T15:53:02.814124+00:00",
+    "baseRevision": "4b98a80796b028ec31397be9c3d6266ff5582c7c",
+    "gateWrapper": "$HOME/.cache/delegatus/self-update/bb38046574072bf9/releases/ddb91806e944/scripts/gate-slot.sh",
+    "commands": {
+      "measurement": "rtk proxy python3 scripts/observe-codex-skills.py --output \"$TMPDIR/codex-skills-observation-production-copied.json\"",
+      "head": "LLV_OWNED_RUN_TIMEOUT_MS=3600000 bash \"$GATE\" --record \"$TMPDIR/touched-tests-2.log\" bun \"$TMPDIR/run-tests.ts\" \"$TMPDIR/check-tree\" \"$TMPDIR/selected-tests.json\"",
+      "additional": "LLV_OWNED_RUN_TIMEOUT_MS=3600000 bash \"$GATE\" --record \"$TMPDIR/extra-tests.log\" bun \"$TMPDIR/run-tests.ts\" \"$TMPDIR/check-tree\" \"$TMPDIR/extra-tests.json\"",
+      "baseline": "LLV_OWNED_RUN_TIMEOUT_MS=3600000 bash \"$GATE\" --record \"$TMPDIR/base-tests.log\" bun \"$TMPDIR/run-tests.ts\" \"$TMPDIR/base-tree\" \"$TMPDIR/base-failures.json\"",
+      "projectComparison": "LLV_OWNED_RUN_TIMEOUT_MS=3600000 bash \"$GATE\" --record \"$TMPDIR/comparisons.log\" bun \"$TMPDIR/run-comparisons.ts\" \"$TMPDIR/check-tree\" \"$TMPDIR/base-failures.json\"",
+      "removalControls": "LLV_OWNED_RUN_TIMEOUT_MS=3600000 bash \"$GATE\" --record \"$TMPDIR/mutations-final.log\" bun \"$TMPDIR/run-mutations.ts\" \"$TMPDIR/check-tree\" \"$TMPDIR/mutations.json\"",
+      "lint": "git diff --cached --name-only -- \"*.ts\" | xargs bun node_modules/eslint/bin/eslint.js",
+      "privacy": "LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE=scripts/privacy-known-value-fingerprints.json bun scripts/privacy-publication-gate.ts --require-known-values --base \"$(git rev-parse HEAD)\""
+    },
+    "environment": "Detached Git exports with copied dependencies; checkEnvironment then isolatedEnvironment per file/control, Viewer control URL on port 1, setsid --wait and closed stdin. Heavy checks ran sequentially.",
+    "testRuntime": "Bun 1.4.0",
+    "uniqueTestFiles": 81,
+    "passingFiles": 74,
+    "preExistingFailureFiles": 7,
+    "newFailures": 0,
+    "confirmedPreExistingFailures": 49,
+    "lint": {
+      "exit": 0,
+      "errors": 0,
+      "warnings": 6,
+      "sameWarningsOnBase": true
+    },
+    "privacy": {
+      "exit": 0
+    },
+    "files": [
+      {
+        "path": "src/lib/accounts/migration/contracts.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/accounts/migration/provider.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/agent/attachCommand.test.ts",
+        "result": "confirmed pre-existing failures"
+      },
+      {
+        "path": "src/lib/agent/cli.integration.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/agent/cli.mcp.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/agent/cli.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/agent/codexSpawnPolicy.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/agent/mcpAllowlist.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/agent/spawnCommand.contention.test.ts",
+        "result": "confirmed pre-existing failures"
+      },
+      {
+        "path": "src/lib/agent/spawnCommand.locale.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/agent/spawnCommand.registryLock.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/agent/spawnCommand.telegram.test.ts",
+        "result": "confirmed pre-existing failures"
+      },
+      {
+        "path": "src/lib/agent/spawnPolicy.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/codexHeadlessConfig.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/flows/engine.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/memory/source.launch.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.accountGuard.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.activation.test.ts",
+        "result": "confirmed pre-existing failures"
+      },
+      {
+        "path": "src/lib/pipelines/engine.cloud.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.containment.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.controllerPass.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.controllerSnapshot.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.cpuQueue.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.creation.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.fencedMessage.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.pauseMetadata.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.ports.part2.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.ports.part3.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.ports.test.ts",
+        "result": "confirmed pre-existing failures"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerBudget.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerBudgetChains.part2.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerBudgetChains.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerBudgetOutput.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerChains.part2.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerChains.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerReset.part2.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerReset.part3.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerReset.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerSignals.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.provisioning.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.publication.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.recoveredPending.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.recovery.part2.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.recovery.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.recoveryAdmission.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.recoveryAuthority.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.rolePrivacy.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.routing.test.ts",
+        "result": "confirmed pre-existing failures"
+      },
+      {
+        "path": "src/lib/pipelines/engine.settlement.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.spawnSilence.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.succession.part2.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.succession.part3.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.succession.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/pipelines/engine.watchdogRegression.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/runtime/codexAppServerHost.compact.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/runtime/codexAppServerHost.inject.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/runtime/codexAppServerHost.injectCli.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/runtime/codexAppServerHost.injectResponses.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/runtime/codexAppServerHost.integration.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/runtime/codexAppServerHost.pluginGrant.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/runtime/codexAppServerHost.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/runtime/codexAppServerHost.tier.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/runtime/codexSkillsInstructions.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/runtime/startup.handoverRetry.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/runtime/startup.quarantine.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/runtime/startup.test.ts",
+        "result": "confirmed pre-existing failures"
+      },
+      {
+        "path": "src/lib/runtime/structuredRecovery.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/runtime/structuredSpawn.cpuPlacement.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/runtime/structuredSpawn.integration.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/runtime/structuredSpawn.memory.test.ts",
+        "result": "pass"
+      },
+      {
+        "path": "src/lib/runtime/structuredSpawn.terminalize.test.ts",
+        "result": "pass"
+      }
+    ],
+    "repositoryComparisons": [
+      {
+        "file": "./src/lib/agent/spawnCommand.telegram.test.ts",
+        "exit": 0,
+        "summary": "touched-tests: 0 new failures, 31 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky",
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--admitted",
+          "--base",
+          "4b98a80796b028ec31397be9c3d6266ff5582c7c",
+          "./src/lib/agent/spawnCommand.telegram.test.ts"
+        ]
+      },
+      {
+        "file": "./src/lib/agent/attachCommand.test.ts",
+        "exit": 0,
+        "summary": "touched-tests: 0 new failures, 7 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky",
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--admitted",
+          "--base",
+          "4b98a80796b028ec31397be9c3d6266ff5582c7c",
+          "./src/lib/agent/attachCommand.test.ts"
+        ]
+      },
+      {
+        "file": "./src/lib/agent/spawnCommand.contention.test.ts",
+        "exit": 0,
+        "summary": "touched-tests: 0 new failures, 3 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky",
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--admitted",
+          "--base",
+          "4b98a80796b028ec31397be9c3d6266ff5582c7c",
+          "./src/lib/agent/spawnCommand.contention.test.ts"
+        ]
+      },
+      {
+        "file": "./src/lib/pipelines/engine.routing.test.ts",
+        "exit": 0,
+        "summary": "touched-tests: 0 new failures, 2 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky",
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--admitted",
+          "--base",
+          "4b98a80796b028ec31397be9c3d6266ff5582c7c",
+          "./src/lib/pipelines/engine.routing.test.ts"
+        ]
+      },
+      {
+        "file": "./src/lib/pipelines/engine.activation.test.ts",
+        "exit": 0,
+        "summary": "touched-tests: 0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky",
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--admitted",
+          "--base",
+          "4b98a80796b028ec31397be9c3d6266ff5582c7c",
+          "./src/lib/pipelines/engine.activation.test.ts"
+        ]
+      },
+      {
+        "file": "./src/lib/pipelines/engine.ports.test.ts",
+        "exit": 0,
+        "summary": "touched-tests: 0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky",
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--admitted",
+          "--base",
+          "4b98a80796b028ec31397be9c3d6266ff5582c7c",
+          "./src/lib/pipelines/engine.ports.test.ts"
+        ]
+      },
+      {
+        "file": "./src/lib/runtime/startup.test.ts",
+        "exit": 0,
+        "summary": "touched-tests: 0 new failures, 4 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky",
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--admitted",
+          "--base",
+          "4b98a80796b028ec31397be9c3d6266ff5582c7c",
+          "./src/lib/runtime/startup.test.ts"
+        ]
+      }
+    ],
+    "removalControls": [
+      {
+        "label": "thread override",
+        "file": "src/lib/codexHeadlessConfig.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/agent/cli.test.ts",
+          "-t",
+          "delegated Codex specs omit skills"
+        ],
+        "controlExit": 0,
+        "exit": 1,
+        "red": true,
+        "failures": [
+          "(fail) delegated Codex specs omit skills in terminal and structured launches; operator specs inherit"
+        ]
+      },
+      {
+        "label": "fresh CLI flag",
+        "file": "src/lib/agent/cli.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/agent/cli.test.ts",
+          "-t",
+          "delegated Codex specs omit skills"
+        ],
+        "controlExit": 0,
+        "exit": 1,
+        "red": true,
+        "failures": [
+          "(fail) delegated Codex specs omit skills in terminal and structured launches; operator specs inherit"
+        ]
+      },
+      {
+        "label": "resume CLI flag",
+        "file": "src/lib/agent/cli.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/agent/cli.test.ts",
+          "-t",
+          "delegated Codex specs omit skills"
+        ],
+        "controlExit": 0,
+        "exit": 1,
+        "red": true,
+        "failures": [
+          "(fail) delegated Codex specs omit skills in terminal and structured launches; operator specs inherit"
+        ]
+      },
+      {
+        "label": "host config forwarding",
+        "file": "src/lib/runtime/codexAppServerHost.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/runtime/codexAppServerHost.test.ts",
+          "-t",
+          "skills policy reaches fresh and resumed"
+        ],
+        "controlExit": 0,
+        "exit": 1,
+        "red": true,
+        "failures": [
+          "(fail) skills policy reaches fresh and resumed Codex threads (omit=%s)"
+        ]
+      },
+      {
+        "label": "durable profile",
+        "file": "src/lib/agent/cli.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/agent/cli.test.ts",
+          "-t",
+          "delegated Codex specs omit skills"
+        ],
+        "controlExit": 0,
+        "exit": 1,
+        "red": true,
+        "failures": [
+          "(fail) delegated Codex specs omit skills in terminal and structured launches; operator specs inherit"
+        ]
+      },
+      {
+        "label": "structured origin",
+        "file": "src/lib/runtime/structuredSpawn.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/runtime/codexSkillsInstructions.test.ts",
+          "-t",
+          "host launch recovers skills policy"
+        ],
+        "controlExit": 0,
+        "exit": 1,
+        "red": true,
+        "failures": [
+          "(fail) host launch recovers skills policy from durable profiles and legacy role receipts"
+        ]
+      },
+      {
+        "label": "spawn admission",
+        "file": "src/lib/agent/spawnCommand.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/agent/spawnCommand.telegram.test.ts",
+          "-t",
+          "Codex admission omits skills"
+        ],
+        "controlExit": 0,
+        "exit": 1,
+        "red": true,
+        "failures": [
+          "(fail) Codex admission omits skills for delegated and role launches while operator roots inherit"
+        ]
+      },
+      {
+        "label": "pipeline admission",
+        "file": "src/lib/pipelines/engine.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/pipelines/engine.rolePrivacy.test.ts",
+          "-t",
+          "admission rechecks privacy and activation before dispatch"
+        ],
+        "controlExit": 0,
+        "exit": 1,
+        "red": true,
+        "failures": [
+          "(fail) admission rechecks privacy and activation before dispatch: reclassify",
+          "(fail) admission rechecks privacy and activation before dispatch: file-reclassify"
+        ]
+      },
+      {
+        "label": "startup forwarding",
+        "file": "src/lib/runtime/startup.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/runtime/startup.test.ts",
+          "-t",
+          "startup keeps an undesignated pipeline orchestrator clean"
+        ],
+        "controlExit": 0,
+        "exit": 1,
+        "red": true,
+        "failures": [
+          "(fail) startup keeps an undesignated pipeline orchestrator clean on codex"
+        ]
+      },
+      {
+        "label": "migration forwarding",
+        "file": "src/lib/accounts/migration/provider.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/accounts/migration/provider.test.ts",
+          "-t",
+          "migration successor runs in the CPU cell"
+        ],
+        "controlExit": 0,
+        "exit": 1,
+        "red": true,
+        "failures": [
+          "(fail) a codex migration successor runs in the CPU cell of its conversation's class, and work it cannot contain is refused before it starts"
+        ]
+      },
+      {
+        "label": "reconnect forwarding",
+        "file": "src/lib/runtime/structuredRecovery.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/runtime/structuredRecovery.test.ts",
+          "-t",
+          "startup recovery reconnects a verified live native host without spawning a successor \\(delegated\\)"
+        ],
+        "controlExit": 0,
+        "exit": 1,
+        "red": true,
+        "failures": [
+          "(fail) startup recovery reconnects a verified live native host without spawning a successor (delegated)"
+        ]
+      },
+      {
+        "label": "path terminal policy",
+        "file": "src/lib/agent/attachCommand.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/agent/cli.test.ts",
+          "-t",
+          "delegated Codex specs omit skills"
+        ],
+        "controlExit": 0,
+        "exit": 1,
+        "red": true,
+        "failures": [
+          "(fail) delegated Codex specs omit skills in terminal and structured launches; operator specs inherit"
+        ]
+      },
+      {
+        "label": "receipt terminal policy",
+        "file": "src/lib/agent/attachCommand.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/runtime/codexSkillsInstructions.test.ts",
+          "-t",
+          "host launch recovers skills policy"
+        ],
+        "controlExit": 0,
+        "exit": 1,
+        "red": true,
+        "failures": [
+          "(fail) host launch recovers skills policy from durable profiles and legacy role receipts"
+        ]
+      }
+    ],
+    "sourceDigests": {
+      "scripts/observe-codex-skills.py": "3ae07f7a19db20f0c561bb582442b13452c860e8c6686e891d488eabe350817b",
+      "src/lib/accounts/migration/contracts.ts": "94f462fa2fd2b709453fc539c454f320587d66fc30ae56acd0c22a7029e389f0",
+      "src/lib/accounts/migration/provider.test.ts": "2257a9ee782ac133e7eb99a895e9a6a28b80556a65448d826187895056d2f012",
+      "src/lib/accounts/migration/provider.ts": "f5be2cbde2467f9289902ff7a06fa2d5158c822cc6ec25fab1bb9bc08b9052bb",
+      "src/lib/agent/attachCommand.ts": "b28fa5aea501fc50d08c495536f9f6ba1d7e873cdd980a370a7d70cfbd43d015",
+      "src/lib/agent/cli.test.ts": "fc6f36a514fb1b11d57b5d8679c1364b2ce03af6c328925d723a98a52452540a",
+      "src/lib/agent/cli.ts": "916a706c83bb1e685e3865657e67dff3756b2b8408dcc3049436d52e972e31e1",
+      "src/lib/agent/spawnCommand.telegram.test.ts": "270cf65412b5bdf560dffc759b1017acdd1eff9d035401bc5122b5cf501ccdc8",
+      "src/lib/agent/spawnCommand.ts": "1409de477c78122668e29ed72383032aa4d98104c3f266887f2d9f4c2814cf40",
+      "src/lib/codexHeadlessConfig.ts": "0def6662f904da2985610670388d6165ed9c3410ae732dc45beb539c8f964ef3",
+      "src/lib/pipelines/engine.rolePrivacy.test.ts": "f5c58950e890a05fd8f73057f5810164b0fba78a2cb9bcfbfd70ccced2068203",
+      "src/lib/pipelines/engine.ts": "f878130e1498ec60238b590493632fa3b247614ea944297638ffeaf04003327f",
+      "src/lib/runtime/codexAppServerHost.test.ts": "9f3b25654060166a231e12fc05d24bef710e097b544e654c4186f95adac0d8ea",
+      "src/lib/runtime/codexAppServerHost.ts": "b7fcbcf7ba3a6363f31a44bed746997dc9986fc488b105c34f353416f4971285",
+      "src/lib/runtime/codexSkillsInstructions.test.ts": "865f8435ba2b3e6cc86594c725c4e5c740089539b555d0385d62c447435c8435",
+      "src/lib/runtime/startup.test.ts": "e7e48ab6ead5482545e9ce2cfe36f0726650b07ea29e56a7963c96ae909b3396",
+      "src/lib/runtime/startup.ts": "70c086bf81a11c40ffa2bc6caf0cea0095b0ad0a05efd5a34c1938090263c189",
+      "src/lib/runtime/structuredRecovery.test.ts": "07dfce16107c160cca2cb6fccfd381e68785731d16f864bc9bde4821aed5456e",
+      "src/lib/runtime/structuredRecovery.ts": "63ebd9fe07f85311213925f27868eff26d9272740e17d90ea1b83ce26d085201",
+      "src/lib/runtime/structuredSpawn.ts": "0502e2a4bdd6dde64437d4cc1b4cb524759803d1b60ba33f3b5895456d2a1d4d"
     }
-  ],
-  "repositoryComparisons": [
-    {
-      "file": "./src/lib/agent/spawnCommand.telegram.test.ts",
-      "exit": 0,
-      "summary": "touched-tests: 0 new failures, 31 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky",
+  },
+  "currentVerification": {
+    "generatedAt": "2026-11-11T13:11:12.666019+00:00",
+    "mainParent": "662a6012b39f051669da557d828c13b9e82aa27d",
+    "reviewedParent": "0a6252a353e95767dfcbf374652cbcb4e75a4194",
+    "status": "Final merged source verified; pipeline publication owns push and hosted CI.",
+    "isolation": "One explicit test file per recorded gate; private HOME, XDG_CONFIG_HOME, TMPDIR, LLV_STATE_DIR and engine homes, Viewer control URL on closed port 1. Heavy checks sequential; the test preload supplies further per-file isolation.",
+    "testRuntime": "Bun 1.4.0",
+    "summary": {
+      "files": 20,
+      "passed": 1386,
+      "matchingMainFailures": 45,
+      "skipped": 1,
+      "newFailures": 0
+    },
+    "files": [
+      {
+        "file": "src/lib/accounts/codexAppServer.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/accounts/codexAppServer.test.ts"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T12:44:33.751622+00:00",
+        "pass": 48,
+        "fail": 0,
+        "skip": 0,
+        "durationSeconds": 1.393,
+        "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e"
+      },
+      {
+        "file": "src/lib/accounts/migration/provider.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/accounts/migration/provider.test.ts"
+        ],
+        "exit": 1,
+        "finishedAt": "2026-11-11T12:57:51.551087+00:00",
+        "pass": 70,
+        "fail": 2,
+        "skip": 0,
+        "durationSeconds": 9.06,
+        "baseRevision": "662a6012b39f051669da557d828c13b9e82aa27d",
+        "baseline": {
+          "exit": 1,
+          "finishedAt": "2026-11-11T12:57:59.157157+00:00",
+          "pass": 66,
+          "fail": 2,
+          "skip": 0,
+          "durationSeconds": 6.71,
+          "sameFailingTestNames": true,
+          "failures": [
+            "a claude migration rejects an owned writable transcript root inside a private home",
+            "a codex migration rejects an owned writable transcript root inside a private home"
+          ]
+        }
+      },
+      {
+        "file": "src/lib/agent/cli.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/agent/cli.test.ts"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T12:44:46.968751+00:00",
+        "pass": 56,
+        "fail": 0,
+        "skip": 0,
+        "durationSeconds": 4.59,
+        "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e"
+      },
+      {
+        "file": "src/lib/agent/ephemeral.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/agent/ephemeral.test.ts"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T12:44:49.772778+00:00",
+        "pass": 15,
+        "fail": 0,
+        "skip": 0,
+        "durationSeconds": 2.15,
+        "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e"
+      },
+      {
+        "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/agent/spawnCommand.telegram.test.ts"
+        ],
+        "exit": 1,
+        "finishedAt": "2026-11-11T12:58:15.599306+00:00",
+        "pass": 37,
+        "fail": 31,
+        "skip": 0,
+        "durationSeconds": 15.69,
+        "baseRevision": "662a6012b39f051669da557d828c13b9e82aa27d",
+        "baseline": {
+          "exit": 1,
+          "finishedAt": "2026-11-11T12:58:28.296422+00:00",
+          "pass": 36,
+          "fail": 31,
+          "skip": 0,
+          "durationSeconds": 12.03,
+          "sameFailingTestNames": true,
+          "failures": [
+            "a codex relaunch where Telegram is not set up leaves the server out and asks nobody",
+            "a conflicting Codex account definition ends the granted launch with a named refusal",
+            "a message to a codex conversation whose host is gone reconnects Telegram and relaunches it with the tool",
+            "a message to a codex conversation whose host is gone relaunches it without Telegram while the connector is disconnected",
+            "a new codex agent starts without the tool while Telegram waits for the operator to sign in",
+            "a sign-out between admission and deferred host start starts the granted child without the tool",
+            "after a self-update a codex relaunch replaces the previous release's connector and starts with the tool",
+            "revoking the seat while a codex launch waits for Telegram to reconnect refuses the launch",
+            "the claude orchestrator rotates while Telegram ended the session",
+            "the claude orchestrator rotates while Telegram is connected",
+            "the claude orchestrator rotates while Telegram is not set up",
+            "the claude orchestrator rotates while the connector is down and comes back",
+            "the claude orchestrator rotates while the connector is down and stays down",
+            "the claude orchestrator rotates while the record was never published for the stored credential",
+            "the codex orchestrator rotates while Telegram ended the session",
+            "the codex orchestrator rotates while Telegram is connected",
+            "the codex orchestrator rotates while Telegram is not set up",
+            "the codex orchestrator rotates while the connector is down and comes back",
+            "the codex orchestrator rotates while the connector is down and stays down",
+            "the codex orchestrator rotates while the record was never published for the stored credential",
+            "the off deferred seat children reach both production hosts with Telegram",
+            "the off disconnected operator root launches without Telegram",
+            "the off production launch builder keeps seat-child Telegram grants",
+            "the off seat builder reaches both production hosts with Telegram",
+            "the off ungranted children reach both hosts without a Telegram token",
+            "the sqlite deferred seat children reach both production hosts with Telegram",
+            "the sqlite disconnected operator root launches without Telegram",
+            "the sqlite production launch builder keeps seat-child Telegram grants",
+            "the sqlite seat builder reaches both production hosts with Telegram",
+            "the sqlite ungranted children reach both hosts without a Telegram token",
+            "where Telegram is not set up, a codex child that asks for it starts without the grant"
+          ]
+        }
+      },
+      {
+        "file": "src/lib/agent/spawnCommand.workspace.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/agent/spawnCommand.workspace.test.ts"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T12:45:06.347939+00:00",
+        "pass": 2,
+        "fail": 0,
+        "skip": 0,
+        "durationSeconds": 0.883,
+        "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e"
+      },
+      {
+        "file": "src/lib/externalRelay/cloud.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/externalRelay/cloud.test.ts"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T12:45:54.742408+00:00",
+        "pass": 89,
+        "fail": 0,
+        "skip": 0,
+        "durationSeconds": 43.73,
+        "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e"
+      },
+      {
+        "file": "src/lib/pipelines/cloudHostedClient.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/pipelines/cloudHostedClient.test.ts"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T12:47:24.350266+00:00",
+        "pass": 145,
+        "fail": 0,
+        "skip": 0,
+        "durationSeconds": 74.84,
+        "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e"
+      },
+      {
+        "file": "src/lib/pipelines/engine.rolePrivacy.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/pipelines/engine.rolePrivacy.test.ts"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T12:36:54.993194+00:00",
+        "pass": 99,
+        "fail": 0,
+        "skip": 1,
+        "durationSeconds": 344.98,
+        "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e"
+      },
+      {
+        "file": "src/lib/runtime/codexAppServerHost.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/runtime/codexAppServerHost.test.ts"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T12:48:24.792840+00:00",
+        "pass": 377,
+        "fail": 0,
+        "skip": 0,
+        "durationSeconds": 59.7,
+        "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e"
+      },
+      {
+        "file": "src/lib/runtime/codexSkillsInstructions.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/runtime/codexSkillsInstructions.test.ts"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T12:48:30.942899+00:00",
+        "pass": 4,
+        "fail": 0,
+        "skip": 0,
+        "durationSeconds": 5.39,
+        "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e"
+      },
+      {
+        "file": "src/lib/runtime/startup.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/runtime/startup.test.ts"
+        ],
+        "exit": 1,
+        "finishedAt": "2026-11-11T12:59:31.355995+00:00",
+        "pass": 194,
+        "fail": 5,
+        "skip": 0,
+        "durationSeconds": 62.31,
+        "baseRevision": "662a6012b39f051669da557d828c13b9e82aa27d",
+        "baseline": {
+          "exit": 1,
+          "finishedAt": "2026-11-11T13:00:31.111538+00:00",
+          "pass": 190,
+          "fail": 5,
+          "skip": 0,
+          "durationSeconds": 58.71,
+          "sameFailingTestNames": true,
+          "failures": [
+            "SQLite startup releases a completed stage host claim with pending delivery after its recorded process dies",
+            "deferred pipeline evidence completes the pass with both engines retained, reconciles pending spawns outside the fence, and re-probes only the evidence until it moves (#1501)",
+            "startup settles a delivered pipeline retry and collapses its rebooted predecessor exactly once",
+            "startup socket recovery retains a partially adopted host and drains its held send once",
+            "startup terminalizes a delivered Claude spawn whose unverifiable host claim survived reboot"
+          ]
+        }
+      },
+      {
+        "file": "src/lib/runtime/structuredRecovery.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/runtime/structuredRecovery.test.ts"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T12:49:44.191589+00:00",
+        "pass": 56,
+        "fail": 0,
+        "skip": 0,
+        "durationSeconds": 3.62,
+        "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e"
+      },
+      {
+        "file": "src/lib/conversation/actions.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/conversation/actions.test.ts"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T12:49:45.284599+00:00",
+        "pass": 16,
+        "fail": 0,
+        "skip": 0,
+        "durationSeconds": 0.532,
+        "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e"
+      },
+      {
+        "file": "scripts/local-gate.hooks.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "scripts/local-gate.hooks.test.ts"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T12:52:53.654354+00:00",
+        "pass": 37,
+        "fail": 0,
+        "skip": 0,
+        "durationSeconds": 106.97,
+        "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e"
+      },
+      {
+        "file": "scripts/local-gate.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "scripts/local-gate.test.ts"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T12:54:30.885251+00:00",
+        "pass": 63,
+        "fail": 0,
+        "skip": 0,
+        "durationSeconds": 96.66,
+        "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e"
+      },
+      {
+        "file": "src/lib/memory/roleHistoryRows.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/memory/roleHistoryRows.test.ts"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T12:54:37.601312+00:00",
+        "pass": 31,
+        "fail": 0,
+        "skip": 0,
+        "durationSeconds": 5.98,
+        "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e"
+      },
+      {
+        "file": "src/lib/agent/attachCommand.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/agent/attachCommand.test.ts"
+        ],
+        "exit": 1,
+        "finishedAt": "2026-11-11T13:00:32.264548+00:00",
+        "pass": 22,
+        "fail": 7,
+        "skip": 0,
+        "durationSeconds": 0.514,
+        "baseRevision": "662a6012b39f051669da557d828c13b9e82aa27d",
+        "baseline": {
+          "exit": 1,
+          "finishedAt": "2026-11-11T13:00:35.290576+00:00",
+          "pass": 22,
+          "fail": 7,
+          "skip": 0,
+          "durationSeconds": 0.418,
+          "sameFailingTestNames": true,
+          "failures": [
+            "a finalized launch composes from its durable receipt while the scanner catches up",
+            "a queued tmux launch composes from its durable receipt during scan lag",
+            "path attach preserves service tier ultrafast",
+            "path attach preserves service tier unset",
+            "receipt attach preserves service tier legacy fast=null",
+            "receipt attach preserves service tier legacy fast=true",
+            "receipt attach preserves service tier ultrafast"
+          ]
+        }
+      },
+      {
+        "file": "src/lib/codexHeadlessConfig.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/codexHeadlessConfig.test.ts"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T12:51:03.977335+00:00",
+        "pass": 21,
+        "fail": 0,
+        "skip": 0,
+        "durationSeconds": 0.351,
+        "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e"
+      },
+      {
+        "file": "src/lib/memory/roleRuleReads.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "src/lib/memory/roleRuleReads.test.ts"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T13:00:38.427604+00:00",
+        "pass": 4,
+        "fail": 0,
+        "skip": 0,
+        "durationSeconds": 0.602,
+        "baseRevision": "662a6012b39f051669da557d828c13b9e82aa27d"
+      }
+    ],
+    "removalControls": [
+      {
+        "site": "cli-fresh",
+        "file": "src/lib/agent/cli.ts",
+        "test": "src/lib/agent/cli.test.ts",
+        "filter": "delegated Codex specs omit skills",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "  if (options.omitSkillsInstructions) args.push(\"-c\", \"skills.include_instructions=false\");",
+        "replacement": "",
+        "failingTests": [
+          "delegated Codex specs omit skills in terminal and structured launches; operator specs inherit"
+        ]
+      },
+      {
+        "site": "cli-resume",
+        "file": "src/lib/agent/cli.ts",
+        "test": "src/lib/agent/cli.test.ts",
+        "filter": "delegated Codex specs omit skills",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "  if (options.omitSkillsInstructions) command += \" -c skills.include_instructions=false\";",
+        "replacement": "",
+        "failingTests": [
+          "delegated Codex specs omit skills in terminal and structured launches; operator specs inherit"
+        ]
+      },
+      {
+        "site": "thread-config",
+        "file": "src/lib/codexHeadlessConfig.ts",
+        "test": "src/lib/agent/cli.test.ts",
+        "filter": "delegated Codex specs omit skills",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "    ...(omitSkillsInstructions ? { skills: { include_instructions: false } } : {}),",
+        "replacement": "",
+        "failingTests": [
+          "delegated Codex specs omit skills in terminal and structured launches; operator specs inherit"
+        ]
+      },
+      {
+        "site": "spawn",
+        "file": "src/lib/agent/spawnCommand.ts",
+        "test": "src/lib/agent/spawnCommand.telegram.test.ts",
+        "filter": "Codex admission omits skills",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "        ...(engine === \"codex\" ? { omitSkillsInstructions: sessionOrigin === \"delegated\" } : {}),",
+        "replacement": "",
+        "failingTests": [
+          "Codex admission omits skills for delegated and role launches while operator roots inherit"
+        ]
+      },
+      {
+        "site": "pipeline",
+        "file": "src/lib/pipelines/engine.ts",
+        "test": "src/lib/pipelines/engine.rolePrivacy.test.ts",
+        "filter": "admission rechecks privacy and activation before dispatch",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "    ...(input.role.engine === \"codex\" ? { omitSkillsInstructions: true } : {}),",
+        "replacement": "",
+        "failingTests": [
+          "admission rechecks privacy and activation before dispatch: churn",
+          "admission rechecks privacy and activation before dispatch: file-reclassify",
+          "admission rechecks privacy and activation before dispatch: reclassify",
+          "admission rechecks privacy and activation before dispatch: request"
+        ]
+      },
+      {
+        "site": "native-host",
+        "file": "src/lib/runtime/codexAppServerHost.ts",
+        "test": "src/lib/runtime/codexAppServerHost.test.ts",
+        "filter": "skills policy reaches fresh and resumed",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "        options.omitSkillsInstructions === true,",
+        "replacement": "        false,",
+        "failingTests": [
+          "skills policy reaches fresh and resumed Codex threads (omit=%s)"
+        ]
+      },
+      {
+        "site": "structured",
+        "file": "src/lib/runtime/structuredSpawn.ts",
+        "test": "src/lib/runtime/codexSkillsInstructions.test.ts",
+        "filter": "host launch recovers skills policy",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "      omitSkillsInstructions: profile.omitSkillsInstructions === true || sessionOriginFor(input.receipt) === \"delegated\",",
+        "replacement": "",
+        "failingTests": [
+          "host launch recovers skills policy from durable profiles and legacy role receipts (off, resume=%s)",
+          "host launch recovers skills policy from durable profiles and legacy role receipts (sqlite, resume=%s)"
+        ]
+      },
+      {
+        "site": "registry-resume",
+        "file": "src/lib/agent/registry.ts",
+        "test": "src/lib/runtime/codexSkillsInstructions.test.ts",
+        "filter": "host launch recovers skills policy",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "    ...(current.omitSkillsInstructions || requested.omitSkillsInstructions ? { omitSkillsInstructions: true } : {}),",
+        "replacement": "",
+        "failingTests": [
+          "host launch recovers skills policy from durable profiles and legacy role receipts (off, resume=%s)",
+          "host launch recovers skills policy from durable profiles and legacy role receipts (sqlite, resume=%s)"
+        ]
+      },
+      {
+        "site": "startup-process",
+        "file": "src/lib/runtime/startup.ts",
+        "test": "src/lib/runtime/startup.test.ts",
+        "filter": "startup replays durable Codex",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "          omitSkillsInstructions,",
+        "replacement": "",
+        "failingTests": [
+          "startup replays durable Codex sandbox=full and permission mode (skills omitted=false)",
+          "startup replays durable Codex sandbox=full and permission mode (skills omitted=true)",
+          "startup replays durable Codex sandbox=restricted and permission mode (skills omitted=false)",
+          "startup replays durable Codex sandbox=restricted and permission mode (skills omitted=true)"
+        ]
+      },
+      {
+        "site": "startup-socket",
+        "file": "src/lib/runtime/startup.ts",
+        "test": "src/lib/runtime/startup.test.ts",
+        "filter": "startup socket adoption preserves skills policy",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "codexHome: owner?.home, memoryCell, omitSkillsInstructions, env: stageEnvironment,",
+        "replacement": "codexHome: owner?.home, memoryCell, env: stageEnvironment,",
+        "failingTests": [
+          "startup socket adoption preserves skills policy (delegated=%s)"
+        ]
+      },
+      {
+        "site": "reconnect",
+        "file": "src/lib/runtime/structuredRecovery.ts",
+        "test": "src/lib/runtime/structuredRecovery.test.ts",
+        "filter": "recovery reconnects.*delegated",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "                omitSkillsInstructions: current.spec.launchProfile?.omitSkillsInstructions === true\n                  || sessionOriginFor(registry.conversation(current.conversationId) ?? {}) === \"delegated\",",
+        "replacement": "",
+        "failingTests": [
+          "foreground recovery reconnects a verified live native host without spawning a successor (delegated)",
+          "startup recovery reconnects a verified live native host without spawning a successor (delegated)"
+        ]
+      },
+      {
+        "site": "migration-publish",
+        "file": "src/lib/accounts/migration/provider.ts",
+        "test": "src/lib/accounts/migration/provider.test.ts",
+        "filter": "Codex published migration skills policy",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "      omitSkillsInstructions: input.profile.omitSkillsInstructions === true || sessionOriginFor(\n        input.conversationId ? input.registry.conversation(input.conversationId as ViewerConversationId) ?? {} : {},\n      ) === \"delegated\",",
+        "replacement": "",
+        "failingTests": [
+          "Codex published migration skills policy: legacy-role",
+          "Codex published migration skills policy: profile"
+        ]
+      },
+      {
+        "site": "migration-fork",
+        "file": "src/lib/accounts/migration/provider.ts",
+        "test": "src/lib/accounts/migration/provider.test.ts",
+        "filter": "Codex successor provider accepts authenticated",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "sourceClient.forkThread(sourceNativeId, skillsOptions())",
+        "replacement": "sourceClient.forkThread(sourceNativeId)",
+        "failingTests": [
+          "Codex successor provider accepts authenticated ChatGPT account responses and standard 0755 roots (delegated=%s)"
+        ]
+      },
+      {
+        "site": "migration-resume",
+        "file": "src/lib/accounts/migration/provider.ts",
+        "test": "src/lib/accounts/migration/provider.test.ts",
+        "filter": "Codex successor provider accepts authenticated",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "        ...skillsOptions(),",
+        "replacement": "",
+        "failingTests": [
+          "Codex successor provider accepts authenticated ChatGPT account responses and standard 0755 roots (delegated=%s)"
+        ]
+      },
+      {
+        "site": "account-fork",
+        "file": "src/lib/accounts/codexAppServer.ts",
+        "test": "src/lib/accounts/codexAppServer.test.ts",
+        "filter": "account fork and validation resume preserve skills policy",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "      ...(options.omitSkillsInstructions ? { config: { skills: { include_instructions: false } } } : {}),",
+        "replacement": "",
+        "failingTests": [
+          "account fork and validation resume preserve skills policy (delegated=%s)"
+        ]
+      },
+      {
+        "site": "account-resume",
+        "file": "src/lib/accounts/codexAppServer.ts",
+        "test": "src/lib/accounts/codexAppServer.test.ts",
+        "filter": "account fork and validation resume preserve skills policy",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "false, options.omitSkillsInstructions === true)",
+        "replacement": "false, false)",
+        "failingTests": [
+          "account fork and validation resume preserve skills policy (delegated=%s)"
+        ]
+      },
+      {
+        "site": "attach-path",
+        "file": "src/lib/agent/attachCommand.ts",
+        "test": "src/lib/agent/cli.test.ts",
+        "filter": "delegated Codex specs omit skills",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "    ...(target.entry.engine === \"codex\" && (profile?.omitSkillsInstructions === true || sessionOriginFor({\n      agentRole: target.entry.durableLineage?.role,\n      parentConversationId: target.entry.durableLineage?.parentConversationId,\n      delegationDepth: target.entry.durableLineage?.depth,\n    }) === \"delegated\") ? { omitSkillsInstructions: true } : {}),",
+        "replacement": "",
+        "failingTests": [
+          "delegated Codex specs omit skills in terminal and structured launches; operator specs inherit"
+        ]
+      },
+      {
+        "site": "attach-receipt",
+        "file": "src/lib/agent/attachCommand.ts",
+        "test": "src/lib/runtime/codexSkillsInstructions.test.ts",
+        "filter": "host launch recovers skills policy",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "    ...(receipt.engine === \"codex\" && (receipt.launchProfile.omitSkillsInstructions === true || sessionOriginFor(receipt) === \"delegated\")\n      ? { omitSkillsInstructions: true } : {}),",
+        "replacement": "",
+        "failingTests": [
+          "host launch recovers skills policy from durable profiles and legacy role receipts (off, resume=%s)",
+          "host launch recovers skills policy from durable profiles and legacy role receipts (sqlite, resume=%s)"
+        ]
+      },
+      {
+        "site": "cloud-stage",
+        "file": "src/lib/pipelines/cloudHostedClient.ts",
+        "test": "src/lib/pipelines/cloudHostedClient.test.ts",
+        "filter": "hosted launch pins model",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "\"skills.include_instructions\": false, ",
+        "replacement": "",
+        "failingTests": [
+          "hosted launch pins model, effort, permissions, ASB configuration and published branch before the work turn"
+        ]
+      },
+      {
+        "site": "ephemeral",
+        "file": "src/lib/agent/ephemeral.ts",
+        "test": "src/lib/agent/ephemeral.test.ts",
+        "filter": "Codex answer profile is closed",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "    \"skills.include_instructions=false\",",
+        "replacement": "",
+        "failingTests": [
+          "Codex answer profile is closed and the answer home links only auth"
+        ]
+      },
+      {
+        "site": "cloud-relay",
+        "file": "src/lib/externalRelay/cloud.ts",
+        "test": "src/lib/externalRelay/cloud.test.ts",
+        "filter": "Cloud WebSocket starts a current thread",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "\"skills.include_instructions\": false,",
+        "replacement": "",
+        "failingTests": [
+          "Cloud WebSocket starts a current thread and sends the exact text (fullAccess=%s)"
+        ]
+      },
+      {
+        "site": "native-socket",
+        "file": "src/lib/runtime/codexAppServerHost.ts",
+        "test": "src/lib/runtime/codexAppServerHost.test.ts",
+        "filter": "socket resume restores the delegated skills decision",
+        "mutantExit": 1,
+        "normalTargetCases": "passed",
+        "normalExit": 0,
+        "removedSnippet": "        ...(options.omitSkillsInstructions ? { skills: config.skills } : {}),",
+        "replacement": "",
+        "failingTests": [
+          "socket resume restores the delegated skills decision (stdio=false, omitted=%s)",
+          "socket resume restores the delegated skills decision (stdio=true, omitted=%s)"
+        ]
+      }
+    ],
+    "gates": {
+      "synced-types": {
+        "command": [
+          "bunx",
+          "tsc",
+          "--noEmit"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T13:03:26.412124+00:00"
+      },
+      "synced-lint": {
+        "command": [
+          "bun",
+          "scripts/eslint-changes.ts",
+          "--base",
+          "662a6012b39f051669da557d828c13b9e82aa27d"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T13:03:34.056193+00:00"
+      },
+      "synced-build": {
+        "command": [
+          "bun",
+          "run",
+          "build"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T13:06:49.479955+00:00"
+      },
+      "synced-viewer": {
+        "command": [
+          "bun",
+          "scripts/verify-viewer-runtime.ts"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T13:06:57.271025+00:00"
+      },
+      "synced-socket": {
+        "command": [
+          "bun",
+          "scripts/verify-viewer-runtime.ts",
+          "--codex-socket"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T13:07:10.454144+00:00"
+      },
+      "synced-host": {
+        "command": [
+          "bun",
+          "scripts/verify-runtime-host.ts",
+          "--runtime",
+          "bun"
+        ],
+        "exit": 0,
+        "finishedAt": "2026-11-11T13:07:29.276314+00:00"
+      }
+    },
+    "mergeHookControls": {
+      "withoutFix": {
+        "exit": 1,
+        "finishedAt": "2026-11-11T12:12:24.552560+00:00",
+        "pass": 1,
+        "fail": 2,
+        "skip": 0,
+        "durationSeconds": 5.67
+      },
+      "withFix": {
+        "exit": 0,
+        "finishedAt": "2026-11-11T12:52:53.654354+00:00",
+        "pass": 37,
+        "fail": 0,
+        "skip": 0,
+        "durationSeconds": 106.97
+      },
+      "cases": [
+        "published incoming main errors pass",
+        "main advances while the merge is pending",
+        "new branch errors remain blocked",
+        "unpublished incoming branch errors remain blocked"
+      ],
+      "testGit": "Native Git in isolated CLI fixtures; delivery retains the guarded Git PATH."
+    },
+    "privacy": {
       "command": [
         "bun",
-        "scripts/local-gate-tests.ts",
-        "--admitted",
+        "scripts/privacy-publication-gate.ts",
+        "--require-known-values",
+        "--check-commits",
         "--base",
-        "4b98a80796b028ec31397be9c3d6266ff5582c7c",
-        "./src/lib/agent/spawnCommand.telegram.test.ts"
+        "662a6012b39f051669da557d828c13b9e82aa27d",
+        "--paths",
+        "all surviving changed files and the English PR draft"
+      ],
+      "receipt": "Final publication receipt retained separately because this record is a gate input."
+    },
+    "launchAudit": {
+      "delegated": [
+        "generic spawn and role presets",
+        "local and hosted Cloud pipeline stages",
+        "fresh CLI, resumed CLI and publication preparation",
+        "transcript and receipt terminal attach",
+        "structured fresh and resume-successor",
+        "JSON and SQLite resume-profile copying across process restart",
+        "startup process rehost and verified socket adoption",
+        "native socket reduced thread/resume configuration",
+        "startup and foreground recovery",
+        "account migration source fork, target resume and successor host publication"
+      ],
+      "operator": [
+        "root spawn and CLI retain inherited skills configuration",
+        "account fork and validation resume preserve the inherited default",
+        "socket reconnect adds no skills override for operator sessions",
+        "full-access operator Cloud relay retains inherited configuration"
+      ],
+      "otherPaths": [
+        "Closed ephemeral and short Cloud relay helpers already suppress the list; assertions and removal controls retain that policy.",
+        "Voice companion is an operator interface. Account authentication, CLI/protocol probes and shell-policy reads create no conversation developer message.",
+        "startCodexStructuredHost forwards its supplied options unchanged; registry adoption gets its options from the audited startup builder.",
+        "Structured recovery replacements use defaultStartHost; Cloud task recovery observes the existing task.",
+        "The project-start change is documentation only; start-at-login changes the Viewer service, with no Codex task-launch path.",
+        "Scheduled Daily Report uses the operator spawn lane and inherits account defaults.",
+        "Codex update rehearsals launch isolated diagnostic fixtures; they do not launch delegated project work."
       ]
     },
-    {
-      "file": "./src/lib/agent/attachCommand.test.ts",
-      "exit": 0,
-      "summary": "touched-tests: 0 new failures, 7 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky",
-      "command": [
-        "bun",
-        "scripts/local-gate-tests.ts",
-        "--admitted",
-        "--base",
-        "4b98a80796b028ec31397be9c3d6266ff5582c7c",
-        "./src/lib/agent/attachCommand.test.ts"
-      ]
+    "mergeResolution": [
+      "spawn test retains the skills admission case and main's removal of the obsolete Claude tmux test",
+      "startup keeps stage Git environment and MCP/plugin grants while forwarding skills policy",
+      "recovery retains both modes and all claim-fence cases, adding the delegated case",
+      "Whitespace-only cleanup in src/lib/accounts/codex.ts and src/lib/conversation/actions.test.ts satisfies the staged-whitespace check",
+      "Latest workspace fromMessage metadata and report-picture retention remain intact.",
+      "Pre-commit lint uses incoming published main history during a pending merge; regression controls keep unpublished errors blocking.",
+      "A trailing empty line inherited in src/lib/memory/roleHistoryRows.test.ts was removed for the staged-whitespace gate."
+    ],
+    "driverDisposition": "scripts/observe-codex-skills.py removed as a one-shot driver. Both existing JSON files remain as retained evidence with historical and current records separated.",
+    "sourceDigests": {
+      "scripts/local-gate.hooks.test.ts": "9ad51a3775187173f5127ceb32b87a4caa9053192e09965ee8ff844f77f91dca",
+      "scripts/local-gate.ts": "b1c6979cf380de60cd52b94daf44f3c4de4f5d15cb56afe0a89b529575e5e3e9",
+      "src/lib/accounts/codex.ts": "8dca720c950c4fb38ded048967d5d21e999231ca72b7ee87c83fc963be75da92",
+      "src/lib/accounts/codexAppServer.test.ts": "df69e600605e52f66d0bb509038ede91a44df7c988f4a5699764dce432eb7596",
+      "src/lib/accounts/codexAppServer.ts": "efd778631fb8aedf232ff11feb40518496e0147715a6ceae332331525556d249",
+      "src/lib/accounts/migration/contracts.ts": "0eae7923615e07bf32a1a121f0ac435c97262051221ab0c71e973b2d4c45730f",
+      "src/lib/accounts/migration/provider.test.ts": "406140eed85565a6788b292720a701439bbc3379dacc2816ffe47d787dd7e3bb",
+      "src/lib/accounts/migration/provider.ts": "841c4489190d1d6e5cb096844bce7854d61633f2ee482da5ca9c2a121108b7c8",
+      "src/lib/agent/attachCommand.ts": "3143f14a974f9f147274bee888de184cbcb025ab6d788c13e7ef5ad593ce93df",
+      "src/lib/agent/cli.test.ts": "30a54d09513a3d10ffbbefed7a25a3472fc5a0086073eb86e4d54c3d900e60c2",
+      "src/lib/agent/cli.ts": "66af11ec50d731c3fd7a4788035c7550a53ebc9642563222f993806e47250609",
+      "src/lib/agent/ephemeral.test.ts": "2eacbc11d6de90e1c6ee85178cc80b39d88b65ffbf911f4a3ef8ceeb4179e462",
+      "src/lib/agent/registry.ts": "ea79680b1a80cad0e1cb5f85a8a3e3c9f644eb513f4ed5fc1f92d506ffc13974",
+      "src/lib/agent/spawnCommand.telegram.test.ts": "98a9000b9385445e25b098161a4868e7037881175427b2df37b23c980f7ac681",
+      "src/lib/agent/spawnCommand.ts": "e07f27b104dbe9af8dc4ca218d4cad341d45cdbf9d5662eeb82b5a8ef57b5cea",
+      "src/lib/codexHeadlessConfig.ts": "0def6662f904da2985610670388d6165ed9c3410ae732dc45beb539c8f964ef3",
+      "src/lib/conversation/actions.test.ts": "878e77e4dec7dfedc6a594e4291c5e8630da7bebf20d8ac8e756d209edee0f2b",
+      "src/lib/externalRelay/cloud.test.ts": "08b7e305df6cad41d01e32c53feb63d8566d1a8f1871baac6c2b97ac9c42d4bb",
+      "src/lib/memory/roleHistoryRows.test.ts": "f1fb8dd8b741db6dc4338b6d6acea78f71eb7c651052a666a3563289e075802f",
+      "src/lib/pipelines/cloudHostedClient.test.ts": "600563f9915cde23a3a6448d3e73f045b006d7ecf4b36a6582b5eab5770a178b",
+      "src/lib/pipelines/cloudHostedClient.ts": "01014940f63862f65573f1ef083cd6d4f9f96720e2585f2d21d7d41e21bab29b",
+      "src/lib/pipelines/engine.rolePrivacy.test.ts": "d5e1b792a9edb06ae5d42f4b8aac9fa7e952069f3a26c1384c1d9921b5f826a4",
+      "src/lib/pipelines/engine.ts": "1dadfd4c2bf75cbdf957cf311ab89230231b0b84c25baf05967d94c9b5ce2df9",
+      "src/lib/runtime/codexAppServerHost.test.ts": "473953105574a53584a2d6d391bb483fecb44ca7d37901cb5e5c669028c439cb",
+      "src/lib/runtime/codexAppServerHost.ts": "20a47e52cd1836ce235516bdc6e9ee5408769bad16af7bad4b0611a7f485240d",
+      "src/lib/runtime/codexSkillsInstructions.test.ts": "3416fcb0ef71b16d4b6a0fecbd57d1f9a9936cc760aa3f85f9d70d1f29b2eb2c",
+      "src/lib/runtime/startup.test.ts": "b728105ccb066df82fc1d0c2c165d7f992fac68daf001b8348321c32ecc35cba",
+      "src/lib/runtime/startup.ts": "cb4c34869d6e8580336c05671d3019c5ea717c1c2b1ad0bbb1b068379d502aa0",
+      "src/lib/runtime/structuredRecovery.test.ts": "5b44cbaea82d3227b4b7e3bb0b85e768d14f87413f6b50a62aa9a5484e44f50a",
+      "src/lib/runtime/structuredRecovery.ts": "46d719e5317f821ed9a6d951c6ab3c67cc49284298ba50c8dc9f13e5909eb1e4",
+      "src/lib/runtime/structuredSpawn.ts": "cdd118c3f1b51de937f4b2e9b85d0a85919c108698ac60f6481c868bc92f7327"
     },
-    {
-      "file": "./src/lib/agent/spawnCommand.contention.test.ts",
-      "exit": 0,
-      "summary": "touched-tests: 0 new failures, 3 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky",
-      "command": [
-        "bun",
-        "scripts/local-gate-tests.ts",
-        "--admitted",
-        "--base",
-        "4b98a80796b028ec31397be9c3d6266ff5582c7c",
-        "./src/lib/agent/spawnCommand.contention.test.ts"
-      ]
-    },
-    {
-      "file": "./src/lib/pipelines/engine.routing.test.ts",
-      "exit": 0,
-      "summary": "touched-tests: 0 new failures, 2 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky",
-      "command": [
-        "bun",
-        "scripts/local-gate-tests.ts",
-        "--admitted",
-        "--base",
-        "4b98a80796b028ec31397be9c3d6266ff5582c7c",
-        "./src/lib/pipelines/engine.routing.test.ts"
-      ]
-    },
-    {
-      "file": "./src/lib/pipelines/engine.activation.test.ts",
-      "exit": 0,
-      "summary": "touched-tests: 0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky",
-      "command": [
-        "bun",
-        "scripts/local-gate-tests.ts",
-        "--admitted",
-        "--base",
-        "4b98a80796b028ec31397be9c3d6266ff5582c7c",
-        "./src/lib/pipelines/engine.activation.test.ts"
-      ]
-    },
-    {
-      "file": "./src/lib/pipelines/engine.ports.test.ts",
-      "exit": 0,
-      "summary": "touched-tests: 0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky",
-      "command": [
-        "bun",
-        "scripts/local-gate-tests.ts",
-        "--admitted",
-        "--base",
-        "4b98a80796b028ec31397be9c3d6266ff5582c7c",
-        "./src/lib/pipelines/engine.ports.test.ts"
-      ]
-    },
-    {
-      "file": "./src/lib/runtime/startup.test.ts",
-      "exit": 0,
-      "summary": "touched-tests: 0 new failures, 4 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky",
-      "command": [
-        "bun",
-        "scripts/local-gate-tests.ts",
-        "--admitted",
-        "--base",
-        "4b98a80796b028ec31397be9c3d6266ff5582c7c",
-        "./src/lib/runtime/startup.test.ts"
-      ]
+    "publication": "No deployment or live-service action. Normal hooks remain enabled. Hosted checks, including complete bun-runtime, belong to pipeline publication.",
+    "pullRequest": {
+      "title": "Omit machine skills instructions from delegated Codex launches",
+      "body": "Delegated Codex launches (pipeline stages and role-preset spawns) use `skills.include_instructions=false`. Operator-owned root sessions inherit their account configuration. The policy travels on the launch profile through resume and account migration; no setting or interface is added.\n\nAn isolated native Codex 0.166.0 app-server, using the production thread-config builder and a port-0 local Responses stub, measured the launch developer message at **23,563 \u2192 1,311 UTF-8 bytes**, saving **22,252 bytes** in each of two alternating pairs. The separate first developer scaffold stayed at 21,779 bytes; total developer text fell from 45,342 to 23,090 bytes. All other developer text matched byte for byte after removing the skills block. Both nested and dotted override forms were confirmed on the native app-server. The historical 0.162.1 observation remains labelled separately in `evidence/codex-skills-instructions.json`.\n\nLaunch coverage includes:\n\n- CLI fresh/resume and publication preparation; transcript-based and receipt-based terminal attach; ordinary spawn admission for operator, delegated child and role-preset launches.\n- Local pipeline admission and hosted Codex Cloud stages; structured fresh/resume; startup rehosting, verified socket adoption and the native socket's reduced resume configuration; both startup and foreground recovery.\n- Account migration metadata fork, target validation resume and successor publication, including legacy role recovery; durable resume-profile copying, tested through JSON and SQLite registry restarts.\n- Existing closed ephemeral and Cloud relay policy, with the operator Cloud path retaining inherited instructions. Voice companion is an operator interface; account authentication, version/protocol and shell-policy probes create no conversation developer message. Scheduled Daily Report uses the operator spawn lane; Codex update rehearsals run isolated diagnostic fixtures.\n\nIntegration with current main preserves stage Git environments, MCP/plugin grants during adoption, and the expanded foreground recovery and claim-fence scenarios. The three conflicting files are `src/lib/agent/spawnCommand.telegram.test.ts`, `src/lib/runtime/startup.ts` and `src/lib/runtime/structuredRecovery.test.ts`. Main's removed Claude tmux test stays removed. Three main files received whitespace-only cleanup required by the staged-whitespace gate. Later main additions to report-picture retention and workspace launch metadata are preserved.\n\nA merge-aware pre-commit lint baseline uses published history from the incoming parent. Real Git regression cases show that inherited main errors pass, while new errors and errors from unpublished incoming branches remain blocked; the controls also cover main advancing during a pending merge.\n\nThe one-shot `scripts/observe-codex-skills.py` driver is removed. Both existing JSON evidence files remain as retained records, with historical results labelled and current verification recorded separately; the ad hoc observation procedure is retained privately.\n\nThe current verification record is `evidence/codex-skills-checks.json`. No deployment is included.\n\nVerification: 20 isolated test files; 1,386 passing cases, 45 failures reproduced on the same main revision, 1 existing skip and zero new failures. All 22 independent removal controls fail as expected. Typecheck, scoped lint, production build and the local Viewer/socket/runtime-host rehearsals pass under Bun 1.4.0. Required hosted checks, including the complete bun-runtime job, run during pipeline publication.\n\nThe per-file records name their tested merge snapshots. After the final main update to memory reads, its direct test, every launch-policy target, all four baseline comparisons, and the type, lint, build and runtime gates were rechecked. All owned launch-source bytes remained unchanged during that update."
     }
-  ],
-  "removalControls": [
-    {
-      "label": "thread override",
-      "file": "src/lib/codexHeadlessConfig.ts",
-      "command": [
-        "bun",
-        "test",
-        "--timeout=60000",
-        "src/lib/agent/cli.test.ts",
-        "-t",
-        "delegated Codex specs omit skills"
-      ],
-      "controlExit": 0,
-      "exit": 1,
-      "red": true,
-      "failures": [
-        "(fail) delegated Codex specs omit skills in terminal and structured launches; operator specs inherit"
-      ]
-    },
-    {
-      "label": "fresh CLI flag",
-      "file": "src/lib/agent/cli.ts",
-      "command": [
-        "bun",
-        "test",
-        "--timeout=60000",
-        "src/lib/agent/cli.test.ts",
-        "-t",
-        "delegated Codex specs omit skills"
-      ],
-      "controlExit": 0,
-      "exit": 1,
-      "red": true,
-      "failures": [
-        "(fail) delegated Codex specs omit skills in terminal and structured launches; operator specs inherit"
-      ]
-    },
-    {
-      "label": "resume CLI flag",
-      "file": "src/lib/agent/cli.ts",
-      "command": [
-        "bun",
-        "test",
-        "--timeout=60000",
-        "src/lib/agent/cli.test.ts",
-        "-t",
-        "delegated Codex specs omit skills"
-      ],
-      "controlExit": 0,
-      "exit": 1,
-      "red": true,
-      "failures": [
-        "(fail) delegated Codex specs omit skills in terminal and structured launches; operator specs inherit"
-      ]
-    },
-    {
-      "label": "host config forwarding",
-      "file": "src/lib/runtime/codexAppServerHost.ts",
-      "command": [
-        "bun",
-        "test",
-        "--timeout=60000",
-        "src/lib/runtime/codexAppServerHost.test.ts",
-        "-t",
-        "skills policy reaches fresh and resumed"
-      ],
-      "controlExit": 0,
-      "exit": 1,
-      "red": true,
-      "failures": [
-        "(fail) skills policy reaches fresh and resumed Codex threads (omit=%s)"
-      ]
-    },
-    {
-      "label": "durable profile",
-      "file": "src/lib/agent/cli.ts",
-      "command": [
-        "bun",
-        "test",
-        "--timeout=60000",
-        "src/lib/agent/cli.test.ts",
-        "-t",
-        "delegated Codex specs omit skills"
-      ],
-      "controlExit": 0,
-      "exit": 1,
-      "red": true,
-      "failures": [
-        "(fail) delegated Codex specs omit skills in terminal and structured launches; operator specs inherit"
-      ]
-    },
-    {
-      "label": "structured origin",
-      "file": "src/lib/runtime/structuredSpawn.ts",
-      "command": [
-        "bun",
-        "test",
-        "--timeout=60000",
-        "src/lib/runtime/codexSkillsInstructions.test.ts",
-        "-t",
-        "host launch recovers skills policy"
-      ],
-      "controlExit": 0,
-      "exit": 1,
-      "red": true,
-      "failures": [
-        "(fail) host launch recovers skills policy from durable profiles and legacy role receipts"
-      ]
-    },
-    {
-      "label": "spawn admission",
-      "file": "src/lib/agent/spawnCommand.ts",
-      "command": [
-        "bun",
-        "test",
-        "--timeout=60000",
-        "src/lib/agent/spawnCommand.telegram.test.ts",
-        "-t",
-        "Codex admission omits skills"
-      ],
-      "controlExit": 0,
-      "exit": 1,
-      "red": true,
-      "failures": [
-        "(fail) Codex admission omits skills for delegated and role launches while operator roots inherit"
-      ]
-    },
-    {
-      "label": "pipeline admission",
-      "file": "src/lib/pipelines/engine.ts",
-      "command": [
-        "bun",
-        "test",
-        "--timeout=60000",
-        "src/lib/pipelines/engine.rolePrivacy.test.ts",
-        "-t",
-        "admission rechecks privacy and activation before dispatch"
-      ],
-      "controlExit": 0,
-      "exit": 1,
-      "red": true,
-      "failures": [
-        "(fail) admission rechecks privacy and activation before dispatch: reclassify",
-        "(fail) admission rechecks privacy and activation before dispatch: file-reclassify"
-      ]
-    },
-    {
-      "label": "startup forwarding",
-      "file": "src/lib/runtime/startup.ts",
-      "command": [
-        "bun",
-        "test",
-        "--timeout=60000",
-        "src/lib/runtime/startup.test.ts",
-        "-t",
-        "startup keeps an undesignated pipeline orchestrator clean"
-      ],
-      "controlExit": 0,
-      "exit": 1,
-      "red": true,
-      "failures": [
-        "(fail) startup keeps an undesignated pipeline orchestrator clean on codex"
-      ]
-    },
-    {
-      "label": "migration forwarding",
-      "file": "src/lib/accounts/migration/provider.ts",
-      "command": [
-        "bun",
-        "test",
-        "--timeout=60000",
-        "src/lib/accounts/migration/provider.test.ts",
-        "-t",
-        "migration successor runs in the CPU cell"
-      ],
-      "controlExit": 0,
-      "exit": 1,
-      "red": true,
-      "failures": [
-        "(fail) a codex migration successor runs in the CPU cell of its conversation's class, and work it cannot contain is refused before it starts"
-      ]
-    },
-    {
-      "label": "reconnect forwarding",
-      "file": "src/lib/runtime/structuredRecovery.ts",
-      "command": [
-        "bun",
-        "test",
-        "--timeout=60000",
-        "src/lib/runtime/structuredRecovery.test.ts",
-        "-t",
-        "startup recovery reconnects a verified live native host without spawning a successor \\(delegated\\)"
-      ],
-      "controlExit": 0,
-      "exit": 1,
-      "red": true,
-      "failures": [
-        "(fail) startup recovery reconnects a verified live native host without spawning a successor (delegated)"
-      ]
-    },
-    {
-      "label": "path terminal policy",
-      "file": "src/lib/agent/attachCommand.ts",
-      "command": [
-        "bun",
-        "test",
-        "--timeout=60000",
-        "src/lib/agent/cli.test.ts",
-        "-t",
-        "delegated Codex specs omit skills"
-      ],
-      "controlExit": 0,
-      "exit": 1,
-      "red": true,
-      "failures": [
-        "(fail) delegated Codex specs omit skills in terminal and structured launches; operator specs inherit"
-      ]
-    },
-    {
-      "label": "receipt terminal policy",
-      "file": "src/lib/agent/attachCommand.ts",
-      "command": [
-        "bun",
-        "test",
-        "--timeout=60000",
-        "src/lib/runtime/codexSkillsInstructions.test.ts",
-        "-t",
-        "host launch recovers skills policy"
-      ],
-      "controlExit": 0,
-      "exit": 1,
-      "red": true,
-      "failures": [
-        "(fail) host launch recovers skills policy from durable profiles and legacy role receipts"
-      ]
-    }
-  ],
-  "sourceDigests": {
-    "scripts/observe-codex-skills.py": "3ae07f7a19db20f0c561bb582442b13452c860e8c6686e891d488eabe350817b",
-    "src/lib/accounts/migration/contracts.ts": "94f462fa2fd2b709453fc539c454f320587d66fc30ae56acd0c22a7029e389f0",
-    "src/lib/accounts/migration/provider.test.ts": "2257a9ee782ac133e7eb99a895e9a6a28b80556a65448d826187895056d2f012",
-    "src/lib/accounts/migration/provider.ts": "f5be2cbde2467f9289902ff7a06fa2d5158c822cc6ec25fab1bb9bc08b9052bb",
-    "src/lib/agent/attachCommand.ts": "b28fa5aea501fc50d08c495536f9f6ba1d7e873cdd980a370a7d70cfbd43d015",
-    "src/lib/agent/cli.test.ts": "fc6f36a514fb1b11d57b5d8679c1364b2ce03af6c328925d723a98a52452540a",
-    "src/lib/agent/cli.ts": "916a706c83bb1e685e3865657e67dff3756b2b8408dcc3049436d52e972e31e1",
-    "src/lib/agent/spawnCommand.telegram.test.ts": "270cf65412b5bdf560dffc759b1017acdd1eff9d035401bc5122b5cf501ccdc8",
-    "src/lib/agent/spawnCommand.ts": "1409de477c78122668e29ed72383032aa4d98104c3f266887f2d9f4c2814cf40",
-    "src/lib/codexHeadlessConfig.ts": "0def6662f904da2985610670388d6165ed9c3410ae732dc45beb539c8f964ef3",
-    "src/lib/pipelines/engine.rolePrivacy.test.ts": "f5c58950e890a05fd8f73057f5810164b0fba78a2cb9bcfbfd70ccced2068203",
-    "src/lib/pipelines/engine.ts": "f878130e1498ec60238b590493632fa3b247614ea944297638ffeaf04003327f",
-    "src/lib/runtime/codexAppServerHost.test.ts": "9f3b25654060166a231e12fc05d24bef710e097b544e654c4186f95adac0d8ea",
-    "src/lib/runtime/codexAppServerHost.ts": "b7fcbcf7ba3a6363f31a44bed746997dc9986fc488b105c34f353416f4971285",
-    "src/lib/runtime/codexSkillsInstructions.test.ts": "865f8435ba2b3e6cc86594c725c4e5c740089539b555d0385d62c447435c8435",
-    "src/lib/runtime/startup.test.ts": "e7e48ab6ead5482545e9ce2cfe36f0726650b07ea29e56a7963c96ae909b3396",
-    "src/lib/runtime/startup.ts": "70c086bf81a11c40ffa2bc6caf0cea0095b0ad0a05efd5a34c1938090263c189",
-    "src/lib/runtime/structuredRecovery.test.ts": "07dfce16107c160cca2cb6fccfd381e68785731d16f864bc9bde4821aed5456e",
-    "src/lib/runtime/structuredRecovery.ts": "63ebd9fe07f85311213925f27868eff26d9272740e17d90ea1b83ce26d085201",
-    "src/lib/runtime/structuredSpawn.ts": "0502e2a4bdd6dde64437d4cc1b4cb524759803d1b60ba33f3b5895456d2a1d4d"
   }
 }

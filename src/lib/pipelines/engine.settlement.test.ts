@@ -1,6 +1,7 @@
 // Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
 // Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { expect, test, spawn, spawnSync, fs, path, Database, reviewNote, tickPipelines, MAX_FLOW_NOTE_LENGTH, createPipelineFromRequest, loadPipelines, savePipelines, pipelineRevision, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeRoundsUsed, pipelineCompletedUnreviewed, asStoredLegacyReviewLane, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, finishReported, REMOTE_BRANCH, create, realWorktreeLane, PROVIDER_LIMIT_NOTICE, LIMITED_ACCOUNT, SPARE_ACCOUNT, limitInterruptedTranscript, codexUsageLimitTranscript, verdictTranscript, silentTranscript, readFixtures, usageLimitPorts, usageLimitStage, reviewPipeline, reviewStage, noteOf, CYCLE_STAGES, BUDGET_STAGES, failEveryCritique, STOP_AFTER_FIX, REVIEW_HEADS, movingHeadHarness, critiqueRound, buildRound, continueReview, movingHead, acceptHead, driveWithController, expectConvertedReview, REVIEW_LOOP_STAGE, BUILD_ONLY, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, interruptedPublication } from "./engine.fixture";
+import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 
 
 test("a failover whose remaining capacity disappears waits with the limit detail (#1371)", async () => {
@@ -1882,7 +1883,7 @@ test("a fail loop crosses a migration boundary and resumes positional parent sel
   expect(lastSpawn).toContain("parent=/codex/stage-1.jsonl");
 });
 
-test("closing an initial pending stage records the resting stage as a durable pending attempt (#353)", async () => {
+test("closing an initial pending stage does not allocate a future attempt (#353)", async () => {
   const h = harness();
   const pipeline = await create(h.ports); // RUN_STAGES: plan → build
   await tickPipelines([], h.ports); // provision → running, cursor plan pending, no attempts
@@ -1895,13 +1896,34 @@ test("closing an initial pending stage records the resting stage as a durable pe
   const reloaded = loadPipelines()[0]!;
   expect(reloaded.state).toBe("closed");
   expect(reloaded.cursor).toBeNull();
-  const planRun = reloaded.runs.find((run) => run.stageId === "plan")!;
-  expect(planRun.attempts).toHaveLength(1);
-  expect(planRun.attempts[0]).toMatchObject({ state: "pending", startedAt: null, completedAt: null, input: null, activatedBy: null });
+  expect(reloaded.runs.find((run) => run.stageId === "plan")!.attempts).toHaveLength(0);
   expect(reloaded.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(0);
+  expect(h.spawnInputs).toHaveLength(0);
 });
 
-test("closing a post-advance pending stage records the resting stage with its relay record (#353)", async () => {
+test("closing after pre-reservation account admission settles the pending attempt", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports); // provision
+  h.ports.spawnAgent = async () => { throw new AccountMutationBusyError(); };
+  await tickPipelines([], h.ports); // admission refuses before onReserved
+  const admissionDeferred = loadPipelines().find(item => item.id === pipeline.id)!;
+  const deferred = admissionDeferred.runs.find(run => run.stageId === "plan")!.attempts[0]!;
+  expect(admissionDeferred.state).toBe("running");
+  expect(deferred).toMatchObject({ state: "pending", startedAt: expect.any(String), spawnCalls: 1,
+    launchId: null, conversationId: null });
+
+  await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
+
+  const closed = loadPipelines().find(item => item.id === pipeline.id)!;
+  expect(closed.runs.find(run => run.stageId === "plan")!.attempts[0]).toMatchObject({
+    state: "skipped", startedAt: deferred.startedAt, completedAt: closed.closedAt,
+    launchId: null, conversationId: null,
+  });
+  expect(h.spawnInputs).toHaveLength(0);
+});
+
+test("closing a post-advance pending stage leaves prior results without a future attempt (#353)", async () => {
   const h = harness();
   const pipeline = await create(h.ports); // RUN_STAGES: plan → build
   await tickPipelines([], h.ports); // provision
@@ -1910,21 +1932,20 @@ test("closing a post-advance pending stage records the resting stage with its re
   const before = loadPipelines()[0]!;
   expect(before.cursor).toMatchObject({ stageId: "build", state: "pending", input: "planned", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
   expect(before.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(0);
+  const priorSpawnCount = h.spawnInputs.length;
+  const passedPlan = structuredClone(before.runs.find((run) => run.stageId === "plan")!.attempts[0]!);
 
   await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   const reloaded = loadPipelines()[0]!;
   expect(reloaded.state).toBe("closed");
   expect(reloaded.cursor).toBeNull();
-  const buildRun = reloaded.runs.find((run) => run.stageId === "build")!;
-  expect(buildRun.attempts).toHaveLength(1);
-  /* The resting attempt inherits the durable relay record and carries no run
-     timestamps (it never started). */
-  expect(buildRun.attempts[0]).toMatchObject({ state: "pending", startedAt: null, completedAt: null, input: "planned", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
-  expect(reloaded.runs.find((run) => run.stageId === "plan")!.attempts[0]!.state).toBe("passed");
+  expect(reloaded.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(0);
+  expect(reloaded.runs.find((run) => run.stageId === "plan")!.attempts[0]).toEqual(passedPlan);
+  expect(h.spawnInputs).toHaveLength(priorSpawnCount);
 });
 
-test("closing a fail-edge target with an older terminal attempt records a fresh pending round (#353)", async () => {
+test("closing a fail-edge target preserves earlier outcomes without allocating a fresh round (#353)", async () => {
   const h = harness();
   const pipeline = await create(h.ports, [
     { id: "plan", kind: "run", role: { roleId: "builder" }, engine: "codex", prompt: "Plan {{task}}", next: "build" },
@@ -1943,20 +1964,18 @@ test("closing a fail-edge target with an older terminal attempt records a fresh 
   const before = loadPipelines()[0]!;
   expect(before.cursor).toMatchObject({ stageId: "build", state: "pending", activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } });
   expect(before.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(1); // build attempt 2 not yet materialized
+  const priorSpawnCount = h.spawnInputs.length;
+  const passedBuild = structuredClone(before.runs.find((run) => run.stageId === "build")!.attempts[0]!);
+  const failedVerify = structuredClone(before.runs.find((run) => run.stageId === "verify")!.attempts[0]!);
 
   await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
 
   const reloaded = loadPipelines()[0]!;
   expect(reloaded.state).toBe("closed");
   expect(reloaded.cursor).toBeNull();
-  const buildRun = reloaded.runs.find((run) => run.stageId === "build")!;
-  expect(buildRun.attempts).toHaveLength(2);
-  expect(buildRun.attempts[0]!.state).toBe("passed");
-  /* The fresh round stays pending, carries the fail-edge provenance and input,
-     and has no run timestamps (it never started). */
-  expect(buildRun.attempts[1]).toMatchObject({ n: 2, state: "pending", startedAt: null, completedAt: null, activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } });
-  expect(buildRun.attempts[1]!.input).toContain("regression");
-  expect(reloaded.runs.find((run) => run.stageId === "verify")!.attempts[0]!.state).toBe("failed");
+  expect(reloaded.runs.find((run) => run.stageId === "build")!.attempts).toEqual([passedBuild]);
+  expect(reloaded.runs.find((run) => run.stageId === "verify")!.attempts[0]).toEqual(failedVerify);
+  expect(h.spawnInputs).toHaveLength(priorSpawnCount);
 });
 
 test.each([false, true])("own-id takeover resumes a delivery-refusal park without rerunning the pass (publish first: %s)", async (publishFirst) => {
@@ -2233,6 +2252,206 @@ for (const variant of ["published", "moved-head", "unknown-remote", "different-r
   });
 }
 
+// Role-memory preparation refuses before the launcher can reserve a launch.
+async function undispatchedRetryFixture(spawnCalled = false) {
+  const { roleMemoryCollection } = await import("@/lib/memory/roleStore");
+  const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "retry-publication-registry.json"));
+  setAgentRegistryForTests(registry);
+  const h = harness();
+  const now = h.ports.now();
+  h.ports.now = () => now;
+  const box = publishHarness(h);
+  const pipeline = await create(h.ports, [PUBLISH_STAGES[0], { ...PUBLISH_STAGES[1],
+    onFail: { to: "build", maxRounds: 3, onExhausted: "park" } }] as never, REMOTE_BRANCH);
+  const read = () => loadPipelines().find(lane => lane.id === pipeline.id)!;
+  const restore = () => { setAgentRegistryForTests(null); registry.close(); };
+  try {
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([h.finish(read().runs[0]!.attempts[0]!.agentPath!, "pass")], h.ports);
+    expect(read().delivery!.operation).toMatchObject({ state: "settled", result: { ok: true, remote: "published", sha: box.passedSha } });
+    expect(h.spawnInputs).toHaveLength(1);
+    const collection = roleMemoryCollection(true)!;
+    const rule = {
+      kind: "rule" as const, id: "r_retry_publication", scope: "machine" as const,
+      rule: "Preserve current publication evidence during a retry", why: "", state: "active" as const, hints: [],
+      source: { project: "fixture", pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" },
+      createdAt: h.ports.now(), changedAt: h.ports.now(),
+    };
+    collection.boundedPatch(1, tx => tx.put(rule));
+    const launch = h.ports.spawnAgent;
+    if (spawnCalled) h.ports.spawnAgent = async () => { throw new Error("fixture launcher refused after invocation"); };
+    else {
+      const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+      db.query("UPDATE state_rows SET value_json = ? WHERE collection = 'role_memory' AND row_key = 'r:r_retry_publication'")
+        .run(JSON.stringify({ kind: "rule", id: 7, rule: rule.rule }));
+      db.close();
+    }
+    try { await tickPipelines([], h.ports); }
+    finally { collection.boundedPatch(1, tx => tx.put(rule)); h.ports.spawnAgent = launch; }
+    const parked = read();
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.stateDetail).toContain(spawnCalled ? "fixture launcher refused" : "role memory could not be read");
+    expect(parked.runs.find(run => run.stageId === "review")!.attempts[0]!.launchId).toBeNull();
+    expect(h.spawnInputs).toHaveLength(1);
+    const key = `pipeline_${pipeline.id}_review_1`;
+    expect(registry.pipelineSpawnHistory(key)).toEqual([]);
+    const { rawPatchPipeline } = await import("./engine.fixture");
+    const retry = () => rawPatchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "review", expectedAttempt: 1 }, h.ports);
+    return { h, box, read, registry, key, retry, restore };
+  } catch (error) { restore(); throw error; }
+}
+
+test("an undispatched same-head retry keeps its publication receipt without publishing again", async () => {
+  const f = await undispatchedRetryFixture();
+  try {
+    const unknown = f.registry.beginSpawnRequest({ engine: "codex", cwd: "/repo", transport: "structured",
+      clientAttemptId: "pipeline_unrelated_review_1", launchProfile: { title: "Unsettled original evidence" } }).receipt!;
+    const before = structuredClone(f.read());
+    const reads = f.box.remoteReadAttempts();
+    const pushes = f.box.order.filter(item => item.startsWith("push:"));
+    expect(pushes).toHaveLength(1);
+    expect((await f.retry()).error).toBeUndefined();
+    const retried = f.read();
+    expect(retried.delivery).toEqual(before.delivery);
+    expect(retried.publishedCommit).toBe(f.box.passedSha);
+    expect(retried.publicationRecovery).toEqual(before.publicationRecovery);
+    expect(retried.stages).toEqual(before.stages);
+    expect(retried.stages[1]!.onFail).toMatchObject({ maxRounds: 3 });
+    expect(retried.runs).toEqual(before.runs);
+    await f.retry();
+    await tickPipelines([], f.h.ports);
+    const running = f.read().runs.find(run => run.stageId === "review")!;
+    expect(running.attempts).toHaveLength(2);
+    expect(running.attempts[0]).toEqual(before.runs.find(run => run.stageId === "review")!.attempts[0]);
+    expect(f.h.spawnInputs).toHaveLength(2);
+    await tickPipelines([f.h.finish(running.attempts[1]!.agentPath!, "pass")], f.h.ports);
+    const completed = f.read();
+    expect(completed.state).toBe("completed");
+    expect(completed.delivery!.operation).toEqual(before.delivery!.operation);
+    expect(completed.publishedCommit).toBe(f.box.passedSha);
+    expect(f.box.remoteReadAttempts()).toBe(reads);
+    expect(f.box.order.filter(item => item.startsWith("push:"))).toEqual(pushes);
+    expect(f.registry.spawnReceipt(unknown.launchId)).toEqual(unknown);
+  } finally { f.restore(); }
+});
+
+test.each(["uncertain-success", "executor-unfinished"] as const)(
+  "an undispatched retry replaces unresolved publication evidence before completion: %s", async variant => {
+    const f = await undispatchedRetryFixture();
+    try {
+      const lane = f.read();
+      const operation = lane.delivery!.operation!;
+      expect(operation.result?.ok).toBe(true);
+      if (variant === "uncertain-success" && operation.result?.ok) operation.result.uncertain = true;
+      if (variant === "executor-unfinished") {
+        expect(operation.executor).toBeDefined();
+        operation.executor!.finished = false;
+      }
+      savePipelines([lane]);
+      const { pipelinePublicationHoldsHost } = await import("./hostRetirement");
+      expect(pipelinePublicationHoldsHost(f.read())).toBe(true);
+      const reads = f.box.remoteReadAttempts();
+      expect((await f.retry()).error).toBeUndefined();
+      const retried = f.read();
+
+      await tickPipelines([], f.h.ports);
+      const attempt = f.read().runs.find(run => run.stageId === "review")!.attempts.at(-1)!;
+      expect(attempt.n).toBe(2);
+      await tickPipelines([f.h.finish(attempt.agentPath!, "pass")], f.h.ports);
+      const completed = f.read();
+      expect(completed.state).toBe("completed");
+      expect(completed.delivery!.operation!.id).not.toBe(operation.id);
+      expect(completed.delivery!.operation).toMatchObject({ state: "settled",
+        result: { ok: true, remote: "published", sha: f.box.passedSha } });
+      expect(f.box.remoteReadAttempts()).toBeGreaterThan(reads);
+      expect(pipelinePublicationHoldsHost(completed)).toBe(false);
+      expect(retried.delivery!.operation).toBeUndefined();
+      expect(retried.publishedCommit).toBeNull();
+      expect(retried.stages).toEqual(lane.stages);
+      expect(retried.runs).toEqual(lane.runs);
+    } finally { f.restore(); }
+  });
+
+test.each(["moved-head", "dirty-worktree", "spawn-called", "owner-replaced", "stale-epoch",
+  "refused-receipt", "unreachable-receipt", "pending-receipt", "running-receipt", "result-sha", "operation-sha", "published-sha",
+  "registry-after-await", "registry-unreadable", "wrong-branch", "head-read-failed", "head-read-threw"] as const)(
+  "an undispatched retry retains existing publication invalidation: %s", async variant => {
+    const f = await undispatchedRetryFixture(variant === "spawn-called");
+    try {
+      const lane = f.read();
+      const before = structuredClone(lane);
+      const operation = structuredClone(lane.delivery!.operation!);
+      const otherSha = "9".repeat(40);
+      if (variant === "moved-head") f.box.setLocalHead(otherSha);
+      if (variant === "dirty-worktree") f.box.setDirty(true);
+      if (variant === "spawn-called") expect(lane.runs.find(run => run.stageId === "review")!.attempts[0]!.spawnCalls).toBeGreaterThan(0);
+      if (variant === "stale-epoch") lane.delivery!.operation!.epoch++;
+      if (variant === "refused-receipt") lane.delivery!.operation!.result = { ok: false, error: "fixture publication refusal" };
+      if (variant === "unreachable-receipt") lane.delivery!.operation!.result = { ok: true, sha: f.box.passedSha, remote: "unreachable", detail: "unknown remote outcome" };
+      if (variant === "pending-receipt") lane.delivery!.operation!.state = "pending";
+      if (variant === "running-receipt") lane.delivery!.operation!.state = "running";
+      if (variant === "result-sha") lane.delivery!.operation!.result = { ok: true, sha: otherSha, remote: "published" };
+      if (variant === "operation-sha") lane.delivery!.operation!.sha = otherSha;
+      if (variant === "published-sha") lane.publishedCommit = otherSha;
+      if (variant === "stale-epoch") {
+        expect(() => savePipelines([lane])).toThrow("refusing to persist a malformed pipeline record");
+        expect(f.read()).toEqual(before);
+        return;
+      }
+      savePipelines([lane]);
+      if (variant === "owner-replaced") {
+        const { buildPipeline, createPipelineWithDelivery, takeoverPipelineDelivery } = await import("./store");
+        const successor = await createPipelineWithDelivery(buildPipeline({ id: "retry-successor", task: "Continue delivery",
+          project: lane.project, repoDir: lane.repoDir, stages: lane.stages, srcPath: null, srcConversationId: null,
+          now: f.h.ports.now(), state: "draft" }), lane.delivery!.target);
+        expect((await takeoverPipelineDelivery(successor.id, lane.id, lane.delivery!.epoch, "continue delivery", null)).error).toBeUndefined();
+      }
+      const execute = f.h.ports.exec;
+      let inserted = false;
+      f.h.ports.exec = async (command, rawArgs, ...rest) => {
+        const args = command === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
+        const result = await execute(command, rawArgs, ...rest);
+        if (args[0] === "rev-parse" && args[1] === "HEAD") {
+          if (variant === "head-read-threw") throw new Error("fixture HEAD read failed");
+          if (variant === "head-read-failed") return { code: 1, stdout: "", stderr: "fixture HEAD unavailable" };
+          if (variant === "registry-after-await" && !inserted) {
+            inserted = true;
+            expect(f.registry.beginSpawnRequest({ engine: "codex", cwd: lane.worktreeDir, transport: "structured",
+              clientAttemptId: f.key, launchProfile: { title: "Original launch evidence" } }).kind).toBe("created");
+          }
+        }
+        if (variant === "wrong-branch" && args[0] === "branch" && args[1] === "--show-current") return { code: 0, stdout: "other-branch", stderr: "" };
+        return result;
+      };
+      const { spyOn } = await import("bun:test");
+      const unreadable = variant === "registry-unreadable" ? spyOn(f.registry, "pipelineSpawnHistory").mockImplementation(() => { throw new Error("fixture registry unavailable"); }) : null;
+      let result;
+      try { result = await f.retry(); } finally { unreadable?.mockRestore(); }
+      expect(result.error).toBeUndefined();
+      const after = f.read();
+      if (variant === "pending-receipt" || variant === "running-receipt") {
+        // Existing retry leaves unsettled evidence alone; it proves no success.
+        expect(after.delivery!.operation).toEqual({ ...operation, state: variant === "pending-receipt" ? "pending" : "running" });
+        expect(after.publishedCommit).toBe(lane.publishedCommit);
+      } else {
+        expect(after.delivery!.operation).toBeUndefined();
+        expect(after.publishedCommit).toBeNull();
+      }
+      if (variant === "registry-after-await") {
+        expect(inserted).toBe(true);
+        expect(f.registry.pipelineSpawnHistory(f.key)).toHaveLength(1);
+      }
+      if (variant === "refused-receipt") expect(after.publicationRecovery![f.box.passedSha]!.history[0]!.operationId).toBe(operation.id);
+      if (variant === "owner-replaced") {
+        const reads = f.box.remoteReadAttempts();
+        expect((await patchPipeline(lane.id, { action: "publish" }, f.h.ports)).error).toBeDefined();
+        expect(f.box.remoteReadAttempts()).toBe(reads);
+      }
+    } finally { f.restore(); }
+  });
+
 test("a builder that already pushed the accepted commit settles without another push (#1939)", async () => {
   const h = harness();
   const box = publishHarness(h);
@@ -2271,9 +2490,13 @@ test.skip("a passed run stage publishes its committed head before the review sta
   expect(loadPipelines()[0]!.state).toBe("running");
 });
 
-test("an unreachable remote leaves the stage passed and records it as unpublished (#999)", async () => {
+test("an unreachable remote backs off across restarts, parks, and recovers the accepted pass (#3375)", async () => {
   const h = harness();
   const box = publishHarness(h, { remoteReadFails: true });
+  let clock = Date.parse(h.ports.now());
+  const scheduled: number[] = [];
+  h.ports.now = () => new Date(clock).toISOString();
+  h.ports.scheduleTick = delay => { scheduled.push(delay); };
   await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
@@ -2306,8 +2529,125 @@ test("an unreachable remote leaves the stage passed and records it as unpublishe
     state: "passed",
     verdict: { status: "pass" },
   });
-  expect(box.remoteReadAttempts()).toBe(2);
+  expect(box.remoteReadAttempts()).toBe(1);
+  expect(waiting.delivery!.operation!.id).toBe(current.delivery!.operation!.id);
   expect(h.flows.size).toBe(0);
+  expect(attempt.publicationRetry).toMatchObject({ failures: 1, retryAt: new Date(clock + 60_000).toISOString() });
+  expect(scheduled).toContain(60_000);
+
+  const { realExec } = await import("@/lib/workflows/provision");
+  const restart = async (remoteFails = true) => {
+    const script = `
+      const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(path.join(import.meta.dir, "engine.ts"))});
+      const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
+      registerPipelineTick(async () => {});
+      const scheduled = [];
+      let reads = 0;
+      const ports = { ...defaultPipelinePorts(), now: () => ${JSON.stringify(new Date(clock).toISOString())},
+        scheduleTick: delay => scheduled.push(delay), worktreePresent: () => true,
+        conversationAgentActive: async () => false, stageHostResident: async () => false,
+        paneAgentAlive: async () => false, getFlow: () => null,
+        spawnAgent: async () => { throw new Error("passed stage must not respawn"); },
+        exec: async (command, rawArgs) => {
+          const args = command === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
+          if (args[0] === "status") return { code: 0, stdout: "", stderr: "" };
+          if (args[0] === "rev-parse" && args[1] === "HEAD") return { code: 0, stdout: ${JSON.stringify(box.passedSha)}, stderr: "" };
+          if (args[0] === "branch" && args[1] === "--show-current") return { code: 0, stdout: ${JSON.stringify(current.branch)}, stderr: "" };
+          if (args[0] === "ls-remote") {
+            reads++;
+            return ${remoteFails ? '{ code: 128, stdout: "", stderr: "fatal: remote authentication unavailable" }'
+              : JSON.stringify({ code: 0, stdout: `${box.passedSha}\trefs/heads/${current.branch}\n`, stderr: "" })};
+          }
+          throw new Error("unexpected publication command: " + command + " " + args.join(" "));
+        } };
+      await tickPipelines([], ports);
+      console.log(JSON.stringify({ reads, scheduled }));
+    `;
+    const result = await realExec(process.execPath, ["-e", script], process.cwd(), { ...process.env }, { timeoutMs: 30_000 });
+    expect(result.code, result.stderr).toBe(0);
+    return JSON.parse(result.stdout.trim()) as { reads: number; scheduled: number[] };
+  };
+
+  for (const [index, delay] of [60_000, 5 * 60_000, 15 * 60_000].entries()) {
+    const before = loadPipelines()[0]!;
+    const history = structuredClone(before.publicationRecovery![box.passedSha]!);
+    expect(history.failures).toBe(index + 1);
+    expect(history.totalAttempts).toBe(index + 1);
+    expect(history.history).toHaveLength(index + 1);
+    clock += delay - 1;
+    const early = await restart();
+    expect(early.reads).toBe(0);
+    expect(loadPipelines()[0]!.publicationRecovery![box.passedSha]).toEqual(history);
+    expect(loadPipelines()[0]!.delivery!.operation!.id).toBe(before.delivery!.operation!.id);
+    clock++;
+    const due = await restart();
+    expect(due.reads).toBe(1);
+    const retried = loadPipelines()[0]!;
+    expect(retried.delivery!.operation!.id).not.toBe(before.delivery!.operation!.id);
+    expect(retried.publicationRecovery![box.passedSha]!.failures).toBe(index + 2);
+    if (index < 2) expect(due.scheduled).toContain([5 * 60_000, 15 * 60_000][index]!);
+  }
+
+  const parked = loadPipelines()[0]!;
+  expect(parked).toMatchObject({ state: "needs_decision", lastPassedCommit: box.passedSha, publishedCommit: null,
+    cursor: { stageId: "build", state: "committing" } });
+  expect(parked.stateDetail!.split("\n")[0]).toContain("checking the remote pipeline branch failed; retried 3 times");
+  expect(parked.stateDetail).toContain("use publish to try again");
+  expect(parked.stateDetail).toContain("fatal: remote authentication unavailable");
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({ state: "passed", verdict: { status: "pass" },
+    publicationRetry: { failures: 3, exhausted: true } });
+  expect(parked.publicationRecovery![box.passedSha]).toMatchObject({ failures: 4, totalAttempts: 4 });
+  clock += 60 * 60_000;
+  expect((await restart(false)).reads).toBe(0);
+  expect(loadPipelines()[0]!.publicationRecovery).toEqual(parked.publicationRecovery);
+  expect(loadPipelines()[0]!.stateDetail).toBe(parked.stateDetail);
+
+  box.setRemoteReadFails(false);
+  expect((await patchPipeline(current.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  const recovered = loadPipelines()[0]!;
+  expect(recovered).toMatchObject({ state: "running", publishedCommit: box.passedSha, cursor: { stageId: "review", state: "pending" } });
+  expect(recovered.runs[0]!.attempts).toHaveLength(1);
+  expect(recovered.runs[0]!.attempts[0]).toMatchObject({ state: "passed", verdict: attempt.verdict, output: attempt.output, error: null });
+  expect(recovered.publicationRecovery).toEqual(parked.publicationRecovery);
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(box.order).toEqual(["commit", `push:${box.passedSha}`]);
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs).toHaveLength(2);
+  expect(loadPipelines()[0]!.runs.find(run => run.stageId === "review")!.attempts).toHaveLength(1);
+  expect(box.order).toEqual(["commit", `push:${box.passedSha}`]);
+});
+
+test.each(["publish", "retry-stage"] as const)("manual %s retains an uncounted settled remote-read failure (#3375)", async action => {
+  const h = harness();
+  const box = publishHarness(h, { remoteReadFails: true });
+  const clock = Date.parse(h.ports.now());
+  h.ports.now = () => new Date(clock).toISOString();
+  await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([finishReported(h, "/codex/stage-1.jsonl", "pass", "done")], h.ports);
+  const settled = loadPipelines()[0]!;
+  const operationId = settled.delivery!.operation!.id;
+  // Recreate a stop after the publisher settles, before the scheduler accounts
+  // for that result. Explicit recovery must record it before replacing it.
+  delete settled.publicationRecovery;
+  delete settled.runs[0]!.attempts[0]!.publicationRetry;
+  settled.state = "needs_decision";
+  settled.stateDetail = "publishing the passed stage: checking the remote pipeline branch failed";
+  savePipelines([settled]);
+  const recovered = await patchPipeline(settled.id, { action }, h.ports);
+  if (action === "publish") expect(recovered.error).toContain("remote authentication unavailable");
+  else expect(recovered.error).toBeUndefined();
+  const replaced = loadPipelines()[0]!;
+  expect(replaced.publicationRecovery![box.passedSha]).toMatchObject({ failures: 1, totalAttempts: 1,
+    history: [{ operationId, retryAt: new Date(clock + 60_000).toISOString() }] });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(box.remoteReadAttempts()).toBe(2);
+  expect(loadPipelines()[0]!.delivery!.operation!.id).not.toBe(operationId);
+  expect(loadPipelines()[0]!.publicationRecovery![box.passedSha]).toMatchObject({ failures: 2, totalAttempts: 2,
+    history: [{ operationId }, { retryAt: new Date(clock + 5 * 60_000).toISOString() }] });
 });
 
 test("a final passing stage stays open until its accepted head is published (#999)", async () => {
@@ -2336,6 +2676,7 @@ test("a final passing stage stays open until its accepted head is published (#99
   expect(box.remoteReadAttempts()).toBe(1);
 
   box.setRemoteReadFails(false);
+  h.advanceWallClock(60_000);
   await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
 
   const completed = loadPipelines()[0]!;
@@ -2366,13 +2707,20 @@ test("a publication that cannot land parks the pass without losing the commit", 
 
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
-  // The first line names the cause and the next step; the evidence follows it.
-  expect(parked.stateDetail!.split("\n")[0]).toBe("publishing the passed stage: git push was refused (exit 1): ! [remote rejected] (shallow update not allowed). Fix it on this branch or on the base branch, then retry-stage.");
+  // Keep the remote diagnostic and accepted pass without attributing the
+  // refusal to a local check or spending the producer's repair allowance.
+  expect(parked.stateDetail!.split("\n")[0]).toContain("git push was refused (exit 1): ! [remote rejected] (shallow update not allowed)");
   expect(parked.stateDetail).toContain("\npublishing the pipeline branch: exit 1");
-  /* The stage's work is committed and recorded — the park is recoverable, and a
-     retry resets to this commit rather than discarding the builder's output. */
+  expect(parked.publicationRecovery?.[box.passedSha]).toMatchObject({ failures: 0, totalAttempts: 1,
+    history: [{ cause: "remote-refusal", retryAt: null }] });
+  const attempt = parked.runs[0]!.attempts[0]!;
+  expect(attempt.verdict?.status).toBe("pass");
+  expect(attempt.publicationRepair).toBeUndefined();
+  expect(attempt.publicationRetry).toBeUndefined();
   expect(parked.lastPassedCommit).toBe(box.passedSha);
   expect(parked.publishedCommit ?? null).toBeNull();
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.publicationRecovery).toEqual(parked.publicationRecovery);
   expect(box.order).toEqual(["commit", "push-rejected"]);
   expect(h.flows.size).toBe(0);
 });

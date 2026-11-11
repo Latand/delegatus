@@ -16,6 +16,7 @@ export type Selection = (typeof SELECTIONS)[number];
 /* The files that start the executable through NATIVE_CODEX_QUEUE_TEST_BINARY,
    LLV_CODEX_HISTORY_CLI or LLV_CODEX_BINARY, once per supported version. */
 export const engineFiles = [
+  "scripts/gate-completion.native.test.ts",
   "src/lib/runtime/codexSocketTransport.native.test.ts",
   "src/lib/agent/processCleanupPolicy.native.test.ts",
   "src/lib/agent/operatorQuestionPolicy.native.test.ts",
@@ -24,6 +25,7 @@ export const engineFiles = [
   "src/lib/runtime/nativeQueueCompaction.integration.test.ts",
   "src/lib/runtime/nativeQueueHost.integration.test.ts",
   "src/lib/runtime/codexSteerDelivery.integration.test.ts",
+  "src/lib/runtime/deliveryLongTurn.native.test.ts",
 ];
 /* Engine files that install globals: one process each, like the other
    injection files. */
@@ -33,6 +35,7 @@ export const engineInjectionFiles = [
 ];
 
 export const files = [
+  "scripts/gate-completion.native.test.ts",
   "src/lib/runtime/codexSocketTransport.native.test.ts",
   "src/lib/agent/processCleanupPolicy.native.test.ts",
   "src/lib/agent/operatorQuestionPolicy.native.test.ts",
@@ -46,6 +49,7 @@ export const files = [
   "src/lib/runtime/nativeQueueCompaction.integration.test.ts",
   "src/lib/runtime/nativeQueueHost.integration.test.ts",
   "src/lib/runtime/codexSteerDelivery.integration.test.ts",
+  "src/lib/runtime/deliveryLongTurn.native.test.ts",
   "src/lib/runtime/codexTurnProfile.test.ts",
   "src/lib/runtime/codexAppServerHost.test.ts",
   "src/lib/runtime/claudeStreamBrokerHost.test.ts",
@@ -91,8 +95,8 @@ export const injectionFiles = [
   "src/lib/runtime/http.inject.test.ts",
   "src/lib/runtime/commands.inject.test.ts",
   "src/components/ComposerBar.dom.test.tsx",
-  "src/components/TmuxComposer.inject.dom.test.tsx",
-  "src/components/TmuxComposer.injectReceipts.dom.test.tsx",
+  "src/components/ConversationComposer.inject.dom.test.tsx",
+  "src/components/ConversationComposer.injectReceipts.dom.test.tsx",
 ];
 
 /* #1652's attachment retention, which ships beside injection (#1689): the
@@ -106,10 +110,10 @@ export const attachmentFiles = [
   "src/lib/runtime/inboxWriters.integration.test.ts",
   "src/lib/runtime/composerPayloadRetry.integration.test.ts",
   "src/lib/inboxFiles.test.ts",
-  "src/components/TmuxComposer.test.ts",
-  "src/components/TmuxComposer.reconciliation.dom.test.tsx",
-  "src/components/TmuxComposer.reconciliationExpiry.dom.test.tsx",
-  "src/components/TmuxComposer.pendingImages.dom.test.tsx",
+  "src/components/ConversationComposer.test.ts",
+  "src/components/ConversationComposer.reconciliation.dom.test.tsx",
+  "src/components/ConversationComposer.reconciliationExpiry.dom.test.tsx",
+  "src/components/ConversationComposer.pendingImages.dom.test.tsx",
 ];
 
 /**
@@ -123,7 +127,7 @@ export const attachmentFiles = [
  */
 export const domFiles = [
   "src/components/NativeQueuePanel.dom.test.tsx",
-  "src/components/TmuxComposer.nativeQueue.dom.test.tsx",
+  "src/components/ConversationComposer.nativeQueue.dom.test.tsx",
   "src/components/VoiceConversation.dom.test.tsx",
   "src/lib/realtime/voiceCardChain.dom.test.ts",
   "src/lib/realtime/voiceCanonicalTranscript.dom.test.ts",
@@ -186,7 +190,7 @@ if (import.meta.main) {
     for (const key of ISOLATED_ROOT_KEYS) {
       fileEnv[key] = join(fileRoot, key === "TMPDIR" ? "t" : key.toLowerCase()); mkdirSync(fileEnv[key]!);
     }
-    const result = spawnSync(process.execPath, ["test", file], { env: fileEnv, stdio: "inherit", timeout: 300_000, killSignal: "SIGKILL" });
+    const result = spawnSync(process.execPath, ["test", "--timeout=60000", file], { env: fileEnv, stdio: "inherit", timeout: 300_000, killSignal: "SIGKILL" });
     if (result.error) throw result.error;
     if (result.status !== 0) process.exit(result.status ?? 1);
   }

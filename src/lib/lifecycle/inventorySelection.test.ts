@@ -208,6 +208,41 @@ test("a spent catalog budget answers from the last completed rows as stale", asy
   held.publish();
 });
 
+test.each([false, true])("project preparation consumes retained metadata before filtering, stale=%s", async stale => {
+  const files = [entry({ path: "/corpus/own.jsonl", project: "own" }), entry({ path: "/corpus/other.jsonl", project: "other" })];
+  const held = heldGeneration();
+  let project: string | undefined;
+  const read: CompletedGenerationRead = async () => ({ snapshot: { files, projectCatalog: [], complete: true },
+    generation: 1, targetGeneration: 1, cacheStatus: "hit", requestCount: 1, cloneDurationMs: 0 });
+  try {
+    const selection = await completedGenerationSelection({
+      limit: 1,
+      prepareProjectMatches: async catalog => { project = catalog.files[0]?.project; },
+      projectMatches: row => row.project === project,
+    }, { completedFileScan: stale ? held.read : read, ...(stale ? { budgetMs: 1, lastCompletedFiles: () => files } : {}) });
+    expect(selection.entries.map(row => row.path)).toEqual(["/corpus/own.jsonl"]);
+    expect(selection.matched).toBe(1);
+  } finally { if (stale) held.publish(); }
+});
+
+test.each([false, true])("cancellation during project preparation stops filtering, stale=%s", async stale => {
+  const held = heldGeneration();
+  const controller = new AbortController();
+  let predicates = 0;
+  const files = [entry({ path: "/corpus/own.jsonl" })];
+  const read: CompletedGenerationRead = async () => ({ snapshot: { files, projectCatalog: [], complete: true },
+    generation: 1, targetGeneration: 1, cacheStatus: "hit", requestCount: 1, cloneDurationMs: 0 });
+  try {
+    await expect(completedGenerationSelection({
+      limit: 1,
+      prepareProjectMatches: async () => { controller.abort(); },
+      projectMatches: () => { predicates++; return true; },
+    }, { completedFileScan: stale ? held.read : read, signal: controller.signal,
+      ...(stale ? { budgetMs: 1, lastCompletedFiles: () => files } : {}) })).rejects.toMatchObject({ name: "AbortError" });
+    expect(predicates).toBe(0);
+  } finally { if (stale) held.publish(); }
+});
+
 test("a generation that arrives inside the catalog budget is the answer", async () => {
   const held = heldGeneration();
   const pending = completedGenerationSelection({ project: "viewer", liveOnly: true, limit: 10 }, {

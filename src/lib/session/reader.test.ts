@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { readSession, scanUserAuthoredMessages } from "./reader";
+import { normalizeSessionLine, readSession, scanUserAuthoredMessages } from "./reader";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-session-reader-"));
 
@@ -18,6 +18,86 @@ function writeJsonl(name: string, rows: unknown[]): string {
 }
 
 describe("readSession", () => {
+  test("preserves payload edges in native content arrays and nested tool results", () => {
+    const text = " \tПривіт ї😀 Hello  world\u200b\n`a  b`  \n";
+    const codex = writeJsonl("codex-payload-edges.jsonl", [
+      { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } },
+      { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text }] } },
+      { type: "event_msg", payload: { type: "item_completed", item: { type: "agentMessage", id: "answer", text } } },
+      { type: "response_item", payload: { type: "function_call_output", output: [{ type: "text", text }] } },
+    ]);
+    const claude = writeJsonl("claude-payload-edges.jsonl", [
+      { type: "user", message: { content: [{ type: "text", text }] } },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "fixture", content: [{ type: "text", text }] }] } },
+    ]);
+    for (const result of [readSession(codex, "codex"), readSession(claude, "claude")]) {
+      for (const record of [...result.messages, ...result.tools]) {
+        expect(record.text).toBe(" \tПривіт ї😀 Hello  world\u200b\n`a  b`  \n");
+        expect(Buffer.from(record.text).equals(Buffer.from(" \tПривіт ї😀 Hello  world\u200b\n`a  b`  \n"))).toBe(true);
+      }
+    }
+    expect(readSession(codex, "codex").messages).toHaveLength(3);
+    expect(readSession(codex, "codex").tools).toHaveLength(1);
+    expect(readSession(claude, "claude").messages).toHaveLength(1);
+    expect(readSession(claude, "claude").tools).toHaveLength(1);
+  });
+
+  test("retains whitespace parts while preserving content-block separators and empty-record filtering", () => {
+    const row = { type: "response_item", payload: { type: "message", role: "assistant", content: [
+      { type: "output_text", text: " Hello " },
+      { type: "output_text", text: " " },
+      { type: "output_text", text: "world  " },
+    ] } };
+    expect(normalizeSessionLine("codex", row)[0]!.record.text).toBe(" Hello \n \nworld  ");
+    const blank = { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: " \t " }], message: "fallback" } };
+    expect(normalizeSessionLine("codex", blank)[0]!.record.text).toBe(" \t ");
+    const file = writeJsonl("payload-blocks.jsonl", [row, blank]);
+    expect(readSession(file, "codex").messages.map(record => record.text)).toEqual([" Hello \n \nworld  "]);
+  });
+
+  test("marks deeply nested records and preserves adjacent messages for every engine", () => {
+    const nestedArray = "[".repeat(100_000) + '"x"' + "]".repeat(100_000);
+    const nestedObject = '{"child":'.repeat(20_000) + '"x"' + "}".repeat(20_000);
+    const nestedContent = '[{"type":"tool_result","content":'.repeat(10_000) + '"x"' + "}]".repeat(10_000);
+    const cases = [
+      { engine: "codex", line: `{"type":"event_msg","payload":{"type":"file_change_output_delta","delta":${nestedArray}}}`,
+        ordinary: { type: "event_msg", timestamp: "t1", payload: { type: "agent_message", message: "  Звичайний 😀\nreply  " } } },
+      { engine: "codex", line: `{"type":"response_item","payload":{"type":"unknown","data":${nestedObject}}}`,
+        ordinary: { type: "event_msg", timestamp: "t1", payload: { type: "agent_message", message: "  Звичайний 😀\nreply  " } } },
+      { engine: "claude", line: `{"type":"user","message":{"content":${nestedContent}}}`,
+        ordinary: { type: "assistant", timestamp: "t1", message: { content: [{ type: "text", text: "  Звичайний 😀\nreply  " }] } } },
+      { engine: "copilot", line: `{"type":"assistant.message","data":{"toolRequests":[{"name":"tool","arguments":${nestedObject}}]}}`,
+        ordinary: { type: "assistant.message", timestamp: "t1", data: { content: "  Звичайний 😀\nreply  " } } },
+    ] as const;
+    for (const [index, { engine, line, ordinary }] of cases.entries()) {
+      const normalized = normalizeSessionLine(engine, JSON.parse(line));
+      expect(normalized).toEqual([{ record: {
+        kind: "trace", role: "system", ts: null, name: "normalization_limit",
+        text: "Record skipped: JSON nesting exceeds 64 levels",
+      } }]);
+      const pathname = path.join(SANDBOX, `nested-${index}.jsonl`);
+      fs.writeFileSync(pathname, [JSON.stringify(ordinary), line, JSON.stringify(ordinary)].join("\n") + "\n");
+      const result = readSession(pathname, engine);
+      expect(result.messages).toEqual([
+        normalizeSessionLine(engine, ordinary)[0].record,
+        normalizeSessionLine(engine, ordinary)[0].record,
+      ]);
+      expect(result.messages.map(record => record.text)).toEqual(["  Звичайний 😀\nreply  ", "  Звичайний 😀\nreply  "]);
+      expect(result.traces).toEqual([normalized[0].record]);
+    }
+  });
+
+  test("keeps nested compact text byte-for-byte up to the normalization depth boundary", () => {
+    const line = (depth: number) => JSON.parse('{"type":"event_msg","payload":{"type":"file_change_output_delta","delta":'
+      + "[".repeat(depth) + '["  first \\n value  ",[],[false,42,{"summary":" second   value "}]]'
+      + "]".repeat(depth) + "}}");
+    expect(normalizeSessionLine("codex", line(59))).toEqual([{ record: {
+      kind: "trace", role: "system", ts: null, name: "file_change_output_delta",
+      text: "first value\nfalse\n42\nsecond value",
+    } }]);
+    expect(normalizeSessionLine("codex", line(60))[0].record.name).toBe("normalization_limit");
+  });
+
   test("splits Claude text, thinking and tools", () => {
     const pathname = writeJsonl("claude.jsonl", [
       { type: "user", timestamp: "t1", message: { content: "Create a task" } },

@@ -9,6 +9,8 @@ import type { setLocale as SetLocale, translate as Translate } from "@/lib/i18n"
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import type { ConversationDraftRequest } from "@/lib/pipelines/conversationDraftContract";
+import type { ConversationDrafts as ConversationDraftsType } from "@/components/pipelines/conversationDraftClient";
 
 
 /*
@@ -48,8 +50,10 @@ const { setLocale, translate } = await import("@/lib/i18n") as { setLocale: type
 const { createPendingPipelineActs } = await import("./MobilePipelineScreen");
 const { receipts, useReceipt } = await import("./MobileReceipt");
 const { MobileTaskScreen } = await import("./MobileTaskScreen");
+const { ConversationDrafts } = await import("@/components/pipelines/conversationDraftClient");
 const { createMobileNav, MobileNavContext } = await import("./mobileNav");
 const { fakeHistory } = await import("./mobileNavTestHistory");
+const { takeRequestedStage } = await import("./pipelineStageRequest");
 setLocale("en");
 afterAll(async () => {
   await new Promise((r) => setTimeout(r, 0));
@@ -127,7 +131,7 @@ function Receipt() {
   return receipt ? <div data-test-receipt="">{receipt.text}{receipt.inverse ? <button type="button" data-test-undo="" onClick={() => receipts.undo()}>undo</button> : null}</div> : null;
 }
 
-function mount(ports: TaskMutationPorts, pipelinePorts: PipelinePorts, subject: BoardTask = theTask, extra: { files?: FileEntry[]; onOpen?: (file: FileEntry) => void; pipelines?: Pipeline[]; onOpenPipeline?: (pipeline: Pipeline) => void } = {}) {
+function mount(ports: TaskMutationPorts, pipelinePorts: PipelinePorts, subject: BoardTask = theTask, extra: { files?: FileEntry[]; onOpen?: (file: FileEntry) => void; pipelines?: Pipeline[]; onOpenPipeline?: (pipeline: Pipeline) => void; conversationDrafts?: ConversationDraftsType } = {}) {
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
@@ -157,6 +161,7 @@ function mount(ports: TaskMutationPorts, pipelinePorts: PipelinePorts, subject: 
         ports={pipelinePorts}
         onOpenConversation={extra.onOpen ?? (() => {})}
         onOpenPipeline={extra.onOpenPipeline ?? (() => {})}
+        conversationDrafts={extra.conversationDrafts}
       />
       <Receipt />
     </MobileNavContext.Provider>,
@@ -471,6 +476,12 @@ test("a live lane is its numbered stage list: who runs each stage once, the curr
   expect(current.querySelector("[data-stage-now]")?.textContent).toContain("running");
   click(q(current, '[data-open-conversation="implement"]'));
   expect(opened).toEqual([stageFile.path]);
+  /* A stage that has not started opens the pipeline screen on its own ⚙ sheet
+     (docs/design/task-card-no-inline-conversations.md §6). */
+  click(q(live, '[data-stage-open="review"]'));
+  expect(screens).toEqual(["running-a"]);
+  expect(takeRequestedStage("running-a")).toBe("review");
+  screens.length = 0;
   /* The Stages line is the way into the pipeline screen, with the lane's ⋯. */
   const stages = q(live, '.pb-section-row [data-open-stages="running-a"]')!;
   expect(stages.textContent).toContain(en("mobile2.pipeline.stages"));
@@ -662,4 +673,78 @@ test("the opened phone task shows the full passive note beneath its description"
   const ask = q(host, "[data-phone-task-ask-orchestrator]");
   expect(ask?.closest("[data-phone-task-bar]")).not.toBeNull();
   expect(ask?.getAttribute("aria-label")).toBeTruthy();
+});
+
+test("«Pipeline from conversation…» on the phone: a create with no answer keeps its own source on the sheet row and asks again under the same key", async () => {
+  const source = file(2, { title: "CSV export retry", cwd: "/repo/export" });
+  const subject = { ...theTask, assignments: [{ conversationId: source.conversationId, path: source.path, panePid: null, state: "linked", error: null, at: iso(600) }] } as unknown as BoardTask;
+  let branch = "fix/csv-export-retry";
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string) => {
+    if (!String(url).startsWith("/api/pipelines/from-conversation")) return new Response("{}", { status: 404 });
+    return new Response(JSON.stringify({ ok: true, source: { conversationId: source.conversationId, title: "CSV export retry", branch, head: "c".repeat(40), sourceRevision: `rev-${branch}`, canCreate: true } }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const posts: ConversationDraftRequest[] = [];
+  let keys = 0;
+  const store = new ConversationDrafts({
+    post: async (body) => { posts.push(body); return { kind: "unknown", error: "offline" }; },
+    preview: async () => ({ kind: "failed", refusal: null }),
+    apply: () => {},
+    newKey: () => `key-${++keys}`,
+  });
+  try {
+    const { nav } = mount(taskPorts([]), noPipelinePorts, subject, { files: [source], pipelines: [], conversationDrafts: store });
+    const body = dom.document.body as unknown as HTMLElement;
+    const row = () => q(body, '[data-phone-task-menu="fromConversation"]');
+    flushSync(() => nav.openSheet("menu"));
+    await sleep(20);
+    /* The conversation's name, and its branch on a line of its own. */
+    const hint = () => [q(body, "[data-phone-from-conversation-hint] > span:first-child")?.textContent, q(body, "[data-phone-from-conversation-hint] [data-branch-name]")?.textContent];
+    expect(hint()).toEqual(["CSV export retry", "fix/csv-export-retry"]);
+    click(row());
+    await sleep(20);
+    expect(nav.getState().sheet).toBeNull();
+    expect(q(body, '[data-conversation-draft="unknown"]')?.textContent).toContain(en("kanban.fromConversation.unknown"));
+
+    /* The conversation moved on; the sheet still names the request that may have landed, and asks for it again. */
+    branch = "other-branch";
+    flushSync(() => nav.openSheet("menu"));
+    await sleep(20);
+    expect([...hint(), q(body, '[data-phone-task-menu-note="fromConversation"]')?.textContent, (row() as HTMLButtonElement | null)?.disabled])
+      .toEqual(["CSV export retry", "fix/csv-export-retry", en("kanban.fromConversation.unknownRow"), false]);
+    click(row());
+    await sleep(20);
+    expect(posts.map((post) => [post.clientRequestId, post.sourceRevision])).toEqual([["key-1", "rev-fix/csv-export-retry"], ["key-1", "rev-fix/csv-export-retry"]]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("an accepted creation joins its task without replacing the existing lanes or task navigation", async () => {
+  const { setTeamViewForTests } = await import("@/components/team/teamClient");
+  const { resetFilesClientCacheForTests, reservePipelineCreation } = await import("@/hooks/useFiles");
+  const { memoryFilesSnapshotStore } = await import("@/lib/client/filesSnapshotStore");
+  const { buildPipeline } = await import("@/lib/pipelines/store");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = Object.assign(async () => Response.json({ error: "temporarily unavailable" }, { status: 503 }), { preconnect: () => {} });
+  setTeamViewForTests({ mode: "solo", me: null, members: [], methods: {
+    approval: false, telegram: { available: false, botUsername: null }, passkey: { available: false },
+  } });
+  resetFilesClientCacheForTests(memoryFilesSnapshotStore());
+  try {
+    const accepted = buildPipeline({ id: "accepted-task", project: "fixture", task: "Accepted follow-up", taskIds: [theTask.id],
+      repoDir: "/repo", srcPath: null, srcConversationId: null, stages: [], now: iso(0) });
+    const reservation = reservePipelineCreation()!;
+    expect(await reservation.accept(accepted, iso(0))).toBe(true);
+    reservation.release();
+    const { host, nav } = mount(taskPorts([]), noPipelinePorts);
+    expect(q(host, '[data-creation="accepted-task"]')).not.toBeNull();
+    expect(qa(host, "[data-phone-task-lane]").length).toBeGreaterThan(1);
+    expect(q(host, "[data-phone-task-title]")?.textContent).toContain(theTask.text.split("\n")[0]);
+    expect(nav.getState().stack.at(-1)?.kind).toBe("task");
+  } finally {
+    for (const root of roots) flushSync(() => root.unmount());
+    roots = [];
+    resetFilesClientCacheForTests(); setTeamViewForTests(null); globalThis.fetch = realFetch;
+  }
 });

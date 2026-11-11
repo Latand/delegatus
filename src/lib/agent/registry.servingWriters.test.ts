@@ -29,7 +29,6 @@ import { registryLockHolder } from "./registryLockHolderFixture";
 import { runIdentityWaveMigrationAtStartupOffLoop } from "./identityWaveStartup";
 import { resolveSpawnLineageOffLoop } from "./spawnParent";
 import { recordActualSpawnAccountOffLoop } from "./spawnAccountSettlement";
-import { beginRegistryResumeOffLoop, reconcileObservedTranscriptHostsOffLoop } from "./transcriptHost";
 
 const AT = "2026-10-19T00:00:00.000Z";
 const SESSION = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
@@ -128,23 +127,6 @@ test("transcript identity admission rereads foreign liveness after waiting", asy
   } finally { f.registry.close(); }
 });
 
-test("transcript observation and resume rerun their admitted guards", async () => {
-  const f = fixture();
-  f.seed();
-  let current = true;
-  const guard = () => { if (!current) throw new Error("observation replaced"); };
-  try {
-    await held(f, () => reconcileObservedTranscriptHostsOffLoop([], f.registry, guard));
-    await expect(held(f, () => reconcileObservedTranscriptHostsOffLoop([], f.registry, guard), () => { current = false; })).rejects.toThrow("observation replaced");
-    current = true;
-    const entry = { engine: "codex", path: f.artifactPath } as FileEntry;
-    const spec = { engine: "codex", cwd: "/repo", windowName: "Resume" } as Parameters<typeof beginRegistryResumeOffLoop>[1];
-    const result = await held(f, () => beginRegistryResumeOffLoop(entry, spec, guard, f.registry));
-    expect(result?.receipt.purpose).toBe("resume-successor");
-    await expect(held(f, () => beginRegistryResumeOffLoop(entry, spec, guard, f.registry), () => { current = false; })).rejects.toThrow("observation replaced");
-  } finally { f.registry.close(); }
-});
-
 test("deputy registration repeats seat authority inside admission", async () => {
   const f = fixture();
   let current = true;
@@ -191,9 +173,9 @@ for (const shared of [false, true]) test(`account selection keeps catalog and ro
   } finally { f.registry.close(); }
 });
 
-for (const family of ["flow", "resume"] as const) for (const phase of ["reservation", "task", "recorded"] as const) {
+for (const family of ["flow"] as const) for (const phase of ["reservation", "task", "recorded"] as const) {
   // Pre-freeze flow execution cases remain until S8; retirement is covered above.
-  (family === "flow" ? test.skip : test)(`${family} revocation after ${phase} admission durably retires its unactuated receipt`, async () => {
+  test.skip(`${family} revocation after ${phase} admission durably retires its unactuated receipt`, async () => {
     const f = fixture(); f.seed();
     let revoked = false;
     const current = () => {
@@ -204,13 +186,7 @@ for (const family of ["flow", "resume"] as const) for (const phase of ["reservat
       return !revoked;
     };
     try {
-      if (family === "resume") {
-        const entry = { engine: "codex", path: f.artifactPath } as FileEntry;
-        const spec = { engine: "codex", cwd: "/repo", windowName: "Resume" } as Parameters<typeof beginRegistryResumeOffLoop>[1];
-        await expect(beginRegistryResumeOffLoop(entry, spec, () => {
-          if (!current()) throw new Error("resume authority replaced");
-        }, f.registry)).rejects.toThrow("resume authority replaced");
-      } else {
+      {
         const flow = { id: `phase-${phase}`, project: "fixture", cwd: "/repo", implementerPath: f.artifactPath,
           implementerConversationId: f.registry.conversationForPath(f.artifactPath)!.id,
           roles: { reviewer: { engine: "codex", model: null, effort: "high" } }, rounds: [] } as unknown as Flow;
@@ -230,7 +206,7 @@ for (const family of ["flow", "resume"] as const) for (const phase of ["reservat
   });
 }
 
-for (const family of ["flow", "resume"] as const) (family === "flow" ? test.skip : test)(`${family} reports refused revocation cleanup and a reopened writer can finish it`, async () => {
+for (const family of ["flow"] as const) test.skip(`${family} reports refused revocation cleanup and a reopened writer can finish it`, async () => {
   const f = fixture(false, 1_000); f.seed();
   const peer = new Database(f.sqliteFilename);
   let locked = false;
@@ -242,11 +218,7 @@ for (const family of ["flow", "resume"] as const) (family === "flow" ? test.skip
   };
   try {
     let work: Promise<unknown>;
-    if (family === "resume") {
-      const entry = { engine: "codex", path: f.artifactPath } as FileEntry;
-      const spec = { engine: "codex", cwd: "/repo", windowName: "Resume" } as Parameters<typeof beginRegistryResumeOffLoop>[1];
-      work = beginRegistryResumeOffLoop(entry, spec, () => { if (!current()) throw new Error("resume authority replaced"); }, f.registry);
-    } else {
+    {
       const flow = { id: "cleanup-refusal", project: "fixture", cwd: "/repo", implementerPath: f.artifactPath,
         implementerConversationId: f.registry.conversationForPath(f.artifactPath)!.id,
         roles: { reviewer: { engine: "codex", model: null, effort: "high" } }, rounds: [] } as unknown as Flow;
@@ -373,15 +345,37 @@ test("host capture waits for durable admission and a stale checkpoint preserves 
 });
 
 test("dead host and startup demotion callbacks take admission on each pass", async () => {
-  const f = fixture(); seedHost(f);
+  const f = fixture();
+  const seed = () => {
+    seedHost(f);
+    const entry = f.registry.readOnlySnapshot().entries[`codex:${SESSION}`]!;
+    f.registry.upsert({ ...entry, claimOwner: null });
+    // This fixture's liveness probe marks every identity dead. Publish the
+    // writer through the real claim path so recovery can recognize it.
+    expect(f.registry.claimStructuredHost(KEY, captureProcessIdentity(process.pid))).not.toBeNull();
+  };
   try {
+    seed();
     await held(f, () => demoteSkippedStructuredRegistryHosts(f.registry, () => false));
     expect(f.registry.readOnlySnapshot().entries[`codex:${SESSION}`]?.status).toBe("dead");
-    seedHost(f);
+    seed();
     f.registry.reconcileConversations([{ engine: "codex", path: f.artifactPath, accountId: null, launchProfile: f.profile,
       turn: { state: "terminal", source: "lifecycle", terminalAt: AT }, observedAt: AT }]);
     await held(f, () => reconcileDeadStructuredRegistryHostsOffLoop(f.registry));
     expect(f.registry.readOnlySnapshot().entries[`codex:${SESSION}`]?.status).toBe("dead");
+  } finally { f.registry.close(); }
+});
+
+for (const startup of [false, true]) test(`dead-host cleanup preserves an unrecognized writer (startup=${startup})`, async () => {
+  const f = fixture(); seedHost(f);
+  f.registry.reconcileConversations([{ engine: "codex", path: f.artifactPath, accountId: null, launchProfile: f.profile,
+    turn: { state: "terminal", source: "lifecycle", terminalAt: AT }, observedAt: AT }]);
+  const before = f.registry.readOnlySnapshot().entries[`codex:${SESSION}`]!;
+  try {
+    await (startup
+      ? demoteSkippedStructuredRegistryHosts(f.registry, () => false)
+      : reconcileDeadStructuredRegistryHostsOffLoop(f.registry));
+    expect(f.registry.readOnlySnapshot().entries[`codex:${SESSION}`]).toEqual(before);
   } finally { f.registry.close(); }
 });
 
@@ -425,4 +419,40 @@ for (const pass of [false, true]) test(`dead-host reconciliation preserves custo
     expect(replacements).toBe(1);
     expect(f.registry.readOnlySnapshot().entries[`codex:${SESSION}`]).toMatchObject({ claimOwner: "replacement", claimEpoch: 8 });
   } finally { f.registry.deliveryWriteOrBusy = write; f.registry.close(); }
+});
+
+test("custody checks inside an admitted writer assemble no complete registry view", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "registry-writer-keyed-"));
+  roots.push(root);
+  let snapshotLoads = 0;
+  const registry = new AgentRegistry(path.join(root, "registry.json"), () => false, undefined, {
+    sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite"),
+    onSqliteSnapshotLoad: () => { snapshotLoads += 1; },
+  });
+  const artifactPath = `/sessions/${SESSION}.jsonl`;
+  const conversation = registry.ensureConversation("codex", artifactPath, null);
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: "/repo", accountId: null, launchProfile: { title: "Keyed custody fixture" } });
+  if (begun.kind !== "created") throw new Error("expected a created launch");
+  let touches = 0;
+  const touch = () => registry.upsert({ key: KEY, artifactPath, cwd: `/repo/${touches++}`, accountId: null, status: "idle",
+    host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  touch();
+  /* Each check follows a commit and a prepared view, as on the serving
+     process: the writer then holds no complete view of its own. */
+  const admitted = async <T>(read: () => T): Promise<{ value: T; loads: number }> => {
+    touch();
+    await registry.prepareReadOnlySnapshot();
+    const before = snapshotLoads;
+    const value = await registry.deliveryWriteOrBusy({ label: "registry.keyed-custody-test" }, read);
+    return { value, loads: snapshotLoads - before };
+  };
+
+  expect(await admitted(() => registry.switchHold(conversation.id))).toEqual({ value: null, loads: 0 });
+  expect(await admitted(() => registry.reconfigureCancelled(conversation.id, "operation-absent"))).toEqual({ value: false, loads: 0 });
+  expect(await admitted(() => registry.endHostlessSpawn(begun.receipt.launchId))).toEqual({ value: false, loads: 0 });
+  const entry = await admitted(() => registry.hostEntry(KEY));
+  expect(entry.loads).toBe(0);
+  // The keyed row is the row a complete view holds, property for property.
+  expect(entry.value).toStrictEqual(structuredClone(registry.readOnlySnapshot().entries[`codex:${SESSION}`]!));
+  expect(await admitted(() => registry.hostEntry({ engine: "codex", sessionId: "absent" }))).toEqual({ value: null, loads: 0 });
 });

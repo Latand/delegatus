@@ -377,3 +377,37 @@ test("a pick a message already engaged offers no cancel on the chip, and a tap k
   expect(host.querySelector("[data-conversation-account-chip]")!.getAttribute("data-conversation-account-next")).toBe("target");
   await act(async () => root.unmount());
 });
+
+/* A move is a reconfigure, and a reconfigure names a model: a conversation whose model is not known sends none,
+   and one whose transcript has not reported a model yet moves on the model its launch asked for. */
+async function pickTarget(entry: FileEntry) {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => { root.render(<AccountBadge engine="codex" accountId="source" file={entry} />); });
+  await act(async () => {
+    host.querySelector<HTMLElement>("[data-conversation-account-chip]")!
+      .dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
+  });
+  const rows = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+  await act(async () => {
+    rows[1]!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  return { host, root };
+}
+
+test("a move on a conversation with no known model sends nothing, keeps no pick and says why", async () => {
+  const { host, root } = await pickTarget({ ...file, model: null, launchModel: null });
+  expect(requests).toEqual([]);
+  expect(toasts).toEqual([{ kind: "err", message: "No model reported yet — pick a model before moving to another account" }]);
+  expect(host.querySelector("[data-conversation-account-chip]")!.getAttribute("data-conversation-account-next")).toBeNull();
+  await act(async () => root.unmount());
+});
+
+test("a move before the transcript reports a model sends the model the launch asked for", async () => {
+  const { root } = await pickTarget({ ...file, model: null, launchModel: "gpt-6-luna" });
+  expect(toasts).toEqual([]);
+  expect(requests).toEqual([expect.objectContaining({ action: "reconfigure", accountId: "target", model: "gpt-6-luna" })]);
+  await act(async () => root.unmount());
+});

@@ -2,7 +2,8 @@
 
 Every project in Delegatus can designate one agent as its **orchestrator**.
 You tell it what you want shipped, in the orchestrator panel above the board;
-it opens a task for each piece of work, runs each as a pipeline, merges
+it opens a task for each piece of work, runs work that needs agents as a
+pipeline, merges
 according to the project's merge setting, and reports back. It works through
 Delegatus's own HTTP API and MCP tools, so everything it starts is a card you
 can open, read, interrupt or take over.
@@ -19,8 +20,8 @@ guide.
 
 1. **Run Delegatus.** `bunx delegatus-cli` serves it on `127.0.0.1:8898` and
    supervises the structured runtime host that agents launch through; see
-   [Getting started](guide/getting-started.md). Neither Docker nor tmux is
-   required for this flow.
+   [Getting started](guide/getting-started.md). Docker is not
+   required.
 2. **The Delegatus MCP server needs no step.** Every agent Delegatus launches,
    the orchestrator included, gets the `viewer` server on its own when its
    account registers none (`src/lib/agent/spawnPolicy.ts`). Registration is
@@ -75,7 +76,15 @@ when you ask; I'll suggest what could come next.
 
 ## How the seat runs work
 
-Every piece of accepted work is a pipeline on its board task: the seat finds
+You can state only an outcome and know nothing of research, pipelines or
+review. For a vague ask the seat first makes a quick, bounded scope check, then
+chooses the route itself: direct work, a pipeline, or a research stage before
+building. It asks you through a decision form only about what stays materially
+ambiguous in your intent, the scope or a trade-off, and settles routine
+technical choices on its own. Its fences, worker limit and the rules on spend,
+other projects, publishing, review, merge and deploys apply on every route.
+
+Accepted work that needs agents is a pipeline on its board task: the seat finds
 or creates the task, composes the stages from the role table and calls
 `create_pipeline` with the task ids. A pipeline has up to eight stages. A
 review is a read-only reviewer stage whose fail edge leads to a fix stage that
@@ -86,8 +95,11 @@ contract is in [docs/pipelines.md](pipelines.md) and the review rounds in
 than the worker limit.
 
 **The merge bar.** A pull request is ready when the reviews passed its final
-head or the budget's last fix passed, the required checks are green and its
-body is read. The project's **Merge when the review passes** setting, on the
+head, the required checks are green and its body is read. When a terminal
+reviewer (`next: null`) spends its budget, a passing last fix is not enough:
+the resulting head needs a passing re-check of that reviewer before it is
+ready. Only a nonterminal review gate may advance on its budget's last passing
+fix, because a later stage still reviews that head. The project's **Merge when the review passes** setting, on the
 **Merging and syncing** page of the board's ⋯ menu, decides who merges it. Off
 (the default), the seat reports "PR ready" and merges only when you ask. On,
 Delegatus merges completed lanes itself once their checks are settled green;
@@ -156,8 +168,15 @@ current built-in default when the incumbent's mandate is based on an older
 version, and the summary line says so; **Keep the incumbent's mandate** carries
 its text forward instead. A seat already on the current version, or on your own
 rules, keeps its text. The seat row flags a stale seat as "mandate vN, default
-vM", and `rotate_orchestrator` defaults identically, with
-`keepIncumbentMandate: true` as the explicit carry-forward.
+vM". The panel submits the mandate text you chose as an explicit override.
+
+`rotate_orchestrator` with no `mandate`, and automatic rotations, render the
+current built-in default and record its current prompt version for the
+successor, including when the incumbent has bespoke rules. Bounded predecessor
+handoff history is retained. `keepIncumbentMandate` is deprecated, accepted and
+ignored. To retain custom rules, pass their text explicitly as `mandate`;
+custom text carries no default-version stamp. An explicit built-in default
+core records the current default version.
 
 The successor receives the mandate plus a handoff the server composes: the
 predecessor's identity and exact `conversation_messages` call, the project's

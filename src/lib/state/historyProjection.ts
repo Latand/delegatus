@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { declaredIndexes } from "./declaredIndexes";
 import path from "node:path";
 import { hotStateSqliteWriterReady, hotStatePreparingWriterReady } from "./hotStateAuthority";
@@ -8,7 +9,7 @@ import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { statePath } from "@/lib/configDir";
 import { observeSqlite } from "@/lib/sqliteReadAttribution";
 import { DatabaseReplacedError, databaseFileIdentity, openCurrentDatabase } from "./currentDatabase";
-import { stateLockAttempt, stateLockDeferral, waitForStateLock } from "./lockWait";
+import { stateDatabaseBusy, stateLockAttempt, stateLockDeferral, waitForStateLock } from "./lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import type { AgentLivenessPipelineRef, LivenessFlow } from "@/lib/lifecycle/liveness";
 import type { fleetLimitWaits } from "@/lib/mcp/agentFleet";
@@ -219,7 +220,7 @@ type HeadlessRow={row_key:string;round:number;row_order:number;reviewerPath:stri
 type HeadlessCache = { revision:number; rows:HeadlessRow[]; rowsByFlow:Map<string,HeadlessRow[]>; flows:LivenessFlow[]; views:Map<HeadlessRow,LivenessFlow>; viewBytes:Map<HeadlessRow,number>; deadByFlow:Map<string,HeadlessRow[]>; deadByPath:Map<string,HeadlessRow[]>; deadByConversation:Map<string,HeadlessRow[]>; flowBytes:number; deadBytes:number; bytes:number };
 type Shared = { connections: Map<string,Database>; counts: Map<string,CountCache>; headless: Map<string,HeadlessCache>; headlessRoundRows:WeakMap<object,HeadlessRow>; headlessFlowRows:WeakMap<object,HeadlessRow> };
 const host = globalThis as typeof globalThis & { __delegatusHistoryProjectionV1?: Shared };
-const shared:Shared = host.__delegatusHistoryProjectionV1 ??= { connections: new Map<string,Database>(), counts: new Map<string,CountCache>(), headless: new Map<string,HeadlessCache>(), headlessRoundRows:new WeakMap<object,HeadlessRow>(), headlessFlowRows:new WeakMap<object,HeadlessRow>() };
+const shared:Shared = host.__delegatusHistoryProjectionV1 ??= { connections: new Map<string,Database>(), counts: new MeasuredCache<string,CountCache>("counts", "state/historyProjection"), headless: new MeasuredCache<string,HeadlessCache>("headless", "state/historyProjection", entry => entry.bytes, "encoded-json"), headlessRoundRows:new WeakMap<object,HeadlessRow>(), headlessFlowRows:new WeakMap<object,HeadlessRow>() };
 shared.headless ??= new Map();
 shared.headlessRoundRows ??= new WeakMap();
 shared.headlessFlowRows ??= new WeakMap();
@@ -263,6 +264,7 @@ function updateWarmCountCaches(filename:string, update:CountUpdate, allowedStamp
     for(const [role,delta] of changes){const next=(cache.value[role]??0)+delta;if(next>0||cache.roles[role])cache.value[role]=next;else delete cache.value[role];}
     for(const [role,delta] of roleDelta){const next=(cache.roles[role]??0)+delta;if(next>0){cache.roles[role]=next;cache.value[role]??=0;}else{delete cache.roles[role];if((cache.value[role]??0)<=0)delete cache.value[role];}}
     cache.stamp=allowed.after;
+    shared.counts.set(key,cache);
   }
 }
 
@@ -300,6 +302,57 @@ function projectionStep<T>(deadline: number, work: () => T): T {
   }
 }
 
+type PipelineTarget = { conversationId: string | null; path: string };
+type PendingHistoryRow = { collection: string; row_key: string };
+
+/** Current ownership comes from write-time triggers, including older writers.
+ * Retained history also names the old owners of moved/deleted rows. Both are
+ * needed: an old projection alone cannot discover a newly attached target. */
+function pendingPipelineTargets(db: Database, targets: readonly PipelineTarget[], limit = 200): PendingHistoryRow[] {
+  if (!targets.length) return [];
+  if (!db.query("SELECT 1 FROM sqlite_master WHERE name='pipeline_owner_refs'").get()) {
+    // Compatibility with a store that has not installed the ownership index.
+    // Never infer absence from an index that does not exist.
+    return db.query<PendingHistoryRow, [number]>("SELECT collection,row_key FROM history_pending WHERE collection IN ('pipelines','pipelines_archive') ORDER BY collection,row_key LIMIT ?").all(limit);
+  }
+  const pending = new Map<string, PendingHistoryRow>();
+  let archiveNeeded = false;
+  for (const target of targets) {
+    for (const [field, value] of [["conversationId", target.conversationId], ["agentPath", target.path]] as const) {
+      if (!value) continue;
+      const rows = db.query<PendingHistoryRow, [string, string, string, number]>(`SELECT p.collection,p.row_key FROM history_pending p
+        WHERE p.collection='pipelines' AND p.row_key IN (
+          SELECT row_key FROM pipeline_owner_refs WHERE kind=? AND identity=?
+          UNION SELECT row_key FROM history_attempts INDEXED BY ${field === "conversationId" ? "history_conversation" : "history_path"}
+          WHERE collection='pipelines' AND ${field}=?)
+        ORDER BY p.row_key LIMIT ?`).all(field,value,value,limit);
+      for (const row of rows) pending.set(`${row.collection}:${row.row_key}`, row);
+      if (pending.size >= limit) return [...pending.values()].slice(0,limit);
+    }
+    // Conversation identity precedes path fallback, even across collections.
+    // A current active conversation reference cannot be superseded by archive.
+    const field = target.conversationId ? "conversationId" : "agentPath";
+    if (!db.query(`SELECT 1 FROM history_attempts INDEXED BY ${field === "conversationId" ? "history_conversation" : "history_path"} WHERE collection='pipelines'
+      AND ${field}=? AND COALESCE(historical,0)=0 LIMIT 1`).get(target.conversationId ?? target.path)) archiveNeeded = true;
+  }
+  if (archiveNeeded) {
+    for (const row of db.query<PendingHistoryRow, [number]>("SELECT collection,row_key FROM history_pending WHERE collection='pipelines_archive' ORDER BY row_key LIMIT ?").all(limit-pending.size)) {
+      pending.set(`${row.collection}:${row.row_key}`, row);
+    }
+  }
+  return [...pending.values()];
+}
+
+/** Undefined is unknown, null is a proved absence. Recheck the selected
+ * dependencies inside the answer's snapshot, including writes after capture. */
+export async function readHistoryPipelineRefs(targets: readonly PipelineTarget[], options: {
+  filename?: string; signal?: AbortSignal; deadlineMs?: number; onYield?: () => Promise<void>;
+} = {}): Promise<(AgentLivenessPipelineRef | null | undefined)[]> {
+  return readHistoryProjection(db => targets.map(target => pendingPipelineTargets(db,[target],1).length
+    ? undefined : historyPipelineRef(db,target.conversationId,target.path)),
+  { ...options, collections: ["pipelines","pipelines_archive"], pipelineTargets: targets });
+}
+
 /** Capture pending identities once, then project one per transaction, with
  * timer opportunities every 4 ms and one asynchronous admission deadline.
  * The final read uses its own snapshot after every captured identity has been
@@ -312,6 +365,9 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
   deadlineMs?: number;
   /** Deterministic scheduling seam for interleaving tests. */
   onYield?: () => Promise<void>;
+  /** Liveness accepts an explicitly incomplete answer when preparation cannot
+   * finish. Its callback must verify each dependency in the final snapshot. */
+  pipelineTargets?: readonly PipelineTarget[];
 } = {}): Promise<T> {
   const filename = options.filename ?? statePath("state.sqlite");
   const collections = options.collections ?? ["pipelines","pipelines_archive","flows"];
@@ -324,7 +380,7 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
   const pendingSql = `SELECT collection,row_key FROM history_pending WHERE collection IN (${collections.map(()=>"?").join(",")}) ORDER BY collection,row_key`;
   const deadline = options.deadlineMs ?? performance.now() + 30_000;
   // Retain the finite batch and its progress across asynchronous lock retries.
-  let pendingRows: Array<{ collection: string; row_key: string }> | undefined;
+  let pendingRows: PendingHistoryRow[] | undefined;
   let pendingIdentity: string | null | undefined;
   let next = 0;
   return withViewerOperation("history.prepare", () => waitForStateLock("history.projection", async () => {
@@ -337,10 +393,20 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
       }
       const batchIdentity = pendingRows ? pendingIdentity : databaseFileIdentity(filename);
       const answer = projectionStep(deadline, () => {
+        const finish = () => {
+          assertWriter();
+          const value = withViewerOperation("history.read", () => read(db));
+          db.exec("COMMIT");
+          if (databaseFileIdentity(filename) !== pendingIdentity) {
+            throw new DatabaseReplacedError(`${filename} was replaced while history projection read its answer`);
+          }
+          return { value };
+        };
         db.exec("BEGIN");
         try {
           if (!pendingRows) {
-            const rows = db.query<{ collection: string; row_key: string }, SQLQueryBindings[]>(pendingSql).all(...collections);
+            const rows = options.pipelineTargets ? pendingPipelineTargets(db,options.pipelineTargets)
+              : db.query<PendingHistoryRow, SQLQueryBindings[]>(pendingSql).all(...collections);
             if (databaseFileIdentity(filename) !== batchIdentity) {
               throw new DatabaseReplacedError(`${filename} was replaced while history projection captured its pending rows`);
             }
@@ -348,21 +414,18 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
             pendingRows = rows;
           }
           const pending = pendingRows[next];
-          if (!pending) {
-            assertWriter();
-            const value = withViewerOperation("history.read", () => read(db));
-            db.exec("COMMIT");
-            if (databaseFileIdentity(filename) !== pendingIdentity) {
-              throw new DatabaseReplacedError(`${filename} was replaced while history projection read its answer`);
-            }
-            return { value };
-          }
+          if (!pending || (options.pipelineTargets && performance.now() >= deadline)) return finish();
           db.exec("ROLLBACK");
         } catch (error) { try { db.exec("ROLLBACK"); } catch { /* transaction already closed */ } throw error; }
-        if (performance.now() > deadline) throw new FileTransactionBusyError("history projection preparation exceeded its deadline");
+        if (performance.now() >= deadline) {
+          if (!options.pipelineTargets) throw new FileTransactionBusyError("history projection preparation exceeded its deadline");
+          db.exec("BEGIN");
+          try { return finish(); }
+          catch (error) { try { db.exec("ROLLBACK"); } catch { /* transaction already closed */ } throw error; }
+        }
         assertWriter();
-        db.exec("BEGIN IMMEDIATE");
         try {
+          db.exec("BEGIN IMMEDIATE");
           const pending = pendingRows![next];
           if (databaseFileIdentity(filename) !== pendingIdentity) {
             throw new DatabaseReplacedError(`${filename} was replaced while history projection was projecting a row`);
@@ -403,7 +466,15 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
           assertWriter();
           db.exec("COMMIT");
           return null;
-        } catch (error) { try { db.exec("ROLLBACK"); } catch { /* transaction already closed */ } throw error; }
+        } catch (error) {
+          try { db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+          if (!options.pipelineTargets || !stateDatabaseBusy(error)) throw error;
+          // A concurrent writer keeps its lease. WAL still permits a snapshot
+          // with honest pending references, without spending the answer waiting.
+          db.exec("BEGIN");
+          try { return finish(); }
+          catch (failure) { try { db.exec("ROLLBACK"); } catch { /* transaction already closed */ } throw failure; }
+        }
       });
       if (answer) return answer.value;
       if (options.onYield) await options.onYield();
@@ -537,6 +608,7 @@ export function pruneHistoryHeadlessRounds(flows:readonly LivenessFlow[], rounds
     addDeadOwner(cache,row);
   }
   cache.bytes=cache.flowBytes+cache.deadBytes;
+  for(const [key,value] of shared.headless) if(value===cache) shared.headless.set(key,cache);
   enforceHeadlessCacheBudget();
 }
 

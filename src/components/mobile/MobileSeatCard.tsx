@@ -43,6 +43,7 @@ import { readSeatDraftField, seatFlowStorage, writeSeatDraftField } from "./orch
 import { seatCardView } from "./orchestratorRowState";
 import { deputyAskLabel, DeputyTwin, liveSeatDeputy } from "../orchestrator/SeatDeputyChip";
 import { PrototypeNoticeChip } from "@/components/prototypeReview/PrototypeNoticeRow";
+import { speedBody } from "@/components/ReasoningControls";
 
 /**
  * Why the sheet is open. `handoff` arms the landing: the sheet was opened to
@@ -305,7 +306,7 @@ export function MobileSeatCard({
           engine: payload.engine,
           ...(payload.model ? { model: payload.model } : {}),
           ...(payload.effort ? { effort: payload.effort } : {}),
-          ...(payload.engine === "codex" && payload.speed ? { fast: payload.speed === "fast" } : {}),
+          ...speedBody(payload.engine, payload.speed),
           ...(payload.accountId ? { accountId: payload.accountId } : {}),
           ...(projectCwd ? { cwd: projectCwd } : {}),
           /* Only an UNEDITED mandate is a version of the approved prompt; an
@@ -339,7 +340,8 @@ export function MobileSeatCard({
               model: payload.model,
               cwd: projectCwd,
               effort: payload.effort,
-              fast: payload.engine === "codex" && payload.speed ? payload.speed === "fast" : null,
+              fast: null,
+              ...speedBody(payload.engine, payload.speed),
               accountId: payload.accountId,
               ["prompt"]: text,
               images: [],

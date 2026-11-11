@@ -1,5 +1,6 @@
 import type { RuntimeEngine as FlowEngine, RuntimeRoleConfig as RoleConfig } from "@/lib/agent/runtimeConfig";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
+import type { TaskSummaryContent } from "@/lib/tasks/types";
 import type { MergeRecovery } from "@/lib/forge/postMerge";
 import type { BackgroundWait } from "./backgroundTasks";
 
@@ -100,13 +101,16 @@ export const PIPELINE_FAIL_EDGE_EXHAUSTIONS: readonly PipelineFailEdgeExhaustion
     many rounds of it the source reviews, and what happens once those are spent.
     Cycles live exclusively on fail edges; the pass graph stays acyclic so
     every pass path terminates. */
+/** Where a run stage executes. A cloud runtime names its provider's hosted session. */
+export type PipelineStageRuntime = "local" | "codex-cloud" | "claude-cloud";
+
 export type PipelineFailEdge = { to: string; maxRounds: number; onExhausted?: PipelineFailEdgeExhaustion };
 
 export type PipelineStageInput = {
   id: string;
   kind: PipelineStageKind;
   /** Omitted stages inherit the project default when the definition is created. */
-  runtime?: "local" | "codex-cloud";
+  runtime?: PipelineStageRuntime;
   role?: PipelineRoleRef;
   engine?: FlowEngine;
   model?: string | null;
@@ -259,7 +263,7 @@ export type PipelineBoundedWait = {
 export type PipelineAttemptDefinition = {
   agentMemoryMaxBytes?: number | null;
   boundAt: string;
-  runtime?: "local" | "codex-cloud";
+  runtime?: PipelineStageRuntime;
   /** `stageDigest` of the stage as it was bound. */
   stageDigest: string;
   "prompt": string;
@@ -328,6 +332,10 @@ export type PipelineStageReport = {
   actor: PauseResumeActor;
   verdict: StageVerdict;
   summary: string | null;
+  result?: string;
+  taskSummary?: TaskSummaryContent;
+  /** Unusable recorded checks excluded from this intent, never passing evidence. */
+  excludedRecordedChecks?: import("@/lib/recordedChecks/reportGate").RecordedCheckExclusion[];
   provenance: PipelineStageProvenance;
   /** Exact admitted lane authority for the deferred observation. */
   provenanceFence?: string;
@@ -392,6 +400,9 @@ export type PipelineRuntimeSwitch = {
   to: PipelineRuntimeSeat & { accountPinned: boolean };
   phase: "requested" | "cutting" | "switching" | "continuing" | "committed" | "rolled-back" | "failed" | "superseded";
   cutAt?: string; continuedAt?: string; settledAt?: string; outcome?: string;
+  /** handoff only: written before the switch asks the runtime to stop its
+      source, so a source found gone afterwards reads as the switch's own stop. */
+  stopDispatchedAt?: string;
   rollback?: boolean;
   reconfigureNoop?: boolean;
   /** Withdraws this attempt's execution authority before any teardown. */
@@ -408,12 +419,22 @@ export type PipelineRuntimeSwitch = {
 export type PipelineAccountHold = { accountId: string; resetsAt: number | null; observedAt: string | null };
 
 export type PipelineStageAttempt = {
+  /** Setup evidence stays with this attempt across failures and explicit retries. */
+  setup?: {
+    /** Resolved execution cwd; the approved recipe keeps its relative cwd. */
+    command: string[]; cwd: string; hash: string;
+    state: "running" | "passed" | "failed";
+    startedAt: string; completedAt: string | null; code: number | null;
+    stdout: string; stderr: string;
+  };
   memoryCap?: import("@/lib/runtime/agentMemoryConfig").AgentMemoryCap;
   n: number;
   cloud?: import("./cloudStage").CloudStageAttempt;
   executionRuntime?: "local" | "cloud" | "cloud-then-local";
   /** Stop custody for pause or account evacuation. A replacement keeps this checkout. */
   suspension?: { reason: "pause" | "account"; detail: string; requestedAt: string; stoppedAt?: string; stopRevision?: number; operatorStoppedAt?: string;
+    /** Explicit retry binds the current stage after stop and delivery settlement. */
+    retryRequestedAt?: string;
     hold?: PipelineAccountHold };
   /** Holds an account suspension of this attempt confirmed, kept when the
       attempt, never launched, launches again on another account. */
@@ -440,6 +461,8 @@ export type PipelineStageAttempt = {
     clientAttemptId: string;
     startedAt: string;
     fence: string;
+    /** Admission begins after deferred input preparation; survives owner recovery. */
+    admissionStartedAt?: string;
     owner?: import("@/lib/processIdentity").ProcessIdentity;
     replay?: boolean;
     /** The reserved prompt still needs asynchronous artifact preparation. */
@@ -511,6 +534,9 @@ export type PipelineStageAttempt = {
       Each failed operation is counted once; `exhausted` waits for an explicit
       push, while publicationRecovery keeps the per-head automatic bound. */
   publicationRetry?: { sha: string; operationId: string; failures: number; retryAt: string; exhausted?: boolean };
+  /** Gate infrastructure retries are independent of producer summary repairs.
+      The accepted head and due time survive controller restarts. */
+  pullRequestInspection?: { sha: string; failures: number; retryAt: string; detail: string; exhausted?: boolean };
   /** Bounded PR summary corrections preserve the accepted verdict and SHA.
       Persisted before delivery so a restart reuses the same request. */
   publicationTextRepair?: {
@@ -555,16 +581,28 @@ export type PipelineStageAttempt = {
   /** Controller-observed head before committing a read-only stage's declared outputs. */
   outputBaseHead?: string;
   /** Bounded wait for a structured delivery controller that is between
-      publications (#1191). `startedAt` is wall-clock from the first sighting,
-      so the budget covers the time a failing spawn attempt spent inside
-      `spawnAgent` as well as the backoff; `retryAfter` is when the next
-      activation may run. Persisted because the wait is spent between ticks —
+      publications (#1191). `retryAfter` gates the next activation. Admission
+      uses the phase counters below; other waits use wall-clock from
+      `startedAt`. Persisted because the wait is spent between ticks —
       sleeping through it would hold the pipeline mutation past the flow
       pipeline controller's phase deadline. */
   controllerWait?: PipelineBoundedWait & {
     /** Cut whose chain owns an incomplete-history confirmation wait, before
         providerWait can open. The reader must prove closure before clearing it. */
     providerCutAt?: number;
+  };
+  /** Active spawn time and observed contention, excluding CPU/update holds.
+      Kept on the attempt across activation replacement and controller restart. */
+  spawnAdmissionBudget?: {
+    spent: { host: number; writer: number; controller: number };
+    kind: "host" | "writer" | "controller";
+    /** Pre-counter retries retain their original shared allowance. */
+    legacyLimitMs?: number;
+    waitingSince?: string;
+    inFlightSince?: string;
+    inFlightKind?: "host" | "writer";
+    lastFailure?: string;
+    lastWriterFailure?: string;
   };
   outOfMemory?: Pick<import("@/lib/runtime/agentMemory").AgentMemoryKill, "at" | "limitBytes" | "limit">;
   memoryWait?: PipelineBoundedWait;
@@ -575,12 +613,30 @@ export type PipelineStageAttempt = {
       Left in place when the budget runs out, as the record of the retries the
       park counts. */
   remoteHeadWait?: PipelineBoundedWait;
+  /** Ownership preparation failures retain capped automatic retry backoff,
+      including across controller restarts. Identity binds it to this accepted
+      attempt and publication; a different operation cannot inherit its wait. */
+  settlementPreparationWait?: PipelineBoundedWait & { identity: string; reason?: string };
   /** Runtime-host generation this attempt's agent was launched under (#1747).
       A release succession mints a new epoch and replaces every engine process
       it hosted, so an attempt still carrying the previous epoch is the only
       witness the controller has that a deploy cut its turn. Absent on attempts
       recorded before the field existed and on pane-hosted ones. */
   hostEpoch?: number;
+  /** Claude restore continuation, retained on this attempt across controller
+      restarts. Reserve each key before admission; an uncertain ACK reuses it.
+      The initial instruction and two no-report nudges share this budget. */
+  restoreContinuation?: {
+    cutAt: string;
+    conversationId: string;
+    transcriptPath: string;
+    promptBoundary: number | null;
+    count: number;
+    clientMessageId: string;
+    requestedAt: string;
+    deadline: string;
+    acceptedAt?: string;
+  };
   /** One durable automatic replacement attempt per interrupted attempt and boot. */
   restartRecovery?: {
     bootId: string;
@@ -628,8 +684,11 @@ export type PipelineStageAttempt = {
       still held harness-tracked background work, named in `tasks`. Cleared
       once the work has reported. */
   backgroundWait?: BackgroundWait;
-  /** A controller commit deadline keeps the passed attempt retrying itself. */
+  /** A controller commit interruption keeps the passed attempt retrying itself. */
   stageCommitWait?: { retryAt: string; detail: string; failures: number };
+  /** Mechanical retries retain this attempt, its accepted head and receipts. */
+  settlementAdmissionRetry?: { retryAt: string; failures: number };
+  spawnInterruptionRetry?: { retryAt: string; failures: number };
   /** The one verdict the controller asked this attempt for (#1756). Written
       when a completed turn carried no verdict the reader could accept:
       `messageTs` is the turn it was asked about, and a later completed turn
@@ -685,6 +744,9 @@ export type PipelineStageAttempt = {
     stageId: string;
     attempt: number;
     commitStartedHead?: string;
+    /** Dead-producer custody pins the branch and staged tree before committing.
+        An unchanged intent can retry; a moved head needs the controller receipt. */
+    commitCustody?: { branch: string; tree: string; paths: string[] };
     committedSha?: string;
     republishQueued?: true;
     reviewRequired?: boolean;
@@ -711,9 +773,15 @@ export type PipelineStageAttempt = {
       for at most ten minutes. Ownership changes and controller restarts keep
       this deadline; successful retirement clears it before replacement. */
   startupOwnerWait?: { launchId: string; deadline: string };
-  /** After a privacy revision conflict, require two stable revision
+  /** A privacy conflict retains the original launch until its receipt proves
+      delivery or safe retirement. The wall deadline survives controller restarts. */
+  roleMemoryDispatchWait?: { launchId: string; deadline: string; reason?: string; detail?: string };
+  /** Confirmed original delivery overrides only its matching privacy refusal.
+      The receipt and generation must still agree on every later tick. */
+  roleMemoryDelivery?: { launchId: string; conversationId: string; transcript: string; retryClaimId: string | null };
+  /** After a privacy revision conflict or preparation exhaustion, require two stable revision
       observations across persisted ticks before composing again. */
-  roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean };
+  roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean; detail?: string };
   roleMemoryFailures?: number;
   /** Launches this attempt reserved and then retired because their receipt
       settled `failed` before any host ran them (#1678): the runtime host was
@@ -743,6 +811,9 @@ export type PipelineStageAttempt = {
       until its turn completes and settlement reads it. Absent on an attempt
       that never called, which settles from its fenced JSON verdict. */
   report?: PipelineStageReport | null;
+  /** Exclusions revalidated at final settlement, including fenced fallback
+      verdicts that have no explicit stage report. */
+  excludedRecordedChecks?: import("@/lib/recordedChecks/reportGate").RecordedCheckExclusion[];
   /** Persisted before switching away from a stage-created branch, so a
       controller restart must finish adopting this head before acceptance. */
   branchAdoption?: { branch: string; head: string; target: string; adoptedHead?: string };
@@ -948,6 +1019,10 @@ export type PipelineDeliveryTarget = {
   remote: string;
   branch: string;
   pr?: number;
+  /** `<owner>/<repo>` holding `pr` when that is not the repository `remote`
+      pushes to: a PR from a fork, whose number names a PR of the checkout's
+      origin. Absent: `pr` is a PR of the delivery remote's repository. */
+  prRepository?: string;
   rejectedHead?: string;
 };
 
@@ -962,9 +1037,11 @@ export type PipelinePublicationRecovery = {
   /** Recoverable failures across attempts, manual retries and ownership epochs. */
   failures: number;
   totalAttempts: number;
+  /** First verified App git 403 for this accepted head, retained on takeover. */
+  app403Since?: string;
   /** Newest 64 failed operations; totalAttempts includes omitted older records. */
   history: Array<{ operationId: string; epoch: number; at: string;
-    cause: "infrastructure-deadline" | "interrupted" | "check-failure";
+    cause: "infrastructure-deadline" | "interrupted" | "check-failure" | "app-git-403" | "environment" | "remote-refusal";
     detail: string; retryAt: string | null }>;
 };
 
@@ -986,6 +1063,12 @@ export type PipelinePublicationFailure = {
   hookStoppedCheck?: string;
   /** Full output proved a deadline with no decisive check or cleanup refusal. */
   retryableDeadline?: boolean;
+  /** The proven deadline expired during CPU admission before checks started. */
+  admissionDeadline?: true;
+  /** Git refused HTTP access after its App credential helper verified a fresh mint. */
+  retryableApp403?: boolean;
+  /** Observation clock captured with the refusal, before recovery can restart. */
+  observedAt?: string;
 };
 
 export type PipelinePublicationResult = (
@@ -1006,6 +1089,9 @@ export type PipelineDelivery = {
   settledFailure?: string;
   operation?: {
     id: string;
+    /** Pending reservation consumed by this execution. Keeps logical recovery
+        identity through native admission without reusing an execution id. */
+    reservationId?: string;
     epoch: number;
     sha: string;
     requestKey?: string;
@@ -1014,6 +1100,8 @@ export type PipelineDelivery = {
     passedStage?: boolean;
     /** Admission snapshot, checked before an asynchronous publisher starts. */
     fence?: string;
+    /** Absolute limit carried by an automatic App-403 retry through admission. */
+    app403Deadline?: string;
     state: "pending" | "running" | "settled";
     executor?: { pid: number; identity: string | null; lock: string; lockIdentity?: string; finished?: boolean;
       result?: PipelinePublicationResult };
@@ -1112,7 +1200,20 @@ export type PipelineRemoteAction = {
   takeover?: { expectedOwner: string; expectedEpoch: number; reason: string };
 };
 
+export type PipelineConversationSource = {
+  conversationId: string;
+  branch: string;
+  head: string;
+  capturedAt: string;
+};
+
 export type Pipeline = {
+  /** Server-attributed member scope, retained across stage retries and restart. */
+  workspace?: import("@/lib/accounts/migration/contracts").LaunchProfile["workspace"];
+  /** Receipt-owned invention provenance, retained across attachment edits. */
+  proactiveTaskIds?: string[];
+  /** Historical context only; never grants creator or spawn authority. */
+  conversationSource?: PipelineConversationSource;
   closeTeardown?: PipelineCloseTeardown;
   closeReport?: PipelineCloseReport;
   /** Flow ids created by a stale controller snapshot and retained until their cleanup succeeds. */
@@ -1135,6 +1236,8 @@ export type Pipeline = {
   creationIntent?: PipelineCreationIntent;
   /** Pinned specification and acceptance criteria, matching Flow.spec from #85. */
   spec?: string;
+  /** Caller-produced source handoff and tracked skill references, shared by stage runtimes. */
+  inputContext?: import("./prompts").StagePromptContext;
   project: string;
   repoDir: string;
   worktreeDir: string;
@@ -1293,6 +1396,9 @@ export type PipelineRefresh = {
 };
 
 export type PipelineMerge = {
+  /** A proactive write began without a terminal forge receipt. Only receipt
+      reconciliation, never a repeated write, may advance it automatically. */
+  effectUncertain?: boolean;
   /** Enrolled when this release automatically lands the PR. */
   postMergeWatch?: boolean;
   /** Required main checks passed on this exact merge commit. */
@@ -1314,9 +1420,11 @@ export type PipelineMerge = {
   /** `reviewedHead`, then each head the runner's own updates produced. The PR
       head must be in it. */
   chain: string[];
-  /** One entry per `update-branch`; `head` stays null until the update's
+  /** One entry per base update: an older runner's `update-branch`, or the
+      runner's own merge of the base tip `base` into the chain tip, the exact
+      `commit` it recorded before pushing. `head` stays null until the update's
       commit is seen on the PR and admitted to the chain. */
-  updates: Array<{ requestedAt: string; head: string | null }>;
+  updates: Array<{ requestedAt: string; head: string | null; commit?: string; base?: string }>;
   /** Every check name seen on any head of this PR, a union. */
   seenChecks: string[];
   /** The head the check clock runs for, when it was first seen, and the check
@@ -1344,7 +1452,8 @@ export type PipelineMerge = {
 };
 
 export type CreatePipelineRequest = {
-  delivery?: { branch: string; remote?: string; pr?: number; rejectedHead?: string; comparison?: boolean };
+  /** `prRepository`: see {@link PipelineDeliveryTarget}; it must be the checkout's origin. */
+  delivery?: { branch: string; remote?: string; pr?: number; prRepository?: string; rejectedHead?: string; comparison?: boolean };
   task: string;
   taskIds?: string[];
   /** #2187 §5.1: `true` marks every linked task as one this pipeline
@@ -1352,6 +1461,8 @@ export type CreatePipelineRequest = {
       and named in the answer. */
   finishesTask?: boolean | string[];
   spec?: string;
+  /** Caller-produced source handoff and tracked skill references, shared by stage runtimes. */
+  inputContext?: import("./prompts").StagePromptContext;
   repoDir: string;
   /** Merge target branch; defaults to main when the pipeline starts. */
   baseBranch?: string;
@@ -1481,7 +1592,7 @@ export type PatchPipelineRequest = {
       running the attempt. An attempt another conversation runs by then answers
       409 `STAGE_CHANGED` before any runtime or definition is changed. */
   expectedConversationId?: string;
-  runtime?: "local" | "codex-cloud";
+  runtime?: PipelineStageRuntime;
   role?: PipelineRoleRef | null;
   engine?: FlowEngine;
   model?: string | null;

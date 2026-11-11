@@ -9,6 +9,7 @@ import {
   ExternalRelayError,
   fetchRelayTargets,
   relayCall,
+  readRelayJsonUrl,
 } from "./client";
 import {
   startRelayPairing,
@@ -341,6 +342,20 @@ test("publication cancellation settles while DNS is held and late DNS cannot emi
   } finally { release([]); lookup.mockRestore(); }
 });
 
+test("descriptor cancellation covers held DNS and prevents a late request", async () => {
+  let release!: (addresses: Array<{ address: string; family: number }>) => void;
+  const held = new Promise<Array<{ address: string; family: number }>>(resolve => { release = resolve; });
+  const lookup = spyOn(dns, "lookup").mockImplementation((() => held) as unknown as typeof dns.lookup);
+  const controller = new AbortController();
+  try {
+    const read = readRelayJsonUrl("https://fixture.invalid/.well-known/delegatus-relay.json", { signal: controller.signal }).catch(error => error);
+    controller.abort(new Error("descriptor deadline"));
+    expect(await read).toMatchObject({ message: "descriptor deadline" });
+    release([{ address: "127.0.0.1", family: 4 }]);
+    await Promise.resolve();
+  } finally { release([]); lookup.mockRestore(); }
+});
+
 
 test("confirmed publication waits asynchronously for its reference transaction", async () => {
   const server = await startTestRelay(() => ({ body: { message_key: "lock_reference", replayed: false } }));
@@ -379,5 +394,24 @@ test("lease-bound binary PUT preserves bytes and refuses redirects and error env
     await expect(relayPutBytes(`${server.origin}/v1`, "/busy", payload, headers)).rejects.toMatchObject({ status: 429, code: "rate_limited", retryAfterSeconds: 2 });
     await expect(relayPutBytes(`${server.origin}/v1`, "/bytes", payload, headers, undefined, { signal: AbortSignal.abort() })).rejects.toThrow();
     expect(seen).toHaveLength(3);
+  } finally { await server.close(); }
+});
+
+test("streamed sends retain length, authority, redirect refusal and error key state", async () => {
+  const bytes = Buffer.from([0, 255, 3, 10]); let calls = 0, opened = 0;
+  const server = await startTestRelay((req, body) => {
+    calls++; expect(body).toEqual(bytes); expect(req.headers["content-length"]).toBe(String(bytes.length));
+    if (req.url?.endsWith("/redirect")) return { status: 302, headers: { location: "/other" } };
+    return { status: 409, body: { error: { code: "send_in_progress", key_state: "pending", retry_after_s: 120 } } };
+  });
+  const upload = { byteLength: bytes.length, contentType: "application/octet-stream", body: async function* () { opened++; yield bytes.subarray(0, 2); yield bytes.subarray(2); } };
+  try {
+    await expect(relayCall(`${server.origin}/v1`, "/send", "POST", undefined, undefined, { upload }))
+      .rejects.toMatchObject({ code: "send_in_progress", retryAfterSeconds: 120, payload: { error: { key_state: "pending" } } });
+    await expect(relayCall(`${server.origin}/v1`, "/redirect", "POST", undefined, undefined, { upload })).rejects.toMatchObject({ status: 302 });
+    await expect(relayCall(`${server.origin}/v1`, "/send", "POST", undefined, undefined, { upload, beforeSend: () => { throw new Error("withdrawn"); } })).rejects.toThrow("withdrawn");
+    expect(calls).toBe(2); expect(opened).toBe(2);
+    await expect(relayCall(`${server.origin}/v1`, "/send", "POST", undefined, undefined, { upload, signal: AbortSignal.abort() })).rejects.toThrow();
+    expect(calls).toBe(2); expect(opened).toBe(2);
   } finally { await server.close(); }
 });

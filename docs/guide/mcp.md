@@ -55,10 +55,12 @@ One line per area:
 - **Review flows.** `list_flows`, `get_flow`, `flow_action`.
 - **The orchestrator seat.** `create_orchestrator`, `get_orchestrator`, `rotate_orchestrator`, `send_message_to_orchestrator`, `seat_tick_settings`, `bridge_report`, `bridge_directive`. See [work across projects](#work-across-projects).
 - **Accounts.** `account_limits`, `account_project_binding`, `conversation_migration`.
-- **Roles.** `role_presets` reads which engine, model and effort each role runs on. The orchestrator seat and your own session can change them, as **Roles: engine and model** in Settings does.
+- **Roles.** `role_presets` reads which engine, model and effort each role runs on. The orchestrator seat and your own session can change them, as **Roles: engine and model** under **Settings** → **Roles and workers** does.
 - **Updates.** `auto_updates` reads the Update dialog's state. The Delegatus project's seat and your own session can turn automatic updates on or off.
+- **Agent browser access.** `grant_agent_browser_access` lets a project's currently designated seat place Delegatus's existing browser-check member in the workspace holding that project, with role `member`. The server identifies the member from the live session in `$HOME/.local/share/delegatus-agent-login/state.json`. No member is created. Omit `workspaceId` to resolve the project's workspace automatically, or supply it as an assertion. Another member, workspace or role is refused, as are missing or expired logins and unassigned projects. Repeating the action keeps the existing membership; a change records the seat conversation, workspace and time in team activity on the operator's authority. An owner or workspace manager can remove it through the existing membership controls.
 - **Bug reports.** `issue_report`. See [bug reports](#bug-reports).
-- **Telegram bot.** `telegram_bot_chats`, `telegram_bot_send`, `telegram_bot_send_document`, `telegram_bot_send_media` and `telegram_bot_messages` post to chats you allowed in the Telegram panel and read what the bot received.
+- **GitHub App access.** A designated seat or the operator's session calls `github_app_connect` with `repository` and, when needed, a `permissions` map of GitHub keys to `read` or `write`. Delegatus publishes one decision form with the required GitHub links, polls for installation or permission approval, proves the credential, then declares the repository and reports to the project's current seat. A grant for the calling project's own repository completes without a second form answer; a different project's repository needs the person's choice in the form. Reuse `clientRequestId` to replay the first answer; use a fresh key to read the open request. The confirmation window lasts 24 hours. See [the connection design](../design/forge-app-connect-repository.md).
+- **Telegram bot.** `telegram_bot_chats`, `telegram_bot_send`, `telegram_bot_send_document`, `telegram_bot_send_media` and `telegram_bot_messages` post to chats you allowed in **Settings** → **Telegram** and read what the bot received.
 - **You and the machine.** `operator_snapshot`, `request_attention`, `dismiss_attention`, `agent_activity`, `agent_fleet`, `lifecycle_events`, `resources`, `deployment_status`, `deploy_exact_sha`, `backfill_worktree_projects`.
 
 ### Work across projects
@@ -100,6 +102,20 @@ for your reply, and a Return button takes you back. On a phone it shows a
 notice and moves nothing. `dismiss_attention` clears a card's "needs you"
 flag until something new comes up, the same as the card's Dismiss; called
 without a target, it reads the project's **Needs you** list.
+
+For a fresh read, use a new `clientRequestId`. The `kinds` filter selects
+sources before gathering. A read shares the caller's deadline and uses a
+3.5-second gathering budget. When a source fails or the budget expires,
+`partial:true` and `omissions` say which sources or evidence were left out.
+`countIsLowerBound:true` means missing sources may add rows; a partial answer
+has no continuation cursor. Read again to obtain a complete panel. Native
+synchronous reads cannot be interrupted mid-call; expiry is checked again
+when they return, before gathering more sources or row evidence.
+
+`seat_tick_settings` keeps its settings and schedule answer when its curation
+panel is unavailable. It returns `partial:true`, `omissions:["curation"]`
+and `curation.status:"unavailable"` with the reason in `runsError`.
+Caller cancellation or expiry of the whole call still refuses that call.
 
 ## Approving an external Claude session
 

@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import type { McpToolArgs, McpToolPayload } from "./server";
 
 type Page = { rows: Record<string, unknown>[]; meta: McpToolPayload; upstream: string | null };
@@ -11,7 +12,7 @@ const caches = new WeakMap<object, Map<string, Held>>();
 export async function budgetPage(owner: object, tool: string, args: McpToolArgs, budget: number,
   load: (cursor: string | null) => Promise<Page>, full: boolean, rowLimit = Number.POSITIVE_INFINITY): Promise<McpToolPayload> {
   let cache = caches.get(owner);
-  if (!cache) { cache = new Map(); caches.set(owner, cache); }
+  if (!cache) { cache = new MeasuredCache("budget-pages", "mcp/budgetPage"); caches.set(owner, cache); }
   const { cursor, clientRequestId: _key, ...filters } = args;
   const scope = createHash("sha256").update(JSON.stringify({ tool, filters: Object.fromEntries(Object.entries(filters).sort(([a], [b]) => a.localeCompare(b))) })).digest("hex");
   for (const [key, value] of cache) if (value.expires < Date.now()) cache.delete(key);

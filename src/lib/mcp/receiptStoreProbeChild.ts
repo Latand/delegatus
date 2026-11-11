@@ -22,7 +22,7 @@ async function awaitFile(filename: string): Promise<void> {
 /**
  * ── ROLE: controlled Viewer (#1490) ───────────────────────────────────────
  *
- * A real HTTP listener in front of the PRODUCTION handlers — `/api/tmux` is
+ * A real HTTP listener in front of the PRODUCTION handlers — `/api/conversation-host` is
  * `conversationHostPOST` and `/api/spawn` is `POST.withDependencies` — with
  * the runtime behind them replaced at the existing injection seams by
  * fixtures that write into the isolated registry this process shares with the
@@ -123,7 +123,6 @@ async function runHttpHost(configPath: string): Promise<void> {
 
   setConversationHostDependenciesForTests({
     completedFileScan: async () => ({ snapshot: { files: [] } }) as never,
-    readTranscriptHosts: async () => ({}) as never,
     enqueueStructuredMessage: async (request) => {
       const registry = agentRegistry();
       const clientMessageId = request.clientMessageId?.trim() || `queue_${crypto.randomUUID()}`;
@@ -243,7 +242,7 @@ async function runHttpHost(configPath: string): Promise<void> {
       const body = await request.text();
       const next = new NextRequest(request.url, { method: request.method, headers: request.headers, body });
       let response: Response;
-      if (url.pathname === "/api/tmux") response = await conversationHostPOST(next);
+      if (url.pathname === "/api/conversation-host") response = await conversationHostPOST(next);
       else if (url.pathname === "/api/spawn") response = await POST.withDependencies(next, spawnDependencies as never);
       else return new Response(JSON.stringify({ error: "unrouted" }), { status: 404, headers: { "content-type": "application/json" } });
       // An immediate-effect proxy loses its answer only AFTER actual work.
@@ -300,7 +299,63 @@ async function runHttpHost(configPath: string): Promise<void> {
   await new Promise<never>(() => {});
 }
 
-if (process.argv[2] === "hold-sqlite") {
+/** Restart rehearsal for a domain transaction and the MCP completion gap.
+ * Both generations serve the exported route with the production SDK service.
+ * The scheduled fixture supplies only host/seat facts to the real guard. */
+async function runCuratorHttp(configPath: string) {
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as { root: string; seatId: string; now: number;
+    portFile: string; marker: string; crash?: "before-complete" | "after-complete" | "after-commit" };
+  // Each service generation uses the same editorial clock. Timers and the
+  // owning runner's process deadline continue to use their native clocks.
+  globalThis.Date = new Proxy(Date, {
+    construct: (target, args, constructor) => Reflect.construct(target, args.length ? args : [config.now], constructor),
+    get: (target, key, receiver) => key === "now" ? () => config.now : Reflect.get(target, key, receiver),
+  });
+  const { scheduledCustodyFixture } = await import("@/lib/memory/curation/custody.fixture");
+  const { curatorRecoveryGuard } = await import("@/lib/memory/curation/admission");
+  const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { viewerMcpBindings, viewerMcpToolPolicy, productionDomainDependencies } = await import("./bindings");
+  const { setMcpHttpDependenciesForTests } = await import("./http");
+  const { POST } = await import("@/app/api/mcp/route");
+  const { NextRequest } = await import("next/server");
+  const f = scheduledCustodyFixture(config.root, { seatId: config.seatId, now: config.now });
+  setAgentRegistryForTests(f.registry);
+  const dependencies = { ...productionDomainDependencies, curatorAdmission: (id: string | null) => curatorRecoveryGuard(id ?? "", f.sources) };
+  const store = new SqliteMcpReceiptStore(path.join(config.root, "curator-receipts.sqlite"));
+  if (config.crash === "after-commit") {
+    const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+    const { curationOperationResult } = await import("@/lib/memory/curation/apply");
+    const { validCurationOperation } = await import("@/lib/memory/curation/store");
+    const commit = SqliteStateCollection.commitPatchesSync;
+    SqliteStateCollection.commitPatchesSync = (patches, options) => {
+      commit(patches, options);
+      const witness = patches.flatMap(patch => patch.records).find(validCurationOperation);
+      if (witness) {
+        fs.writeFileSync(config.marker, JSON.stringify(curationOperationResult(witness)));
+        process.exit(79);
+      }
+    };
+  }
+  const complete = store.complete.bind(store);
+  store.complete = (...args) => {
+    if (args[0].startsWith("curate_rules:") && config.crash && config.crash !== "after-commit") {
+      if (config.crash === "after-complete") complete(...args);
+      fs.writeFileSync(config.marker, JSON.stringify(args[2]));
+      process.exit(79);
+    }
+    return complete(...args);
+  };
+  const service = createMcpToolService(viewerMcpBindings(undefined, undefined, dependencies), store, viewerMcpToolPolicy(dependencies));
+  setMcpHttpDependenciesForTests({ service: async () => service,
+    conversationForCapability: value => f.registry.conversationIdForSpawnCapabilityDigest(crypto.createHash("sha256").update(value).digest("hex")) });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => POST(new NextRequest(request)) });
+  fs.writeFileSync(config.portFile, String(server.port));
+  await new Promise<never>(() => {});
+}
+
+if (process.argv[2] === "curator-http") {
+  await runCuratorHttp(process.argv[3]!);
+} else if (process.argv[2] === "hold-sqlite") {
   const { Database } = await import("bun:sqlite");
   const db = new Database(process.argv[3]!);
   const ready = process.argv[4]!;

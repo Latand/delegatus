@@ -570,7 +570,7 @@ test("durable retry revokes reconfigure and host recovery across a registry reop
   const held = new Promise<void>(resolve => { release = resolve; });
   let spawns = 0;
   const recovering = recoverDeadStructuredConversation({ path: transcript, conversationId: conversation.id }, {
-    registry, client: {} as never, transport: () => "structured", park: () => null,
+    registry, client: {} as never, transportAvailable: () => true, park: () => null,
     resolveAccount: () => ({ engine: "claude", accountId: "default", kind: "legacy", home: path.dirname(transcript),
       transcriptRoot: path.dirname(transcript), env: { NODE_ENV: "test" } }),
     ownership: { operationId, revision: 1, owns: async () => true, releaseHost: async () => true,
@@ -596,7 +596,7 @@ test("durable retry revokes reconfigure and host recovery across a registry reop
     expect(runtimeSwitchRetirementReason(conversation.id, registry)).toContain("withdrew");
     expect(() => pipelineSwitchFence(operationId)!.authorize()).toThrow("withdrew");
     await expect(recoverDeadStructuredConversation({ path: transcript, conversationId: conversation.id }, {
-      registry, transport: () => "structured", client: null, park: () => null,
+      registry, transportAvailable: () => true, client: null, park: () => null,
       spawn: async () => { spawns++; throw new Error("unexpected spawn"); },
     })).rejects.toThrow("withdrew");
     expect(spawns).toBe(0);
@@ -1737,6 +1737,23 @@ test("a crash after the owned stop replays that stop and excludes only its kill 
   await tickPipelines([], h.ports); expect(ownKey).toBeString(); await tickPipelines([], h.ports);
   expect(calls).toBe(2);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("committed");
+});
+
+test("a handoff whose stop landed while its answer was lost still starts its target (#3797)", async () => {
+  const h = switchHarness(); h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
+  await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+  let stopped = false; let calls = 0; let spawned = 0;
+  // The runtime ended the source and the answer timed out; from then on the source reads as gone.
+  h.ports.stopStageAgent = async () => { calls++; if (!stopped) { stopped = true; throw new Error("runtime host request timed out"); } return { outcome: "not-running" }; };
+  h.ports.runtimeSwitchSourceUnavailable = id => id === STAGE_CONVERSATION && stopped;
+  h.ports.spawnAgent = async (_input, reserved) => { spawned++; await reserved({ launchId: "launch-new", conversationId: "conversation_new", accountId: "default" }); return { launchId: "launch-new", conversationId: "conversation_new", accountId: "default", sessionId: "new", transcript: "/codex/new.jsonl", paneId: null }; };
+  await tickPipelines([], h.ports); expect(stopped).toBe(true); await tickPipelines([], h.ports);
+  const record = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0];
+  expect(calls).toBe(2);
+  expect(spawned).toBe(1);
+  expect(record?.phase).toBe("committed");
+  expect(record?.retry).toBeUndefined();
+  expect(loadPipelines()[0]!.state).toBe("running");
 });
 
 test("handoff accepts an early successor verdict and rejects the former conversation's report", async () => {

@@ -78,3 +78,55 @@ test("indexed materialization keeps staged paths private and holds its snapshot 
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("publication of the same identity clears stale path withholding in plain and indexed snapshots", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "materialization-published-"));
+  let store: SqliteAgentRegistryStore | undefined;
+  try {
+    const dataset = buildRegistryPerformanceDataset(directory, scaledRegistryPerformanceShape(0.05));
+    store = new SqliteAgentRegistryStore(dataset.filename, { normalize: normalizeRegistry,
+      initialSnapshot: () => { throw new Error("dataset must already exist"); } });
+    const pendingId = store.read(file => Object.keys(file.receipts).sort().find(id => file.receipts[id]!.key)!);
+    const publishedId = "fixture-completed-resume";
+    const { result: pending } = store.mutate(file => {
+      const receipt = file.receipts[pendingId]!;
+      receipt.transport = "structured";
+      receipt.state = "path-pending";
+      receipt.purpose = "launch";
+      receipt.artifactPath = "/fixture/published.jsonl";
+      file.receipts[publishedId] = { ...receipt, launchId: publishedId, state: "completed",
+        purpose: "resume-successor", resumeSourcePath: receipt.artifactPath };
+      return { path: receipt.artifactPath, conversationId: receipt.conversationId, key: receipt.key! };
+    }, false);
+    const original = store.read(file => JSON.parse(JSON.stringify(file.receipts[publishedId]!)));
+    for (const mismatch of ["none", "conversation", "key", "engine", "path", "unfinished", "missing-key", "foreign-staged", "alias"] as const) {
+      store.mutate(file => {
+        delete file.receipts["fixture-foreign-staged"];
+        const receipt = file.receipts[publishedId] = { ...original };
+        if (mismatch === "conversation") receipt.conversationId = "conversation_foreign";
+        if (mismatch === "key") receipt.key = { ...pending.key, sessionId: "different-session" };
+        if (mismatch === "engine") receipt.engine = receipt.engine === "claude" ? "codex" : "claude";
+        if (mismatch === "path") receipt.artifactPath = pending.path + ".foreign";
+        if (mismatch === "unfinished") receipt.state = "path-pending";
+        if (mismatch === "missing-key") receipt.key = null;
+        if (mismatch === "foreign-staged") file.receipts["fixture-foreign-staged"] = {
+          ...file.receipts[pendingId]!, launchId: "fixture-foreign-staged", conversationId: "conversation_foreign",
+        };
+        if (mismatch === "alias") {
+          receipt.conversationId = "conversation_alias";
+          file.conversationAliases.conversation_alias = pending.conversationId;
+        }
+      }, false);
+      const snapshots = [store.readOnlySnapshot().file, store.read(file => normalizeRegistry(JSON.parse(JSON.stringify(file))))];
+      for (const snapshot of snapshots) {
+        const fence = identityMaterializationFence(snapshot);
+        expect(fence.allowsPath(pending.path), mismatch).toBe(mismatch === "none" || mismatch === "alias");
+        // A published path does not publish the abandoned receipt itself.
+        expect(fence.allowsReceipt(snapshot.receipts[pendingId]!)).toBe(false);
+      }
+    }
+  } finally {
+    store?.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

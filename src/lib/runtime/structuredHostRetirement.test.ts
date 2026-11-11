@@ -7,9 +7,9 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 
-import type { RegistryFile } from "@/lib/agent/registry";
+import { AgentRegistry, normalizeRegistry, setAgentRegistryForTests, type RegistryFile } from "@/lib/agent/registry";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { statePath } from "@/lib/configDir";
 import { procBackend } from "@/lib/proc";
@@ -146,6 +146,10 @@ async function sweep(over: StructuredHostRetirementDependencies = {}): Promise<S
     revokedSeatConversations: () => determined(new Set<string>()),
     transcriptStat: () => determined({ mtimeMs: NOW - 24 * 3_600_000 }),
     processIdentity: () => determined(HOST_IDENTITY),
+    pidAlive: () => determined(true),
+    readCursor: () => null,
+    writeCursor: () => {},
+    treePss: () => ({ bytes: null, measuredProcesses: 0 }),
     processMemory: () => new Map([[HOST_PID, { rssBytes: 110 * 1024 * 1024, swapBytes: 332 * 1024 * 1024 }]]),
     ppidMap: () => new Map([[HOST_PID, 1]]),
     owned: () => true,
@@ -222,7 +226,7 @@ function fixtureTreeScript(): string {
      behind as an orphan. */
   fs.writeFileSync(script, [
     'import { spawn } from "node:child_process";',
-    'spawn("/bin/sh", ["-c", "sleep 45"], { detached: true, stdio: "ignore" }).unref();',
+    'spawn("/bin/sh", ["-c", "exec sleep 45"], { detached: true, stdio: "ignore" }).unref();',
     "setInterval(() => {}, 1000);",
     "",
   ].join("\n"), { mode: 0o600 });
@@ -280,6 +284,127 @@ test("a settled, quiet, unclaimed host is retired and the audit says why", async
   expect(retired.passed).toContain("transcript-idle");
   expect(retired.reclaimed).toEqual({ rssBytes: 110 * 1024 * 1024, swapBytes: 332 * 1024 * 1024, processes: 1 });
   expect(probe.report.reclaimed.swapBytes).toBe(332 * 1024 * 1024);
+});
+
+test("unknown process liveness refuses and cannot reconcile a gone row", async () => {
+  let reconciled = false;
+  const probe = await sweep({ pidAlive: () => undetermined("kernel unavailable"),
+    reconcileGone: async () => { reconciled = true; return { status: "gone" }; } });
+  expect(probe.terminated).toEqual([]);
+  expect(reconciled).toBe(false);
+  expect(probe.report.refused).toMatchObject([{ clause: "process-identity", undetermined: true, reason: "kernel unavailable" }]);
+});
+
+test.each(["process", "exitProcess"] as const)("a gone scoped root retained in %s reconciles without entering termination", async field => {
+  const file = snapshot();
+  const host = file.entries[`claude:${SESSION}`]!.structuredHost!;
+  host.scope = { unit: "delegatus-agent-retirement.scope", bootEpoch: BOOT_EPOCH };
+  const identity = { pid: 2_147_483_647, startIdentity: "retained-root", bootEpoch: BOOT_EPOCH };
+  host.process = field === "process" ? identity : null;
+  host.exitProcess = identity;
+  let reconciled = false;
+  const probe = await sweep({ snapshot: () => file, pidAlive: () => determined(false),
+    processIdentity: () => undetermined("root exited"),
+    reconcileGone: async () => { reconciled = true; return { status: "gone" }; } });
+  expect(probe.report.failed).toEqual([]);
+  expect(probe.report.refused).toEqual([]);
+  expect(probe.report.gone).toHaveLength(1);
+  expect(reconciled).toBe(true);
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.retired).toEqual([]);
+});
+
+test.each(["process", "exitProcess"] as const)("a retained %s identity and scope are rechecked after asynchronous measurement", async field => {
+  for (const change of ["none", "pid", "start", "boot", "missing", "scope", "claim", "writer", "owner"] as const) {
+    const file = snapshot();
+    const original = file.entries[`claude:${SESSION}`]!;
+    const host = original.structuredHost!;
+    host.scope = { unit: "delegatus-agent-retirement.scope", bootEpoch: BOOT_EPOCH };
+    const identity = { pid: 2_147_483_647, startIdentity: "retained-root", bootEpoch: BOOT_EPOCH };
+    host.process = field === "process" ? identity : null;
+    host.exitProcess = field === "exitProcess" ? identity : undefined;
+    let current = file;
+    const probe = await sweep({ snapshot: () => current, pidAlive: () => determined(true),
+      processIdentity: () => determined(identity.startIdentity), treePss: async () => {
+        await Promise.resolve();
+        const changed = { ...host,
+          [field]: change === "missing" ? null : { ...identity,
+            pid: change === "pid" ? identity.pid - 1 : identity.pid,
+            startIdentity: change === "start" ? "replacement" : identity.startIdentity,
+            bootEpoch: change === "boot" ? "replacement-boot" : identity.bootEpoch },
+          scope: change === "scope" ? { ...host.scope!, unit: "delegatus-agent-replacement.scope" } : host.scope,
+          writerClaimEpoch: change === "writer" ? host.writerClaimEpoch + 1 : host.writerClaimEpoch,
+        };
+        current = { ...file, entries: { ...file.entries, [`claude:${SESSION}`]: { ...original,
+          structuredHost: changed, claimEpoch: change === "claim" ? original.claimEpoch + 1 : original.claimEpoch,
+          claimOwner: change === "owner" ? "structured-host:replacement" : original.claimOwner,
+        } } };
+        return { bytes: null, measuredProcesses: 0 };
+      } });
+    expect(probe.report.failed, change).toEqual([]);
+    expect(probe.report.gone, change).toEqual([]);
+    expect(probe.terminated.length, change).toBe(change === "none" ? 1 : 0);
+    expect(probe.report.refused, change).toEqual(change === "none" ? [] : [expect.objectContaining({ changed: true })]);
+  }
+});
+
+test("a scoped row with neither process identity remains untouched", async () => {
+  const file = snapshot();
+  const host = file.entries[`claude:${SESSION}`]!.structuredHost!;
+  host.scope = { unit: "delegatus-agent-retirement.scope", bootEpoch: BOOT_EPOCH };
+  host.process = null;
+  delete host.exitProcess;
+  const probe = await sweep({ snapshot: () => file });
+  expect(probe.report.evaluated).toBe(0);
+  expect(probe.report.gone).toEqual([]);
+  expect(probe.terminated).toEqual([]);
+  expect(file.entries[`claude:${SESSION}`]!.structuredHost).toBe(host);
+});
+
+for (const alive of [true, false]) test(`a cursor write failure alarms before ${alive ? "termination" : "gone reconciliation"}`, async () => {
+  let acted = false;
+  await expect(sweep({ writeCursor: () => { throw new Error("cursor disk unavailable"); },
+    pidAlive: () => determined(alive),
+    reconcileGone: async () => { acted = true; return { status: "gone" }; },
+    terminate: async () => { acted = true; throw new Error("unreachable"); } })).rejects.toThrow("cursor disk unavailable");
+  expect(acted).toBe(false);
+});
+
+test("an asynchronous PSS measurement rechecks a new busy turn before termination", async () => {
+  let busy = false;
+  const probe = await sweep({ snapshot: () => snapshot({ entries: { [`claude:${SESSION}`]: entry({
+    structuredHost: { ...(entry().structuredHost as object), activeTurnRef: busy ? "new-turn" : null },
+  }) } }), treePss: async () => { await Promise.resolve(); busy = true; return { bytes: 60, measuredProcesses: 1 }; } });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.refused).toMatchObject([{ clause: "turn-settled", changed: true }]);
+});
+
+test("an asynchronous PSS measurement cannot transfer retirement to a replacement process", async () => {
+  let replaced = false;
+  const probe = await sweep({ snapshot: () => snapshot({ entries: { [`claude:${SESSION}`]: entry({
+    structuredHost: { ...(entry().structuredHost as object), process: {
+      pid: replaced ? HOST_PID + 1 : HOST_PID, startIdentity: HOST_IDENTITY, bootEpoch: BOOT_EPOCH,
+    } },
+  }) } }), treePss: async () => { await Promise.resolve(); replaced = true; return { bytes: 60, measuredProcesses: 1 }; } });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.refused).toMatchObject([{ clause: "process-identity", changed: true }]);
+});
+
+test("unavailable PSS remains unknown while resident-memory accounting stays separate", async () => {
+  const probe = await sweep({ treePss: undefined, snapshot: () => snapshot({ entries: { [`claude:${SESSION}`]: entry({
+    structuredHost: { ...(entry().structuredHost as object), process: { pid: 2_000_000_000, startIdentity: HOST_IDENTITY, bootEpoch: BOOT_EPOCH } },
+  }) } }) });
+  expect(probe.report.retired[0]!.pss).toEqual({ bytes: null, measuredProcesses: 0 });
+  expect(probe.report.reclaimed.rssBytes).toBe(110 * 1024 * 1024);
+});
+
+test.skipIf(process.platform !== "linux")("PSS includes the real process tree before the termination spy", async () => {
+  const probe = await sweep({ ppidMap: () => new Map(), treePss: undefined,
+    snapshot: () => snapshot({ entries: { [`claude:${SESSION}`]: entry({ structuredHost: {
+      ...(entry().structuredHost as object), process: { pid: process.pid, startIdentity: HOST_IDENTITY, bootEpoch: BOOT_EPOCH },
+    } }) } }) });
+  expect(probe.report.retired[0]!.pss!.measuredProcesses).toBe(1);
+  expect(probe.report.retired[0]!.pss!.bytes).toBeGreaterThan(0);
 });
 
 test("a turn in flight blocks retirement", async () => {
@@ -746,8 +871,11 @@ test("a host whose record stored no kernel identity blocks retirement", async ()
   }, "undetermined");
 });
 
-test("a pid that no longer carries the recorded identity blocks retirement", async () => {
-  await refusedBy("process-identity", { processIdentity: () => determined(`${HOST_PID}:999999`) });
+test("a pid that no longer carries the recorded identity reconciles without termination", async () => {
+  const probe = await sweep({ processIdentity: () => determined(`${HOST_PID}:999999`), reconcileGone: async () => ({ status: "gone" }) });
+  expect(probe.report.gone).toHaveLength(1);
+  expect(probe.report.retired).toEqual([]);
+  expect(probe.terminated).toEqual([]);
 });
 
 test("a sweep defers past its batch bound rather than overrunning the next tick", async () => {
@@ -901,6 +1029,7 @@ test("a replacement host on the same session key is never reached", async () => 
       },
     }),
     processIdentity: observedIdentity,
+    reconcileGone: async () => ({ status: "gone" }),
     processMemory: (pids) => procBackend.processMemory(pids),
     ppidMap: () => procBackend.ppidMap(),
     owned: () => false,
@@ -912,12 +1041,12 @@ test("a replacement host on the same session key is never reached", async () => 
     }),
   });
 
-  /* The predicate itself refuses, so the termination is never even reached. */
+  /* Only the predecessor custody is gone; the replacement tree is untouched. */
   expect(probe.report.retired).toEqual([]);
   expect(probe.report.failed).toEqual([]);
   expect(probe.terminated).toEqual([]);
-  expect(probe.report.refused).toHaveLength(1);
-  expect(probe.report.refused[0]!.clause).toBe("process-identity");
+  expect(probe.report.refused).toEqual([]);
+  expect(probe.report.gone).toHaveLength(1);
   expect(cleared).toEqual([]);
   for (const pid of tree.tree) expect(procBackend.pidAlive(pid)).toBe(true);
 });
@@ -1083,6 +1212,45 @@ test("the sweep runs on its own timer, once per process", async () => {
   } finally {
     stopStructuredHostRetirement();
   }
+});
+
+test("a slow sweep cannot overlap the next timer tick", async () => {
+  let tick: (() => void) | undefined;
+  let finish: (() => void) | undefined;
+  let calls = 0;
+  startStructuredHostRetirement({
+    scheduleInterval: callback => { tick = callback; return { unref() {} } as unknown as ReturnType<typeof setInterval>; },
+    sweep: () => { calls++; return new Promise<void>(resolve => { finish = resolve; }); },
+  });
+  try {
+    tick!();
+    tick!();
+    expect(calls).toBe(1);
+    finish!();
+    await Promise.resolve();
+    tick!();
+    expect(calls).toBe(2);
+    finish!();
+    await Promise.resolve();
+  } finally { stopStructuredHostRetirement(); }
+});
+
+test("a failed sweep releases its timer admission and raises an alarm", async () => {
+  let tick: (() => void) | undefined;
+  let calls = 0;
+  const alarm = spyOn(console, "error").mockImplementation(() => {});
+  startStructuredHostRetirement({
+    scheduleInterval: callback => { tick = callback; return { unref() {} } as unknown as ReturnType<typeof setInterval>; },
+    sweep: async () => { calls++; throw new Error("fixture sweep failure"); },
+  });
+  try {
+    tick!();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(alarm).toHaveBeenCalled();
+    tick!();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(calls).toBe(2);
+  } finally { stopStructuredHostRetirement(); alarm.mockRestore(); }
 });
 
 /** A subject every clause of the predicate passes, built as a literal so the
@@ -1260,7 +1428,7 @@ class ResumedEngineChild extends EventEmitter {
   }
 }
 
-test("a retired conversation still opens and resumes from its transcript", async () => {
+test.each(["retired", "gone"] as const)("a %s conversation still opens and resumes from its transcript with events intact", async mode => {
   /* #747 asks for this as an assertion rather than an assumption: retire a
      host for real, then OPEN the conversation's transcript and RESUME the
      session from it, through the same adoption path production uses. */
@@ -1285,32 +1453,50 @@ test("a retired conversation still opens and resumes from its transcript", async
   fs.utimesSync(transcript, quiet, quiet);
   const before = fs.readFileSync(transcript);
 
-  const tree = await spawnFixtureHostTree();
-  const retired = await sweep({
-    snapshot: () => snapshot({
-      entries: {
-        [`claude:${SESSION}`]: entry({
-          artifactPath: transcript,
-          cwd,
+  const eventStore = new FileRuntimeEventStore(path.join(home, "events"));
+  const event = { kind: "delta" as const, turnId: "retained-turn", text: "retained output", seq: 1 };
+  eventStore.append(SESSION, event);
+  const eventsBefore = eventStore.load(SESSION);
+  if (mode === "gone") {
+    const file = normalizeRegistry({ ...snapshot({ entries: {
+      [`claude:${SESSION}`]: entry({ artifactPath: transcript, cwd,
+        structuredHost: { ...(entry().structuredHost as object),
+          process: { pid: 2_147_483_647, startIdentity: "exited-host", bootEpoch: BOOT_EPOCH },
+          scope: { unit: "delegatus-agent-resume.scope", bootEpoch: BOOT_EPOCH },
+          eventCursor: 0, activeTurnRef: "unsettled-turn" },
+      }),
+    } }), version: 2 });
+    const filename = path.join(home, "registry.json");
+    fs.writeFileSync(filename, JSON.stringify(file));
+    const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", now: () => NOW });
+    setAgentRegistryForTests(registry);
+    try {
+      const reconciled = await sweep({ snapshot: () => registry.readOnlySnapshot(), pidAlive: () => determined(false),
+        processIdentity: () => undetermined("process absent"), durableEventTail: () => determined(1),
+        scopeLoadState: async () => "not-found" });
+      expect(reconciled.report.gone).toHaveLength(1);
+      expect(reconciled.terminated).toEqual([]);
+      expect(registry.readOnlySnapshot().entries[`claude:${SESSION}`]!.artifactPath).toBe(transcript);
+      expect(registry.readOnlySnapshot().conversations).toEqual(file.conversations);
+    } finally { setAgentRegistryForTests(null); registry.close(); }
+  } else {
+    const tree = await spawnFixtureHostTree();
+    const retired = await sweep({
+      snapshot: () => snapshot({ entries: {
+        [`claude:${SESSION}`]: entry({ artifactPath: transcript, cwd,
           structuredHost: { ...(entry().structuredHost as object), process: { pid: tree.pid, startIdentity: tree.startIdentity, bootEpoch: BOOT_EPOCH } },
         }),
-      },
-    }),
-    /* The real stat, so the transcript this resume reads is the file on disk. */
-    transcriptStat: undefined,
-    processIdentity: observedIdentity,
-    processMemory: (pids) => procBackend.processMemory(pids),
-    ppidMap: () => procBackend.ppidMap(),
-    owned: () => false,
-    terminate: (ref) => terminateStructuredHostTree(ref, {
-      terminateOwnedHost: async () => false,
-      retireRegistryEntry: () => {},
-      graceMs: 200,
-      deadlineMs: 5_000,
-    }),
-  });
-  expect(retired.report.retired).toHaveLength(1);
-  for (const pid of tree.tree) expect(procBackend.pidAlive(pid)).toBe(false);
+      } }),
+      transcriptStat: undefined, processIdentity: observedIdentity,
+      processMemory: (pids) => procBackend.processMemory(pids), ppidMap: () => procBackend.ppidMap(), owned: () => false,
+      terminate: (ref) => terminateStructuredHostTree(ref, {
+        terminateOwnedHost: async () => false, retireRegistryEntry: () => {}, graceMs: 200, deadlineMs: 5_000,
+      }),
+    });
+    expect(retired.report.retired).toHaveLength(1);
+    for (const pid of tree.tree) expect(procBackend.pidAlive(pid)).toBe(false);
+  }
+  expect(eventStore.load(SESSION)).toEqual(eventsBefore);
 
   /* Opened: the transcript is byte-identical and still parses into the
      conversation the retired host was serving. */
@@ -1339,7 +1525,7 @@ test("a retired conversation still opens and resumes from its transcript", async
   const resumed = await ClaudeStreamBrokerHost.adopt(SESSION, {
     cwd,
     claudeProjectsDir: projects,
-    eventStore: new FileRuntimeEventStore(path.join(home, "events")),
+    eventStore,
     deliveryLedger: ledger,
     shutdownGraceMs: 50,
     readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
@@ -1361,6 +1547,7 @@ test("a retired conversation still opens and resumes from its transcript", async
     expect(argv).not.toContain("--session-id");
     expect(confirmed).toEqual([{ entryId: "delivery-1", engineMessageId: messageId }]);
     expect((await resumed.health()).status).toBe("idle");
+    expect(eventStore.load(SESSION).slice(0, eventsBefore.length)).toEqual(eventsBefore);
   } finally {
     await resumed.release();
   }

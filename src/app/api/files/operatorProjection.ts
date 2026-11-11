@@ -1,4 +1,5 @@
 import { performanceSpans } from "@/lib/performanceSpans";
+import { MeasuredCache, MeasuredWeakCache } from "@/lib/cacheTelemetry";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -86,7 +87,7 @@ const projectionCacheStore = globalThis as typeof globalThis & {
   __llvFilesProjectionCache?: Map<string, CachedProjection>;
   __llvBoardHistory?: BoardHistory;
   __llvBoardEncoder?: BoardEncoder;
-  __llvFilesGzipBodies?: WeakMap<ProjectionRepresentation, Promise<Uint8Array>>;
+  __llvFilesGzipBodiesV2?: MeasuredWeakCache<ProjectionRepresentation, { promise: Promise<Uint8Array>; bytes: number }>;
   __llvFilesProjectionInflight?: Map<string, Promise<ProjectionRepresentation>>;
   __llvFilesProjectionPersistenceTail?: Promise<void>;
   __llvFilesPersistedProjectionChecked?: boolean;
@@ -105,7 +106,8 @@ function nextProjectionSequence(): number {
 }
 
 function projectionCache(): Map<string, CachedProjection> {
-  projectionCacheStore.__llvFilesProjectionCache ??= new Map();
+  projectionCacheStore.__llvFilesProjectionCache ??= new MeasuredCache("projections", "files/operatorProjection",
+    value => Buffer.byteLength(value.representation.body), "encoded-json");
   return projectionCacheStore.__llvFilesProjectionCache;
 }
 
@@ -119,14 +121,19 @@ function boardEncoder(): BoardEncoder {
 
 /** One compression per representation, however many clients fetch it. */
 function gzippedRepresentation(representation: ProjectionRepresentation): Promise<Uint8Array> {
-  projectionCacheStore.__llvFilesGzipBodies ??= new WeakMap();
-  let compressed = projectionCacheStore.__llvFilesGzipBodies.get(representation);
+  const cache = projectionCacheStore.__llvFilesGzipBodiesV2 ??= new MeasuredWeakCache("gzip-bodies", "files/operatorProjection", entry => entry.bytes);
+  let compressed = cache.get(representation);
   if (!compressed) {
-    compressed = gzipBody(representation.body);
-    projectionCacheStore.__llvFilesGzipBodies.set(representation, compressed);
-    void compressed.catch(() => projectionCacheStore.__llvFilesGzipBodies?.delete(representation));
+    const entry = { promise: gzipBody(representation.body), bytes: 0 };
+    compressed = entry;
+    cache.set(representation, entry);
+    void entry.promise.then(bytes => {
+      if (cache.get(representation) !== entry) return;
+      entry.bytes = bytes.byteLength;
+      cache.set(representation, entry);
+    }, () => cache.delete(representation));
   }
-  return compressed;
+  return compressed.promise;
 }
 
 function projectionInflight(): Map<string, Promise<ProjectionRepresentation>> {
@@ -205,6 +212,7 @@ function projectionBaseKey(
     pinOverlayPaths: scan.pinOverlayPaths ?? [],
     stores: [
       ...PROJECTION_STATE_FILES.map(stateFileSignature),
+      stateFileSignature("project-presentation.json"),
       hotStateSignature("project_aliases", "project-aliases.json"),
       hotStateSignature("project_curation", "project-curation.json"),
       hotStateSignature("worktree_map", "worktree-map.json"),
@@ -594,13 +602,48 @@ export function HEAD(request: Request): Response {
 export type AfterFilesResponse = (work: () => Promise<void>) => void;
 const nextTurn: AfterFilesResponse = (work) => { setTimeout(() => { void work(); }, 0); };
 
+/** A queue refusal for a scope with nothing to serve, as the HTTP answer. It
+    carries no rows, ETag or build stamp, so the caller learns nothing about any
+    scope; the client's own backoff asks again. Only this boundary converts it:
+    `getFiles` keeps throwing for the board's internal preparation, which treats
+    a throw as "not prepared yet". */
+function projectionUnavailableResponse(request: Request, error: FilesProjectionQueueError): Response {
+  const url = new URL(request.url);
+  const diagnostics = filesProjectionQueueDiagnostics();
+  const yesNo = (flag: boolean) => (flag ? "yes" : "no");
+  console.warn(
+    `[files projection] ${error.reason} for a scope with nothing to serve: waited ${Math.round(error.waitedMs)}ms; `
+    + `waiting ${diagnostics.waiting}, expired ${diagnostics.expired}, refused ${diagnostics.refused}; `
+    + `pinned ${yesNo(!!url.searchParams.get("path")?.trim())}, summary ${yesNo(url.searchParams.get("view") === "summary")}, `
+    + `agent ${yesNo(request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER))}`,
+  );
+  return Response.json(
+    { error: "files projection unavailable", code: "files_projection_unavailable", reason: error.reason },
+    {
+      status: 503,
+      headers: {
+        "cache-control": "no-store",
+        "x-llv-files-projection-cache": "unavailable",
+        "server-timing": `files-worker-queue;dur=${error.waitedMs.toFixed(1)};desc="${error.reason}"`,
+      },
+    },
+  );
+}
+
 export async function GET(request: Request, afterResponse: AfterFilesResponse = nextTurn): Promise<Response> {
   const id = randomUUID();
   performanceSpans.request(id, new URL(request.url).searchParams.get("view") === "storage-health" ? "health" : "files");
   performanceSpans.event("http.dispatch", id);
   let failed = true;
   try {
-    const response = await performanceSpans.correlate(id, () => withViewerOperation("files.get", () => getFiles(request, false, afterResponse)));
+    const response = await performanceSpans.correlate(id, () => withViewerOperation("files.get", async () => {
+      try {
+        return await getFiles(request, false, afterResponse);
+      } catch (error) {
+        if (error instanceof FilesProjectionQueueError) return projectionUnavailableResponse(request, error);
+        throw error;
+      }
+    }));
     failed = false;
     return response;
   } finally {
@@ -817,9 +860,11 @@ async function getFiles(request: Request, skipBootstrap = false, afterResponse: 
 
 /** The operator's summary representation, sharing the poll's scan and cache.
     Internal reads neither mark presence nor run the board migration. */
-async function operatorBoardBody(): Promise<string> {
+async function operatorBoardBody(signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
   const request = new Request("http://localhost/api/files?view=summary");
   const scan = await cachedFileScan(undefined, undefined, Date.now(), undefined, undefined, { copySnapshot: false });
+  signal?.throwIfAborted();
   const scope = projectionScopeKey(undefined, true, false);
   const cached = projectionCache().get(scope)?.representation;
   const projected = filesystemExhausted() && cached ? { representation: cached } : await projectionFor(scope, projectionKey(projectionBaseKey(scan, undefined)), request, scan, true);
@@ -827,8 +872,10 @@ async function operatorBoardBody(): Promise<string> {
 }
 
 
-export async function operatorBoardRepresentation(): Promise<import("@/lib/attention/needsYouRead").NeedsYouBody> {
-  return JSON.parse(await operatorBoardBody());
+export async function operatorBoardRepresentation(signal?: AbortSignal): Promise<import("@/lib/attention/needsYouRead").NeedsYouBody> {
+  const body = await operatorBoardBody(signal);
+  signal?.throwIfAborted();
+  return JSON.parse(body);
 }
 
 /** The exact panel representation, decoded and reduced outside the Viewer. */

@@ -1,0 +1,1151 @@
+{
+  "purpose": "Complete the guarded checks and review after the earlier merge checkpoint.",
+  "createdAt": "2026-10-24T08:24:04.959962+00:00",
+  "verificationStatus": "complete: no observed assertion fails only on the branch",
+  "priorEvidence": [
+    "evidence/package-installs-merge-verification.json",
+    "evidence/package-installs-merge-refresh.json"
+  ],
+  "capturedMain": "97bdb94ea9dfe32dff8a7bf022eeb2f83d8f02b7",
+  "checkedHead": "a79f8e3bed4aebfba0227813ccebd42b39f15414",
+  "mainRefresh": "Both fresh fetches returned the already-merged main revision. No additional merge was necessary.",
+  "conflicts": [
+    {
+      "file": "src/lib/agent/headless.ts:1",
+      "resolution": "Keep repository identity and memory-scope imports."
+    },
+    {
+      "file": "src/lib/pipelines/git.test.ts:54",
+      "resolution": "Keep persistent fixture Git identity configuration and construct the synthetic email from separate strings."
+    },
+    {
+      "file": "src/lib/runtime/copilotAcpHost.test.ts:20",
+      "resolution": "Keep repository identity and MCP HTTP access imports."
+    }
+  ],
+  "followupConflicts": [],
+  "historicalPreStageConflict": {
+    "file": "src/lib/pipelines/git.ts:210",
+    "merge": "914c75f1dbc7c6a38ef1adc04fa7797cdd81200f",
+    "resolution": "Retain worktree provenance before dependency preparation in both provisioning paths. This merge predates the assigned stage input."
+  },
+  "checks": [
+    {
+      "label": "main-contention-1",
+      "command": [
+        "setsid",
+        "--wait",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/app/api/spawn/route.test.ts"
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "seconds": 16.831,
+      "failedCases": [
+        "Claude selection handles a fallback race with automatic credential rotation",
+        "Claude selection handles a fallback race with exhausted pin",
+        "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+        "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+        "Claude selection handles a fallback race with pin catalog change",
+        "Claude selection handles a fallback race with pin credential removal",
+        "Claude selection handles a fallback race with pin credential rotation",
+        "Claude selection handles a fallback race with pin rejected refresh rotation",
+        "Claude selection handles a fallback race with pin unreadable credential",
+        "Claude selection handles a fallback race with unavailable pin",
+        "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+        "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+        "Viewer draft and per-project orchestrator seat pass public spawn admission",
+        "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+        "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+        "a pinned Claude health probe handles pinned catalog before reserving once",
+        "a pinned Claude health probe handles pinned credential before reserving once",
+        "a pinned Claude health probe handles pinned removed credential before reserving once",
+        "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+        "a pinned Claude health probe handles unrelated refusal before reserving once",
+        "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+        "a queued pinned account survives restart and launches exactly once on the pin after admission",
+        "an automatic bound-project health revision race stays retryable and preserves the same request key"
+      ],
+      "logSha256": "3d21c25682887e31b23c26fd7582fb5ea586f512a700b585e4f244341e7c75c5",
+      "counts": {
+        "pass": 70,
+        "fail": 23,
+        "skip": null
+      }
+    },
+    {
+      "label": "branch-contention-1",
+      "command": [
+        "setsid",
+        "--wait",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/app/api/spawn/route.test.ts"
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "seconds": 15.878,
+      "failedCases": [
+        "Claude selection handles a fallback race with automatic credential rotation",
+        "Claude selection handles a fallback race with exhausted pin",
+        "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+        "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+        "Claude selection handles a fallback race with pin catalog change",
+        "Claude selection handles a fallback race with pin credential removal",
+        "Claude selection handles a fallback race with pin credential rotation",
+        "Claude selection handles a fallback race with pin rejected refresh rotation",
+        "Claude selection handles a fallback race with pin unreadable credential",
+        "Claude selection handles a fallback race with unavailable pin",
+        "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+        "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+        "Viewer draft and per-project orchestrator seat pass public spawn admission",
+        "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+        "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+        "a pinned Claude health probe handles pinned catalog before reserving once",
+        "a pinned Claude health probe handles pinned credential before reserving once",
+        "a pinned Claude health probe handles pinned removed credential before reserving once",
+        "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+        "a pinned Claude health probe handles unrelated refusal before reserving once",
+        "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+        "a queued pinned account survives restart and launches exactly once on the pin after admission",
+        "an automatic bound-project health revision race stays retryable and preserves the same request key"
+      ],
+      "logSha256": "22b3575a33d5da998d1d2881727ed5f7f17f784ecd5f269229b95e0e72f41c40",
+      "counts": {
+        "pass": 70,
+        "fail": 23,
+        "skip": null
+      }
+    },
+    {
+      "label": "main-contention-2",
+      "command": [
+        "setsid",
+        "--wait",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/app/api/spawn/route.test.ts"
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "seconds": 17.117,
+      "failedCases": [
+        "Claude selection handles a fallback race with automatic credential rotation",
+        "Claude selection handles a fallback race with exhausted pin",
+        "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+        "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+        "Claude selection handles a fallback race with pin catalog change",
+        "Claude selection handles a fallback race with pin credential removal",
+        "Claude selection handles a fallback race with pin credential rotation",
+        "Claude selection handles a fallback race with pin rejected refresh rotation",
+        "Claude selection handles a fallback race with pin unreadable credential",
+        "Claude selection handles a fallback race with unavailable pin",
+        "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+        "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+        "Viewer draft and per-project orchestrator seat pass public spawn admission",
+        "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+        "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+        "a pinned Claude health probe handles pinned catalog before reserving once",
+        "a pinned Claude health probe handles pinned credential before reserving once",
+        "a pinned Claude health probe handles pinned removed credential before reserving once",
+        "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+        "a pinned Claude health probe handles unrelated refusal before reserving once",
+        "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+        "a queued pinned account survives restart and launches exactly once on the pin after admission",
+        "an automatic bound-project health revision race stays retryable and preserves the same request key"
+      ],
+      "logSha256": "4681af9fe9d6c08a8da31a7f3ee5f20f4e93dce1ea7982e9fc250576e68bef2c",
+      "counts": {
+        "pass": 70,
+        "fail": 23,
+        "skip": null
+      }
+    },
+    {
+      "label": "branch-contention-2",
+      "command": [
+        "setsid",
+        "--wait",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/app/api/spawn/route.test.ts"
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "seconds": 17.167,
+      "failedCases": [
+        "Claude selection handles a fallback race with automatic credential rotation",
+        "Claude selection handles a fallback race with exhausted pin",
+        "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+        "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+        "Claude selection handles a fallback race with pin catalog change",
+        "Claude selection handles a fallback race with pin credential removal",
+        "Claude selection handles a fallback race with pin credential rotation",
+        "Claude selection handles a fallback race with pin rejected refresh rotation",
+        "Claude selection handles a fallback race with pin unreadable credential",
+        "Claude selection handles a fallback race with unavailable pin",
+        "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+        "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+        "Viewer draft and per-project orchestrator seat pass public spawn admission",
+        "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+        "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+        "a pinned Claude health probe handles pinned catalog before reserving once",
+        "a pinned Claude health probe handles pinned credential before reserving once",
+        "a pinned Claude health probe handles pinned removed credential before reserving once",
+        "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+        "a pinned Claude health probe handles unrelated refusal before reserving once",
+        "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+        "a queued pinned account survives restart and launches exactly once on the pin after admission",
+        "an automatic bound-project health revision race stays retryable and preserves the same request key"
+      ],
+      "logSha256": "cd6db85aedf16cc258da3edcd9215de435c79b7c6a69b695605c68730f540e69",
+      "counts": {
+        "pass": 70,
+        "fail": 23,
+        "skip": null
+      }
+    },
+    {
+      "label": "main-contention-3",
+      "command": [
+        "setsid",
+        "--wait",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/app/api/spawn/route.test.ts"
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "seconds": 17.063,
+      "failedCases": [
+        "Claude selection handles a fallback race with automatic credential rotation",
+        "Claude selection handles a fallback race with exhausted pin",
+        "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+        "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+        "Claude selection handles a fallback race with pin catalog change",
+        "Claude selection handles a fallback race with pin credential removal",
+        "Claude selection handles a fallback race with pin credential rotation",
+        "Claude selection handles a fallback race with pin rejected refresh rotation",
+        "Claude selection handles a fallback race with pin unreadable credential",
+        "Claude selection handles a fallback race with unavailable pin",
+        "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+        "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+        "Viewer draft and per-project orchestrator seat pass public spawn admission",
+        "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+        "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+        "a pinned Claude health probe handles pinned catalog before reserving once",
+        "a pinned Claude health probe handles pinned credential before reserving once",
+        "a pinned Claude health probe handles pinned removed credential before reserving once",
+        "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+        "a pinned Claude health probe handles unrelated refusal before reserving once",
+        "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+        "a queued pinned account survives restart and launches exactly once on the pin after admission",
+        "an automatic bound-project health revision race stays retryable and preserves the same request key"
+      ],
+      "logSha256": "65c5732ff574511794a651eafd2b3c9c0f32b5f5f1f3b6bf5b8e7b61023bd0c4",
+      "counts": {
+        "pass": 70,
+        "fail": 23,
+        "skip": null
+      }
+    },
+    {
+      "label": "branch-contention-3",
+      "command": [
+        "setsid",
+        "--wait",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/app/api/spawn/route.test.ts"
+      ],
+      "exit": 1,
+      "timedOut": false,
+      "seconds": 16.211,
+      "failedCases": [
+        "Claude selection handles a fallback race with automatic credential rotation",
+        "Claude selection handles a fallback race with exhausted pin",
+        "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+        "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+        "Claude selection handles a fallback race with pin catalog change",
+        "Claude selection handles a fallback race with pin credential removal",
+        "Claude selection handles a fallback race with pin credential rotation",
+        "Claude selection handles a fallback race with pin rejected refresh rotation",
+        "Claude selection handles a fallback race with pin unreadable credential",
+        "Claude selection handles a fallback race with unavailable pin",
+        "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+        "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+        "Viewer draft and per-project orchestrator seat pass public spawn admission",
+        "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+        "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+        "a pinned Claude health probe handles pinned catalog before reserving once",
+        "a pinned Claude health probe handles pinned credential before reserving once",
+        "a pinned Claude health probe handles pinned removed credential before reserving once",
+        "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+        "a pinned Claude health probe handles unrelated refusal before reserving once",
+        "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+        "a queued pinned account survives restart and launches exactly once on the pin after admission",
+        "an automatic bound-project health revision race stays retryable and preserves the same request key"
+      ],
+      "logSha256": "452c149eb9df79b275d46dd716c67f260d5781a9a5c82147208d61ae01bf2a31",
+      "counts": {
+        "pass": 70,
+        "fail": 23,
+        "skip": null
+      }
+    },
+    {
+      "label": "main-native-compaction",
+      "command": [
+        "setsid",
+        "--wait",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/runtime/nativeQueueCompaction.integration.test.ts"
+      ],
+      "exit": 0,
+      "timedOut": false,
+      "seconds": 1.769,
+      "failedCases": [],
+      "logSha256": "36fdc55f6e79228b572aca01679e483e3888d18199d30feeeb932163896fc129",
+      "counts": {
+        "pass": 2,
+        "fail": 0,
+        "skip": null
+      }
+    },
+    {
+      "label": "branch-native-compaction",
+      "command": [
+        "setsid",
+        "--wait",
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/runtime/nativeQueueCompaction.integration.test.ts"
+      ],
+      "exit": 0,
+      "timedOut": false,
+      "seconds": 1.719,
+      "failedCases": [],
+      "logSha256": "99fda41d1e269a4f5f1932772babfbb9c7f02ce78b8a402570049d17b53de2cb",
+      "counts": {
+        "pass": 2,
+        "fail": 0,
+        "skip": null
+      }
+    },
+    {
+      "label": "branch-typecheck",
+      "command": [
+        "bunx",
+        "tsc",
+        "--noEmit",
+        "--incremental",
+        "false"
+      ],
+      "exit": 0,
+      "timedOut": false,
+      "seconds": 147.833,
+      "failedCases": [],
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "counts": {
+        "pass": null,
+        "fail": null,
+        "skip": null
+      }
+    },
+    {
+      "label": "branch-lint",
+      "command": [
+        "bun",
+        "scripts/eslint-changes.ts",
+        "--base",
+        "97bdb94ea9dfe32dff8a7bf022eeb2f83d8f02b7",
+        "scripts/gate-runner/client.ts",
+        "scripts/gate-runner/harness.fixture.ts",
+        "scripts/gate-runner/load.test.ts",
+        "scripts/gate-runner/load.ts",
+        "scripts/gate-runner/remoteEntry.test.ts",
+        "scripts/gate-runner/remoteExport.test.ts",
+        "scripts/gate-runner/remoteFaults.test.ts",
+        "scripts/gate-runner/remoteShip.test.ts",
+        "scripts/gate-runner/remoteVerdict.test.ts",
+        "scripts/pipeline-park-proof.test.ts",
+        "scripts/pipeline-park-proof.ts",
+        "src/lib/accounts/manager.ts",
+        "src/lib/accounts/spawnHealth.test.ts",
+        "src/lib/agent/cli.ts",
+        "src/lib/agent/headless.ts",
+        "src/lib/git/agentHistoryGuard.test.ts",
+        "src/lib/git/agentHistoryGuard.ts",
+        "src/lib/git/agentPublicationIdentity.ts",
+        "src/lib/git/repositoryCommitIdentity.test.ts",
+        "src/lib/git/repositoryCommitIdentity.ts",
+        "src/lib/pipelines/engine.fixture.ts",
+        "src/lib/pipelines/engine.ports.part2.test.ts",
+        "src/lib/pipelines/engine.ts",
+        "src/lib/pipelines/git.test.ts",
+        "src/lib/pipelines/git.ts",
+        "src/lib/pipelines/packageInstalls.test.ts",
+        "src/lib/pipelines/stageAttemptPush.test.ts",
+        "src/lib/pipelines/stageAttemptPush.ts",
+        "src/lib/pipelines/stageCommitRepair.test.ts",
+        "src/lib/pipelines/worktreeDependencies.test.ts",
+        "src/lib/pipelines/worktreeDependencies.ts",
+        "src/lib/runtime/agentSignalSandbox.test.ts",
+        "src/lib/runtime/claudeStreamBrokerHost.ts",
+        "src/lib/runtime/codexAppServerHost.test.ts",
+        "src/lib/runtime/codexAppServerHost.ts",
+        "src/lib/runtime/copilotAcpHost.test.ts",
+        "src/lib/runtime/copilotAcpHost.ts",
+        "src/lib/workflows/provision.test.ts",
+        "src/lib/workflows/provision.ts",
+        "test-preload.ts"
+      ],
+      "exit": 0,
+      "timedOut": false,
+      "seconds": 7.831,
+      "failedCases": [],
+      "logSha256": "2981b4233d0bce6ede99b540dc05e2c1002289e63adc032ecb669b58c3108c4d",
+      "counts": {
+        "pass": null,
+        "fail": null,
+        "skip": null
+      }
+    }
+  ],
+  "comparison": {
+    "wholeFileObservationsPerSide": 3,
+    "testsPerRouteFile": 93,
+    "sharedFailureCountPerObservation": 23,
+    "branchOnlyFailedCases": [],
+    "contentionAssertion": "a pinned preflight waits out a short foreign holder and keeps a 2 s timeout replayable without a failed receipt",
+    "contentionPassesOnMain": 3,
+    "contentionPassesOnBranch": 3,
+    "nativeCompactionPerSide": {
+      "pass": 2,
+      "fail": 0,
+      "assertions": 37
+    },
+    "sharedFailures": [
+      "Claude selection handles a fallback race with automatic credential rotation",
+      "Claude selection handles a fallback race with exhausted pin",
+      "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+      "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+      "Claude selection handles a fallback race with pin catalog change",
+      "Claude selection handles a fallback race with pin credential removal",
+      "Claude selection handles a fallback race with pin credential rotation",
+      "Claude selection handles a fallback race with pin rejected refresh rotation",
+      "Claude selection handles a fallback race with pin unreadable credential",
+      "Claude selection handles a fallback race with unavailable pin",
+      "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+      "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+      "Viewer draft and per-project orchestrator seat pass public spawn admission",
+      "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+      "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+      "a pinned Claude health probe handles pinned catalog before reserving once",
+      "a pinned Claude health probe handles pinned credential before reserving once",
+      "a pinned Claude health probe handles pinned removed credential before reserving once",
+      "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+      "a pinned Claude health probe handles unrelated refusal before reserving once",
+      "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+      "a queued pinned account survives restart and launches exactly once on the pin after admission",
+      "an automatic bound-project health revision race stays retryable and preserves the same request key"
+    ]
+  },
+  "execution": {
+    "wrapper": "the standard guarded stage wrapper, then gate-remote",
+    "serial": true,
+    "testPrefix": [
+      "setsid",
+      "--wait",
+      "bun",
+      "test",
+      "--timeout=60000"
+    ],
+    "stdin": "closed",
+    "isolationKeys": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_CACHE_HOME",
+      "XDG_DATA_HOME",
+      "LLV_STATE_DIR",
+      "TMPDIR",
+      "CODEX_HOME",
+      "CLAUDE_CONFIG_DIR",
+      "LLV_CODEX_HOME",
+      "LLV_CLAUDE_HOME"
+    ],
+    "capture": "sibling directories outside tested checkouts",
+    "nativeBackend": "isolated local fixture; no external model service",
+    "bunVersion": "1.4.0",
+    "codexVersion": "0.162.1"
+  },
+  "sourceContinuity": {
+    "checkedPaths": 7048,
+    "allBeforeHashesMatchAfter": true,
+    "sourceDigest": "d028b78e9154bef7a52131125ec3540de67e147e14085995084c4d29248ce532",
+    "changesSinceRefreshHashes": {
+      "src/lib/runtime/nativeQueueCompaction.integration.test.ts": "0815b74ef29f68070a9310801ea0bf1f71de0f2bfa8f8300ad6814e31512ffe2"
+    },
+    "coverage": "Retain the earlier importer and gate comparison evidence. Only the newer native compaction test differed from the last refresh snapshot; this completion checks it on both sides and typechecks the complete branch."
+  },
+  "excludedExploration": {
+    "reason": "The first private harness combined a new session with setsid; its launcher exited before the tests. All eight test launch receipts are excluded and replaced by the completed serial observations. Typecheck and lint were direct children, awaited to completion, and remain valid. A read-only process inspection verified that the first test children had exited before the corrected batch started.",
+    "initialTransport": {
+      "command": [
+        "bash",
+        "$HEAVY_WRAPPER",
+        "gate-remote",
+        "--get",
+        "../merge-checks/",
+        "--out",
+        "$STAGE_SCRATCH/merge-resume/received",
+        "--",
+        "python3",
+        "-c",
+        "$REMOTE_CHECK_SCRIPT"
+      ],
+      "exit": 0,
+      "seconds": 167.026,
+      "payloadSha256": "e401a18dd786f06271f4e49d61be274705a5d7c13bc2d51e1e04f0759477ce5b"
+    },
+    "excludedLaunchReceipts": [
+      {
+        "label": "main-contention-1",
+        "command": [
+          "setsid",
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/app/api/spawn/route.test.ts"
+        ],
+        "exit": 0,
+        "timedOut": false,
+        "seconds": 0.003,
+        "failedCases": [],
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "counts": {
+          "pass": null,
+          "fail": null,
+          "skip": null
+        }
+      },
+      {
+        "label": "branch-contention-1",
+        "command": [
+          "setsid",
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/app/api/spawn/route.test.ts"
+        ],
+        "exit": 0,
+        "timedOut": false,
+        "seconds": 0.002,
+        "failedCases": [],
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "counts": {
+          "pass": null,
+          "fail": null,
+          "skip": null
+        }
+      },
+      {
+        "label": "main-contention-2",
+        "command": [
+          "setsid",
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/app/api/spawn/route.test.ts"
+        ],
+        "exit": 0,
+        "timedOut": false,
+        "seconds": 0.002,
+        "failedCases": [],
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "counts": {
+          "pass": null,
+          "fail": null,
+          "skip": null
+        }
+      },
+      {
+        "label": "branch-contention-2",
+        "command": [
+          "setsid",
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/app/api/spawn/route.test.ts"
+        ],
+        "exit": 0,
+        "timedOut": false,
+        "seconds": 0.002,
+        "failedCases": [],
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "counts": {
+          "pass": null,
+          "fail": null,
+          "skip": null
+        }
+      },
+      {
+        "label": "main-contention-3",
+        "command": [
+          "setsid",
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/app/api/spawn/route.test.ts"
+        ],
+        "exit": 0,
+        "timedOut": false,
+        "seconds": 0.003,
+        "failedCases": [],
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "counts": {
+          "pass": null,
+          "fail": null,
+          "skip": null
+        }
+      },
+      {
+        "label": "branch-contention-3",
+        "command": [
+          "setsid",
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/app/api/spawn/route.test.ts"
+        ],
+        "exit": 0,
+        "timedOut": false,
+        "seconds": 0.002,
+        "failedCases": [],
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "counts": {
+          "pass": null,
+          "fail": null,
+          "skip": null
+        }
+      },
+      {
+        "label": "main-native-compaction",
+        "command": [
+          "setsid",
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/runtime/nativeQueueCompaction.integration.test.ts"
+        ],
+        "exit": 0,
+        "timedOut": false,
+        "seconds": 0.003,
+        "failedCases": [],
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "counts": {
+          "pass": null,
+          "fail": null,
+          "skip": null
+        }
+      },
+      {
+        "label": "branch-native-compaction",
+        "command": [
+          "setsid",
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/runtime/nativeQueueCompaction.integration.test.ts"
+        ],
+        "exit": 0,
+        "timedOut": false,
+        "seconds": 0.003,
+        "failedCases": [],
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "counts": {
+          "pass": null,
+          "fail": null,
+          "skip": null
+        }
+      }
+    ]
+  },
+  "guardedTransport": {
+    "command": [
+      "bash",
+      "$HEAVY_WRAPPER",
+      "gate-remote",
+      "--get",
+      "../merge-confirmations/",
+      "--out",
+      "$STAGE_SCRATCH/merge-resume/confirmed",
+      "--",
+      "python3",
+      "-c",
+      "$REMOTE_CHECK_SCRIPT"
+    ],
+    "exit": 0,
+    "seconds": 115.713,
+    "payloadSha256": "2c695b5bf784e12c8ebe75e5f27b0a1366a24bca94911e7cfca9476fb3e878bb"
+  },
+  "review": {
+    "scope": "The original conflict resolutions, latest upstream fixture, final feature diff against main, and evidence continuity.",
+    "method": "One read-only self-review using the PR review toolkit. Trace repository identity through terminal, headless and structured launches, sandbox filtering, commit hooks, settlement, reconciliation and workflow merge; trace dependency preparation through provisioning, launch, settlement and publication. Read merge resolutions with remerge diffs and inspect existing behavioural coverage.",
+    "findings": []
+  },
+  "limitations": [
+    "Native macOS validation was unavailable; the earlier native macOS intermittent observation is unchanged.",
+    "The broader campaigns retain their explicitly documented shared failures, conditional skips and deadline observations; this completion adds the exact pending checks requested after the checkpoint."
+  ],
+  "shellCommandReceipts": [
+    {
+      "startedAt": "2026-10-24T08:17:48.372Z",
+      "command": "pwd; git status --short; git branch --show-current; printenv TMPDIR; cat $HOME/.agents/skills/using-superpowers/SKILL.md; cat $HOME/.agents/skills/delegatus-orchestration/SKILL.md; cat $HOME/.codex/RTK.md",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:17:48.372Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:17:52.047Z",
+      "command": "rtk proxy bash -c 'cat CONTRIBUTING.md; cat package.json; cat evidence/package-installs-merge-refresh.json; cat $HOME/.codex/desktop-memory/memory_summary.md; cat $HOME/.codex/memories/SERVER_MEMORY_INDEX.md'",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:17:52.047Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:18:04.724Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 0ee89543d95d173b2cc23d05453fbc3edde0f629fa5db4e0b99e78f92ccb2aaf]",
+      "exit": 0,
+      "scriptSha256": "0ee89543d95d173b2cc23d05453fbc3edde0f629fa5db4e0b99e78f92ccb2aaf",
+      "finishedAt": "2026-10-24T08:18:04.724Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:18:07.812Z",
+      "command": "rtk proxy bash -c 'git fetch origin main; rc=$?; printf \"fetch exit=%s\\n\" \"$rc\"; git rev-parse HEAD origin/main; git log -6 --oneline; rg -n \"delegatus|package.install|identity\" $HOME/.codex/desktop-memory/MEMORY.md $HOME/.codex/memories/MEMORY.md $HOME/.codex/memories/SERVER_MEMORY_INDEX.md; command -v gate-remote; cat $HOME/.codex/skills/anthropic-pr-code-review/SKILL.md'",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:18:07.812Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:18:12.640Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: f40e195d2fb73a036d497b51e0f21aea7b1f54ed1f93e41ce0cbaf968c35cff5]",
+      "exit": 0,
+      "scriptSha256": "f40e195d2fb73a036d497b51e0f21aea7b1f54ed1f93e41ce0cbaf968c35cff5",
+      "finishedAt": "2026-10-24T08:18:12.640Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:18:12.816Z",
+      "command": "rtk proxy bash -c 'git rev-parse HEAD origin/main; git diff --stat origin/main...HEAD; rg --files -g AGENTS.md -g CLAUDE.md; sed -n \"1,200p\" $HOME/.local/bin/gate-remote; cat $HOME/.codex/skills/anthropic-pr-code-review/agents/code-reviewer.md'",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:18:12.816Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:18:30.368Z",
+      "command": "rtk proxy bash -c 'cat CLAUDE.md; cat bunfig.toml; git merge-base --is-ancestor origin/main HEAD; printf \"ancestry exit=%s\\n\" \"$?\"; git diff --quiet origin/main HEAD -- .github/workflows; printf \"workflows exit=%s\\n\" \"$?\"; git diff origin/main...HEAD -- src/lib/agent/headless.ts src/lib/pipelines/git.test.ts src/lib/runtime/copilotAcpHost.test.ts; sed -n \"1,160p\" scripts/review-export.ts'",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:18:30.368Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:18:30.913Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 036fc082ca4182a19e7802727ed0fd202ecd47a3d305b90bee67ed75d0d80156]",
+      "exit": 0,
+      "scriptSha256": "036fc082ca4182a19e7802727ed0fd202ecd47a3d305b90bee67ed75d0d80156",
+      "finishedAt": "2026-10-24T08:18:30.913Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:18:54.150Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: da1845708aba5d091b63a65001d049a21af58fad5712f095f24895b349cfbd3a]",
+      "exit": 0,
+      "scriptSha256": "da1845708aba5d091b63a65001d049a21af58fad5712f095f24895b349cfbd3a",
+      "finishedAt": "2026-10-24T08:18:54.150Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:19:00.199Z",
+      "command": "rtk proxy git diff origin/main...HEAD -- src/lib/git src/lib/pipelines/worktreeDependencies.ts src/lib/pipelines/worktreeDependencies.test.ts src/lib/pipelines/packageInstalls.test.ts src/lib/pipelines/git.ts src/lib/pipelines/engine.ts src/lib/pipelines/stageAttemptPush.ts",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:19:00.199Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:19:00.295Z",
+      "command": "rtk proxy git diff origin/main...HEAD -- src/lib/agent/cli.ts src/lib/runtime/claudeStreamBrokerHost.ts src/lib/runtime/codexAppServerHost.ts src/lib/runtime/copilotAcpHost.ts src/lib/workflows/provision.ts test-preload.ts docs/design/pipeline-package-installs.md",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:19:00.295Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:19:21.344Z",
+      "command": "rtk proxy bash -c 'sed -n \"1,180p\" src/lib/git/repositoryCommitIdentity.ts; cat src/lib/pipelines/worktreeDependencies.ts; git diff origin/main...HEAD -- src/lib/pipelines/git.ts src/lib/pipelines/engine.ts src/lib/pipelines/stageAttemptPush.ts'",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:19:21.344Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:19:27.763Z",
+      "command": "rtk proxy ssh -o BatchMode=yes $GATE_RUNNER python3 - <<'PY' [multiline script: 97c6a8e1af0dfc7229722d0cf9ab188bfe3e2ab75d5a356cad77d4d6525deef9]",
+      "exit": 0,
+      "scriptSha256": "97c6a8e1af0dfc7229722d0cf9ab188bfe3e2ab75d5a356cad77d4d6525deef9",
+      "finishedAt": "2026-10-24T08:19:27.763Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:19:27.933Z",
+      "command": "rtk proxy bash -c 'sed -n \"1,200p\" src/lib/pipelines/worktreeDependencies.test.ts; sed -n \"1,180p\" src/lib/pipelines/packageInstalls.test.ts; git show --remerge-diff edcbf9c3d89f4dafbda58762b2c939679b8abfbd -- src/lib/agent/headless.ts src/lib/pipelines/git.test.ts src/lib/runtime/copilotAcpHost.test.ts'",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:19:27.933Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:19:33.655Z",
+      "command": "rtk proxy bash -c 'sed -n \"1,160p\" src/lib/runtime/nativeQueueCompaction.integration.test.ts; rg -n \"a pinned preflight waits|describe|test\\(\" src/app/api/spawn/route.test.ts | tail -20; git status --short; git config --get core.hooksPath; rg -n \"gate-remote|NATIVE|queue.compaction\" evidence/native-queue-compaction-startup.md'",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:19:33.655Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:19:42.422Z",
+      "command": "rtk proxy bash -c 'cat evidence/native-queue-compaction-startup.md; rg -n \"NATIVE_CODEX|CODEX_FIXTURE|process.env|test.skip\" src/lib/runtime/nativeQueueCompaction.integration.test.ts'",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:19:42.422Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:19:42.602Z",
+      "command": "rtk proxy ssh -o BatchMode=yes $GATE_RUNNER python3 - <<'PY' [multiline script: 182d53d3fd6b2bb47757ee866d04cf73128f384814eb97693bcf109ae0d7d12d]",
+      "exit": 0,
+      "scriptSha256": "182d53d3fd6b2bb47757ee866d04cf73128f384814eb97693bcf109ae0d7d12d",
+      "finishedAt": "2026-10-24T08:19:42.602Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:19:48.164Z",
+      "command": "rtk proxy ssh -o BatchMode=yes $GATE_RUNNER bash -c 'command -v codex; ls -d tools/* codex* 2>/dev/null; ls -d $RUNNER_HOME/.local/bin/*codex* $RUNNER_HOME/.bun/bin/*codex* 2>/dev/null'",
+      "exit": 2,
+      "finishedAt": "2026-10-24T08:19:48.164Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:19:53.273Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: e74d34f0531bc17badf9d1814695bbdd521c7e3882b78d0c752db8c3cf8fd9d3]",
+      "exit": 0,
+      "scriptSha256": "e74d34f0531bc17badf9d1814695bbdd521c7e3882b78d0c752db8c3cf8fd9d3",
+      "finishedAt": "2026-10-24T08:19:53.273Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:20:02.087Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 65cf60244987dca04b8ad5852238caca32e0145e7db8a7daf3a0b110c514d99c]",
+      "exit": 0,
+      "scriptSha256": "65cf60244987dca04b8ad5852238caca32e0145e7db8a7daf3a0b110c514d99c",
+      "finishedAt": "2026-10-24T08:20:02.087Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:20:14.015Z",
+      "command": "rtk proxy bash -c 'git diff origin/main...HEAD -- src/lib/pipelines/engine.fixture.ts src/lib/pipelines/engine.ports.part2.test.ts src/lib/pipelines/stageCommitRepair.test.ts src/lib/pipelines/stageAttemptPush.test.ts src/lib/runtime/agentSignalSandbox.test.ts src/lib/runtime/codexAppServerHost.test.ts src/lib/workflows/provision.test.ts; sed -n \"1,240p\" src/lib/git/repositoryCommitIdentity.test.ts; sed -n \"310,370p\" src/lib/agent/headless.ts'",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:20:14.015Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:20:14.110Z",
+      "command": "rtk proxy bash -c 'rg -n \"repositoryPublicationSource|prepareAgentPublicationSpec|prepareHeadlessPublication|agentPublicationIdentityEnv|prepareWorktreeDependencies|isolateWorktreeDependencies\" src/lib/agent/cli.ts src/lib/agent/headless.ts src/lib/agent/spawnCommand.ts src/lib/runtime/copilotAcpHost.ts src/lib/runtime/codexAppServerHost.ts src/lib/runtime/claudeStreamBrokerHost.ts src/lib/runtime/agentConfigSandbox.ts src/lib/agent/spawnPolicy.ts; git log origin/main..HEAD --format=\"%h %s\"'",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:20:14.110Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:20:26.361Z",
+      "command": "rtk proxy ssh -o BatchMode=yes $GATE_RUNNER python3 - <<'PY' [multiline script: 84501f3dc14730fc2955274e1b3cb3ba4b1a4b550bfa313ba030a6b09f408d2b]",
+      "exit": 0,
+      "scriptSha256": "84501f3dc14730fc2955274e1b3cb3ba4b1a4b550bfa313ba030a6b09f408d2b",
+      "finishedAt": "2026-10-24T08:20:26.361Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:20:27.234Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: e9af684fd8c4fea11f0fd59ceb80ad2b12ade03a7cedbd186d04210ed91ce390]",
+      "exit": 0,
+      "scriptSha256": "e9af684fd8c4fea11f0fd59ceb80ad2b12ade03a7cedbd186d04210ed91ce390",
+      "finishedAt": "2026-10-24T08:20:27.234Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:20:46.476Z",
+      "command": "rtk proxy bash -c 'sed -n \"240,340p\" src/lib/workflows/provision.ts; sed -n \"150,230p\" src/lib/agent/cli.ts; sed -n \"40,110p\" src/lib/runtime/agentConfigSandbox.ts; sed -n \"180,235p\" src/lib/runtime/nativeQueueCompaction.integration.test.ts'",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:20:46.476Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:21:00.490Z",
+      "command": "rtk proxy rg -l --glob '*.jsonl' 'Prepared corrected scripts; not submitted until current guarded call finishes' $HOME/.config/delegatus/accounts/codex $HOME/.codex/sessions/2026/10/24",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:21:00.490Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:21:09.017Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 6e894d58190bcede283346080898930f454ecfabbe66eec183918311859fd59e]",
+      "exit": 0,
+      "scriptSha256": "6e894d58190bcede283346080898930f454ecfabbe66eec183918311859fd59e",
+      "finishedAt": "2026-10-24T08:21:09.017Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:21:13.496Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 9ebb47d873c79951e579ece6ee4bb1426b691e87841e0630004d20d4542351b9]",
+      "exit": 0,
+      "scriptSha256": "9ebb47d873c79951e579ece6ee4bb1426b691e87841e0630004d20d4542351b9",
+      "finishedAt": "2026-10-24T08:21:13.496Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:21:23.606Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: dccad5e6b9b8a4c3f4a57650e97c0136fd13e7603a2b5617be860f25b7c6044b]",
+      "exit": 0,
+      "scriptSha256": "dccad5e6b9b8a4c3f4a57650e97c0136fd13e7603a2b5617be860f25b7c6044b",
+      "finishedAt": "2026-10-24T08:21:23.606Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:21:37.560Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 79ee5d415aed969d4fa3877accf67a6854a38d6b019216978a826b17030159db]",
+      "exit": 0,
+      "scriptSha256": "79ee5d415aed969d4fa3877accf67a6854a38d6b019216978a826b17030159db",
+      "finishedAt": "2026-10-24T08:21:37.560Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:21:41.318Z",
+      "command": "rtk proxy python3 \"$TMPDIR/merge-resume/run.py\"",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:21:41.318Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:21:46.040Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: d7292e50c3c6b0003f6810fa008198390916a6dafef070a87ae9224ce9fe5080]",
+      "exit": 0,
+      "scriptSha256": "d7292e50c3c6b0003f6810fa008198390916a6dafef070a87ae9224ce9fe5080",
+      "finishedAt": "2026-10-24T08:21:46.040Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:21:54.618Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: b343a72ba4770338e12823d94c41d08fab36f5517edeafe8717f7d620bd2a92e]",
+      "exit": 0,
+      "scriptSha256": "b343a72ba4770338e12823d94c41d08fab36f5517edeafe8717f7d620bd2a92e",
+      "finishedAt": "2026-10-24T08:21:54.618Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:21:54.716Z",
+      "command": "rtk proxy git show --remerge-diff 914c75f1d -- src/lib/pipelines/git.ts",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:21:54.716Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:22:17.255Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: bfa13243b29abacff87a5548f89355645c33d3cb78235c5402518073594126f9]",
+      "exit": 0,
+      "scriptSha256": "bfa13243b29abacff87a5548f89355645c33d3cb78235c5402518073594126f9",
+      "finishedAt": "2026-10-24T08:22:17.255Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:22:27.973Z",
+      "command": "rtk proxy python3 \"$TMPDIR/merge-resume/extract-receipts.py\"",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:22:27.973Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:22:28.104Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 25ea1d69a15055d0d6be5df434a0f93079e0c90ebd6428a2a546e81a5296daa3]",
+      "exit": 0,
+      "scriptSha256": "25ea1d69a15055d0d6be5df434a0f93079e0c90ebd6428a2a546e81a5296daa3",
+      "finishedAt": "2026-10-24T08:22:28.104Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:22:48.763Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: fceffcbfe9a744fffbdaebcea3c61ec915e69bc1a7ba96c0a436aa363d2afb40]",
+      "exit": 0,
+      "scriptSha256": "fceffcbfe9a744fffbdaebcea3c61ec915e69bc1a7ba96c0a436aa363d2afb40",
+      "finishedAt": "2026-10-24T08:22:48.763Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:22:48.900Z",
+      "command": "rtk proxy python3 \"$TMPDIR/merge-resume/extract-receipts.py\"",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:22:48.900Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:23:03.039Z",
+      "command": "rtk proxy git fetch origin main",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:23:03.039Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:23:03.125Z",
+      "command": "rtk proxy git rev-parse HEAD origin/main",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:23:03.125Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:23:03.257Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: d8acce73b90f293c8a77ef290b00a311f40cb97468a2520a34c40bf17ef35d4b]",
+      "exit": 0,
+      "scriptSha256": "d8acce73b90f293c8a77ef290b00a311f40cb97468a2520a34c40bf17ef35d4b",
+      "finishedAt": "2026-10-24T08:23:03.257Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:23:18.556Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 107ff5dd22ea57be1688a788a238350563bebded3d043fcf595d09b46c81302c]",
+      "exit": 0,
+      "scriptSha256": "107ff5dd22ea57be1688a788a238350563bebded3d043fcf595d09b46c81302c",
+      "finishedAt": "2026-10-24T08:23:18.556Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:23:40.520Z",
+      "command": "rtk proxy python3 \"$TMPDIR/merge-resume/run-corrected.py\"",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:23:40.520Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:23:52.883Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 5bdabac6de11849d7032b1581945fb4e749af00eae4cc29cb67af1f4c1dd43b0]",
+      "exit": 0,
+      "scriptSha256": "5bdabac6de11849d7032b1581945fb4e749af00eae4cc29cb67af1f4c1dd43b0",
+      "finishedAt": "2026-10-24T08:23:52.883Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:24:04.184Z",
+      "command": "rtk proxy python3 \"$TMPDIR/merge-resume/extract-receipts.py\"",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:24:04.184Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:24:04.980Z",
+      "command": "rtk proxy python3 \"$TMPDIR/merge-resume/make-report.py\"",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:24:04.980Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:24:05.075Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 4aca778059787b70161243b4d491c9e35372f1605421154dd849a75e0bcae7e2]",
+      "exit": 0,
+      "scriptSha256": "4aca778059787b70161243b4d491c9e35372f1605421154dd849a75e0bcae7e2",
+      "finishedAt": "2026-10-24T08:24:05.075Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:24:11.678Z",
+      "command": "rtk proxy bash -c 'git status --short; git diff --check; sed -n \"1,150p\" evidence/package-installs-merge-completion.json; sed -n \"35,90p\" \"$TMPDIR/merge-resume/extract-receipts.py\"'",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:24:11.678Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:24:19.655Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 01327049a5cee1254fc8800ec83a00fa58cf77054454a58163110b4073be6cac]",
+      "exit": 0,
+      "scriptSha256": "01327049a5cee1254fc8800ec83a00fa58cf77054454a58163110b4073be6cac",
+      "finishedAt": "2026-10-24T08:24:19.655Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:24:30.453Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 57f7a133b5a2bf571f7b20af46461d9995cd53374e49039ff072658a160b75b1]",
+      "exit": 0,
+      "scriptSha256": "57f7a133b5a2bf571f7b20af46461d9995cd53374e49039ff072658a160b75b1",
+      "finishedAt": "2026-10-24T08:24:30.453Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:24:30.645Z",
+      "command": "rtk proxy python3 \"$TMPDIR/merge-resume/extract-receipts.py\"",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:24:30.645Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:24:38.799Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 2a960136bdc24c4dc132fe4775187a568eccc9bce8b4d372f5b1a17d27b03137]",
+      "exit": 0,
+      "scriptSha256": "2a960136bdc24c4dc132fe4775187a568eccc9bce8b4d372f5b1a17d27b03137",
+      "finishedAt": "2026-10-24T08:24:38.799Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:24:42.790Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 1de372b73a25883b858b817473a45d49a606ffc26e30253af97baaa61a14a7e7]",
+      "exit": 0,
+      "scriptSha256": "1de372b73a25883b858b817473a45d49a606ffc26e30253af97baaa61a14a7e7",
+      "finishedAt": "2026-10-24T08:24:42.790Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:24:55.671Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 24e717132378b2ebffe1f7fd0397508f7a098db217a9268837ca74b6d7b73518]",
+      "exit": 0,
+      "scriptSha256": "24e717132378b2ebffe1f7fd0397508f7a098db217a9268837ca74b6d7b73518",
+      "finishedAt": "2026-10-24T08:24:55.671Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:24:55.895Z",
+      "command": "rtk proxy python3 \"$TMPDIR/merge-resume/extract-receipts.py\"",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:24:55.895Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:25:15.020Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 10510050acbe9749941422397a63397663f01379a0f601afc8460023b250c4f9]",
+      "exit": 0,
+      "scriptSha256": "10510050acbe9749941422397a63397663f01379a0f601afc8460023b250c4f9",
+      "finishedAt": "2026-10-24T08:25:15.020Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:25:29.089Z",
+      "command": "rtk proxy git add evidence/package-installs-merge-completion.json",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:25:29.089Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:25:29.188Z",
+      "command": "rtk proxy git diff --cached --check",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:25:29.188Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:25:29.277Z",
+      "command": "rtk proxy git diff --cached --stat",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:25:29.277Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:25:29.408Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: e905c3da5685719021d6c32bd396b691cf2c1d6e8de3cd8501d13198f59811a8]",
+      "exit": 0,
+      "scriptSha256": "e905c3da5685719021d6c32bd396b691cf2c1d6e8de3cd8501d13198f59811a8",
+      "finishedAt": "2026-10-24T08:25:29.408Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:25:42.574Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 63668c7c2da3d0660726ef7266845abb0bb32c1def083c45bcedc7be4acb3db8]",
+      "exit": 0,
+      "scriptSha256": "63668c7c2da3d0660726ef7266845abb0bb32c1def083c45bcedc7be4acb3db8",
+      "finishedAt": "2026-10-24T08:25:42.574Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:26:24.654Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: df423c871643ef2144b012b36d85f9324b4b7ee5488d17e4ad9a8002288b5ed7]",
+      "exit": 0,
+      "scriptSha256": "df423c871643ef2144b012b36d85f9324b4b7ee5488d17e4ad9a8002288b5ed7",
+      "finishedAt": "2026-10-24T08:26:24.654Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:26:34.989Z",
+      "command": "rtk proxy bun run privacy:check",
+      "exit": 0,
+      "finishedAt": "2026-10-24T08:26:34.989Z"
+    },
+    {
+      "startedAt": "2026-10-24T08:26:37.282Z",
+      "command": "rtk proxy python3 - <<'PY' [multiline script: 1a23482b4d84398a7c00db62ddc3dbe6979b873f49aec57660290d1100b12549]",
+      "exit": 0,
+      "scriptSha256": "1a23482b4d84398a7c00db62ddc3dbe6979b873f49aec57660290d1100b12549",
+      "finishedAt": "2026-10-24T08:26:37.282Z"
+    }
+  ],
+  "commandNotation": "Private locations use role placeholders. Multiline shell payloads are identified by their SHA-256. Shell receipts come from primary completed-command events and preserve each tool invocation exit; remote checks preserve each child command and exit. The guarded batch exits zero after recording per-file outcomes, including shared failures. The transcript inventory has a cutoff before its own final generation and the final add, whitespace, privacy, commit and verification commands; their exits are reported in the stage completion.",
+  "nonzeroCommandNotes": [
+    "The optional binary-location listing exited 2 because optional glob locations were absent; the Codex binary was found and the actual native fixture subsequently passed.",
+    "All six accepted spawn-route whole-file runs exited 1 with the same 23 failed assertions on main and branch. These are shared failures; no branch-only assertion remains.",
+    "The excluded early test launcher exited 0 before the tests completed. Those receipts supply no passing evidence."
+  ],
+  "publicationPrivacy": {
+    "command": [
+      "bun",
+      "run",
+      "privacy:check"
+    ],
+    "exit": 0
+  },
+  "inventoryCutoffAt": "2026-10-24T08:26:46.673025+00:00"
+}

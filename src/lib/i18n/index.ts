@@ -72,7 +72,7 @@ export function chooseLocale(next: Locale) {
 
 const OPERATOR_SETTINGS_URL = "/api/operator/settings";
 
-function clientTimeZone(): { timeZone?: string } {
+export function clientTimeZone(): { timeZone?: string } {
   try {
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     return zone ? { timeZone: zone } : {};

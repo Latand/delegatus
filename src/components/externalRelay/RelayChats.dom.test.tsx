@@ -120,6 +120,24 @@ test("the leaf lists the chats with a transcript, offers no delete, and opens on
   expect(host.querySelector("[data-agent-window]")).toBeNull();
 });
 
+test("the reader names the model a chat was launched on until its transcript reports one, and no model when neither is known", async () => {
+  const modelChip = (host: HTMLElement) => Array.from(host.querySelectorAll<HTMLElement>(".ch-model:not([data-relay-chat-read-only])")).map((chip) => chip.textContent);
+  const launched = { ...file("c1", 1_791_540_000), engine: "codex" as const, model: null, launchModel: "gpt-6-luna" };
+  const unknown = { ...file("c2", 1_791_540_000), engine: "codex" as const, model: null, launchModel: null };
+  const host = await mount(<RelayChatsView relayId="relay-1" payload={{ relays: payload.relays, chats: [chat("c1", { file: launched }), chat("c2", { file: unknown })] }} />);
+  const rows = Array.from(host.querySelectorAll<HTMLElement>("[data-relay-chat]"));
+
+  await act(async () => rows[0]!.querySelector("button")!.click());
+  expect(host.querySelector("[data-agent-window]")?.getAttribute("data-agent-window")).toBe("c1");
+  expect(modelChip(host)).toEqual(["gpt-6-luna"]);
+
+  await act(async () => { document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape" }) as unknown as Event); });
+  await act(async () => rows[1]!.querySelector("button")!.click());
+  expect(host.querySelector("[data-agent-window]")?.getAttribute("data-agent-window")).toBe("c2");
+  expect(modelChip(host)).toEqual([]);
+  expect(host.querySelector("[data-relay-chat-read-only]")?.textContent).toBe("Read only");
+});
+
 test("a relay with nothing to open says so, in Ukrainian too", async () => {
   setLocale("uk");
   const host = await mount(<RelayChatsView relayId="relay-2" payload={payload} />);

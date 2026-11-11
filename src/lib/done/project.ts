@@ -28,7 +28,7 @@ export interface DoneWorld extends DoneFramePorts {
   removeFrames?(keys: readonly string[]): Promise<void>;
   now(): number;
   forge(): ForgeCacheFile;
-  pipelines(): readonly Pipeline[];
+  pipelines(): readonly Pipeline[] | Promise<readonly Pipeline[]>;
   tasks(): readonly BoardTask[];
   deployments(): readonly DoneDeployment[];
   reports(): readonly BridgeReportV1[];
@@ -36,6 +36,7 @@ export interface DoneWorld extends DoneFramePorts {
   pipelineRepository(pipeline: Pipeline): string | null;
   repositoryProject(repository: string): string | null;
   accountLabel(engine: string, accountId: string): string | null;
+  pipelineRecord?(pipelineId: string): Pipeline | null;
 }
 
 /* On `globalThis` because Next bundles route handlers separately: a module
@@ -70,13 +71,14 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
     now,
     floor: activation,
     forge: world.forge(),
-    pipelines: world.pipelines(),
+    pipelines: await world.pipelines(),
     tasks: world.tasks(),
     deployments: world.deployments(),
     reports: world.reports(),
     limits: world.limits(),
     limitEpisodes: memory.limitEpisodes,
     pipelineRepository: (pipeline) => world.pipelineRepository(pipeline),
+    pipelineRecord: (pipelineId) => world.pipelineRecord?.(pipelineId) ?? null,
     repositoryProject: (repository) => world.repositoryProject(repository),
     accountLabel: (engine, accountId) => world.accountLabel(engine, accountId),
   });

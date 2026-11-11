@@ -490,12 +490,86 @@ test("#2166: the Project step offers repositories without preselecting the curre
   host.remove();
 });
 
+/* Typing here calls the handler outside a browser event, so the form's effects (which tell the
+   guide what it holds) run on the next task, as they do between a person's keystroke and click. */
+async function typeName(host: HTMLElement, value: string): Promise<void> {
+  const input = host.querySelector("[data-create-project-form] input") as HTMLInputElement;
+  const propsKey = Object.keys(input).find((key) => key.startsWith("__reactProps$"))!;
+  flushSync(() => (input as unknown as Record<string, { onChange: (event: unknown) => void }>)[propsKey]!.onChange({ target: { value } }));
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+const onProjectStep = (host: HTMLElement) => (host.textContent ?? "").includes("Step 2 of 4");
+
+test("the Project step: Continue with a name typed creates the project and moves on", async () => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const creations: Array<[string, string | null]> = [];
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="project" marker={null} projects={[]} onClose={() => {}} onCreateProject={async (name, folder) => {
+    creations.push([name, folder]);
+    return { ok: true, project: "repo-pr-gram", root: "projects/pr-gram" };
+  }} />));
+  const primary = () => host.querySelector("[data-onboarding-primary]") as HTMLElement;
+  const create = host.querySelector("[data-create-project-form] button[type=submit]") as HTMLElement;
+  /* One filled control while the name is typed: Continue, and Create stays a border. */
+  expect(primary().className).toContain("bg-brand");
+  expect(create.className).not.toContain("bg-brand");
+  await typeName(host, "PR GRAM");
+  flushSync(() => primary().click());
+  await until(() => !onProjectStep(host));
+  expect(creations).toEqual([["PR GRAM", null]]);
+  expect(onProjectStep(host)).toBe(false);
+  flushSync(() => root.unmount());
+  host.remove();
+});
+
+test("the Project step: a refused create keeps the guide on the step, and Continue with no name still skips ahead", async () => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="project" marker={null} projects={[]} onClose={() => {}} onCreateProject={async () => ({ ok: false, code: "NO_FREE_FOLDER" })} />));
+  await typeName(host, "PR GRAM");
+  flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+  await until(() => Boolean(host.querySelector("[data-create-project-form] [role=alert]")));
+  expect(onProjectStep(host)).toBe(true);
+  await typeName(host, "");
+  flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+  expect(onProjectStep(host)).toBe(false);
+  flushSync(() => root.unmount());
+  host.remove();
+});
+
+test("the Project step: a taken name makes «Open it» the filled control, and Continue opens that project", async () => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="project" marker={null} projects={[]} onClose={() => {}} onCreateProject={async () => ({
+    ok: false, code: "DUPLICATE_NAME", project: "repo-existing", displayName: "PR GRAM", root: "projects/pr-gram",
+  })} />));
+  await typeName(host, "PR GRAM");
+  flushSync(() => (host.querySelector("[data-create-project-form]") as HTMLFormElement).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  await until(() => Boolean(host.querySelector("[data-create-open-existing]")));
+  const open = host.querySelector("[data-create-open-existing]") as HTMLElement;
+  expect(open.className).toContain("bg-brand");
+  expect(host.querySelector("[data-create-project-form] button[type=submit]")).toBeNull();
+  expect((host.querySelector("[data-onboarding-primary]") as HTMLElement).className).not.toContain("bg-brand");
+  flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+  await until(() => !onProjectStep(host));
+  expect(onProjectStep(host)).toBe(false);
+  flushSync(() => root.unmount());
+  host.remove();
+});
+
 test("#2166: Escape in the Project step's folder picker closes the picker, not the guide", () => {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
   const closes: string[] = [];
   flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="project" marker={null} projects={[]} onClose={(outcome) => closes.push(outcome)} onCreateProject={async () => ({ ok: false, code: "ERROR" })} />));
+  /* The picker is the collapsed secondary path; the name alone is the default. */
+  expect(host.querySelector("[data-directory-trigger]")).toBeNull();
+  flushSync(() => (host.querySelector("[data-create-existing-toggle]") as HTMLElement).click());
   flushSync(() => (host.querySelector("[data-directory-trigger]") as HTMLElement).click());
   const combobox = host.querySelector("[role=combobox]") as HTMLElement;
   expect(combobox).not.toBeNull();
@@ -910,6 +984,36 @@ test("the mapping shows the small-change and docs rows, a reset row with Restore
     flushSync(() => (host.querySelector("[data-mapping-restore='builder:frontend']") as HTMLElement).click());
     await until(() => requests.some((request) => request.method === "PUT" && request.url.includes("/api/roles")));
     expect(requests.find((request) => request.method === "PUT")?.body).toEqual({ overrides: { builder: { variants: { frontend: from } } } });
+  } finally {
+    flushSync(() => root.unmount());
+    host.remove();
+    rolesBody = { schemaVersion: 2, roles: [] };
+  }
+});
+
+test("the mapping keeps a role saved on a retired model, under its label, beside only the current choices", async () => {
+  const { mergeRoleDefinitions } = await import("@/lib/roles/store");
+  const { listedModels } = await import("@/lib/agent/models");
+  const saved = { engine: "codex" as const, model: "gpt-5.6-terra", effort: "ultra" };
+  const current = { engine: "codex" as const, model: "gpt-6.1-sol", effort: "high" };
+  const roles = mergeRoleDefinitions({ reviewer: { config: saved }, architect: { config: current } }).map((role) => ({ ...role, promptPreview: role.promptScaffold }));
+  rolesBody = { schemaVersion: 5, roles };
+  requests.length = 0;
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<OnboardingDialog mode="mapping" marker={null} onClose={() => {}} />));
+    await until(() => Boolean(host.querySelector("[data-mapping-row]")));
+    const selects = (row: string) => [...host.querySelectorAll<HTMLSelectElement>(`[data-mapping-row='${row}'] select`)];
+    const [model, effort] = selects("reviewer");
+    expect(model!.value).toBe("gpt-5.6-terra");
+    expect(model!.selectedOptions[0]?.textContent).toBe("GPT-5.6-Terra");
+    expect([...model!.options].map((option) => option.value)).toEqual(listedModels("codex", "gpt-5.6-terra").map((option) => option.id));
+    expect(effort!.value).toBe("ultra");
+    // A row on a current model offers the fresh choices alone.
+    expect([...selects("architect")[0]!.options].map((option) => option.value)).toEqual(["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"]);
+    expect(requests.filter((request) => request.method === "PUT")).toEqual([]);
   } finally {
     flushSync(() => root.unmount());
     host.remove();

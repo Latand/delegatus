@@ -1,4 +1,4 @@
-import { completedFileScan, lastScannedFiles, type CachedFileScan } from "@/lib/scanner/scanCache";
+import { completedFileScan, lastScannedFiles, lastScannedProjectCatalog, type CachedFileScan, type FileScanSnapshot } from "@/lib/scanner/scanCache";
 import type { FileEntry } from "@/lib/types";
 
 /**
@@ -42,8 +42,17 @@ import type { FileEntry } from "@/lib/types";
 
 export type ConversationEngine = "claude" | "codex";
 
+export interface ConversationSelectionCatalog {
+  files: readonly FileEntry[];
+  projectCatalog: readonly FileScanSnapshot["projectCatalog"][number][];
+}
+
 export interface ConversationSelectionRequest {
   project?: string;
+  /** Resolve scope from the exact retained generation before filtering rows. */
+  prepareProjectMatches?(catalog: ConversationSelectionCatalog): Promise<void>;
+  /** A caller with canonical project resolution shares it with selection. */
+  projectMatches?(entry: Pick<FileEntry, "project" | "path">): boolean;
   /** Restrict to rows the scan projects as live or a verified owner hosts. */
   liveOnly?: boolean;
   /** Case-insensitive substring over title, project and path. */
@@ -130,9 +139,9 @@ export function selectConversationEntries(
     /* Recorded before the filters: a hosted row this generation holds under a
        different project is still a row the caller need not recover. */
     if (request.hostedPaths?.has(entry.path)) hostedSeen.add(entry.path);
-    if (request.project && entry.project !== request.project) continue;
     const currentlyOwned = request.hostedPaths?.has(entry.path) ?? false;
     if (request.liveOnly && entry.activity !== "live" && !currentlyOwned) continue;
+    if (request.projectMatches ? !request.projectMatches(entry) : request.project && entry.project !== request.project) continue;
     if (query && !`${entry.title}\n${entry.project}\n${entry.path}`.toLocaleLowerCase().includes(query)) continue;
     matched += 1;
     /* The completed scan can call a dead transcript `live` until its next
@@ -217,6 +226,8 @@ export async function completedGenerationSelection(
   if (dependencies.signal?.aborted) throw abortError(dependencies.signal.reason);
   if (scan === BUDGET_SPENT) {
     const completed = (dependencies.lastCompletedFiles ?? lastScannedFiles)();
+    await request.prepareProjectMatches?.({ files: completed ?? [], projectCatalog: lastScannedProjectCatalog() ?? [] });
+    if (dependencies.signal?.aborted) throw abortError(dependencies.signal.reason);
     return {
       ...selectConversationEntries(completed ?? [], request),
       generation: null,
@@ -225,6 +236,8 @@ export async function completedGenerationSelection(
       selectionMs: performance.now() - startedAt,
     };
   }
+  await request.prepareProjectMatches?.(scan.snapshot);
+  if (dependencies.signal?.aborted) throw abortError(dependencies.signal.reason);
   const selected = selectConversationEntries(scan.snapshot.files, request);
   return {
     ...selected,

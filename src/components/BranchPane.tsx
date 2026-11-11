@@ -35,13 +35,13 @@ import { paneState, type PaneState } from "./paneState";
 import { CtxChip, GoalChip, PlanChip } from "./PlanChip";
 import { SessionTitle } from "./session/SessionTitle";
 import { ProcessStatusControls } from "./TaskHeader";
-import { TmuxComposer } from "./TmuxComposer";
+import { ConversationComposer } from "./ConversationComposer";
 import { RateLimitBadge } from "./RateLimitBadge";
 import { TaskRelationStrip } from "./tasks/TaskRelationStrip";
 import type { TaskRelation } from "./tasks/taskRelations";
 import { WakeupChip, wakeupChipKey } from "./WakeupChip";
 import { EngineBadge } from "./EngineMark";
-import { activityDot, cleanTitle, effortTint, effortTitle, engineBadge, engineEdge, fileModelLabel, fmtAge } from "./utils";
+import { activityDot, cleanTitle, effortTint, effortTitle, engineBadge, engineEdge, conversationModelLabel, fmtAge } from "./utils";
 import { isLaunchedConversation } from "./launchedConversations";
 
 const noop = () => undefined;
@@ -130,7 +130,7 @@ interface Props {
   onClose?: () => void;
   /** Native DnD attributes on the header: drag a column by its head to reorder siblings. */
   dragHandle?: React.HTMLAttributes<HTMLElement>;
-  /** Hides the tmux composer: headless runs and finished review rounds take no input. */
+  /** Hides the composer: headless runs and finished review rounds take no input. */
   noComposer?: boolean;
   /** Archive and relay readers keep navigation and transcript disclosure,
       with no transcript, host, account or delivery mutation controls. */
@@ -400,13 +400,13 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
                 {/* Model + reasoning is read-only identity only (issue #241):
                     the picker moved out of the header into the unified control
                     strip; the chip and the effort bars are identity. */}
-                {file.model ? (
+                {conversationModelLabel(file) ? (
                   <span
                     className="shrink-0 rounded-full px-1.5 py-0.5 font-mono text-[9.5px] font-semibold"
                     style={{ backgroundColor: effortTint(file).soft, color: effortTint(file).color }}
                     title={[badge.label, effortTitle(file)].filter(Boolean).join(" · ")}
                   >
-                    {fileModelLabel(file)}
+                    {conversationModelLabel(file)}
                   </span>
                 ) : (
                   <EngineBadge engine={file.engine} className="px-2 py-0.5 text-[10px] font-bold" title={effortTitle(file)} />
@@ -544,7 +544,7 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
           {dormant || isMobile || neverStarted || readOnly || composerShown ? null : <AgentControlStrip file={file} />}
           {dormant || neverStarted ? null : <div ref={setStepsMount} className="contents" />}
           {composerMount && !superseded && !neverStarted && !readOnly ? <div ref={composerMount} className="contents" /> : null}
-          {composerShown ? <TmuxComposer file={file} pollPaused={feedPaused} deadHost={deadHost} sendBlockedReason={sendBlockedReason} {...(composerPrimary ? { primaryPlace: true } : {})} {...(composerPlaceholder ? { placeholder: composerPlaceholder } : {})} /> : null}
+          {composerShown ? <ConversationComposer file={file} pollPaused={feedPaused} deadHost={deadHost} sendBlockedReason={sendBlockedReason} {...(composerPrimary ? { primaryPlace: true } : {})} {...(composerPlaceholder ? { placeholder: composerPlaceholder } : {})} /> : null}
         </div>
       </section>
     </div>

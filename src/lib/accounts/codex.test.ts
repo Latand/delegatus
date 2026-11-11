@@ -12,13 +12,44 @@ const OLD_HOME = process.env.LLV_CODEX_HOME;
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy-codex");
 
-const { CorruptCodexAccountsError, LOGIN_STARTUP_GRACE_MS, activeCodexAccountId, cleanupOrphanedCodexHomes, codexAccountsRoot, codexLoginPaneStatus, codexSessionRoots, codexSessionRootInventory, createManagedCodexAccount, listCodexAccounts, removeManagedCodexAccount, setActiveCodexAccount } = await import("./codex");
+const { UnknownAccountError, CorruptCodexAccountsError, activeCodexAccountId, cleanupOrphanedCodexHomes, codexAccountsRoot, codexSessionRoots, codexSessionRootInventory, createManagedCodexAccount, listCodexAccounts, removeManagedCodexAccountAsync, removeManagedCodexAccount, setActiveCodexAccount } = await import("./codex");
 const { agentRegistry, normalizeRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { pathAllowed } = await import("@/lib/scanner/roots");
 const { recoverInterruptedCodexAccountRemovals } = await import("./codex");
 const { retiredAccountArchive } = await import("./removal");
 const { resetAccountCollectionsForTests } = await import("./accountsStore");
 const { persistedAccountRegistry, persistedAccountState, seedAccountRegistry } = await import("./accountsStoreFixture");
+const { setCodexAccountSpendCredits, codexAccountSpendsCredits, hideLegacyCodexAccount, restoreLegacyCodexAccount } = await import("./codex");
+
+test("paid spending defaults off, round-trips real writes, and stays scoped to one listed account", () => {
+  const first = createManagedCodexAccount("Credit fixture A");
+  const second = createManagedCodexAccount("Credit fixture B");
+  expect(listCodexAccounts().every(account => account.spendCredits === false)).toBe(true);
+  setCodexAccountSpendCredits(first.id, true);
+  resetAccountCollectionsForTests();
+  expect(codexAccountSpendsCredits(first.id)).toBe(true);
+  const child = Bun.spawnSync([process.execPath, "-e", `import { codexAccountSpendsCredits } from ${JSON.stringify(path.resolve("src/lib/accounts/codex.ts"))}; process.stdout.write(JSON.stringify([codexAccountSpendsCredits(${JSON.stringify(first.id)}), codexAccountSpendsCredits(${JSON.stringify(second.id)})]));`], { env: process.env });
+  expect(child.exitCode).toBe(0);
+  expect(JSON.parse(child.stdout.toString())).toEqual([true, false]);
+  expect(codexAccountSpendsCredits(second.id)).toBe(false);
+  expect(codexAccountSpendsCredits("default")).toBe(false);
+  setActiveCodexAccount(second.id);
+  expect(listCodexAccounts().find(account => account.id === first.id)?.spendCredits).toBe(true);
+  setCodexAccountSpendCredits("default", true);
+  setCodexAccountSpendCredits(first.id, false);
+  expect(codexAccountSpendsCredits("default")).toBe(true);
+  expect(codexAccountSpendsCredits(first.id)).toBe(false);
+  expect(() => setCodexAccountSpendCredits("missing", true)).toThrow(UnknownAccountError);
+  hideLegacyCodexAccount();
+  restoreLegacyCodexAccount();
+  expect(codexAccountSpendsCredits("default")).toBe(false);
+  const registry = persistedAccountRegistry("codex");
+  seedAccountRegistry("codex", { ...registry, spendCredits: "true" });
+  expect(codexAccountSpendsCredits("default")).toBe(false);
+  seedAccountRegistry("codex", { ...registry, spendCredits: ["future-account"] });
+  const future = createManagedCodexAccount("Future account", { id: "future-account" });
+  expect(codexAccountSpendsCredits(future.id)).toBe(false);
+});
 
 beforeEach(() => {
   closeAgentRegistryForTests();
@@ -185,36 +216,6 @@ test("concurrent Codex removal and creation preserve both mutations", async () =
   expect(await creator.exited).toBe(0);
   expect(listCodexAccounts().map((item) => item.id)).toContain("created-child");
   expect(listCodexAccounts().map((item) => item.id)).not.toContain(removed.id);
-});
-
-test("a shell during login startup grace remains pending", () => {
-  const startedAt = 1_000;
-  expect(codexLoginPaneStatus(false, { paneId: "%4", windowName: "codex-login", startedAt }, { windowName: "codex-login", command: "zsh" }, startedAt + LOGIN_STARTUP_GRACE_MS - 1)).toEqual({ state: "pending", clear: false });
-});
-
-test("a shell after login startup grace becomes idle", () => {
-  const startedAt = 1_000;
-  expect(codexLoginPaneStatus(false, { paneId: "%4", windowName: "codex-login", startedAt }, { windowName: "codex-login", command: "zsh" }, startedAt + LOGIN_STARTUP_GRACE_MS)).toEqual({ state: "idle", clear: true });
-});
-
-test("a transient missing pane during startup grace stays pending", () => {
-  const startedAt = 1_000;
-  expect(codexLoginPaneStatus(false, { paneId: "%4", windowName: "codex-login", startedAt }, null, startedAt + LOGIN_STARTUP_GRACE_MS - 1)).toEqual({ state: "pending", clear: false });
-});
-
-test("a missing pane at the grace deadline becomes idle and clears", () => {
-  const startedAt = 1_000;
-  expect(codexLoginPaneStatus(false, { paneId: "%4", windowName: "codex-login", startedAt }, null, startedAt + LOGIN_STARTUP_GRACE_MS)).toEqual({ state: "idle", clear: true });
-});
-
-test("a missing pane past the grace deadline becomes idle and clears", () => {
-  const startedAt = 1_000;
-  expect(codexLoginPaneStatus(false, { paneId: "%4", windowName: "codex-login", startedAt }, null, startedAt + LOGIN_STARTUP_GRACE_MS + 60_000)).toEqual({ state: "idle", clear: true });
-});
-
-test("a pane whose window no longer matches is a different pane and clears immediately", () => {
-  const startedAt = 1_000;
-  expect(codexLoginPaneStatus(false, { paneId: "%4", windowName: "codex-login", startedAt }, { windowName: "other", command: "codex" }, startedAt + 1)).toEqual({ state: "idle", clear: true });
 });
 
 test("legacy pane records without a timestamp remain readable", () => {
@@ -603,4 +604,28 @@ test("recovery of a removal interrupted while retiring never routes onto a hidde
   expect(activeCodexAccountId()).toBe(other.id);
   expect(listCodexAccounts().map((account) => account.id)).toEqual([other.id]);
   expect(persistedAccountRegistry("codex").active).not.toBe("default");
+});
+
+
+test("cooperative account removal yields while preserving history through its worker", async () => {
+  const account = createManagedCodexAccount("Cooperative archive");
+  const sessions = path.join(account.home, "sessions");
+  fs.mkdirSync(sessions, { mode: 0o700 });
+  for (let i = 0; i < 4000; i += 1) fs.writeFileSync(path.join(sessions, `${i}.jsonl`), "history\n");
+  let ticks = 0;
+  const timer = setInterval(() => { ticks += 1; }, 1);
+  let report: Awaited<ReturnType<typeof removeManagedCodexAccountAsync>>;
+  try { report = await removeManagedCodexAccountAsync(account.id); }
+  finally { clearInterval(timer); }
+  expect(ticks).toBeGreaterThan(0);
+  expect(report.files).toBe(4000);
+  expect(report.cleanupPending).toBe(false);
+  expect(fs.readFileSync(path.join(report.archive!, "sessions/3999.jsonl"), "utf8")).toBe("history\n");
+  expect(listCodexAccounts().some(item => item.id === account.id)).toBe(false);
+  expect(createManagedCodexAccount("After archive").id).toBeTruthy();
+});
+
+
+test("account removal worker preserves typed refusal for an unknown account", async () => {
+  await expect(removeManagedCodexAccountAsync("worker-missing")).rejects.toBeInstanceOf(UnknownAccountError);
 });

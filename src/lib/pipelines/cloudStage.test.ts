@@ -11,6 +11,14 @@ const reserved: CloudStageAttempt = { phase: "reserved", environmentId: "fixture
   polls: 0, taskId: null, taskUrl: null, model: null };
 const reference = { taskId: "current-task-1", taskUrl: "https://example.com/cloud/current-task-1" };
 
+test("prepared account bindings round-trip alongside legacy reserved attempts", () => {
+  const prepared = { ...reserved, environmentId: "asenvcfg_fixture", environmentSelection: "fixed-selection", environmentBindingRevision: 1, environmentPrincipal: "a".repeat(64) };
+  expect(isCloudStageAttempt(JSON.parse(JSON.stringify(prepared)))).toBe(true);
+  expect(isCloudStageAttempt(reserved)).toBe(true);
+  expect(isCloudStageAttempt({ ...prepared, environmentPrincipal: "invalid" })).toBe(false);
+  expect(isCloudStageAttempt({ ...prepared, environmentBindingRevision: 0 })).toBe(false);
+});
+
 test("explicit cloud models support reviewer, verifier and writable builder stages", () => {
   expect(cloudStageConfigurationError(stage)).toBeNull();
   expect(cloudStageConfigurationError({ ...stage, effectiveRole: { ...stage.effectiveRole, roleId: "verifier" } })).toBeNull();
@@ -108,4 +116,19 @@ test("hosted handles retain only a bounded thread and turn identity", () => {
     expect(validCloudThreadReference(value)).toBe(false);
     expect(isCloudStageAttempt({ ...reserved, ...reference, phase: "polling", thread: value })).toBe(false);
   }
+});
+
+test("claude-cloud admits Claude read-only and builder stages with a bound model, and refuses the rest", () => {
+  const role = (over: Record<string, unknown>) => ({ roleId: "reviewer", engine: "claude", model: "opus", effort: "high", access: "read-only", promptScaffold: null, ...over }) as never;
+  const stage = (over: Record<string, unknown>) => ({ runtime: "claude-cloud" as const, kind: "run" as const, model: "opus", effectiveRole: role({}), ...over });
+  for (const roleId of ["reviewer", "verifier", "architect"]) expect(cloudStageConfigurationError(stage({ effectiveRole: role({ roleId }) }))).toBeNull();
+  expect(cloudStageConfigurationError(stage({ effectiveRole: role({ roleId: "builder", access: "read-write" }) }))).toBeNull();
+  for (const refused of [stage({ effectiveRole: role({ engine: "codex" }) }), stage({ effectiveRole: role({ roleId: "deployer" }) }), stage({ effectiveRole: role({ roleId: "reviewer", access: "read-write" }) }),
+    stage({ kind: "review-loop" }), stage({ outputs: [{ path: "x" }] })]) {
+    expect(cloudStageConfigurationError(refused)).toContain("claude-cloud requires a Claude");
+  }
+  expect(cloudStageConfigurationError(stage({ model: "sonnet" }))).toContain("explicit stage model");
+  /* An architect stays out of the Codex runtime, whose admission did not change. */
+  expect(cloudStageConfigurationError({ ...stage({ effectiveRole: role({ roleId: "architect", engine: "codex" }) }), runtime: "codex-cloud" })).toContain("codex-cloud requires");
+  expect(cloudStageConfigurationError(stage({ runtime: "other-cloud" }))).toContain("stage runtime must be local, codex-cloud or claude-cloud");
 });

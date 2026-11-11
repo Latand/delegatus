@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { validCodexRequestReceipt } from "./codexRequestReceipt";
 import fs from "node:fs";
 import path from "node:path";
@@ -36,7 +37,7 @@ const eventStoreGlobals = globalThis as typeof globalThis & {
 };
 
 function ledgerCache(): Map<string, CachedLedger> {
-  eventStoreGlobals.__llvRuntimeEventLedgers ??= new Map();
+  eventStoreGlobals.__llvRuntimeEventLedgers ??= new MeasuredCache<string, CachedLedger>("ledgers", "runtime/eventStore", entry => entry.identity.size, "source-jsonl");
   return eventStoreGlobals.__llvRuntimeEventLedgers;
 }
 
@@ -143,7 +144,8 @@ function validEvent(value: unknown): value is RuntimeEvent {
   const nonEmptyString = (field: unknown): field is string => typeof field === "string" && field.length > 0;
   switch (event.kind) {
     case "native-queue-changed":
-      return nonEmptyString(event.threadId);
+      return nonEmptyString(event.threadId)
+        && (event.evidenceRejectedFor === undefined || nonEmptyString(event.evidenceRejectedFor));
     case "turn-started":
       return nonEmptyString(event.turnId);
     case "delta":
@@ -168,6 +170,7 @@ function validEvent(value: unknown): value is RuntimeEvent {
     }
     case "turn-ended":
       return nonEmptyString(event.turnId)
+        && (event.claudeResultUuid === undefined || (nonEmptyString(event.claudeResultUuid) && event.claudeResultUuid.length <= 128))
         && (event.status === "completed" || event.status === "interrupted" || event.status === "error");
     case "attention":
       return nonEmptyString(event.id) && nonEmptyString(event.method) && Object.hasOwn(event, "attention")

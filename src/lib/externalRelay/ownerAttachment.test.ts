@@ -48,6 +48,21 @@ function withDocument(request: ExternalRelayRequest, extraction: "complete" | "t
   } });
 }
 
+test("required attachment extraction and access survive optional overload in fresh and resumed prompts", () => {
+  const request = withDocument(attachmentRequest(), "complete");
+  request.input.short_term_memory = "я".repeat(15000);
+  const owner = ownerTierFor({ ownerTier: true }, request)!;
+  for (const prompt of [ownerRunPrompt(request, owner, 3, "optional suffix ".repeat(4000)),
+    ownerContinuationPrompt(request, owner, 3, { seen: [], staticDigest: null }, "optional suffix ".repeat(4000)).prompt]) {
+    expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(32000);
+    const documents = JSON.parse(prompt.match(/<documents>\n([^]*?)\n<\/documents>/)![1]!);
+    expect(documents).toEqual(request.input.documents);
+    expect(prompt).toContain("document-ref");
+    expect(prompt).toContain(marker);
+    expect(prompt).not.toContain("optional suffix");
+  }
+});
+
 test.each(["reply", "owner", "captionless", "parameterized-mime"])("%s attachment is fetched in initial and continuation prompts", kind => {
   const request = attachmentRequest();
   if (kind === "owner") {

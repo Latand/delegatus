@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import { type Member } from "./contract";
 import { createInvite, redeemJoin, TeamError } from "./members";
@@ -34,9 +35,10 @@ import { DELETE as memberDELETE, PUT as memberPUT } from "@/app/api/team/workspa
 import { PUT as placementPUT } from "@/app/api/team/workspace-projects/route";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { GET as pipelinesGET } from "@/app/api/pipelines/route";
-import { PATCH as pipelinePATCH } from "@/app/api/pipelines/[id]/route";
+import { GET as pipelineGET, PATCH as pipelinePATCH } from "@/app/api/pipelines/[id]/route";
+import { queuePipelineCreation, pipelineCreationQueueDir } from "@/lib/pipelines/creationQueue";
+import * as creationQueue from "@/lib/pipelines/creationQueue";
 import { setConversationHostDependenciesForTests } from "@/app/api/conversation-host/dependencies";
-import { allowedKillTarget, lastResourceTargetRefs, noteSessionTargets } from "@/lib/resources";
 import { GET as settingsGET, PUT as settingsPUT } from "@/app/api/projects/settings/route";
 import { setBridgeReports, setMergeOnReview, setReportTelegram } from "@/lib/projects/settings";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
@@ -50,13 +52,13 @@ import { GET as memberGET } from "@/app/api/team/workspaces/[id]/members/route";
 import { GET as workspacesGET } from "@/app/api/team/workspaces/route";
 import { POST as spawnPOST } from "@/app/api/spawn/route";
 import { POST as spawnValidatePOST } from "@/app/api/spawn/validate/route";
-import { POST as taskSpawnPOST } from "@/app/api/tasks/[id]/spawn/route";
 import { POST as pipelinesPOST } from "@/app/api/pipelines/route";
 import { POST as preflightPOST } from "@/app/api/pipelines/preflight/route";
 import * as scanCache from "@/lib/scanner/scanCache";
-import * as transcriptHost from "@/lib/agent/transcriptHost";
-import * as tmux from "@/lib/tmux";
 import { GET as conversationsGET } from "@/app/api/conversations/route";
+import { GET as filesGET } from "@/app/api/files/route";
+import { createFilesProjectionQueue, type FilesProjectionQueue } from "@/app/api/files/projectionQueue";
+import { setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 
 const W1 = `w_${"a".repeat(32)}`;
@@ -116,6 +118,190 @@ afterEach(() => {
 });
 
 describe("workspace authority", () => {
+  function queued(id = "queued-alpha", project = "repo-alpha") {
+    const pipeline = buildPipeline({ id, project, task: "Accepted creation", repoDir: root, taskIds: [],
+      srcPath: null, srcConversationId: null, now: "2030-01-01T00:00:00Z", stages: [] });
+    pipeline.state = "draft";
+    queuePipelineCreation(pipeline, { repository: project, remote: "https://example.invalid/project.git", branch: "refs/heads/fixture" }, false, "store busy");
+    return pipeline;
+  }
+
+  test("queued ID reads admit current members and deny foreign, unplaced and anonymous readers", async () => {
+    const pipeline = queued();
+    for (const actor of [owner, manager, member]) {
+      const result = await pipelineGET(request(`/api/pipelines/${pipeline.id}`, actor), { params: Promise.resolve({ id: pipeline.id }) });
+      expect(result.status).toBe(404);
+      expect(result.headers.get("cache-control")).toBe("private, no-store");
+      expect(await result.json()).toMatchObject({ code: "pipeline_queued", queuedCreation: { id: pipeline.id, project: "repo-alpha", state: "queued" } });
+    }
+    for (const id of [pipeline.id, queued("queued-beta", "repo-beta").id]) {
+      const result = await pipelineGET(request(`/api/pipelines/${id}?project=repo-alpha`, outsider), { params: Promise.resolve({ id }) });
+      expect(result.status).toBe(403);
+      expect(await result.text()).not.toContain("Accepted creation");
+    }
+    const foreign = await pipelineGET(request("/api/pipelines/queued-beta?project=repo-alpha", member), { params: Promise.resolve({ id: "queued-beta" }) });
+    expect(foreign.status).toBe(403);
+    const anonymous = await pipelineGET(new NextRequest("http://localhost/api/pipelines/queued-alpha"), { params: Promise.resolve({ id: pipeline.id }) });
+    expect(anonymous.status).toBe(401);
+    // The new read resolver does not grant queue mutation access.
+    expect((await pipelinePATCH(request(`/api/pipelines/${pipeline.id}`, member, "PATCH", { action: "start" }), { params: Promise.resolve({ id: pipeline.id }) })).status).toBe(403);
+  });
+
+  test("exact queue reads distinguish missing, malformed, conflicting and unsafe files without exposing private fields", async () => {
+    const pipeline = queued("read-boundary");
+    const file = path.join(pipelineCreationQueueDir(), `${pipeline.id}.json`);
+    const original = fs.readFileSync(file, "utf8");
+    expect((await creationQueue.readPipelineCreationReceipt(pipeline.id)).kind).toBe("found");
+    expect(await creationQueue.readPipelineCreationReceipt("missing")).toEqual({ kind: "missing" });
+    expect(await creationQueue.readPipelineCreationReceipt("../read-boundary")).toEqual({ kind: "unavailable" });
+    fs.writeFileSync(file, "{");
+    expect(await creationQueue.readPipelineCreationReceipt(pipeline.id)).toEqual({ kind: "unavailable" });
+    fs.writeFileSync(file, original);
+    const refused = path.join(pipelineCreationQueueDir(), `${pipeline.id}.refused.json`);
+    fs.writeFileSync(refused, JSON.stringify({ ...JSON.parse(original), refusedAt: "2030-01-01T00:00:01Z" }));
+    expect(await creationQueue.readPipelineCreationReceipt(pipeline.id)).toEqual({ kind: "unavailable" });
+    // Ambiguous ownership discloses no receipt, even with a permitted hint.
+    for (const actor of [owner, member, outsider]) {
+      const response = await pipelineGET(request(`/api/pipelines/${pipeline.id}?project=repo-alpha`, actor), { params: Promise.resolve({ id: pipeline.id }) });
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: "workspace authorization unavailable", code: "team_store_unavailable" });
+    }
+    const anonymous = await pipelineGET(new NextRequest(`http://localhost/api/pipelines/${pipeline.id}`), { params: Promise.resolve({ id: pipeline.id }) });
+    expect(anonymous.status).toBe(401);
+    fs.unlinkSync(refused);
+    fs.unlinkSync(file);
+    fs.symlinkSync(path.join(root, "missing-private"), file);
+    expect(await creationQueue.readPipelineCreationReceipt(pipeline.id)).toEqual({ kind: "unavailable" });
+    fs.unlinkSync(file);
+    const oversized = fs.openSync(file, "w");
+    try { fs.ftruncateSync(oversized, creationQueue.CREATION_READ_MAX_BYTES + 1); } finally { fs.closeSync(oversized); }
+    expect(await creationQueue.readPipelineCreationReceipt(pipeline.id)).toEqual({ kind: "unavailable" });
+    fs.writeFileSync(file, original);
+    const entry = JSON.parse(original);
+    entry.pipeline.task = "\u0001".repeat(4000);
+    entry.pipeline.spec = "\u0001".repeat(16000);
+    entry.pipeline.stages = Array.from({ length: 8 }, (_, index) => ({ id: `stage-${index}`, kind: "run", prompt: "\u0001".repeat(8000), next: null }));
+    fs.writeFileSync(file, JSON.stringify(entry));
+    const read = await pipelineGET(request(`/api/pipelines/${pipeline.id}`, member), { params: Promise.resolve({ id: pipeline.id }) });
+    expect(read.status).toBe(404);
+    const body = await read.json();
+    expect(body.queuedCreation.title).toHaveLength(4000);
+    expect(Object.keys(body.queuedCreation).sort()).toEqual(["id", "project", "queuedAt", "reason", "state", "taskIds", "title"]);
+    expect(read.headers.get("cache-control")).toBe("private, no-store");
+  });
+
+  test("queue lookup reads four exact paths with unrelated retained history and rejects altered ownership", async () => {
+    const pipeline = queued("read-history");
+    const directory = pipelineCreationQueueDir();
+    const file = path.join(directory, `${pipeline.id}.json`);
+    const original = fs.readFileSync(file, "utf8");
+    for (let index = 0; index < 512; index++) fs.writeFileSync(path.join(directory, `unrelated-${index}.json`), original);
+    const open = fsPromises.open;
+    const paths: string[] = [];
+    const observer = spyOn(fsPromises, "open").mockImplementation((...args) => {
+      paths.push(String(args[0]));
+      return open(...args);
+    });
+    try {
+      for (let pass = 0; pass < 2; pass++) {
+        paths.length = 0;
+        expect((await creationQueue.readPipelineCreationReceipt(pipeline.id)).kind).toBe("found");
+        expect(paths).toEqual([".json", ".refused.json", ".admission", ".admission.refused"].map(suffix => path.join(directory, pipeline.id + suffix)));
+      }
+    } finally { observer.mockRestore(); }
+    const entry = JSON.parse(original);
+    entry.pipeline.id = "different-id";
+    fs.writeFileSync(file, JSON.stringify(entry));
+    expect(await creationQueue.readPipelineCreationReceipt(pipeline.id)).toEqual({ kind: "unavailable" });
+    entry.pipeline.id = pipeline.id;
+    entry.pipeline.project = "";
+    fs.writeFileSync(file, JSON.stringify(entry));
+    expect(await creationQueue.readPipelineCreationReceipt(pipeline.id)).toEqual({ kind: "unavailable" });
+  });
+
+  test("queue readback accepts the non-empty task identifiers the producer stores", async () => {
+    const pipeline = queued("legacy-task-ids");
+    pipeline.taskIds = ["legacy:task/one", "task with spaces"];
+    queuePipelineCreation(pipeline, { repository: pipeline.project, remote: "https://example.invalid/project.git", branch: "refs/heads/fixture" }, false, "store busy");
+    const response = await pipelineGET(request(`/api/pipelines/${pipeline.id}`, member), { params: Promise.resolve({ id: pipeline.id }) });
+    expect(response.status).toBe(404);
+    expect((await response.json()).queuedCreation.taskIds).toEqual(pipeline.taskIds);
+  });
+
+  test("queued read fences params revocation, owner demotion and project replacement during IO", async () => {
+    const pipeline = queued();
+    const params = Promise.resolve().then(() => { store.removeWorkspaceMember(W1, member.id); return { id: pipeline.id }; });
+    expect((await pipelineGET(request(`/api/pipelines/${pipeline.id}`, member), { params })).status).toBe(403);
+    store.putWorkspaceMember(W1, member.id, "member", owner.id, new Date(now).toISOString());
+    const read = creationQueue.readPipelineCreationReceipt;
+    let calls = 0;
+    const spy = spyOn(creationQueue, "readPipelineCreationReceipt").mockImplementation(async id => {
+      const result = await read(id);
+      if (++calls === 2) store.removeWorkspaceMember(W1, member.id);
+      return result;
+    });
+    try { expect((await pipelineGET(request(`/api/pipelines/${pipeline.id}`, member), { params: Promise.resolve({ id: pipeline.id }) })).status).toBe(403); }
+    finally { spy.mockRestore(); }
+    // Keep a second owner active so demotion cannot turn the installation solo.
+    person("m_second_owner", "owner");
+    const demote = Promise.resolve().then(() => { store.updateMember({ ...owner, role: "member" }); return { id: pipeline.id }; });
+    expect((await pipelineGET(request(`/api/pipelines/${pipeline.id}`, owner), { params: demote })).status).toBe(403);
+    store.putWorkspaceMember(W1, member.id, "member", owner.id, new Date(now).toISOString());
+    calls = 0;
+    const move = spyOn(creationQueue, "readPipelineCreationReceipt").mockImplementation(async id => {
+      if (++calls === 2) queued(id, "repo-beta");
+      return read(id);
+    });
+    try { expect((await pipelineGET(request(`/api/pipelines/${pipeline.id}`, member), { params: Promise.resolve({ id: pipeline.id }) })).status).toBe(403); }
+    finally { move.mockRestore(); }
+  });
+
+  test("refused read keeps the ID, hides filesystem errors, and yields to stored data", async () => {
+    const pipeline = queued();
+    const file = path.join(pipelineCreationQueueDir(), `${pipeline.id}.json`);
+    const entry = JSON.parse(fs.readFileSync(file, "utf8"));
+    fs.writeFileSync(path.join(pipelineCreationQueueDir(), `${pipeline.id}.refused.json`), JSON.stringify({ ...entry,
+      refusedAt: "2030-01-01T00:01:00Z", error: "private filesystem diagnostic" }));
+    fs.rmSync(file);
+    const read = await pipelineGET(request(`/api/pipelines/${pipeline.id}`, member), { params: Promise.resolve({ id: pipeline.id }) });
+    expect(await read.json()).toEqual({ error: "creation refused", code: "pipeline_creation_refused", queuedCreation: {
+      id: pipeline.id, project: pipeline.project, title: pipeline.task, taskIds: [], queuedAt: entry.queuedAt,
+      state: "refused", reason: "creation_refused",
+    } });
+    savePipelines([pipeline]);
+    const stored = await pipelineGET(request(`/api/pipelines/${pipeline.id}`, member), { params: Promise.resolve({ id: pipeline.id }) });
+    expect(stored.status).toBe(200);
+    expect((await stored.json()).pipeline.id).toBe(pipeline.id);
+  });
+
+  test("a solo read cannot cross an awaited transition into team mode", async () => {
+    const pipeline = queued("solo-transition");
+    store.updateMember({ ...owner, status: "revoked", revokedAt: new Date(now).toISOString() });
+    const request = new NextRequest(`http://localhost/api/pipelines/${pipeline.id}`);
+    const params = Promise.resolve().then(() => { store.updateMember(owner); return { id: pipeline.id }; });
+    expect((await pipelineGET(request, { params })).status).toBe(403);
+    expect((await pipelineGET(new NextRequest(request), { params: Promise.resolve({ id: pipeline.id }) })).status).toBe(401);
+  });
+
+  test.each([false, true])("final scope fence refuses revocation after the real handler encoded its answer (stored=%s)", async stored => {
+    const pipeline = queued("final-await");
+    if (stored) savePipelines([pipeline]);
+    const encode = NextResponse.json;
+    const spy = spyOn(NextResponse, "json").mockImplementation(<JsonBody>(body: JsonBody, init?: Parameters<typeof NextResponse.json>[1]) => {
+      const response = encode(body, init);
+      const answer = body as { pipeline?: { id: string }; queuedCreation?: { id: string } };
+      if (answer.pipeline?.id === pipeline.id || answer.queuedCreation?.id === pipeline.id) {
+        queueMicrotask(() => store.removeWorkspaceMember(W1, member.id));
+      }
+      return response;
+    });
+    try {
+      const result = await pipelineGET(request(`/api/pipelines/${pipeline.id}`, member), { params: Promise.resolve({ id: pipeline.id }) });
+      expect(result.status).toBe(403);
+      expect(await result.text()).not.toContain(pipeline.task);
+    } finally { spy.mockRestore(); }
+  });
+
   test("spawn suggestions with an own source and no project never return foreign directories", async () => {
     const dirs = ["alpha", "beta"].map(name => path.join(root, name));
     const entries = dirs.map((cwd, index) => {
@@ -186,67 +372,6 @@ describe("workspace authority", () => {
     const response = await memberGET(request(`/api/team/workspaces/${W1}/members`, manager), { params: Promise.resolve().then(() => { store.removeWorkspaceMember(W1, manager.id); return { id: W1 }; }) });
     expect(response.status).toBe(403);
   });
-  test("resource pane targets stay owner-only beside an authorized conversation on both mounts", async () => {
-    const registry = agentRegistry();
-    const receipt = registry.beginSpawn("codex", root, { project: "repo-alpha", title: "Own conversation" });
-    const artifactPath = path.join(root, "own.jsonl");
-    registry.completeSpawn(receipt.launchId, { key: { engine: "codex", sessionId: fixtureSessionId(3) }, artifactPath, cwd: root, accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
-    const target = "beta-agent:1.0";
-    const ref = { paneId: "%42", panePid: 4242, tmuxServerPid: 4200, tmuxServerStartIdentity: null, paneStartIdentity: null };
-    const endpoint = { kind: "tmux-tmpdir" as const, tmuxTmpdir: root, socketName: "default" as const, socketPath: path.join(root, "tmux.sock") };
-    const identities: Record<string, string>[] = [{ path: artifactPath }, { conversationId: receipt.conversationId }];
-    const previousTargets = lastResourceTargetRefs();
-    const killed: string[] = [];
-    let attaches = 0;
-    setConversationHostDependenciesForTests({
-      panePidOf: async () => ref.panePid,
-      killPane: async pane => { killed.push(pane); },
-      tmuxEndpointDescriptor: () => endpoint,
-      resolveTmuxAttach: async (reference, requestedEndpoint = endpoint) => {
-        expect(reference).toEqual(ref);
-        attaches++;
-        return { ok: true, target, endpoint: requestedEndpoint, command: "fixture attach", readOnlyCommand: "fixture read only" };
-      },
-    });
-    try {
-      for (const route of ["conversation-host", "tmux"]) {
-        const { GET, POST } = await import(`../../app/api/${route}/route.ts`);
-        noteSessionTargets([{ target, ref }]);
-        for (const actor of [member, manager, outsider]) {
-          for (const identity of identities) {
-            const calls = [
-              () => POST(request(`/api/${route}`, actor, "POST", { action: "kill-target", target, ...identity })),
-              () => GET(request(`/api/${route}?attach=1&target=${encodeURIComponent(target)}&${new URLSearchParams(identity)}`, actor)),
-              () => POST(request(`/api/${route}?target=${encodeURIComponent(target)}`, actor, "POST", { action: "interrupt", ...identity })),
-              () => POST(request(`/api/${route}`, actor, "POST", { action: "kill-target", ...identity })),
-            ];
-            for (const call of calls) {
-              const denied = await call();
-              expect(denied.status).toBe(403);
-              expect(await denied.json()).toEqual({ error: "workspace access denied", code: "workspace_forbidden" });
-              expect(allowedKillTarget(target)).toEqual(ref);
-              expect(killed).toEqual([]);
-              expect(attaches).toBe(0);
-            }
-          }
-        }
-        const attached = await GET(request(`/api/${route}?attach=1&target=${encodeURIComponent(target)}&conversationId=${receipt.conversationId}`, owner));
-        expect(attached.status).toBe(200);
-        expect((await attached.json()).attach.target).toBe(target);
-        expect(attaches).toBe(1);
-        expect(allowedKillTarget(target)).toEqual(ref);
-        const killedResponse = await POST(request(`/api/${route}`, owner, "POST", { action: "kill-target", target, path: artifactPath }));
-        expect(killedResponse.status).toBe(200);
-        expect(killed).toEqual([ref.paneId]);
-        expect(allowedKillTarget(target)).toBeNull();
-        killed.length = 0;
-        attaches = 0;
-      }
-    } finally {
-      setConversationHostDependenciesForTests(null);
-      noteSessionTargets(previousTargets);
-    }
-  });
 
   test("a cwd or repoDir that resolves outside the member's workspace is refused on every directory route", async () => {
     const [alpha, beta] = ["alpha", "beta"].map(name => {
@@ -275,7 +400,6 @@ describe("workspace authority", () => {
     const routes = (actor: Member, directory: string) => [
       ["/api/spawn", () => spawnPOST(request("/api/spawn", actor, "POST", { cwd: directory, engine: "codex", prompt: "escape" }))],
       ["/api/spawn/validate", () => spawnValidatePOST(request("/api/spawn/validate", actor, "POST", { cwd: directory, engine: "codex" }))],
-      ["/api/tasks/[id]/spawn", () => taskSpawnPOST(request("/api/tasks/task-own/spawn", actor, "POST", { cwd: directory, engine: "codex" }), { params: Promise.resolve({ id: "task-own" }) })],
       ["/api/pipelines", () => pipelinesPOST(request("/api/pipelines", actor, "POST", { project: alphaKey, repoDir: directory }))],
       ["/api/pipelines/preflight", () => preflightPOST(request("/api/pipelines/preflight", actor, "POST", { repoDir: directory }))],
       ["/api/orchestrator/seat", () => seatGET(request(`/api/orchestrator/seat?project=${encodeURIComponent(alphaKey)}&cwd=${encodeURIComponent(directory)}`, actor))],
@@ -311,7 +435,7 @@ describe("workspace authority", () => {
     }
   });
 
-  test("a pid beside an authorized conversation, launch or path never looks up or sends to another workspace's process", async () => {
+  test("a pid beside an authorized conversation, launch or path never sends to another workspace's process", async () => {
     const registry = agentRegistry();
     const ownTranscript = path.join(root, "own.jsonl");
     const foreignTranscript = path.join(root, "foreign.jsonl");
@@ -326,35 +450,25 @@ describe("workspace authority", () => {
       { ...catalogEntryToFileEntry(catalogRow(ownTranscript, "repo-alpha"), now), pid: ownPid, proc: "running" as const },
       { ...catalogEntryToFileEntry(catalogRow(foreignTranscript, "repo-beta"), now), pid: foreignPid, proc: "running" as const },
     ];
-    const pidLookups: number[] = [];
     const sends: unknown[] = [];
-    const resolvePid = async (pid: number) => { pidLookups.push(pid); return pid === foreignPid ? "beta-agent:1.0" : pid === ownPid ? "alpha-agent:1.0" : null; };
     const scanned = async () => ({ snapshot: { files } }) as never;
-    const emptyHosts = async () => ({ hosts: [], observation: "available", canonicalFor: () => null }) as never;
     const deliver = async (message: unknown) => { sends.push(message); return { ok: true, target: "probe:0.0", operationId: "op-probe" } as never; };
     setConversationHostDependenciesForTests({
-      completedFileScan: scanned, readTranscriptHosts: emptyHosts, resolveRequestedTmuxTarget: resolvePid as never,
+      completedFileScan: scanned,
       deliverConversationMessage: deliver as never,
       // Structured admission declines, so a send that passes the gate reaches the legacy pid ladder.
       enqueueStructuredMessage: (async (message: unknown) => { sends.push(message); return null; }) as never,
     });
     const scan = spyOn(scanCache, "completedFileScan").mockImplementation(scanned);
-    const hosts = spyOn(transcriptHost, "readTranscriptHosts").mockImplementation(emptyHosts);
-    const tmuxLookup = spyOn(tmux, "resolveRequestedTmuxTarget").mockImplementation(resolvePid as never);
     const previousHosts = process.env.LLV_STRUCTURED_HOSTS;
     const send = (route: string, actor: Member, body: Record<string, unknown>) => request(`/api/${route}`, actor, "POST", { text: "probe", ...body });
     try {
       for (const route of ["conversation-host", "tmux"]) {
-        const { GET, POST: sendPOST } = await import(`../../app/api/${route}/route.ts`);
-        const { POST } = await import(`../../app/api/${route}/targets/route.ts`);
+        const { POST: sendPOST } = await import(`../../app/api/${route}/route.ts`);
         const identities = [receipt.conversationId, `spawn:${receipt.launchId}`, ownTranscript];
         for (const actor of [member, manager]) {
           for (const pid of [foreignPid, unknownPid]) {
             for (const identity of identities) {
-              for (const key of ["path", "conversationId"]) {
-                const lookup = await GET(request(`/api/${route}?${key}=${encodeURIComponent(identity)}&pid=${pid}`, actor));
-                expect(lookup.status, `${route} GET ${key}=${identity} pid=${pid}`).toBe(403);
-              }
               for (const structured of ["1", "0"]) {
                 process.env.LLV_STRUCTURED_HOSTS = structured;
                 for (const body of [{ conversationId: identity, pid }, { path: identity, pid }, { conversationId: identity, pid: String(pid) }]) {
@@ -363,33 +477,17 @@ describe("workspace authority", () => {
                 }
               }
             }
-            const batch = await POST(request(`/api/${route}/targets`, actor, "POST", { reqs: [
-              { id: "conversation", path: receipt.conversationId, pid },
-              { id: "launch", path: `spawn:${receipt.launchId}`, pid },
-            ] }));
-            expect(batch.status).toBe(403);
-            expect((await GET(request(`/api/${route}?pid=${pid}`, actor))).status).toBe(403);
-            expect((await POST(request(`/api/${route}/targets`, actor, "POST", { reqs: [{ id: "pid", pid }] }))).status).toBe(403);
           }
-          expect(pidLookups).toEqual([]);
           expect(sends).toEqual([]);
           // The member's own agent pid, beside its own conversation, still reaches the handlers.
-          expect(await (await GET(request(`/api/${route}?conversationId=${receipt.conversationId}&pid=${ownPid}`, actor))).json()).toEqual({ target: "alpha-agent:1.0" });
-          expect(pidLookups).toEqual([ownPid]);
           process.env.LLV_STRUCTURED_HOSTS = "0";
           expect((await sendPOST(send(route, actor, { conversationId: `spawn:${receipt.launchId}`, pid: ownPid }))).status).toBe(200);
           expect(sends).toEqual([expect.objectContaining({ pid: ownPid, path: "", text: "probe" })]);
-          pidLookups.length = 0;
           sends.length = 0;
         }
-        // The owner's pid lookups and pid-addressed sends are unchanged.
-        expect(await (await GET(request(`/api/${route}?pid=${foreignPid}`, owner))).json()).toEqual({ target: "beta-agent:1.0" });
-        expect(await (await GET(request(`/api/${route}?conversationId=${receipt.conversationId}&pid=${foreignPid}`, owner))).json()).toEqual({ target: "beta-agent:1.0" });
-        expect(await (await POST(request(`/api/${route}/targets`, owner, "POST", { reqs: [{ id: "pid", pid: foreignPid }] }))).json()).toEqual({ targets: { pid: "beta-agent:1.0" } });
-        expect(pidLookups).toEqual([foreignPid, foreignPid, foreignPid]);
+        // The owner's pid-addressed sends are unchanged.
         expect((await sendPOST(send(route, owner, { conversationId: `spawn:${receipt.launchId}`, pid: foreignPid }))).status).toBe(200);
         expect(sends).toEqual([expect.objectContaining({ pid: foreignPid, path: "" })]);
-        pidLookups.length = 0;
         sends.length = 0;
       }
     } finally {
@@ -397,8 +495,6 @@ describe("workspace authority", () => {
       else process.env.LLV_STRUCTURED_HOSTS = previousHosts;
       setConversationHostDependenciesForTests(null);
       scan.mockRestore();
-      hosts.mockRestore();
-      tmuxLookup.mockRestore();
     }
   });
 
@@ -588,7 +684,7 @@ describe("workspace authority", () => {
     const receipt = registry.beginSpawn("codex", root, { project: "repo-beta", title: "Workspace foreign conversation" });
     const artifactPath = `${root}/foreign.jsonl`;
     registry.completeSpawn(receipt.launchId, { key: { engine: "codex", sessionId: fixtureSessionId(2) }, artifactPath, cwd: root, accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
-    for (const route of ["runtime/send", "runtime/inject", "runtime/interrupt", "runtime/steer", "runtime/answer", "runtime/queue", "conversation-host", "tmux", "answer"]) {
+    for (const route of ["runtime/send", "runtime/inject", "runtime/interrupt", "runtime/steer", "runtime/answer", "runtime/queue", "conversation-host", "tmux"]) {
       const routes = await import(`../../app/api/${route}/route.ts`) as { POST(req: NextRequest): Promise<Response> };
       const denied = await routes.POST(request(`/api/${route}`, member, "POST", { project: "repo-alpha", conversationId: receipt.conversationId, path: artifactPath, transcriptPath: artifactPath, action: "interrupt", text: "message", idempotencyKey: "workspace-message" }));
       expect(denied.status, route).toBe(403);
@@ -627,7 +723,7 @@ describe("workspace authority", () => {
 
   test("the board projection removes foreign rows, aliases, names and navigation maps", () => {
     const files = ["alpha", "beta"].map(name => ({ ...catalogEntryToFileEntry({ path: `${root}/${name}.jsonl`, root: "codex-sessions", name, project: `repo-${name}`, title: name, firstPrompt: "", engine: "codex", kind: "session", fmt: "codex", mtime: now / 1000, size: 10 }, now), conversationId: `conversation_${name}` as const }));
-    const source: FilesResponse = { files, tasks: [...loadTasksForList()], flows: [], pipelines: [], workflows: [], systemHealth: { tmux: { status: "healthy" } }, projectCatalog: [], projectAliases: { "repo-alpha": "repo-beta" }, projectDisplayNames: { "repo-alpha": "alpha", "repo-beta": "beta" }, conversationAliases: { hidden: "conversation_beta" }, launchRoutes: { hidden: "conversation_beta" }, projectCwds: { "repo-alpha": "alpha", "repo-beta": "beta" }, crownedProjects: ["repo-alpha", "repo-beta"] };
+    const source: FilesResponse = { files, tasks: [...loadTasksForList()], flows: [], pipelines: [], workflows: [], systemHealth: {}, projectCatalog: [], projectAliases: { "repo-alpha": "repo-beta" }, projectDisplayNames: { "repo-alpha": "alpha", "repo-beta": "beta" }, conversationAliases: { hidden: "conversation_beta" }, launchRoutes: { hidden: "conversation_beta" }, projectCwds: { "repo-alpha": "alpha", "repo-beta": "beta" }, crownedProjects: ["repo-alpha", "repo-beta"] };
     const result = workspaceFiles(workspaceScope(store, member.id), source);
     expect(result.files).toHaveLength(1);
     expect(result.tasks).toHaveLength(1);
@@ -814,5 +910,208 @@ describe("workspace invitations", () => {
     expect(() => redeemJoin(store, invite.code, "Joiner", device, now)).toThrow(TeamError);
     expect(store.challenge(invite.challenge.id)?.consumedAt).toBeNull();
     expect(store.workspaceMemberships(manager.id)).toEqual([]);
+  });
+});
+
+// Keep the browser's last confirmed membership until its next workspace refresh.
+test.each(["stored", "refused", "queued"] as const)("retained %s creation disappears after server membership revocation", async terminal => {
+  const { createFilesClientCache } = await import("@/hooks/useFiles");
+  const { memoryFilesSnapshotStore } = await import("@/lib/client/filesSnapshotStore");
+  const pipeline = buildPipeline({ id: "retained-creation", project: "repo-alpha", task: "Protected accepted title", repoDir: root,
+    taskIds: [], srcPath: null, srcConversationId: null, now: "2030-01-01T00:00:00Z", stages: [] });
+  pipeline.state = "draft";
+  const storage = memoryFilesSnapshotStore();
+  let reads = 0;
+  let catalogs = 0;
+  const cache = createFilesClientCache(async url => {
+    if (url.startsWith("/api/pipelines/")) {
+      reads++;
+      return pipelineGET(request(url, member), { params: Promise.resolve({ id: pipeline.id }) });
+    }
+    catalogs++;
+    const scope = workspaceScope(store, member.id);
+    return Response.json(workspaceFiles(scope, { files: [], pipelines: [pipeline], tasks: [], flows: [], workflows: [], systemHealth: {} } as FilesResponse),
+      { headers: { ETag: '"retained-catalog"' } });
+  }, { authority: () => ({ owner: member.id, signature: "last-confirmed-alpha-membership" }), creationStore: () => storage });
+  try {
+    const reservation = cache.reserveCreation()!;
+    await reservation.accept(pipeline, pipeline.createdAt); reservation.release();
+    if (terminal === "stored") savePipelines([pipeline]);
+    else {
+      queuePipelineCreation(pipeline, { repository: "repo-alpha", remote: "https://example.invalid/project.git", branch: "refs/heads/fixture" }, false, "busy");
+      if (terminal === "refused") {
+        const queued = path.join(pipelineCreationQueueDir(), pipeline.id + ".json");
+        const value = JSON.parse(fs.readFileSync(queued, "utf8"));
+        fs.writeFileSync(path.join(pipelineCreationQueueDir(), pipeline.id + ".refused.json"), JSON.stringify({ ...value, refusedAt: "2030-01-01T00:01:00Z", error: "refused" }));
+        fs.unlinkSync(queued);
+      }
+    }
+    await cache.reconcileCreations();
+    expect(reads).toBe(1);
+    await cache.reconcileCreations();
+    expect(cache.read().pipelines.some(row => row.id === pipeline.id) || cache.creationCards().some(row => row.receipt?.id === pipeline.id)).toBe(true);
+    store.removeWorkspaceMember(W1, member.id);
+    expect((await pipelineGET(request(`/api/pipelines/${pipeline.id}`, member), { params: Promise.resolve({ id: pipeline.id }) })).status).toBe(403);
+    await cache.revalidate(); await cache.reconcileCreations();
+    await cache.revalidate(); await cache.reconcileCreations();
+    expect(catalogs).toBe(2);
+    expect(cache.read().pipelines.some(row => row.id === pipeline.id) || cache.creationCards().some(row => row.receipt?.id === pipeline.id)).toBe(false);
+    expect(storage.current()?.creations?.entries.some(row => row.id === pipeline.id)).toBe(false);
+  } finally { cache.dispose(); }
+});
+
+// The real drainer settles between the reader's two exact file opens.
+test("refusal transition retains the accepted ID for an authorized member", async () => {
+  const { createFilesClientCache } = await import("@/hooks/useFiles");
+  const { memoryFilesSnapshotStore } = await import("@/lib/client/filesSnapshotStore");
+  const pipeline = buildPipeline({ id: "refusal-race", project: "repo-alpha", task: "Accepted task title", repoDir: root,
+    taskIds: [], srcPath: null, srcConversationId: null, now: "2030-01-01T00:00:00Z", stages: [] });
+  pipeline.state = "draft";
+  queuePipelineCreation(pipeline, { repository: pipeline.project, remote: "https://example.invalid/project.git", branch: "refs/heads/fixture" }, false, "busy");
+  const queued = path.join(pipelineCreationQueueDir(), pipeline.id + ".json");
+  const value = JSON.parse(fs.readFileSync(queued, "utf8"));
+  value.pipeline.stages = [{ id: "retired", kind: "review-loop" }];
+  fs.writeFileSync(queued, JSON.stringify(value));
+  const storage = memoryFilesSnapshotStore();
+  const statuses: number[] = [];
+  const cache = createFilesClientCache(async url => {
+    const response = await pipelineGET(request(url, member), { params: Promise.resolve({ id: pipeline.id }) });
+    statuses.push(response.status);
+    return response;
+  }, { authority: () => ({ owner: member.id, signature: "current-alpha-membership" }), creationStore: () => storage });
+  const open = fsPromises.open;
+  let settled = false;
+  const observer = spyOn(fsPromises, "open").mockImplementation(async (...args) => {
+    if (!settled && String(args[0]).endsWith(pipeline.id + ".refused.json")) {
+      settled = true;
+      await creationQueue.admitQueuedPipelineCreations();
+    }
+    return open(...args);
+  });
+  try {
+    const reservation = cache.reserveCreation()!;
+    await reservation.accept(pipeline, pipeline.createdAt); reservation.release();
+    await cache.reconcileCreations();
+    observer.mockRestore();
+    const following = await pipelineGET(request(`/api/pipelines/${pipeline.id}`, member), { params: Promise.resolve({ id: pipeline.id }) });
+    const followingBody = await following.json();
+    expect(settled).toBe(true);
+    expect(statuses).toEqual([503]);
+    expect(cache.creationCards().some(row => row.id === pipeline.id && row.status === "unavailable")).toBe(true);
+    expect(storage.current()?.creations?.entries.map(row => row.id)).toEqual([pipeline.id]);
+    expect(following.status).toBe(404);
+    expect(followingBody.code).toBe("pipeline_creation_refused");
+    expect(workspaceScope(store, member.id).access(pipeline.project)).not.toBe("none");
+    await cache.reconcileCreations();
+    expect(cache.creationCards().some(row => row.receipt?.id === pipeline.id && row.status === "refused")).toBe(true);
+  } finally { observer.mockRestore(); cache.dispose(); }
+});
+
+describe("a cold pinned board scope the projection queue refuses", () => {
+  const queues = globalThis as typeof globalThis & { __llvFilesProjectionQueue?: FilesProjectionQueue };
+  let release: (() => void) | undefined;
+  let held: Promise<unknown> | undefined;
+  let queue: FilesProjectionQueue;
+  /* The queue runs on a clock and a deadline timer the test owns: a request waits
+     until the queue has taken its build (its timer is armed then), and a deadline
+     passes when the test advances the clock, never after a real delay. */
+  const maxWaitMs = 30_000;
+  let clock = 0;
+  let armed: Array<{ callback: () => void; cancelled: boolean }> = [];
+  let armWaiters: Array<{ count: number; resolve: () => void }> = [];
+  const queued = (count: number) => armed.length >= count ? Promise.resolve() : new Promise<void>(resolve => { armWaiters.push({ count, resolve }); });
+  const expireWaiting = () => {
+    clock += maxWaitMs + 1;
+    for (const entry of armed.filter(candidate => !candidate.cancelled)) { entry.cancelled = true; entry.callback(); }
+  };
+  let ownId: string;
+  let foreignId: string;
+  const pinned = (identity: string, actor?: Member) => {
+    const url = `http://localhost/api/files?view=summary&path=${encodeURIComponent(identity)}`;
+    return actor ? request(new URL(url).pathname + new URL(url).search, actor) : new NextRequest(url, { headers: { host: "localhost" } });
+  };
+  const conversationIn = (project: string, suffix: number) => {
+    const registry = agentRegistry();
+    const receipt = registry.beginSpawn("codex", root, { project, title: `${project} conversation` });
+    registry.completeSpawn(receipt.launchId, { key: { engine: "codex", sessionId: fixtureSessionId(suffix) }, artifactPath: path.join(root, `${project}-${suffix}.jsonl`), cwd: root, accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
+    return receipt.conversationId;
+  };
+  beforeEach(() => {
+    ownId = conversationIn("repo-alpha", 11);
+    foreignId = conversationIn("repo-beta", 12);
+    scanCache.resetFilesRouteCacheForTests();
+    scanCache.setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: true }));
+    setFilesResponseWorkerRuntimeForTests({ launch: { executable: process.execPath, workerPath: path.join(process.cwd(), "src/lib/filesResponse.worker.ts") }, timeoutMs: 30_000 });
+    // One build holds the only worker slot, so a later scope waits past its bound.
+    clock = 0;
+    armed = [];
+    armWaiters = [];
+    queue = createFilesProjectionQueue({
+      maxDepth: 4,
+      maxWaitMs,
+      now: () => clock,
+      timer: (callback) => {
+        const entry = { callback, cancelled: false };
+        armed.push(entry);
+        for (const waiter of armWaiters) if (armed.length >= waiter.count) waiter.resolve();
+        return { cancel: () => { entry.cancelled = true; } };
+      },
+    });
+    queues.__llvFilesProjectionQueue = queue;
+    held = queue.run(() => new Promise<{ timing: string }>(resolve => { release = () => resolve({ timing: "" }); }));
+    delete (globalThis as { __llvFilesProjectionCache?: unknown }).__llvFilesProjectionCache;
+  });
+  afterEach(async () => {
+    release?.();
+    await held;
+    queues.__llvFilesProjectionQueue = undefined;
+    scanCache.setFileScanRunnerForTests(null);
+    scanCache.resetFilesRouteCacheForTests();
+    setFilesResponseWorkerRuntimeForTests(null);
+    shutdownFilesResponseWorker("test");
+  });
+
+  test("a member's own conversation gets a 503 with no rows", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      for (const actor of [member, manager]) {
+        const reply = filesGET(pinned(ownId, actor));
+        await queued(armed.length + 1);
+        expireWaiting();
+        const response = await reply;
+        expect(response.status).toBe(503);
+        const text = await response.text();
+        expect(JSON.parse(text)).toEqual({ error: "board unavailable" });
+        expect(text).not.toContain("files");
+        expect(response.headers.get("etag")).toBeNull();
+      }
+    } finally { warn.mockRestore(); }
+  });
+
+  test("a foreign conversation is refused before the queue is touched", async () => {
+    const before = queue.diagnostics();
+    const response = await filesGET(pinned(foreignId, member));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "workspace_forbidden" });
+    expect(queue.diagnostics()).toEqual(before);
+  });
+
+  test("membership removed during the queue wait gives 403", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const pending = filesGET(pinned(ownId, member));
+      await queued(2);
+      expect(queue.diagnostics().waiting).toBe(1);
+      store.removeWorkspaceMember(W1, member.id);
+      expireWaiting();
+      expect((await pending).status).toBe(403);
+    } finally { warn.mockRestore(); }
+  });
+
+  test("no session gets the sign-in refusal before the queue", async () => {
+    const before = queue.diagnostics();
+    const response = await filesGET(pinned(ownId));
+    expect(response.status).toBe(401);
+    expect(queue.diagnostics()).toEqual(before);
   });
 });

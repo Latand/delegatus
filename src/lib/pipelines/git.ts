@@ -1,7 +1,11 @@
-import { proactiveTaskExecutionError } from "@/lib/tasks/proactiveExecution";
+import { proactivePipelineExecutionError } from "@/lib/tasks/proactiveExecution";
+import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WINDOW_ENDED_REASON } from "./publicationHistory";
+import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
+import { dependencyInstallFailure, prepareLockedDependencies } from "./lockedDependencies";
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
-import { publicationFailurePhase } from "./publicationHistory";
+export { preparePipelineSetup } from "./setupRecipe";
+import { publicationEnvironmentFailure, publicationFailurePhase } from "./publicationHistory";
 export { publicationFailurePhase } from "./publicationHistory";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -9,11 +13,13 @@ import os from "node:os";
 import path from "node:path";
 import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provision";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
+import { repositoryCommitIdentity } from "@/lib/git/repositoryCommitIdentity";
 import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
 import { compactSensitiveText, staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
 import { mailboxPattern } from "@/lib/privacy/mailbox";
 import publicationFingerprints from "../../../scripts/privacy-known-value-fingerprints.json";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
+import { PUBLICATION_TRANSPORT_MS, publicationCheckBinding, readPublicationCheckReceipt, supportsPublicationPreparation } from "@/lib/git/publicationCheckReceipt";
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { procBackend } from "@/lib/proc";
@@ -22,7 +28,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
-import { publicationDeadlineOnly } from "./publication";
+import { publicationApp403, publicationDeadlineKind, publicationFrozenInstallFailure, publicationTransportLine } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { recordWorktreeProvenance } from "./worktreeProvenance";
@@ -32,7 +38,7 @@ import { instanceCpuPrioritySource } from "@/lib/runtime/cpuAdmissionScope";
 import { isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, waitForCpuPressure } from "@/lib/runtime/cpuPressure";
 import { lessonPublicationEnv, RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectExistingControllerArtifacts } from "./controllerArtifacts";
-import { DEFAULT_PUBLICATION_PUSH_MS, PIPELINE_PUBLICATION_PUSH_MS, publicationHookDeadline, publicationPushBudgetMs } from "./gateBudget";
+import { DEFAULT_PUBLICATION_PUSH_MS, PIPELINE_PUBLICATION_PUSH_MS, PUBLICATION_PACK_MARGIN_MS, publicationHookDeadline, publicationPushBudgetMs } from "./gateBudget";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 
@@ -43,6 +49,8 @@ export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } 
   deferred?: true;
   /** The controller deadline expired before Git could commit; no file refusal. */
   commitTimeout?: true;
+  /** A cancelled child with no hook diagnostic; custody is re-read on retry. */
+  commitCancelled?: true;
   /** Set when Git or index validation refuses the proposed stage commit. */
   commitRefusal?: StageCommitRefusal;
 };
@@ -86,7 +94,43 @@ export async function resolveDeliveryRemote(repoDir: string, requested: string |
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(remote) && !/^[^/]+:/.test(remote)) remote = path.resolve(repoDir, remote);
   const repository = projectIdentityFromRemote(remote, repoDir)?.project;
   if (!repository) return { ok: false, error: "invalid delivery remote", status: 400 };
+  /* Publication uses the stored URL literally, including when a named remote
+     expanded to it. Git can apply another existing rewrite to that URL. */
+  const effective = await literalRemoteUrls(repoDir, remote, exec);
+  if (!effective) return { ok: false, error: "could not read the repository's remotes; retry the request", status: 409 };
+  const elsewhere = [...effective.fetch, ...effective.push].find((url) => projectIdentityFromRemote(url, repoDir)?.project !== repository);
+  if (elsewhere !== undefined) {
+    return { ok: false, status: 400, error: `this checkout's Git url insteadOf or pushInsteadOf settings rewrite the delivery remote ${remote} to another repository; remove the rewrite or deliver through a configured remote` };
+  }
   return { ok: true, remote, repository };
+}
+
+/**
+ * The fetch and push URLs Git itself uses for a literal remote `url` in the
+ * checkout at `repoDir`, with its `insteadOf` and `pushInsteadOf` rewrites
+ * applied; null when Git cannot answer. Read through a remote that exists
+ * only on one command line, under a name no configured remote has, so
+ * nothing is written. `names` are the configured remotes when the caller
+ * already read them.
+ */
+export async function literalRemoteUrls(repoDir: string, url: string, exec: ExecPort, names?: readonly string[]): Promise<{ fetch: string[]; push: string[] } | null> {
+  if (!url || url.startsWith("-") || /[\r\n\0]/.test(url)) return null;
+  let taken = names;
+  if (!taken) {
+    const listed = await exec("git", ["remote"], repoDir, undefined, { timeoutMs: 10_000 });
+    if (listed.code !== 0) return null;
+    taken = listed.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+  }
+  let probe = "delegatus-literal-probe";
+  for (let suffix = 1; taken.includes(probe); suffix++) probe = `delegatus-literal-probe-${suffix}`;
+  const listed = await exec("git", ["-c", `remote.${probe}.url=${url}`, "remote", "-v"], repoDir, undefined, { timeoutMs: 10_000 });
+  if (listed.code !== 0) return null;
+  const urls = { fetch: [] as string[], push: [] as string[] };
+  for (const line of listed.stdout.split("\n")) {
+    const match = /^([^\t]+)\t(.*) \((fetch|push)\)$/.exec(line);
+    if (match?.[1] === probe) urls[match[3] as "fetch" | "push"].push(match[2]!);
+  }
+  return urls.fetch.length && urls.push.length ? urls : null;
 }
 
 async function stageCommitRefusal(staged: readonly string[] | null, exec: ExecPort, cwd: string): Promise<StageCommitRefusal> {
@@ -131,6 +175,8 @@ const INVALID_BASE_BRANCH = "the pipeline base branch is invalid";
 
 /** The branch a pipeline resolves its base from when the caller named none. */
 export const DEFAULT_PIPELINE_BASE_BRANCH = "main";
+// Cached hardlinks may also belong to another checkout; keep package writes local.
+const WORKTREE_INSTALL_BACKEND = "--backend=copyfile";
 
 function validBaseBranch(value: string): boolean {
   return (
@@ -155,8 +201,8 @@ function validPipelineBranch(value: string): boolean {
    lane in `provisioning` for ever. */
 const BASE_FETCH_TIMEOUT = "60s";
 
-/** `--signal=KILL` takes `timeout` down with its command, so a real expiry
-    usually ends on SIGKILL with no exit status at all (#1692). */
+/** The executor deadline ends the owned child on SIGKILL with no exit
+    status. Retain the exit codes returned by older timeout adapters. */
 function killedAtBound(result: ExecResult): boolean {
   return result.code === 124 || result.code === 137 || result.signal === "SIGKILL";
 }
@@ -180,9 +226,9 @@ export async function resolvePipelineBase(
   const requestedRef = input.baseRef?.trim();
   if (!requestedRef) {
     const fetch = (await exec(
-      "timeout",
-      ["--signal=KILL", BASE_FETCH_TIMEOUT, "git", "fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`],
-      repoDir,
+      "git",
+      ["fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`],
+      repoDir, undefined, { timeoutMs: parseInt(BASE_FETCH_TIMEOUT) * 1_000 },
     ));
     if (killedAtBound(fetch)) return { ok: false, error: `fetching origin/${baseBranch}: git fetch timed out after ${BASE_FETCH_TIMEOUT}` };
     if (fetch.code !== 0) return failure(`fetching origin/${baseBranch}`, fetch);
@@ -208,7 +254,8 @@ export async function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPo
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
   if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
-  await prepareStageToolchain(pipeline, exec);
+  try { await prepareStageToolchain(pipeline, exec); }
+  catch (error) { return { ok: false, error: dependencyEnvironmentError(error) }; }
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
 }
 
@@ -221,9 +268,9 @@ function worktreePathMatches(registeredPath: string | undefined, lanePath: strin
 }
 
 /** Provisioning uses the same bounded executor with a cancellation signal. */
-export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal) => Promise<ExecResult>;
-export const realProvisionExec: ProvisionExecPort = async (command, args, cwd, signal) =>
-  await realExec(command, args, cwd, undefined, { signal });
+export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal, options?: { env?: Partial<NodeJS.ProcessEnv>; timeoutMs?: number; inheritFd?: number; additionalInheritedFds?: readonly number[] }) => Promise<ExecResult>;
+export const realProvisionExec: ProvisionExecPort = async (command, args, cwd, signal, options) =>
+  await realExec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs, inheritFd: options?.inheritFd, additionalInheritedFds: options?.additionalInheritedFds });
 
 export async function resolvePipelineBaseAsync(
   repoDir: string,
@@ -242,8 +289,9 @@ export async function resolvePipelineBaseAsync(
     if (!localBase && origin.code !== 0) return failure("reading origin for the pipeline base", origin);
   }
   if (!requestedRef && !localBase) {
-    const fetch = await exec("timeout",
-      ["--signal=KILL", BASE_FETCH_TIMEOUT, "git", "fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`], repoDir, signal);
+    const fetch = await exec("git",
+      ["fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`], repoDir, signal,
+      { timeoutMs: parseInt(BASE_FETCH_TIMEOUT) * 1_000 });
     if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
     if (killedAtBound(fetch)) return { ok: false, error: `fetching origin/${baseBranch}: git fetch timed out after ${BASE_FETCH_TIMEOUT}` };
     if (fetch.code !== 0) return failure(`fetching origin/${baseBranch}`, fetch);
@@ -437,7 +485,14 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
   // The worktree sweep removes only checkouts with a record of who made them.
   // The pipeline's own record names this path too, so a failed write keeps it sweepable.
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
-  await prepareStageToolchain(pipeline, (command, args, cwd) => exec(command, args, cwd, signal));
+  try {
+    await prepareStageToolchain(pipeline,
+      (command, args, cwd, env, options) => exec(command, args, cwd, signal, { env, timeoutMs: options?.timeoutMs, inheritFd: options?.inheritFd, additionalInheritedFds: options?.additionalInheritedFds }), signal);
+  }
+  catch (error) {
+    if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+    return { ok: false, error: dependencyEnvironmentError(error) };
+  }
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   return { ok: true, sha: base.stdout.trim(), baseBranch: pipeline.baseBranch };
 }
@@ -686,6 +741,25 @@ async function staleStageIndex(pipeline: Pipeline, head: string, tree: string, e
   }
 }
 
+function readStageCommitReceipt(receiptFile: string, parent: string, declaredOutputs: readonly string[]): StageCommitReceipt | null {
+  try {
+    if (fs.statSync(receiptFile).size > 128 * 1024) throw new Error("oversized receipt");
+    const value: unknown = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
+    if (!value || typeof value !== "object") throw new Error("invalid receipt");
+    const receipt = value as StageCommitReceipt;
+    if (receipt.version !== 1 || !/^[0-9a-f-]{36}$/.test(receipt.id)
+      || receipt.parent !== parent || !/^[0-9a-f]{40}$/.test(receipt.tree)
+      || !Array.isArray(receipt.paths) || receipt.paths.length === 0
+      || !receipt.paths.every((file) => typeof file === "string" && pathIsDeclaredOutput(file, declaredOutputs))) {
+      throw new Error("invalid receipt");
+    }
+    return receipt;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 /** The controller flushes ownership before Git writes. Recovery must prove the
     exact parent, tree, nonce and declared paths; a familiar commit title alone
     never grants a read-only stage permission to have created a commit. */
@@ -697,20 +771,11 @@ async function recoverStageCommit(
   exec: ExecPort,
   cwd: string,
 ): Promise<PipelineGitResult | null> {
-  let receipt: StageCommitReceipt;
+  let receipt: StageCommitReceipt | null;
   try {
-    if (fs.statSync(receiptFile).size > 128 * 1024) throw new Error("oversized receipt");
-    const value: unknown = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
-    if (!value || typeof value !== "object") throw new Error("invalid receipt");
-    receipt = value as StageCommitReceipt;
-    if (receipt.version !== 1 || !/^[0-9a-f-]{36}$/.test(receipt.id)
-      || receipt.parent !== parent || !/^[0-9a-f]{40}$/.test(receipt.tree)
-      || !Array.isArray(receipt.paths) || receipt.paths.length === 0
-      || !receipt.paths.every((file) => typeof file === "string" && pathIsDeclaredOutput(file, declaredOutputs))) {
-      throw new Error("invalid receipt");
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    receipt = readStageCommitReceipt(receiptFile, parent, declaredOutputs);
+    if (!receipt) return null;
+  } catch {
     return { ok: false, error: "the stage commit ownership receipt could not be verified; preserve the checkout and receipt" };
   }
   const proof = await exec("git", ["show", "-s", "--format=%P%x00%T%x00%B", head], cwd);
@@ -731,45 +796,36 @@ async function recoverStageCommit(
   return { ok: true, sha: head };
 }
 
-/** Capture only the exact, live parent link settlement creates. Recheck its
-    identity before releasing it so a replacement install is preserved. */
-function stageToolchainRelease(pipeline: Pipeline): (() => void) | undefined {
+/** Delegatus worktrees use the completed per-input cache. Other repositories
+    retain private hook tools and preserve installations their writers own. */
+async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort, signal?: AbortSignal): Promise<void> {
   if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
-  const local = path.join(pipeline.worktreeDir, "node_modules");
-  const target = path.resolve(pipeline.repoDir, "node_modules");
-  try {
-    const owned = fs.lstatSync(local);
-    if (!owned.isSymbolicLink() || fs.readlinkSync(local) !== target || !fs.existsSync(local)) return;
-    return () => {
-      try {
-        const current = fs.lstatSync(local);
-        if (current.isSymbolicLink() && current.dev === owned.dev && current.ino === owned.ino
-          && fs.readlinkSync(local) === target) fs.unlinkSync(local);
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    };
-  } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-}
-
-/** Provisioning shares the parent checkout's installed tools before the agent
-    can make its first hooked commit. Settlement retries this for older lanes
-    and read-only turns, then removes the borrowed link after its commit so a
-    later install cannot write into the parent checkout.
-    Preserve any local install or unrelated link, including dangling links. */
-async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort): Promise<(() => void) | undefined> {
-  if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
+  if (await prepareLockedDependencies(pipeline.worktreeDir, { exec, signal })) return;
+  isolateWorktreeDependencies(pipeline);
   const local = path.join(pipeline.worktreeDir, "node_modules");
   try { fs.lstatSync(local); return; }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  const parent = path.join(pipeline.repoDir, "node_modules");
-  if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) return;
-  // A repository that tracks dependencies must never gain a staged symlink.
+  // A non-package repository needs no preparation. If the source has tools,
+  // an absent lane manifest must still refuse sharing and try a private install.
+  if (!fs.existsSync(path.join(pipeline.worktreeDir, "package.json"))
+    && !fs.existsSync(path.join(pipeline.repoDir, "node_modules"))) return;
+  // Repositories tracking dependencies must not acquire an ignored install.
   const ignored = await exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir);
   if (ignored.code === 1) return;
-  if (ignored.code !== 0) throw new Error(`checking ignored settlement dependencies: ${(ignored.stderr || ignored.stdout).trim()}`);
-  const target = path.resolve(parent);
-  try { fs.symlinkSync(target, local, "dir"); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return; throw error; }
-  return stageToolchainRelease(pipeline);
+  if (ignored.code !== 0) throw new Error("checking ignored repository hook dependencies failed");
+  signal?.throwIfAborted();
+  const prepared = await prepareWorktreeDependencies(pipeline, { signal });
+  if (prepared !== "private-install") return;
+  signal?.throwIfAborted();
+  const installed = await exec("bun", ["install", "--frozen-lockfile", "--ignore-scripts", WORKTREE_INSTALL_BACKEND], pipeline.worktreeDir,
+    pipelinePublicationHookEnv(), { signal, timeoutMs: 180_000 });
+  signal?.throwIfAborted();
+  if (installed.code !== 0) throw new Error("private repository hook dependency installation failed");
+}
+
+function dependencyEnvironmentError(error: unknown): string {
+  return error instanceof Error && error.message.startsWith("stage environment:") ? error.message
+    : "stage environment: preparing isolated worktree dependencies failed; source dependencies preserved";
 }
 
 /** Git owns its short-lived index lock and hook protocol. Verify the actual
@@ -795,14 +851,18 @@ async function commitStageTree(pipeline: Pipeline, parent: string, tree: string,
     }
   }
   const marker = `Delegatus-Stage-Settlement: ${crypto.randomUUID()}`;
+  const identity = await repositoryCommitIdentity(cwd, exec);
   await beforeCommit?.();
-  const commit = await exec("git", ["commit", ...[...messages, marker].flatMap(message => ["-m", message])], cwd,
-    pipelineLiteralGitEnv({ ...controllerCommitIdentityEnv(), ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { timeoutMs: STAGE_COMMIT_TIMEOUT_MS });
+  const commit = await exec("git", ["commit", ...[...messages, marker, ...(identity.coauthor ? [identity.coauthor] : [])].flatMap(message => ["-m", message])], cwd,
+    pipelineLiteralGitEnv({ ...identity.env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { timeoutMs: STAGE_COMMIT_TIMEOUT_MS });
   if (commit.code !== 0) {
     const current = await exec("git", ["rev-parse", "HEAD"], cwd);
     if (current.code === 0 && current.stdout.trim() !== parent) return changed();
     if (commit.code === null && /^command timed out after \d+ms(?:$|:)/.test(commit.stderr)) {
       return { ...failure("committing the passed stage", commit), deferred: true, commitTimeout: true };
+    }
+    if (commit.code === null && commit.stderr.trim() === "command cancelled" && !commit.stdout.trim()) {
+      return { ...failure("committing the passed stage", commit), deferred: true, commitCancelled: true };
     }
     return failure("committing the passed stage", commit);
   }
@@ -835,10 +895,9 @@ export async function commitPipelineStage(
   receiptFile?: string,
   control?: StageCommitControl,
 ): Promise<PipelineGitResult> {
-  // A Viewer exit can bypass the commit's finally. Reap that link before
-  // inspecting paths or recovering an already-landed commit; borrow anew only
-  // after staging, so every successful settlement leaves publication safe.
-  try { stageToolchainRelease(pipeline)?.(); }
+  // A Viewer exit can leave a source-owned link behind. Reap it before
+  // inspecting paths or recovering an already-landed commit.
+  try { isolateWorktreeDependencies(pipeline); }
   catch (error) {
     return { ok: false, error: `committing the passed stage: releasing interrupted repository hook toolchain: ${error instanceof Error ? error.message : "unknown failure"}` };
   }
@@ -929,8 +988,18 @@ export async function commitPipelineStage(
   }
   let receipt: StageCommitReceipt | undefined;
   if (!allowCommit && receiptFile && protectedHead && /^[0-9a-f]{40}$/.test(protectedHead)) {
-    receipt = { version: 1, id: crypto.randomUUID(), parent: protectedHead, tree: custodyTree, paths: changedOutputPaths };
-    writeJsonDurably(receiptFile, receipt);
+    try {
+      const previous = readStageCommitReceipt(receiptFile, protectedHead, declaredOutputs);
+      if (previous?.tree === custodyTree && previous.paths.length === changedOutputPaths.length
+        && new Set(previous.paths).size === changedOutputPaths.length
+        && previous.paths.every(file => changedOutputPaths.includes(file))) receipt = previous;
+      else {
+        receipt = { version: 1, id: crypto.randomUUID(), parent: protectedHead, tree: custodyTree, paths: changedOutputPaths };
+        writeJsonDurably(receiptFile, receipt);
+      }
+    } catch {
+      return { ok: false, error: "the stage commit ownership receipt could not be verified; preserve the checkout and receipt" };
+    }
   }
   const head = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
   const recheckedTree = await exec("git", ["write-tree"], pipeline.worktreeDir);
@@ -938,17 +1007,13 @@ export async function commitPipelineStage(
   if (head.stdout.trim() !== sha || recheckedTree.stdout.trim() !== custodyTree) {
     return { ok: false, deferred: true, error: "stage index custody changed during validation; retrying with fresh evidence" };
   }
-  let releaseTools: (() => void) | undefined;
-  try { releaseTools = await prepareStageToolchain(pipeline, exec); }
+  try { await prepareStageToolchain(pipeline, exec); }
   catch (error) {
     return { ok: false, error: `committing the passed stage: preparing repository hook toolchain: ${error instanceof Error ? error.message : "unknown failure"}` };
   }
-  let commit: PipelineGitResult;
-  try {
-    commit = await commitStageTree(pipeline, sha, custodyTree, [`pipeline(${pipeline.id}): complete ${stageId}`,
+  const commit = await commitStageTree(pipeline, sha, custodyTree, [`pipeline(${pipeline.id}): complete ${stageId}`,
       ...(receipt ? [`Delegatus-Stage-Commit: ${receipt.id}`] : [])], exec, allowCommit ? undefined : changedOutputPaths,
       () => control?.beforeCommit(sha));
-  } finally { releaseTools?.(); }
   if (!commit.ok) {
     if (commit.deferred) return commit;
     return { ...commit,
@@ -1335,6 +1400,7 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
   const local = (await currentPipelineBranchHead(pipeline, exec));
   if (!local.ok) return local;
   if (local.sha !== head) return { ok: false, error: "the stage head moved before history reconciliation" };
+  const repositoryIdentity = await repositoryCommitIdentity(pipeline.worktreeDir, exec);
   // Check every commit this parent would reintroduce, including an unsafe
   // ancestor behind an admitted accepted tip. Unknown identities are refused
   // conservatively; values and partial metadata reads never enter the reason.
@@ -1345,7 +1411,7 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
     const [commit, parents, ...fields] = line.split("\0");
     if (!/^[0-9a-f]{40}$/.test(commit) || !/^(?:[0-9a-f]{40}(?: [0-9a-f]{40})*)?$/.test(parents) || fields.length !== 4) return unreadableIdentity;
     for (const offset of [0, 2]) {
-      if (!admittedPublicationIdentity(fields[offset], fields[offset + 1], offset === 0 ? "author" : "committer", parents ? parents.split(" ").length : 0)) return { ok: false,
+      if (!repositoryIdentity.coauthor && !admittedPublicationIdentity(fields[offset], fields[offset + 1], offset === 0 ? "author" : "committer", parents ? parents.split(" ").length : 0)) return { ok: false,
         error: `history reconciliation refused to restore ${commit.slice(0, 12)} ${offset === 0 ? "author" : "committer"} identity; restored commits require publication-safe attribution (values withheld)` };
     }
     // Formatting with %B truncates at NUL and transcodes declared encodings.
@@ -1358,7 +1424,7 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
     if (messageStart < 0) return unreadableMessage;
     const encoding = /^encoding (.+)$/m.exec(bytes.subarray(0, messageStart).toString("ascii"))?.[1];
     if (encoding && !/^utf-?8$/i.test(encoding)) return unreadableMessage;
-    if (!admittedPublicationMessage(bytes.subarray(messageStart + 2).toString("utf8"))) return { ok: false,
+    if (!repositoryIdentity.coauthor && !admittedPublicationMessage(bytes.subarray(messageStart + 2).toString("utf8"))) return { ok: false,
       error: `history reconciliation refused to restore ${commit.slice(0, 12)} commit message; restored commits require publication-safe messages (values withheld)` };
   }
   const branch = (await exec("git", ["symbolic-ref", "HEAD"], pipeline.worktreeDir));
@@ -1481,8 +1547,9 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
   if (missing) {
     return { ok: false, error: `stage head ${shortId(head)} does not preserve accepted head ${shortId(accepted)}; dropped accepted commits: ${[...dropped, ...droppedMerges].map(shortId).join(", ")}; accepted content is missing or conflicts with the stage tree` };
   }
+  const identity = repositoryIdentity;
   const commit = (await exec("git", ["commit-tree", tree.stdout.trim(), "-p", head, "-p", accepted,
-    "-m", `pipeline(${pipeline.id}): reconcile rebased stage`], pipeline.worktreeDir, controllerCommitIdentityEnv()));
+    "-m", `pipeline(${pipeline.id}): reconcile rebased stage`, ...(identity.coauthor ? ["-m", identity.coauthor] : [])], pipeline.worktreeDir, identity.env));
   if (commit.code !== 0) return failure("recording the stage reconciliation merge", commit);
   const sha = commit.stdout.trim();
   if (!/^[0-9a-f]{40}$/i.test(sha)) return { ok: false, error: "reconciliation did not produce an exact commit SHA" };
@@ -1573,6 +1640,14 @@ function redactPublicationOutput(stdout: string, stderr: string): string {
   return redactPublicationText(`${stdout}\n${stderr}`).trim();
 }
 
+/** A clipped line remains a continuation, even if its first retained bytes
+ * spell a hook diagnostic. Complete lines retain their original prefix. */
+function publicationDiagnosticTail(output: string, limit: number): string {
+  const tail = output.slice(-limit);
+  const partialLine = output.length > limit && output[output.length - limit - 1] !== "\n" && !tail.startsWith("\n");
+  return partialLine ? `…${tail.slice(1)}` : tail;
+}
+
 function publicationFailureDetail(failure: PipelinePublicationFailure): string {
   const status = failure.code === null ? `signal ${failure.signal ?? "unknown"}` : `exit ${failure.code}`;
   return redactPublicationText(`${failure.step}: ${status} (${failure.durationMs} ms)\n${failure.outputTail || "no output"}`);
@@ -1582,8 +1657,11 @@ function publicationFailureDetail(failure: PipelinePublicationFailure): string {
     phase markers name the phase; `(fail)` lines name tests. */
 export function publicationFailureCause(failure: PipelinePublicationFailure): string {
   const status = failure.code === null ? `signal ${failure.signal ?? "unknown"}` : `exit ${failure.code}`;
-  if (failure.step === "preparing publication dependencies") return `installing the worktree's dependencies failed (bun install --frozen-lockfile, ${status})`;
+  if (publicationEnvironmentFailure({ error: "", failure })) return dependencyInstallFailure({ code: failure.code, stdout: "", stderr: failure.outputTail });
   const lines = failure.outputTail.split("\n").map((line) => line.trim());
+  const transport = publicationTransportLine(failure.outputTail);
+  if (transport) return `git push was refused (${status}): ${transport.slice(0, 160)}`;
+  if (failure.admissionDeadline && failure.retryableDeadline) return "the pre-push hook's CPU admission lock-wait budget expired before checks started";
   const phase = publicationFailurePhase(failure);
   const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ") || (line.startsWith("NEW ") && !line.includes("<runner error>")))
     .map((line) => line.slice(line.startsWith("NEW ") ? 4 : 7).replace(/ \[[\d.]+m?s\]$/, "")))];
@@ -1592,7 +1670,7 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   const lost = runner ? `; the gate runner returned no verdict: ${runner}` : "";
   if (phase) return `the repository's pre-push hook failed in its "${phase}" phase (${status}${tests}${lost})`;
   if (runner) return `git push was refused (${status}${tests}${lost})`;
-  const last = lines.filter(Boolean).at(-1);
+  const last = lines.filter(line => line && !/^Everything up-to-date$/i.test(line)).at(-1);
   return `git push was refused (${status}${tests})${last ? `: ${last.slice(0, 160)}` : ""}`;
 }
 
@@ -1699,10 +1777,8 @@ export function pipelinePublicationInFlight(pipeline: Pipeline): PipelinePublish
     detail: `publishing the passed stage, in progress since ${new Date(progressAt).toISOString()} (operation ${operation.id})` };
 }
 
-/** A publication tick gets one bounded remote read. The engine tick is already
-    the retry loop, so retrying or sleeping inside this synchronous adapter only
-    multiplies event-loop stalls. `timeout` exists in both the runtime image and
-    the Linux host namespace used by agent shims. */
+/** A publication tick gets one remote read bounded by the portable executor.
+    The engine tick owns retries; this adapter never waits between attempts. */
 async function readRemotePipelineBranch(
   pipeline: Pipeline,
   exec: ExecPort,
@@ -1710,9 +1786,9 @@ async function readRemotePipelineBranch(
 ): Promise<{ ok: true; sha: string } | { ok: false; error: string }> {
   if (pipeline.delivery && !pipeline.delivery.target.remote) return { ok: true, sha: "" };
   const result = (await exec(
-    "timeout",
-    ["--signal=KILL", REMOTE_READ_TIMEOUT, "git", "ls-remote", "--heads", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`],
-    pipeline.worktreeDir,
+    "git",
+    ["ls-remote", "--heads", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`],
+    pipeline.worktreeDir, undefined, { timeoutMs: parseInt(REMOTE_READ_TIMEOUT) * 1_000 },
   ));
   if (result.code === 0) return { ok: true, sha: result.stdout.trim().split(/\s+/)[0] ?? "" };
   if (killedAtBound(result)) {
@@ -1728,6 +1804,8 @@ export interface PipelinePublishRequest {
   /** What the caller last recorded as published; a match short-circuits the
       whole probe. */
   publishedSha?: string | null;
+  /** Same observation clock as the controller; defaults to the wall clock. */
+  now?: () => string;
 }
 
 /** Acquire a kernel lock on the parent's open file description BEFORE any
@@ -1785,7 +1863,7 @@ export function pipelinePublicationFence(pipeline: Pipeline): string {
     branch: pipeline.branch, worktree: pipeline.worktreeDir,
     attempt: attempt ? { n: attempt.n, state: attempt.state, launch: attempt.launchId, conversation: attempt.conversationId } : null,
     delivery: delivery ? { target: delivery.target, epoch: delivery.epoch, owner: delivery.ownerId,
-      active: delivery.active, disposition: delivery.disposition, publish: delivery.publish, operation: delivery.operation?.id } : null })).digest("hex");
+      active: delivery.active, disposition: delivery.disposition, publish: delivery.publish, operation: delivery.operation?.id, app403Deadline: delivery.operation?.app403Deadline } : null })).digest("hex");
 }
 
 /**
@@ -1812,7 +1890,10 @@ export function pipelinePublicationFence(pipeline: Pipeline): string {
 const PUBLICATION_INSTALL_SUBJECT = "publication install";
 
 export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
-  const proactiveError = proactiveTaskExecutionError(pipeline.taskIds);
+  const now = request.now ?? (() => new Date().toISOString());
+  const expiredFailure = (deadline: string): PipelinePublicationFailure => ({ step: "publishing the pipeline branch", code: 1, signal: null,
+    durationMs: 0, outputTail: APP_PUSH_WINDOW_ENDED_REASON, retryableApp403: true, observedAt: new Date(Date.parse(deadline) - APP_PUSH_RETRY_WINDOW_MS).toISOString() });
+  const proactiveError = proactivePipelineExecutionError(pipeline);
   if (proactiveError) return { ok: false, error: proactiveError };
   const operationId = crypto.randomUUID();
   const lock = path.join(pipelineArtifactsDir(pipeline.id), "publication.lock");
@@ -1879,8 +1960,14 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         deliveryJournal(current, "recovery", error); tx.put(current);
         return { error };
       }
+      // Reservations written before the deadline field still carry the
+      // automatic retry's attempt counter and per-head refusal observation.
+      const retry = current.runs.find(run => run.stageId === current.cursor?.stageId)?.attempts.at(-1)?.publicationRetry;
+      const since = current.publicationRecovery?.[request.acceptedSha]?.app403Since;
+      const app403Deadline = previous?.app403Deadline ?? (previous?.state === "pending" && retry?.sha === request.acceptedSha
+        && !retry.exhausted && since ? new Date(Date.parse(since) + APP_PUSH_RETRY_WINDOW_MS).toISOString() : undefined);
       current.delivery.operation = { id: operationId, epoch: current.delivery.epoch, sha: request.acceptedSha,
-        ...(previous?.state === "pending" ? { requestKey: previous.requestKey, ...(previous.passedStage ? { passedStage: true } : {}) } : {}), state: "running",
+        ...(previous?.state === "pending" ? { reservationId: previous.id, requestKey: previous.requestKey, app403Deadline, ...(previous.passedStage ? { passedStage: true } : {}) } : {}), state: "running",
       executor: { pid: process.pid, identity: procBackend.processIdentity(process.pid), lock, lockIdentity } };
       fs.futimesSync(descriptor, new Date(), new Date());
       tx.put(current);
@@ -1898,7 +1985,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     const revalidate = () => {
       const current = findPipelineRecord(pipeline.id);
       if (!matches(current)) { identityChanged = true; abort.abort(); }
-      if (current && proactiveTaskExecutionError(current.taskIds)) {
+      if (current && proactivePipelineExecutionError(current)) {
         authorityRevoked = true;
         // Revocation fences new work. An active push keeps its deadline and
         // ownership cancellation, and must finish before its receipt settles.
@@ -1950,20 +2037,24 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
       // Only observations of the in-flight effect remain authorized. Never
       // let reconciliation open another write after proactive revocation.
-      const remoteRead = command === "timeout" && args[0] === "--signal=KILL"
-        && args[1] === REMOTE_READ_TIMEOUT && args[2] === "git" && args[3] === "ls-remote";
+      const remoteRead = command === "git" && args.length === 4
+        && args[0] === "ls-remote" && args[1] === "--heads"
+        && args[2] === (pipeline.delivery?.target.remote || "origin")
+        && args[3] === (pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`)
+        && options?.timeoutMs === parseInt(REMOTE_READ_TIMEOUT) * 1_000;
       const diagnosticRead = command === "git" && (args[0] === "merge-base" || args[0] === "diff");
       if (authorityRevoked && !(writeStarted && (remoteRead || diagnosticRead))) {
         return { code: null, stdout: "", stderr: "publication authority revoked" };
       }
       fs.futimesSync(descriptor, new Date(), new Date());
       const preparingDependencies = command === "bun" && args[0] === "install";
+      const preparingChecks = command === "bun" && args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare";
       // The push runs the repository's pre-push gates; both leave the
       // production service for a work scope. Its PID, group and the inherited
       // lock descriptor stay this command's.
       let launch = { command, args };
-      if ((command === "git" && args[0] === "push") || preparingDependencies) {
-        try { launch = wrapWorkCommand(command, args, { label: preparingDependencies ? "publish-install" : "publish-push" }); }
+      if ((command === "git" && args[0] === "push") || preparingDependencies || preparingChecks) {
+        try { launch = wrapWorkCommand(command, args, { label: preparingDependencies ? "publish-install" : preparingChecks ? "publish-checks" : "publish-push" }); }
         catch (error) {
           if (!(error instanceof CpuContainmentUnavailable)) throw error;
           failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
@@ -1976,26 +2067,56 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       // through gate-slot.sh. The lane shows the reason while it waits, and a
       // close or takeover aborts the wait before any child exists.
       if (preparingDependencies && !await waitForPublicationInstall()) return { code: null, stdout: "", stderr: "publication superseded" };
+      revalidate();
+      if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
+      // Re-read time after dependency admission and all preceding Git awaits.
+      // A queued automatic retry cannot acquire a fresh window on restart.
+      const deadline = reservation.pipeline.delivery!.operation!.app403Deadline;
+      if (!writeStarted && deadline && Date.parse(now()) >= Date.parse(deadline)) {
+        failureEvidence = expiredFailure(deadline);
+        return { code: 1, stdout: "", stderr: APP_PUSH_WINDOW_ENDED_REASON };
+      }
       if (command === "git" && args[0] === "push") writeStarted = true;
       const started = performance.now();
       const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv({ ...env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { ...options, signal: abort.signal, inheritFd: descriptor });
-      if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies)) {
+      if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies || preparingChecks)) {
+        // Redaction may discard a stream containing decisive refusal evidence.
+        // Only the classification survives; raw bytes are never persisted.
+        const rawOutput = `${executed.stdout}\n${executed.stderr}`;
+        const deadlineKind = preparingDependencies ? null : publicationDeadlineKind(rawOutput);
+        const rawPhase = preparingDependencies ? null : publicationFailurePhase({ outputTail: rawOutput });
+        const dependencyFailure = preparingDependencies || publicationFrozenInstallFailure(rawOutput);
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.
-        const output = redactPublicationOutput(executed.stdout, executed.stderr);
-        const tail = output.slice(-4000);
+        const output = dependencyFailure ? dependencyInstallFailure(executed) : redactPublicationOutput(executed.stdout, executed.stderr);
+        const tail = publicationDiagnosticTail(output, 4000);
         const lines = output.split("\n");
-        const checks = [...new Set(lines.filter((line) => line.startsWith("pre-push: ") || line.startsWith("gate-runner: no verdict:")))].slice(-16);
+        const checkLines = lines.filter((line) => line.startsWith("pre-push: ") || line.startsWith("gate-runner: no verdict:")
+          || line.trim() === "PRIVACY GATE: PASS").map(line => line.trim() === "PRIVACY GATE: PASS" ? line.trim() : line);
+        // Keep the last occurrence in event order: a later privacy start must
+        // remain after an earlier PASS, including when markers repeat.
+        const checks = [...new Set(checkLines.reverse())].reverse().slice(-16);
         const tests = [...new Set(lines.filter((line) => /^(?:\(fail\) |NEW (?!.*<runner error>))/.test(line)))].slice(0, 8);
-        const phases = [...checks, ...tests].filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
+        // Reserve every retained status before clipping. Comparing with the
+        // initial tail can lose a PASS when the reserved prefix shortens it.
+        const phases = output.length > 4000 ? [...checks, ...tests].map((line) => line.slice(0, 160)).join("\n") : "";
         // Long diagnostics must not erase the hook phases or failing test names.
         const timedOut = executed.code === null ? /^command timed out after (\d+)ms/.exec(executed.stderr) : null;
-        const hookStop = preparingDependencies ? null : hookBudgetStop(output);
-        const outputTail = phases ? `${phases}\n…\n${output.slice(-(4000 - phases.length - 3))}` : tail;
-        failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
+        const hookStop = preparingDependencies ? null
+          : hookBudgetStop(dependencyFailure ? redactPublicationOutput(executed.stdout, executed.stderr) : output);
+        let outputTail = phases ? `${phases}\n…\n${publicationDiagnosticTail(output, 4000 - phases.length - 3)}` : tail;
+        // Check the final bound too: reserving status lines can move a real
+        // refusal outside a tail that originally contained it.
+        if (rawPhase === "privacy" && publicationFailurePhase({ outputTail }) !== "privacy") {
+          const refusal = "pre-push: privacy: refused\n";
+          outputTail = refusal + publicationDiagnosticTail(outputTail, 4000 - refusal.length);
+        }
+        failureEvidence = { step: dependencyFailure ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
-          retryableDeadline: !preparingDependencies && publicationDeadlineOnly(output),
+          retryableDeadline: deadlineKind !== null,
+          ...(deadlineKind === "admission" ? { admissionDeadline: true } : {}),
+          ...(!preparingDependencies && rawPhase !== "privacy" && publicationApp403(output) ? { retryableApp403: true, observedAt: now() } : {}),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
       }
       return executed;
@@ -2022,7 +2143,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     if (failureEvidence && (!result.ok || result.remote === "unreachable")) {
       const detail = publicationFailureDetail(failureEvidence);
       result = result.ok ? { ...result, failure: failureEvidence, detail }
-        : { ...result, failure: failureEvidence, error: detail };
+        : { ...result, failure: failureEvidence, error: result.error.startsWith("stage environment:") ? result.error
+          : publicationEnvironmentFailure({ error: "", failure: failureEvidence }) ? publicationFailureCause(failureEvidence) : detail };
       // A hook that stopped at its budget judged nothing: retried like a push
       // its time limit killed, never parked as the stage's own refusal.
       if (!result.ok && failureEvidence.hookBudgetMs && failureEvidence.retryableDeadline) result = { ...result, outcome: "not-landed" };
@@ -2223,8 +2345,13 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   // left node_modules incomplete, or a merged lockfile may have moved on.
   if (fs.existsSync(path.join(pipeline.worktreeDir, "package.json"))
     && ["bun.lock", "bun.lockb"].some((file) => fs.existsSync(path.join(pipeline.worktreeDir, file)))) {
-    const installed = await exec("bun", ["install", "--frozen-lockfile"], pipeline.worktreeDir, pipelinePublicationHookEnv(), { timeoutMs: 180_000 });
-    if (installed.code !== 0) return failure("preparing publication dependencies", installed);
+    try {
+      if (!await prepareLockedDependencies(pipeline.worktreeDir, { exec })) {
+        await isolateWorktreeDependencies(pipeline);
+        const installed = await exec("bun", ["install", "--frozen-lockfile", WORKTREE_INSTALL_BACKEND], pipeline.worktreeDir, pipelinePublicationHookEnv(), { timeoutMs: 180_000 });
+        if (installed.code !== 0) return { ok: false, error: dependencyInstallFailure(installed) };
+      }
+    } catch (error) { return { ok: false, error: dependencyEnvironmentError(error) }; }
     // Lifecycle scripts must not change the accepted head or tracked work.
     const prepared = await currentPipelineBranchHead(pipeline, exec);
     if (!prepared.ok) return prepared;
@@ -2260,7 +2387,48 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     LLV_GATE_LANE_ID: pipeline.id, LLV_GATE_PUSH_HEAD: acceptedSha, LLV_GATE_STATE_DIR: stateDir(),
     ...(pipeline.cursor?.stageId ? { LLV_GATE_STAGE_ID: pipeline.cursor.stageId } : {}),
     LLV_GATE_PUSH_DEADLINE: String(publicationHookDeadline(budget.ms, Date.now())) };
-  const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms }));
+  // The repository's gate can finish before Git's authenticated discovery.
+  // The subsequent native hook verifies this exact operation's consumed
+  // inputs, with fresh privacy, under a separate bounded transport deadline.
+  const preparedGate = fs.existsSync(path.join(pipeline.worktreeDir, "scripts/local-gate.ts"))
+    && supportsPublicationPreparation(pipeline.worktreeDir);
+  let transportBudgetMs = PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS;
+  const receiptFile = preparedGate ? path.join(pipelineArtifactsDir(pipeline.id), `publication-checks-${pipeline.delivery!.operation!.id}.json`) : undefined;
+  let push: ExecResult;
+  try {
+    if (receiptFile) {
+      fs.mkdirSync(path.dirname(receiptFile), { recursive: true, mode: 0o700 });
+      Object.assign(pushEnv, {
+        LLV_GATE_PUBLICATION_RECEIPT: receiptFile,
+        LLV_GATE_PUBLICATION_ID: pipeline.delivery!.operation!.id,
+        LLV_GATE_PUBLICATION_EPOCH: String(pipeline.delivery!.epoch),
+        LLV_GATE_PUBLICATION_FENCE: pipelinePublicationFence(pipeline),
+        LLV_GATE_PUBLICATION_REF: pipeline.delivery!.target.branch,
+        LLV_GATE_PUBLICATION_REMOTE_HEAD: remoteSha || "0".repeat(40),
+      });
+      const checkStarted = performance.now();
+      const checked = await exec("bun", ["scripts/local-gate.ts", "pre-push", "--publication-prepare"], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms });
+      if (checked.code !== 0) return failure("checking the publication before transport", checked);
+      // Preparation includes privacy: its elapsed time is a conservative
+      // observation even with older hooks that report no per-step timings.
+      // Allow a second scan under load, capped by this publication's budget,
+      // and retain the pack margin outside the hook's verdict deadline.
+      transportBudgetMs = Math.min(budget.ms, Math.max(PUBLICATION_TRANSPORT_MS,
+        Math.ceil(2 * (performance.now() - checkStarted))) + PUBLICATION_PACK_MARGIN_MS);
+      // An older or failed gate cannot turn an exit code into a check receipt.
+      readPublicationCheckReceipt(receiptFile, publicationCheckBinding(pushEnv));
+      const current = await currentPipelineBranchHead(pipeline, exec);
+      if (!current.ok) return current;
+      if (current.sha !== acceptedSha) return { ok: false, error: "the accepted revision changed after publication checks; nothing was published" };
+      pushEnv.LLV_GATE_PUSH_DEADLINE = String(publicationHookDeadline(transportBudgetMs, Date.now()));
+    }
+    push = await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: receiptFile ? transportBudgetMs : budget.ms });
+  } finally {
+    if (receiptFile) {
+      fs.rmSync(receiptFile, { force: true });
+      fs.rmSync(`${receiptFile}.consuming`, { force: true });
+    }
+  }
   if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };
   if (push.code !== 0) return failure("publishing the pipeline branch", push);
   const confirm = (await readRemotePipelineBranch(pipeline, exec, "confirming the published pipeline branch"));

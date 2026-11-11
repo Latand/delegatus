@@ -496,6 +496,18 @@ describe("receipt-keyed instant attach (issue #919)", () => {
     expect({ ...versioned, spawn: { ...versioned!.spawn!, mandate: undefined } }).toEqual({ ...plain, spawn: { ...plain!.spawn!, mandate: undefined } });
   });
 
+  test("an ultrafast launch survives the reload record, rides the replayed body and paints its tier first", () => {
+    const attempt = { ...baseAttempt, request: { ...baseRequest, fast: null, serviceTier: "ultrafast" } };
+    expect(hasRecoverableRequest(attempt)).toBe(true);
+    const body = spawnRequestBody(attempt as Parameters<typeof spawnRequestBody>[0]);
+    expect(body).toMatchObject({ serviceTier: "ultrafast" });
+    expect("fast" in body).toBe(false);
+    expect(provisionalSpawnFile(attempt, launched(), "proj")).toMatchObject({ fast: true, serviceTier: "ultrafast" });
+    /* A record whose tier is not a catalog id is never replayed. */
+    expect(hasRecoverableRequest({ ...attempt, request: { ...attempt.request, serviceTier: "Ultra Fast" } })).toBe(false);
+    expect(hasRecoverableRequest({ ...attempt, request: { ...attempt.request, serviceTier: 7 as unknown as string } })).toBe(false);
+  });
+
   test("the provisional window already names the chosen runtime, so the pill never reads a default first", () => {
     const provisional = provisionalSpawnFile(baseAttempt, launched(), "proj")!;
     expect(provisional).toMatchObject({ model: "gpt-5.6", launchModel: "gpt-5.6", effort: "high", fast: false });

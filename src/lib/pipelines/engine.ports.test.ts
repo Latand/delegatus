@@ -3,6 +3,7 @@ import { expect, spyOn, test, crypto, fs, path, accountManager, engineModule, de
 import type { PipelinePorts } from "./engine.fixture";
 import { bindHostExitWriter, recordHostExit, recordHostStop, withHostStopOrigin } from "@/lib/runtime/hostExit";
 import { captureProcessIdentity } from "@/lib/processIdentity";
+import { RegistryWriterBusyError } from "@/lib/agent/registry";
 
 test("pipeline death evidence waits for the independent native waiter's receipt", async () => {
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "pending-exit-agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
@@ -79,23 +80,10 @@ for (const sqliteMode of ["off", "sqlite"] as const) test(`late predecessor exit
   } finally { setAgentRegistryForTests(null); registry.close(); fs.rmSync(binding, { recursive: true, force: true }); }
 });
 
-test("default pane liveness keeps failed or unreadable tmux observations alive", async () => {
-  const observations: Awaited<ReturnType<typeof import("@/lib/tmux").panePidMap>>[] = [
-    { kind: "failure", error: "tmux snapshot unavailable" },
-    { kind: "available", panes: new Map([[42, { target: "stage:0.0", paneId: "%42", windowName: "stage" }]]) },
-    { kind: "available", panes: new Map() },
-    { kind: "no-server" },
-  ];
-  const freshReads: boolean[] = [];
-  const ports = defaultPipelinePorts({ panes: {
-    snapshot: async () => null,
-    observation: async fresh => { freshReads.push(fresh!); return observations.shift()!; },
-  } });
-  expect(await ports.paneAgentAlive("%42")).toBe(true);
-  expect(await ports.paneAgentAlive("%42")).toBe(true);
+test("a stored pane id answers as not running and has nothing to stop", async () => {
+  const ports = defaultPipelinePorts();
   expect(await ports.paneAgentAlive("%42")).toBe(false);
-  expect(await ports.paneAgentAlive("%42")).toBe(false);
-  expect(freshReads).toEqual([true, true, true, true]);
+  expect(await ports.stopStagePane({ paneId: "%42" } as never)).toEqual({ outcome: "not-running" });
 });
 
 
@@ -276,14 +264,14 @@ test("a concurrent pipeline replay and its recovery projections withhold staged 
   fs.chmodSync(codexBinary, 0o755);
   process.env.LLV_CODEX_BINARY = codexBinary;
   setAgentRegistryForTests(registry);
-  const resolveSpawn = spyOn(accountManager, "resolveSpawn").mockImplementation(() => ({
+  const resolveSpawn = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => ({ kind: "available", account: {
     engine: "codex",
     accountId: "pipeline-account",
     kind: "managed",
     home: cwd,
     transcriptRoot: cwd,
     env: { NODE_ENV: "test" },
-  }));
+  } }));
   const input: Parameters<PipelinePorts["spawnAgent"]>[0] = {
     role: {
       roleId: "builder",
@@ -965,6 +953,7 @@ for (const shape of ["unrelated", "owned", "owned-checkout", "owned-destination"
       (await git(worktree, "add", "build.txt"));
       (await git(worktree, "commit", "-m", "stage work"));
       const tip = (await git(worktree, "rev-parse", "HEAD"));
+      const protectionReads: string[] = [];
       if (shape.startsWith("forge-protected")) {
         const forgeUrl = "https://github.com/fixture/repo.git";
         const exec = h.ports.exec;
@@ -974,12 +963,19 @@ for (const shape of ["unrelated", "owned", "owned-checkout", "owned-destination"
         savePipelines([lane]);
         const remoteExec = h.ports.provisionExec!;
         h.ports.provisionExec = async (command, args, ...rest) => {
-          if (command === "timeout" && args.includes("ls-remote")) return { code: 0, stdout: `${tip}\trefs/heads/${branch}\n`, stderr: "" };
-          if (command === "timeout" && args.includes("gh")) {
-            expect(args).toContain(`repos/fixture/repo/branches/${encodeURIComponent(branch)}`);
+          if (command === "git" && args[0] === "ls-remote") {
+            expect(args).toEqual(["ls-remote", "--heads", lane.delivery!.target.remote, `refs/heads/${branch}`]);
+            expect(rest).toEqual([worktree, undefined, { timeoutMs: 5_000 }]);
+            protectionReads.push("git");
+            return { code: 0, stdout: `${tip}\trefs/heads/${branch}\n`, stderr: "" };
+          }
+          if (command === "gh" && args[0] === "api") {
+            expect(args).toEqual(["api", `repos/fixture/repo/branches/${encodeURIComponent(branch)}`, "--jq", ".protected"]);
+            expect(rest).toEqual([worktree, undefined, { timeoutMs: 5_000 }]);
             // The forge check must hold no registry mutation lease.
             const { withPipelineMutation } = await import("./store");
             await withPipelineMutation(() => {});
+            protectionReads.push("gh");
             return { code: 0, stdout: "true\n", stderr: "" };
           }
           return remoteExec(command, args, ...rest);
@@ -1019,7 +1015,11 @@ for (const shape of ["unrelated", "owned", "owned-checkout", "owned-destination"
       if (shape === "owned" || shape === "owned-checkout") expect(parked.stateDetail).toContain("another pipeline owns");
       if (shape === "owned-destination") expect(parked.stateDetail).toContain("adoption destination");
       if (shape === "protected") expect(parked.stateDetail).toContain("protected base branch");
-      if (shape.startsWith("forge-protected")) expect(parked.stateDetail).toContain("protected forge branch");
+      if (shape.startsWith("forge-protected")) {
+        expect(protectionReads).toEqual(["git", "gh"]);
+        expect(parked.stateDetail).toContain("protected forge branch");
+        expect(parked.runs[0]!.attempts[0]!.branchAdoption).toBeUndefined();
+      }
     } finally {
       fs.rmSync(fixture.root, { recursive: true, force: true });
     }
@@ -1300,45 +1300,61 @@ for (const interruption of [null, "before-ref", "after-ref"] as const) {
 }
 
 
-test.each(["preparation", "transport"] as const)("spawn admission rechecks its lane cutoff after %s yields", async boundary => {
+test.each(["entry", "account", "preparation", "transport", "recovery"] as const)("spawn admission checks its budget at %s", async boundary => {
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `deadline-registry-${boundary}.json`));
   setAgentRegistryForTests(registry);
   let clock = 1_000;
   const monotonic = spyOn(performance, "now").mockImplementation(() => clock);
-  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available", account: {
-    engine: "claude", accountId: "fixture-account", kind: "managed", home: process.env.LLV_STATE_DIR!,
-    transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
-  }});
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => {
+    if (boundary === "account") clock += 3_000;
+    return { kind: "available", account: {
+      engine: "claude", accountId: "fixture-account", kind: "managed", home: process.env.LLV_STATE_DIR!,
+      transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+    } };
+  });
   const clientModule = await import("@/lib/runtime/client");
   const spawnModule = await import("@/lib/runtime/structuredSpawn");
   const guardModule = await import("@/lib/git/stageAttemptGuard");
   const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
   const guard = spyOn(guardModule, "prepareStageGitGuard").mockResolvedValue({});
   let dispatched = false;
+  let authorizeRecovery: (() => void | Promise<void>) | undefined;
   const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async input => {
     await Promise.resolve();
-    clock += 3_000;
+    if (boundary !== "recovery") clock += 3_000;
     await input.authorize?.();
+    authorizeRecovery = input.authorize;
     dispatched = true;
     return { path: null } as never;
   });
   let reservations = 0;
   try {
-    await expect(defaultPipelinePorts().spawnAgent({
+    const pending = defaultPipelinePorts().spawnAgent({
       role: { roleId: "builder", engine: "claude", model: "fable", effort: "high", access: "read-write", promptScaffold: "" },
       runtimeProfile: { access: "read-write", sandbox: "full" }, cwd: process.env.LLV_STATE_DIR!,
       project: "repo-00000000000000000000000000000001", requestedAccountId: null,
       title: "Build", prompt: "Build", parentPath: null, clientAttemptId: `lane_deadline_${boundary}`,
-      spawnAdmissionDeadline: clock + 3_000,
+      spawnAdmissionDeadline: clock + (boundary === "entry" ? 0 : 3_000),
       membership: { kind: "pipeline", containerId: "deadline-lane", role: "builder", slot: "build:1",
         stageId: "build", stageOrder: 0, round: 1, parentConversationId: null }, creatorConversationId: null,
     }, async () => {
       if (++reservations === 2 && boundary === "preparation") {
         await Promise.resolve(); clock += 3_000;
       }
-    })).rejects.toThrow("lane deadline exhausted");
-    expect(dispatched).toBe(false);
-    expect(spawn.mock.calls.length).toBe(boundary === "preparation" ? 0 : 1);
+    });
+    if (boundary === "recovery") {
+      await pending;
+      clock += 3_000;
+      expect(authorizeRecovery).toBeDefined();
+      await authorizeRecovery!();
+      expect(dispatched).toBe(true);
+      expect(spawn.mock.calls).toHaveLength(1);
+    } else {
+      await expect(pending).rejects.toThrow("spawn admission budget exhausted");
+      await expect(pending).rejects.not.toBeInstanceOf(RegistryWriterBusyError);
+      expect(dispatched).toBe(false);
+      expect(spawn.mock.calls.length).toBe(boundary === "transport" ? 1 : 0);
+    }
     const receipt = registry.spawnReceiptForClientAttempt(`lane_deadline_${boundary}`);
     if (boundary === "preparation") expect(receipt?.state).toBe("failed");
   } finally {

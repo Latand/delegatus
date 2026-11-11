@@ -32,6 +32,7 @@ import { sampleCallHistory } from "@/components/voiceCompanion/transcriptSample.
 import { scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
 import { OfficialVoiceCompanionAdapter } from "@/lib/voiceCompanion/liveAdapter";
+import { reconnectEvidence } from "@/components/voiceCompanion/reconnectEvidence.fixture";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -181,6 +182,8 @@ const MENU_STATE = new URLSearchParams(location.search).get("menu-state");
    what the head and its words cover is measured over real rows. `history` opens as after a reload, with no call of
    its own and `sampleCallHistory`'s three retained calls, which the conversation panel's picker opens (GitHub #2975). */
 const VOICE_SCENE = new URLSearchParams(location.search).get("voice");
+const timerToastsWaiting = Array.from({ length: VOICE_SCENE === "timer-burst" ? 5 : 1 }, (_, index) => `vt_012345678${index}abcdef`);
+Object.assign(window, { timerToastsWaiting });
 const VOICE_LONG = new URLSearchParams(location.search).has("voice-long");
 const phoneVoice = { starts: [] as string[], projects: [] as Array<string | null>, closes: 0, sessionRequests: 0 };
 const VOICE_DEVICES = new URLSearchParams(location.search).has("dev");
@@ -226,8 +229,13 @@ if (VOICE_SCENE === "drop") {
       Object.assign(phoneVoice, { lose: () => callbacks.lost("PROVIDER_ERROR") });
       return { open: async () => "v=0\r\n", answer: async () => {}, mute: () => {}, interrupt: () => {}, close: async () => {} };
     },
-    cues: { prepare: () => {}, connect: () => {}, disconnect: () => {}, dispose: () => {} },
+    cues: { prepare: () => {}, connect: () => {}, disconnect: () => {}, timer: () => undefined, dispose: () => {} },
   }));
+}
+if (VOICE_SCENE === "reconnect") {
+  const fixture = reconnectEvidence(localStorage.getItem("llv_lang") === "uk" ? "uk" : "en");
+  Object.assign(window, { voiceReconnect: fixture.controls });
+  setVoiceCompanionAdapterForTests(() => fixture.adapter);
 }
 function voiceFeed(feed: string): string {
   if (!VOICE_LONG) return feed;
@@ -267,7 +275,7 @@ const files: FileEntry[] = [
        freshly launched agent, the way a real operator's open question does. */
     ...(new URLSearchParams(location.search).has("launch") ? {
       pendingQuestion: {
-        kind: "question", toolUseId: "toolu-launch-previous", transcriptPath: RUNNING_PATH, pid: 4_401, paneTarget: null, askedAt: iso(300),
+        kind: "question", toolUseId: "toolu-launch-previous", transcriptPath: RUNNING_PATH, pid: 4_401, askedAt: iso(300),
         questions: [{ question: "Which format?", header: "Format", multiSelect: false, options: [] }],
       },
     } : {}),
@@ -326,6 +334,23 @@ if (SEAT_NOISE !== null) {
   else if (SEAT_NOISE === "iii") { seatOn("claude", "opus", "high", ""); launchWindow({ state: "failed", initialMessage: "failed", retrySafe: true, recoveryStopped: true, error: "the host has not answered yet" }); }
   else if (SEAT_NOISE === "iv") seatOn("codex", "gpt-5.6-sol", "low", "iv-old");
   else if (SEAT_NOISE === "v") seatOn("codex", "gpt-5.6-sol", "high", "v");
+}
+/* `?modelface=<luna|unknown|observed|fable>`: what the transcript and the launch have told the running conversation
+   about its model, so the chat header and the menu's identity line show the model it runs on. */
+const MODEL_FACE = new URLSearchParams(location.search).get("modelface");
+if (MODEL_FACE) {
+  const facts: Record<string, { engine: "claude" | "codex"; model: string | null; launchModel: string | null }> = {
+    /* A stage launched on Luna whose transcript has not named a model yet. */
+    luna: { engine: "codex", model: null, launchModel: "gpt-6-luna" },
+    /* Neither the transcript nor the launch has told. */
+    unknown: { engine: "codex", model: null, launchModel: null },
+    /* The transcript names a model other than the one the launch asked for. */
+    observed: { engine: "codex", model: "gpt-6-astra", launchModel: "gpt-6-luna" },
+    fable: { engine: "claude", model: "fable-5-1", launchModel: "fable" },
+  };
+  const fact = facts[MODEL_FACE] ?? facts.luna!;
+  seatOn(fact.engine, fact.model ?? "", "high", "");
+  Object.assign(files[0]!, { model: fact.model, launchModel: fact.launchModel });
 }
 /* The first-message cases. The raw recovery envelope rides in `error` on every pending step on purpose: the window
    must not print it. */
@@ -685,6 +710,8 @@ const ASKS_SCENE = new URLSearchParams(location.search).has("asks");
 const asksSetting = { enabled: ASKS_SCENE };
 const asksLines: Array<{ conversationId: string; path: string; role: string | null; title: string; gist: string; minutesAgo: number }> = [];
 const STAGE_AGENT = new URLSearchParams(location.search).get("stage-agent");
+/* `?stage-place=1`: «lane-decision» ran «implement» in the cloud, and «review» moved to this machine with its cause. */
+const STAGE_PLACE = new URLSearchParams(location.search).has("stage-place");
 /* `?launch=1`: the phone launches an agent from a draft. The spawn route answers a
    structured receipt, and the scan swaps the launch window for the agent's
    transcript once the driver asks (`evidence.materializeLaunch()`). The running
@@ -709,7 +736,7 @@ function kanbanConversation(title: string, state: "working" | "settled" | "askin
     settled: { mtime: now - ago, lastAgentWorkAt: (now - ago) * 1_000 },
     asking: {
       activity: "live", proc: "running", pid: 5_000 + kanbanSeq, mtime: now - ago, lastAgentWorkAt: (now - ago) * 1_000,
-      pendingQuestion: { kind: "question", toolUseId: `toolu-kanban-${kanbanSeq}`, transcriptPath: path, pid: 5_000 + kanbanSeq, paneTarget: null, askedAt: iso(ago),
+      pendingQuestion: { kind: "question", toolUseId: `toolu-kanban-${kanbanSeq}`, transcriptPath: path, pid: 5_000 + kanbanSeq, askedAt: iso(ago),
         questions: [{ question: "Which unit file stays, the user unit or the system one?", header: "Unit", multiSelect: false, options: [] }] },
     },
     stalled: { activity: "stalled", activityReason: "jsonl_turn_stalled", proc: "running", pid: 5_000 + kanbanSeq, mtime: now - ago, engine: "codex", model: "gpt-6-astra", lastTurn: { startedAt: (now - ago - 600) * 1_000, endedAt: null }, lastAgentWorkAt: (now - ago) * 1_000 },
@@ -797,6 +824,20 @@ if (KANBAN) {
             `/repo/${"unbroken-path-segment".repeat(8)}`, "End of the question. Кінець питання."].join("\n"), provenance: { head: null, branch: "fixture", uncommitted: [], pullRequest: null, outputs: [] } },
       },
     ] }];
+  }
+  if (STAGE_PLACE) {
+    const current = kanbanPipelines[0]!;
+    const base = current.runs[0]!.attempts[0]!;
+    const reviewPath = kanbanConversation("Mobile data · review", "working", 300);
+    const runtime = { runtime: "claude-cloud" as const };
+    current.stages = current.stages.map((stage) => ({ ...stage, ...runtime }));
+    current.state = "running";
+    current.cursor = { stageId: "review", state: "running", input: null, activatedBy: null };
+    current.runs = [
+      { stageId: "implement", attempts: [{ ...base, state: "passed", verdict: { status: "pass", findings: [] }, definition: runtime, cloud: { phase: "completed" } } as never] },
+      { stageId: "review", attempts: [{ ...base, state: "running", verdict: null, completedAt: null, agentPath: reviewPath, conversationId: idOf(reviewPath), definition: runtime,
+        cloud: { phase: "failed", fallback: { at: iso(300), reason: "Claude Cloud session can write to GitHub; read-only access was not proven, so no assignment was sent. Connect GitHub read-only for this account (docs/design/claude-code-cloud.md, setup step 2)" } } } as never] },
+    ];
   }
   kanbanPipelines.push(kanbanLane("lane-paused", "Finish mobile traffic acceptance", ["t-data"], "paused", [{ id: "accept", state: "passed", ago: 5_400 }, { id: "review", role: "reviewer" }]));
   kanbanLinks.pipelines["lane-decision"] = { links: [], noPr: true };
@@ -946,7 +987,7 @@ if (KANBAN) {
       stuckDelivery: { since: iso(41 * 60), attempts: 2, state: "held" },
     });
     const cleared = reason("Pick the log retention for the stage box", {
-      pendingQuestion: { kind: "question", toolUseId: "toolu-needs-cleared", transcriptPath: "", pid: 5_900, paneTarget: null, askedAt: iso(1_500),
+      pendingQuestion: { kind: "question", toolUseId: "toolu-needs-cleared", transcriptPath: "", pid: 5_900, askedAt: iso(1_500),
         questions: [{ question: "Keep 14 days of logs or 30?", header: "Retention", multiSelect: false, options: [] }] },
       attentionDismissal: { at: iso(600), by: { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" }, reasonId: "toolu-needs-cleared" },
     });
@@ -1420,8 +1461,8 @@ const mergeSetting = { enabled: true };
 const bridgeSetting = { enabled: new URLSearchParams(location.search).get("bridge") !== "off" };
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
-  // The driver supplies the real server projection for the liveness case.
-  if (new URLSearchParams(location.search).get("scenario") === "stale-working"
+  // The driver supplies the real server projection for the liveness case, and the task summary case's records.
+  if (["stale-working", "task-summary"].includes(new URLSearchParams(location.search).get("scenario") ?? "")
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
   if (RUNTIME_PERF && url.pathname === "/api/runtime/snapshot") return serverFetch(input, init);
@@ -1433,6 +1474,18 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* The voice head's scenes: the companion on in the settings, and no session route at all. */
   if (VOICE_SCENE && url.pathname === "/api/voice-companion/settings") {
     return json({ enabled: true, backend: "api", monthlyCapUsd: 20, keySource: "file", keyEnvironment: "OPENAI_API_KEY", month: "2026-10", usageUsd: 0.4, reservedUsd: 0, incomplete: false, uncertainSession: false });
+  }
+  /* The voice timer toast's scenes: one timer fired, or five at once, each with the server's one claim. */
+  if ((VOICE_SCENE === "timer" || VOICE_SCENE === "timer-burst") && url.pathname === "/api/voice-companion/timers") {
+    if (method === "GET") return json({ claimable: timerToastsWaiting, nextInMs: null });
+    const asked = JSON.parse(String(init?.body)) as { action: string; id: string };
+    if (asked.action === "showing") return json({ showing: true });
+    if (asked.action === "shown") return json({ shown: true });
+    const at = timerToastsWaiting.indexOf(asked.id);
+    if (at < 0) return json({ claimed: false });
+    timerToastsWaiting.splice(at, 1);
+    const words = await (await serverFetch("/evidence/timer-words")).json() as Record<"en" | "uk", string>;
+    return json({ claimed: true, lease: 1, title: "", text: words[localStorage.getItem("llv_lang") === "uk" ? "uk" : "en"] });
   }
   if (VOICE_SCENE && url.pathname === "/api/voice-companion/session") {
     phoneVoice.sessionRequests += 1;
@@ -1547,7 +1600,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (OVERLAY_LINKS && url.pathname.startsWith("/api/artifact")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/log/provenance" && AGENT_LABEL) return json((await deliveredAgentEvidence()).provenance);
-  if (STAGE_AGENT && ["/api/conversation-host", "/api/tmux", "/api/runtime/send"].includes(url.pathname) && method === "POST") {
+  if (STAGE_AGENT && ["/api/conversation-host", "/api/conversation-host", "/api/runtime/send"].includes(url.pathname) && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     if (typeof body.text === "string") evidence.sends.push(body);
     return json({ ok: true, outcome: "resumed", receipt: { operationId: "stage-agent-send", idempotencyKey: body.idempotencyKey, conversationId: body.conversationId, kind: "send", status: "delivered", text: body.text, at: new Date().toISOString(), revision: 1 } });
@@ -1667,13 +1720,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({
       files: kanbanFiles, projectCatalog: Object.values(OVERVIEW_KEYS).map((project) => ({ project, conversations: kanbanFiles.filter((entry) => entry.project === project).length, smt: now - 20 })),
       projectDisplayNames: OVERVIEW_NAMES, flows: [], pipelines: kanbanPipelines,
-      workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
+      workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
     });
   }
   if (url.pathname === "/api/files" && KANBAN) {
     return json({
       files: ROTATION && evidence.rotationGap ? kanbanFiles.filter((file) => file !== fmTarget) : kanbanFiles, projectCatalog: [{ project: PROJECT, conversations: kanbanFiles.length, smt: now - 20 }], flows: [], pipelines: kanbanPipelines,
-      workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
+      workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
       ...(FIRST_MESSAGE !== null ? { launchRoutes: { [`spawn:${FM_LAUNCH_ID}`]: FM_CONVERSATION_ID } } : {}),
     });
   }
@@ -1683,13 +1736,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
     return json({
       files: [...files, launched], projectCatalog: [{ project: PROJECT, conversations: files.length + 1, smt: now - 20 }], flows, pipelines,
-      workflows: [], tasks, systemHealth: { tmux: { status: "healthy" } },
+      workflows: [], tasks, systemHealth: {},
     });
   }
   if (url.pathname === "/api/files") {
     return json({
       files, projectCatalog: [{ project: PROJECT, conversations: files.length, smt: now - 20 }], flows, pipelines,
-      workflows: [], tasks, systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
+      workflows: [], tasks, systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
       /* The durable route of the launch, as the server hands it, so the pane follows the conversation from `spawn:` to its transcript. */
       ...(FIRST_MESSAGE !== null ? { launchRoutes: { [`spawn:${FM_LAUNCH_ID}`]: FM_CONVERSATION_ID } } : {}),
     });
@@ -1890,7 +1943,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (body?.mode === "select" && typeof body.id === "string") activeAccount = body.id;
     return json({ ok: true });
   }
-  if (url.pathname === "/api/tmux" && method === "POST") {
+  if (url.pathname === "/api/conversation-host" && method === "POST") {
     evidence.runtimeRequests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     return json(STRUCTURED ? { ok: true, structured: true } : { ok: true, outcome: "pending", operationId: "reconfigure-evidence" });
   }

@@ -1,57 +1,170 @@
 {
-  "version": "codex-cli 0.162.1",
-  "transport": "app-server stdio, thread/start config override",
-  "runs": [
-    {
-      "skills.include_instructions": null,
-      "first_developer_bytes": 23563,
-      "skills_block_present": true,
-      "developer_messages": 3,
-      "skills_block_bytes": 22252
+  "recordPolicy": "Retained observation evidence. The historical one-shot repository driver has been removed; it is not a supported capture command.",
+  "historicalObservation": {
+    "version": "codex-cli 0.162.1",
+    "transport": "app-server stdio, thread/start config override",
+    "runs": [
+      {
+        "skills.include_instructions": null,
+        "first_developer_bytes": 23563,
+        "skills_block_present": true,
+        "developer_messages": 3,
+        "skills_block_bytes": 22252
+      },
+      {
+        "skills.include_instructions": false,
+        "first_developer_bytes": 1311,
+        "skills_block_present": false,
+        "developer_messages": 3,
+        "skills_block_bytes": 0
+      },
+      {
+        "skills.include_instructions": null,
+        "first_developer_bytes": 23563,
+        "skills_block_present": true,
+        "developer_messages": 3,
+        "skills_block_bytes": 22252
+      },
+      {
+        "skills.include_instructions": false,
+        "first_developer_bytes": 1311,
+        "skills_block_present": false,
+        "developer_messages": 3,
+        "skills_block_bytes": 0
+      }
+    ],
+    "observedAt": "2026-10-27T15:12:56.942793+00:00",
+    "baseRevision": "4b98a80796b028ec31397be9c3d6266ff5582c7c",
+    "command": "rtk proxy python3 scripts/observe-codex-skills.py --output \"$TMPDIR/codex-skills-observation-production-copied.json\"",
+    "conditions": {
+      "instructions": "Short fixed developer instruction and identical fixed user input; installed skill roots copied into a private home.",
+      "configuration": "Real headlessCodexThreadConfig output applied via thread/start config; MCP servers disabled in both arms.",
+      "provider": "Port-0 loopback response stub; no model-service traffic.",
+      "measurement": "UTF-8 bytes of the text of the first developer response_item in the Codex rollout. The model request also includes a separate base developer scaffold.",
+      "trials": "Alternating inherited setting and per-thread false, twice in one isolated app-server."
     },
-    {
-      "skills.include_instructions": false,
-      "first_developer_bytes": 1311,
-      "skills_block_present": false,
-      "developer_messages": 3,
-      "skills_block_bytes": 0
+    "sourceDigests": {
+      "src/lib/codexHeadlessConfig.ts": "0def6662f904da2985610670388d6165ed9c3410ae732dc45beb539c8f964ef3",
+      "scripts/observe-codex-skills.py": "3ae07f7a19db20f0c561bb582442b13452c860e8c6686e891d488eabe350817b"
     },
-    {
-      "skills.include_instructions": null,
-      "first_developer_bytes": 23563,
-      "skills_block_present": true,
-      "developer_messages": 3,
-      "skills_block_bytes": 22252
-    },
-    {
-      "skills.include_instructions": false,
-      "first_developer_bytes": 1311,
-      "skills_block_present": false,
-      "developer_messages": 3,
-      "skills_block_bytes": 0
+    "savedBytes": 22252,
+    "initialObservation": {
+      "beforeProductEdits": true,
+      "firstDeveloperBytes": 23538,
+      "afterBytes": 1311,
+      "skillsBlockAbsentAfter": true,
+      "command": "rtk proxy python3 \"$TMPDIR/observe-codex-skills.py\"",
+      "conditions": "The first probe linked the skill roots; the committed probe copies them to keep every write inside scratch."
     }
-  ],
-  "observedAt": "2026-10-27T15:12:56.942793+00:00",
-  "baseRevision": "4b98a80796b028ec31397be9c3d6266ff5582c7c",
-  "command": "rtk proxy python3 scripts/observe-codex-skills.py --output \"$TMPDIR/codex-skills-observation-production-copied.json\"",
-  "conditions": {
-    "instructions": "Short fixed developer instruction and identical fixed user input; installed skill roots copied into a private home.",
-    "configuration": "Real headlessCodexThreadConfig output applied via thread/start config; MCP servers disabled in both arms.",
-    "provider": "Port-0 loopback response stub; no model-service traffic.",
-    "measurement": "UTF-8 bytes of the text of the first developer response_item in the Codex rollout. The model request also includes a separate base developer scaffold.",
-    "trials": "Alternating inherited setting and per-thread false, twice in one isolated app-server."
   },
-  "sourceDigests": {
-    "src/lib/codexHeadlessConfig.ts": "0def6662f904da2985610670388d6165ed9c3410ae732dc45beb539c8f964ef3",
-    "scripts/observe-codex-skills.py": "3ae07f7a19db20f0c561bb582442b13452c860e8c6686e891d488eabe350817b"
+  "currentObservation": {
+    "version": "codex-cli 0.166.0",
+    "transport": "app-server stdio, thread/start config override",
+    "runs": [
+      {
+        "skills.include_instructions": null,
+        "first_developer_bytes": 21779,
+        "launch_developer_bytes": 23563,
+        "total_developer_bytes": 45342,
+        "skills_block_present": true,
+        "developer_messages": 2,
+        "skills_block_bytes": 22252
+      },
+      {
+        "skills.include_instructions": false,
+        "first_developer_bytes": 21779,
+        "launch_developer_bytes": 1311,
+        "total_developer_bytes": 23090,
+        "skills_block_present": false,
+        "developer_messages": 2,
+        "skills_block_bytes": 0
+      },
+      {
+        "skills.include_instructions": null,
+        "first_developer_bytes": 21779,
+        "launch_developer_bytes": 23563,
+        "total_developer_bytes": 45342,
+        "skills_block_present": true,
+        "developer_messages": 2,
+        "skills_block_bytes": 22252
+      },
+      {
+        "skills.include_instructions": false,
+        "first_developer_bytes": 21779,
+        "launch_developer_bytes": 1311,
+        "total_developer_bytes": 23090,
+        "skills_block_present": false,
+        "developer_messages": 2,
+        "skills_block_bytes": 0
+      }
+    ],
+    "command": "python3 \"$LLV_EVIDENCE_DIR/observe-skills.py\" --output \"$TMPDIR/latest-real-start.json\"",
+    "conditions": {
+      "configuration": "Actual headlessCodexThreadConfig output with identical input and developer instructions; inherited policy alternating with delegated skills override, twice.",
+      "isolation": "Private HOME, CODEX_HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR; Viewer URL on closed port 1. Installed skills copied into the private home.",
+      "provider": "Port-0 loopback Responses stub; no account credentials or model-service traffic.",
+      "measurement": "UTF-8 text bytes. Codex 0.166.0 records a separate base developer scaffold before the launch developer message; additional_tools records are not messages."
+    },
+    "otherDeveloperTextEqualAfterRemovingSkillsBlock": true,
+    "sourceDigests": {
+      "src/lib/codexHeadlessConfig.ts": "0def6662f904da2985610670388d6165ed9c3410ae732dc45beb539c8f964ef3"
+    },
+    "probeSha256": "38630b32d9a4ba5b7c9c080987efd979ffb55e951e8e377395b4c0af0b443136",
+    "exactEqualityWithoutWhitespaceNormalization": true,
+    "remainingDeveloperMessageSha256": "0380d3221243fab879d775a545ca1c7c5006512b5720b5a679cdd6c302765dd2",
+    "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e",
+    "observedAt": "2026-11-11T12:31:07.216163+00:00",
+    "savedBytes": 22252,
+    "configurationStyle": "Nested skills table produced by headlessCodexThreadConfig",
+    "launchDeveloperMessageIndex": 1
   },
-  "savedBytes": 22252,
-  "initialObservation": {
-    "beforeProductEdits": true,
-    "firstDeveloperBytes": 23538,
-    "afterBytes": 1311,
-    "skillsBlockAbsentAfter": true,
-    "command": "rtk proxy python3 \"$TMPDIR/observe-codex-skills.py\"",
-    "conditions": "The first probe linked the skill roots; the committed probe copies them to keep every write inside scratch."
+  "dottedOverrideObservation": {
+    "version": "codex-cli 0.166.0",
+    "transport": "app-server stdio, thread/start config override",
+    "runs": [
+      {
+        "skills.include_instructions": null,
+        "first_developer_bytes": 21779,
+        "launch_developer_bytes": 23563,
+        "total_developer_bytes": 45342,
+        "skills_block_present": true,
+        "developer_messages": 2,
+        "skills_block_bytes": 22252
+      },
+      {
+        "skills.include_instructions": false,
+        "first_developer_bytes": 21779,
+        "launch_developer_bytes": 1311,
+        "total_developer_bytes": 23090,
+        "skills_block_present": false,
+        "developer_messages": 2,
+        "skills_block_bytes": 0
+      },
+      {
+        "skills.include_instructions": null,
+        "first_developer_bytes": 21779,
+        "launch_developer_bytes": 23563,
+        "total_developer_bytes": 45342,
+        "skills_block_present": true,
+        "developer_messages": 2,
+        "skills_block_bytes": 22252
+      },
+      {
+        "skills.include_instructions": false,
+        "first_developer_bytes": 21779,
+        "launch_developer_bytes": 1311,
+        "total_developer_bytes": 23090,
+        "skills_block_present": false,
+        "developer_messages": 2,
+        "skills_block_bytes": 0
+      }
+    ],
+    "baseRevision": "662a6012b39f051669da557d828c13b9e82aa27d",
+    "observedAt": "2026-11-11T13:07:50.660506+00:00",
+    "configurationStyle": "Dotted skills.include_instructions key used by Cloud launchers, exercised on the same local native app-server protocol.",
+    "exactEqualityWithoutWhitespaceNormalization": true,
+    "savedBytes": 22252,
+    "command": "python3 \"$LLV_EVIDENCE_DIR/observe-flat-skills.py\" --output \"$TMPDIR/latest-flat-real-start.json\"",
+    "probeSha256": "ae287d558618d4bd9b4e654f6ba5d756decb23cb009b4a6c60295ea35614fe5f"
   }
 }

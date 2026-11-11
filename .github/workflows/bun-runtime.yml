@@ -28,6 +28,8 @@ name: Bun runtime pin
 
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       native_queue_campaign:
@@ -43,10 +45,8 @@ permissions:
 # had already been replaced. One round per ref, and the newest wins. This group
 # is step 1 of the cut order on #1761.
 #
-# Nothing that must not be cancelled is in reach of this group. After step 2 none
-# of these workflows runs on a push to main or a tag at all, and on `pull_request`
-# the ref is `refs/pull/<n>/merge` while a run started by hand carries the branch
-# ref, so the two never share a group.
+# Pull requests and main each cancel obsolete runs on their own ref. A
+# cancelled commit stays ineligible until an exact-target gate succeeds.
 #
 # The two required workflows get no group at all, deliberately. They run on
 # `pull_request_target` and, for the tracker audit, on issue and review events,
@@ -71,7 +71,7 @@ jobs:
         repetition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
         # One list for both hosted jobs and scripts/local-gate.ts. The held
         # workflow tests require the documented installed pin and host pins.
-        codex: &native-codex-versions [0.154.0, 0.159.0, 0.162.1, 0.163.0]
+        codex: &native-codex-versions [0.154.0, 0.159.0, 0.162.1, 0.163.0, 0.164.0, 0.165.0, 0.166.0, 0.167.0]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:

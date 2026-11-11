@@ -1,4 +1,4 @@
-import { registryLivenessRows } from "./sqliteRegistryStore";
+import { registryLivenessRows, registryRowProjection, type RegistryRowProjector } from "./sqliteRegistryStore";
 import { procBackend } from "@/lib/proc";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
@@ -150,7 +150,6 @@ function withinGrace(timestamp: string | null | undefined, probe: LivenessProbe)
  */
 export function entryIsLive(entry: AgentRegistryEntry, probe: LivenessProbe): boolean {
   if (!HOSTED_ENTRY_STATUSES.has(entry.status)) return false;
-  if (identityAlive(entry.host?.agent, probe) || identityAlive(entry.host?.panePid, probe)) return true;
   if (identityAlive(entry.structuredHost?.process ?? null, probe)) return true;
   return withinGrace(entry.updatedAt, probe);
 }
@@ -193,6 +192,38 @@ function canonicalId(file: RegistryFile, id: ViewerConversationId): ViewerConver
   return current;
 }
 
+type ConversationLivenessIndex = {
+  deliveries?: Map<ViewerConversationId, RegistryFile["heldDeliveries"][string][]>;
+  receipts?: Map<ViewerConversationId, SpawnReceipt[]>;
+};
+
+/** Build each index at most once, and only when host and migration evidence
+    did not already answer. Retained history can contain thousands of rows. */
+function deliveryLivenessIndex(file: RegistryFile): NonNullable<ConversationLivenessIndex["deliveries"]> {
+  const deliveries: NonNullable<ConversationLivenessIndex["deliveries"]> = new Map();
+  for (const delivery of Object.values(file.heldDeliveries)) {
+    if (!UNDELIVERED_DELIVERY_STATES.has(delivery.state)) continue;
+    const ids = new Set([canonicalId(file, delivery.conversationId), canonicalId(file, delivery.runtimeConversationId)]);
+    for (const id of ids) {
+      const rows = deliveries.get(id) ?? [];
+      rows.push(delivery);
+      deliveries.set(id, rows);
+    }
+  }
+  return deliveries;
+}
+
+function receiptLivenessIndex(file: RegistryFile): NonNullable<ConversationLivenessIndex["receipts"]> {
+  const receipts: NonNullable<ConversationLivenessIndex["receipts"]> = new Map();
+  for (const receipt of registryLivenessRows(file).receipts) {
+    const id = canonicalId(file, receipt.conversationId);
+    const rows = receipts.get(id) ?? [];
+    rows.push(receipt);
+    receipts.set(id, rows);
+  }
+  return receipts;
+}
+
 /**
  * The four kinds of state that make a conversation genuinely current on its
  * account (issue #643): an active registered host, an in-flight launch/resume
@@ -210,6 +241,7 @@ export function conversationIsLive(
   liveEntryPaths: ReadonlySet<string>,
   probe: LivenessProbe,
   purpose: "current" | "removal" = "current",
+  index?: ConversationLivenessIndex,
 ): boolean {
   const generation = conversation.generations.at(-1);
   if (generation && identityAlive(generation.host?.tmuxHost?.agent, probe)) return true;
@@ -219,7 +251,7 @@ export function conversationIsLive(
   const settled = purpose === "removal" ? REMOVAL_SETTLED_MIGRATION_PHASES : SETTLED_MIGRATION_PHASES;
   if (conversation.migration && !settled.has(conversation.migration.phase)) return true;
   const owns = (id: ViewerConversationId) => canonicalId(file, id) === conversation.id;
-  for (const delivery of Object.values(file.heldDeliveries)) {
+  for (const delivery of index ? (index.deliveries ??= deliveryLivenessIndex(file)).get(conversation.id) ?? [] : Object.values(file.heldDeliveries)) {
     if (!UNDELIVERED_DELIVERY_STATES.has(delivery.state)) continue;
     if (!owns(delivery.conversationId) && !owns(delivery.runtimeConversationId)) continue;
     /* held/assigned: the queued turn has not been attempted — always current,
@@ -237,7 +269,7 @@ export function conversationIsLive(
        grace-expired uncertain delivery contributes nothing on its own. */
     if (withinGrace(delivery.createdAt, probe)) return true;
   }
-  for (const receipt of registryLivenessRows(file).receipts) {
+  for (const receipt of index ? (index.receipts ??= receiptLivenessIndex(file)).get(conversation.id) ?? [] : registryLivenessRows(file).receipts) {
     if (!owns(receipt.conversationId)) continue;
     if (receiptIsLive(file, receipt, probe)) return true;
   }
@@ -247,12 +279,28 @@ export function conversationIsLive(
 /** Artifact paths held by a live registry entry, computed once per evaluation. */
 function liveEntryPaths(file: RegistryFile, engine: AgentEngine, probe: LivenessProbe): Set<string> {
   const paths = new Set<string>();
-  for (const entry of Object.values(file.entries)) {
-    if (entry.key.engine !== engine || !entryIsLive(entry, probe)) continue;
+  // Only a hosted status can be live, and the projection keeps that answer for
+  // every archived entry, so the dead history is not read again.
+  for (const [key, hosted] of registryRowProjection(file, HOSTED_ENTRIES)) {
+    const entry = hosted ? file.entries[key] : undefined;
+    if (!entry || entry.key.engine !== engine || !entryIsLive(entry, probe)) continue;
     paths.add(entry.artifactPath);
   }
   return paths;
 }
+
+const HOSTED_ENTRIES: RegistryRowProjector<"entries", boolean> = {
+  id: "liveness-hosted-entries-v1", collection: "entries",
+  project: entry => HOSTED_ENTRY_STATUSES.has(entry.status),
+};
+
+/* An uncertain delivery is a handful of rows among the whole delivery history.
+   The projection keeps an archived row's answer, so a pass reads no archive. */
+const UNCERTAIN_DELIVERIES: RegistryRowProjector<"heldDeliveries", { id: string; conversationId: ViewerConversationId; createdAt: string } | null> = {
+  id: "liveness-uncertain-deliveries-v1", collection: "heldDeliveries",
+  project: delivery => delivery.state === "delivery-uncertain"
+    ? { id: delivery.id, conversationId: delivery.conversationId, createdAt: delivery.createdAt } : null,
+};
 
 /** What keeps the account live, for the removal dialog (issue #1857):
     `live_sessions` for a running entry or open launch receipt, `queued_pin`
@@ -325,8 +373,8 @@ export function staleUndeliverableHeldDeliveryIds(
     return paths;
   };
   const ids: string[] = [];
-  for (const delivery of Object.values(file.heldDeliveries)) {
-    if (delivery.state !== "delivery-uncertain") continue;
+  for (const [, delivery] of registryRowProjection(file, UNCERTAIN_DELIVERIES)) {
+    if (!delivery) continue;
     if (withinGrace(delivery.createdAt, probe)) continue;
     const conversation = file.conversations[canonicalId(file, delivery.conversationId)];
     if (!conversation) continue;
@@ -347,10 +395,11 @@ export function liveAccountConversationIds(
 ): ViewerConversationId[] {
   const probe = livenessProbe(options);
   const paths = liveEntryPaths(file, engine, probe);
+  const index: ConversationLivenessIndex = {};
   const live: ViewerConversationId[] = [];
   for (const conversation of Object.values(file.conversations)) {
     if (conversation.engine !== engine || conversation.generations.at(-1)?.accountId !== accountId) continue;
-    if (conversationIsLive(file, conversation, paths, probe, "removal")) live.push(conversation.id);
+    if (conversationIsLive(file, conversation, paths, probe, "removal", index)) live.push(conversation.id);
   }
   return live;
 }

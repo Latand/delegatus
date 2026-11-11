@@ -1,7 +1,9 @@
 import path from "node:path";
 
-import { sessionValid } from "@/lib/voiceCompanion/storage";
+import { sessionValid } from "@/lib/voiceCompanion/sessionValidation";
 
+import { historyRowsByToken, ROLE_HISTORY_COLLECTION, scopeFromCollectedRows } from "@/lib/memory/roleHistoryRows";
+import type { RoleMemoryScopeRow } from "@/lib/memory/roleTypes";
 import type { SourceSnapshot, StoredRow } from "./stores";
 import type { RedoItem, SectionName } from "./types";
 
@@ -120,7 +122,7 @@ function settledMemorySource(value: unknown): { schemaVersion: 1; source: "deleg
 
 const VOICE_COMPANION = "voice-companion.json";
 const companionSkeleton = () => ({ version: 1, settings: { enabled: false, monthlyCapUsd: 20 }, charges: {}, sessions: {} });
-const VOICE_CONFIG_FILE = /^(?:tts-backend|tts-voice-[a-z]+|tts-model-[a-z]+|transcribe-backend)$/;
+const VOICE_CONFIG_FILE = /^(?:openai-services\.json|tts-backend|tts-voice-[a-z]+|tts-model-[a-z]+|transcribe-backend)$/;
 const VOICE_PERSONA = "prompts/voice-persona.md";
 const TRANSCRIPTS = path.join("voice-companion", "transcripts");
 const RELAY_SWITCHES = ["relay:rich_media", "chain_conversations", "compact"];
@@ -148,7 +150,15 @@ export const PARTS: readonly Part[] = [
      lesson requests (`q:`) are history and stay. Curation state per project
      travels without its passes, which are history too. */
   { kind: "rows", id: "rows:role_memory", section: "memory.role", collection: "role_memory", legacyDocument: false, merge: "role-memory",
-    collect: rows("role_memory", key => key.startsWith("r:") || key.startsWith("s:")) },
+    /* A scope travels with its whole history in its row, the format every
+       install reads, wherever this install keeps the entries. */
+    collect: source => {
+      const collected = rows("role_memory", key => key.startsWith("r:") || key.startsWith("s:"))(source);
+      const moved = (value: unknown): value is RoleMemoryScopeRow => isRecord(value) && value.kind === "scope" && isRecord(value.historyRows);
+      if (!collected.some(row => moved(row.value))) return collected;
+      const tokens = historyRowsByToken(source.rows(ROLE_HISTORY_COLLECTION).map(row => row.value));
+      return collected.map(row => moved(row.value) ? { ...row, value: scopeFromCollectedRows(row.value, tokens) } : row);
+    } },
   { kind: "rows", id: "rows:role_memory_curation", section: "memory.role", collection: "role_memory_curation", legacyDocument: false, merge: "curation",
     accept: (key, value) => isRecord(value) && value.kind === "project" && isString(value.project) && key === `p:${value.project}` && Array.isArray(value.passes),
     collect: source => rows("role_memory_curation", key => key.startsWith("p:"))(source).map(row => {

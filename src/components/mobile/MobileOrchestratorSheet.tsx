@@ -65,6 +65,7 @@ import {
   type SeatCardView,
 } from "./orchestratorRowState";
 import { Z } from "@/components/layers";
+import { speedBody } from "@/components/ReasoningControls";
 
 const BADGE_TONE: Record<SeatBadgeTone, string> = {
   success: "bg-success-soft text-success",
@@ -786,7 +787,7 @@ function RotateDraft({
         engine: launch.engine,
         ...(launch.model ? { model: launch.model } : {}),
         ...(launch.effort ? { effort: launch.effort } : {}),
-        ...(launch.engine === "codex" && launch.speed ? { fast: launch.speed === "fast" } : {}),
+        ...speedBody(launch.engine, launch.speed),
         ...(launch.launchAccountId ? { accountId: launch.launchAccountId } : {}),
       },
       launch: { draft: launch, cwd: cwd ?? "", firstMessage: mandate },
@@ -814,7 +815,7 @@ function RotateDraft({
             targets. What the operator adjusts here is what the successor runs
             on. */}
         <div className="shrink-0 [&_button]:min-h-11 [&_select]:min-h-11" data-orchestrator-launch-choices>
-          <AgentLaunchControls draft={launch} disabled={submitting} stacked />
+          <AgentLaunchControls draft={launch} disabled={submitting} stacked inheritSpeed />
         </div>
 
         <RotateMandateSection

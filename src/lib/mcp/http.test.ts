@@ -26,7 +26,7 @@ import { awaitFixtureFile } from "./fixtureBarrier";
  * service — real bindings, the real per-call policy, the SQLite receipt store —
  * and the production identity resolution: the capability each client presents
  * is looked up in a real registry. The only stand-in is the Viewer's
- * `/api/tmux` delivery route, served on the same listener, which records what
+ * `/api/conversation-host` delivery route, served on the same listener, which records what
  * the bindings forwarded and delivers nothing.
  *
  * Everything runs in a private sandbox: state, config, home and temp all point
@@ -132,7 +132,7 @@ function serveViewer(listenPort: number): ReturnType<typeof Bun.serve> {
     port: listenPort,
     fetch: async (request) => {
       const url = new URL(request.url);
-      if (url.pathname === "/api/tmux" && request.method === "POST" && holdDelivery) {
+      if (url.pathname === "/api/conversation-host" && request.method === "POST" && holdDelivery) {
         const settle = holdDelivery;
         holdDelivery = null;
         const started = Date.now();
@@ -140,7 +140,7 @@ function serveViewer(listenPort: number): ReturnType<typeof Bun.serve> {
         settle(Date.now() - started);
         return new Response(null, { status: 499 });
       }
-      if (url.pathname === "/api/tmux" && request.method === "POST") {
+      if (url.pathname === "/api/conversation-host" && request.method === "POST") {
         const body = await request.json() as { clientMessageId: string };
         deliveries.push({ capability: request.headers.get("x-llv-spawn-capability"), clientMessageId: body.clientMessageId });
         if (loseNextDeliveryAnswer) {
@@ -253,6 +253,34 @@ for (const engine of ["codex-mcp-client", "claude-code"]) test(`${engine} receiv
 function agentClient(agent: Agent): Promise<Client> {
   return httpClient({ "x-llv-spawn-capability": agent.capability });
 }
+
+test("real HTTP MCP pipeline creation cannot turn prepared proactive provenance into execution authority", async () => {
+  const { admitProactiveTask } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority } = await import("@/lib/tasks/proactive.fixture");
+  const { loadPipelines } = await import("@/lib/pipelines/store");
+  const { task } = await admitProactiveTask({ ...candidate("http-proactive-fence"), project: "viewer" },
+    { ...context(), project: "viewer" }, undefined, authority());
+  const before = loadPipelines().map(lane => lane.id);
+  const caller = launchAgent("Proactive pipeline refusal fixture");
+  const { sessionKeyFromTranscript } = await import("@/lib/agent/sessionKey");
+  const nativeId = ["20000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const transcript = path.join(process.env.LLV_CLAUDE_HOME!, "projects", "fixture", `${nativeId}.jsonl`);
+  agentRegistry().completeSpawn(caller.launchId, {
+    key: sessionKeyFromTranscript("claude", transcript)!, artifactPath: transcript, cwd: sandbox, accountId: null,
+    status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+  });
+  const client = await agentClient(caller);
+  try {
+    const result = await client.callTool({ name: "create_pipeline", arguments: {
+      clientRequestId: "http-proactive-create", task: task.text, taskIds: [task.id], repoDir: process.cwd(),
+      src: transcript, autoStart: false, stages: [],
+    } });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain("disabled");
+    expect(loadPipelines().map(lane => lane.id)).toEqual(before);
+    expect(deliveries).toHaveLength(0);
+  } finally { await client.close(); }
+});
 
 for (const keyed of [false, true]) test(`spawned MCP client calls Delegatus over HTTP with access key=${keyed}`, async () => {
   const { applyClaudeSpawnPolicy, viewerMcpTransportForLaunch } = await import("@/lib/agent/spawnPolicy");

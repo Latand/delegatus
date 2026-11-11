@@ -66,9 +66,11 @@ import { runClaimedRequest } from "./runner";
 import { readRunLedger, updateRelayStore, type PairedRelay } from "./store";
 import { contextRequest } from "./request.fixture";
 import { startTestRelay } from "./testRelay";
+import { cloneReceipt } from "./clone.fixture";
 import { readAnswerRecord } from "./answers";
 import { answerPrompt } from "./prompt";
 import { requestSchema } from "./protocol";
+import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 // The runner and its timers live in a child. This peer observes cancellation
 // with its own real clock, after turn/start proves an execution obligation.
@@ -202,7 +204,7 @@ test("Cloud answer is delivered through the relay with unchanged protocol steps 
   } finally { select.mockRestore(); await server.close(); }
 }, 45000);
 
-test("Cloud WebSocket starts a current thread and sends the exact text", async () => {
+test.each([false, true])("Cloud WebSocket starts a current thread and sends the exact text (fullAccess=%s)", async (fullAccess) => {
   const oldUrl = process.env.LLV_CODEX_CLOUD_URL;
   process.env.LLV_CODEX_CLOUD_URL = "wss://example.invalid/app-server";
   const events = new EventEmitter();
@@ -226,8 +228,10 @@ test("Cloud WebSocket starts a current thread and sends the exact text", async (
     };
   }, async () => "/workspace/fixture");
   try {
-    expect(await transport({ prompt: "exact composed input", environmentId: "repo-env", fullAccess: true, timeoutMs: 1000, signal: new AbortController().signal })).toBe("answer");
-    expect(sent.find(call => call.method === "thread/start")?.params).toMatchObject({ model: "gpt-6.1-sol", approvalPolicy: "never", serviceTier: "ultrafast", environments: [{ environmentConfigId: "repo-env", cwd: "/workspace/fixture" }], sandbox: "danger-full-access" });
+    expect(await transport({ prompt: "exact composed input", environmentId: "repo-env", fullAccess, timeoutMs: 1000, signal: new AbortController().signal })).toBe("answer");
+    expect(sent.find(call => call.method === "thread/start")?.params).toMatchObject({ model: "gpt-6.1-sol", approvalPolicy: "never", serviceTier: "ultrafast", environments: [{ environmentConfigId: "repo-env", cwd: "/workspace/fixture" }], sandbox: fullAccess ? "danger-full-access" : "read-only" });
+    const config = sent.find(call => call.method === "thread/start")!.params.config as Record<string, unknown>;
+    expect(config["skills.include_instructions"]).toBe(fullAccess ? undefined : false);
     expect(sent.find(call => call.method === "turn/start")?.params).toEqual({ threadId: "thread", input: [{ type: "text", text: "exact composed input" }] });
   } finally { if (oldUrl === undefined) delete process.env.LLV_CODEX_CLOUD_URL; else process.env.LLV_CODEX_CLOUD_URL = oldUrl; }
 });
@@ -263,6 +267,104 @@ for (const failCloud of [false, true]) test(`owner relay routes through repo Clo
     expect(result).toMatchObject({ outcome: "answered", answer: { text: failCloud ? "Local owner answer" : "Cloud owner answer" } });
     expect(cloudCalls).toBe(1); expect(localCalls).toBe(failCloud ? 1 : 0);
     expect(select).toHaveBeenCalledTimes(failCloud ? 1 : 0);
+  } finally { select.mockRestore(); repository.close(); await server.close(); }
+});
+
+test("owner Cloud execution completes after heartbeat lease loss and delivers once", async () => {
+  let lost!: () => void;
+  const leaseLost = new Promise<void>(resolve => { lost = resolve; });
+  let received!: () => void, release!: () => void;
+  const heartbeatReceived = new Promise<void>(resolve => { received = resolve; });
+  let started!: () => void;
+  const cloudStarted = new Promise<void>(resolve => { started = resolve; });
+  const heartbeatReply = new Promise<void>(resolve => { release = resolve; });
+  const sends: unknown[] = [];
+  const heartbeat = spyOn(console, "info").mockImplementation((message, frame) => {
+    // Resume Cloud after the runner's synchronous heartbeat handler returns.
+    if (message === "External relay heartbeat" && frame.phase === "failed" && frame.status === 409 && frame.code === "lease_lost") queueMicrotask(lost);
+  });
+  const server = await startTestRelay(async (req, body) => {
+    if (req.url?.endsWith("/heartbeat") && (body as { seq: number }).seq > 1) {
+      received();
+      await heartbeatReply;
+      return { status: 409, body: { error: { code: "lease_lost" } } };
+    }
+    if (req.url?.endsWith("/send")) { sends.push(body); return { body: cloneReceipt() }; }
+    return { body: { status: "ok" } };
+  });
+  const relay: PairedRelay = { id: "owner_cloud_lease_lost", origin: server.origin, api_base: server.origin + "/v1", name: "Relay", description: "Relay", credential: "fixture",
+    owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
+    limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+    targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "none", enabled: true, ownerTier: true, engine: "codex-cloud", model: "gpt-6.1-sol", effort: null,
+      project: "repository", cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const request = { ...contextRequest, request_id: "owner_cloud_lease_loss_answer", liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
+    owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: null },
+    input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_owner: true } } };
+  let cloudCalls = 0, localCalls = 0;
+  try {
+    const running = runClaimedRequest(relay, request, undefined, { leaseWorker: false,
+      cloudTransport: async input => {
+        cloudCalls++;
+        started();
+        await new Promise<void>((resolve, reject) => {
+          const onAbort = () => reject(new Error("Cloud turn aborted"));
+          input.signal.addEventListener("abort", onAbort, { once: true });
+          void leaseLost.then(() => { input.signal.removeEventListener("abort", onAbort); resolve(); });
+        });
+        return JSON.stringify({ action: "reply", text: "Cloud owner answer", reply_to: "m1" });
+      },
+      ownerPorts: { launch: async () => { localCalls++; return { status: 202, body: {} }; }, observe: async () => ({ state: "ended", finalText: "duplicate" }), stop: async () => {} },
+    });
+    await Promise.all([heartbeatReceived, cloudStarted]);
+    expect(cloudCalls).toBe(1);
+    release();
+    const result = await running;
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Cloud owner answer" } });
+    expect(cloudCalls).toBe(1); expect(localCalls).toBe(0); expect(sends).toHaveLength(1);
+    expect(sends[0]).toMatchObject({ text: "Cloud owner answer", reply_to_message_id: 51 });
+  } finally { release(); heartbeat.mockRestore(); await server.close(); }
+});
+
+test("owner Cloud trims duplicated optional history and sends one bounded turn", async () => {
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const relay: PairedRelay = { id: "owner_cloud_large_prompt", origin: server.origin, api_base: server.origin + "/v1", name: "Relay", description: "Relay", credential: "fixture",
+    owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
+    limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+    targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "none", enabled: true, ownerTier: true, engine: "codex-cloud", model: "gpt-6.1-sol", effort: null,
+      project: "repository", cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const repository = seedRepository(); relay.targets[0]!.project = repository.project;
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const select = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { ...process.env },
+  } });
+  const base = contextRequest.input.conversation[0]!;
+  const parent = { ...base, id: "direct-parent", text: "Direct parent must survive", sent_at: "2026-09-27T12:00:00Z" };
+  const oldHistory = Array.from({ length: 20 }, (_, index) => ({ ...base, id: `old-${index}`, author: { ...base.author, self: true },
+    sent_at: `2026-09-${String(1 + index).padStart(2, "0")}T12:00:00Z`, text: "Old optional context ".repeat(120) }));
+  const current = { ...base, id: "m1", text: "Hello", reply_to: parent.id, sent_at: "2026-09-28T12:00:00Z" };
+  const request = { ...contextRequest, request_id: "owner_cloud_large_optional_history", input: { ...contextRequest.input,
+    conversation: [parent, ...oldHistory, current], respond_to: current.id, request_text: current.text, tools: [],
+    requester: { ...contextRequest.input.requester, is_owner: true } } };
+  let cloudCalls = 0;
+  try {
+    const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false,
+      cloudTransport: async input => {
+        cloudCalls++;
+        expect(Buffer.byteLength(input.prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+        expect(input.prompt).toContain("Hello"); expect(input.prompt).toContain("Direct parent must survive");
+        return JSON.stringify({ action: "reply", text: "Cloud answer", reply_to: current.id });
+      },
+      ownerPorts: { launch: async () => { throw new Error("local agent should not launch"); },
+        observe: async () => ({ state: "ended", finalText: "duplicate" }), stop: async () => {} },
+    });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Cloud answer" } });
+    expect(cloudCalls).toBe(1); expect(completions).toHaveLength(1); expect(select).not.toHaveBeenCalled();
   } finally { select.mockRestore(); repository.close(); await server.close(); }
 });
 
@@ -420,7 +522,7 @@ for (const state of ["unresolved", "deleted", "reassigned", "switch-before-launc
       expect(launches).toBe(state === "valid" ? 1 : 0);
       if (state !== "valid" && state !== "switch-before-launch") expect(selection).not.toHaveBeenCalled();
       if (state === "valid") expect(result).toMatchObject({ outcome: "answered", answer: { text: "Done" } });
-      else if (state === "switch-before-launch") expect(result).toMatchObject({ outcome: "answered", answer: { text: expect.stringContaining("configured project directory") } });
+      else if (state === "switch-before-launch") expect(result).toMatchObject({ outcome: "answered", answer: { text: "Your request could not be completed. Please try again." } });
       else expect(result).toMatchObject({ outcome: "failed", reason: "configuration_error", detail: expect.stringContaining("configured project directory") });
     } finally { selection.mockRestore(); wire.mockRestore(); repository.close(); }
   });
@@ -466,12 +568,20 @@ for (const prior of ["none", "action", "unknown", "reassigned", "rich"] as const
         ...(prior === "rich" ? { features: ["relay_rich_messages"] } : {}),
         input: { ...contextRequest.input, ...(prior === "rich" ? { format: formatGuide } : {}), tools: [{ name: tool, summary: "Notes", mode: "direct", effect, parameters: { type: "object", properties: {} } }],
           requester: { ...contextRequest.input.requester, is_owner: true } },
-      }, undefined, { leaseWorker: false, cloudTransport: async () => {
+      }, undefined, { leaseWorker: false, cloudTransport: async input => {
         cloud++;
+        expect(Buffer.byteLength(input.prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+        expect(input.prompt.match(/<owner_request>\n/g)).toHaveLength(1);
+        if (priorCall && cloud > 1) expect(input.prompt).toContain('"output":"Found"');
         if (priorCall && cloud === 1) return JSON.stringify({ action: "call", text: "", reply_to: null, calls: [{ tool, arguments: "{}", cursor: null }] });
         throw new CloudFailure(true);
       }, ownerPorts: {
-        launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_fallback_tools", initialMessage: "delivered" } }; },
+        launch: async input => {
+          launches++;
+          expect(Buffer.byteLength(String(input.prompt))).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+          if (priorCall) expect(String(input.prompt)).toContain('"output":"Found"');
+          return { status: 202, body: { conversationId: "conversation_fallback_tools", initialMessage: "delivered" } };
+        },
         observe: async () => {
           if (prior === "reassigned") expect(spawnSync("git", ["-C", repository.cwd, "remote", "add", "origin", "https://example.test/fixture/reassigned.git"], { env: checkEnvironment(process.env) }).status).toBe(0);
           list = await relayServiceToolsOp("conversation_fallback_tools", { op: "list" });

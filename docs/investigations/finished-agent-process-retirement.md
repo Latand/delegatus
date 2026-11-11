@@ -1,5 +1,91 @@
 # Finished-agent process retirement
 
+## Bounded idle-sweep progress, 2026-10-28
+
+The idle sweep selected the first 512 structured rows on every pass. A refused
+prefix could therefore keep every later host out of both evaluation and its
+conversation lookup. Selection now orders the liveness projection by session
+key, resumes after a durable key, and wraps. Removed rows do not shift an
+offset; deferred eligible rows remain reachable on later circuits. Only the
+selected page's conversations are loaded, and final checks select one key.
+The timer admits one sweep at a time.
+
+`host-retirement-cursor.json` is a private, versioned checkpoint. Its reader
+accepts the writer's validated key or null, with a 256-byte read budget.
+An invalid checkpoint or a failed write raises an error before any host action.
+The cursor is persisted before the first asynchronous admission. A crash can
+defer the rest of that page until the next circuit; it cannot grant signal
+authority. Empty populations reset the checkpoint to null.
+
+The October 28 implementation gave a confirmed absent PID without a recorded
+agent scope a separate
+reconciliation path. The asynchronous registry writer admission is labelled
+`registry.idle-reconcile-gone`. Inside it, publication ownership, PID absence,
+recorded identity, claim owner and both claim epochs are checked again. The
+existing `terminateStructuredHost` registry
+mutation also fences captured survivors and signal domains. Reconciliation
+clears host custody and marks the entry dead while keeping conversation and
+delivery records. It never calls the tree terminator or sends a signal.
+Unverifiable liveness refuses; changed custody and write failures retain their
+reason in the sweep's failure report. Retained scopes still required fenced
+termination in that implementation; the November 5 correction below supersedes
+that behaviour for proven-gone identities.
+
+Retirement of live hosts and retained scopes keeps the existing seat, turn,
+attention, activity, handoff, pending-operation, event-flush, realtime,
+resumability, transcript and kernel-identity clauses. Runtime ownership and protected-tree checks remain in
+the existing terminator. Registry age only describes candidates outside the
+page and never authorizes a stop. Kernel PSS is sampled asynchronously under
+one second per tree; every volatile retirement fact is checked again after the
+measurement. Missing measurements report a null total and a measured-process
+count, independently of RSS and swap.
+
+### Shared records and readers
+
+- Candidate producers are the Claude and Codex host-column builders in
+  `src/lib/runtime/registry.ts`, written through `AgentRegistry`. Pane-hosted
+  rows remain excluded. The existing liveness selector omits archived history.
+- The cursor has one production reader and writer, both in
+  `src/lib/runtime/structuredHostRetirement.ts`. Its initial default is null.
+  Production builder output is persisted and reopened by the process fixture.
+- Gone reconciliation reuses `AgentRegistry.terminateStructuredHost` with
+  expected custody and confirmed retained identities. Its cascade releases the
+  host claim and pending action, preserves exit-process evidence, updates the
+  registry's readiness revision and leaves resumable conversation history.
+- The report writer adds optional `progress`, `gone` and per-retirement `pss`
+  fields to version 1. Progress describes the planning snapshot: before/after
+  keys, wrap, candidate count and the oldest registry timestamp outside the
+  current page. The journal copies these additions while aggregating refusals.
+- `src/lib/runtime/structuredHostRetirementStatus.ts` accepts the additive
+  report fields and keeps its existing project attribution. The process tests
+  pass actual report-writer bytes through this reader. The seat-tick readers in
+  `src/lib/monitor/seatTickSources.ts` continue to read failures, undetermined
+  refusals and journal actions. Old reports remain readable.
+
+### Verification procedure
+
+`src/lib/runtime/structuredHostRetirement.paging.test.ts` starts a fresh Bun
+process for each sweep against a private SQLite registry. Inputs pass through
+`codexHostColumns` and `normalizeRegistry`; identifiers, ordering and policy
+clock are fixed. Its starvation case places 520 flush-refused rows before four
+eligible hosts and requires the next process to retire all four. Other cases
+cover live busy/seat/protected hosts, gone reconciliation, writer-admission
+races and checkpoint failure. The existing retirement tests cover the full
+live termination policy and process-tree fence.
+
+Run that file and `src/lib/runtime/structuredHostRetirement.test.ts` by path, followed by
+`bunx tsc --noEmit`, serially through `scripts/gate-slot.sh` in a scratch source
+export. Repeat the starvation test on the base with the same test and isolation.
+This change claims no measured speed or memory reduction; reclamation figures
+are samples of each retired tree before termination.
+
+An additional run of `src/lib/runtime/structuredHostRetirementStatus.test.ts`
+found its unchanged corrupt-receipt setup failing with SQLite `malformed JSON`
+at the insert, before the observation reader runs. The same focused case fails
+on the starting main revision, `8c6a163f218708db9cfc034b103709d7852893f2`.
+The new process fixture independently checks that the production reader accepts
+the actual sweep report bytes.
+
 ## Terminal-path follow-up, 2026-10-19
 
 The controller previously excluded closed lanes without a close obligation and
@@ -194,3 +280,76 @@ PID and its fixtures cleaned up. The corrected run uses a private temp root.
 The schema assertion also accepts an omitted JSON Schema `required` array,
 which denotes no required properties. Type checking needs more than the
 default 2 GiB Node heap on this checkout.
+
+
+## Gone identity reconciliation, 2026-11-05
+
+For a read-only census, join the latest retirement report's refused keys to
+`agent-registry.sqlite` through a read-only SQLite connection. Read the recorded
+PID's kernel start token and current boot identity. Report absence, changed
+identity, matching identity and unreadable evidence separately. Do not invoke
+the sweep on a running installation to obtain this observation.
+
+Observed at 03:25 UTC: all 512 refused rows in the report completed at 03:22:36
+UTC had absent PIDs and scopes recorded before the current kernel boot. Their
+reported clauses were events-flushed (460), turn-settled (51) and
+no-open-operation (1). The code only selected absent, unscoped roots for early
+reconciliation, so these scoped rows entered the live-host predicate. This
+establishes the refusal path. The origin of flushed-cursor lag remains unproven.
+
+The sweep now classifies the recorded process identity before evaluating live
+clauses. PID absence, a changed start token or a changed boot identity selects
+gone reconciliation. It never calls runtime release, native release or the
+tree terminator. An absent scope is proven by a different kernel boot, or by a
+read-only LoadState observation on the same boot. A loaded or unreadable scope
+retains custody and reports failure. Scope names from another kernel receive
+no command. Retained live or unverified survivor identities and signal-domain
+members still prevent registry retirement.
+
+After asynchronous scope observation and writer admission, the reconciliation
+checks publication ownership, recorded process, scope, boot, claim owner and
+both claim epochs again. It uses the existing registry mutation and preserves
+transcripts, durable events, conversations and delivery history. Process-restart
+regressions prove reconciled rows leave subsequent candidate pages. The final recheck also classifies identity after the asynchronous memory read,
+so a host that disappeared while measurement waited reconciles without entering
+termination. The live predicate and its ordering are unchanged, including
+refusal of cursor lag.
+
+The version 1 report adds optional `liveRefused` with a count and counts by
+clause for proven live identities. Unknown identities are excluded from that
+census. Its only producer is the sweep; the journal copies it while aggregating
+refusals. The status and seat-tick readers accept additive fields, preserving
+older reports. No registry schema or shared mutation contract changes.
+
+The paging regressions exercise the real sweep and SQLite registry through a
+fresh child process per invocation. They cover previous-boot and collected
+current-boot scopes, retained exit identities, PID reuse, live cursor lag,
+unreadable evidence, writer-admission changes, survivors and write failure.
+The existing adoption regression also opens and resumes a reconciled Claude
+conversation through its transcript, checking retained runtime events.
+
+Verification on the final source: 74 core tests and 30 paging tests passed.
+The identical tests on the starting base had five and eleven expected failures,
+respectively. Disabling gone routing failed both targeted reconciliation cases;
+inverting the event-flush comparison made the live-lag test detect four
+termination attempts. Disabling the final gone-identity recheck failed the
+case where a host disappears during asynchronous memory measurement. All three
+mutations were restored byte-for-byte; the four targeted controls passed again. Focused lint and the local privacy publication gate passed.
+Commands, source fingerprints, exits and aggregate observations are recorded in
+`evidence/host-retirement/gone-reconciliation.json`.
+
+Observed at 03:40:26 UTC: the latest report (finished at 03:37:36 UTC) contained
+52 proven-live idle refusals: transcript-idle (46), turn-settled (2), seat-free
+(4). The complete registry census found 53 live idle hosts among 62 live host
+identities; one idle host was outside that 512-row report page. All 53 had
+recent transcripts. These counts describe the running installation before
+deployment. This change preserves its live-host clauses; it has not been
+applied to that installation during verification.
+
+A separate read-only policy census at 03:44:54 UTC classified all 53 live idle
+identities using sufficient blockers from the unchanged predicate: 48 had
+recent transcripts without a revoked-seat waiver, and five had unrevoked seat
+standing. Therefore **53 live idle hosts remain refused under this change**
+(inferred from those observed inputs). This global policy count includes hosts
+outside the latest report page. The observed report count above remains 52 at
+its stated time; neither count claims a deployment or a live sweep of the fix.

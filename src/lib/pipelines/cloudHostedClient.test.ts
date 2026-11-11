@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import type WebSocket from "ws";
 import { createHostedCloudStageClient, CloudSubmissionNotStartedError, type HostedCloudDependencies } from "./cloudHostedClient";
 import type { CloudTaskAccess, CloudStageClient } from "./cloudStage";
+import { CLOUD_STAGE_TIMEOUT_MS } from "./cloudStage";
+import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
+import { deadlineChild, deadlineReport, heldCloudAcknowledgement, superviseCloudDeadline } from "./fixtures/cloudDeadline";
 
 type Frame = { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: unknown };
 const model = "gpt-6.1-sol", environmentId = "asenvcfg_fixture", headSha = "a".repeat(40);
@@ -63,6 +66,44 @@ function fixture(overrides: Partial<HostedCloudDependencies> = {}) {
     respond: (fn: typeof handle) => { handle = fn; } };
 }
 
+test("a principal change after environment preparation refuses before thread or turn submission", async () => {
+  const f = fixture();
+  const error = await f.client.submit({ ...f.input, environmentPrincipal: "f".repeat(64) }).catch(error => error);
+  expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(error.message).toContain("account identity changed");
+  expect(f.frames.some(frame => frame.method === "thread/start" || frame.method === "turn/start")).toBe(false);
+});
+
+test.each(["ready", "repository-changed", "ref-changed", "metadata-refused"])("submission revalidates prepared scope despite an existing mount: %s", async outcome => {
+  let metadataReads = 0;
+  const f = fixture({ fetch: async url => {
+    if (url.includes("/environment-configs/")) return Response.json({ id: environmentId,
+      repositories: [{ repository_id: "repository-fixture", ref: outcome === "ref-changed" ? "other" : "refs/heads/main", mount_path: environment.cwd }] });
+    metadataReads++;
+    if (outcome === "metadata-refused") return new Response(null, { status: 403 });
+    return Response.json({ repository_full_name: outcome === "repository-changed" ? "other/project" : "Fixture/Project" });
+  } });
+  const input = { ...f.input, environmentScope: { repository: "fixture/project", ref: "main" } };
+  if (outcome === "ready") {
+    await f.client.submit(input);
+    expect(f.frames.some(frame => frame.method === "turn/start")).toBe(true);
+  } else {
+    const error = await f.client.submit(input).catch(error => error);
+    expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
+    expect(["cloud-limit", "account-limit"]).toContain(error.category);
+    expect(f.frames.some(frame => frame.method === "thread/start" || frame.method === "turn/start")).toBe(false);
+  }
+  expect(metadataReads).toBe(outcome === "ref-changed" ? 0 : 1);
+});
+
+test("a configuration disappearing after preparation remains a confirmed pre-turn fallback cause", async () => {
+  const f = fixture({ fetch: async () => Response.json({}, { status: 404 }) });
+  const error = await f.client.submit(f.input).catch(error => error);
+  expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(error.category).toBe("cloud-limit");
+  expect(f.frames.some(frame => frame.method === "thread/start" || frame.method === "turn/start")).toBe(false);
+});
+
 test.each([200, 403, 404] as const)("account catalog admission handles HTTP %i before any Cloud work", async status => {
   const f = fixture({ fetch: async () => status === 200 ? Response.json({ id: environmentId, repositories: [{ mount_path: environment.cwd }] }) : new Response(null, { status }) });
   expect(await f.client.hasEnvironment(f.access)).toBe(status === 200);
@@ -103,7 +144,7 @@ test("hosted launch pins model, effort, permissions, ASB configuration and publi
   expect(f.frames.filter(frame => frame.method).map(frame => frame.method)).toEqual(["initialize", "initialized", "thread/start", "command/exec", "turn/start"]);
   expect(f.frames.find(frame => frame.method === "thread/start")!.params).toMatchObject({ model, allowProviderModelFallback: false,
     ephemeral: false, sandbox: "danger-full-access", approvalPolicy: "never", deferredEnvironment: true,
-    config: { model_reasoning_effort: "xhigh" }, environments: [{ environmentConfigId: environmentId, cwd: environment.cwd }] });
+    config: { "skills.include_instructions": false, model_reasoning_effort: "xhigh" }, environments: [{ environmentConfigId: environmentId, cwd: environment.cwd }] });
   expect(f.frames.find(frame => frame.method === "command/exec")!.params).toMatchObject({ environmentId: environment.environmentId, processId: "command-fixture", outputBytesCap: 8192 });
   expect(String((f.frames.find(frame => frame.method === "command/exec")!.params!.command as string[])[2])).toContain("'refs/heads/pipeline/fixture'");
   expect(f.frames.find(frame => frame.method === "turn/start")!.params).toMatchObject({ threadId: thread.id, model,
@@ -136,6 +177,118 @@ test.each(["model", "environment", "head", "rpc", "disconnect"])("launch refuses
   const error = await f.client.submit(f.input).then(() => "unexpected success", error => error.message);
   expect(error).toStartWith("Codex Cloud "); expect(error).not.toContain("fixture-auth");
   expect(f.frames.filter(frame => frame.method === "thread/start")).toHaveLength(1);
+  expect(f.frames.filter(frame => frame.method === "turn/start")).toHaveLength(0);
+});
+
+const providerText = "refused for Bearer fixture-auth (fixture-routing) at https://provider.example/trace?id=1";
+test.each([
+  { name: "observed unknown checkout refusal", method: "command/exec", error: { code: -32600, message: providerText, data: { codexErrorInfo: "providerRefusalFixture" } },
+    category: "cloud-limit", summary: "(command/exec, code providerRefusalFixture, rpc -32600, category unknown)" },
+  { name: "unknown refusal without provider data", method: "command/exec", error: { code: -32603, message: providerText },
+    category: "cloud-limit", summary: "(command/exec, code -32603, category unknown)" },
+  { name: "bad request outside the stage configuration", method: "command/exec", error: { code: -32600, message: providerText, data: { codexErrorInfo: "badRequest" } },
+    category: "cloud-limit", summary: "(command/exec, code badRequest, rpc -32600, category unknown)" },
+  { name: "account limit", method: "command/exec", error: { code: -32000, message: providerText, data: { codexErrorInfo: "usageLimitExceeded" } },
+    category: "account-limit", summary: "(command/exec, code usageLimitExceeded, rpc -32000, category account-limit)" },
+  { name: "stage configuration refusal", method: "thread/start", error: { code: -32600, message: providerText, data: { codexErrorInfo: "badRequest" } },
+    category: "invalid", summary: "(thread/start, code badRequest, rpc -32600, category configuration)" },
+])("a pre-model $name keeps its scrubbed provider code and routing category", async ({ method, error, category, summary }) => {
+  const f = fixture();
+  f.respond((frame, socket) => {
+    if (frame.method === method) { socket.receive({ id: frame.id, error }); return undefined; }
+    return f.original(frame, socket);
+  });
+  const refused = await f.client.submit(f.input).catch(error => error);
+  expect(refused).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(refused.category).toBe(category);
+  expect(refused.message).toStartWith(`Codex Cloud RPC refused ${summary}: refused for `);
+  expect(refused.message).not.toContain("fixture-auth");
+  expect(refused.message).not.toContain("fixture-routing");
+  expect(refused.message).not.toContain("provider.example");
+  expect(f.frames.filter(frame => frame.method === "command/exec")).toHaveLength(method === "command/exec" ? 1 : 0);
+  expect(f.frames.filter(frame => frame.method === "turn/start")).toHaveLength(0);
+  expect(f.sockets.every(socket => socket.readyState === 3)).toBe(true);
+});
+
+test("an opaque provider body is not recorded as the refusal message", async () => {
+  const f = fixture();
+  f.respond((frame, socket) => {
+    if (frame.method === "command/exec") { socket.receive({ id: frame.id, error: { code: -32600, message: JSON.stringify({ headers: "fixture-auth" }) } }); return undefined; }
+    return f.original(frame, socket);
+  });
+  const refused = await f.client.submit(f.input).catch(error => error);
+  expect(refused.message).toBe("Codex Cloud RPC refused (command/exec, code -32600, category unknown)");
+});
+
+const privateDiagnostics = [
+  'upstream refused: <!DOCTYPE html><html><body>private-body-marker</body></html>',
+  'upstream refused: <body data-route="private-header-marker">private-body-marker</body>',
+  'upstream refused: <?xml version="1.0"?><error>private-body-marker</error>',
+  'upstream refused: <error xmlns="urn:fixture">private-body-marker</error>',
+  'upstream refused: <!-- private-body-marker -->',
+  'upstream refused: <![CDATA[private-body-marker]]>',
+  'upstream refused: <error private-body-marker',
+  'upstream refused: <body>' + "x".repeat(66_000) + 'private-body-marker</body>',
+  'upstream refused: {"headers":{"x-fixture-route":"private-header-marker"},"payload":"private-body-marker"}',
+  'upstream refused: [{"payload":"private-body-marker","route":"private-header-marker"}]',
+  'upstream refused\r\nHTTP/1.1 503 Unavailable\r\nX-Fixture-Route: private-header-marker\r\n\r\nprivate-body-marker',
+  'upstream refused\nX-Fixture-Route: private-header-marker\n\nprivate-body-marker',
+  'upstream refused; headers: X-Fixture-Route: private-header-marker\nprivate-body-marker',
+  'upstream refused\nVia: private-header-marker\n\nprivate-body-marker',
+  'upstream refused: Via: private-header-marker\nprivate-body-marker',
+  'upstream refused:Via: private-header-marker\nprivate-body-marker',
+  'upstream refused: {"payload":"' + "x".repeat(66_000) + 'private-body-marker", "route":"private-header-marker"}',
+];
+test.each(privateDiagnostics.map((message, index) => ({ message, index })))("review privacy: RPC diagnostic $index drops body and headers while keeping its cause", async ({ message }) => {
+  const f = fixture();
+  f.respond((frame, socket) => {
+    if (frame.method === "command/exec") {
+      socket.receive({ id: frame.id, error: { code: -32600, message, data: { codexErrorInfo: "providerRefusalFixture" } } });
+      return undefined;
+    }
+    return f.original(frame, socket);
+  });
+  const refused = await f.client.submit(f.input).catch(error => error);
+  expect(refused).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(refused.category).toBe("cloud-limit");
+  expect(refused.message).toBe("Codex Cloud RPC refused (command/exec, code providerRefusalFixture, rpc -32600, category unknown): upstream refused");
+  expect(f.frames.some(frame => frame.method === "turn/start")).toBe(false);
+});
+
+test.each(privateDiagnostics.map((message, index) => ({ message, index })))("review privacy: preparation diagnostic $index drops body and headers before selecting its tail", async ({ message }) => {
+  const f = fixture();
+  f.respond((frame, socket) => frame.method === "command/exec" ? { exitCode: 128, stdout: "", stderr: message } : f.original(frame, socket));
+  const refused = await f.client.submit(f.input).catch(error => error);
+  expect(refused).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(refused.category).toBe("cloud-limit");
+  expect(refused.message).toBe("Codex Cloud lane branch preparation failed (exit 128, category preparation): upstream refused");
+  expect(f.frames.some(frame => frame.method === "turn/start")).toBe(false);
+});
+
+test("review privacy: terminal turn diagnostics use the same body and header boundary", async () => {
+  for (const message of privateDiagnostics) {
+    const f = fixture();
+    f.respond((frame, socket) => frame.method === "thread/turns/list"
+      ? { data: [{ ...turn, status: "failed", error: { code: "provider_error", message } }] } : f.original(frame, socket));
+    expect(await f.client.poll(f.access)).toEqual({ state: "failed", error: "Codex Cloud turn failed (provider_error): upstream refused", model });
+  }
+});
+
+test.each([
+  { name: "a failed fetch", stderr: "fatal: could not read Username for 'https://github.com': fixture-auth\nfatal: couldn't find remote ref refs/heads/pipeline/fixture\n",
+    tail: "fatal: couldn't find remote ref refs/heads/pipeline/fixture" },
+  { name: "long output", stderr: "x".repeat(7000) + "\nfatal: unable to access the origin\n", tail: "fatal: unable to access the origin" },
+])("a non-zero branch preparation exit after $name is a Cloud preparation failure with its scrubbed stderr tail", async ({ stderr, tail }) => {
+  const f = fixture();
+  f.respond((frame, socket) => frame.method === "command/exec" ? { exitCode: 128, stdout: "", stderr } : f.original(frame, socket));
+  const refused = await f.client.submit(f.input).catch(error => error);
+  expect(refused).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(refused.category).toBe("cloud-limit");
+  expect(refused.message).toStartWith("Codex Cloud lane branch preparation failed (exit 128, category preparation): ");
+  expect(refused.message).toEndWith(tail);
+  expect(refused.message.length).toBeLessThan(700);
+  expect(refused.message).not.toContain("fixture-auth");
+  expect(refused.message).not.toContain("github.com");
   expect(f.frames.filter(frame => frame.method === "turn/start")).toHaveLength(0);
 });
 
@@ -189,10 +342,24 @@ test("cloud failure messages redact credentials and raw payload fields before bo
   if (result.state !== "failed") throw new Error("expected failure");
   expect(result.error).toStartWith("Codex Cloud turn failed (environment_setup_failed): Environment setup failed: missing dependency;");
   expect(result.error).toContain("[redacted]");
-  expect(result.error).toEndWith("…");
+  expect(result.error).toEndWith("[redacted] [redacted]");
   expect(result.error.length).toBeLessThan(1600);
   expect(result.error).not.toMatch(/[\r\n]/);
   for (const secret of [...secrets, "escaped-tail", "raw-payload"]) expect(result.error).not.toContain(secret);
+});
+
+test("a long plain Cloud diagnostic stays bounded after credential scrubbing", async () => {
+  const f = fixture();
+  const message = "Environment setup failed: fixture-auth fixture-routing " + "x".repeat(3000);
+  f.respond((frame, socket) => frame.method === "thread/turns/list" ? { data: [{ ...turn, status: "failed",
+    error: { message, code: "environment_setup_failed" } }] } : f.original(frame, socket));
+  const result = await f.client.poll(f.access);
+  if (result.state !== "failed") throw new Error("expected failure");
+  expect(result.error).toStartWith("Codex Cloud turn failed (environment_setup_failed): Environment setup failed: [redacted] [redacted]");
+  expect(result.error).toEndWith("…");
+  expect(result.error.length).toBeLessThan(1600);
+  expect(result.error).not.toContain("fixture-auth");
+  expect(result.error).not.toContain("fixture-routing");
 });
 
 test.each([false, 0, "", [], "fixture-auth", {}, { message: "" }, { message: { headers: "fixture-auth" } }].map(error => ({ error })))("malformed turn errors never confirm failure: $error", async ({ error }) => {
@@ -405,3 +572,159 @@ test.each(["command/exec", "thread/read", "thread/turns/list", "thread/items/lis
   else await expect(f.client.readFinalMessage(f.access)).rejects.toThrow("Codex Cloud");
   expect(f.frames.at(-1)!.method).toBe(seam);
 });
+
+
+test("oversized composed input arrives losslessly through ordered acknowledged turns", async () => {
+  const f = fixture();
+  const prompt = "界🙂\n".repeat(14000);
+  let started = 0, acknowledged = 0;
+  let release: (() => void) | undefined;
+  let ready: (() => void) | undefined;
+  const held = new Promise<void>(resolve => { ready = resolve; });
+  f.respond((frame, socket) => {
+    if (frame.method === "turn/start") {
+      expect(started).toBe(acknowledged);
+      return { turn: { ...turn, id: `part_${++started}` } };
+    }
+    if (frame.method === "thread/turns/list") {
+      const answer = () => { acknowledged++; socket.receive({ id: frame.id, result: { data: [{ ...turn, id: `part_${started}` }], nextCursor: null } }); };
+      if (started === 1) { release = answer; ready!(); }
+      else answer();
+      return undefined;
+    }
+    return f.original(frame, socket);
+  });
+  const run = f.client.submit({ ...f.input, prompt });
+  await Promise.race([held, run.then(() => { throw new Error("submission returned before its input acknowledgements"); })]);
+  expect(started).toBe(1);
+  release!();
+  const receipt = await run;
+  const sent = f.frames.filter(frame => frame.method === "turn/start").map(frame =>
+    (frame.params!.input as { text: string }[])[0]!.text);
+  expect(sent.length).toBeGreaterThan(1);
+  expect(sent.every(text => Buffer.byteLength(text) <= 32000)).toBe(true);
+  expect(sent.map(text => text.slice(text.indexOf("\n\n") + 2)).join("")).toBe(prompt);
+  expect(acknowledged).toBe(started - 1);
+  expect(receipt.thread?.turnId).toBe(`part_${started}`);
+  expect(f.sockets.every(socket => socket.readyState === 3)).toBe(true);
+});
+
+for (const failure of ["failed", "interrupted", "error", "model", "withdrawn", "aborted", "disconnect"] as const) {
+  test(`oversized input stops after an acknowledgement ${failure} and retains submission uncertainty`, async () => {
+    const f = fixture();
+    f.respond((frame, socket) => {
+      if (frame.method === "thread/turns/list") {
+        if (failure === "withdrawn") f.supersede();
+        if (failure === "aborted") f.abort.abort();
+        if (failure === "disconnect") { socket.terminate(); return undefined; }
+        return { data: [{ ...turn, status: ["failed", "interrupted"].includes(failure) ? failure : "completed",
+          ...(failure === "error" ? { error: { message: "acknowledgement refused" } } : {}),
+          ...(failure === "model" ? { model: "other-model" } : {}) }], nextCursor: null };
+      }
+      return f.original(frame, socket);
+    });
+    const error = await f.client.submit({ ...f.input, prompt: "界🙂".repeat(12000) }).catch(error => error);
+    expect(error).toBeInstanceOf(Error);
+    expect(error instanceof CloudSubmissionNotStartedError).toBe(false);
+    expect(f.frames.filter(frame => frame.method === "turn/start")).toHaveLength(1);
+    expect(f.sockets.every(socket => socket.readyState === 3)).toBe(true);
+  });
+}
+
+test("thread-bound composition completes before a model turn, and refusal starts no work", async () => {
+  const f = fixture();
+  let identity: string | undefined;
+  await f.client.submit({ ...f.input, preparePrompt: async threadId => { identity = threadId; return "Complete composed input"; } });
+  expect(identity).toBe(thread.id);
+  expect(f.frames.find(frame => frame.method === "turn/start")!.params!.input).toEqual([
+    { type: "text", text: "Complete composed input", text_elements: [] },
+  ]);
+  const refused = fixture();
+  await expect(refused.client.submit({ ...refused.input, preparePrompt: async () => { throw new Error("privacy unavailable"); } })).rejects.toThrow();
+  expect(refused.frames.filter(frame => frame.method === "turn/start")).toHaveLength(0);
+  expect(refused.sockets.every(socket => socket.readyState === 3)).toBe(true);
+});
+
+test.each([
+  { kind: "ordinary error", cause: new Error("private composition diagnostic") },
+  { kind: "role-memory refusal", cause: new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", "private privacy diagnostic") },
+  { kind: "thrown value", cause: "private thrown value" },
+])("pre-turn composition refusal is safely retryable and sanitized: $kind", async ({ cause }) => {
+  const f = fixture();
+  const error = await f.client.submit({ ...f.input, preparePrompt: async () => { throw cause; } }).catch(error => error);
+  expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(error.category).toBe("invalid");
+  expect(error.message).toBe("Codex Cloud transport failed");
+  expect(f.frames.some(frame => frame.method === "turn/start")).toBe(false);
+  expect(f.sockets.every(socket => socket.readyState === 3)).toBe(true);
+  await f.client.submit(f.input);
+  expect(f.frames.filter(frame => frame.method === "turn/start")).toHaveLength(1);
+});
+
+test("refusal at the final turn dispatch guard is known not to have started work", async () => {
+  const f = fixture();
+  let prepared = false, guards = 0;
+  const error = await f.client.submit({ ...f.input,
+    preparePrompt: async () => { prepared = true; return f.input.prompt; },
+    assertCurrent: () => { if (prepared && ++guards === 2) throw new Error("authority withdrawn"); },
+  }).catch(error => error);
+  expect(guards).toBe(2);
+  expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(error.category).toBe("invalid");
+  expect(f.frames.some(frame => frame.method === "turn/start")).toBe(false);
+  expect(f.sockets.every(socket => socket.readyState === 3)).toBe(true);
+  await f.client.submit(f.input);
+  expect(f.frames.filter(frame => frame.method === "turn/start")).toHaveLength(1);
+});
+
+for (const expired of [false, true]) for (const size of [4_000, 70_000]) {
+  const name = `multipart delivery uses a real stage deadline: expired=${expired} size=${size}`;
+  test(name, async () => {
+    const budgetMs = expired ? 5_123 : 60_123;
+    if (!deadlineChild(name)) return superviseCloudDeadline(import.meta.path, name, expired, budgetMs);
+    const f = fixture();
+    const acknowledgement = heldCloudAcknowledgement();
+    const realTimer = globalThis.setTimeout;
+    // Keep the production timer and cancellation semantics. Compress only the
+    // thirty-minute session budget; the parent measures real elapsed time.
+    let armed = 0;
+    const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
+      const handle = realTimer(callback, ms === CLOUD_STAGE_TIMEOUT_MS ? budgetMs : ms);
+      if (ms === CLOUD_STAGE_TIMEOUT_MS) { armed++; deadlineReport("armed"); }
+      return handle;
+    }) as typeof setTimeout);
+    let crossed = false, started = 0, acknowledged = 0;
+    f.respond((frame, socket) => {
+      if (frame.method === "turn/start") { expect(started).toBe(acknowledged); started++; }
+      if (frame.method === "thread/turns/list" && !crossed) {
+        crossed = true;
+        acknowledgement.hold(() => { acknowledged++; socket.receive({ id: frame.id, result: f.original(frame, socket) }); });
+        return undefined;
+      }
+      if (frame.method === "thread/turns/list") acknowledged++;
+      return f.original(frame, socket);
+    });
+    try {
+      const prompt = "Accepted detail 界🙂. ".repeat(size);
+      if (size === 70_000) expect(Buffer.byteLength(prompt)).toBeGreaterThan(1024 * 1024);
+      const result = await f.client.submit({ ...f.input, prompt, preparePrompt: async () => prompt }).catch(error => error);
+      const sent = f.frames.filter(frame => frame.method === "turn/start").map(frame => (frame.params!.input as { text: string }[])[0]!.text);
+      expect(armed).toBe(1);
+      expect(crossed).toBe(true);
+      if (expired) {
+        expect(result).toBeInstanceOf(Error);
+        expect(result.message).toBe("Codex Cloud operation timed out");
+        expect(result instanceof CloudSubmissionNotStartedError).toBe(false);
+        expect(sent).toHaveLength(1);
+        expect(acknowledged).toBe(0);
+      } else {
+        expect(result.taskId).toBe(thread.id);
+        expect(sent.every(text => Buffer.byteLength(text) <= 32000)).toBe(true);
+        expect(sent.map(text => text.slice(text.indexOf("\n\n") + 2)).join("")).toBe(prompt);
+        expect(acknowledged).toBe(started - 1);
+      }
+      expect(f.sockets.every(socket => socket.readyState === 3)).toBe(true);
+      deadlineReport("done");
+    } finally { timer.mockRestore(); acknowledgement.close(); }
+  }, 180_000);
+}

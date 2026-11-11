@@ -20,7 +20,7 @@ import { RoleFrameMark } from "@/components/RoleFrameMark";
 import { ConversationRoleScope, RoleAvatar } from "@/components/brand/RoleAvatar";
 import { useAgentCapabilities } from "@/components/useAgentCapabilities";
 import { conversationFrameRole, type FrameRole } from "@/lib/roleFrames";
-import { cleanTitle, fileModelLabel, fmtAge } from "@/components/utils";
+import { cleanTitle, conversationModelLabel, fmtAge } from "@/components/utils";
 
 import { ConversationAccountChip } from "./AccountPicker";
 import { engineWord } from "./identityMarks";
@@ -298,9 +298,9 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
           <span>{engineWord(engine)}</span>
         </span>
       ) : null}
-      {file.model ? (
+      {conversationModelLabel(file) ? (
         <span className="ch-model" title={t("kanban.readerModelTitle")}>
-          <span>{fileModelLabel(file)}</span>
+          <span>{conversationModelLabel(file)}</span>
           <EffortScale effort={file.effort} />
           {file.effort ? <span className="ch-effort">{file.effort}</span> : null}
         </span>

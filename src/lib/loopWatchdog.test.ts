@@ -55,6 +55,40 @@ test("trigger storage is numeric, fixed, and unpublished rows are rejected", () 
     utcMs: 12345, site: 7, ageMs: 1400, rssBeforeBytes: 100, rssBytes: 200, rssBeforeUtcMs: 12000, rssUtcMs: 12300 });
 });
 
+test("constant-size RSS read uses the real worker and reports unavailable after stop", async () => {
+  const report = await runProbe(setup + `
+    const latest = watchdog.latestRss();
+    const ring = watchdog.snapshot().samples.at(-1);
+    await watchdog.stop();
+    console.log(JSON.stringify({ latest, ring, stopped: watchdog.latestRss() }));
+  `);
+  if (process.platform === "linux") {
+    expect(report.latest.bytes).toBeGreaterThan(0);
+    expect(report.latest.utcMs).toBeGreaterThan(0);
+    expect(report.ring.rssBytes).toBeGreaterThan(0);
+  } else expect(report.latest).toBeNull();
+  expect(report.stopped).toBeNull();
+});
+
+test("periodic monitor sample carries the real watchdog RSS and its independent clock", async () => {
+  const report = await runProbe(`
+    const { createViewerLoopMonitor, LOOP_MEMORY_RETENTION } = await import(${JSON.stringify(new URL("viewerLoopMonitor.ts", moduleUrl).href)});
+    const { createPerformanceSpans } = await import(${JSON.stringify(new URL("performanceSpans.ts", moduleUrl).href)});
+    let at = 0;
+    const monitor = createViewerLoopMonitor(() => {}, () => at, createPerformanceSpans(() => at));
+    try {
+      await monitor.start();
+      at = LOOP_MEMORY_RETENTION.intervalMs; monitor.tick();
+      console.log(JSON.stringify(monitor.memorySamples().samples.at(-1)));
+    } finally { monitor.stop(); }
+  `);
+  expect(report.pid).toBeGreaterThan(0);
+  if (process.platform === "linux") {
+    expect(report.rss.bytes).toBeGreaterThan(0);
+    expect(report.rss.utcMs).toBeLessThanOrEqual(report.utcMs);
+  } else expect(report.rss).toBeNull();
+});
+
 test("independent worker records a stale heartbeat before recovery, once per stall, across fresh processes", async () => {
   for (let run = 0; run < 2; run++) {
     const report = await runProbe(setup + `
@@ -155,7 +189,9 @@ test.skipIf(process.platform !== "linux")("production monitor serializes the sta
   expect(report.row.scheduler.rss.source).toBe("proc-status-worker");
   expect(report.row.scheduler.rss.deltaBytes).toBeGreaterThan(48 * 1024 * 1024);
   expect(report.row.scheduler.rss.sampleToUtcMs).toBeLessThan(report.recovered);
-  expect(report.row.heap).toMatchObject({ source: "unavailable", deltaBytes: null, unavailable: "nonblocking-heap-sampling-unavailable" });
+  expect(report.row.heap).toMatchObject({ source: "heap-reader", deltaBytes: expect.any(Number) });
+  expect(report.row.memoryUsage).toMatchObject({ source: "memory-reader", rss: expect.any(Number),
+    heapUsed: expect.any(Number), heapTotal: expect.any(Number), external: expect.any(Number), arrayBuffers: expect.any(Number) });
   expect(report.row.operations).toContainEqual(expect.objectContaining({ name: "http.render", completed: true }));
   expect(report.row.attribution.slices).toContainEqual(expect.objectContaining({ site: "http.render", kind: "sync" }));
 }, 30_000);

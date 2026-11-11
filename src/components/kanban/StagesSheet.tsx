@@ -1,6 +1,7 @@
 "use client";
 
 import { AgentMemoryCapNote } from "@/components/AgentMemoryCapNote";
+import { StageSetupResult } from "@/components/pipelines/StageSetupResult";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { openReviewHistory } from "@/components/flows/ReviewHistory";
@@ -15,15 +16,16 @@ import type { KanbanPipeline } from "./kanbanModel";
 import { ChevronRight, CloseGlyph, CollapseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import { cssEscape } from "./kanbanFocus";
 import { GraphGlyph, graphStateWord, LoopChip, PipelineGraph, pipelineProgress, ROLE_GLYPH, stageNames, stageRoleId, useCoarsePointer } from "./PipelineSection";
-import { stageIdentity, valuesOf } from "./stageIdentity";
+import { attemptPlace, stageIdentity, valuesOf } from "./stageIdentity";
 import { modelGlyphKind } from "./modelGlyph";
 import { StageGlyph } from "./StageGlyph";
-import { engineWord, identityTitle, StageIdentity } from "./identityMarks";
+import { engineWord, identityTitle, StageIdentity, StagePlaceLine } from "./identityMarks";
 import { graphOrder, layoutGraph, roundsOf, STAGE_TONE } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
 import { StageAccountChip } from "./AccountPicker";
 import { ReaderSlot, type ReaderPlacement } from "./KanbanReaders";
 import { DraftLeftover, StageDraftFeed, useStageDraft } from "./StageDraft";
+import { AddStageControl, ConfigureToggle, conversationDraftLane, DraftStageConfigure } from "@/components/pipelines/DraftStageControls";
 import { stageDraftKey, type StageDrafts } from "./stageDrafts";
 import { draftOutcome, finishedStageIds, neverLaunched, paneFacts, pipelineEnded } from "./stagesModel";
 
@@ -68,8 +70,12 @@ export function StagesSheet(props: {
   flowsById: ReadonlyMap<string, Flow>;
   /** The stage the sheet opened on. */
   initialFocus: string | null;
+  /** Opened from a lane's «Graph»: the graph is shown at any width. */
+  initialGraph?: boolean;
   /** The pane conversation the agent window shows, which stands there and not in its pane. */
   windowReader: string | null;
+  /** The stage whose first message the agent window shows, which is edited there and not in its pane. */
+  windowDraft?: string | null;
   placement: ReaderPlacement;
   drafts: StageDrafts;
   ports: PipelinePorts;
@@ -78,6 +84,8 @@ export function StagesSheet(props: {
   onChooseAttempt: (stageId: string, n: number) => void;
   onStageMenu: (stage: PipelineStage, anchor: HTMLElement) => void;
   onOpenRecorded: (conversation: { path: string | null; conversationId: string | null }) => void;
+  /** A node or chip: the stage's conversation, or its first message, in the agent window over the sheet. */
+  onOpenStage?: (stage: PipelineStage) => void;
   /** Close the agent window, which puts its conversation back in its pane. */
   onLeaveWindow: () => void;
   onClose: () => void;
@@ -88,7 +96,7 @@ export function StagesSheet(props: {
   const names = useMemo(() => stageNames(t, pipeline), [t, pipeline]);
   const nameOf = (stage: PipelineStage) => names.get(stage.id) ?? stage.id;
   const order = useMemo(() => graphOrder(pipeline), [pipeline]);
-  const [graph, setGraph] = useState(() => typeof window === "undefined" || window.innerWidth >= 700);
+  const [graph, setGraph] = useState(() => props.initialGraph === true || typeof window === "undefined" || window.innerWidth >= 700);
   const [zoom, setZoom] = useState<SheetZoom>("fit");
   const [focus, setFocus] = useState<string | null>(props.initialFocus ?? order[0]?.id ?? null);
   const [inView, setInView] = useState<ReadonlySet<string>>(new Set());
@@ -126,6 +134,12 @@ export function StagesSheet(props: {
     markLane();
   }, [markLane]);
 
+  /* A node or chip reaches its pane (#2148), then opens what its stage has in
+     the agent window over the sheet; closing the window comes back here. */
+  const open = (stage: PipelineStage) => {
+    reach(stage.id);
+    props.onOpenStage?.(stage);
+  };
   /* A folded pane opens before the lane scrolls to it. */
   const reach = (stageId: string) => {
     const pane = panes.find((entry) => entry.stage.id === stageId);
@@ -245,7 +259,8 @@ export function StagesSheet(props: {
         {graph ? null : (
           <nav className="gs-nav" aria-label={t("kanban.stages.navAria")}>
             {order.map((stage, index) => {
-              const state = views.get(stage.id)?.state ?? "pending";
+              const view = views.get(stage.id);
+              const state = view?.state ?? "pending";
               /* The numbered chips carry the same engine mark and effort ladder as
                  the graph node, so a minimized stage still says who runs it (#1743). */
               const identity = stageIdentity(pipeline, stage);
@@ -257,10 +272,10 @@ export function StagesSheet(props: {
                   data-nav-stage={stage.id}
                   aria-current={focus === stage.id}
                   aria-label={`${t("kanban.stages.navChipAria", { n: index + 1, stage: nameOf(stage), state: graphStateWord(t, state) })}. ${identityTitle(t, identity)}`}
-                  onClick={() => reach(stage.id)}
+                  onClick={() => open(stage)}
                 >
                   <span className="nidx num">{index + 1}</span>
-                  <StageGlyph state={state} model={identity} fallback="dot" />
+                  <StageGlyph state={state} model={identity} motion={view?.motion} fallback="dot" />
                   <StageIdentity identity={identity} density="chip" name={<span className="nlbl">{nameOf(stage)}</span>} glyph />
                 </button>
               );
@@ -270,6 +285,8 @@ export function StagesSheet(props: {
             ))}
           </nav>
         )}
+        {/* A draft made from a conversation takes one more stage after its last. */}
+        {conversationDraftLane(pipeline) ? <AddStageControl pipeline={pipeline} ports={props.ports} variant="board" /> : null}
 
         <div className="gs-body">
           {graph ? (
@@ -286,7 +303,7 @@ export function StagesSheet(props: {
                       inView={inView}
                       scale={scale}
                       navigate
-                      onOpenStage={(_pipeline, stage) => reach(stage.id)}
+                      onOpenStage={(_pipeline, stage) => open(stage)}
                     />
                   </div>
                 </div>
@@ -357,6 +374,8 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
   const latest = attempts.at(-1) ?? null;
   const agent = stageAgentRowModel(pipeline, stage.id);
   const state: StageChipState = shown && shown !== latest ? chipState(shown.state) : view?.state ?? "pending";
+  /* An earlier attempt the pane shows is history: its glyph holds still. */
+  const motion = shown && shown !== latest ? "still" : view?.motion;
   const word = graphStateWord(t, state);
   const roleId = stageRoleId(stage);
   /* The pane header says who runs the stage in full words beside the same mark
@@ -366,8 +385,13 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
   /* The glyph names the model of the attempt the pane shows, which an older
      attempt may have run on another model than the stage's latest. */
   const ran = shown?.effectiveRole ? valuesOf(shown.effectiveRole) : identity;
+  /* Where the attempt on show ran, and why it moved if it did: a started stage's
+     conversation header has no room for the cause, so the pane says it. */
+  const shownPlace = shown ? attemptPlace(shown) : null;
   const draftKey = stageDraftKey(pipeline.id, stage.id);
   const draft = useStageDraft(props.drafts, draftKey);
+  /* A waiting stage of a conversation's draft opens its role and runtime in place of its first message. */
+  const [configuring, setConfiguring] = useState(false);
   const glyph = <span className="pglyph" aria-hidden="true"><svg {...svgProps} strokeWidth={1.8}>{ROLE_GLYPH[roleId] ?? ROLE_GLYPH.builder}</svg></span>;
   const aria = t(pane.folded ? "kanban.stages.paneAriaFolded" : "kanban.stages.paneAria", { n: index + 1, total, stage: name, role: roleNameById(t, roleId), engine, state: word });
   const className = `pane tone-${STAGE_TONE[state]} role-${roleId}${pane.folded ? " folded" : ""}${props.focused ? " focus" : ""}`;
@@ -378,7 +402,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
         <button type="button" className="pane-strip" data-pane-fold={stage.id} aria-label={t("kanban.stages.expandPane", { stage: name })} onClick={() => props.onFold(stage.id, false)}>
           {glyph}
           {/* The strip's state word sits in its grey label, so the badge says it. */}
-          <StageGlyph state={state} model={ran} fallback="dot" />
+          <StageGlyph state={state} model={ran} motion={motion} fallback="dot" />
           <span className="vlabel"><span className="num">{index + 1}</span> {name} · {word}</span>
         </button>
       </section>
@@ -402,14 +426,25 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
   const neverRan = !shown || (pipelineEnded(pipeline) && attempts.every(neverLaunched));
   const outcome = draft && draft.phase !== "saving" ? draftOutcome(pipeline, stage.id, draft) : null;
   let body: React.ReactNode;
-  if (neverRan) {
+  if (neverRan && props.windowDraft === stage.id) {
+    /* One editor of a first message at a time: the window's. */
+    body = (
+      <div className="pane-conv away" data-pane-away={draftKey}>
+        <p className="pane-note">{t("kanban.stages.inFullPane")}</p>
+        <button type="button" className="btn quiet" onClick={props.onLeaveWindow}>{t("kanban.stages.showHere")}</button>
+      </div>
+    );
+  } else if (neverRan) {
     body = (
       <div className="pane-conv draft">
         <div className="ch-meta pane-id">
           <StageIdentity identity={identity} density="header" showWord glyph />
           <StageAccountChip pipeline={pipeline} stage={stage} />
+          {conversationDraftLane(pipeline) ? <ConfigureToggle stage={stage} name={name} open={configuring} onToggle={() => setConfiguring((value) => !value)} /> : null}
         </div>
-        <StageDraftFeed pipeline={pipeline} stage={stage} names={names} drafts={props.drafts} ports={props.ports} />
+        {configuring && conversationDraftLane(pipeline)
+          ? <div className="pane-config" data-draft-configure-pane={stage.id}><DraftStageConfigure pipeline={pipeline} stage={stage} /></div>
+          : <StageDraftFeed pipeline={pipeline} stage={stage} names={names} drafts={props.drafts} ports={props.ports} />}
       </div>
     );
   } else if (pane.readerKey && props.windowReader === pane.readerKey) {
@@ -433,8 +468,11 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       </div>
     );
   } else {
-    body = <div className="pane-conv away"><p className="pane-note">{shown.state === "spawning" || shown.state === "pending" ? t("kanban.stages.starting") : t("kanban.graph.noConversationTitle")}</p></div>;
+    /* With no conversation to show, a setup the attempt ran has the pane's
+       room, and the note under it is one line. */
+    body = <div className={`pane-conv away${shown.setup ? " line" : ""}`}><p className="pane-note">{shown.state === "spawning" || shown.state === "pending" ? t("kanban.stages.starting") : t("kanban.graph.noConversationTitle")}</p></div>;
   }
+  const setupFills = !neverRan && !pane.readerKey && !recorded;
 
   return (
     <section className={className} data-stage={stage.id} data-collapsed="0" tabIndex={-1} role="region" aria-label={aria}>
@@ -453,7 +491,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
         </span>
         {/* A drawn glyph already names the model and the state, so the word
             beside it is for the eye only. */}
-        <span className="pstate"><StageGlyph state={state} model={ran} fallback="dot" badge={false} named /><span aria-hidden={modelGlyphKind(ran.engine, ran.model) ? true : undefined}>{word}</span></span>
+        <span className="pstate"><StageGlyph state={state} model={ran} motion={motion} fallback="dot" badge={false} named /><span aria-hidden={modelGlyphKind(ran.engine, ran.model) ? true : undefined}>{word}</span></span>
         <span className="spacer" />
         <button type="button" className="icon-btn sm" data-pane-fold={stage.id} aria-label={t("kanban.stages.collapsePane", { stage: name })} title={t("kanban.readerCollapse")} onClick={() => props.onFold(stage.id, true)}>
           <CollapseGlyph />
@@ -464,6 +502,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       </div>
       {/* A stage that never ran says when it starts once, in its draft. */}
       {neverRan ? null : <div className="pane-sub">{bits}</div>}
+      {!neverRan && shownPlace ? <StagePlaceLine place={shownPlace} /> : null}
       {agent.question ? <p className="m-0 max-h-40 shrink-0 overflow-y-auto whitespace-pre-wrap break-words text-ui text-primary" tabIndex={0} data-stage-question={stage.id}>{agent.question}</p> : null}
       {agent.target ? (
         <button type="button" className="btn quiet" data-open-conversation={stage.id} onClick={() => {
@@ -505,6 +544,10 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       {draft && (outcome === "undelivered" || (outcome === "ended-before-start" && !neverRan)) ? (
         <DraftLeftover kind={outcome === "undelivered" ? "undelivered" : "ended"} draft={draft} draftKey={draftKey} name={name} drafts={props.drafts} onOpenConversation={recorded ? () => props.onOpenRecorded(recorded) : null} />
       ) : null}
+      {/* The setup result belongs to the attempt the pane shows. Above a
+          conversation it takes at most half the pane, so the conversation
+          keeps its room; with none, it takes what the pane has. */}
+      {shown ? <StageSetupResult setup={shown.setup} worktreeDir={pipeline.worktreeDir} fit fill={setupFills} /> : null}
       <AgentMemoryCapNote cap={shown?.memoryCap} />
       {body}
     </section>

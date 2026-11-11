@@ -8,6 +8,7 @@ import { agentConfigSandboxRoot } from "@/lib/runtime/agentConfigSandbox";
 
 import {
   DISK_CRITICAL_BYTES,
+  attemptRetentionCategory,
   DISK_RECOVERY_BYTES,
   DISK_SPACE_WAIT_PREFIX,
   DISK_WARNING_BYTES,
@@ -24,6 +25,13 @@ import {
 
 /* Every volume here is a fake probe answer: nothing reads a real disk. */
 const GiB = 1024 ** 3;
+test("retention category names reclaimable allocation and its deadline", () => {
+  const text = attemptRetentionCategory({ periodDays: 7, dueBytes: 2 * GiB, upcomingBytes: GiB, until: Date.parse("2026-11-08T12:00:00Z") });
+  expect(text).toContain("7 днів"); expect(text).toContain("2.00 GiB найближчими проходами");
+  expect(text).toContain("ще 1.00 GiB — до 2026-11-08");
+  expect(text).not.toContain("утримує активність"); expect(text).not.toContain("понад ліміт");
+  expect(attemptRetentionCategory()).toBe("Тимчасові дані агентів");
+});
 const provisionSource = { NODE_ENV: "test" as const, TMPDIR: "/srv/agent-temp", XDG_CONFIG_HOME: "/srv/delegatus-config" };
 const probe = (free: Record<string, number>): DiskProbe => (directory) => {
   const volume = Object.keys(free).find((prefix) => directory.startsWith(prefix));
@@ -272,7 +280,7 @@ test.skipIf(process.platform !== "linux")("System warns on idle host config pres
     expect(low.volumes).toContainEqual(expect.objectContaining({ volume: "host-temp", level: "critical", provisioning: true }));
     expect(diskPressureLabel(low)).toContain("1.00 GiB free");
     await Promise.all([...caches.values()].map(row => row.measuring));
-    freeBytes = 20 * GiB; time += 60_000;
+    freeBytes = 121 * GiB; time += 60_000;
     expect((await readDiskPressure(options)).episode).toBeNull();
   } finally {
     await Promise.all([...caches.values()].map(row => row.measuring));
@@ -1001,4 +1009,23 @@ test.skipIf(process.platform !== "linux")("default Docker admission discovers th
     expect(paths).toContain("/proc/1/root" + source.TMPDIR);
     expect(scans).toBe(0);
   } finally { scan.mockRestore(); anchor.mockRestore(); }
+});
+
+
+test("a large nearly full volume opens pressure before the legacy ten GiB limit", () => {
+  const pressure = observeDiskPressure(diskVolumes([{ role: "state", directory: "/srv/state" }],
+    () => ({ volume: "disk", totalBytes: 1742 * GiB, freeBytes: 55.5 * GiB })), null, "2026-10-28T12:00:00Z");
+  expect(pressure.episode).toBe("2026-10-28T12:00:00Z");
+  expect(pressure.warningBytes).toBe(100 * GiB);
+});
+
+test("the disk threshold has an explicit legacy setting and a recovery margin", async () => {
+  const { diskWarningBytes } = await import("./diskPressure");
+  expect(diskWarningBytes(1742 * GiB, { LLV_DISK_PRESSURE_FREE_GIB: "0" })).toBe(10 * GiB);
+  expect(diskWarningBytes(1742 * GiB, { LLV_DISK_PRESSURE_FREE_GIB: "60" })).toBe(60 * GiB);
+  expect(diskWarningBytes(1742 * GiB, { LLV_DISK_PRESSURE_FREE_GIB: "bad" })).toBe(100 * GiB);
+  const volumes = (freeBytes: number) => diskVolumes([{ role: "state", directory: "/srv/state" }], () => ({ volume: "disk", totalBytes: 1742 * GiB, freeBytes }));
+  const low = observeDiskPressure(volumes(55 * GiB), null, "2026-10-28T12:00:00Z");
+  expect(observeDiskPressure(volumes(110 * GiB), low, "2026-10-28T12:01:00Z").episode).toBe(low.episode);
+  expect(observeDiskPressure(volumes(121 * GiB), low, "2026-10-28T12:02:00Z").episode).toBeNull();
 });

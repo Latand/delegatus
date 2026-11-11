@@ -1,9 +1,10 @@
+import { REPOSITORY_IDENTITY, repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { withoutOperatorCredentials } from "./operatorCredentials";
 import { agentMemoryScopes } from "@/lib/runtime/agentMemorySettings";
 import { signalDomain, signalAgentDomain, spawnHeadlessSignalSandbox, headlessFixtureTransport } from "@/lib/runtime/agentSignalSandbox";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { pipeline } from "node:stream/promises";
-import { AgentMemoryCell, planAgentMemory, wrapAgentCommand } from "@/lib/runtime/agentMemory";
+import { AgentMemoryCell, planAgentMemory, wrapAgentLaunch } from "@/lib/runtime/agentMemory";
 import { planAgentCpu } from "@/lib/runtime/cpuPlacement";
 import { agentRegistry } from "./registry";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
@@ -319,7 +320,21 @@ export interface BuiltHeadlessCommand {
 }
 
 export async function prepareHeadlessPublication(built: BuiltHeadlessCommand, cwd: string): Promise<BuiltHeadlessCommand> {
-  if (!built.codexPublication) return built;
+  const source = await repositoryPublicationSource(cwd, built.env);
+  const identity = agentPublicationIdentityEnv(source);
+  built = { ...built, env: { ...source, ...identity } };
+  if (!built.codexPublication) {
+    const args = [...built.args];
+    const index = args.indexOf("--settings");
+    if (index >= 0) {
+      const value = args[index + 1];
+      const settings = JSON.parse(value.startsWith("{") ? value : fs.readFileSync(value, "utf8"));
+      const env = { ...settings.env, ...identity };
+      if (!source[REPOSITORY_IDENTITY]) delete env[REPOSITORY_IDENTITY];
+      args[index + 1] = JSON.stringify({ ...settings, env });
+    } else args.push("--settings", JSON.stringify({ env: identity }));
+    return { ...built, args };
+  }
   const policy = await readCodexShellPolicy(built.command, cwd, built.env, [], { ignoreUserConfig: true });
   return { ...built, args: [...built.args, ...agentCodexPublicationArgs(policy, built.env)] };
 }
@@ -436,8 +451,8 @@ export function launchDetached(input: {
     const memoryCell = plan ? new AgentMemoryCell(plan) : null;
     const fixture = headlessFixtureTransport();
     const start = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {
-      const wrapped = wrapAgentCommand(plan, command, args);
-      return (fixture ?? spawn)(wrapped.command, wrapped.args, options);
+      const wrapped = wrapAgentLaunch(plan, command, args, options?.env ?? process.env);
+      return (fixture ?? spawn)(wrapped.command, wrapped.args, { ...options, env: wrapped.env });
     }) as typeof spawn;
     const launchOptions = {
       cwd: input.cwd,

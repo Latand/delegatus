@@ -1,3 +1,4 @@
+import { codexAccountSpendsCredits } from "@/lib/accounts/creditPolicy";
 import { agentRegistry } from "@/lib/agent/registry";
 import { ENGINE_MODELS } from "@/lib/agent/models";
 import { listCodexAccounts } from "@/lib/accounts/codex";
@@ -104,7 +105,7 @@ export async function turboAnswer(project: string, settings: { turbo?: TurboSett
   const candidates = await liveCandidates(project);
   const raised = candidates.filter(candidate => {
     const tier = candidate.model ? context!.plan.find(account => account.accountId === candidate.accountId)?.tiers[candidate.model] : undefined;
-    return !candidate.legacy && !candidate.stage?.switchOpen && !!tier && raisesTier(candidate.tier, tier);
+    return !candidate.stage?.switchOpen && !!tier && raisesTier(candidate.tier, tier);
   });
   const observations = agentRegistry().quotaObservations("codex");
   answer.preview = {
@@ -153,9 +154,7 @@ async function liveCandidates(project: string): Promise<TurboCandidate[]> {
     if (!generation || generation.archivedAt) continue;
     const key = `codex:${generation.id}`;
     const entry = snapshot.entries[key];
-    const hosted = held.has(key);
-    const legacy = !hosted && !!entry?.host && entry.status === "live";
-    if (!hosted && !legacy) continue;
+    if (!held.has(key)) continue;
     if (conversationProjectKey(conversation.projectOwnership, generation.launchProfile) !== project) continue;
     const membership = (snapshot.memberships[conversation.id] ?? []).find(item => item.kind === "pipeline" && item.stageId);
     let stage: TurboCandidate["stage"];
@@ -171,7 +170,7 @@ async function liveCandidates(project: string): Promise<TurboCandidate[]> {
     }
     out.push({ conversationId: conversation.id, accountId: generation.accountId, model: generation.launchProfile.model,
       tier: launchServiceTier(generation.launchProfile) ?? null, ...(seat && registry.canonicalConversationId(seat as ViewerConversationId) === conversation.id ? { seat: true } : {}),
-      ...(stage ? { stage } : {}), ...(legacy ? { legacy: true } : {}), busy: entry?.structuredHost?.activeTurnRef != null });
+      ...(stage ? { stage } : {}), busy: entry?.structuredHost?.activeTurnRef != null });
   }
   return out;
 }
@@ -191,7 +190,7 @@ export function authorizeTurboTier(project: string, episodeKey: string, conversa
   const allowed = allowedAccountIdsForProject(project, "codex");
   if (!generation.accountId || allowed && !allowed.includes(generation.accountId)) throw new Error("Turbo account is no longer allowed");
   const observation = agentRegistry().quotaObservations("codex").find(item => item.accountId === generation.accountId);
-  const verdict = turboAccountVerdict(setting, generation.accountId, observation ? { limits: observation.limits, stale: staleObservation(observation) } : null, Date.now());
+  const verdict = turboAccountVerdict(setting, generation.accountId, observation ? { limits: observation.limits, stale: staleObservation(observation) } : null, Date.now(), codexAccountSpendsCredits(generation.accountId));
   if (verdict.verdict === "hold") throw new Error(verdict.reason);
 }
 
@@ -214,6 +213,7 @@ function productionPorts(): TurboSweepPorts {
       const same = !expected || generation?.accountId === expected.accountId && profile?.model === expected.model;
       return { live: same && !!generation && !generation.archivedAt, hosted: !!structuredDeliveryHostForConversation(conversationId), tier: profile ? launchServiceTier(profile) ?? null : null };
     },
+    spendCredits: codexAccountSpendsCredits,
     reading: accountId => {
       const observation = agentRegistry().quotaObservations("codex").find(item => item.accountId === accountId);
       return observation ? { limits: observation.limits, stale: staleObservation(observation) } : null;

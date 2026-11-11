@@ -26,9 +26,6 @@
     "evidence/model-glyphs/design/desktop-card-running-light.png",
     "evidence/model-glyphs/design/desktop-card-waiting-settled-light.png",
     "evidence/model-glyphs/design/desktop-card-live-light.png",
-    "evidence/model-glyphs/design/desktop-card-graphs-running-light.png",
-    "evidence/model-glyphs/design/desktop-card-graphs-waiting-settled-light.png",
-    "evidence/model-glyphs/design/desktop-card-graphs-live-light.png",
     "evidence/model-glyphs/design/desktop-sheet-waiting-light.png",
     "evidence/model-glyphs/design/desktop-sheet-chips-waiting-light.png",
     "evidence/model-glyphs/design/desktop-sheet-settled-light.png",
@@ -78,9 +75,6 @@
     "evidence/model-glyphs/design/desktop-card-running-dark.png",
     "evidence/model-glyphs/design/desktop-card-waiting-settled-dark.png",
     "evidence/model-glyphs/design/desktop-card-live-dark.png",
-    "evidence/model-glyphs/design/desktop-card-graphs-running-dark.png",
-    "evidence/model-glyphs/design/desktop-card-graphs-waiting-settled-dark.png",
-    "evidence/model-glyphs/design/desktop-card-graphs-live-dark.png",
     "evidence/model-glyphs/design/desktop-sheet-waiting-dark.png",
     "evidence/model-glyphs/design/desktop-sheet-chips-waiting-dark.png",
     "evidence/model-glyphs/design/desktop-sheet-settled-dark.png",
@@ -322,14 +316,14 @@
         1400
       ],
       "animationsSeeked": [
-        39,
-        39,
-        39,
-        39,
-        39,
-        39,
-        39,
-        39
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31
       ]
     },
     "desktop-card-running-light": {
@@ -345,10 +339,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.625618",
+          "haloOpacity": "0.725728",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -369,7 +362,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.600263",
+          "haloOpacity": "0.793626",
           "figure": [
             "mg-tilt"
           ],
@@ -392,13 +385,13 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.610817",
+          "haloOpacity": "0.828618",
           "figure": [
             "mg-sway"
           ],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: running. Claude · Haiku · reasoning high",
+          "hostLabel": "Tidy: running. Claude · Haiku 5.5 · reasoning high",
           "inside": true,
           "twin": false,
           "word": null,
@@ -415,7 +408,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.671634",
+          "haloOpacity": "0.887956",
           "figure": [
             "mg-phase"
           ],
@@ -438,10 +431,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.600263",
+          "haloOpacity": "0.793626",
           "figure": [
-            "mg-turn",
-            "mg-breathe"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -462,7 +454,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.600068",
+          "haloOpacity": "0.783613",
           "figure": [
             "mg-turn"
           ],
@@ -485,7 +477,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.608564",
+          "haloOpacity": "0.750397",
           "figure": [
             "mg-write"
           ],
@@ -508,7 +500,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.625618",
+          "haloOpacity": "0.725728",
           "figure": [
             "mg-spin"
           ],
@@ -608,7 +600,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -807,7 +799,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -854,7 +846,7 @@
           "figure": [],
           "badge": "rgb(23, 122, 55)",
           "ownLabel": null,
-          "hostLabel": "Tidy: passed. Claude · Haiku · reasoning high",
+          "hostLabel": "Tidy: passed. Claude · Haiku 5.5 · reasoning high",
           "inside": true,
           "twin": false,
           "word": null,
@@ -944,10 +936,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.732723",
+          "haloOpacity": "0.712074",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -968,15 +959,13 @@
           "hostTone": "active",
           "kind": "terra",
           "reading": "running",
-          "live": true,
+          "live": false,
           "width": 14,
           "height": 14,
           "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.761941",
-          "figure": [
-            "mg-spin"
-          ],
+          "halo": "none",
+          "haloOpacity": "0",
+          "figure": [],
           "badge": null,
           "ownLabel": null,
           "hostLabel": "Migrate: committing. Codex · 5.6-Terra · reasoning high",
@@ -1022,7 +1011,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.717109",
+          "haloOpacity": "0.723555",
           "figure": [
             "mg-write"
           ],
@@ -1045,10 +1034,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.777078",
+          "haloOpacity": "0.699",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -1056,735 +1044,6 @@
           "inside": true,
           "twin": false,
           "word": null,
-          "wordWant": null
-        }
-      ],
-      "dots": []
-    },
-    "desktop-card-graphs-running-light": {
-      "glyphs": [
-        {
-          "stage": "critique",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "astra",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.867384",
-          "figure": [
-            "mg-breathe",
-            "mg-flare"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Critique on Codex: running. Codex · 6-Astra · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
-          "wordWant": null
-        },
-        {
-          "stage": "build",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "fable",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.600067",
-          "figure": [
-            "mg-tilt"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Build on Claude: running. Claude · Fable · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
-          "wordWant": null
-        },
-        {
-          "stage": "tidy",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "haiku",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.944806",
-          "figure": [
-            "mg-sway"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Tidy on Claude: running. Claude · Haiku · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
-          "wordWant": null
-        },
-        {
-          "stage": "test",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "luna",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.653041",
-          "figure": [
-            "mg-phase"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Test on Codex: running. Codex · 6-Luna · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
-          "wordWant": null
-        },
-        {
-          "stage": "design",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "opus",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.926977",
-          "figure": [
-            "mg-turn",
-            "mg-breathe"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Design on Claude: running. Claude · Opus 5.5 · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
-          "wordWant": null
-        },
-        {
-          "stage": "verify",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "sol",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.99972",
-          "figure": [
-            "mg-turn"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Verify on Codex: running. Codex · 6-Sol · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
-          "wordWant": null
-        },
-        {
-          "stage": "docs",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "sonnet",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.994542",
-          "figure": [
-            "mg-write"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Docs on Claude: running. Claude · Sonnet · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
-          "wordWant": null
-        },
-        {
-          "stage": "migrate",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "terra",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.974329",
-          "figure": [
-            "mg-spin"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Migrate on Codex: running. Codex · 5.6-Terra · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
-          "wordWant": null
-        }
-      ],
-      "dots": [
-        {
-          "stage": "fix",
-          "mark": "dot"
-        }
-      ]
-    },
-    "desktop-card-graph-waiting-light": {
-      "glyphs": [
-        {
-          "stage": "design",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "opus",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Design on Claude: waiting. Claude · Opus 5.5 · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(108, 108, 121)",
-          "wordWant": null
-        },
-        {
-          "stage": "build",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "fable",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Build on Claude: waiting. Claude · Fable · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(108, 108, 121)",
-          "wordWant": null
-        },
-        {
-          "stage": "docs",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "sonnet",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Docs on Claude: waiting. Claude · Sonnet · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(108, 108, 121)",
-          "wordWant": null
-        },
-        {
-          "stage": "tidy",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "haiku",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Tidy on Claude: waiting. Claude · Haiku · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(108, 108, 121)",
-          "wordWant": null
-        },
-        {
-          "stage": "verify",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "sol",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Verify on Codex: waiting. Codex · 6-Sol · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(108, 108, 121)",
-          "wordWant": null
-        },
-        {
-          "stage": "critique",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "astra",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Critique on Codex: waiting. Codex · 6-Astra · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(108, 108, 121)",
-          "wordWant": null
-        },
-        {
-          "stage": "migrate",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "terra",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Migrate on Codex: waiting. Codex · 5.6-Terra · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(108, 108, 121)",
-          "wordWant": null
-        },
-        {
-          "stage": "test",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "luna",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Test on Codex: waiting. Codex · 6-Luna · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(108, 108, 121)",
-          "wordWant": null
-        }
-      ],
-      "dots": [
-        {
-          "stage": "fix",
-          "mark": "dot"
-        }
-      ]
-    },
-    "desktop-card-graph-p-glyphs-settled-light": {
-      "glyphs": [
-        {
-          "stage": "design",
-          "host": "pnode",
-          "hostTone": "ok",
-          "kind": "opus",
-          "reading": "passed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Design on Claude: passed. Claude · Opus 5.5 · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
-          "wordWant": "rgb(23, 122, 55)"
-        },
-        {
-          "stage": "build",
-          "host": "pnode",
-          "hostTone": "ok",
-          "kind": "fable",
-          "reading": "passed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Build on Claude: passed. Claude · Fable · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
-          "wordWant": "rgb(23, 122, 55)"
-        },
-        {
-          "stage": "critique",
-          "host": "pnode",
-          "hostTone": "bad",
-          "kind": "astra",
-          "reading": "failed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Critique on Codex: failed. Codex · 6-Astra · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(198, 40, 40)",
-          "wordWant": "rgb(198, 40, 40)"
-        },
-        {
-          "stage": "verify",
-          "host": "pnode",
-          "hostTone": "needs",
-          "kind": "sol",
-          "reading": "needs",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Verify on Codex: needs you. Codex · 6-Sol · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(138, 95, 0)",
-          "wordWant": "rgb(138, 95, 0)"
-        },
-        {
-          "stage": "tidy",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "haiku",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Tidy on Claude: waiting. Claude · Haiku · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(108, 108, 121)",
-          "wordWant": null
-        }
-      ],
-      "dots": []
-    },
-    "desktop-card-graph-p-glyphs-settled-more-light": {
-      "glyphs": [
-        {
-          "stage": "docs",
-          "host": "pnode",
-          "hostTone": "ok",
-          "kind": "sonnet",
-          "reading": "passed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Docs on Claude: passed. Claude · Sonnet · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
-          "wordWant": "rgb(23, 122, 55)"
-        },
-        {
-          "stage": "tidy",
-          "host": "pnode",
-          "hostTone": "ok",
-          "kind": "haiku",
-          "reading": "passed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Tidy on Claude: passed. Claude · Haiku · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
-          "wordWant": "rgb(23, 122, 55)"
-        },
-        {
-          "stage": "migrate",
-          "host": "pnode",
-          "hostTone": "ok",
-          "kind": "terra",
-          "reading": "passed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Migrate on Codex: passed. Codex · 5.6-Terra · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
-          "wordWant": "rgb(23, 122, 55)"
-        },
-        {
-          "stage": "test",
-          "host": "pnode",
-          "hostTone": "bad",
-          "kind": "luna",
-          "reading": "failed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Test on Codex: failed. Codex · 6-Luna · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(198, 40, 40)",
-          "wordWant": "rgb(198, 40, 40)"
-        }
-      ],
-      "dots": [
-        {
-          "stage": "fix",
-          "mark": "dot"
-        }
-      ]
-    },
-    "desktop-card-graph-p-glyphs-review-light": {
-      "glyphs": [
-        {
-          "stage": "build",
-          "host": "pnode",
-          "hostTone": "ok",
-          "kind": "fable",
-          "reading": "passed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Build on Claude: passed. Claude · Fable · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
-          "wordWant": "rgb(23, 122, 55)"
-        },
-        {
-          "stage": "review",
-          "host": "pnode",
-          "hostTone": "review",
-          "kind": "astra",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.698983",
-          "figure": [
-            "mg-breathe",
-            "mg-flare"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Review on Codex: reviewing. Codex · 6-Astra · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(13, 148, 136)",
-          "wordWant": null
-        }
-      ],
-      "dots": []
-    },
-    "desktop-card-graph-p-glyphs-commit-light": {
-      "glyphs": [
-        {
-          "stage": "migrate",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "terra",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.907319",
-          "figure": [
-            "mg-spin"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Migrate on Codex: committing. Codex · 5.6-Terra · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
-          "wordWant": null
-        }
-      ],
-      "dots": []
-    },
-    "desktop-card-graph-p-glyphs-rework-light": {
-      "glyphs": [
-        {
-          "stage": "design",
-          "host": "pnode",
-          "hostTone": "ok",
-          "kind": "opus",
-          "reading": "passed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Design on Claude: passed. Claude · Opus 5.5 · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
-          "wordWant": "rgb(23, 122, 55)"
-        },
-        {
-          "stage": "docs",
-          "host": "pnode",
-          "hostTone": "ok",
-          "kind": "sonnet",
-          "reading": "passed",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.670785",
-          "figure": [
-            "mg-write"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Docs on Claude: passed. Claude · Sonnet · reasoning high. working again. Open its conversation",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
-          "wordWant": "rgb(23, 122, 55)"
-        },
-        {
-          "stage": "critique",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "astra",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.649333",
-          "figure": [
-            "mg-breathe",
-            "mg-flare"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Critique on Codex: running. Codex · 6-Astra · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(23, 122, 55)",
           "wordWant": null
         }
       ],
@@ -1807,7 +1066,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Design on Claude: waiting. Claude · Opus 5.5 · reasoning high · configured, not launched yet. Its pane is in focus",
+          "hostLabel": "Design on Claude: waiting. Claude · Opus 5.5 · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(108, 108, 121)",
@@ -1828,7 +1087,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Build on Claude: waiting. Claude · Fable · reasoning high · configured, not launched yet. Show its pane",
+          "hostLabel": "Build on Claude: waiting. Claude · Fable · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(108, 108, 121)",
@@ -1849,7 +1108,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Docs on Claude: waiting. Claude · Sonnet · reasoning high · configured, not launched yet. Show its pane",
+          "hostLabel": "Docs on Claude: waiting. Claude · Sonnet · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(108, 108, 121)",
@@ -1870,7 +1129,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy on Claude: waiting. Claude · Haiku · reasoning high · configured, not launched yet. Show its pane",
+          "hostLabel": "Tidy on Claude: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(108, 108, 121)",
@@ -1891,7 +1150,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Verify on Codex: waiting. Codex · 6-Sol · reasoning high · configured, not launched yet. Show its pane",
+          "hostLabel": "Verify on Codex: waiting. Codex · 6-Sol · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(108, 108, 121)",
@@ -1912,7 +1171,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Critique on Codex: waiting. Codex · 6-Astra · reasoning high · configured, not launched yet. Show its pane",
+          "hostLabel": "Critique on Codex: waiting. Codex · 6-Astra · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(108, 108, 121)",
@@ -1933,7 +1192,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Migrate on Codex: waiting. Codex · 5.6-Terra · reasoning high · configured, not launched yet. Show its pane",
+          "hostLabel": "Migrate on Codex: waiting. Codex · 5.6-Terra · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(108, 108, 121)",
@@ -1954,7 +1213,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Test on Codex: waiting. Codex · 6-Luna · reasoning high · configured, not launched yet. Show its pane",
+          "hostLabel": "Test on Codex: waiting. Codex · 6-Luna · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(108, 108, 121)",
@@ -2046,7 +1305,7 @@
         "haloOpacity": "0",
         "figure": [],
         "badge": null,
-        "ownLabel": "Haiku: waiting",
+        "ownLabel": "Haiku 5.5: waiting",
         "hostLabel": "4. TidyCleanerwaiting",
         "inside": true,
         "twin": false,
@@ -2218,7 +1477,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Stage 4, Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Stage 4, Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -2417,7 +1676,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy on Claude: waiting. Claude · Haiku · reasoning high · configured, not launched yet. Show its pane",
+          "hostLabel": "Tidy on Claude: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(108, 108, 121)",
@@ -2525,7 +1784,7 @@
         "haloOpacity": "0",
         "figure": [],
         "badge": null,
-        "ownLabel": "Haiku: waiting",
+        "ownLabel": "Haiku 5.5: waiting",
         "hostLabel": "5. TidyCleanerwaiting",
         "inside": true,
         "twin": false,
@@ -2744,7 +2003,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Stage 5, Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Stage 5, Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -2791,7 +2050,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy on Claude: passed. Claude · Haiku · reasoning high. Show its pane",
+          "hostLabel": "Tidy on Claude: passed. Claude · Haiku 5.5 · reasoning high. Show its pane",
           "inside": true,
           "twin": false,
           "word": "rgb(23, 122, 55)",
@@ -2883,7 +2142,7 @@
         "haloOpacity": "0",
         "figure": [],
         "badge": null,
-        "ownLabel": "Haiku: passed",
+        "ownLabel": "Haiku 5.5: passed",
         "hostLabel": "2. TidyCleanerpassed",
         "inside": true,
         "twin": false,
@@ -2971,7 +2230,7 @@
           "figure": [],
           "badge": "rgb(23, 122, 55)",
           "ownLabel": null,
-          "hostLabel": "Stage 2, Tidy: passed. Claude · Haiku · reasoning high",
+          "hostLabel": "Stage 2, Tidy: passed. Claude · Haiku 5.5 · reasoning high",
           "inside": true,
           "twin": false,
           "word": null,
@@ -3061,14 +2320,13 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.761968",
+          "haloOpacity": "0.852804",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Review on Codex: reviewing. Codex · 6-Astra · reasoning high. Its pane is in focus",
+          "hostLabel": "Review on Codex: reviewing. Codex · 6-Astra · reasoning high. Open its conversation",
           "inside": true,
           "twin": false,
           "word": "rgb(13, 148, 136)",
@@ -3110,16 +2368,15 @@
         "height": 14,
         "scale": 1,
         "halo": "mg-halo",
-        "haloOpacity": "0.739894",
+        "haloOpacity": "0.845441",
         "figure": [
-          "mg-breathe",
-          "mg-flare"
+          "mg-turn"
         ],
         "badge": null,
         "ownLabel": "GPT-6-Astra: reviewing",
         "hostLabel": "2. ReviewReviewerreview loopreviewing",
         "inside": true,
-        "twin": false,
+        "twin": true,
         "word": "rgb(13, 148, 136)",
         "wordWant": null
       }
@@ -3158,10 +2415,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.894542",
+          "haloOpacity": "0.941026",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -3187,13 +2443,13 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.806363",
+          "haloOpacity": "0.880033",
           "figure": [
             "mg-tilt"
           ],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Build on Claude: running. Claude · Fable · reasoning high. Its pane is in focus",
+          "hostLabel": "Build on Claude: running. Claude · Fable · reasoning high. Open its conversation",
           "inside": true,
           "twin": false,
           "word": "rgb(23, 122, 55)",
@@ -3214,7 +2470,7 @@
         "height": 14,
         "scale": 1,
         "halo": "mg-halo",
-        "haloOpacity": "0.793595",
+        "haloOpacity": "0.880033",
         "figure": [
           "mg-tilt"
         ],
@@ -3222,7 +2478,7 @@
         "ownLabel": "Fable: running",
         "hostLabel": "1. BuildBuilderrunning",
         "inside": true,
-        "twin": false,
+        "twin": true,
         "word": "rgb(23, 122, 55)",
         "wordWant": null
       }
@@ -3240,7 +2496,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.952173",
+          "haloOpacity": "0.974895",
           "figure": [
             "mg-tilt"
           ],
@@ -3268,10 +2524,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.664122",
+          "haloOpacity": "0.739934",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -3292,7 +2547,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.731606",
+          "haloOpacity": "0.806405",
           "figure": [
             "mg-tilt"
           ],
@@ -3315,13 +2570,13 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.771423",
+          "haloOpacity": "0.839902",
           "figure": [
             "mg-sway"
           ],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: працює. Claude · Haiku · міркування високі",
+          "hostLabel": "Tidy: працює. Claude · Haiku 5.5 · міркування високі",
           "inside": true,
           "twin": false,
           "word": null,
@@ -3338,7 +2593,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.845486",
+          "haloOpacity": "0.895876",
           "figure": [
             "mg-phase"
           ],
@@ -3361,10 +2616,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.731606",
+          "haloOpacity": "0.806405",
           "figure": [
-            "mg-turn",
-            "mg-breathe"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -3385,7 +2639,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.720805",
+          "haloOpacity": "0.796738",
           "figure": [
             "mg-turn"
           ],
@@ -3408,7 +2662,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.687015",
+          "haloOpacity": "0.764351",
           "figure": [
             "mg-write"
           ],
@@ -3431,7 +2685,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.664122",
+          "haloOpacity": "0.739934",
           "figure": [
             "mg-spin"
           ],
@@ -3531,7 +2785,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: чекає. Claude · Haiku · міркування високі · налаштовано, ще не запускалося",
+          "hostLabel": "Tidy: чекає. Claude · Haiku 5.5 · міркування високі · налаштовано, ще не запускалося",
           "inside": true,
           "twin": false,
           "word": null,
@@ -3730,7 +2984,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: чекає. Claude · Haiku · міркування високі · налаштовано, ще не запускалося",
+          "hostLabel": "Tidy: чекає. Claude · Haiku 5.5 · міркування високі · налаштовано, ще не запускалося",
           "inside": true,
           "twin": false,
           "word": null,
@@ -3777,7 +3031,7 @@
           "figure": [],
           "badge": "rgb(23, 122, 55)",
           "ownLabel": null,
-          "hostLabel": "Tidy: пройдено. Claude · Haiku · міркування високі",
+          "hostLabel": "Tidy: пройдено. Claude · Haiku 5.5 · міркування високі",
           "inside": true,
           "twin": false,
           "word": null,
@@ -3867,10 +3121,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.636513",
+          "haloOpacity": "0.732763",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -3891,15 +3144,13 @@
           "hostTone": "active",
           "kind": "terra",
           "reading": "running",
-          "live": true,
+          "live": false,
           "width": 14,
           "height": 14,
           "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.632663",
-          "figure": [
-            "mg-spin"
-          ],
+          "halo": "none",
+          "haloOpacity": "0",
+          "figure": [],
           "badge": null,
           "ownLabel": null,
           "hostLabel": "Migrate: фіксує. Codex · 5.6-Terra · міркування високі",
@@ -3945,7 +3196,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.643205",
+          "haloOpacity": "0.757331",
           "figure": [
             "mg-write"
           ],
@@ -3968,10 +3219,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.62563",
+          "haloOpacity": "0.732763",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -4043,7 +3293,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: running. Claude · Haiku · reasoning high",
+          "hostLabel": "Tidy: running. Claude · Haiku 5.5 · reasoning high",
           "inside": true,
           "twin": false,
           "word": null,
@@ -4242,7 +3492,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -4441,7 +3691,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -4488,7 +3738,7 @@
           "figure": [],
           "badge": "rgb(23, 122, 55)",
           "ownLabel": null,
-          "hostLabel": "Tidy: passed. Claude · Haiku · reasoning high",
+          "hostLabel": "Tidy: passed. Claude · Haiku 5.5 · reasoning high",
           "inside": true,
           "twin": false,
           "word": null,
@@ -4599,12 +3849,12 @@
           "hostTone": "active",
           "kind": "terra",
           "reading": "running",
-          "live": true,
+          "live": false,
           "width": 14,
           "height": 14,
           "scale": 1,
           "halo": "none",
-          "haloOpacity": "1",
+          "haloOpacity": "0",
           "figure": [],
           "badge": null,
           "ownLabel": null,
@@ -4698,10 +3948,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.732738",
+          "haloOpacity": "0.86726",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -4748,15 +3997,13 @@
           "hostTone": "active",
           "kind": "terra",
           "reading": "running",
-          "live": true,
+          "live": false,
           "width": 14,
           "height": 14,
           "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.988105",
-          "figure": [
-            "mg-spin"
-          ],
+          "halo": "none",
+          "haloOpacity": "0",
+          "figure": [],
           "badge": null,
           "ownLabel": null,
           "hostLabel": "Migrate",
@@ -4781,10 +4028,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.830471",
+          "haloOpacity": "0.867224",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -4805,7 +4051,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.880026",
+          "haloOpacity": "0.907274",
           "figure": [
             "mg-tilt"
           ],
@@ -4828,13 +4074,13 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.90258",
+          "haloOpacity": "0.925028",
           "figure": [
             "mg-sway"
           ],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "1TidyHaiku· Cleanerrunning",
+          "hostLabel": "1TidyHaiku 5.5· Cleanerrunning",
           "inside": true,
           "twin": false,
           "word": null,
@@ -4851,7 +4097,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.937973",
+          "haloOpacity": "0.952477",
           "figure": [
             "mg-phase"
           ],
@@ -4874,10 +4120,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.880026",
+          "haloOpacity": "0.907274",
           "figure": [
-            "mg-turn",
-            "mg-breathe"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -4898,7 +4143,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.873265",
+          "haloOpacity": "0.9019",
           "figure": [
             "mg-turn"
           ],
@@ -4921,7 +4166,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.84959",
+          "haloOpacity": "0.882871",
           "figure": [
             "mg-write"
           ],
@@ -4944,7 +4189,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.830471",
+          "haloOpacity": "0.867224",
           "figure": [
             "mg-spin"
           ],
@@ -5044,7 +4289,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Open the conversation of Tidy. Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Open the conversation of Tidy. Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -5243,7 +4488,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Open the conversation of Tidy. Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Open the conversation of Tidy. Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -5290,7 +4535,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "2TidyHaiku· Cleanerpassed",
+          "hostLabel": "2TidyHaiku 5.5· Cleanerpassed",
           "inside": true,
           "twin": false,
           "word": null,
@@ -5384,10 +4629,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.84545",
+          "haloOpacity": "0.867243",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -5408,15 +4652,13 @@
           "hostTone": null,
           "kind": "terra",
           "reading": "running",
-          "live": true,
+          "live": false,
           "width": 14,
           "height": 14,
           "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.830487",
-          "figure": [
-            "mg-spin"
-          ],
+          "halo": "none",
+          "haloOpacity": "0",
+          "figure": [],
           "badge": null,
           "ownLabel": null,
           "hostLabel": "1Migrate5.6-Terra· Buildercommitting",
@@ -5462,7 +4704,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.842668",
+          "haloOpacity": "0.876446",
           "figure": [
             "mg-write"
           ],
@@ -5485,10 +4727,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.822913",
+          "haloOpacity": "0.860079",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -5581,7 +4822,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Configure the stage Tidy. Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Configure the stage Tidy. Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -5780,7 +5021,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Configure the stage Tidy. Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Configure the stage Tidy. Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -5827,7 +5068,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "2TidyHaiku· Cleanerpassed",
+          "hostLabel": "2TidyHaiku 5.5· Cleanerpassed",
           "inside": true,
           "twin": false,
           "word": null,
@@ -5900,10 +5141,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.762002",
+          "haloOpacity": "0.860081",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -5950,15 +5190,13 @@
           "hostTone": "active",
           "kind": "terra",
           "reading": "running",
-          "live": true,
+          "live": false,
           "width": 14,
           "height": 14,
           "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.86009",
-          "figure": [
-            "mg-spin"
-          ],
+          "halo": "none",
+          "haloOpacity": "0",
+          "figure": [],
           "badge": null,
           "ownLabel": null,
           "hostLabel": "Migrate",
@@ -5983,10 +5221,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.822896",
+          "haloOpacity": "0.867219",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -6007,7 +5244,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.874261",
+          "haloOpacity": "0.90727",
           "figure": [
             "mg-tilt"
           ],
@@ -6030,13 +5267,13 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.897788",
+          "haloOpacity": "0.925025",
           "figure": [
             "mg-sway"
           ],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "1TidyHaiku· Клінерпрацює",
+          "hostLabel": "1TidyHaiku 5.5· Клінерпрацює",
           "inside": true,
           "twin": false,
           "word": null,
@@ -6053,7 +5290,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.934846",
+          "haloOpacity": "0.952475",
           "figure": [
             "mg-phase"
           ],
@@ -6076,10 +5313,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.874261",
+          "haloOpacity": "0.90727",
           "figure": [
-            "mg-turn",
-            "mg-breathe"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -6100,7 +5336,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.867224",
+          "haloOpacity": "0.901896",
           "figure": [
             "mg-turn"
           ],
@@ -6123,7 +5359,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.842652",
+          "haloOpacity": "0.882867",
           "figure": [
             "mg-write"
           ],
@@ -6146,7 +5382,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.822896",
+          "haloOpacity": "0.867219",
           "figure": [
             "mg-spin"
           ],
@@ -6246,7 +5482,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Відкрити розмову етапу Tidy. Tidy: чекає. Claude · Haiku · міркування високі · налаштовано, ще не запускалося",
+          "hostLabel": "Відкрити розмову етапу Tidy. Tidy: чекає. Claude · Haiku 5.5 · міркування високі · налаштовано, ще не запускалося",
           "inside": true,
           "twin": false,
           "word": null,
@@ -6445,7 +5681,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Відкрити розмову етапу Tidy. Tidy: чекає. Claude · Haiku · міркування високі · налаштовано, ще не запускалося",
+          "hostLabel": "Відкрити розмову етапу Tidy. Tidy: чекає. Claude · Haiku 5.5 · міркування високі · налаштовано, ще не запускалося",
           "inside": true,
           "twin": false,
           "word": null,
@@ -6492,7 +5728,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "2TidyHaiku· Клінерпройдено",
+          "hostLabel": "2TidyHaiku 5.5· Клінерпройдено",
           "inside": true,
           "twin": false,
           "word": null,
@@ -6586,10 +5822,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.838013",
+          "haloOpacity": "0.860076",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -6610,15 +5845,13 @@
           "hostTone": null,
           "kind": "terra",
           "reading": "running",
-          "live": true,
+          "live": false,
           "width": 14,
           "height": 14,
           "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.838013",
-          "figure": [
-            "mg-spin"
-          ],
+          "halo": "none",
+          "haloOpacity": "0",
+          "figure": [],
           "badge": null,
           "ownLabel": null,
           "hostLabel": "1Migrate5.6-Terra· Білдерфіксує",
@@ -6664,7 +5897,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.856468",
+          "haloOpacity": "0.876443",
           "figure": [
             "mg-write"
           ],
@@ -6687,10 +5920,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.838013",
+          "haloOpacity": "0.860076",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -6910,14 +6142,14 @@
         1400
       ],
       "animationsSeeked": [
-        39,
-        39,
-        39,
-        39,
-        39,
-        39,
-        39,
-        39
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31,
+        31
       ]
     },
     "desktop-card-running-dark": {
@@ -6933,10 +6165,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.830621",
+          "haloOpacity": "0.74722",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -6957,7 +6188,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.931404",
+          "haloOpacity": "0.812798",
           "figure": [
             "mg-tilt"
           ],
@@ -6980,13 +6211,13 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.697326",
+          "haloOpacity": "0.845494",
           "figure": [
             "mg-sway"
           ],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: running. Claude · Haiku · reasoning high",
+          "hostLabel": "Tidy: running. Claude · Haiku 5.5 · reasoning high",
           "inside": true,
           "twin": false,
           "word": null,
@@ -7003,7 +6234,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.689086",
+          "haloOpacity": "0.899756",
           "figure": [
             "mg-phase"
           ],
@@ -7026,10 +6257,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.931404",
+          "haloOpacity": "0.812798",
           "figure": [
-            "mg-turn",
-            "mg-breathe"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -7050,7 +6280,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.973365",
+          "haloOpacity": "0.803323",
           "figure": [
             "mg-turn"
           ],
@@ -7073,7 +6303,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.974619",
+          "haloOpacity": "0.771434",
           "figure": [
             "mg-write"
           ],
@@ -7096,7 +6326,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.830621",
+          "haloOpacity": "0.74722",
           "figure": [
             "mg-spin"
           ],
@@ -7196,7 +6426,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -7395,7 +6625,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -7442,7 +6672,7 @@
           "figure": [],
           "badge": "rgb(79, 195, 111)",
           "ownLabel": null,
-          "hostLabel": "Tidy: passed. Claude · Haiku · reasoning high",
+          "hostLabel": "Tidy: passed. Claude · Haiku 5.5 · reasoning high",
           "inside": true,
           "twin": false,
           "word": null,
@@ -7532,10 +6762,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.611918",
+          "haloOpacity": "0.74722",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -7556,15 +6785,13 @@
           "hostTone": "active",
           "kind": "terra",
           "reading": "running",
-          "live": true,
+          "live": false,
           "width": 14,
           "height": 14,
           "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.6",
-          "figure": [
-            "mg-spin"
-          ],
+          "halo": "none",
+          "haloOpacity": "0",
+          "figure": [],
           "badge": null,
           "ownLabel": null,
           "hostLabel": "Migrate: committing. Codex · 5.6-Terra · reasoning high",
@@ -7610,7 +6837,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.635608",
+          "haloOpacity": "0.764313",
           "figure": [
             "mg-write"
           ],
@@ -7633,10 +6860,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.609737",
+          "haloOpacity": "0.739896",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -7644,735 +6870,6 @@
           "inside": true,
           "twin": false,
           "word": null,
-          "wordWant": null
-        }
-      ],
-      "dots": []
-    },
-    "desktop-card-graphs-running-dark": {
-      "glyphs": [
-        {
-          "stage": "critique",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "astra",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.996592",
-          "figure": [
-            "mg-breathe",
-            "mg-flare"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Critique on Codex: running. Codex · 6-Astra · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
-          "wordWant": null
-        },
-        {
-          "stage": "build",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "fable",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.608249",
-          "figure": [
-            "mg-tilt"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Build on Claude: running. Claude · Fable · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
-          "wordWant": null
-        },
-        {
-          "stage": "tidy",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "haiku",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.8284",
-          "figure": [
-            "mg-sway"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Tidy on Claude: running. Claude · Haiku · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
-          "wordWant": null
-        },
-        {
-          "stage": "test",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "luna",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.92827",
-          "figure": [
-            "mg-phase"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Test on Codex: running. Codex · 6-Luna · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
-          "wordWant": null
-        },
-        {
-          "stage": "design",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "opus",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.622371",
-          "figure": [
-            "mg-turn",
-            "mg-breathe"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Design on Claude: running. Claude · Opus 5.5 · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
-          "wordWant": null
-        },
-        {
-          "stage": "verify",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "sol",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.953359",
-          "figure": [
-            "mg-turn"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Verify on Codex: running. Codex · 6-Sol · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
-          "wordWant": null
-        },
-        {
-          "stage": "docs",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "sonnet",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.991468",
-          "figure": [
-            "mg-write"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Docs on Claude: running. Claude · Sonnet · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
-          "wordWant": null
-        },
-        {
-          "stage": "migrate",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "terra",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.997631",
-          "figure": [
-            "mg-spin"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Migrate on Codex: running. Codex · 5.6-Terra · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
-          "wordWant": null
-        }
-      ],
-      "dots": [
-        {
-          "stage": "fix",
-          "mark": "dot"
-        }
-      ]
-    },
-    "desktop-card-graph-waiting-dark": {
-      "glyphs": [
-        {
-          "stage": "design",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "opus",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Design on Claude: waiting. Claude · Opus 5.5 · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(139, 139, 152)",
-          "wordWant": null
-        },
-        {
-          "stage": "build",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "fable",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Build on Claude: waiting. Claude · Fable · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(139, 139, 152)",
-          "wordWant": null
-        },
-        {
-          "stage": "docs",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "sonnet",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Docs on Claude: waiting. Claude · Sonnet · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(139, 139, 152)",
-          "wordWant": null
-        },
-        {
-          "stage": "tidy",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "haiku",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Tidy on Claude: waiting. Claude · Haiku · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(139, 139, 152)",
-          "wordWant": null
-        },
-        {
-          "stage": "verify",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "sol",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Verify on Codex: waiting. Codex · 6-Sol · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(139, 139, 152)",
-          "wordWant": null
-        },
-        {
-          "stage": "critique",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "astra",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Critique on Codex: waiting. Codex · 6-Astra · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(139, 139, 152)",
-          "wordWant": null
-        },
-        {
-          "stage": "migrate",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "terra",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Migrate on Codex: waiting. Codex · 5.6-Terra · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(139, 139, 152)",
-          "wordWant": null
-        },
-        {
-          "stage": "test",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "luna",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Test on Codex: waiting. Codex · 6-Luna · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(139, 139, 152)",
-          "wordWant": null
-        }
-      ],
-      "dots": [
-        {
-          "stage": "fix",
-          "mark": "dot"
-        }
-      ]
-    },
-    "desktop-card-graph-p-glyphs-settled-dark": {
-      "glyphs": [
-        {
-          "stage": "design",
-          "host": "pnode",
-          "hostTone": "ok",
-          "kind": "opus",
-          "reading": "passed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Design on Claude: passed. Claude · Opus 5.5 · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
-          "wordWant": "rgb(79, 195, 111)"
-        },
-        {
-          "stage": "build",
-          "host": "pnode",
-          "hostTone": "ok",
-          "kind": "fable",
-          "reading": "passed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Build on Claude: passed. Claude · Fable · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
-          "wordWant": "rgb(79, 195, 111)"
-        },
-        {
-          "stage": "critique",
-          "host": "pnode",
-          "hostTone": "bad",
-          "kind": "astra",
-          "reading": "failed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Critique on Codex: failed. Codex · 6-Astra · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(240, 113, 113)",
-          "wordWant": "rgb(240, 113, 113)"
-        },
-        {
-          "stage": "verify",
-          "host": "pnode",
-          "hostTone": "needs",
-          "kind": "sol",
-          "reading": "needs",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Verify on Codex: needs you. Codex · 6-Sol · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(224, 174, 69)",
-          "wordWant": "rgb(224, 174, 69)"
-        },
-        {
-          "stage": "tidy",
-          "host": "pnode",
-          "hostTone": "idle",
-          "kind": "haiku",
-          "reading": "waiting",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Tidy on Claude: waiting. Claude · Haiku · reasoning high · configured, not launched yet. Open its first message",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(139, 139, 152)",
-          "wordWant": null
-        }
-      ],
-      "dots": []
-    },
-    "desktop-card-graph-p-glyphs-settled-more-dark": {
-      "glyphs": [
-        {
-          "stage": "docs",
-          "host": "pnode",
-          "hostTone": "ok",
-          "kind": "sonnet",
-          "reading": "passed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Docs on Claude: passed. Claude · Sonnet · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
-          "wordWant": "rgb(79, 195, 111)"
-        },
-        {
-          "stage": "tidy",
-          "host": "pnode",
-          "hostTone": "ok",
-          "kind": "haiku",
-          "reading": "passed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Tidy on Claude: passed. Claude · Haiku · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
-          "wordWant": "rgb(79, 195, 111)"
-        },
-        {
-          "stage": "migrate",
-          "host": "pnode",
-          "hostTone": "ok",
-          "kind": "terra",
-          "reading": "passed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Migrate on Codex: passed. Codex · 5.6-Terra · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
-          "wordWant": "rgb(79, 195, 111)"
-        },
-        {
-          "stage": "test",
-          "host": "pnode",
-          "hostTone": "bad",
-          "kind": "luna",
-          "reading": "failed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Test on Codex: failed. Codex · 6-Luna · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(240, 113, 113)",
-          "wordWant": "rgb(240, 113, 113)"
-        }
-      ],
-      "dots": [
-        {
-          "stage": "fix",
-          "mark": "dot"
-        }
-      ]
-    },
-    "desktop-card-graph-p-glyphs-review-dark": {
-      "glyphs": [
-        {
-          "stage": "build",
-          "host": "pnode",
-          "hostTone": "ok",
-          "kind": "fable",
-          "reading": "passed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Build on Claude: passed. Claude · Fable · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
-          "wordWant": "rgb(79, 195, 111)"
-        },
-        {
-          "stage": "review",
-          "host": "pnode",
-          "hostTone": "review",
-          "kind": "astra",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.950688",
-          "figure": [
-            "mg-breathe",
-            "mg-flare"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Review on Codex: reviewing. Codex · 6-Astra · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(45, 212, 191)",
-          "wordWant": null
-        }
-      ],
-      "dots": []
-    },
-    "desktop-card-graph-p-glyphs-commit-dark": {
-      "glyphs": [
-        {
-          "stage": "migrate",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "terra",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.649295",
-          "figure": [
-            "mg-spin"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Migrate on Codex: committing. Codex · 5.6-Terra · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
-          "wordWant": null
-        }
-      ],
-      "dots": []
-    },
-    "desktop-card-graph-p-glyphs-rework-dark": {
-      "glyphs": [
-        {
-          "stage": "design",
-          "host": "pnode",
-          "hostTone": "ok",
-          "kind": "opus",
-          "reading": "passed",
-          "live": false,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "none",
-          "haloOpacity": "0",
-          "figure": [],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Design on Claude: passed. Claude · Opus 5.5 · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
-          "wordWant": "rgb(79, 195, 111)"
-        },
-        {
-          "stage": "docs",
-          "host": "pnode",
-          "hostTone": "ok",
-          "kind": "sonnet",
-          "reading": "passed",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.647336",
-          "figure": [
-            "mg-write"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Docs on Claude: passed. Claude · Sonnet · reasoning high. working again. Open its conversation",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
-          "wordWant": "rgb(79, 195, 111)"
-        },
-        {
-          "stage": "critique",
-          "host": "pnode",
-          "hostTone": "active",
-          "kind": "astra",
-          "reading": "running",
-          "live": true,
-          "width": 14,
-          "height": 14,
-          "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.686593",
-          "figure": [
-            "mg-breathe",
-            "mg-flare"
-          ],
-          "badge": null,
-          "ownLabel": null,
-          "hostLabel": "Critique on Codex: running. Codex · 6-Astra · reasoning high. No conversation yet",
-          "inside": true,
-          "twin": false,
-          "word": "rgb(79, 195, 111)",
           "wordWant": null
         }
       ],
@@ -8395,7 +6892,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Design on Claude: waiting. Claude · Opus 5.5 · reasoning high · configured, not launched yet. Its pane is in focus",
+          "hostLabel": "Design on Claude: waiting. Claude · Opus 5.5 · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(139, 139, 152)",
@@ -8416,7 +6913,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Build on Claude: waiting. Claude · Fable · reasoning high · configured, not launched yet. Show its pane",
+          "hostLabel": "Build on Claude: waiting. Claude · Fable · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(139, 139, 152)",
@@ -8437,7 +6934,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Docs on Claude: waiting. Claude · Sonnet · reasoning high · configured, not launched yet. Show its pane",
+          "hostLabel": "Docs on Claude: waiting. Claude · Sonnet · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(139, 139, 152)",
@@ -8458,7 +6955,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy on Claude: waiting. Claude · Haiku · reasoning high · configured, not launched yet. Show its pane",
+          "hostLabel": "Tidy on Claude: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(139, 139, 152)",
@@ -8479,7 +6976,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Verify on Codex: waiting. Codex · 6-Sol · reasoning high · configured, not launched yet. Show its pane",
+          "hostLabel": "Verify on Codex: waiting. Codex · 6-Sol · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(139, 139, 152)",
@@ -8500,7 +6997,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Critique on Codex: waiting. Codex · 6-Astra · reasoning high · configured, not launched yet. Show its pane",
+          "hostLabel": "Critique on Codex: waiting. Codex · 6-Astra · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(139, 139, 152)",
@@ -8521,7 +7018,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Migrate on Codex: waiting. Codex · 5.6-Terra · reasoning high · configured, not launched yet. Show its pane",
+          "hostLabel": "Migrate on Codex: waiting. Codex · 5.6-Terra · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(139, 139, 152)",
@@ -8542,7 +7039,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Test on Codex: waiting. Codex · 6-Luna · reasoning high · configured, not launched yet. Show its pane",
+          "hostLabel": "Test on Codex: waiting. Codex · 6-Luna · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(139, 139, 152)",
@@ -8634,7 +7131,7 @@
         "haloOpacity": "0",
         "figure": [],
         "badge": null,
-        "ownLabel": "Haiku: waiting",
+        "ownLabel": "Haiku 5.5: waiting",
         "hostLabel": "4. TidyCleanerwaiting",
         "inside": true,
         "twin": false,
@@ -8806,7 +7303,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Stage 4, Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Stage 4, Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -9005,7 +7502,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy on Claude: waiting. Claude · Haiku · reasoning high · configured, not launched yet. Show its pane",
+          "hostLabel": "Tidy on Claude: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet. Open its first message",
           "inside": true,
           "twin": false,
           "word": "rgb(139, 139, 152)",
@@ -9113,7 +7610,7 @@
         "haloOpacity": "0",
         "figure": [],
         "badge": null,
-        "ownLabel": "Haiku: waiting",
+        "ownLabel": "Haiku 5.5: waiting",
         "hostLabel": "5. TidyCleanerwaiting",
         "inside": true,
         "twin": false,
@@ -9332,7 +7829,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Stage 5, Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Stage 5, Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -9379,7 +7876,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy on Claude: passed. Claude · Haiku · reasoning high. Show its pane",
+          "hostLabel": "Tidy on Claude: passed. Claude · Haiku 5.5 · reasoning high. Show its pane",
           "inside": true,
           "twin": false,
           "word": "rgb(79, 195, 111)",
@@ -9471,7 +7968,7 @@
         "haloOpacity": "0",
         "figure": [],
         "badge": null,
-        "ownLabel": "Haiku: passed",
+        "ownLabel": "Haiku 5.5: passed",
         "hostLabel": "2. TidyCleanerpassed",
         "inside": true,
         "twin": false,
@@ -9559,7 +8056,7 @@
           "figure": [],
           "badge": "rgb(79, 195, 111)",
           "ownLabel": null,
-          "hostLabel": "Stage 2, Tidy: passed. Claude · Haiku · reasoning high",
+          "hostLabel": "Stage 2, Tidy: passed. Claude · Haiku 5.5 · reasoning high",
           "inside": true,
           "twin": false,
           "word": null,
@@ -9649,14 +8146,13 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.692701",
+          "haloOpacity": "0.852806",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Review on Codex: reviewing. Codex · 6-Astra · reasoning high. Its pane is in focus",
+          "hostLabel": "Review on Codex: reviewing. Codex · 6-Astra · reasoning high. Open its conversation",
           "inside": true,
           "twin": false,
           "word": "rgb(45, 212, 191)",
@@ -9698,16 +8194,15 @@
         "height": 14,
         "scale": 1,
         "halo": "mg-halo",
-        "haloOpacity": "0.664086",
+        "haloOpacity": "0.845444",
         "figure": [
-          "mg-breathe",
-          "mg-flare"
+          "mg-turn"
         ],
         "badge": null,
         "ownLabel": "GPT-6-Astra: reviewing",
         "hostLabel": "2. ReviewReviewerreview loopreviewing",
         "inside": true,
-        "twin": false,
+        "twin": true,
         "word": "rgb(45, 212, 191)",
         "wordWant": null
       }
@@ -9746,10 +8241,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.799995",
+          "haloOpacity": "0.963477",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -9775,13 +8269,13 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.812744",
+          "haloOpacity": "0.896719",
           "figure": [
             "mg-tilt"
           ],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Build on Claude: running. Claude · Fable · reasoning high. Its pane is in focus",
+          "hostLabel": "Build on Claude: running. Claude · Fable · reasoning high. Open its conversation",
           "inside": true,
           "twin": false,
           "word": "rgb(79, 195, 111)",
@@ -9802,7 +8296,7 @@
         "height": 14,
         "scale": 1,
         "halo": "mg-halo",
-        "haloOpacity": "0.86841",
+        "haloOpacity": "0.896719",
         "figure": [
           "mg-tilt"
         ],
@@ -9810,7 +8304,7 @@
         "ownLabel": "Fable: running",
         "hostLabel": "1. BuildBuilderrunning",
         "inside": true,
-        "twin": false,
+        "twin": true,
         "word": "rgb(79, 195, 111)",
         "wordWant": null
       }
@@ -9828,7 +8322,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.891269",
+          "haloOpacity": "0.977541",
           "figure": [
             "mg-tilt"
           ],
@@ -9856,10 +8350,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.925016",
+          "haloOpacity": "0.75457",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -9880,7 +8373,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.743503",
+          "haloOpacity": "0.819146",
           "figure": [
             "mg-tilt"
           ],
@@ -9903,13 +8396,13 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.662773",
+          "haloOpacity": "0.851015",
           "figure": [
             "mg-sway"
           ],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: працює. Claude · Haiku · міркування високі",
+          "hostLabel": "Tidy: працює. Claude · Haiku 5.5 · міркування високі",
           "inside": true,
           "twin": false,
           "word": null,
@@ -9926,7 +8419,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.600304",
+          "haloOpacity": "0.903559",
           "figure": [
             "mg-phase"
           ],
@@ -9949,10 +8442,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.743503",
+          "haloOpacity": "0.819146",
           "figure": [
-            "mg-turn",
-            "mg-breathe"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -9973,7 +8465,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.770552",
+          "haloOpacity": "0.809875",
           "figure": [
             "mg-turn"
           ],
@@ -9996,7 +8488,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.863204",
+          "haloOpacity": "0.778532",
           "figure": [
             "mg-write"
           ],
@@ -10019,7 +8511,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.925016",
+          "haloOpacity": "0.75457",
           "figure": [
             "mg-spin"
           ],
@@ -10119,7 +8611,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: чекає. Claude · Haiku · міркування високі · налаштовано, ще не запускалося",
+          "hostLabel": "Tidy: чекає. Claude · Haiku 5.5 · міркування високі · налаштовано, ще не запускалося",
           "inside": true,
           "twin": false,
           "word": null,
@@ -10318,7 +8810,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: чекає. Claude · Haiku · міркування високі · налаштовано, ще не запускалося",
+          "hostLabel": "Tidy: чекає. Claude · Haiku 5.5 · міркування високі · налаштовано, ще не запускалося",
           "inside": true,
           "twin": false,
           "word": null,
@@ -10365,7 +8857,7 @@
           "figure": [],
           "badge": "rgb(79, 195, 111)",
           "ownLabel": null,
-          "hostLabel": "Tidy: пройдено. Claude · Haiku · міркування високі",
+          "hostLabel": "Tidy: пройдено. Claude · Haiku 5.5 · міркування високі",
           "inside": true,
           "twin": false,
           "word": null,
@@ -10455,10 +8947,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.996551",
+          "haloOpacity": "0.75457",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -10479,15 +8970,13 @@
           "hostTone": "active",
           "kind": "terra",
           "reading": "running",
-          "live": true,
+          "live": false,
           "width": 14,
           "height": 14,
           "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.977576",
-          "figure": [
-            "mg-spin"
-          ],
+          "halo": "none",
+          "haloOpacity": "0",
+          "figure": [],
           "badge": null,
           "ownLabel": null,
           "hostLabel": "Migrate: фіксує. Codex · 5.6-Terra · міркування високі",
@@ -10533,7 +9022,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.977579",
+          "haloOpacity": "0.771407",
           "figure": [
             "mg-write"
           ],
@@ -10556,10 +9045,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.919375",
+          "haloOpacity": "0.747192",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -10631,7 +9119,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: running. Claude · Haiku · reasoning high",
+          "hostLabel": "Tidy: running. Claude · Haiku 5.5 · reasoning high",
           "inside": true,
           "twin": false,
           "word": null,
@@ -10830,7 +9318,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -11029,7 +9517,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -11076,7 +9564,7 @@
           "figure": [],
           "badge": "rgb(79, 195, 111)",
           "ownLabel": null,
-          "hostLabel": "Tidy: passed. Claude · Haiku · reasoning high",
+          "hostLabel": "Tidy: passed. Claude · Haiku 5.5 · reasoning high",
           "inside": true,
           "twin": false,
           "word": null,
@@ -11187,12 +9675,12 @@
           "hostTone": "active",
           "kind": "terra",
           "reading": "running",
-          "live": true,
+          "live": false,
           "width": 14,
           "height": 14,
           "scale": 1,
           "halo": "none",
-          "haloOpacity": "1",
+          "haloOpacity": "0",
           "figure": [],
           "badge": null,
           "ownLabel": null,
@@ -11286,10 +9774,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.732754",
+          "haloOpacity": "0.860106",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -11336,15 +9823,13 @@
           "hostTone": "active",
           "kind": "terra",
           "reading": "running",
-          "live": true,
+          "live": false,
           "width": 14,
           "height": 14,
           "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.980502",
-          "figure": [
-            "mg-spin"
-          ],
+          "halo": "none",
+          "haloOpacity": "0",
+          "figure": [],
           "badge": null,
           "ownLabel": null,
           "hostLabel": "Migrate",
@@ -11369,10 +9854,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.777055",
+          "haloOpacity": "0.867229",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -11393,7 +9877,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.837997",
+          "haloOpacity": "0.907277",
           "figure": [
             "mg-tilt"
           ],
@@ -11416,13 +9900,13 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.867231",
+          "haloOpacity": "0.925031",
           "figure": [
             "mg-sway"
           ],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "1TidyHaiku· Cleanerrunning",
+          "hostLabel": "1TidyHaiku 5.5· Cleanerrunning",
           "inside": true,
           "twin": false,
           "word": null,
@@ -11439,7 +9923,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.914582",
+          "haloOpacity": "0.952479",
           "figure": [
             "mg-phase"
           ],
@@ -11462,10 +9946,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.837997",
+          "haloOpacity": "0.907277",
           "figure": [
-            "mg-turn",
-            "mg-breathe"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -11486,7 +9969,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.8294",
+          "haloOpacity": "0.901904",
           "figure": [
             "mg-turn"
           ],
@@ -11509,7 +9992,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.799979",
+          "haloOpacity": "0.882876",
           "figure": [
             "mg-write"
           ],
@@ -11532,7 +10015,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.777055",
+          "haloOpacity": "0.867229",
           "figure": [
             "mg-spin"
           ],
@@ -11632,7 +10115,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Open the conversation of Tidy. Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Open the conversation of Tidy. Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -11831,7 +10314,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Open the conversation of Tidy. Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Open the conversation of Tidy. Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -11878,7 +10361,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "2TidyHaiku· Cleanerpassed",
+          "hostLabel": "2TidyHaiku 5.5· Cleanerpassed",
           "inside": true,
           "twin": false,
           "word": null,
@@ -11972,10 +10455,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.822904",
+          "haloOpacity": "0.867232",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -11996,15 +10478,13 @@
           "hostTone": null,
           "kind": "terra",
           "reading": "running",
-          "live": true,
+          "live": false,
           "width": 14,
           "height": 14,
           "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.815287",
-          "figure": [
-            "mg-spin"
-          ],
+          "halo": "none",
+          "haloOpacity": "0",
+          "figure": [],
           "badge": null,
           "ownLabel": null,
           "hostLabel": "1Migrate5.6-Terra· Buildercommitting",
@@ -12050,7 +10530,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.821481",
+          "haloOpacity": "0.876442",
           "figure": [
             "mg-write"
           ],
@@ -12073,10 +10553,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.799982",
+          "haloOpacity": "0.860075",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -12169,7 +10648,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Configure the stage Tidy. Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Configure the stage Tidy. Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -12368,7 +10847,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Configure the stage Tidy. Tidy: waiting. Claude · Haiku · reasoning high · configured, not launched yet",
+          "hostLabel": "Configure the stage Tidy. Tidy: waiting. Claude · Haiku 5.5 · reasoning high · configured, not launched yet",
           "inside": true,
           "twin": false,
           "word": null,
@@ -12415,7 +10894,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "2TidyHaiku· Cleanerpassed",
+          "hostLabel": "2TidyHaiku 5.5· Cleanerpassed",
           "inside": true,
           "twin": false,
           "word": null,
@@ -12488,10 +10967,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.616734",
+          "haloOpacity": "0.867259",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -12538,15 +11016,13 @@
           "hostTone": "active",
           "kind": "terra",
           "reading": "running",
-          "live": true,
+          "live": false,
           "width": 14,
           "height": 14,
           "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.82296",
-          "figure": [
-            "mg-spin"
-          ],
+          "halo": "none",
+          "haloOpacity": "0",
+          "figure": [],
           "badge": null,
           "ownLabel": null,
           "hostLabel": "Migrate",
@@ -12571,10 +11047,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.712034",
+          "haloOpacity": "0.867223",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -12595,7 +11070,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.780865",
+          "haloOpacity": "0.907273",
           "figure": [
             "mg-tilt"
           ],
@@ -12618,13 +11093,13 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.8172",
+          "haloOpacity": "0.925027",
           "figure": [
             "mg-sway"
           ],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "1TidyHaiku· Клінерпрацює",
+          "hostLabel": "1TidyHaiku 5.5· Клінерпрацює",
           "inside": true,
           "twin": false,
           "word": null,
@@ -12641,7 +11116,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.879808",
+          "haloOpacity": "0.952477",
           "figure": [
             "mg-phase"
           ],
@@ -12664,10 +11139,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.780865",
+          "haloOpacity": "0.907273",
           "figure": [
-            "mg-turn",
-            "mg-breathe"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -12688,7 +11162,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.770566",
+          "haloOpacity": "0.901899",
           "figure": [
             "mg-turn"
           ],
@@ -12711,7 +11185,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.736749",
+          "haloOpacity": "0.88287",
           "figure": [
             "mg-write"
           ],
@@ -12734,7 +11208,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.712034",
+          "haloOpacity": "0.867223",
           "figure": [
             "mg-spin"
           ],
@@ -12834,7 +11308,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Відкрити розмову етапу Tidy. Tidy: чекає. Claude · Haiku · міркування високі · налаштовано, ще не запускалося",
+          "hostLabel": "Відкрити розмову етапу Tidy. Tidy: чекає. Claude · Haiku 5.5 · міркування високі · налаштовано, ще не запускалося",
           "inside": true,
           "twin": false,
           "word": null,
@@ -13033,7 +11507,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "Відкрити розмову етапу Tidy. Tidy: чекає. Claude · Haiku · міркування високі · налаштовано, ще не запускалося",
+          "hostLabel": "Відкрити розмову етапу Tidy. Tidy: чекає. Claude · Haiku 5.5 · міркування високі · налаштовано, ще не запускалося",
           "inside": true,
           "twin": false,
           "word": null,
@@ -13080,7 +11554,7 @@
           "figure": [],
           "badge": null,
           "ownLabel": null,
-          "hostLabel": "2TidyHaiku· Клінерпройдено",
+          "hostLabel": "2TidyHaiku 5.5· Клінерпройдено",
           "inside": true,
           "twin": false,
           "word": null,
@@ -13174,10 +11648,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.792314",
+          "haloOpacity": "0.867232",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,
@@ -13198,15 +11671,13 @@
           "hostTone": null,
           "kind": "terra",
           "reading": "running",
-          "live": true,
+          "live": false,
           "width": 14,
           "height": 14,
           "scale": 1,
-          "halo": "mg-halo",
-          "haloOpacity": "0.792314",
-          "figure": [
-            "mg-spin"
-          ],
+          "halo": "none",
+          "haloOpacity": "0",
+          "figure": [],
           "badge": null,
           "ownLabel": null,
           "hostLabel": "1Migrate5.6-Terra· Білдерфіксує",
@@ -13252,7 +11723,7 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.807158",
+          "haloOpacity": "0.882879",
           "figure": [
             "mg-write"
           ],
@@ -13275,10 +11746,9 @@
           "height": 14,
           "scale": 1,
           "halo": "mg-halo",
-          "haloOpacity": "0.784669",
+          "haloOpacity": "0.867232",
           "figure": [
-            "mg-breathe",
-            "mg-flare"
+            "mg-turn"
           ],
           "badge": null,
           "ownLabel": null,

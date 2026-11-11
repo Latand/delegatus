@@ -12,6 +12,10 @@ export interface ArtifactMeta {
   etag: string;
   /** HTML only: the sandboxed frame URL the report renders from. */
   frame?: string;
+  /** A committed file: the commit it was read at. */
+  revision?: { head: string; committedAt: number; headSource: "branch" | "last-passed" };
+  /** A committed file: the directory its relative links resolve against. */
+  baseDir?: string;
 }
 
 export type ArtifactFailure =
@@ -27,6 +31,11 @@ export function artifactContentUrl(path: string, options: { download?: boolean }
   const query = new URLSearchParams({ path: stripLineSuffix(path) });
   if (options.download) query.set("download", "1");
   return `/api/artifact?${query.toString()}`;
+}
+
+/** The same request with `download=1`, for either source. */
+export function withDownload(url: string): string {
+  return `${url}${url.includes("?") ? "&" : "?"}download=1`;
 }
 
 export function artifactMetaUrl(path: string): string {

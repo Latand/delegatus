@@ -9,7 +9,8 @@ import { useLocale } from "@/lib/i18n";
 
 /** "Claude · Opus 5.5 · high effort · account Main": what the draft will run
     on, in the order the pickers set it. The effort and the account are left
-    out while the launch takes the CLI's own (no effort chosen, no catalog). */
+    out while the launch takes the CLI's own (no effort chosen, no catalog),
+    and a Codex speed while it is the standard one. */
 export function runsOnValue(draft: AgentLaunchDraft, t: ReturnType<typeof useLocale>["t"]): string {
   const account = draft.accounts.find((entry) => entry.id === draft.launchAccountId) ?? null;
   return [
@@ -18,6 +19,8 @@ export function runsOnValue(draft: AgentLaunchDraft, t: ReturnType<typeof useLoc
     ENGINE_MODELS[draft.engine].find((option) => option.id === draft.model)?.label ?? modelDisplayName(draft.engine, draft.model),
     draft.effort ? t("orchPanel.runsOnEffort", { effort: draft.effort }) : null,
     account ? t("orchPanel.runsOnAccount", { label: account.label }) : null,
+    /* A chosen speed other than the standard one, as the pill below names it. */
+    draft.engine === "codex" ? draft.speed === "ultrafast" ? "Ultrafast" : draft.speed === "fast" ? t("composer.speedFastShort") : null : null,
   ].filter(Boolean).join(" · ");
 }
 

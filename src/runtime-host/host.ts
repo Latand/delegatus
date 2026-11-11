@@ -2,7 +2,7 @@ import { performanceSpans } from "@/lib/performanceSpans";
 import { runtimeDataCorruptionCode } from "@/lib/runtime/dataCorruption";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { canonicalNativeQueueProof, type NativeQueueCompactedProof, type NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
-import { isStructuredHostKind, parseRuntimeScope, RUNTIME_RECEIPT_STATUSES, RuntimeIdempotencyConflictError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeOperationReceipt, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
+import { isStructuredHostKind, parseRuntimeScope, RUNTIME_RECEIPT_STATUSES, RuntimeIdempotencyConflictError, DeploymentAdmissionClosedError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeOperationReceipt, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { consumeRuntimeEvent, RuntimeConsumerDeferredError, type RuntimeConsumerPorts } from "@/lib/runtime/consumers";
 
@@ -244,11 +244,15 @@ export class RuntimeHost {
         if (typeof afterEventSeq !== "number" || !Number.isSafeInteger(afterEventSeq) || afterEventSeq < 0) {
           throw new Error("runtime effect cursor is invalid");
         }
+        const conversationId = request.params?.conversationId;
+        if (conversationId !== undefined && (typeof conversationId !== "string" || !conversationId || conversationId.length > 512)) {
+          throw new Error("runtime effect conversation is invalid");
+        }
         if (request.params?.conditional === true) {
           const version = this.journal.effectPageVersion();
           result = request.params.knownVersion === version ? { version, unchanged: true }
-            : { version, effects: this.journal.effectBatch(100, kinds as string[] | undefined, afterEventSeq) };
-        } else result = this.journal.effectBatch(100, kinds as string[] | undefined, afterEventSeq);
+            : { version, effects: this.journal.effectBatch(100, kinds as string[] | undefined, afterEventSeq, conversationId) };
+        } else result = this.journal.effectBatch(100, kinds as string[] | undefined, afterEventSeq, conversationId);
       } else if (request.method === "producer-cursor") {
         const producerKind = request.params?.producerKind;
         const eventKeyPrefix = request.params?.eventKeyPrefix;
@@ -334,9 +338,11 @@ export class RuntimeHost {
         }
         result = await withViewerOperation("runtime.rpc", () =>
           this.journal.acknowledgeTerminalProjectionAsync(operationIds as string[], options.signal));
-      } else if (request.method === "viewer-deployment-request") {
+      } else if (request.method === "viewer-deployment-request" || request.method === "viewer-deployment-reconcile") {
         if (!this.deployments) throw new Error("viewer deployments are disabled");
+        if (request.params?.reconcileOnly !== undefined && typeof request.params.reconcileOnly !== "boolean") throw new Error("invalid reconciliation flag");
         result = await this.deployments.requestViewerDeployment({
+          reconcileOnly: request.method === "viewer-deployment-reconcile" || request.params?.reconcileOnly === true,
           revision: typeof request.params?.revision === "string" ? request.params.revision : undefined,
           ref: typeof request.params?.ref === "string" ? request.params.ref : undefined,
           idempotencyKey: String(request.params?.idempotencyKey ?? ""),
@@ -365,7 +371,7 @@ export class RuntimeHost {
       } else throw new Error("runtime request method is unsupported");
       return { id: request.id, ok: true, result };
     } catch (error) {
-      const code = error instanceof RuntimeIdempotencyConflictError ? error.code : runtimeDataCorruptionCode(error);
+      const code = error instanceof RuntimeIdempotencyConflictError || error instanceof DeploymentAdmissionClosedError ? error.code : runtimeDataCorruptionCode(error);
       return {
         id: request.id,
         ok: false,

@@ -112,12 +112,13 @@ test("a busy account mutation rides out a deploy-length outage and parks naming 
   expect(spawnCalls).toBe(attempt.controllerWait!.rounds + 1);
   expect(parked).toMatchObject({
     state: "needs_decision",
-    stateDetail: `stage spawn failed after ${attempt.controllerWait!.rounds} retries over ${Math.round((Date.parse(h.ports.now()) - Date.parse(attempt.controllerWait!.startedAt)) / 1_000)}s: account mutation is busy`,
+    stateDetail: `stage spawn failed after ${spawnCalls - 1} retries over 600s: spawn admission budget exhausted; last observed failure: account mutation is busy`,
     cursor: { stageId: "plan", state: "spawning" },
   });
   expect(parked.runs[0]!.attempts).toHaveLength(1);
   expect(attempt).toMatchObject({ n: 1, state: "needs_decision", launchId: null, conversationId: null });
   expect(attempt.error).toBe(parked.stateDetail);
+  expect(attempt.spawnAdmissionBudget?.spent.writer).toBe(600_000);
 });
 
 test("mixed controller waits publish only the current busy retry time", async () => {
@@ -206,6 +207,7 @@ test("a due busy wait survives a restarted controller race with one fresh host c
     const ports = defaultPipelinePorts();
     ports.now = () => ${JSON.stringify(h.ports.now())};
     // This child models admission and a fake spawn, just like the parent harness.
+    ports.worktreePresent = () => true;
     ports.engineReadiness = () => "connected";
     ports.structuredDeliveryPublication = () => "ready";
     // bun -e is not recognized as a test by the machine scheduler. Keep this
@@ -504,7 +506,7 @@ test("a controller that never returns parks the stage with the wait it spent (#1
   expect(slept).toEqual([]);
   expect(parked.state).toBe("needs_decision");
   expect(parked.stateDetail).toContain("structured delivery controller is unavailable");
-  expect(parked.stateDetail).toContain("6 retries over 30s");
+  expect(parked.stateDetail).toContain("5 retries over 30s: spawn admission budget exhausted");
   expect(parked.runs[0]!.attempts[0]!.controllerWait).toMatchObject({ budgetMs: 30_000, retryMaxMs: 8_000 });
 });
 
@@ -3075,3 +3077,52 @@ test("an unbound sidecar signals the Viewer before any local pipeline preparatio
   expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
   expect(JSON.parse(stdout.trim())).toEqual({ requests: 1, effects: 0, changed: false });
 });
+
+test.each(["fetch", "pinned", "failed"] as const)("portable provisioning controller settles a real Git base without timeout: %s", async mode => {
+  const { os, realExec, createPipelineFromRequest } = await import("./engine.fixture");
+  const { realProvisionExec } = await import("./git");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "portable-controller-"));
+  const h = harness();
+  savePipelines([]);
+  try {
+    const repo = path.join(root, "repo"), origin = path.join(root, "origin.git"), bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    fs.symlinkSync(Bun.which("git")!, path.join(bin, "git"));
+    expect(Bun.which("timeout", { PATH: bin })).toBeNull();
+    expect(Bun.which("gtimeout", { PATH: bin })).toBeNull();
+    const git = async (cwd: string, ...args: string[]) => {
+      const result = await realExec("git", args, cwd);
+      expect(result.code, result.stderr).toBe(0);
+      return result.stdout.trim();
+    };
+    await git(root, "init", "--bare", "--initial-branch=main", origin);
+    await git(root, "clone", origin, repo);
+    await git(repo, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", "base");
+    await git(repo, "push", "origin", "main");
+    const head = await git(repo, "rev-parse", "HEAD");
+    if (mode === "failed") await git(repo, "remote", "set-url", "origin", path.join(root, "missing.git"));
+    let fetches = 0;
+    h.ports.exec = realExec;
+    h.ports.provisionExec = async (command, args, cwd, signal, options) => {
+      if (args[0] === "fetch") { fetches++; expect(options?.timeoutMs).toBe(60_000); }
+      return realProvisionExec(command, args, cwd, signal, { ...options, env: { ...options?.env, PATH: bin } });
+    };
+    const created = await createPipelineFromRequest({ task: "Portable provisioning", repoDir: repo, publication: "internal",
+      ...(mode === "pinned" ? { baseRef: head } : {}),
+      stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }],
+    }, h.ports);
+    expect(created.error).toBeUndefined();
+    expect(created.pipeline).toBeDefined();
+    await tickPipelines([], h.ports);
+    const lane = loadPipelines().find(item => item.id === created.pipeline!.id)!;
+    expect(fetches).toBe(mode === "pinned" ? 0 : 1);
+    if (mode === "failed") {
+      expect(lane).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("fetching origin/main:") });
+      expect(h.spawnInputs).toHaveLength(0);
+      expect(fs.existsSync(lane.worktreeDir)).toBe(false);
+    } else {
+      expect(lane).toMatchObject({ state: "running", baseRef: head, baseBranch: "main" });
+      expect(await git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(head);
+    }
+  } finally { savePipelines([]); fs.rmSync(root, { recursive: true, force: true }); }
+}, 30_000);

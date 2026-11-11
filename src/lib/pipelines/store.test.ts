@@ -12,6 +12,40 @@ import { stageVerdictFrom } from "./verdict";
 
 const ARCHIVE_CHILD = path.join(import.meta.dir, "archive.sqliteChild.ts");
 
+test("conversation source survives storage, independent reads and archival without becoming creator lineage", async () => isolatedDelivery(async () => {
+  const source = { conversationId: "conversation_source", branch: "fix/source", head: "a".repeat(40), capturedAt: "2026-10-01T00:00:00.000Z" };
+  const pipeline = deliveryFixture("conversation-source");
+  pipeline.conversationSource = { ...source };
+  pipeline.state = "closed";
+  pipeline.cursor = null;
+  pipeline.closedAt = "2026-10-02T00:00:00.000Z";
+  pipeline.hiddenAt = pipeline.closedAt;
+  savePipelines([pipeline]);
+  const first = loadPipelines()[0]!;
+  const second = loadPipelinesForStartup()[0]!;
+  expect(first.conversationSource).toEqual(source);
+  first.conversationSource!.branch = "changed-local-copy";
+  expect(second.conversationSource).toEqual(source);
+  expect(loadPipelines()[0]!.conversationSource).toEqual(source);
+  expect(await archiveSettledPipelines(Date.parse("2026-10-20T00:00:00.000Z"))).toBe(1);
+  expect(loadArchivedPipelines()[0]!.conversationSource).toEqual(source);
+  const archived = findPipelineRecord(pipeline.id)!;
+  archived.conversationSource!.branch = "changed-archive-copy";
+  expect(findPipelineRecord(pipeline.id)!.conversationSource).toEqual(source);
+}));
+
+test("stored source metadata is optional and malformed source facts are refused", async () => isolatedDelivery(async () => {
+  const { isStoredPipeline } = await import("./store");
+  const pipeline = deliveryFixture("source-shape");
+  expect(isStoredPipeline(pipeline)).toBe(true);
+  const source = { conversationId: "conversation_source", branch: "fix/source", head: "a".repeat(40), capturedAt: "2026-10-01T00:00:00.000Z" };
+  expect(isStoredPipeline({ ...pipeline, conversationSource: source })).toBe(true);
+  for (const invalid of [null, [], {}, { ...source, conversationId: "/transcript/path" }, { ...source, branch: "bad branch" },
+    { ...source, head: "main" }, { ...source, capturedAt: "2026-02-31T00:00:00.000Z" }, { ...source, extra: "unvalidated" }]) {
+    expect(isStoredPipeline({ ...pipeline, conversationSource: invalid })).toBe(false);
+  }
+}));
+
 test("a one-stage merger pipeline accepts its role and persists the effective read-write profile", () => {
   const effectiveRole = { roleId: "merger" as const, engine: "codex" as const, model: "gpt-6.1-sol", effort: "high", access: "read-write" as const, promptScaffold: "Merge reviewed PRs" };
   expect(isEffectiveRole(effectiveRole)).toBe(true);
@@ -261,6 +295,30 @@ test("takeover records a settled failure before the old controller observes it",
   expect(taken.pipeline?.publicationRecovery?.[sha]).toMatchObject({ failures: 1, totalAttempts: 1,
     history: [{ operationId: "unobserved-deadline", cause: "infrastructure-deadline", retryAt: expect.any(String) }] });
   expect(findPipelineRecord(owner.id)!.publicationRecovery).toEqual(taken.pipeline?.publicationRecovery);
+}));
+
+test("takeover after restart keeps an unrecorded App refusal's original expiry", async () => isolatedDelivery(async root => {
+  const owner = await createPipelineWithDelivery(deliveryFixture("app-refusal-owner"), deliveryTarget);
+  const sha = "a".repeat(40);
+  owner.delivery!.operation = { id: "unobserved-app-refusal", sha, epoch: 1, state: "settled", result: { ok: false,
+    error: "App git access unavailable", failure: { step: "publishing the pipeline branch", code: 1,
+      signal: null, durationMs: 1, outputTail: "fatal: HTTP 403", retryableApp403: true, observedAt: "2026-10-27T08:00:00.000Z" } } };
+  savePipelines([owner]);
+  const comparison = await createPipelineWithDelivery(deliveryFixture("app-refusal-successor"), deliveryTarget);
+  const { realExec } = await import("@/lib/workflows/provision");
+  const result = await realExec(process.execPath, ["-e", `
+    const { setSystemTime } = await import("bun:test");
+    setSystemTime(new Date("2026-10-27T09:20:00.000Z"));
+    const { takeoverPipelineDelivery } = await import(${JSON.stringify(path.join(import.meta.dir, "store.ts"))});
+    const taken = await takeoverPipelineDelivery(${JSON.stringify(comparison.id)}, ${JSON.stringify(owner.id)}, 1, "continue publication", null);
+    console.log(JSON.stringify(taken));
+  `], process.cwd(), { ...process.env, LLV_STATE_DIR: root }, { timeoutMs: 30_000 });
+  expect(result.code, result.stderr).toBe(0);
+  const taken = JSON.parse(result.stdout);
+  expect(taken.error).toBeUndefined();
+  expect(taken.pipeline.publicationRecovery[sha]).toMatchObject({ app403Since: "2026-10-27T08:00:00.000Z",
+    history: [{ cause: "app-git-403", retryAt: null }] });
+  expect(findPipelineRecord(owner.id)!.publicationRecovery).toEqual(taken.pipeline.publicationRecovery);
 }));
 
 test("terminal release retains receipts through archive and takeover fences epochs and in-flight writes", async () => isolatedDelivery(async () => {
@@ -1193,7 +1251,7 @@ test("startup owner handoff deadlines round-trip and malformed deadlines are ref
 test("suspension custody round-trips independently and rejects malformed stop evidence", async () => isolatedDelivery(() => {
   const lane = providerStoreFixture();
   const suspension = { reason: "account" as const, detail: "account left binding", requestedAt: "2026-10-15T00:00:00Z",
-    stoppedAt: "2026-10-15T00:00:01Z", stopRevision: 2, operatorStoppedAt: "2026-10-15T00:00:02Z" };
+    stoppedAt: "2026-10-15T00:00:01Z", stopRevision: 2, operatorStoppedAt: "2026-10-15T00:00:02Z", retryRequestedAt: "2026-10-15T00:00:03Z" };
   lane.runs[0]!.attempts[0]!.suspension = suspension;
   savePipelines([lane]);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.suspension).toEqual(suspension);
@@ -1201,7 +1259,8 @@ test("suspension custody round-trips independently and rejects malformed stop ev
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.suspension!.detail).toBe(suspension.detail);
   for (const bad of [{}, { ...suspension, reason: "unknown" }, { ...suspension, stoppedAt: "invalid" },
     { ...suspension, requestedAt: null }, { ...suspension, operatorStoppedAt: 123 },
-    { ...suspension, stopRevision: -1 }, { ...suspension, stopRevision: "1" }]) {
+    { ...suspension, stopRevision: -1 }, { ...suspension, stopRevision: "1" },
+    { ...suspension, retryRequestedAt: "invalid" }, { ...suspension, retryRequestedAt: null }]) {
     lane.runs[0]!.attempts[0]!.suspension = bad as never;
     expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
   }

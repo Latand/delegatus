@@ -205,35 +205,6 @@ test("Codex admission omits skills for delegated and role launches while operato
   }
 }));
 
-test("Claude tmux admission materializes the current memory source at the real launch boundary", async () => {
-  const transport = process.env.LLV_SPAWN_TRANSPORT;
-  process.env.LLV_SPAWN_TRANSPORT = "tmux";
-  try {
-    notSetUp();
-    for (const state of SOURCE_STATES) {
-      chooseSource(state);
-      let reached = false;
-      let settings: { autoMemoryEnabled?: boolean; env?: Record<string, string> } | undefined;
-      const { response } = await launch("claude", null, undefined, {
-        runtimeHostClient: () => null as never,
-        spawnTmuxAgent: async spec => {
-          reached = true;
-          const file = spec.command.match(/'--settings' '([^']+)'/)?.[1];
-          if (file) settings = JSON.parse(fs.readFileSync(file, "utf8"));
-          throw Error("synthetic stop at tmux launch boundary");
-        },
-      }, `memory_source_tmux_${state}`);
-      expect(reached).toBe(true); expect(response.status).toBe(500);
-      expect(settings).toBeDefined();
-      expect(settings?.autoMemoryEnabled).toBe(sourceTurnsEnginesOff(state) ? false : undefined);
-      expect(settings?.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe(sourceTurnsEnginesOff(state) ? "1" : undefined);
-    }
-  } finally {
-    chooseSource("unchosen");
-    if (transport === undefined) delete process.env.LLV_SPAWN_TRANSPORT; else process.env.LLV_SPAWN_TRANSPORT = transport;
-  }
-});
-
 async function agentLaunch(engine: "claude" | "codex", seatId: string, overrides: Partial<SpawnCommandDependencies> = {}) {
   const launchId = seatLaunchIds.get(seatId);
   if (!launchId) throw new Error("seat launch missing");
@@ -649,36 +620,6 @@ test("an ungranted seat cannot grant Telegram to a child", async () => {
   expect(receipt).toBeNull();
 });
 
-test("Telegram grant refuses the tmux fallback before reserving a child", async () => {
-  connected();
-  const seatId = seedSeat();
-  process.env.LLV_SPAWN_TRANSPORT = "tmux";
-  try {
-    const { response, receipt } = await launch("claude", seatId, ["telegram"]);
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ error: "telegram MCP requires structured spawn transport" });
-    expect(receipt).toBeNull();
-  } finally {
-    process.env.LLV_SPAWN_TRANSPORT = "structured";
-  }
-});
-
-test("an ordinary tmux root keeps the Viewer baseline while Telegram is connected", async () => {
-  connected();
-  process.env.LLV_SPAWN_TRANSPORT = "tmux";
-  try {
-    const { response, receipt } = await launch("claude", null, undefined, {
-      runtimeHostClient: () => null,
-      spawnTmuxAgent: async () => { throw new Error("synthetic tmux launch stopped"); },
-    });
-    expect(response.status).toBe(500);
-    expect(await response.json()).toMatchObject({ error: "synthetic tmux launch stopped" });
-    expect(receipt?.launchProfile.mcpServers).toEqual(["viewer"]);
-  } finally {
-    process.env.LLV_SPAWN_TRANSPORT = "structured";
-  }
-});
-
 for (const connectedFirst of [true, false]) test(`root replay keeps its ${connectedFirst ? "granted" : "denied"} Telegram selection across connector change`,
   async () => withRegistryMode("sqlite", async () => {
     if (connectedFirst) connected(); else notSetUp();
@@ -825,7 +766,7 @@ async function sendToGoneHost(engine: "claude" | "codex", target: { conversation
       try {
         return await recoverDeadStructuredConversation(request, {
           ...recoveryDependencies,
-          transport: () => "structured",
+          transportAvailable: () => true,
           resolveAccount: () => launchAccount(engine),
           requestDeliveryDrain: () => {},
           spawn: (input) => spawnStructuredConversation(input, { startHost: probe.startHost }),

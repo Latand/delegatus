@@ -39,6 +39,16 @@ export function stageAttempts(pipeline: Pipeline, stageId: string): PipelineStag
   return pipeline.runs.find((run) => run.stageId === stageId)?.attempts ?? [];
 }
 
+/** A saved cut waits until a continuation is accepted. Lifecycle remains
+ * running so the controller can retry the same attempt. */
+export function currentProviderWait(pipeline: Pipeline): NonNullable<PipelineStageAttempt["providerWait"]> | null {
+  if (pipeline.state !== "running" && pipeline.state !== "needs_decision") return null;
+  const attempt = pipeline.cursor && latestAttempt(pipeline, pipeline.cursor.stageId);
+  if (!attempt || attempt.report || (attempt.state !== "running" && attempt.state !== "needs_decision")) return null;
+  const wait = attempt.providerWait;
+  return wait && wait.turnTs > 0 && !wait.actionAt ? wait : null;
+}
+
 /**
  * Resolves a stage's chip state from its latest attempt and the pipeline cursor,
  * following the state matrix: a terminal attempt state wins; otherwise a stage
@@ -65,6 +75,7 @@ export function stageChipState(pipeline: Pipeline, stage: PipelineStage): StageC
   }
   const onCursor = pipeline.cursor?.stageId === stage.id;
   if (onCursor && pipelineCursorActive(pipeline)) {
+    if (currentProviderWait(pipeline)) return "pending";
     if (pipeline.cursor?.state === "committing" || attempt?.state === "committing") return "committing";
     if (stage.kind === "review-loop" || pipeline.cursor?.state === "reviewing" || attempt?.state === "reviewing") return "reviewing";
     return "running";

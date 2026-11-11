@@ -79,10 +79,23 @@ test("the release owner starts auto-update and the «Готово» sweep with t
     loadFlowPipelineController: async () => ({ startFlowPipelineController: () => { started.push("pipeline"); } }),
     loadAccountMigrationController: async () => ({ startAccountMigrationController: async () => {} }),
     loadSelfUpdateAuto: async () => ({ startSelfUpdateAuto: () => { started.push("auto"); } }),
+    loadCloudEnvironmentController: async () => ({ startCloudEnvironmentController: () => { started.push("cloud"); } }),
     loadLinkedBoardSync: async () => ({ startLinkedBoardSync: () => { started.push("boards"); } }),
     loadDoneSweep: async () => ({ startDoneSweep: () => { started.push("done"); } }),
+    loadAppConnect: async () => ({ startAppConnectPoller: () => { started.push("app-connect"); } }),
   });
-  expect(started).toEqual(["auto", "pipeline", "boards", "done"]);
+  expect(started).toEqual(["auto", "pipeline", "cloud", "boards", "done", "app-connect"]);
+});
+
+test.each([true, false])("pressure observation starts independently of cleanup with cleanup loader succeeds=%s", async succeeds => {
+  const started: string[] = [];
+  await startCurrentReleaseControllers({ LLV_ACCOUNT_CONTROLLER_DISABLED: "1" }, {
+    loadFlowPipelineController: async () => ({ startFlowPipelineController: () => {} }),
+    loadAccountMigrationController: async () => ({ startAccountMigrationController: async () => {} }),
+    loadDiskPressureWatch: async () => ({ startDiskPressureWatch: () => { started.push("pressure"); } }),
+    loadTempSweep: async () => { if (!succeeds) throw new Error("cleanup unavailable"); return { startTempSweep: () => { started.push("temp"); } }; },
+  });
+  expect(started).toEqual(succeeds ? ["pressure", "temp"] : ["pressure"]);
 });
 
 test("an auto-update loader failure leaves the other controllers running", async () => {
@@ -129,6 +142,20 @@ test("a seat-channel startup failure leaves saved-answer delivery running", asyn
     loadPrototypeDelivery: async () => ({ startPrototypeDeliveryWorker: () => { started.push("answers"); } }),
   });
   expect(started).toEqual(["pipeline", "answers"]);
+});
+
+test("voice timers start at boot, and their failure stops no other controller", async () => {
+  const started: string[] = [];
+  const controllers = { loadFlowPipelineController: async () => ({ startFlowPipelineController: () => { started.push("pipeline"); } }),
+    loadAccountMigrationController: async () => ({ startAccountMigrationController: async () => {} }) };
+  await startCurrentReleaseControllers({ LLV_ACCOUNT_CONTROLLER_DISABLED: "1" }, { ...controllers,
+    loadVoiceTimers: async () => ({ startVoiceTimers: () => { started.push("timers"); } }) });
+  expect(started).toEqual(["pipeline", "timers"]);
+  started.length = 0;
+  await startCurrentReleaseControllers({}, { ...controllers,
+    loadVoiceTimers: async () => { throw new Error("timer store refused"); },
+    loadAccountMigrationController: async () => { started.push("accounts"); return { startAccountMigrationController: async () => {} }; } });
+  expect(started).toEqual(["pipeline", "accounts"]);
 });
 
 test("an install transfer that cannot be settled refuses activation before any launch or host is admitted", async () => {

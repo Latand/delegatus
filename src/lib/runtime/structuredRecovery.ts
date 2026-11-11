@@ -7,11 +7,12 @@ import { resolveContinuityAccount } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { ResumeSpec } from "@/lib/agent/cli";
-import { agentRegistry, type AgentRegistry, type ProcessIdentity, type RegistryFile, type SpawnBeginResult } from "@/lib/agent/registry";
+import { conversationIdsResolvingTo, agentRegistry, storedPaneAgentRuns, type AgentRegistry, type ProcessIdentity, type RegistryFile, type SpawnBeginResult } from "@/lib/agent/registry";
+import { procBackend } from "@/lib/proc";
 import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { cachedLimitsProvenance } from "@/lib/limits";
-import { captureProcessIdentity, processIdentityMayOwn } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayOwn, processIdentityStatus } from "@/lib/processIdentity";
 import { derivedSpawnTitle, durableSemanticTitle } from "@/lib/title";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
@@ -22,6 +23,7 @@ import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { bindCodexHostPersistence, reconcileDeadStructuredRegistryHostOffLoop } from "./registry";
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import { assertPipelineTurnAllowed } from "./accountCreditGuard";
+import { stageGitEnvironment } from "./stageGitEnvironment";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import { stagedLaunchRecovery } from "./stagedRecovery";
 import {
@@ -31,9 +33,11 @@ import {
   spawnStructuredConversation,
   structuredHostCell,
 } from "./structuredSpawn";
-import { spawnTransport } from "./spawnTransport";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
-import { findPipelineRecord, withPipelineStartupAdmission } from "@/lib/pipelines/store";
+import { structuredTransportAvailable } from "./spawnTransport";
+import { statePath } from "@/lib/configDir";
+import { recipientPipelineEvidenceRevision } from "@/lib/state/sqliteStateStore";
+import { loadPipelineOwnershipForStartupAsync, pipelineStartupAttemptMatches, findPipelineRecord, withPipelineStartupAdmission } from "@/lib/pipelines/store";
 import { instanceCpuPrioritySource } from "./cpuAdmissionScope";
 import { cpuPriorityEnv } from "./cpuPriority";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
@@ -41,13 +45,16 @@ import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { CodexAppServerHost } from "./codexAppServerHost";
 
 export interface StructuredRecoveryRequest {
-  /** Internal startup delivery path: reconnect a verified native listener
-      when its previous Viewer released the writer, without a successor. */
+  /** Reconnect a verified native listener without a successor. Ordinary
+      recovery also does this when a live Codex process has no local host. */
   reconnectLiveHost?: boolean;
   /** Fresh autonomous seat authority, re-read after recovery's lock waits. */
   admissionGuard?: DeliveryAdmissionGuard;
   /** Seat authority after reservation, independent of this launch's new identity. */
   authorityGuard?: () => void;
+  /** Hand predecessor evidence to the verified successor before attachment
+      writes its ledger. Called synchronously after this recovery proves custody. */
+  acceptSuccessorClaim?: (key: SessionKey) => void;
   path: string;
   conversationId?: string | null;
   origin?: MessageOrigin;
@@ -119,9 +126,11 @@ const defaultParkResolver: StructuredHostParkResolver = (engine, accountId, snap
 });
 
 export interface StructuredRecoveryDependencies {
+  /** Whether this deployment can host the recovered conversation. Without a
+      structured transport there is nothing to start, and recovery answers null. */
+  transportAvailable?: () => boolean;
   registry?: AgentRegistry;
   client?: RuntimeHostClient | null;
-  transport?: () => "tmux" | "structured";
   resolveAccount?: (engine: "claude" | "codex" | "copilot", accountId: string | null, project: string | null) => AccountContext;
   spawn?: typeof spawnStructuredConversation;
   processIdentity?: () => ProcessIdentity;
@@ -302,11 +311,11 @@ function candidateFor(
      old root is already dead. Only a successful termination retry can verify
      and clear this evidence. */
   if ((entry?.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
-  if (entry?.host) return null;
-  /* Structured cutover covers every registered transcript. Historical Codex
-     and Claude sessions reach their pane-less host through this recovery path,
-     including conversations that predate registry entries. A verified live
-     tmux owner returned above keeps ownership until that process exits. */
+  /* A stored row can name a pane agent that still runs after the upgrade. It
+     may write this transcript, so no second writer is started beside it. */
+  if (storedPaneAgentRuns(entry, procBackend)) return null;
+  /* Every registered transcript reaches its host through this recovery path,
+     including conversations that predate registry entries. */
   const terminal = entry?.status === "dead" || entry?.status === "unhosted";
   const hostProcessLive = Boolean(!terminal
     && structuredHostProcessAlive(entry?.structuredHost?.process ?? null));
@@ -417,7 +426,8 @@ async function recoverCandidate(
     if (!current) return null;
     const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
     if (request.reconnectLiveHost && !ownership && client && current.engine === "codex") {
-      const entry = registry.readOnlySnapshot().entries[sessionKeyId(current.key)];
+      const entry = registry.structuredRecoveryFacts(current.key, { conversationId: current.conversationId })
+        .entries[sessionKeyId(current.key)];
       const native = entry?.structuredHost;
       const socketOwner = native?.process ? { endpoint: native.endpoint, process: native.process,
         signalDomain: native.signalDomain, signalBoundary: native.signalBoundary } : null;
@@ -425,7 +435,27 @@ async function recoverCandidate(
         const { publishStructuredDeliveryHost, structuredDeliveryHostForConversation } = await import("./structuredDeliveryController");
         if (!structuredDeliveryHostForConversation(current.conversationId)) {
           const account = (dependencies.resolveAccount ?? resolveContinuityAccount)(current.engine, current.accountId, current.project);
+          const recipientSelection = () => {
+            const snapshot = registry.startupHostSnapshot(current!.key);
+            const conversationIds = conversationIdsResolvingTo(snapshot,current!.conversationId);
+            const entry = snapshot.entries[sessionKeyId(current!.key)];
+            const generation = registry.conversation(current!.conversationId)?.generations.at(-1);
+            return { ids: [...new Set(conversationIds.flatMap(id => (snapshot.memberships[id] ?? [])
+              .filter(item => item.kind === "pipeline").map(item => item.containerId)))], conversationIds,
+              agentPaths: [...new Set([entry?.artifactPath, generation?.path].filter((value): value is string => !!value))],
+              sessionIds: [current!.key.sessionId] };
+          };
+          const recipient = recipientSelection();
+          const recipientIdentity = JSON.stringify(recipient);
+          const recipientVersion = recipientPipelineEvidenceRevision(statePath("state.sqlite"), recipient);
           const authorize = () => {
+            if (!recipientVersion) throw new StructuredRecoveryHeldForUpdateError("recipient pipeline ownership index is unavailable for native reconnect");
+            if (recipientPipelineEvidenceRevision(statePath("state.sqlite"), recipient) !== recipientVersion) {
+              throw new StructuredRecoveryHeldForUpdateError("recipient pipeline authority changed during native reconnect");
+            }
+            if (JSON.stringify(recipientSelection()) !== recipientIdentity) throw new StructuredRecoverySupersededError();
+            if (registry.conversation(current!.conversationId)?.generations.at(-1)?.id !== current!.key.sessionId
+              || registry.conversation(current!.conversationId)?.supersededBy) throw new StructuredRecoverySupersededError();
             assertRecoveryAdmission(request, registry);
             request.authorityGuard?.();
             request.admissionGuard?.();
@@ -435,11 +465,20 @@ async function recoverCandidate(
           authorize();
           const claim = await withPipelineStartupAdmission(async available => {
             if (!available) throw new StructuredRecoveryHeldForUpdateError("pipeline authority is unavailable for native reconnect");
+            const owners = await loadPipelineOwnershipForStartupAsync(recipient.ids,new Set(recipient.conversationIds),recipient);
+            if (owners.some(row => row.survivors.some(identity => processIdentityStatus(identity) !== "dead")
+              || row.attempts.some(attempt => pipelineStartupAttemptMatches(attempt,recipient) && attempt.suspended))) {
+              throw new StructuredRecoveryHeldForUpdateError("recipient pipeline custody is unresolved for native reconnect");
+            }
             return registry.deliveryWriteOrBusy({ label: "registry.reconnect-startup-host" }, () => {
               authorize();
+              if (JSON.stringify(recipientSelection()) !== recipientIdentity
+                || registry.conversation(current!.conversationId)?.generations.at(-1)?.id !== current!.key.sessionId) {
+                throw new StructuredRecoverySupersededError();
+              }
               return registry.claimStructuredHost(current!.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner });
             });
-          }, "reconnecting requested startup host", undefined, true);
+          }, "reconnecting requested startup host", undefined, true, { recipient });
           if (claim?.structuredHost && claim.claimOwner) {
             let host: CodexAppServerHost | undefined;
             const releaseConnection = async () => {
@@ -448,13 +487,22 @@ async function recoverCandidate(
                 () => registry.releaseStructuredHostClaim(current!.key, claim.claimOwner!, claim.claimEpoch));
             };
             try {
+              if (!registry.ownsStructuredHostClaim(current.key, claim.claimOwner, claim.claimEpoch)) {
+                throw new StructuredRecoverySupersededError();
+              }
+              request.acceptSuccessorClaim?.(current.key);
+              request.admissionGuard?.(current.key);
               authorize();
               const retainedProtocolVersion = claim.structuredHost.protocolVersion;
               host = await CodexAppServerHost.adopt(current.key.sessionId, {
                 omitSkillsInstructions: current.spec.launchProfile?.omitSkillsInstructions === true
                   || sessionOriginFor(registry.conversation(current.conversationId) ?? {}) === "delegated",
                 cwd: current.spec.cwd, codexHome: account.home,
-                env: withoutUnsupportedApiCredentials(account.env), socketOwner,
+                mcpServers: current.spec.launchProfile?.mcpServers ?? ["viewer"],
+                plugins: current.spec.launchProfile?.plugins ?? [],
+                env: { ...withoutUnsupportedApiCredentials(account.env),
+                  ...await stageGitEnvironment(registry, current.conversationId, entry.structuredHostOperationId, current.spec.cwd) }, socketOwner,
+                assertCurrent: authorize,
                 initialEventCursor: claim.structuredHost.eventCursor,
                 readProtocolVersion: () => retainedProtocolVersion ?? "unknown",
                 memoryCell: structuredHostCell(registry, "codex", sessionKeyId(current.key), current.conversationId),
@@ -640,7 +688,7 @@ async function recoverCandidate(
             successorEpoch = claimEpoch;
             ownsSuccessor = () => !!claimOwner && registry.ownsStructuredHostClaim(current.key, claimOwner, claimEpoch);
             // The spawn supplies the claim it just acquired, before yielding.
-            // Later checks accept only this reservation and this writer.
+            // Later checks accept only this reservation, writer and current generation.
             admissionGuard = () => {
               assertAuthority();
               if (!request.authorityGuard) request.admissionGuard?.();
@@ -648,6 +696,7 @@ async function recoverCandidate(
               const receipt = snapshot.receipts[launchId];
               const entry = snapshot.entries[sessionKeyId(current.key)];
               if (!claimOwner || !receipt || receipt.conversationId !== current.conversationId
+                || registry.conversation(current.conversationId)?.generations.at(-1)?.id !== current.key.sessionId
                 || receipt.accountId !== account.accountId || receipt.purpose !== "resume-successor"
                 || receipt.state === "failed" || receipt.state === "conflicted"
                 || entry?.claimOwner !== claimOwner || entry.claimEpoch !== claimEpoch
@@ -657,6 +706,8 @@ async function recoverCandidate(
               }
             };
             claimed = true;
+            admissionGuard();
+            request.acceptSuccessorClaim?.(current.key);
             admissionGuard();
           },
         },
@@ -729,7 +780,7 @@ export async function recoverDeadStructuredConversation(
   request: StructuredRecoveryRequest,
   dependencies: StructuredRecoveryDependencies = {},
 ): Promise<StructuredRecoveryResult | null> {
-  if ((dependencies.transport ?? spawnTransport)() !== "structured") return null;
+  if (!(dependencies.transportAvailable ?? structuredTransportAvailable)()) return null;
   const registry = dependencies.registry ?? agentRegistry();
   if (dependencies.ownership && !await dependencies.ownership.owns()) {
     throw new StructuredRecoverySupersededError();
@@ -744,6 +795,16 @@ export async function recoverDeadStructuredConversation(
   const retired = runtimeSwitchRetirementReason(candidate.conversationId, registry);
   if (retired) throw new Error(retired);
   let admittedRequest = request;
+  if (!dependencies.ownership && request.reconnectLiveHost === undefined
+    && candidate.engine === "codex" && candidate.hostProcessLive) {
+    const { structuredDeliveryHostForConversation } = await import("./structuredDeliveryController");
+    /* A native process may outlive its Viewer writer. Its registry claim alone
+       does not prove this Viewer holds a transport that can deliver a turn.
+       Reuse the socket-owner and claim fences below before reporting recovery. */
+    if (!structuredDeliveryHostForConversation(candidate.conversationId)) {
+      admittedRequest = { ...request, reconnectLiveHost: true };
+    }
+  }
   const admissionSnapshot = registry.livenessConversationSnapshot(candidate.conversationId);
   if (conversationAgentRole(admissionSnapshot, candidate.conversationId) === "curator") {
     const [{ curatorRecoveryGuard }, { defaultSeatTickAdmissionSources }] = await Promise.all([
@@ -756,7 +817,7 @@ export async function recoverDeadStructuredConversation(
       request.admissionGuard?.(key);
       curatorGuard();
     };
-    admittedRequest = { ...request, admissionGuard, authorityGuard: () => {
+    admittedRequest = { ...admittedRequest, admissionGuard, authorityGuard: () => {
       (request.authorityGuard ?? request.admissionGuard)?.();
       curatorGuard();
     } };
@@ -778,7 +839,7 @@ export async function recoverDeadStructuredConversation(
       },
     });
   }
-  if (candidate.hostLive && !dependencies.ownership && !request.reconnectLiveHost) return { ...liveHostResult(candidate), ...(admittedRequest.admissionGuard ? { admissionGuard: admittedRequest.admissionGuard } : {}) };
+  if (candidate.hostLive && !dependencies.ownership && !admittedRequest.reconnectLiveHost) return { ...liveHostResult(candidate), ...(admittedRequest.admissionGuard ? { admissionGuard: admittedRequest.admissionGuard } : {}) };
   const recovery = recoverCandidate(admittedRequest, dependencies, registry, candidate);
   recoveries.set(recoveryKey, recovery);
   try {

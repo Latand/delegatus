@@ -13,14 +13,15 @@ import { captureProcessIdentity } from "@/lib/processIdentity";
 
 const NOW = Date.parse("2026-10-16T00:00:00Z");
 const CREATED = new Date(NOW).toISOString();
-function seeded(root: string, history: number) {
+const retirementSession = (index: number) => ["00000000", "0000", "0000", "0000", String(index + 1).padStart(12, "0")].join("-");
+function seeded(root: string, history: number, sessionId = (index: number) => `reader-${index}`) {
   const seed = new AgentRegistry(path.join(root, "seed.json"), undefined, undefined, { sqliteMode: "off" });
   const conversation = seed.ensureConversation("codex", "/fixture/template.jsonl", null);
   const receipt = seed.beginSpawn("codex", "/fixture", { title: "Reader fixture" });
   seed.close();
   const file = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
   for (let n = 0; n <= history; n++) {
-    const id = `conversation_reader_${n}` as `conversation_${string}`, session = `reader-${n}`;
+    const id = `conversation_reader_${n}` as `conversation_${string}`, session = sessionId(n);
     file.conversations[id] = { ...conversation, id, createdAt: CREATED, updatedAt: CREATED, generations: [{ ...conversation.generations[0]!, createdAt: CREATED, id: session, path: `/fixture/${n}.jsonl` }],
       turn: { ...conversation.turn, state: "idle" } };
     file.entries[`codex:${session}`] = { key: { engine: "codex", sessionId: session }, artifactPath: `/fixture/${n}.jsonl`, cwd: "/fixture", accountId: null,
@@ -44,7 +45,7 @@ test("retirement and startup membership payload reads stay flat across tenfold r
   try {
     for (const history of [10, 100]) {
       const directory = path.join(root, String(history)); fs.mkdirSync(directory);
-      const initial = seeded(directory, history);
+      const initial = seeded(directory, history, retirementSession);
       const counts: number[] = [];
       for (let reopened = 0; reopened < 2; reopened++) {
         let reads = 0;
@@ -62,7 +63,7 @@ test("retirement and startup membership payload reads stay flat across tenfold r
           counts.push(reads);
           // Exercise the production startup selector over the same indexed view.
           const registry = { readOnlySnapshot: () => snapshot,
-            structuredHostEntries: () => [snapshot.entries["codex:reader-0"]!] } as AgentRegistry;
+            structuredHostEntries: () => [snapshot.entries[`codex:${retirementSession(0)}`]!] } as AgentRegistry;
           reads = 0;
           const selected = pipelineStartupMemberships(registry);
           expect(Object.keys(selected.memberships)).toEqual(["conversation_reader_0", "conversation_reader_alias", "conversation_reader_pending"]);
@@ -293,7 +294,7 @@ function emptyJournalClient(journal: import("@/runtime-host/journal").RuntimeJou
   } as unknown as import("./client").RuntimeHostClient;
 }
 
-for (const mode of ["current", "copied", "other-registry", "changed-before-completion", "marker-changed-before-completion", "legacy-changed-before-completion"] as const) test(`startup publication validates its prepared selection (${mode})`, async () => {
+for (const mode of ["current", "copied", "other-registry", "changed-before-completion", "marker-changed-before-completion"] as const) test(`startup publication validates its prepared selection (${mode})`, async () => {
   const { RuntimeJournal } = await import("@/runtime-host/journal");
   const { bindStructuredDeliveryQueue, completeStructuredDeliveryQueueStartup } = await import("./structuredDeliveryController");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-publication-selection-"));
@@ -314,10 +315,6 @@ for (const mode of ["current", "copied", "other-registry", "changed-before-compl
   });
   try {
     if (mode === "marker-changed-before-completion") registry.upsert(seeded(root, 0).entries["codex:reader-0"]!);
-    if (mode === "legacy-changed-before-completion") {
-      registry.upsert({ ...seeded(root, 0).entries["codex:reader-0"]!, status: "dead", structuredHost: null });
-      while (peer.archiveInactive(1000)) { /* The later host must leave cold storage. */ }
-    }
     await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
     const snapshot = await prepare();
     observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation((...args) => { preparations++; return prepare(...args); });
@@ -333,11 +330,6 @@ for (const mode of ["current", "copied", "other-registry", "changed-before-compl
     }, false);
     if (mode === "marker-changed-before-completion") peer.mutate(file => {
       file.entries["codex:reader-0"]!.pendingAction = "spawn";
-    }, false);
-    if (mode === "legacy-changed-before-completion") peer.mutate(file => {
-      const identity = { pid: 990002, startIdentity: "legacy-fixture", bootEpoch: "fixture" };
-      file.entries["codex:reader-0"]!.host = { kind: "tmux", endpoint: "fixture", server: identity,
-        paneId: "%1", panePid: identity, windowName: "Fixture", agent: identity, argv: [] };
     }, false);
     await completion;
     expect(preparations).toBe(mode === "current" || mode === "marker-changed-before-completion" ? 0 : 1);
@@ -510,7 +502,7 @@ test("startup terminal selection reads current uncertain and failed deliveries w
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("historical fallback publication selects current structured and legacy hosts without decoding retained conversations", async () => {
+test("historical fallback publication selects current structured hosts without decoding retained conversations", async () => {
   const { RuntimeJournal } = await import("@/runtime-host/journal");
   const { bindStructuredDeliveryQueue, completeStructuredDeliveryQueueStartup } = await import("./structuredDeliveryController");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-fallback-readers-"));
@@ -520,9 +512,6 @@ test("historical fallback publication selects current structured and legacy host
       const directory = path.join(root, String(history)); fs.mkdirSync(directory);
       const initial = seeded(directory, history);
       initial.receipts = {}; initial.memberships = {}; initial.conversationAliases = {};
-      const identity = { pid: 990002, startIdentity: "legacy-fixture", bootEpoch: "fixture" };
-      initial.entries["codex:reader-1"]!.host = { kind: "tmux", endpoint: "fixture", server: identity,
-        paneId: "%1", panePid: identity, windowName: "Fixture", agent: identity, argv: [] };
       // An old generation's structured row is retained, while the current
       // generation has no host and must receive no fallback publication.
       initial.entries["codex:reader-2"]!.structuredHost = { ...initial.entries["codex:reader-0"]!.structuredHost!, process: null };
@@ -555,7 +544,7 @@ test("historical fallback publication selects current structured and legacy host
         await completeStructuredDeliveryQueueStartup([], phase => {
           inPublication = phase === "publishing historical host fallbacks";
         });
-        expect(published.sort()).toEqual(["conversation_reader_0", "conversation_reader_1", "conversation_reader_4"]);
+        expect(published.sort()).toEqual(["conversation_reader_0", "conversation_reader_4"]);
         reads.push(payloads);
       } finally {
         await bindStructuredDeliveryQueue([]);

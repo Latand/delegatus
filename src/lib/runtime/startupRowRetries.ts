@@ -138,7 +138,7 @@ export function startupRowRetries(registry: AgentRegistry): StartupRowRetries {
 
 /** Uses the existing task write admission. A deterministic item survives
  * restarts and is available to the project's seat through list_tasks. */
-export async function startupRowNotice(entry: AgentRegistryEntry, row: StartupRowRetry | null, assertActive = () => {}): Promise<void> {
+export async function startupRowNotice(entry: Pick<AgentRegistryEntry, "key" | "cwd">, row: StartupRowRetry | null, assertActive = () => {}): Promise<void> {
   const key = `${entry.key.engine}:${entry.key.sessionId}`;
   const hash = id(key);
   // A deterministic UUIDv8 keeps retries idempotent and passes older peers'

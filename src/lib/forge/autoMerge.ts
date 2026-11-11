@@ -1,11 +1,15 @@
-import { assertProactiveTaskExecution, proactiveTaskExecutionError } from "@/lib/tasks/proactiveExecution";
+import { proactiveResultReview } from "@/lib/tasks/proactiveLane";
+import { assertProactivePipelineExecution, proactivePipelineExecutionError, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
+import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
+import { indexMergeSuccessors, mergeSuccessor } from "@/lib/pipelines/mergeSuccessor";
 import { openRevertPr, readPostMergeChecks, sweepPostMerge } from "./postMerge";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { yieldToRuntime } from "@/lib/cooperative";
 import { withControllerPipelineScope } from "@/lib/pipelines/controllerScope";
 import os from "node:os";
-import { refreshAdmission, refreshRequest, refreshReservation, refreshTupleKey, refreshWasRequested, type RefreshLineage, type RefreshOptions } from "./autoRefresh";
+import { BaseUpdateError, planBaseUpdate, pushBaseUpdate, type BaseUpdatePlan, type BaseUpdatePush, type BaseUpdateRequest } from "./baseUpdate";
+import { deliveryOwnership, refreshAdmission, refreshRequest, refreshReservation, refreshTupleKey, refreshWasRequested, type RefreshLineage, type RefreshOptions } from "./autoRefresh";
 import { realExec } from "@/lib/workflows/provision";
 
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
@@ -23,6 +27,7 @@ import { checkFailedReason, MERGE_REASONS } from "./mergeReasons";
 import { lanePullRequest, pipelineRepository } from "./resolve";
 import { type PullRequestState } from "./workLinks";
 import { readBatchLanding } from "./batchLanding";
+import { githubReadBackoff, githubReadFailure } from "./githubReadFailure";
 
 /*
  * "Merge when the review passes" (#2187 §4, docs/design/merge-policy-and-task-finishing.md).
@@ -35,8 +40,13 @@ import { readBatchLanding } from "./batchLanding";
  * lease: the `gh` calls happen with no lock held, and each result is written
  * under the pipeline lock against the record read again inside it.
  *
- * A conflict, BEHIND base, or red check on an outdated base starts visible
- * refresh work (docs/design/auto-refresh-conflicting-prs.md).
+ * A PR behind its base (reported BEHIND or proven after bounded UNKNOWN)
+ * is updated by the runner itself: the
+ * merge of the base tip into the PR head, under the machine identity, pushed
+ * as a fast-forward (docs/design/merge-queue-refresh-capacity.md §5).
+ * A conflict, a BEHIND PR the runner cannot update, or a red check on an
+ * outdated base starts visible refresh work
+ * (docs/design/auto-refresh-conflicting-prs.md).
  * The refresh stage resolves it and publishes through the pipeline gate.
  * What cannot be settled by waiting blocks with one plain sentence and goes to
  * the operator (§4.6).
@@ -45,20 +55,22 @@ import { readBatchLanding } from "./batchLanding";
 export const MERGE_POLL_MS = 60_000;
 /** The least time a head's checks must have had to register (§4.3). */
 export const MERGE_SETTLE_MS = 3 * 60_000;
-/** The most time a head may take to settle, from its first read. */
+/** Give GitHub one registration window to compute mergeability before checking ancestry. */
+export const MERGE_UNKNOWN_WAIT_MS = MERGE_SETTLE_MS;
+/** The most time a current head may take to settle, from its first read on a current base. */
 export const MERGE_WAIT_LIMIT_MS = 90 * 60_000;
-/** Reads in a row `gh` may fail before the merge blocks. */
+/** Nontransient reads (and refresh creation) may fail this many times. */
 export const MERGE_READ_FAILURE_LIMIT = 3;
 const MERGE_SCHEDULE_DEBOUNCE_MS = 15_000;
 const REPOSITORY_FACTS_TTL_MS = 30 * 60_000;
 const GH_TIMEOUT_MS = 30_000;
 
-const PR_FIELDS = "state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,mergeCommit,mergedAt";
+const PR_FIELDS = "state,isDraft,headRefOid,headRefName,isCrossRepository,baseRefName,mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,mergeCommit,mergedAt";
 export { MERGE_REASONS };
 
 export interface AutoMergePorts {
   now: () => number;
-  /** Concurrent PR refresh/check slots per repository, clamped to one or two. */
+  /** Concurrent refreshes and readiness reads per repository, clamped to one or two. */
   refreshConcurrency?: number;
   run: GithubRunner;
   /** Every GitHub merge goes through this. In a declared App repository it
@@ -84,6 +96,12 @@ export interface AutoMergePorts {
   /** A decision form published by this lane's terminal passed attempt. */
   hasPublishedPrototype?: (pipeline: Pipeline) => boolean;
   startRefresh?: (request: ReturnType<typeof refreshRequest>, options: RefreshOptions) => Promise<{ pipeline?: Pipeline; error?: string }>;
+  /** The runner's own update of a PR that is only behind its base. Absent,
+      such a PR takes the refresh-lane path. */
+  updateBase?: {
+    plan: (request: BaseUpdateRequest) => Promise<BaseUpdatePlan>;
+    push: (request: BaseUpdatePush) => Promise<void>;
+  };
   activeSeat?: (project: string) => Promise<RefreshLineage | null>;
   log?: (message: string, error?: unknown) => void;
   /** Moves a board task to Done for the finish sweep (#2187 §5.3) and says
@@ -98,6 +116,7 @@ export type TaskFinishOutcome = "moved" | "already-done" | "missing" | "refused"
 /** A review stage: a legacy review loop, or a read-only run stage that owns
     a fail edge (§3.4). */
 export function isReviewStage(pipeline: Pipeline, stage: PipelineStage): boolean {
+  if (pipeline.proactiveTaskIds?.length) return pipeline.stages[0]?.id !== stage.id && proactiveResultReview(stage);
   if (stage.kind === "review-loop") return true;
   if (stage.kind !== "run" || !stage.onFail) return false;
   const latest = pipeline.runs.find((run) => run.stageId === stage.id)?.attempts.filter((attempt) => !attempt.historical).at(-1);
@@ -107,24 +126,53 @@ export function isReviewStage(pipeline: Pipeline, stage: PipelineStage): boolean
   return /(?:^|[-_])review$/.test(stage.id) || (latest?.effectiveRole?.access ?? stage.effectiveRole?.access ?? stage.access ?? "read-write") === "read-only";
 }
 
+/** An explicit exception covers the final implementation only when its pass
+ * suffix cannot write another implementation head. */
+function reviewHasReadOnlySuffix(pipeline: Pipeline, stage: PipelineStage): boolean {
+  const seen = new Set([stage.id]);
+  let next = stage.next;
+  while (next !== null) {
+    if (seen.has(next)) return false;
+    seen.add(next);
+    const successor = pipeline.stages.find(row => row.id === next);
+    if (!successor || successor.kind !== "run" || successor.effectiveRole.access !== "read-only") return false;
+    next = successor.next;
+  }
+  return true;
+}
+
 /**
  * Whether a completed lane's reviews passed: at least one review stage ran,
  * and every one that ran ended passed, was accepted by the operator (skipped,
  * or its unreviewed head accepted with `accept-head`), or spent its budget
- * with the fix of its last findings passed.
+ * with the fix of its last findings passed. Refresh lanes require passed
+ * reviews because their resolution has not been reviewed by the original lane.
  */
 export function mergeEligible(pipeline: Pipeline): boolean {
   if (pipeline.state !== "completed") return false;
   let reviewed = 0;
+  let implementedHeadCovered = !pipeline.proactiveTaskIds?.length;
   for (const stage of pipeline.stages) {
     if (!isReviewStage(pipeline, stage)) continue;
     const latest = pipeline.runs.find((run) => run.stageId === stage.id)?.attempts.filter((attempt) => !attempt.historical).at(-1);
     if (!latest) continue;
     reviewed += 1;
-    if (latest.state === "passed" || latest.state === "skipped") continue;
-    if ((pipeline.reviewAcceptances ?? []).some((acceptance) => acceptance.stageId === stage.id && acceptance.attempt === latest.n)) continue;
-    // Older completed records may predate the terminal re-check. They cannot
-    // enter automatic merging on the final fix's unreviewed head (#3037).
+    if (latest.state === "passed") {
+      // Proactive grants never infer head coverage from completion timestamps.
+      const head = latest.reviewHeadSha ?? latest.outputBaseHead ?? latest.report?.provenance.head;
+      const integration = latest.publicationIntegration;
+      if (head && (head === pipeline.lastPassedCommit || head === headBeforeLocalOutput(pipeline)
+        || integration?.passedSha === head && integration.acceptedSha === pipeline.lastPassedCommit)) implementedHeadCovered = true;
+      continue;
+    }
+    // A refresh requires a passed review of its integration resolution.
+    if (pipeline.refreshOf) return false;
+    const acceptance = (pipeline.reviewAcceptances ?? []).find(row => row.stageId === stage.id && row.attempt === latest.n);
+    if (latest.state === "skipped" || acceptance) {
+      if (reviewHasReadOnlySuffix(pipeline, stage)
+        && (latest.state === "skipped" || acceptance?.currentHead === pipeline.lastPassedCommit)) implementedHeadCovered = true;
+      continue;
+    }
     if (stage.next !== null && latest.budgetSpent && stage.onFail && failEdgeExhaustion(stage.onFail) !== "park") {
       const fix = pipeline.runs.find((run) => run.stageId === stage.onFail!.to)?.attempts.find((attempt) => !attempt.historical
         && attempt.state === "passed"
@@ -132,11 +180,14 @@ export function mergeEligible(pipeline: Pipeline): boolean {
         && attempt.activatedBy.budgetSpent === true
         && attempt.activatedBy.stageId === stage.id
         && attempt.activatedBy.attempt === latest.n);
-      if (fix) continue;
+      if (fix) {
+        if (reviewHasReadOnlySuffix(pipeline, stage)) implementedHeadCovered = true;
+        continue;
+      }
     }
     return false;
   }
-  return reviewed > 0;
+  return reviewed > 0 && implementedHeadCovered;
 }
 
 export { lanePullRequest };
@@ -148,7 +199,7 @@ export type { CheckVerdict, ReadCheck } from "./checkRollup";
 import { rollupChecks, type PullRequestView as CheckView } from "./checkRollup";
 
 type PullRequestReview = { reviewer: string | null; isBot: boolean; state: string };
-export type PullRequestView = CheckView & { reviews?: PullRequestReview[] };
+export type PullRequestView = CheckView & { reviews?: PullRequestReview[]; headRefName?: string; isCrossRepository?: boolean };
 
 /** The paginated list-reviews endpoint returns chronological reviews. `--jq`
  * emits one compact JSON record per review, including across page boundaries;
@@ -202,6 +253,8 @@ export function parsePullRequestView(raw: string): PullRequestView | null {
     mergeCommit: text(commit?.oid),
     mergedAt: text(view.mergedAt),
     checks: rollupChecks(view.statusCheckRollup),
+    ...(typeof view.headRefName === "string" ? { headRefName: view.headRefName } : {}),
+    ...(typeof view.isCrossRepository === "boolean" ? { isCrossRepository: view.isCrossRepository } : {}),
   };
 }
 
@@ -393,7 +446,7 @@ type Step =
  * place (the head clock, the names seen) and answers the next move.
  */
 export function decideMerge(merge: PipelineMerge, view: PullRequestView, required: readonly string[], now: number): Step {
-  if (view.state === "MERGED") return { kind: "merged", by: merge.state === "merging" ? "auto-merge" : "outside" };
+  if (view.state === "MERGED") return { kind: "merged", by: merge.state === "merging" || merge.effectUncertain ? "auto-merge" : "outside" };
   if (view.state === "CLOSED") return { kind: "block", reason: MERGE_REASONS.closed };
   if (changesRequested(view)) return { kind: "block", reason: MERGE_REASONS.changesRequested };
   if (view.isDraft || view.mergeStateStatus === "DRAFT") return { kind: "block", reason: MERGE_REASONS.draft };
@@ -401,26 +454,28 @@ export function decideMerge(merge: PipelineMerge, view: PullRequestView, require
   if (view.headRefOid !== tip) return { kind: "block", reason: MERGE_REASONS.headChanged };
   if (merge.head !== view.headRefOid) {
     merge.head = view.headRefOid;
-    merge.headSeenAt = iso(now);
+    merge.headSeenAt = null;
     merge.lastChecks = null;
   }
+  const outstanding = merge.updates.some((update) => update.head === null);
+  // A behind head needs refresh work before its current-head checks can be
+  // expected. Discard any earlier clock, including one persisted by an older
+  // runner; the first current-base read starts a fresh checks budget.
+  if (view.mergeStateStatus === "BEHIND" && !outstanding) merge.headSeenAt = null;
+  else merge.headSeenAt ??= iso(now);
   const names = view.checks.map((check) => check.name);
   const previous = merge.lastChecks;
   merge.lastChecks = names;
   merge.seenChecks = [...new Set([...merge.seenChecks, ...names])].sort();
   if (view.mergeStateStatus === "DIRTY" || view.mergeable === "CONFLICTING") return { kind: "block", reason: MERGE_REASONS.conflict };
   const red = view.checks.find((check) => check.verdict === "red");
-  if (red) return { kind: "block", reason: checkFailedReason(red.name) };
-  const outstanding = merge.updates.some((update) => update.head === null);
   const age = now - Date.parse(merge.headSeenAt ?? iso(now));
   if (outstanding) {
     /* The update was accepted and its commit has not reached the PR yet. */
-    return age >= MERGE_WAIT_LIMIT_MS ? { kind: "block", reason: MERGE_REASONS.checksTimeout } : { kind: "wait", state: "updating", reason: null };
+    return age >= MERGE_WAIT_LIMIT_MS ? { kind: "block", reason: MERGE_REASONS.checksTimeout } : { kind: "wait", state: "updating", reason: red ? checkFailedReason(red.name) : null };
   }
-  if (view.mergeStateStatus === "BEHIND") {
-    if (age >= MERGE_WAIT_LIMIT_MS) return { kind: "block", reason: MERGE_REASONS.checksTimeout };
-    return { kind: "refresh" };
-  }
+  if (red) return { kind: "block", reason: checkFailedReason(red.name) };
+  if (view.mergeStateStatus === "BEHIND") return { kind: "refresh" };
   const present = new Set(names);
   const requiredNames = new Set(required);
   // Only required contexts hold the merge while checks register or run.
@@ -442,26 +497,27 @@ export function decideMerge(merge: PipelineMerge, view: PullRequestView, require
     const review = view.reviewDecision === "REVIEW_REQUIRED";
     return { kind: "block", reason: review ? MERGE_REASONS.reviewRequired : MERGE_REASONS.protection };
   }
-  /* UNKNOWN, a null or UNKNOWN `mergeable`: GitHub is still
-     computing; read again, inside the same bound. */
-  if (age >= MERGE_WAIT_LIMIT_MS) return { kind: "block", reason: MERGE_REASONS.checksTimeout };
+  /* Settled green checks leave only GitHub's mergeability computation.
+     stepLane checks ancestry after a short bound; readiness rotation lets
+     peers progress while this read remains uncertain. */
   return { kind: "wait", state: "checking", reason: null };
 }
 
 function block(merge: PipelineMerge, reason: string, now: number): void {
+  if (merge.state !== "blocked" || merge.reason !== reason || !merge.blockedAt) merge.blockedAt = iso(now);
   merge.state = "blocked";
   merge.reason = reason;
-  merge.blockedAt = iso(now);
   merge.nextReadAt = null;
 }
 
 /** Write `change` against the record read again under the lock, only while
     it is still the merge the runner read. */
-async function commit(ports: AutoMergePorts, read: Pipeline, change: (merge: PipelineMerge, live: Pipeline) => void): Promise<boolean> {
+async function commit(ports: AutoMergePorts, read: Pipeline, change: (merge: PipelineMerge, live: Pipeline) => void, reconcileOwner = false): Promise<boolean> {
   const readAt = read.merge!.updatedAt;
   let status: string | undefined;
   const changed = await ports.mutate(read.id, (live) => {
-    if (live.state !== "completed" || !live.merge || live.merge.updatedAt !== readAt || live.merge.state !== read.merge!.state || live.merge.attempts !== read.merge!.attempts) return false;
+    if ((live.state !== "completed" && !read.merge!.effectUncertain && !(reconcileOwner && live.state === read.state && live.merge?.state === "merging"))
+      || !live.merge || live.merge.updatedAt !== readAt || live.merge.state !== read.merge!.state || live.merge.attempts !== read.merge!.attempts) return false;
     change(live.merge, live);
     live.merge.updatedAt = iso(Math.max(ports.now(), Date.parse(readAt) + 1));
     status = mergeStatus(live.merge, Boolean(live.hiddenAt));
@@ -472,24 +528,56 @@ async function commit(ports: AutoMergePorts, read: Pipeline, change: (merge: Pip
   return changed;
 }
 
+/** A completed refresh without a passed resolution review keeps its reason
+ * and releases its queue slot. A merge already recorded as merging is read
+ * back by stepLane first so a dispatched write can be reconciled. */
+async function retainRefreshReviewStop(read: Pipeline, ports: AutoMergePorts): Promise<boolean> {
+  const merge = read.merge;
+  if (read.state !== "completed" || !read.refreshOf || !merge || merge.state === "merging"
+    || !PIPELINE_MERGE_LIVE_STATES.has(merge.state) || mergeEligible(read)) return false;
+  let stopped = false;
+  const changed = await ports.mutate(read.id, live => {
+    if (live.state !== "completed" || !live.refreshOf || !live.merge
+      || live.merge.updatedAt !== merge.updatedAt || live.merge.state !== merge.state
+      || live.merge.state === "merging" || mergeEligible(live)) return false;
+    block(live.merge, MERGE_REASONS.refreshReviewRequired, ports.now());
+    live.merge.updatedAt = iso(Math.max(ports.now(), Date.parse(merge.updatedAt) + 1));
+    stopped = true;
+    return true;
+  });
+  if (changed && stopped) laneStatus(ports, read.id, mergeStatus({ ...merge, state: "blocked", reason: MERGE_REASONS.refreshReviewRequired }));
+  return true;
+}
+
 /** Queued work from an older release and a changed record after a forge await
     must meet the current review bar before merging. */
 async function commitReviewed(ports: AutoMergePorts, read: Pipeline, change: (merge: PipelineMerge) => void): Promise<boolean> {
   let admitted = false;
   const changed = await commit(ports, read, (merge, live) => {
-    if (!mergeEligible(live)) { block(merge, "lane has not met the review merge bar", ports.now()); return; }
+    if (!mergeEligible(live)) {
+      block(merge, live.refreshOf ? MERGE_REASONS.refreshReviewRequired : "lane has not met the review merge bar", ports.now());
+      return;
+    }
     change(merge);
     admitted = true;
   });
   return changed && admitted;
 }
 
-/** Reconciles a retained update issued by an older runner into its chain:
-    two parents, the first the chain's tip, committed by GitHub (`web-flow`).
-    A web-UI edit is `web-flow` too, with one parent. */
+/** Reconciles an outstanding update into its chain. The runner's own base
+    update is admitted only as the exact commit it recorded before pushing.
+    A retained update issued by an older runner has two parents, the first the
+    chain's tip, committed by GitHub (`web-flow`); a web-UI edit is `web-flow`
+    too, with one parent. */
 async function admitUpdateHead(merge: PipelineMerge, head: string, ports: AutoMergePorts): Promise<boolean> {
   const outstanding = merge.updates.findLast((update) => update.head === null);
   if (!outstanding) return false;
+  if (outstanding.commit) {
+    if (outstanding.commit !== head) return false;
+    merge.chain = [...merge.chain, head];
+    outstanding.head = head;
+    return true;
+  }
   const raw = await ports.run(["api", `repos/${merge.repository}/commits/${head}`, "--jq", "{parents: [.parents[].sha], committer: .committer.login}"]);
   const commit = JSON.parse(raw) as { parents?: unknown; committer?: unknown };
   const parents = Array.isArray(commit.parents) ? commit.parents : [];
@@ -497,6 +585,20 @@ async function admitUpdateHead(merge: PipelineMerge, head: string, ports: AutoMe
   merge.chain = [...merge.chain, head];
   outstanding.head = head;
   return true;
+}
+
+/** A machine identity is authority to request a review, never to merge.
+ * Only a two-parent refresh directly on the reviewed tip is a candidate. */
+async function machineRefreshParent(merge: PipelineMerge, head: string, ports: AutoMergePorts): Promise<string | null> {
+  const raw = await ports.run(["api", `repos/${merge.repository}/commits/${head}`, "--jq",
+    "{parents: [.parents[].sha], identity: .commit.committer}"]);
+  const commit = JSON.parse(raw) as { parents?: unknown; identity?: { name?: unknown; email?: unknown } };
+  const identity = controllerCommitIdentityEnv();
+  const parents = Array.isArray(commit.parents) ? commit.parents : [];
+  return parents.length === 2 && parents[0] === merge.chain.at(-1)
+    && typeof parents[1] === "string" && /^[0-9a-f]{40}$/i.test(parents[1])
+    && commit.identity?.name === identity.GIT_COMMITTER_NAME && commit.identity?.email === identity.GIT_COMMITTER_EMAIL
+    ? parents[1] : null;
 }
 
 /** A checkout base may be the PR branch itself on a successor lane. Only
@@ -508,11 +610,202 @@ async function refreshBaseBranch(read: Pipeline, forgeBase: string, ports: AutoM
   return base;
 }
 
-async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, capacityReason: string | null = null, queueReason: string | null = null): Promise<void> {
+/** An original mirrors its proven refresh successor; only that successor
+    carries dispatch ownership for their PR. Missing or mismatched links hold. */
+function refreshMergeSuccessor(pipeline: Pipeline, byId: ReadonlyMap<string, Pipeline>): Pipeline | null {
+  const merge = pipeline.merge;
+  const child = merge?.refresh?.pipelineId ? byId.get(merge.refresh.pipelineId) : null;
+  return child?.merge && child.refreshOf?.pipelineId === pipeline.id
+    && child.refreshOf.base === merge!.refresh!.base
+    && child.merge.repository === merge!.repository && child.merge.prNumber === merge!.prNumber ? child : null;
+}
+
+/** A merge accepted in an earlier sweep still owns the repository while its
+    landing is unresolved, even outside this sweep's bounded read window. */
+function repositoryMergeOwner(ports: AutoMergePorts, laneId: string, repository: string): Pipeline | undefined {
+  const pipelines = ports.loadPipelines();
+  const byId = new Map(pipelines.map(pipeline => [pipeline.id, pipeline]));
+  return pipelines.find(pipeline => pipeline.id !== laneId
+    && pipeline.merge?.repository === repository && pipeline.merge.state === "merging"
+    && !refreshMergeSuccessor(pipeline, byId));
+}
+
+const ownerReason = (owner: Pipeline) => `waiting for repository merge of PR #${owner.merge!.prNumber} (pipeline ${owner.id})`;
+
+/** A failed read, or a failed base update, counted on the record as read now. */
+async function failRead(ports: AutoMergePorts, read: Pipeline, error: unknown, now: number): Promise<void> {
+  const failures = (read.merge!.readFailures ?? 0) + 1;
+  const failure = githubReadFailure(error);
+  if (error instanceof BaseUpdateError) failure.reason = failure.reason.replace(/^GitHub read/, "Base update");
+  ports.log?.(`[auto merge] ${read.id}: read failed (${failures}): ${failure.reason}`);
+  await commit(ports, read, (live) => {
+    live.readFailures = failures;
+    live.readAt = iso(now);
+    if (live.effectUncertain) {
+      live.state = "blocked";
+      live.reason = "The merge outcome is unconfirmed; its receipt is unreadable";
+      live.nextReadAt = iso(now + MERGE_POLL_MS);
+    } else {
+      live.reason = failure.reason;
+      if ((!failure.transient || error instanceof BaseUpdateError) && failures >= MERGE_READ_FAILURE_LIMIT) block(live, failure.reason, now);
+      else live.nextReadAt = iso(now + (failure.transient ? githubReadBackoff(failures) : MERGE_POLL_MS));
+    }
+  });
+}
+
+/* ── The runner's own base update (docs/design/merge-queue-refresh-capacity.md §5) ── */
+
+function baseUpdateTarget(read: Pipeline): { repoDir: string; remote: string; branch: string } | null {
+  const target = read.delivery?.target;
+  return read.repoDir && target?.branch ? { repoDir: read.repoDir, remote: target.remote || "origin", branch: target.branch } : null;
+}
+
+/** The recorded push still belongs to the delivery read before planning. */
+function baseUpdatePushOwned(read: Pipeline, ports: AutoMergePorts, commitId: string): boolean {
+  const rows = ports.loadPipelines();
+  const current = rows.find(lane => lane.id === read.id);
+  return Boolean(current && current.repoDir === read.repoDir && !current.proactiveTaskIds?.length
+    && current.lastPassedCommit === read.lastPassedCommit && current.merge?.attempts === read.merge?.attempts
+    && current.merge?.state === "updating" && current.merge.updates.at(-1)?.commit === commitId
+    && JSON.stringify(current.delivery?.target) === JSON.stringify(read.delivery?.target)
+    && deliveryOwnership(current, rows, ports.setting(current.project)));
+}
+
+function holdsBaseUpdate(pipeline: Pipeline, now: number): boolean {
+  const merge = pipeline.merge;
+  return Boolean(pipeline.state === "completed" && merge && !merge.effectUncertain
+    && PIPELINE_MERGE_LIVE_STATES.has(merge.state)
+    && !(readinessWaitExpired(merge, now) && !merge.updates.some(update => update.head === null)));
+}
+
+/** One update per base tip and repository among completed queue members.
+    An unresolved final merge keeps its reservation across lifecycle changes. */
+function baseUpdateHolder(ports: AutoMergePorts, read: Pipeline, base: string): string | null {
+  const repository = read.merge!.repository;
+  const owner = ports.loadPipelines().find(pipeline => pipeline.id !== read.id && pipeline.merge?.repository === repository
+    && holdsBaseUpdate(pipeline, ports.now()) && pipeline.merge.updates.at(-1)?.base === base);
+  if (owner) return `waiting for the update of PR #${owner.merge!.prNumber} (pipeline ${owner.id})`;
+  const merging = repositoryMergeOwner(ports, read.id, repository);
+  return merging ? ownerReason(merging) : null;
+}
+
+/** An outdated PR, in the lane's own repository and branch, whose
+    finished lane still owns the delivery: merge the base tip into its head,
+    record that exact commit, then push it. False leaves the refresh-lane path
+    to the caller (a conflict, or a PR the runner may not update). */
+async function updateBehindBase(read: Pipeline, merge: PipelineMerge, view: PullRequestView, ports: AutoMergePorts, now: number,
+  bookkeeping: (live: PipelineMerge) => void, mayMerge: boolean, queueReason: string | null,
+  failedBase?: { base: string; reason: string }): Promise<boolean> {
+  const target = baseUpdateTarget(read);
+  const updateBase = ports.updateBase;
+  if (!target || !updateBase || read.proactiveTaskIds?.length || view.isCrossRepository !== false
+    || view.headRefName !== target.branch.replace(/^refs\/heads\//, "")
+    || !deliveryOwnership(read, ports.loadPipelines(), ports.setting(read.project))) return false;
+  const baseBranch = await refreshBaseBranch(read, view.baseRefName, ports);
+  const base = failedBase?.base ?? (await ports.run(["api", `repos/${merge.repository}/branches/${encodeURIComponent(baseBranch)}`, "--jq", ".commit.sha"])).trim();
+  if (!/^[0-9a-f]{40}$/i.test(base)) throw new Error("gh returned no base tip");
+  const held = () => baseUpdateHolder(ports, read, base) ?? (mayMerge ? null : queueReason ?? "waiting for the queue head");
+  const wait = async (reason: string | null) => {
+    await commit(ports, read, live => {
+      bookkeeping(live);
+      live.state = "checking";
+      live.reason = reason;
+      live.nextReadAt = iso(now + MERGE_POLL_MS);
+    });
+    return true;
+  };
+  const before = held();
+  if (before) return wait(before);
+  const plan = await updateBase.plan({ ...target, head: view.headRefOid, base, at: iso(now) });
+  if (plan.kind === "conflict") return false;
+  // The head already contains the base: GitHub has not caught up yet.
+  if (plan.kind === "current") {
+    if (!failedBase) return wait(null);
+    await commit(ports, read, live => { bookkeeping(live); block(live, failedBase.reason, now); });
+    return true;
+  }
+  let recorded = false;
+  const changed = await commit(ports, read, (live, current) => {
+    bookkeeping(live);
+    const holder = held();
+    if (holder || !deliveryOwnership(current, ports.loadPipelines(), ports.setting(current.project))) {
+      live.state = "checking";
+      live.reason = holder;
+      live.nextReadAt = iso(now + MERGE_POLL_MS);
+      return;
+    }
+    // Recorded before the push: a crash replays this exact commit, and the
+    // PR head equal to it is admitted as the runner's own.
+    live.updates = [...merge.updates, { requestedAt: iso(now), head: null, commit: plan.commit, base }];
+    live.state = "updating";
+    live.reason = failedBase?.reason ?? null;
+    live.headSeenAt = null;
+    live.nextReadAt = iso(now + MERGE_POLL_MS);
+    recorded = true;
+  });
+  if (!changed || !recorded) return true;
+  if (failedBase) ports.log?.(`[auto merge] ${read.id}: ${failedBase.reason} on ${view.headRefOid}; recorded base update ${plan.commit} from ${base}`);
+  if (!baseUpdatePushOwned(read, ports, plan.commit)) return true;
+  try {
+    await updateBase.push({ ...target, commit: plan.commit });
+  } catch (error) {
+    const current = ports.loadPipelines().find(lane => lane.id === read.id);
+    if (current?.merge) await failRead(ports, current, error, now);
+  }
+  return true;
+}
+
+/** A recorded update whose commit has not reached the PR: recreate it from
+    the same inputs and push it again. A commit that cannot be recreated
+    exactly, or a delivery the lane no longer owns, drops the entry; the next
+    read plans afresh. False when it was dropped. */
+async function replayBaseUpdate(read: Pipeline, merge: PipelineMerge, update: PipelineMerge["updates"][number], view: PullRequestView, ports: AutoMergePorts, now: number): Promise<boolean> {
+  const target = baseUpdateTarget(read);
+  const baseBranch = await refreshBaseBranch(read, view.baseRefName, ports);
+  const base = (await ports.run(["api", `repos/${merge.repository}/branches/${encodeURIComponent(baseBranch)}`, "--jq", ".commit.sha"])).trim();
+  if (!/^[0-9a-f]{40}$/i.test(base)) throw new Error("gh returned no base tip");
+  const plan = target && ports.updateBase && update.base === base && !read.proactiveTaskIds?.length
+    && view.isCrossRepository === false && view.headRefName === target.branch.replace(/^refs\/heads\//, "")
+    && deliveryOwnership(read, ports.loadPipelines(), ports.setting(read.project))
+    ? await ports.updateBase.plan({ ...target, head: merge.chain.at(-1)!, base: update.base, at: update.requestedAt })
+    : null;
+  if (!target || plan?.kind !== "commit" || plan.commit !== update.commit) {
+    await commit(ports, read, live => {
+      live.updates = live.updates.filter(entry => entry.head !== null || entry.commit !== update.commit);
+      live.state = "checking";
+      live.reason = null;
+      live.headSeenAt = null;
+      live.nextReadAt = iso(now);
+    });
+    return false;
+  }
+  if (!deliveryOwnership(read, ports.loadPipelines(), ports.setting(read.project))
+    || !baseUpdatePushOwned(read, ports, plan.commit)) return true;
+  await ports.updateBase!.push({ ...target, commit: plan.commit });
+  return true;
+}
+
+async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, capacity: () => string | null = () => null, queueReason: string | null = null): Promise<void> {
+  // An accepted dispatch needs terminal landing proof. Readiness, check
+  // deadlines and lane lifecycle cannot release its durable reservation.
+  if (read.merge!.state === "merging" && !read.merge!.effectUncertain && read.merge!.prNumber !== null) {
+    await reconcileBatchLanding(read, { repository: read.merge!.repository, number: read.merge!.prNumber }, ports, true);
+    return;
+  }
   const now = ports.now();
   const merge = structuredClone(read.merge!);
+  const bookkeeping = (live: PipelineMerge) => {
+    live.chain = merge.chain;
+    live.updates = merge.updates;
+    live.head = merge.head;
+    live.headSeenAt = merge.headSeenAt;
+    live.lastChecks = merge.lastChecks;
+    live.seenChecks = merge.seenChecks;
+    live.readAt = iso(now);
+    live.readFailures = 0;
+  };
   const setting = ports.setting(read.project);
-  if (merge.state !== "merging" && !mergeEligible(read)) {
+  if (!merge.effectUncertain && merge.state !== "merging" && !mergeEligible(read)) {
     await commit(ports, read, live => block(live, "lane has not met the review merge bar", now));
     return;
   }
@@ -538,6 +831,14 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       const landed = await readBatchLanding(merge.repository, merge.prNumber, view.baseRefName || read.baseBranch, { head: view.headRefOid, repoDir: read.repoDir }, ports.run);
       if (landed) view = { ...view, state: "MERGED", mergeCommit: landed.commit, mergedAt: landed.mergedAt };
     }
+    if (merge.effectUncertain && view.state !== "MERGED" && view.state !== "CLOSED") {
+      await commit(ports, read, live => {
+        live.state = "blocked";
+        live.reason = "The merge outcome is unconfirmed; waiting for its actual receipt";
+        live.nextReadAt = iso(now + MERGE_POLL_MS);
+      });
+      return;
+    }
     const behindReviewedHead = view.state === "OPEN" && view.headRefOid !== merge.chain.at(-1)
       ? (await prHeadBehindReviewedHead(read, view.headRefOid))
       : null;
@@ -545,17 +846,44 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       await commit(ports, read, (live) => block(live, `PR head is behind the reviewed head ${behindReviewedHead}`, now));
       return;
     }
-    /* Only a retained legacy update can admit an unreviewed chain extension.
-       New base refreshes own their reviewed head in a successor lane. */
+    /* Admit only a recorded mechanical update or a retained legacy update;
+       conflict refreshes own their reviewed head in a successor lane. */
     if (view.state === "OPEN" && !merge.chain.includes(view.headRefOid)) await admitUpdateHead(merge, view.headRefOid, ports);
+    const unlanded = view.state === "OPEN" ? merge.updates.findLast(update => update.head === null && update.commit) : undefined;
+    if (unlanded && view.headRefOid === merge.chain.at(-1) && !await replayBaseUpdate(read, merge, unlanded, view, ports, now)) return;
     if (view.state === "OPEN") {
       view.reviews = parseReviews(await ports.run(["api", `repos/${merge.repository}/pulls/${merge.prNumber}/reviews?per_page=100`, "--paginate", "--jq", ".[] | {reviewer: .user.login, isBot: (.user.type == \"Bot\"), state} | @json"]));
       required = await requiredContexts(merge.repository, view.baseRefName || "main", ports);
     }
     decision = decideMerge(merge, view, required, now);
+    // GitHub can leave a diverged PR UNKNOWN indefinitely. Prove that the
+    // reviewed head lacks the published base before using the BEHIND path.
+    // All review, head, conflict and failed-check stops above still apply.
+    if ((decision.kind === "wait" && decision.state !== "updating"
+      || decision.kind === "block" && decision.reason === MERGE_REASONS.checksTimeout)
+      && (view.mergeStateStatus === "UNKNOWN" || view.mergeable === null || view.mergeable === "UNKNOWN")
+      && !merge.updates.some(update => update.head === null)
+      && now - Date.parse(merge.headSeenAt ?? "") >= MERGE_UNKNOWN_WAIT_MS) {
+      const branch = await refreshBaseBranch(read, view.baseRefName, ports);
+      const base = (await ports.run(["api", `repos/${merge.repository}/branches/${encodeURIComponent(branch)}`, "--jq", ".commit.sha"])).trim();
+      if (!/^[0-9a-f]{40}$/i.test(base)) throw new Error("gh returned no base tip");
+      const ancestor = (await ports.run(["api", `repos/${merge.repository}/compare/${base}...${view.headRefOid}`, "--jq", ".merge_base_commit.sha"])).trim();
+      if (!/^[0-9a-f]{40}$/i.test(ancestor)) throw new Error("gh returned no merge base");
+      if (ancestor !== base) decision = { kind: "refresh" };
+    }
+    if (read.refreshOf && merge.state === "merging" && decision.kind !== "merged" && !mergeEligible(read)) {
+      await commit(ports, read, (currentMerge, current) => {
+        if (current.refreshOf && !mergeEligible(current)) block(currentMerge, MERGE_REASONS.refreshReviewRequired, now);
+      });
+      return;
+    }
+    if (decision.kind === "refresh" && await updateBehindBase(read, merge, view, ports, now, bookkeeping, mayMerge, queueReason)) return;
     const red = view.checks.find(check => check.verdict === "red");
     const failedCheck = decision.kind === "block" && red && decision.reason === checkFailedReason(red.name);
-    const needsRefresh = failedCheck || decision.kind === "refresh" || (decision.kind === "block" && decision.reason === MERGE_REASONS.conflict);
+    const machineParent = decision.kind === "block" && decision.reason === MERGE_REASONS.headChanged
+      && ports.startRefresh && refreshAdmission(read, ports.loadPipelines(), ports.setting(read.project))
+      ? await machineRefreshParent(merge, view.headRefOid, ports) : null;
+    const needsRefresh = machineParent !== null || failedCheck || decision.kind === "refresh" || (decision.kind === "block" && decision.reason === MERGE_REASONS.conflict);
     const refreshRefusal = decision.kind === "refresh"
       ? "Delegatus could not start the refresh: the PR is behind its base and has no eligible delivery refresh"
       : decision.kind === "block" ? decision.reason : MERGE_REASONS.conflict;
@@ -564,6 +892,13 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       const baseBranch = await refreshBaseBranch(read, view.baseRefName, ports);
       const base = (await ports.run(["api", `repos/${merge.repository}/branches/${encodeURIComponent(baseBranch)}`, "--jq", ".commit.sha"])).trim();
       if (!/^[0-9a-f]{40}$/i.test(base)) throw new Error("gh returned no base tip");
+      if (machineParent !== null && machineParent !== base) {
+        await commit(ports, read, (live) => block(live, MERGE_REASONS.headChanged, now));
+        return;
+      }
+      // An already published merge must be reviewed against its first parent.
+      // Keeping that boundary also makes a replay review the same resolution.
+      const refreshHead = machineParent !== null ? merge.chain.at(-1)! : view.headRefOid;
       // Compare immutable SHAs: soft protection need not report BEHIND.
       const mergeBase = failedCheck
         ? (await ports.run(["api", `repos/${merge.repository}/compare/${base}...${view.headRefOid}`, "--jq", ".merge_base_commit.sha"])).trim()
@@ -580,60 +915,54 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
           await commit(ports, read, (live) => block(live, MERGE_REASONS.refreshSameBase, now));
           return;
         }
-        if (capacityReason) {
-          const reason = `${decision.kind === "refresh" ? "PR is behind its base" : refreshRefusal}; ${capacityReason}`;
-          decision = mergeWaitExpired(merge, now)
-            ? { kind: "block", reason }
-            : { kind: "wait", state: "checking", reason };
-        } else {
-          const reserved = await commit(ports, read, (live, current) => {
-            const pipelines = ports.loadPipelines();
-            if (!refreshAdmission(current, pipelines, ports.setting(current.project))) { block(live, refreshRefusal, now); return; }
-            if (refreshWasRequested(current, pipelines, base, view!.headRefOid)
-              || ports.loadRefreshByKey?.(refreshTupleKey(current, base, view!.headRefOid))) {
-              block(live, failedCheck ? refreshRefusal : MERGE_REASONS.refreshSameBase, now);
-              return;
-            }
-            live.state = "refreshing";
-            live.reason = null;
-            live.nextReadAt = null;
-            live.refresh = refreshReservation(read, base, view!.headRefOid, now, baseBranch);
-            live.readFailures = 0;
-          });
-          if (reserved) {
-            const current = ports.loadPipelines().find((lane) => lane.id === read.id);
-            if (current?.merge?.state === "refreshing") await startRefresh(current, ports);
+        // A failed check can mask BEHIND, including under soft protection.
+        // The immutable comparison above admits the same mechanical update;
+        // the new head still goes through its own checks and merge admission.
+        if (failedCheck && await updateBehindBase(read, merge, view, ports, now, bookkeeping, mayMerge, queueReason,
+          { base, reason: refreshRefusal })) return;
+        const reserved = await commit(ports, read, (live, current) => {
+          const pipelines = ports.loadPipelines();
+          if (!refreshAdmission(current, pipelines, ports.setting(current.project))) { block(live, refreshRefusal, now); return; }
+          const held = capacity();
+          // Refresh admission ends the old head's checks obligation, whether
+          // waiting for capacity or running our own successor lane.
+          merge.headSeenAt = null;
+          live.headSeenAt = null;
+          if (held) {
+            bookkeeping(live);
+            const reason = `${decision.kind === "refresh" ? "PR is behind its base" : refreshRefusal}; ${held}`;
+            live.state = "checking";
+            live.reason = reason;
+            live.nextReadAt = iso(now + MERGE_POLL_MS);
+            return;
           }
-          return;
+          if (refreshWasRequested(current, pipelines, base, refreshHead)
+            || ports.loadRefreshByKey?.(refreshTupleKey(current, base, refreshHead))) {
+            block(live, failedCheck ? refreshRefusal : MERGE_REASONS.refreshSameBase, now);
+            return;
+          }
+          live.state = "refreshing";
+          live.reason = null;
+          live.nextReadAt = null;
+          live.refresh = refreshReservation(read, base, refreshHead, now, baseBranch);
+          live.readFailures = 0;
+        });
+        if (reserved) {
+          const current = ports.loadPipelines().find((lane) => lane.id === read.id);
+          if (current?.merge?.state === "refreshing") await startRefresh(current, ports);
         }
+        return;
       }
     }
     if (decision.kind === "refresh") decision = { kind: "block", reason: refreshRefusal };
   } catch (error) {
-    const failures = (merge.readFailures ?? 0) + 1;
-    ports.log?.(`[auto merge] ${read.id}: read failed (${failures})`, error);
-    await commit(ports, read, (live) => {
-      live.readFailures = failures;
-      live.readAt = iso(now);
-      if (mergeWaitExpired(live, now)) block(live, MERGE_REASONS.checksTimeout, now);
-      else if (failures >= MERGE_READ_FAILURE_LIMIT) block(live, MERGE_REASONS.unreachable, now);
-      else live.nextReadAt = iso(now + MERGE_POLL_MS);
-    });
+    await failRead(ports, read, error, now);
     return;
   }
   const step = decision!;
-  const bookkeeping = (live: PipelineMerge) => {
-    live.chain = merge.chain;
-    live.updates = merge.updates;
-    live.head = merge.head;
-    live.headSeenAt = merge.headSeenAt;
-    live.lastChecks = merge.lastChecks;
-    live.seenChecks = merge.seenChecks;
-    live.readAt = iso(now);
-    live.readFailures = 0;
-  };
   if (step.kind === "merged") {
     await commit(ports, read, (live) => {
+      delete live.effectUncertain;
       bookkeeping(live);
       live.state = "merged";
       live.by = step.by;
@@ -648,7 +977,10 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     return;
   }
   if (step.kind === "block") {
-    await commit(ports, read, (live) => { bookkeeping(live); block(live, step.reason, now); });
+    await commit(ports, read, (live) => {
+      if (view?.state === "CLOSED") delete live.effectUncertain;
+      bookkeeping(live); block(live, step.reason, now);
+    });
     return;
   }
   if (step.kind === "wait") {
@@ -660,11 +992,13 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     });
     return;
   }
-  if (!mayMerge) {
+  const mergeOwner = () => repositoryMergeOwner(ports, read.id, merge.repository);
+  const owner = mergeOwner();
+  if (!mayMerge || owner) {
     await commit(ports, read, (live) => {
       bookkeeping(live);
       live.state = "queued";
-      live.reason = queueReason ?? capacityReason;
+      live.reason = owner ? ownerReason(owner) : queueReason;
       live.nextReadAt = iso(now + MERGE_POLL_MS);
     });
     return;
@@ -676,24 +1010,55 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     return;
   }
   const method = await mergeMethod(merge.repository, ports).catch(() => "squash" as const);
+  let reserved = false;
   const recorded = await commitReviewed(ports, read, (live) => {
     bookkeeping(live);
+    const owner = mergeOwner();
+    if (owner) {
+      live.state = "queued";
+      live.reason = ownerReason(owner);
+      live.nextReadAt = iso(now + MERGE_POLL_MS);
+      return;
+    }
+    reserved = true;
     live.state = "merging";
+    if (read.proactiveTaskIds?.length) live.effectUncertain = true;
     live.method = method;
     live.reason = null;
     live.nextReadAt = iso(now + MERGE_POLL_MS);
   });
-  if (!recorded) return;
+  if (!recorded || !reserved) return;
   let failure: string | null = null;
+  let dispatched = false;
+  let refreshReviewRefused = false;
+  let dispatchHeld: string | null = null;
   try {
     /* `--match-head-commit`: GitHub refuses if the head moved since the read.
        The branch stays; worktree cleanup owns lane branches. */
-    const beforeDispatch = () => assertProactiveTaskExecution((ports.loadPipelines().find(lane => lane.id === read.id) ?? read).taskIds);
+    const beforeDispatch = () => {
+      const owner = mergeOwner();
+      if (owner) {
+        dispatchHeld = ownerReason(owner);
+        throw new Error(dispatchHeld);
+      }
+      const current = ports.loadPipelines().find(lane => lane.id === read.id);
+      if (read.proactiveTaskIds?.length && (!current || !mergeEligible(current)
+        || current.merge?.reviewedHead !== current.lastPassedCommit)) {
+        throw new Error("proactive merge requires result-review evidence for its implemented head");
+      }
+      assertProactivePipelineExecution(current ?? read, "effect");
+      if ((current ?? read).refreshOf && !mergeEligible(current ?? read)) {
+        refreshReviewRefused = true;
+        throw new Error(MERGE_REASONS.refreshReviewRequired);
+      }
+    };
     beforeDispatch();
-    await ports.write(["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`, "--match-head-commit", view.headRefOid], merge.repository, beforeDispatch);
+    await ports.write(["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`, "--match-head-commit", view.headRefOid], merge.repository,
+      () => { beforeDispatch(); dispatched = true; });
   } catch (error) {
     /* No App credential: the refusal is the whole reason, in its own words. */
-    failure = error instanceof ForgeAppWriteRefused ? error.message : `GitHub refused the merge: ${githubMessage(error)}`;
+    if (!dispatchHeld) failure = refreshReviewRefused ? MERGE_REASONS.refreshReviewRequired
+      : error instanceof ForgeAppWriteRefused ? error.message : `GitHub refused the merge: ${githubMessage(error)}`;
   }
   let after: PullRequestView | null = null;
   try {
@@ -705,6 +1070,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
   if (!current?.merge) return;
   await commit(ports, current, (live) => {
     if (after?.state === "MERGED") {
+      delete live.effectUncertain;
       live.state = "merged";
       live.by = "auto-merge";
       live.postMergeWatch = true;
@@ -715,7 +1081,23 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       live.nextReadAt = null;
       return;
     }
-    if (failure) block(live, failure, ports.now());
+    if (live.effectUncertain && after?.state === "CLOSED") {
+      delete live.effectUncertain;
+      block(live, MERGE_REASONS.closed, ports.now());
+      return;
+    }
+    if (live.effectUncertain && !dispatched) delete live.effectUncertain;
+    if (live.effectUncertain) {
+      live.state = "blocked";
+      live.reason = failure ?? "The merge outcome is unconfirmed; waiting for its actual receipt";
+      live.nextReadAt = iso(ports.now() + MERGE_POLL_MS);
+      return;
+    }
+    if (dispatchHeld) {
+      live.state = "queued";
+      live.reason = dispatchHeld;
+      live.nextReadAt = iso(ports.now() + MERGE_POLL_MS);
+    } else if (failure) block(live, failure, ports.now());
     /* Otherwise the merge was accepted and the PR does not read merged yet:
        the next read in `merging` settles it. */
   });
@@ -741,6 +1123,11 @@ async function startRefresh(read: Pipeline, ports: AutoMergePorts): Promise<void
     const current = ports.loadPipelines().find((lane) => lane.id === read.id);
     if (!ports.setting(read.project).enabled || current?.merge?.state !== "refreshing"
       || current.merge.refresh?.key !== reservation.key || current.merge.refresh.pipelineId) return;
+    const held = !ports.loadRefreshByKey?.(reservation.key) && refreshCapacityReason(ports, read.merge.repository);
+    if (held) {
+      if (read.merge.reason !== held) await commit(ports, read, live => { live.reason = held; });
+      return;
+    }
     const result = await ports.startRefresh(refreshRequest(read, legacyBase), {
       creationRequest: { key: reservation.key, digest: reservation.digest },
       refreshOf: { pipelineId: read.id, base: reservation.base, lineage },
@@ -760,6 +1147,36 @@ async function startRefresh(read: Pipeline, ports: AutoMergePorts): Promise<void
 
 /* ── The sweep ──────────────────────────────────────────────────────────── */
 
+/** The slot covers the refresh attempt's preparation and execution, until
+    its verdict: once the update from main is finished, settlement, publication,
+    parks, seat resumes and later stages own no slot. */
+function holdsRefreshCapacity(pipeline: Pipeline): boolean {
+  if (!pipeline.refreshOf || pipeline.cursor?.stageId !== "refresh") return false;
+  // Creation returns before checkout preparation and first-stage dispatch.
+  // Keep that admitted refresh from spawning peers before its host starts.
+  if (pipeline.state === "provisioning") return true;
+  if (pipeline.state !== "running") return false;
+  const attempt = pipeline.runs.find(run => run.stageId === "refresh")?.attempts.filter(attempt => !attempt.historical).at(-1);
+  // Retry intent is durable before tickRunStage replaces the terminal attempt.
+  if (pipeline.cursor.state === "pending") return true;
+  return Boolean(attempt && ["spawning", "running", "reviewing"].includes(attempt.state));
+}
+
+function refreshLimit(ports: AutoMergePorts): number {
+  return Math.max(1, Math.min(2, Math.floor(ports.refreshConcurrency ?? 1) || 1));
+}
+
+function refreshCapacityReason(ports: AutoMergePorts, repository: string): string | null {
+  const pipelines = ports.loadPipelines();
+  const byId = new Map(pipelines.map(pipeline => [pipeline.id, pipeline]));
+  const holders = pipelines.filter(pipeline => holdsRefreshCapacity(pipeline)
+    && (ports.pullRequestOf(pipeline)?.repository ?? pipeline.merge?.repository
+      ?? byId.get(pipeline.refreshOf!.pipelineId)?.merge?.repository) === repository);
+  return holders.length >= refreshLimit(ports)
+    ? `waiting for repository capacity held by refresh ${holders.slice(0, 2).map(pipeline => pipeline.id).join(", ")}`
+    : null;
+}
+
 type MergeAdmissionPorts = Pick<AutoMergePorts, "setting" | "pullRequestOf" | "hasPublishedPrototype">;
 
 /** Shared by the sweep and retry-merge. Call again against the live lane under
@@ -767,7 +1184,7 @@ type MergeAdmissionPorts = Pick<AutoMergePorts, "setting" | "pullRequestOf" | "h
 export function mergeAdmission(pipeline: Pipeline, now: number, ports: MergeAdmissionPorts = {
   setting: mergeOnReviewSetting, pullRequestOf: lanePullRequest, hasPublishedPrototype,
 }): { merge: PipelineMerge } | { reason: string } {
-  const proactiveError = proactiveTaskExecutionError(pipeline.taskIds);
+  const proactiveError = proactivePipelineExecutionError(pipeline);
   if (proactiveError) return { reason: proactiveError };
   if (pipeline.state !== "completed") return { reason: "only a completed pipeline can queue its merge" };
   if (pipeline.hiddenAt) return { reason: "lane is hidden" };
@@ -814,15 +1231,41 @@ function mergeStatus(merge: PipelineMerge, hidden = false): string {
   return `${hidden ? "skipped: lane is hidden; " : ""}${merge.state}${merge.reason ? `: ${merge.reason}` : ""}`;
 }
 
-/** Followers outside the read window still expose their FIFO blocker. Keep
- * their check clock untouched and avoid writing the same explanation again. */
-async function retainQueueReason(ports: AutoMergePorts, read: Pipeline, reason: string): Promise<void> {
-  if (read.merge?.state !== "queued" || read.merge.reason === reason) return;
+/** Keep unvisited reasons current without starting or extending a check clock. */
+async function retainQueueReason(ports: AutoMergePorts, read: Pipeline, reason: string, capacityReason: string | null = null): Promise<void> {
+  const merge = read.merge;
+  if (merge?.readFailures) return;
+  if (merge?.state === "checking" && merge.reason?.includes("; waiting for repository capacity held by refresh ")) {
+    reason = `${merge.reason.split("; waiting for repository capacity held by refresh ")[0]}; ${capacityReason ?? reason}`;
+  } else if (merge?.state === "refreshing" && !merge.refresh?.pipelineId) {
+    reason = capacityReason ?? reason;
+  } else if (merge?.state !== "queued") return;
+  if (merge.reason === reason) return;
   await commit(ports, read, live => { live.reason = reason; });
 }
 
 function mergeWaitExpired(merge: PipelineMerge, now: number): boolean {
   return now - Date.parse(merge.headSeenAt ?? "") >= MERGE_WAIT_LIMIT_MS;
+}
+
+/** A retained UNKNOWN read must yield readiness even if ancestry is current. */
+function readinessWaitExpired(merge: PipelineMerge, now: number): boolean {
+  return merge.state === "checking" && now - Date.parse(merge.headSeenAt ?? "") >= MERGE_UNKNOWN_WAIT_MS;
+}
+
+/** A wait label cannot outlive the update owner it describes. No forge read
+ * or check-clock change is needed to retire that local dependency. */
+async function clearRetiredUpdateWaits(ports: AutoMergePorts, repository: string, rows: readonly Pipeline[], byId: ReadonlyMap<string, Pipeline>): Promise<void> {
+  for await (const candidate of mergeRows(rows)) {
+    const row = byId.get(candidate.id) ?? candidate;
+    const merge = row.merge;
+    if (merge?.repository !== repository || merge.state !== "checking" || merge.readFailures) continue;
+    const ownerId = /^waiting for the update of PR #\d+ \(pipeline ([^)]+)\)$/.exec(merge.reason ?? "")?.[1];
+    if (!ownerId) continue;
+    const owner = byId.get(ownerId);
+    if (owner?.merge?.repository === repository && holdsBaseUpdate(owner, ports.now())) continue;
+    await commit(ports, row, live => { live.reason = null; });
+  }
 }
 
 /** A sweep may visit retained lanes, but never drains them in one loop turn. */
@@ -847,12 +1290,25 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   await ports.prepareRead?.();
   const now = ports.now();
   const pipelines = performanceSpans.sync("forge.auto-merge.read", ports.loadPipelines);
+  const successorOwners = indexMergeSuccessors(pipelines);
   const pending = new Set<string>();
   const retained = new Set<string>();
+  // Keep at most eight due receipts. Persisted due times rotate older work to
+  // the front across sweeps and restarts without an in-memory scan cursor.
+  const receipts: Array<{ pipeline: Pipeline; due: number }> = [];
   for await (const pipeline of mergeRows(pipelines)) {
     performanceSpans.sync("forge.auto-merge.prune", () => {
       if (pipeline.state === "completed" && !pipeline.merge) pending.add(pipeline.id);
       if (pipeline.state === "completed" && pipeline.merge) retained.add(pipeline.id);
+      if (pipeline.merge?.effectUncertain) {
+        const parsed = Date.parse(pipeline.merge.nextReadAt ?? "");
+        const due = Number.isFinite(parsed) ? parsed : -Infinity;
+        if (due <= now) {
+          receipts.push({ pipeline, due });
+          receipts.sort((a, b) => a.due - b.due || a.pipeline.id.localeCompare(b.pipeline.id));
+          if (receipts.length > 8) receipts.pop();
+        }
+      }
     });
   }
   for await (const id of mergeRows(admissionReasons.keys())) {
@@ -861,11 +1317,26 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   for await (const id of mergeRows(laneReasons.keys())) {
     performanceSpans.sync("forge.auto-merge.prune", () => { if (!retained.has(id)) laneReasons.delete(id); });
   }
+  for (const { pipeline } of receipts) await stepLane(pipeline, ports, false);
   for await (const pipeline of mergeRows(pipelines)) {
+    // Custody survives lane closure and visibility changes; this path only reads.
+    if (pipeline.merge?.effectUncertain) continue;
     const { completed, hidden } = performanceSpans.sync("forge.auto-merge.admit", () => ({
       completed: pipeline.state === "completed", hidden: Boolean(pipeline.hiddenAt),
     }), 1);
     if (!completed) continue;
+    const successor = mergeSuccessor(pipeline, successorOwners);
+    if (successor) {
+      if (successor.merge && pipeline.merge && pipeline.merge.state !== "merged"
+        && pipeline.merge.reason !== `Merge superseded by delivery owner ${successor.id}`) {
+        await commit(ports, pipeline, live => {
+          live.state = "cancelled";
+          live.reason = `Merge superseded by delivery owner ${successor.id}`;
+          live.nextReadAt = null;
+        });
+      }
+      continue;
+    }
     if (hidden) {
       if (!pipeline.merge) notAdmitted(ports, pipeline.id, "lane is hidden");
       else laneStatus(ports, pipeline.id, mergeStatus(pipeline.merge, true));
@@ -914,7 +1385,11 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       await commit(ports, pipeline, (live) => { live.state = "cancelled"; live.reason = MERGE_REASONS.settingOff; live.nextReadAt = null; });
       continue;
     }
-    if (merge.state !== "merged" && merge.state !== "cancelled" && (merge.state === "refreshing" || merge.refresh?.pipelineId)) {
+    // Only retirement by this reserved refresh may reopen a cancelled parent.
+    if (merge.state !== "merged"
+      && (merge.state !== "cancelled" || (setting.enabled
+        && merge.reason === `Merge superseded by delivery owner ${merge.refresh?.pipelineId}`))
+      && (merge.state === "refreshing" || merge.refresh?.pipelineId)) {
       const refreshed = ports.loadPipelines().find((lane) => lane.id === merge.refresh?.pipelineId);
       const cached = merge.prNumber ? ports.cachedState(merge.repository, merge.prNumber) : null;
       if (refreshed?.merge?.state === "merged" || cached === "merged") {
@@ -943,6 +1418,17 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
             if ("reason" in latest) block(live, `Refresh was not admitted: ${latest.reason}`, ports.now());
           });
         }
+      } else if (refreshed?.state === "completed" && refreshed.merge && !mergeEligible(refreshed)
+        && refreshed.refreshOf?.pipelineId === pipeline.id && refreshed.refreshOf.base === merge.refresh?.base
+        && refreshed.merge.repository === merge.repository && refreshed.merge.prNumber === merge.prNumber) {
+        const reason = `Refresh was not admitted: ${MERGE_REASONS.refreshReviewRequired}`;
+        if (merge.state !== "blocked" || merge.reason !== reason) await commit(ports, pipeline, (live) => {
+          const current = ports.loadPipelines().find(lane => lane.id === refreshed.id);
+          if (current?.state !== "completed" || !current.merge || mergeEligible(current)
+            || current.refreshOf?.pipelineId !== pipeline.id || current.refreshOf.base !== live.refresh?.base
+            || current.merge.repository !== live.repository || current.merge.prNumber !== live.prNumber) return;
+          block(live, reason, ports.now());
+        });
       } else if (refreshed?.state === "completed" && mergeEligible(refreshed) && refreshed.merge
         && refreshed.refreshOf?.pipelineId === pipeline.id && refreshed.refreshOf.base === merge.refresh?.base
         && refreshed.merge.repository === merge.repository && refreshed.merge.prNumber === merge.prNumber) {
@@ -963,10 +1449,13 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
             live.nextReadAt = progress.nextReadAt;
           });
         }
-      } else if (refreshed?.state === "needs_decision") {
-        await commit(ports, pipeline, (live) => block(live, refreshed.stateDetail || "Refresh needs a decision", now));
-      } else if (refreshed?.state === "closed") {
-        await commit(ports, pipeline, (live) => block(live, MERGE_REASONS.refreshClosed, now));
+      } else if (refreshed?.state === "needs_decision" || refreshed?.state === "closed") {
+        const reason = refreshed.state === "closed" ? MERGE_REASONS.refreshClosed : refreshed.stateDetail || "Refresh needs a decision";
+        // Observing the same stopped refresh is no new wait. In particular it
+        // must not move blockedAt past a dismissal and wake the seat again.
+        if (merge.state !== "blocked" || merge.reason !== reason) {
+          await commit(ports, pipeline, (live) => block(live, reason, now));
+        }
       }
       continue;
     }
@@ -1021,17 +1510,18 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
     }
     return row;
   };
-  type QueueEntry = { pipeline: Pipeline; activeRefresh: boolean };
+  type QueueEntry = { pipeline: Pipeline; refreshLane: boolean };
   const queues = new Map<string, Map<string, QueueEntry>>();
-  const activeRefreshes = new Map<string, string[]>();
   for await (const pipeline of mergeRows(rows)) {
+    if (await retainRefreshReviewStop(pipeline, ports)) continue;
     performanceSpans.sync("forge.auto-merge.queue", () => {
       const merge = pipeline.merge;
-      const activeRefresh = Boolean(pipeline.refreshOf) && pipeline.state !== "completed"
+      if (merge?.effectUncertain) return;
+      const refreshLane = Boolean(pipeline.refreshOf) && merge?.state !== "merging" && pipeline.state !== "completed"
         && pipeline.state !== "closed" && pipeline.state !== "needs_decision";
-      if (!activeRefresh && (pipeline.state !== "completed" || !merge
+      if (!refreshLane && merge?.state !== "merging" && (pipeline.state !== "completed" || !merge
         || (!PIPELINE_MERGE_LIVE_STATES.has(merge.state) && merge.state !== "refreshing"))) return;
-      const pr = activeRefresh ? ports.pullRequestOf(pipeline) : null;
+      const pr = refreshLane ? ports.pullRequestOf(pipeline) : null;
       const parentMerge = pipeline.refreshOf ? byId.get(pipeline.refreshOf.pipelineId)?.merge : null;
       const repository = pr?.repository ?? merge?.repository ?? parentMerge?.repository;
       if (!repository) return;
@@ -1040,68 +1530,96 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       queues.set(repository, queue);
       const key = number == null ? pipeline.id : String(number);
       const held = queue.get(key);
-      if (activeRefresh) {
-        const refreshing = activeRefreshes.get(repository) ?? [];
-        refreshing.push(pipeline.id);
-        activeRefreshes.set(repository, refreshing);
-      }
-      if (!held || activeRefresh || (!held.activeRefresh && held.pipeline.merge?.refresh?.pipelineId && !merge?.refresh?.pipelineId)) {
-        queue.set(key, { pipeline, activeRefresh });
+      if (!held || refreshLane || (!held.refreshLane && held.pipeline.merge?.refresh?.pipelineId && !merge?.refresh?.pipelineId)) {
+        queue.set(key, { pipeline, refreshLane });
       }
     }, 1);
   }
-  const limit = Math.max(1, Math.min(2, Math.floor(ports.refreshConcurrency ?? 1) || 1));
+  const limit = refreshLimit(ports);
   for await (const [repository, queue] of mergeRows(queues)) {
     const ordered = [...queue.values()].sort(({ pipeline: left }, { pipeline: right }) => {
       const a = origin(left), b = origin(right);
       return (a.merge?.requestedAt ?? a.closedAt ?? "").localeCompare(b.merge?.requestedAt ?? b.closedAt ?? "")
         || a.id.localeCompare(b.id);
     });
-    const refreshing = activeRefreshes.get(repository) ?? [];
-    const capacityReason = `waiting for repository capacity held by refresh ${refreshing.slice(0, 2).join(", ")}`;
-    const first = ordered[0]!.pipeline;
-    const firstPr = first.merge?.prNumber ?? ports.pullRequestOf(first)?.number;
-    const queueReason = `queued behind ${firstPr == null ? `pipeline ${first.id}` : `PR #${firstPr} (pipeline ${first.id})`}`
-      + (refreshing.length >= limit ? `; ${capacityReason}` : "");
-    for await (const { pipeline, activeRefresh } of mergeRows(ordered.slice(limit))) {
-      if (!activeRefresh && !pipeline.hiddenAt) await retainQueueReason(ports, pipeline, queueReason);
+    // Refresh ownership must not block readiness reads or clean merges. Rotate
+    // bounded reads using durable timestamps, so a deferred refresh at the head
+    // cannot starve a clean PR further back, including after a restart.
+    const refreshOutstanding = ordered.some(entry => entry.refreshLane || entry.pipeline.merge?.state === "refreshing"
+      || entry.pipeline.merge?.refresh?.pipelineId);
+    const candidates = ordered.filter(entry => !entry.refreshLane && (!entry.pipeline.merge?.refresh?.pipelineId
+      || (entry.pipeline.merge.state === "merging" && !refreshMergeSuccessor(entry.pipeline, byId))));
+    const dueNow = ({ pipeline }: QueueEntry) => {
+      const due = Date.parse(pipeline.merge!.nextReadAt ?? "");
+      return !Number.isFinite(due) || due <= now || (!pipeline.merge!.readFailures && mergeWaitExpired(pipeline.merge!, now));
+    };
+    const heldReason = refreshCapacityReason(ports, repository);
+    const readable = refreshOutstanding && heldReason ? candidates.filter(entry => entry.pipeline.merge!.state !== "refreshing" && dueNow(entry)).sort((a, b) =>
+      Number(mergeWaitExpired(b.pipeline.merge!, now)) - Number(mergeWaitExpired(a.pipeline.merge!, now))
+      || (a.pipeline.merge!.readAt ?? "").localeCompare(b.pipeline.merge!.readAt ?? "")) : candidates;
+    // A merge admitted while refreshes ran can now be behind an older queued
+    // PR. Reconcile its landing before that PR can monopolize bounded reads.
+    // Retry work and mechanical updates rotate by durable read time, even
+    // after a waiting peer recovers its read. Backoff holds no readiness slot,
+    // and unresolved merge ownership retains reconciliation priority.
+    const readinessExpired = candidates.some(entry => readinessWaitExpired(entry.pipeline.merge!, now));
+    const rotateReads = readinessExpired || candidates.some(entry => entry.pipeline.merge!.readFailures || entry.pipeline.merge!.updates.at(-1)?.base);
+    const updateRequestedAt = ({ pipeline }: QueueEntry) => {
+      const update = pipeline.merge!.updates.at(-1);
+      return update?.base ? update.requestedAt : "";
+    };
+    const selected = readable.filter(entry => !rotateReads || dueNow(entry)).sort((a, b) =>
+      Number(b.pipeline.merge!.state === "merging" && dueNow(b))
+      - Number(a.pipeline.merge!.state === "merging" && dueNow(a))
+      || (rotateReads ? (a.pipeline.merge!.readAt ?? "").localeCompare(b.pipeline.merge!.readAt ?? "")
+        // Both polling slots can write the same timestamp. Lead with the
+        // newest base update so retained older updates cannot keep its
+        // ready head behind the PR waiting for it, including after restart.
+        || updateRequestedAt(b).localeCompare(updateRequestedAt(a)) : 0)).slice(0, limit);
+    const first = candidates[0]?.pipeline;
+    const firstPr = first?.merge?.prNumber;
+    const queueReason = refreshOutstanding ? "waiting for merge readiness poll"
+      : `queued behind ${firstPr == null ? `pipeline ${first?.id}` : `PR #${firstPr} (pipeline ${first!.id})`}`;
+    for await (const { pipeline } of mergeRows(candidates.filter(entry => !selected.includes(entry)))) {
+      if (!pipeline.hiddenAt) await retainQueueReason(ports, pipeline, queueReason, heldReason);
     }
-    let available = Math.max(0, limit - refreshing.length);
-    for (const [index, { pipeline: head, activeRefresh }] of ordered.slice(0, limit).entries()) {
-      if (activeRefresh) {
-        // Creation may have committed before its answer was lost. Replaying
-        // that exact durable key repairs the parent's link without a new slot.
-        const parent = byId.get(head.refreshOf!.pipelineId);
-        const reservation = parent?.merge?.refresh;
-        if (parent?.state === "completed" && parent.merge?.state === "refreshing" && reservation && !reservation.pipelineId
-          && reservation.base === head.refreshOf!.base && head.creationRequest?.key === reservation.key
-          && head.creationRequest.digest === reservation.digest) await startRefresh(parent, ports);
-        continue;
-      }
-      // Capacity gates new work. Completed carriers still need their bounded
-      // reads to reconcile external merges and release expired check holds.
-      const hasCapacity = available > 0;
-      if (hasCapacity) available -= 1;
-      if (head.merge!.state === "refreshing" || head.merge!.refresh?.pipelineId) {
-        if (hasCapacity && !head.merge!.refresh?.pipelineId) await startRefresh(head, ports);
+    // Creation may commit before its answer is lost. Repair that exact link
+    // even when the recovered child already owns the last refresh slot.
+    for (const { pipeline } of ordered.filter(entry => entry.refreshLane)) {
+      const parent = byId.get(pipeline.refreshOf!.pipelineId);
+      const reservation = parent?.merge?.refresh;
+      if (parent?.state === "completed" && parent.merge?.state === "refreshing" && reservation && !reservation.pipelineId
+        && reservation.base === pipeline.refreshOf!.base && pipeline.creationRequest?.key === reservation.key
+        && pipeline.creationRequest.digest === reservation.digest) await startRefresh(parent, ports);
+    }
+    let merged = false, readFailed = false;
+    for (const [index, { pipeline: head }] of selected.entries()) {
+      const capacity = () => refreshCapacityReason(ports, repository);
+      if (head.merge!.state === "refreshing") {
+        await startRefresh(head, ports);
         continue;
       }
       const due = performanceSpans.sync("forge.auto-merge.queue", () => Date.parse(head.merge!.nextReadAt ?? ""), 1);
-      if (Number.isFinite(due) && due > now && !mergeWaitExpired(head.merge!, now)) {
+      if (Number.isFinite(due) && due > now && (head.merge!.readFailures || head.merge!.state === "merging" || !mergeWaitExpired(head.merge!, now))) {
         if (index > 0 && !head.hiddenAt) await retainQueueReason(ports, head, queueReason);
         if (!head.hiddenAt) laneStatus(ports, head.id, mergeStatus(head.merge!));
         continue;
       }
       try {
-        await stepLane(head, ports, index === 0 && hasCapacity,
-          hasCapacity ? null : capacityReason, index > 0 ? queueReason : null);
+        await stepLane(head, ports, !merged && (refreshOutstanding || readinessExpired || index === 0 || readFailed), capacity, index > 0 ? queueReason : null);
+        const current = ports.loadPipelines().find(pipeline => pipeline.id === head.id);
+        if (current) byId.set(current.id, current);
+        const progress = current?.merge;
+        readFailed = Boolean(progress?.readFailures);
+        merged ||= progress?.state === "merged" || progress?.state === "merging";
       } catch (error) {
         ports.log?.(`[auto merge] ${head.id}: step failed`, error);
-        if (mergeWaitExpired(head.merge!, ports.now())) {
+        if (head.merge!.state !== "merging" && mergeWaitExpired(head.merge!, ports.now())) {
           await commit(ports, head, live => block(live, MERGE_REASONS.checksTimeout, ports.now()));
         }
       }
     }
+    await clearRetiredUpdateWaits(ports, repository, candidates.map(entry => entry.pipeline), byId);
   }
   });
 }
@@ -1134,7 +1652,8 @@ async function reconcileBatchLanding(read: Pipeline, pr: { repository: string; n
     live.repository = pr.repository;
     live.prNumber = pr.number;
     live.state = "merged";
-    live.by = "outside";
+    live.by = read.merge!.state === "merging" ? "auto-merge" : "outside";
+    if (live.by === "auto-merge") live.postMergeWatch = true;
     live.mergedHead = view.headRefOid;
     live.mergeCommit = view.mergeCommit;
     live.mergedAt = view.mergedAt ?? iso(now);
@@ -1142,7 +1661,7 @@ async function reconcileBatchLanding(read: Pipeline, pr: { repository: string; n
     live.blockedAt = null;
     live.nextReadAt = null;
     live.readFailures = 0;
-  });
+  }, read.merge!.state === "merging");
 }
 
 /* ── A pipeline that finishes its task (#2187 §5) ───────────────────────── */
@@ -1315,6 +1834,7 @@ export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pi
     hasPublishedPrototype,
     finishTask: finishBoardTask,
     startRefresh: async (request, options) => (await import("@/lib/pipelines/engine")).createPipelineFromRequest(request, undefined, options),
+    updateBase: { plan: request => planBaseUpdate(request), push: request => pushBaseUpdate(request) },
     activeSeat: async (project) => {
       const seat = (await import("@/lib/orchestrator/seats")).orchestratorSeatFor(project).active;
       return seat ? { srcPath: seat.path, srcConversationId: seat.conversationId } : null;
@@ -1333,9 +1853,34 @@ export function scheduleAutoMerge(overrides: Partial<AutoMergePorts> & Pick<Auto
   const recovery = sweepPostMerge({
     ...ports,
     read: async (lane, ref) => readPostMergeChecks(lane, ref, await requiredContexts(lane.merge!.repository, "main", ports), ports.run),
-    create: async (request, creationRequest, lineage) => {
-      const project = ports.loadPipelines().find(lane => lane.repoDir === request.repoDir)?.project;
-      const creatorLineage = (project ? await ports.activeSeat?.(project) : null) ?? lineage;
+    create: async (request, creationRequest, lineage, source) => {
+      // An original receipt owns its membership, including later manual corrections.
+      const replay = () => {
+        const existing = pipelineDeliveryLookup({ requestKey: creationRequest.key });
+        if (existing && existing.creationRequest?.digest !== creationRequest.digest) {
+          throw new Error("idempotency_conflict: recovery creation arguments changed");
+        }
+        return existing;
+      };
+      const existing = replay();
+      if (existing) return { id: existing.id };
+      const creatorLineage = (await ports.activeSeat?.(source.project)) ?? lineage;
+      const afterSeat = replay();
+      if (afterSeat) return { id: afterSeat.id };
+      // Read again after seat lookup; only fresh repairs acquire source membership.
+      const current = ports.loadPipelines().find(lane => lane.id === source.id);
+      if (!current || current.project !== source.project || current.repoDir !== source.repoDir) {
+        throw new Error("Recovery source outcome is unavailable; restore its task membership and retry");
+      }
+      const taskIds = [...new Set(current.taskIds)];
+      if (!taskIds.length) {
+        throw new Error("Recovery source outcome has no tasks; link its outcome tasks and retry");
+      }
+      const retained = proactiveConversationTaskIds([creatorLineage.srcConversationId]);
+      if (retained.some(id => !taskIds.includes(id))) {
+        throw new Error("Recovery creator authority requires tasks outside the source outcome; reconcile authority and retry");
+      }
+      request = { ...request, taskIds };
       const result = await (await import("@/lib/pipelines/engine")).createPipelineFromRequest(request, undefined, { creationRequest, creatorLineage });
       if (!result.pipeline) throw new Error(result.error ?? "Recovery pipeline creation failed");
       return { id: result.pipeline.id };

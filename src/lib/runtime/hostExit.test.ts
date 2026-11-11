@@ -5,12 +5,74 @@ import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { statePath } from "@/lib/configDir";
-import { bindHostExitWriter, hostExitText, observeHostExit, readHostExit, readHostExitSpool, recordHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
+import { bindHostExitWriter, discardHostExitWriter, hostExitText, observeHostExit, readHostExit, readHostExitSpool, recordHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { launcherFile, spawnManagedEngine } from "./agentSignalSandbox";
 import { socketWaitOwnerSource } from "./codexSocketTransport";
 import path from "node:path";
 import { terminateStructuredHostTree } from "./structuredHostControl";
 import { AgentMemoryCell, type AgentMemoryPlan } from "./agentMemory";
+
+for (const discard of [false, true]) for (const existing of [false, true]) test.skipIf(process.platform !== "linux")(`exit binding stays readable during publication (discard=${discard}, existing=${existing})`, async () => {
+  const directory = fs.mkdtempSync(path.join(process.env.TMPDIR!, "binding-publication-"));
+  const binding = path.join(directory, "host-exit.json");
+  const release = path.join(directory, "release");
+  const child = spawn(process.execPath, ["-e", socketWaitOwnerSource, "--", JSON.stringify([
+    directory, process.execPath, "-e", `const fs=require("node:fs");const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(timer);process.exit(23)}},5)`,
+  ])], { stdio: ["ignore", "ignore", "pipe"] });
+  const closed = once(child, "close");
+  const waiter = captureProcessIdentity(child.pid!);
+  let errors = "";
+  child.stderr!.on("data", chunk => { errors += String(chunk); });
+  let native: ReturnType<typeof captureProcessIdentity> | undefined;
+  let writing: ReturnType<typeof spyOn> | undefined;
+  try {
+    const deadline = performance.now() + 5_000;
+    const ready = path.join(directory, "native.json");
+    while (!fs.existsSync(ready) && performance.now() < deadline) await Bun.sleep(10);
+    native = captureProcessIdentity(JSON.parse(fs.readFileSync(ready, "utf8")).pid);
+    if (existing) bindHostExitWriter(directory, native, waiter);
+    const write = fs.writeFileSync;
+    let interleaved = false;
+    writing = spyOn(fs, "writeFileSync").mockImplementation((file, ...args) => {
+      const filename = typeof file === "number" ? fs.readlinkSync(`/proc/self/fd/${file}`) : String(file);
+      if (!interleaved && (filename === binding || filename.startsWith(binding + "."))) {
+        interleaved = true;
+        // Pause after opening/truncating the writer's file, before its bytes
+        // arrive. The independent waiter must see the old complete binding or
+        // its absence throughout this interval.
+        const fd = typeof file === "number" ? file : fs.openSync(file, "w", 0o600);
+        try {
+          write(release, "release");
+          const probe = spawnSync(process.execPath, ["-e", `import { processIdentityMayRun } from ${JSON.stringify(path.resolve("src/lib/processIdentity.ts"))};
+            const until=performance.now()+5000;
+            while(processIdentityMayRun(${JSON.stringify(waiter)})) {
+              if(performance.now()>until)process.exit(1);await Bun.sleep(10);
+            }`], { encoding: "utf8", timeout: 6_000 });
+          expect(probe.status, probe.stderr).toBe(0);
+          return write(fd, ...args);
+        } finally { if (typeof file !== "number") fs.closeSync(fd); }
+      }
+      return write(file, ...args);
+    });
+    if (discard) discardHostExitWriter(directory);
+    else bindHostExitWriter(directory, native, waiter);
+    writing.mockRestore();
+    expect(interleaved).toBeTrue();
+    expect(await closed, errors).toEqual([23, null]);
+    expect(errors).toBe("");
+    expect(readHostExitSpool(directory)?.exit).toMatchObject({ code: 23, signal: null });
+    const published = JSON.parse(fs.readFileSync(binding, "utf8"));
+    if (discard) expect(published).toEqual({ discard: true });
+    else expect(published.file).toEndWith(".exit.json");
+    if (existing) expect(readHostExit(native)?.exit).toMatchObject({ code: 23, signal: null });
+  } finally {
+    writing?.mockRestore();
+    if (native && processIdentityStatus(native) === "alive") process.kill(native.pid, "SIGKILL");
+    if (processIdentityStatus(waiter) === "alive") child.kill("SIGKILL");
+    await closed;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 15_000);
 
 for (const mode of ["descendant", "fatal-cleanup"] as const) test(`memory ${mode} records the native host stop before signalling it`, () => {
   const root = 2147482800;
@@ -310,6 +372,7 @@ setInterval(()=>{if(fs.existsSync(${JSON.stringify(finish)})) process.exit(23)},
     fs.writeFileSync(binary, `#!/bin/sh\nexec '${process.execPath}' '${fixture}' "$@"\n`, { mode: 0o700 });
     const bin = path.join(directory, "bin"); fs.mkdirSync(bin);
     fs.symlinkSync(Bun.which("python3")!, path.join(bin, "python3"));
+    fs.symlinkSync(Bun.which("git")!, path.join(bin, "git"));
     const hostModule = path.join(import.meta.dir, engine === "claude" ? "claudeStreamBrokerHost.ts" : "copilotAcpHost.ts");
     const source = `import fs from "node:fs";
 import { ${engine === "claude" ? "ClaudeStreamBrokerHost" : "CopilotAcpHost"} as Host } from ${JSON.stringify(hostModule)};
@@ -451,15 +514,15 @@ test("a managed waiter whose engine cannot spawn releases its private binding", 
 });
 
 test("a refused managed exit binding reaps the native engine before rejecting startup", async () => {
-  const write = fs.writeFileSync;
+  const rename = fs.renameSync;
   let native: ReturnType<typeof captureProcessIdentity> | null = null;
-  const refusal = spyOn(fs, "writeFileSync").mockImplementation((file, ...args) => {
-    if (path.basename(String(file)) === "host-exit.json") {
-      const pid = JSON.parse(fs.readFileSync(path.join(path.dirname(String(file)), "native.json"), "utf8")).pid;
+  const refusal = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+    if (path.basename(String(to)) === "host-exit.json") {
+      const pid = JSON.parse(fs.readFileSync(path.join(path.dirname(String(to)), "native.json"), "utf8")).pid;
       native = captureProcessIdentity(pid);
       throw new Error("fixture exit binding refused");
     }
-    return write(file, ...args);
+    return rename(from, to);
   });
   try {
     await expect(spawnManagedEngine(process.execPath, ["-e", "setInterval(()=>{},1000)"],
@@ -480,19 +543,19 @@ for (const detached of [false, true]) test(`refused managed exit binding reaps i
   const receipts = statePath("host-exits");
   const beforeWaits = fs.existsSync(waits) ? fs.readdirSync(waits).sort() : [];
   const beforeReceipts = fs.existsSync(receipts) ? fs.readdirSync(receipts).sort() : [];
-  const write = fs.writeFileSync;
+  const rename = fs.renameSync;
   let native: ReturnType<typeof captureProcessIdentity> | null = null;
   let descendant: ReturnType<typeof captureProcessIdentity> | null = null;
-  const refusal = spyOn(fs, "writeFileSync").mockImplementation((file, ...args) => {
-    if (path.basename(String(file)) === "host-exit.json") {
-      const pid = JSON.parse(fs.readFileSync(path.join(path.dirname(String(file)), "native.json"), "utf8")).pid;
+  const refusal = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+    if (path.basename(String(to)) === "host-exit.json") {
+      const pid = JSON.parse(fs.readFileSync(path.join(path.dirname(String(to)), "native.json"), "utf8")).pid;
       native = captureProcessIdentity(pid);
       const probe = spawnSync(process.execPath, ["-e", `const fs=require("node:fs");const until=Date.now()+5000;while(!fs.existsSync(${JSON.stringify(ready)})){if(Date.now()>until)process.exit(1);await Bun.sleep(10)}`], { timeout: 6_000, env: process.env });
       if (probe.status !== 0) throw new Error("fixture descendant did not become ready");
       descendant = captureProcessIdentity(JSON.parse(fs.readFileSync(ready, "utf8")).pid);
       throw new Error("fixture tree exit binding refused");
     }
-    return write(file, ...args);
+    return rename(from, to);
   });
   try {
     await expect(spawnManagedEngine(process.execPath, ["-e", `const child=require("node:child_process").spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"inherit",detached:${detached}});child.once("spawn",()=>require("node:fs").writeFileSync(${JSON.stringify(ready)},JSON.stringify({pid:child.pid})));setInterval(()=>{},1000);`],

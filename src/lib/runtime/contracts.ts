@@ -24,7 +24,7 @@ export type RuntimeScopeString = `${RuntimeScopeKind}:${string}`;
 export type RuntimeScopeInput = RuntimeScope | RuntimeScopeString;
 
 export type RuntimeEngine = "codex" | "claude" | "copilot";
-export type RuntimeHostKind = "codex-app-server" | "claude-broker" | "copilot-acp" | "tmux-legacy" | "unhosted";
+export type RuntimeHostKind = "codex-app-server" | "claude-broker" | "copilot-acp" | "unhosted";
 
 /** The structured host kind each engine runs under. */
 export function runtimeHostKindForEngine(engine: RuntimeEngine): Extract<RuntimeHostKind, "codex-app-server" | "claude-broker" | "copilot-acp"> {
@@ -279,6 +279,9 @@ export interface RuntimeOperationReceipt {
   queuePosition?: number | null;
   reason?: string | null;
   text?: string | null;
+  /** A send may already have reached the engine. Retained across requeues;
+      the current reason only describes the latest wait or transition. */
+  deliveryUnverified?: boolean;
   imageCount?: number;
   /** The per-turn runtime settings snapshot a send/steer was admitted with
       (issue #499): the durable audit record that the selected model/effort/fast
@@ -315,6 +318,8 @@ export interface RuntimeTransitionDetails {
   turnId?: string | null;
   queuePosition?: number | null;
   reason?: string | null;
+  /** Monotonic evidence of an earlier send without confirmation. */
+  deliveryUnverified?: true;
   /** null withdraws a route recorded by an earlier transition. */
   delivery?: RuntimeDeliveryMode | null;
   interruptedTurnId?: string | null;
@@ -399,7 +404,9 @@ export interface RuntimeSendCommand extends RuntimeCommandBase {
   contentDigest?: string;
   /** Privacy revision that must still be current when a pipeline first prompt dispatches. */
   roleMemoryRevision?: string;
-  policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
+  /** context-or-queue chooses native context for a supported active host at dispatch,
+   * otherwise waits for an idle wake. A possibly written insertion is never retried. */
+  policy?: "queue" | "context-or-queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
   /** Automatic continuation requires this same idle revision and writer at admission and execution. */
   onlyIfIdle?: RuntimeIdleKillFence;
@@ -994,7 +1001,15 @@ export interface ViewerDeploymentStatus {
   revisionNumber: number;
 }
 
+/** A durable admission refusal: the key is fenced before this is reported. */
+export class DeploymentAdmissionClosedError extends Error {
+  readonly code = "deploy_not_admitted";
+  constructor() { super("Deployment was not admitted; this request key is permanently closed."); }
+}
+
 export interface ViewerDeploymentRequest {
+  /** Settle the original key without ever starting a deployment. */
+  reconcileOnly?: boolean;
   revision?: string;
   /** A branch of the canonical repository (`refs/heads/<branch>`), resolved to
       its exact commit by the host adapter (#1033). Takes precedence over
@@ -1017,6 +1032,8 @@ export interface ViewerDeploymentSummary {
   startedAt: string | null;
   finishedAt: string | null;
   error: string | null;
+  /** Adapter notice, including an explicit result when nothing restarted. */
+  servingProgress?: string;
 }
 
 export interface ViewerDeploymentList {
@@ -1076,7 +1093,8 @@ export function compactViewerDeploymentError(error: string | null): string | nul
 export function viewerDeploymentSummary(row: ViewerDeploymentStatus): ViewerDeploymentSummary {
   return { deploymentId: row.deploymentId, phase: row.phase, sha: row.revision, terminal: row.terminal,
     startedAt: row.createdAt ?? null, finishedAt: row.terminal ? row.updatedAt ?? null : null,
-    error: compactViewerDeploymentError(row.error) };
+    error: compactViewerDeploymentError(row.error),
+    ...(row.servingProgress ? { servingProgress: compactViewerDeploymentError(row.servingProgress)! } : {}) };
 }
 
 export type ViewerDeploymentReceipt =
@@ -1093,7 +1111,7 @@ export interface RuntimeSocketRequest {
   /** Opt in to serial reuse; older listeners close after the answer. */
   keepAlive?: boolean;
   id: string;
-  method: "runtime-host-health" | "files-revision" | "session-read" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-confirm-delivery" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
+  method: "runtime-host-health" | "files-revision" | "session-read" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-confirm-delivery" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-reconcile" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
   params?: Record<string, unknown>;
 }
 

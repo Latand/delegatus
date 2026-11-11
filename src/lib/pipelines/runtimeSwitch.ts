@@ -152,6 +152,7 @@ export async function cancelPendingRuntimeSwitch(registry: Pick<AgentRegistry, "
 function clearOldWaits(attempt: PipelineStageAttempt) {
   delete attempt.providerWait; delete attempt.providerRecoveryBudget; delete attempt.severedTurn;
   delete attempt.verdictRequest; delete attempt.backgroundWait; delete attempt.controllerWait;
+  delete attempt.restoreContinuation;
 }
 
 function writeArtifact(file: string, content: string): void {
@@ -325,6 +326,11 @@ export async function driveRuntimeSwitch(
         await ports.runtimeSwitchControl(record.from.conversationId, record.from.agentPath!, "interrupt", switchOperationKey(record, "interrupt"), record.to);
         record.phase = "switching"; await persist();
       } else {
+        /* The stop can land while its answer is lost (#3797). Without this
+           record the next pass read the stopped source as a host that died
+           on its own and failed the switch before any target started. The
+           same stop key replays below and the switch continues to its target. */
+        if (!record.stopDispatchedAt) { record.stopDispatchedAt = ports.now(); await persist(); }
         const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n, conversationId: record.from.conversationId,
           launchId: record.from.launchId, agentPath: record.from.agentPath, paneId: null }, { operationId: switchOperationKey(record, "stop"), automatic: true });
         if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {

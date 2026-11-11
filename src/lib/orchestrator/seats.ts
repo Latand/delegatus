@@ -1,3 +1,6 @@
+import { workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
+import { TeamError } from "@/lib/team/members";
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { reportHeaderName } from "@/lib/projects/settings";
 import { notifySeatChannel } from "./seatChannelSignal";
 import crypto from "node:crypto";
@@ -78,6 +81,14 @@ export interface OrchestratorSeatTrigger {
 }
 
 export interface OrchestratorSeat {
+  workspace?: import("@/lib/team/workspacePrincipal").WorkspacePrincipal;
+  /** True: `workspace` came from a member's message to a seat this one
+      replaced, and nobody designated this seat for that member. Such a fence is
+      message authority: the next person who writes to this seat's conversation
+      decides its reach. False: the binding is the designation itself and no
+      later message changes it. Absent on records written before the field
+      existed; read it through `seatWorkspaceFromMessage`. */
+  workspaceFromMessage?: boolean;
   project: string;
   /** Monotonic designation epoch; strictly increases across the whole file. */
   seatEpoch: number;
@@ -212,6 +223,7 @@ const seatsFile = () => statePath("orchestrator-seats.json");
 type RecipientRefusal = { status: 409 | 503; error: string; successorConversationId?: string; project?: string; revokedAt?: string; revokedSeatEpoch?: number } | null;
 
 const RECIPIENT_AUTHORITY_CACHE_LIMIT = 8;
+const RECIPIENT_AUTHORITY_LOOKUP_ATTEMPTS = 3;
 const recipientAuthorityCacheProperty = "__delegatusOrchestratorRecipientAuthorityV2__" as const;
 const identityConversationAlias = (id: string): string => id;
 
@@ -239,7 +251,7 @@ interface RecipientAuthorityCache {
 function recipientAuthorityCache(): RecipientAuthorityCache {
   const globalCache = globalThis as typeof globalThis & { [recipientAuthorityCacheProperty]?: RecipientAuthorityCache };
   return globalCache[recipientAuthorityCacheProperty] ??= {
-    files: new Map(), indexes: new Map(), fileLoads: new Map(), indexLoads: new Map(),
+    files: new MeasuredCache("files", "orchestrator/seats"), indexes: new MeasuredCache("indexes", "orchestrator/seats"), fileLoads: new Map(), indexLoads: new Map(),
   };
 }
 
@@ -325,6 +337,8 @@ function normalizeSeat(value: unknown): OrchestratorSeat | null {
     : Boolean(engine || model);
   return {
     project: seat.project,
+    ...(seat.workspace ? { workspace: { memberId: seat.workspace.memberId, workspaceId: seat.workspace.workspaceId } } : {}),
+    ...(seat.workspace && typeof seat.workspaceFromMessage === "boolean" ? { workspaceFromMessage: seat.workspaceFromMessage } : {}),
     seatEpoch: seat.seatEpoch,
     conversationId: seat.conversationId ?? null,
     path: seat.path ?? null,
@@ -980,6 +994,9 @@ export type BeginSeatIntentResult =
 export type NotReplayedSeatIntent = { kind: "not_replayed" };
 
 export interface BeginSeatIntentInput {
+  workspace?: import("@/lib/team/workspacePrincipal").WorkspacePrincipal;
+  /** See `OrchestratorSeat.workspaceFromMessage`. */
+  workspaceFromMessage?: boolean;
   project: string;
   mandate: string;
   /** The role table this intent's delivery carries; see `OrchestratorSeat.roleTable`. */
@@ -1018,6 +1035,7 @@ export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput & { repl
 export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginSeatIntentResult | NotReplayedSeatIntent;
 export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginSeatIntentResult | NotReplayedSeatIntent {
   return withAccountMutationLock(() => {
+    if (input.workspace && !workspacePrincipalAllows(input.workspace, input.project)) throw new TeamError("workspace_forbidden", "workspace access denied", 403);
     const file = readOrchestratorSeatFile();
     const project = canonicalOrchestratorProject(input.project);
     const active = file.seats[project];
@@ -1053,6 +1071,8 @@ export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginS
       delete file.pending[project];
     }
     const seat: OrchestratorSeat = {
+      ...(input.workspace ? { workspace: { memberId: input.workspace.memberId, workspaceId: input.workspace.workspaceId } } : {}),
+      ...(input.workspace ? { workspaceFromMessage: input.workspaceFromMessage === true } : {}),
       project,
       seatEpoch: file.nextSeatEpoch,
       conversationId: input.conversationId ?? null,
@@ -1443,6 +1463,56 @@ export function activeOrchestratorSeatsOrUnknown(): OrchestratorSeat[] | null {
   return file === null ? null : Object.values(file.seats);
 }
 
+// One file and one map per process, evicted on path or filesystem identity
+// changes. Every call stats the file: peer writes, revocations, permission
+// changes and atomic replacements take effect without a polling interval.
+/** The request key authentication recovery rotates under
+    (`seatAuthRotationKey`). That rotation records no other durable mark. */
+const AUTH_RECOVERY_ROTATION_KEY = /^seat-auth-[0-9a-f]{64}$/;
+
+/** A record written before the field existed cannot say where its binding came
+    from. A rotation an agent or the seat tick triggered only ever copied the
+    reach of the conversation behind it, and that copy is how a member's message
+    became a permanent binding. Such a record is read as message authority: it
+    stays fenced until a person writes to the seat, and then that person
+    decides. Only durable marks of such a rotation count: an agent trigger, the
+    automatic-replacement fence, or the authentication recovery key. A person's
+    designation carries none of them, also when it replaced an incumbent. */
+export function seatWorkspaceFromMessage(seat: Pick<OrchestratorSeat, "workspace" | "workspaceFromMessage" | "triggeredBy" | "intent">): boolean {
+  if (!seat.workspace) return false;
+  return seat.workspaceFromMessage ?? (seat.triggeredBy?.kind === "agent" || Boolean(seat.intent.automaticReplacement)
+    || AUTH_RECOVERY_ROTATION_KEY.test(seat.intent.clientRequestId));
+}
+
+/** What a designation recorded about one seat conversation's workspace reach. */
+export interface SeatWorkspaceBinding {
+  workspace: OrchestratorSeat["workspace"];
+  fromMessage: boolean;
+}
+
+let workspacePrincipalsCache: {
+  file: string; identity: string; principals: ReadonlyMap<string | null, SeatWorkspaceBinding>;
+} | undefined;
+
+export function orchestratorWorkspacePrincipalsOrUnknown(): ReadonlyMap<string | null, SeatWorkspaceBinding> | null {
+  const file = seatsFile();
+  let identity: string;
+  try {
+    const stat = fs.statSync(file, { bigint: true });
+    identity = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.mode].join(":");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") { workspacePrincipalsCache = undefined; return null; }
+    identity = "missing";
+  }
+  if (workspacePrincipalsCache?.file === file && workspacePrincipalsCache.identity === identity)
+    return workspacePrincipalsCache.principals;
+  const seats = activeOrchestratorSeatsOrUnknown();
+  const principals = seats === null ? null : new Map(seats.map(seat => [seat.conversationId,
+    { workspace: seat.workspace, fromMessage: seatWorkspaceFromMessage(seat) }]));
+  workspacePrincipalsCache = principals === null ? undefined : { file, identity, principals };
+  return principals;
+}
+
 /**
  * One project's active and pending seats, or null when the durable store could
  * not be established (a torn or future-schema file, an unreadable path). A
@@ -1592,21 +1662,29 @@ export function isCurrentOrchestratorSeat(conversationIds: readonly string[]): b
 }
 
 /** Hydrate and index seat authority before a caller reaches synchronous
-    admission. The sync check above only stats the file and reads one Map key. */
+    admission. Retry revision races here, before any delivery can be reserved
+    or dispatched. Stable refusals still return immediately. The sync check
+    above only stats the file and reads one Map key. */
 export async function orchestratorRecipientRefusalAsync(
   conversationIds: readonly string[],
   resolveAlias: (conversationId: string) => string = identityConversationAlias,
 ): Promise<RecipientRefusal> {
   return withViewerOperation("orchestrator.recipient-authority", async () => {
     const filePath = seatsFile();
-    const revision = await seatFileRevisionAsync(filePath);
-    if (revision === null) return { status: 503, error: "orchestrator seat authority is unavailable" };
-    const index = await recipientAuthorityIndex(filePath, revision);
-    if (!index) return { status: 503, error: "orchestrator seat authority is unavailable" };
-    if (seatFileRevisionSync(filePath) !== revision) {
-      return { status: 503, error: "orchestrator seat authority changed during lookup" };
+    for (let attempt = 0; attempt < RECIPIENT_AUTHORITY_LOOKUP_ATTEMPTS; attempt++) {
+      const revision = await seatFileRevisionAsync(filePath);
+      if (revision === null) return { status: 503, error: "orchestrator seat authority is unavailable" };
+      const index = await recipientAuthorityIndex(filePath, revision);
+      const currentRevision = seatFileRevisionSync(filePath);
+      if (currentRevision !== null && currentRevision !== revision
+        && attempt + 1 < RECIPIENT_AUTHORITY_LOOKUP_ATTEMPTS) continue;
+      if (!index) return { status: 503, error: "orchestrator seat authority is unavailable" };
+      if (currentRevision !== revision) {
+        return { status: 503, error: "orchestrator seat authority changed during lookup" };
+      }
+      return recipientAuthorityRefusal(index, conversationIds, resolveAlias);
     }
-    return recipientAuthorityRefusal(index, conversationIds, resolveAlias);
+    return { status: 503, error: "orchestrator seat authority changed during lookup" };
   });
 }
 

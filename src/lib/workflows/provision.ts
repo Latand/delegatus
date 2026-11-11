@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { pidAlive } from "@/lib/scanner/process";
 import { CpuContainmentUnavailable, wrapWorkCommand, type CpuPorts } from "@/lib/runtime/cpuPlacement";
-import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
+import { repositoryCommitIdentity } from "@/lib/git/repositoryCommitIdentity";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
 import { cpuBudgetTimer, cpuWaitBudget } from "@/lib/runtime/cpuAdmissionBudget";
 
@@ -38,6 +38,8 @@ export interface ExecOptions {
   stdoutEncoding?: "utf8" | "latin1";
   /** Publication children retain their owner's kernel lock across a restart. */
   inheritFd?: number;
+  /** Independent resource owners survive wrappers that replace inheritFd. */
+  additionalInheritedFds?: readonly number[];
 }
 
 export type ExecPort = (command: string, args: string[], cwd: string, env?: Partial<NodeJS.ProcessEnv>, options?: ExecOptions) => ExecResult | Promise<ExecResult>;
@@ -53,7 +55,7 @@ export const realExec: ExecPort = (command, args, cwd, env, options = {}) => new
   const budget = cpuWaitBudget({ ...process.env, GIT_TERMINAL_PROMPT: "0", ...env });
   const child = spawn(command, args, {
     cwd, detached: process.platform !== "win32",
-    stdio: ["ignore", "pipe", "pipe", ...(options.inheritFd === undefined ? [] : [options.inheritFd])],
+    stdio: ["ignore", "pipe", "pipe", ...(options.inheritFd === undefined ? [] : [options.inheritFd]), ...options.additionalInheritedFds ?? []],
     env: budget.env,
   });
   const stop = (reason: string) => {
@@ -273,7 +275,9 @@ export async function finishMerge(wf: Workflow, exec: ExecPort, cleanupExec: Exe
   if (!/^[0-9a-f]{40}$/i.test(expectedTree)) {
     return { ok: false, error: "the workflow merge could not be previewed safely; inspect the repo before retrying" };
   }
-  const merge = (await exec("git", ["merge", "--no-ff", wf.branch, "-m", `Merge ${wf.branch}: ${prTitle(wf)}`], wf.repoDir, controllerCommitIdentityEnv()));
+  const identity = await repositoryCommitIdentity(wf.repoDir, exec);
+  const merge = (await exec("git", ["merge", "--no-ff", wf.branch, "-m", `Merge ${wf.branch}: ${prTitle(wf)}`,
+    ...(identity.coauthor ? ["-m", identity.coauthor] : [])], wf.repoDir, identity.env));
   if (merge.code !== 0) {
     /* A merge can fail after populating the index. Even a fresh ownership
        snapshot cannot make `merge --abort` safe: an operator can stage a

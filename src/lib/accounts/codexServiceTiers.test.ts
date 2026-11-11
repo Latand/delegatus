@@ -112,3 +112,15 @@ test("legacy cache speed tiers supply explicit launch tier ids when service tier
     ]);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
+
+
+test("inherited launch tiers are preferences and explicit speed still wins", () => {
+  const input = { engine: "codex" as const, model: "gpt-6.1-sol", fast: undefined, serviceTier: undefined,
+    inheritedServiceTier: "ultrafast", roleDefault: "priority", roleDefaultApplies: true };
+  expect(codexLaunchTier(input)).toEqual({ tier: "ultrafast", required: false, source: "inherited" });
+  expect(codexLaunchTier({ ...input, serviceTier: "priority" })).toEqual({ tier: "priority", required: true, source: "explicit" });
+  expect(codexLaunchTier({ ...input, fast: true })).toEqual({ tier: "priority", required: true, source: "fast" });
+  expect(codexLaunchTier({ ...input, fast: false })).toMatchObject({ tier: null });
+  expect(codexLaunchTier({ ...input, inheritedServiceTier: "bad tier" })).toHaveProperty("error");
+  expect(codexLaunchTier({ ...input, engine: "claude" })).toHaveProperty("error");
+});

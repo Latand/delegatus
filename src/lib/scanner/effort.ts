@@ -109,16 +109,22 @@ function normalizeServiceTier(value: unknown): string | null {
 
 /** Codex thread settings survive structured starts, later turns and stopped sessions. */
 export function entryServiceTier(entry: FileEntry, durableTiers?: ReadonlyMap<string, string | null>): string | null {
-  if (entry.engine !== "codex") return null;
+  return entryServiceTierResult(entry, durableTiers).value;
+}
+
+export function entryServiceTierResult(entry: Pick<FileEntry, "engine" | "pid" | "path" | "mtime" | "size">,
+  durableTiers?: ReadonlyMap<string, string | null>): { value: string | null; source: "native" | "profile" | null } {
+  const profile = () => { const value = durableServiceTier(entry, durableTiers); return { value, source: value === null ? null : "profile" as const }; };
+  if (entry.engine !== "codex") return { value: null, source: null };
   const argv = entry.pid === null ? [] : readArgv(entry.pid);
   for (let i = 0; i < argv.length - 1; i++) {
     if (argv[i] !== "-c" && argv[i] !== "--config") continue;
     const match = argv[i + 1].match(/^service_tier\s*=\s*"?([a-z][a-z0-9_-]{0,31})"?$/);
-    if (match) return normalizeServiceTier(match[1]);
+    if (match) return { value: normalizeServiceTier(match[1]), source: "native" };
   }
   const mtimeMs = entry.mtime * 1000;
   const cached = serviceTierCache.get(entry.path);
-  if (cached?.[0] === entry.size && cached[1] === mtimeMs) return cached[2] ?? durableServiceTier(entry, durableTiers);
+  if (cached?.[0] === entry.size && cached[1] === mtimeMs) return cached[2] ? { value: cached[2], source: "native" } : profile();
   const pick = (records: Record<string, unknown>[]) => {
     for (const record of [...records].reverse()) {
       const payload = recordValue(record.payload);
@@ -133,7 +139,7 @@ export function entryServiceTier(entry: FileEntry, durableTiers?: ReadonlyMap<st
   // When the tail cannot answer, use the durable profile rather than an old head setting.
   const tier = pick(tail.records);
   if (tail.complete) serviceTierCache.set(entry.path, [entry.size, mtimeMs, tier]);
-  return tier ?? durableServiceTier(entry, durableTiers);
+  return tier ? { value: tier, source: "native" } : profile();
 }
 
 /** Resolve only the scanner's current paths, with bounded synchronous slices.
@@ -177,7 +183,7 @@ export function durableServiceTierIndex(registry = agentRegistry()): ReadonlyMap
   return tiers;
 }
 
-function durableServiceTier(entry: FileEntry, tiers?: ReadonlyMap<string, string | null>): string | null {
+function durableServiceTier(entry: Pick<FileEntry, "path">, tiers?: ReadonlyMap<string, string | null>): string | null {
   if (tiers) return tiers.get(entry.path) ?? null;
   try {
     const profile = agentRegistry().launchProfileForPath(entry.path);

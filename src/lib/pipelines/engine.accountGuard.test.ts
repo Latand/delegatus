@@ -1,4 +1,4 @@
-import { expect, test, harness, create, tickPipelines, loadPipelines, savePipelines, patchPipeline, providerRecoveryHarness, LIMITED_ACCOUNT, PASS_TEXT, AgentRegistry, path, fs } from "./engine.fixture";
+import { expect, test, harness, create, createPipelineFromRequest, tickPipelines, loadPipelines, savePipelines, patchPipeline, providerRecoveryHarness, LIMITED_ACCOUNT, PASS_TEXT, AgentRegistry, path, fs } from "./engine.fixture";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import { accountQuotaVerdict, selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
 import { ProjectAccountRefusedError } from "@/lib/accounts/manager";
@@ -7,18 +7,18 @@ import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 
 async function fixture() {
   const h = harness();
+  const roleLookup = h.ports.roleLookup!;
+  h.ports.roleLookup = (roleId, params, project) => {
+    const role = roleLookup(roleId, params, project);
+    return role?.engine === "codex" ? { ...role, serviceTier: "ultrafast" } : role;
+  };
   const spawn = h.ports.spawnAgent;
   h.ports.spawnAgent = async (input, reserved) => ({ ...await spawn(input, reserved), paneId: null });
-  await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }] as never);
+  await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, account: "account-a", prompt: "Build", next: null }] as never);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   const lane = loadPipelines()[0]!;
   const attempt = lane.runs[0]!.attempts[0]!;
-  attempt.accountId = "account-a";
-  lane.stages[0]!.account = "account-a";
-  attempt.definition!.account = "account-a";
-  attempt.effectiveRole.serviceTier = "ultrafast";
-  savePipelines([lane]);
   let allowed = ["account-a", "account-b"];
   const accounts = allowed.map(id => ({ id, authPresent: true }));
   const now = Date.parse(h.ports.now());
@@ -94,6 +94,8 @@ test.each(["binding", "credit"])("retry-stage admits %s evacuation while deliver
   const f = await fixture();
   if (kind === "binding") f.allow(["account-b"]);
   else f.observations[0]!.limits!.weekly!.usedPercent = 99;
+  // Explicit retry obeys the stage's configured pin; release it before requesting evacuation.
+  expect((await patchPipeline(f.lane.id, { action: "override-stage", stageId: "build", account: null }, f.h.ports)).error).toBeUndefined();
   let outstanding = true;
   f.h.ports.conversationDeliveryOutstanding = () => outstanding;
   const request = { action: "retry-stage" as const, expectedStageId: "build", expectedAttempt: 1 };
@@ -259,6 +261,7 @@ test("a later operator stop fences evacuation until an explicit retry", async ()
   stopped = false;
   await tickPipelines([], f.h.ports);
   expect(f.current().runs[0]!.attempts).toHaveLength(1);
+  expect((await patchPipeline(f.lane.id, { action: "override-stage", stageId: "build", account: null }, f.h.ports)).error).toBeUndefined();
   await patchPipeline(f.lane.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, f.h.ports);
   expect(f.current().runs[0]!.attempts[1]!.accountId).toBe("account-b");
 });
@@ -561,4 +564,25 @@ test("the same exhausted reading, still fresh when its reset passes, keeps the r
   expect(f.attempts()).toHaveLength(2);
   expect(f.attempts()[1]).toMatchObject({ accountId: "account-a", state: "running", launchId: expect.any(String),
     restartContext: { previousAttempt: 1, transcriptPath: f.attempt.agentPath } });
+});
+
+test("a stage moved to Claude before it starts launches on Claude with no Codex tier", async () => {
+  const h = harness();
+  savePipelines([]);
+  const created = await createPipelineFromRequest({ task: "Move a stage to Claude", spec: "AC1", repoDir: "/repo", publication: "internal", autoStart: false, stages: [
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, engine: "codex", model: "gpt-5.6-sol", effort: "high", preferredServiceTier: "ultrafast", prompt: "Review", next: "plan" },
+    { id: "plan", kind: "run", role: { roleId: "architect" }, access: "read-only", prompt: "Plan", next: null },
+  ] } as never, h.ports, { allowOperatorDraftWithoutLineage: true });
+  const id = created.pipeline!.id;
+  const moved = await patchPipeline(id, { action: "override-stage", stageId: "review", engine: "claude", model: "opus", effort: "high" }, h.ports);
+  expect(moved.error).toBeUndefined();
+  expect((await patchPipeline(id, { action: "start" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs).toHaveLength(1);
+  const attempt = loadPipelines()[0]!.runs.find(run => run.stageId === "review")!.attempts[0]!;
+  for (const role of [h.spawnInputs[0]!.role, attempt.effectiveRole]) {
+    expect(role).toMatchObject({ engine: "claude", model: "opus", effort: "high" });
+    for (const key of ["serviceTier", "serviceTierSource", "preferredServiceTier"] as const) expect(role[key as keyof typeof role]).toBeUndefined();
+  }
 });

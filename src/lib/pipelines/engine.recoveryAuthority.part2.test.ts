@@ -181,22 +181,33 @@ test.each((["codex", "claude"] as const).flatMap(engine => (["busy", "abort"] as
   const recordedAt = f.h.ports.now();
   f.h.ports.conversationRestartCut = () => ({ recordedAt });
   let stops = 0;
+  const appendOperator = () => fs.appendFileSync(file, JSON.stringify(engine === "codex"
+    ? { type: "event_msg", timestamp: recordedAt, payload: { type: "user_message", message: "Wait for my review" } }
+    : { type: "user", timestamp: recordedAt, message: { role: "user", content: "Wait for my review" } }) + "\n");
+  const continuations: string[] = [];
+  f.h.ports.resumeSeveredTurn = async input => {
+    if (operator) appendOperator();
+    if (!await input.continuationAllowed!()) return false;
+    continuations.push(input.clientMessageId);
+    return true;
+  };
   f.h.ports.stopInterruptedStageAgent = async () => {
-    if (++stops === 1 && operator) fs.appendFileSync(file, JSON.stringify(engine === "codex"
-      ? { type: "event_msg", timestamp: recordedAt, payload: { type: "user_message", message: "Wait for my review" } }
-      : { type: "user", timestamp: recordedAt, message: { role: "user", content: "Wait for my review" } }) + "\n");
+    if (++stops === 1 && operator) appendOperator();
     return { outcome: "stopped" };
   };
   await tickPipelines([], f.h.ports);
-  expect(stops).toBe(1);
-  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(operator ? 1 : 2);
+  expect(stops).toBe(engine === "claude" ? 0 : 1);
+  expect(continuations).toHaveLength(engine === "claude" && !operator ? 1 : 0);
+  const attempts = engine === "claude" || operator ? 1 : 2;
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(attempts);
   f.advance(60_000);
   await tickPipelines([], f.h.ports);
   await tickPipelines([], f.h.ports);
-  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(operator ? 1 : 2);
-  expect(f.h.spawnInputs).toHaveLength(operator ? 1 : 2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(attempts);
+  expect(f.h.spawnInputs).toHaveLength(attempts);
   expect(f.sends).toHaveLength(0);
-  if (operator && turn === "busy") expect(loadPipelines()[0]!.stateDetail).toContain("cancelled after newer stage activity");
+  if (operator && turn === "busy" && engine === "codex") expect(loadPipelines()[0]!.stateDetail).toContain("cancelled after newer stage activity");
+  if (operator && engine === "claude") expect(loadPipelines()[0]!.state).toBe("needs_decision");
 });
 
 

@@ -51,15 +51,15 @@ test("the production config gives Next's TypeScript child enough heap", () => {
         console.log(JSON.stringify({ configPath: config.typescript.tsconfigPath, workers: config.experimental.cpus, ...JSON.parse(child.stdout) }));
       })().catch(error => { console.error(error); process.exitCode = 1; });
     `;
-    for (const heap of ["--max-old-space-size=4096", "--max_old_space_size=16384"]) {
+    for (const fullTypes of [false, true]) for (const heap of ["--max-old-space-size=4096", "--max_old_space_size=16384"]) {
       const result = spawnSync("node", ["-e", script, child], {
         cwd: import.meta.dir,
-        env: { ...process.env, NODE_OPTIONS: `${heap} --no-warnings` },
+        env: { ...process.env, NODE_OPTIONS: `${heap} --no-warnings`, LLV_GATE_FULL_TYPES: fullTypes ? process.cwd() : undefined },
         encoding: "utf8",
       });
       expect(result.status, result.stderr).toBe(0);
       const observed = JSON.parse(result.stdout.trim().split("\n").at(-1)!);
-      expect(observed.configPath).toBe("tsconfig.production.json");
+      expect(observed.configPath).toBe(fullTypes ? "tsconfig.json" : "tsconfig.production.json");
       expect(observed.workers).toBe(2);
       expect(observed.warnings).toBe(true);
       expect(observed.limit).toBeGreaterThanOrEqual((heap.includes("16384") ? 16384 : 11264) * 1024 * 1024);

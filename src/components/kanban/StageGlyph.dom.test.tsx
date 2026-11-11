@@ -42,7 +42,7 @@ function mount(node: React.ReactNode): HTMLElement {
 test("a running stage draws its model moving; a settled one carries its state as a badge", () => {
   const host = mount(
     <>
-      <StageGlyph state="running" model={{ engine: "claude", model: "fable" }} fallback="mark" />
+      <StageGlyph state="running" model={{ engine: "claude", model: "fable" }} motion="ordinary" fallback="mark" />
       <StageGlyph state="passed" model={{ engine: "codex", model: "gpt-6-sol" }} fallback="mark" />
       <StageGlyph state="failed" model={{ engine: "codex", model: "gpt-5.6-terra" }} fallback="mark" />
       <StageGlyph state="needs_decision" model={{ engine: "claude", model: "haiku" }} fallback="mark" />
@@ -120,10 +120,37 @@ test("Astra is a star: a filled disc, a white-hot core and eight rays, long and 
 });
 
 test("a settled stage whose conversation works again moves while keeping its badge", () => {
-  const host = mount(<StageGlyph state="passed" model={{ engine: "claude", model: "opus" }} live fallback="mark" />);
+  const host = mount(<StageGlyph state="passed" model={{ engine: "claude", model: "opus" }} live motion="ordinary" fallback="mark" />);
   const glyph = host.querySelector<HTMLElement>(".mglyph")!;
   expect(glyph.dataset.live).toBe("1");
   expect(glyph.dataset.glyphState).toBe("passed");
+  expect(glyph.querySelector(".mg-badge")).not.toBeNull();
+});
+
+/* docs/design/model-icon-motion-brief.md: the glyph moves only at the motion
+   its host computed, and a host that computed none leaves it still. */
+test("a glyph moves at its tier only while its agent works, holds still otherwise, and drains while it waits for its agent", () => {
+  const sol = { engine: "codex", model: "gpt-6.1-sol" };
+  const host = mount(
+    <>
+      <StageGlyph state="running" model={sol} motion="ordinary" fallback="mark" />
+      <StageGlyph state="running" model={sol} motion="fast" fallback="mark" />
+      <StageGlyph state="reviewing" model={{ engine: "codex", model: "gpt-6-astra" }} motion="ultra" fallback="mark" />
+      <StageGlyph state="running" model={sol} motion="still" fallback="mark" />
+      <StageGlyph state="committing" model={sol} fallback="mark" />
+      <StageGlyph state="running" model={sol} motion="waiting" fallback="mark" />
+      <StageGlyph state="pending" model={sol} motion="waiting" fallback="mark" />
+    </>,
+  );
+  expect([...host.querySelectorAll<HTMLElement>(".mglyph")].map((glyph) => [glyph.dataset.glyphState, glyph.dataset.live ?? null, glyph.dataset.tier ?? null])).toEqual([
+    ["running", "1", "ordinary"],
+    ["running", "1", "fast"],
+    ["running", "1", "ultra"],
+    ["running", null, null],
+    ["running", null, null],
+    ["waiting", null, null],
+    ["waiting", null, null],
+  ]);
 });
 
 test("a model with no glyph keeps exactly the mark or dot its host drew", () => {
@@ -179,4 +206,40 @@ test("beside a drawn glyph the identity draws no second engine mark; a model wit
   /* The model's name and the effort stay as words and ladder. */
   expect(host.querySelector('[data-case="glyph"] .imodel')?.textContent).toBe("opus");
   expect(host.querySelector('[data-case="glyph"] [data-effort-pills]')).not.toBeNull();
+});
+
+/* Where a stage ran, in both languages: the mark on every density, the words where a row has room. */
+test.each([["en", "Claude Code cloud", "Claude Code cloud: moved to this machine: model training is on", "cloud", "local"],
+  ["uk", "Хмара Claude Code", "Хмара Claude Code: перенесено на цю машину: model training is on", "хмара", "локально"]] as const)("the identity says where a stage ran (%s)", (locale, cloud, moved, shortCloud, shortLocal) => {
+  setLocale(locale);
+  const base = { engine: "claude", model: "opus", modelLabel: "Opus", effort: "high", source: "launched" as const, modelIsDefault: true, next: null };
+  const draw = (place: { provider: "claude" | "codex"; movedLocal: boolean; reason: string | null } | undefined, density: "header" | "node" | "line" | "chip", words = true) => {
+    const host = document.createElement("div"); document.body.append(host);
+    const root = createRoot(host); roots.push(root);
+    flushSync(() => root.render(<StageIdentity identity={{ ...base, ...(place ? { place } : {}) }} density={density} words={words} />));
+    return host.querySelector(".pident")!;
+  };
+  const onCloudPlace = { provider: "claude", movedLocal: false, reason: null } as const, localPlace = { provider: "claude", movedLocal: true, reason: "model training is on" } as const;
+  const shapeOf = (element: Element, place: string) => element.querySelector(`[data-stage-place='${place}'] svg`)!.innerHTML;
+  const running = draw(onCloudPlace, "header");
+  expect(running.querySelector("[data-stage-place='cloud']")?.textContent).toBe(cloud);
+  expect(running.getAttribute("title")).toContain(cloud);
+  const fellBack = draw(localPlace, "header");
+  expect(fellBack.querySelector("[data-stage-place='moved-local']")?.textContent).toBe(moved);
+  expect(fellBack.getAttribute("title")).toContain(moved);
+  /* Every density but the roomy one draws the short word, and the two places differ in mark and word. */
+  for (const density of ["node", "line"] as const) {
+    const onCloud = draw(onCloudPlace, density), onLocal = draw(localPlace, density);
+    expect(onCloud.querySelector("[data-stage-place='cloud']")?.textContent).toBe(shortCloud);
+    expect(onLocal.querySelector("[data-stage-place='moved-local']")?.textContent).toBe(shortLocal);
+    expect(shapeOf(onCloud, "cloud")).not.toBe(shapeOf(onLocal, "moved-local"));
+    expect(onCloud.getAttribute("title")).toContain(cloud);
+  }
+  /* A chip, and a graph zoomed below the legible floor, keep only the differing marks. */
+  for (const [density, words] of [["chip", true], ["node", false]] as const) {
+    const onCloud = draw(onCloudPlace, density, words), onLocal = draw(localPlace, density, words);
+    expect(onCloud.querySelector("[data-stage-place]")?.textContent).toBe("");
+    expect(shapeOf(onCloud, "cloud")).not.toBe(shapeOf(onLocal, "moved-local"));
+  }
+  expect(draw(undefined, "header").querySelector("[data-stage-place]")).toBeNull();
 });

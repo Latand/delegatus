@@ -1,4 +1,9 @@
-import { SeatTickWork, seatTickWorkDetail, seatTickSkippedSources, assertSeatTickWork, guardedSeatTickPort, seatTickYield as yieldToRuntime } from "./seatTickWork";
+import { structuredDeliveryMcpObservation } from "@/lib/runtime/structuredDeliveryController";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { bindResumedSeatTick } from "./resumedSeatTick";
+import { seatTickCheckErrorAlarm, seatTickDeliveryAlarm } from "./seatTickWatchdog";
+import { SeatTickWork, outsideSeatTickWork, seatTickMutation, seatTickWorkRemainingMs, seatTickWorkDetail, seatTickSkippedSources, assertSeatTickWork, guardedSeatTickPort, seatTickYield as yieldToRuntime } from "./seatTickWork";
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import type { DeadlineScheduler } from "@/lib/deadline";
 import type { SeatTickInstructionLine } from "./seatTickInstructions";
@@ -15,7 +20,7 @@ import type { SeatCommandResult } from "@/lib/orchestrator/seatCommand";
 import { seatHostRecoveryKey, seatHostRecoveryCard, type SeatHostRecovery, type SeatHostRecoveryPorts } from "./seatHostRecovery";
 import { recoverSeatAuthentication, type SeatAuthRecoveryPorts } from "./seatAuthRecovery";
 import { openSeatAuthIncident } from "./seatAuthIncident";
-import { productionCurationController, type CurationController } from "@/lib/memory/curation/run";
+import { curationForSweep, productionCurationController, type CurationController } from "@/lib/memory/curation/run";
 import { machinePass } from "@/lib/memory/curation/store";
 import { productionBoardMaintenanceController, type BoardMaintenanceController } from "@/lib/boardMaintenance/run";
 import crypto from "node:crypto";
@@ -47,13 +52,16 @@ import {
   seatTickSourceGapCardText,
   seatTickSourceGapRef,
 } from "./cards";
-import { openIssuesForProposal, type ProposalIssue } from "./githubEvidence";
-import { appendSeatTickRecord } from "./journalStore";
+import type { ProposalIssue } from "./githubEvidence";
+import { forgeCacheView } from "@/lib/forge/cache";
+import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
+import { recordedProjectRemote } from "@/lib/projects/aliases";
+import { appendSeatTickRecord, appendSeatTickRecordAsync, readSeatTickAlarmRecords, readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
 import { redactBounded, redactMonitorText } from "./redact";
 import { seatMcpHealth, type SeatMcpHealth } from "./seatMcpHealth";
 import { withChildFinalMessages } from "./childFinalMessage";
 import { seatTickNoteRevision, seatTickProposalMessage, seatTickWakePayload } from "./report";
-import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickDecision, seatTickPolicy, seatTickWakeCommit, seatTickWakeCommitPlan, seatTurnProgressing } from "./seatTick";
+import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickCatchUpItemCursor, seatTickDecision, seatTickPolicy, seatTickWakeCommit, seatTickWakeCommitPlan, seatTurnProgressing } from "./seatTick";
 import { seatTickFenceBoundMs, seatTickFenceLapsesAt, seatTickFenceRetirableOnAge, seatTickFenceSentence, seatTickReportedFence, seatTickWakeFence } from "./seatTickFence";
 import { effectiveSeatTickSettings, readSeatTickSettingsFile, readTurboSettings, seatTickSettingsAfterLapse, writeSeatTickSettings } from "./seatTickSettings";
 import { readSeatTickState, readSeatTickStateFile, seatTickStateForEpoch, writeSeatTickState } from "./seatTickState";
@@ -64,7 +72,6 @@ import {
   seatTickDeployPending,
   refreshSeatTickEvidence,
   seatInput,
-  repoDirForProject,
   seatTickProjects,
   SeatTickEvidenceRefreshCanceledError,
   type SeatTickSources,
@@ -161,6 +168,8 @@ export interface SeatTickControllerDependencies {
       already doing. */
   writeSettings?: typeof writeSeatTickSettings;
   appendRecord?: typeof appendSeatTickRecord;
+  /** The same project's journal, paired with an overridden appendRecord. */
+  readRecords?: (project: string, limit: number) => SeatTickRunRecord[];
   deliver?: typeof deliverConversationMessage;
   /** Whether the board now carries the card. See {@link ensureSeatTickCard}. */
   ensureCard?: (project: string, card: SeatTickCard, at: string) => boolean;
@@ -264,8 +273,13 @@ function absorbedAttempts(existing: BoardTask | undefined, key: string): number 
 }
 
 function cardText(project: string, card: SeatTickCard, at: string, existing?: BoardTask): string {
+  if (card.kind === "check-errors") return redactBounded([
+    "Seat tick checks keep failing", "", card.detail,
+    "The next check retries. Inspect the latest failure and restore the failing source so wakes can resume.",
+    "", `${MONITOR_REF_PREFIX} ${card.ref}`,
+  ].join("\n"), CARD_TEXT_LIMIT);
   if (card.kind === "auto-rotation" || card.kind === "host-recovery") return redactBounded(card.detail, CARD_TEXT_LIMIT);
-  if (card.kind === "auth-failed") return redactBounded(`${card.detail}\n\n${MONITOR_REF_PREFIX} ${card.ref}`, CARD_TEXT_LIMIT);
+  if (card.kind === "auth-failed" || card.kind === "disk-pressure") return redactBounded(`${card.detail}\n\n${MONITOR_REF_PREFIX} ${card.ref}`, CARD_TEXT_LIMIT);
   if (card.kind === "no-seat") return orchestratorAlertCardText(card.detail, at);
   if (card.kind === "mcp-unavailable") return redactBounded([
     "Orchestrator seat cannot use its Viewer MCP",
@@ -300,13 +314,62 @@ function cardText(project: string, card: SeatTickCard, at: string, existing?: Bo
   return seatTickRetryGuardCardText(project, card.detail, card.ref, at);
 }
 
-/** The card's agent-facing details, or undefined for a kind that keeps its
-    `monitor-ref:` line in the text. Rotation and host-recovery cards are read by
-    the operator as a title and one sentence; their records and markers go here. */
-function cardDetails(card: SeatTickCard): string | undefined {
-  if (card.kind !== "auto-rotation" && card.kind !== "host-recovery") return undefined;
+/** Durable fact identity alongside any agent-facing record. Rotation and
+    host-recovery keep their monitor ref here as well. */
+function cardDetails(card: SeatTickCard): string {
+  const fact = `${CARD_FACT_PREFIX} ${cardFact(card)}`;
+  if (card.kind !== "auto-rotation" && card.kind !== "host-recovery") return fact;
   const marker = `${MONITOR_REF_PREFIX} ${card.ref}`;
-  return card.record ? `${redactBounded(card.record, CARD_TEXT_LIMIT)}\n\n${marker}` : marker;
+  return [fact, card.record ? redactBounded(card.record, CARD_TEXT_LIMIT) : "", marker].filter(Boolean).join("\n\n");
+}
+
+const CARD_FACT_PREFIX = "monitor-fact:";
+
+/** Stable across checks and restarts, including after the create receipt expires.
+    Recovery notices also distinguish an intermediate outcome from its terminal one. */
+function cardFact(card: SeatTickCard): string {
+  const identity = card.kind === "tick-settings" ? card.settings
+    : card.kind === "host-recovery"
+      ? [card.instance, card.record?.split("; ", 1)[0] ?? card.detail]
+      : card.attempt ?? card.instance ?? card.ref;
+  return crypto.createHash("sha256").update(JSON.stringify([card.ref, identity])).digest("hex");
+}
+
+function completedSeatTickCard(tasks: readonly BoardTask[], project: string, card: SeatTickCard, at: string, recentCreates: readonly { taskId: string; clientRequestId: string }[] = []): boolean {
+  const expected = cardFact(card);
+  return tasks.some(task => {
+    if (task.status !== "done" || canonicalOrchestratorProject(task.project) !== project || taskMonitorRef(task) !== card.ref) return false;
+    // A monitor-resolved condition can recur. A later board move replaces its
+    // timestamp or names its actor, so a seat/operator dismissal still holds.
+    if (!task.statusBy && task.details?.split("\n").includes(`monitor-resolved-at: ${task.updatedAt}`)) return false;
+    const fact = task.details?.match(/^monitor-fact: ([a-f0-9]{64})$/m)?.[1];
+    if (fact) return fact === expected;
+    // Legacy creates stored their occurrence identity in the receipt. Use it
+    // where available so an old closed card cannot mask a later occurrence.
+    const receipt = recentCreates.find(row => row.taskId === task.id);
+    if (receipt) {
+      const legacyIdentity = card.instance ?? card.attempt;
+      const requestId = monitorClientRequestId(legacyIdentity
+        ? `${card.ref}:${project}:${legacyIdentity}` : `${card.ref}:${project}`);
+      if (receipt.clientRequestId !== requestId) return false;
+      // The original settings receipt names only the project, so it cannot
+      // distinguish revisions. Its rendered card is the only surviving
+      // evidence of which settings were dismissed.
+      if (card.kind === "tick-settings" && !legacyIdentity) {
+        return task.text === cardText(project, card, at);
+      }
+      return true;
+    }
+    // Some older card kinds kept their identity in the rendered body.
+    if (card.kind === "tick-settings") return task.text === cardText(project, card, at);
+    if (card.kind === "wake-unresolved") return task.text.split("\n").some(line =>
+      line.match(/^Attempts on this card: \d+; newest key: (.*)$/)?.[1] === redactBounded(card.attempt ?? card.instance ?? "", CARD_TEXT_LIMIT));
+    if (card.kind === "source-unreadable" && card.instance) return task.text.includes(`since ${card.instance.slice(0, 16).replace("T", " ")} UTC`);
+    if (card.kind === "host-recovery" || card.kind === "auto-rotation") return task.text === cardText(project, card, at);
+    // MCP and check-error cards carried no occurrence in their legacy body.
+    // Without a receipt there is no proof that the current fact was dismissed.
+    return false;
+  });
 }
 
 /**
@@ -331,10 +394,10 @@ function cardDetails(card: SeatTickCard): string | undefined {
  * a per-outage receipt (see {@link SeatTickCard.instance}) a replay means this
  * very outage was carded by an earlier check.
  */
-function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): boolean {
+export function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): boolean {
   // Authentication and automatic rotation notices are separate occurrences. An older owed card can
   // finish beside a newer incident without rewriting or closing its notice.
-  if ((card.kind === "auth-failed" || card.kind === "auto-rotation" || card.kind === "host-recovery") && card.instance) card = { ...card, ref: `${card.ref}-${crypto.createHash("sha256").update(card.instance).digest("hex").slice(0, 32)}` };
+  if ((card.kind === "auth-failed" || card.kind === "auto-rotation" || card.kind === "host-recovery" || card.kind === "disk-pressure") && card.instance) card = { ...card, ref: `${card.ref}-${crypto.createHash("sha256").update(card.instance).digest("hex").slice(0, 32)}` };
   /* The board file is resolved HERE, per call, rather than taken from the
      module-load default `mutateTasksFile` would otherwise use. That default is
      frozen the first time `@/lib/tasks/store` is imported anywhere in the
@@ -360,11 +423,15 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
     const existing = standingSeatTickCard(state.tasks, project, card);
     if (card.state === "resolved") {
       if (!existing) return unchanged;
-      const closed = patchTask(state.tasks, existing.id, { status: "done" });
+      const resolvedAt = new Date().toISOString();
+      const closed = patchTask(state.tasks, existing.id, { status: "done",
+        details: `monitor-resolved-at: ${resolvedAt}\n\n${existing.details ?? ""}`.trim(),
+      }, resolvedAt);
       return closed.ok
         ? { state: { tasks: closed.tasks, recentCreates: state.recentCreates }, result: true }
         : { state: absorbed ? state : undefined, result: false };
     }
+    if (completedSeatTickCard(state.tasks, project, card, at, state.recentCreates)) return unchanged;
     const text = cardText(project, card, at, existing);
     const details = cardDetails(card);
     if (existing) {
@@ -374,14 +441,14 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
          card that tracks a standing state — the one kind that declares its
          `state` — is kept in step with what it describes. */
       if (card.state !== "open") return unchanged;
-      if (existing.text === text && (details === undefined || existing.details === details)) return unchanged;
-      const updated = patchTask(state.tasks, existing.id, { text, ...(details !== undefined ? { details } : {}) });
+      if (existing.text === text && existing.details === details) return unchanged;
+      const updated = patchTask(state.tasks, existing.id, { text, details });
       return updated.ok
         ? { state: { tasks: updated.tasks, recentCreates: state.recentCreates }, result: true }
         /* The condition is on the board either way; only its wording is stale. */
         : unchanged;
     }
-    if ((card.kind === "mcp-unavailable" || card.kind === "auto-rotation" || card.kind === "host-recovery") && card.state === "open") {
+    if ((card.kind === "mcp-unavailable" || card.kind === "auto-rotation" || card.kind === "host-recovery" || card.kind === "check-errors") && card.state === "open") {
       /* Reopen the same card after a later outage or when a recovery's terminal
          outcome follows a closed intermediate notice. Creating with its durable
          receipt would replay the completed task without updating the notice. */
@@ -390,7 +457,7 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
         && task.status === "done"
         && taskMonitorRef(task) === card.ref);
       if (completed) {
-        const reopened = patchTask(state.tasks, completed.id, { status: "inbox", text, ...(details !== undefined ? { details } : {}) });
+        const reopened = patchTask(state.tasks, completed.id, { status: "inbox", text, details });
         return reopened.ok
           ? { state: { tasks: reopened.tasks, recentCreates: state.recentCreates }, result: true }
           : { state: absorbed ? state : undefined, result: false };
@@ -399,12 +466,10 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
     const created = createTask(state.tasks, {
       project,
       text,
-      ...(details !== undefined ? { details } : {}),
+      details,
       placement: "unplaced",
-      /* Scope the receipt to the project, then to the occurrence where one is
-         known (#1298). A repeated MCP outage reopens its completed card above. */
-      clientRequestId: monitorClientRequestId(card.instance
-        ? `${card.ref}:${project}:${card.instance}` : `${card.ref}:${project}`),
+      // New facts have independent receipts even while a completed fact's receipt remains.
+      clientRequestId: monitorClientRequestId(`${card.ref}:${project}:${cardFact(card)}`),
     }, state.recentCreates);
     if (!created.ok) return { state: absorbed ? state : undefined, result: false };
     if (created.replay) return unchanged;
@@ -425,10 +490,11 @@ function seatTickCardIsCurrent(project: string, card: SeatTickCard, at: string, 
   if (card.kind === "wake-unresolved" && tasks.some((task) => isAttemptCard(task, project))) return false;
   const existing = standingSeatTickCard(tasks, project, card);
   if (card.state === "resolved") return !existing;
+  if (completedSeatTickCard(tasks, project, card, at)) return true;
   if (!existing) return false;
   if (card.state !== "open") return true;
   const details = cardDetails(card);
-  return existing.text === cardText(project, card, at, existing) && (details === undefined || existing.details === details);
+  return existing.text === cardText(project, card, at, existing) && existing.details === details;
 }
 
 /** An open card the per-attempt scheme left for this project (#1594), whose
@@ -688,6 +754,7 @@ function evidenceSummary(evidence: SeatTickWakeEvidence | null): string | null {
       : journal === "unasked" ? "runtime journal not asked"
         : `runtime journal: ${journal.status}${journal.reason ? ` — ${redactBounded(journal.reason, REASON_LIMIT)}` : ""}`);
   if (evidence.recorded === "lost") parts.push("the delivery record was settled lost on the journal's own verdict");
+  if (evidence.confirmation === "destination-transcript") parts.push("the destination transcript contains the frozen wake");
   if (evidence.confirmation === "claude-ledger") parts.push("the Claude delivery ledger confirms the original operation's arrival");
   if (evidence.recorded === "delivered") parts.push(evidence.confirmation === "claude-ledger"
     ? "the delivery record was settled delivered on that confirmation"
@@ -937,14 +1004,14 @@ async function reconcileRetiredWakes(context: {
     }
     if (state.accounting) {
       const accounting = tickAccounting(state.accounting.filename, context.project);
-      if (!accounting.settleRetired(wake.clientMessageId)) {
+      if (!(await seatTickMutation("settleRetired", () => accounting.settleRetired(wake.clientMessageId)))) {
         state = accounting.readState();
         continue;
       }
       state = accounting.readState();
     } else {
       state = { ...state, retiredWakes: state.retiredWakes.filter((held) => held.wake.clientMessageId !== wake.clientMessageId) };
-      context.writeState(context.project, state);
+      await seatTickMutation("writeState", () => context.writeState(context.project, state));
     }
     context.appendRecord({
       schemaVersion: 1,
@@ -984,7 +1051,8 @@ interface WakeSettlement {
  * the dispatch token still matches in the accounting transaction. All sends,
  * including same-key retries, claim that token before entering transport.
  * A paused old caller therefore either blocks replacement or fails admission
- * after replacement. Throws and legacy attempts retain unknown authority.
+ * after replacement. Ended callers are reconciled after a finite deadline;
+ * retained destination payloads keep their fence.
  */
 async function reconcileOutstandingWake(context: {
   project: string;
@@ -1017,18 +1085,22 @@ async function reconcileOutstandingWake(context: {
   const outstanding = context.state.outstandingWake;
   if (!outstanding) return context.state;
   let state = context.state;
-  const persist = (next: SeatTickProjectState): SeatTickProjectState => {
+  const persist = async (next: SeatTickProjectState): Promise<SeatTickProjectState> => {
     if (next.accounting) {
       const accounting = tickAccounting(next.accounting.filename, context.project);
-      accounting.writeState(next);
+      await seatTickMutation("writeState", () => accounting.writeState(next));
       return accounting.readState();
     }
-    context.writeState(context.project, next);
+    await seatTickMutation("writeState", () => context.writeState(context.project, next));
     return next;
   };
   /* An attempt written before the instant existed is stamped when first seen,
      so the attention bound below is measured from a fact. */
-  if (!outstanding.preparedAt) state = persist({ ...state, outstandingWake: { ...outstanding, preparedAt: context.at } });
+  if (!outstanding.preparedAt) state = await persist({ ...state, outstandingWake: { ...outstanding, preparedAt: context.at } });
+  if (!state.wakeDecidedSince && state.outstandingWake!.seatEpoch === context.seat?.seatEpoch
+    && state.outstandingWake!.conversationId === context.seat?.conversationId) {
+    state = await persist({ ...state, wakeDecidedSince: state.outstandingWake!.preparedAt ?? context.at });
+  }
   let wake = state.outstandingWake!;
   const preparedAt = Date.parse(wake.preparedAt!);
   const overdue = Number.isFinite(preparedAt) && context.now - preparedAt >= context.wakeIntervalMs;
@@ -1039,8 +1111,44 @@ async function reconcileOutstandingWake(context: {
   /* A holder that cannot answer must not take the check down with it, and it
      is not evidence either way: the wake stays outstanding, so the next check
      asks again rather than crediting or discarding it on a failed read. */
+  // A short arrival interval must not inherit three whole check intervals of
+  // delay. The recorded caller deadline still fences a caller allowed longer.
+  const recoveryBound = Math.min(3 * context.retryIntervalMs, context.wakeIntervalMs);
+  let fencedAbsent = false;
+  if (state.accounting && (wake.dispatch?.state === "active" || (wake.dispatch?.state === "returned" && !wake.dispatch.deadlineAt))
+    && context.now - preparedAt >= recoveryBound) {
+    const accounting = tickAccounting(state.accounting.filename, context.project);
+    await seatTickMutation("dispatch.fence", () => accounting.fenceExpiredDispatch(wake, context.at, preparedAt + recoveryBound));
+    state = accounting.readState();
+    if (state.outstandingWake?.clientMessageId !== wake.clientMessageId) return state;
+    wake = state.outstandingWake;
+  }
   const observation = await observeWake(context.sources, wake);
+  if (state.accounting) {
+    const fresh = tickAccounting(state.accounting.filename, context.project).readState();
+    const current = fresh.outstandingWake;
+    if (!current || current.clientMessageId !== wake.clientMessageId || current.dispatch?.token !== wake.dispatch?.token
+      || current.dispatch?.state !== wake.dispatch?.state || current.operationId !== wake.operationId) return fresh;
+    state = fresh;
+    wake = current;
+  }
   let observed = observation.observed;
+  if (observed === "absent" && !wake.operationId && wake.dispatch?.state === "returned" && state.accounting
+    && context.now - preparedAt >= recoveryBound && context.now >= Date.parse(wake.dispatch.deadlineAt ?? "")) {
+    const accounting = tickAccounting(state.accounting.filename, context.project);
+    fencedAbsent = await seatTickMutation("dispatch.absent", () => accounting.confirmFencedAbsent(wake));
+    state = accounting.readState();
+    if (state.outstandingWake?.clientMessageId !== wake.clientMessageId || state.outstandingWake.dispatch?.token !== wake.dispatch?.token) return state;
+    wake = state.outstandingWake;
+  }
+  if (fencedAbsent && wake.dispatch?.legacy) context.appendRecord({ schemaVersion: 1, at: context.at, project: context.project,
+    seatEpoch: wake.seatEpoch, verdict: "dropped", reasons: [], items: 0, deferred: 0, eventsThrough: state.eventsThrough ?? 0,
+    delivery: { clientMessageId: wake.clientMessageId, outcome: "dispatch-expired" },
+    detail: "legacy dispatch expired without destination evidence of delivery; recovery keeps the original key and frozen payload so the reservation fences both callers" });
+  if (observation.evidence?.operationId && !wake.operationId) {
+    state = await persist({ ...state, outstandingWake: { ...wake, operationId: observation.evidence.operationId } });
+    wake = state.outstandingWake!;
+  }
   let reason = observation.reason;
   let settlement: WakeSettlement | null = null;
   let redispatched: string | null = null;
@@ -1059,7 +1167,10 @@ async function reconcileOutstandingWake(context: {
      at worst the successor is told again. What decides between them is a
      question about what "told" means across a rotation, not a question about
      this branch, so it is not settled here: #1604. */
-  if (observed === "landed") {
+  if (fencedAbsent && !wake.dispatch?.legacy) {
+    settlement = { verdict: "dropped", outcome: "dispatch-expired", row: "clear",
+      detail: `the dispatch ended without a delivery: ${wake.dispatch?.reason ?? "caller ended"}; the caller is fenced and the destination has no reservation; the current wake is re-derived once` };
+  } else if (observed === "landed") {
     settlement = { verdict: "landed", outcome: "landed", row: "commit",
       detail: "a wake the delivery layer had kept reached the seat; the wake stamp and the event cursor move now, on the plan the check that raised it wrote down" };
   } else if (observed === "dropped") {
@@ -1083,7 +1194,7 @@ async function reconcileOutstandingWake(context: {
         detail: "the layer holding the wake raised for the replaced seat ended it without proving arrival; the original key and all obligations remain outstanding, and no wake replaces it" };
     } else if (observed === "absent" && !wake.operationId && wake.text && wake.dispatch?.state === "refused" && state.accounting) {
       const accounting = tickAccounting(state.accounting.filename, context.project);
-      if (!accounting.settleAbsent(wake)) return accounting.readState();
+      if (!(await seatTickMutation("settleAbsent", () => accounting.settleAbsent(wake)))) return accounting.readState();
       state = accounting.readState();
       settlement = { verdict: "revoked", outcome: "unsent", row: "clear",
         detail: "the wake raised for the replaced seat was refused by the delivery layer before it reserved anything, and the record holds nothing under its key and the returned dispatch token was fenced atomically: the attempt is released unsent with nothing it named acknowledged, and the successor's next check raises its own wake" };
@@ -1091,6 +1202,20 @@ async function reconcileOutstandingWake(context: {
       settlement = { verdict: "revoked", outcome: "unknown", row: "keep",
         detail: `the wake raised for the replaced seat could not be revoked: no holder could account for it${reason ? ` (${reason})` : ""}; it is asked again at the next check` };
     }
+  } else if (observed === "uncertain" && wake.dispatch?.state !== "active"
+    && (wake.dispatch?.state === "returned" || overdue)
+    && context.now >= (wake.dispatch?.deadlineAt ? Date.parse(wake.dispatch.deadlineAt) : preparedAt + recoveryBound)
+    && !!wake.operationId && observation.evidence?.operationId === wake.operationId
+    && ((typeof observation.evidence?.journal === "object" && observation.evidence.journal !== null
+      && ["uncertain", "interrupted", "failed"].includes(observation.evidence.journal.status))
+      || (observation.evidence?.journal === "no-record" && observation.evidence.record?.state === "failed"))) {
+    // The caller ended and either the journal or the matching destination
+    // reservation is terminal. A pruned receipt is distinct from a live or
+    // unreachable operation. Release the slot without crediting any work.
+    const terminalReason = typeof observation.evidence.journal === "object" && observation.evidence.journal
+      ? observation.evidence.journal.reason : observation.evidence.record?.reason;
+    settlement = { verdict: "dropped", outcome: "terminal-unverified", row: "clear",
+      detail: `the dispatch passed its arrival deadline and its operation ended without proof of arrival: ${redactBounded(terminalReason ?? wake.dispatch?.reason ?? "arrival unverified", REASON_LIMIT)}; nothing is credited and the current wake carries the uncredited obligations` };
   } else if (observed === "uncertain") {
     settlement = { verdict: "uncertain", outcome: "uncertain", row: "keep",
       detail: "the layer holding the wake ended it without proving arrival; the original key and all obligations remain outstanding, and no wake replaces it" };
@@ -1102,7 +1227,7 @@ async function reconcileOutstandingWake(context: {
        still the one it was prepared for. A row that moved on belongs to the
        controller that moved it; a seat that moved is the next check's to
        release. */
-    if (context.refreshWake && state.accounting) {
+    if (context.refreshWake && state.accounting && !wake.dispatch?.legacy) {
       const payload = await context.refreshWake(state, wake);
       const accounting = tickAccounting(state.accounting.filename, context.project);
       const fresh = accounting.readState();
@@ -1111,12 +1236,12 @@ async function reconcileOutstandingWake(context: {
         || current.seatEpoch !== wake.seatEpoch || current.operationId !== wake.operationId
         || current.dispatch?.state !== wake.dispatch?.state || current.dispatch?.token !== wake.dispatch?.token) return fresh;
       if (!payload) {
-        if (wake.dispatch?.state === "refused") accounting.settleAbsent(wake);
-        else accounting.cancelUndispatched(wake);
+        if (wake.dispatch?.state === "refused") await seatTickMutation("settleAbsent", () => accounting.settleAbsent(wake));
+        else await seatTickMutation("cancelUndispatched", () => accounting.cancelUndispatched(wake));
         return accounting.readState();
       }
       // The state revision and dispatch identity fence concurrent refreshes and admissions.
-      accounting.writeState({ ...fresh, outstandingWake: { ...current, ...payload } });
+      await seatTickMutation("writeState", () => accounting.writeState({ ...fresh, outstandingWake: { ...current, ...payload } }));
       state = accounting.readState();
       wake = state.outstandingWake!;
     } else if (!wake.dispatch) {
@@ -1138,32 +1263,32 @@ async function reconcileOutstandingWake(context: {
       if (!authority || authority.conversationId !== wake.conversationId || authority.seatEpoch !== wake.seatEpoch) return state;
       const accounting = state.accounting ? tickAccounting(state.accounting.filename, context.project) : null;
       if (!accounting) return state;
-      const token = accounting.beginDispatch(wake);
+      const token = await seatTickMutation("dispatch.begin", () => accounting.beginDispatch(wake, new Date(context.sources.now() + (seatTickWorkRemainingMs() ?? context.retryIntervalMs / 4)).toISOString()));
       state = accounting.readState();
       if (!token) return state;
       wake = state.outstandingWake!;
       let outcome: DeliveryOutcome | null = null;
       try {
-        outcome = await context.deliver({ pid: null, path: authority.path ?? context.seat?.path ?? "", conversationId: wake.conversationId,
-          clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: delegatusMessageOrigin("seat-tick", context.project), policy: "queue" });
+        outcome = await dispatchCall.run({ clientMessageId: wake.clientMessageId, token }, () => context.deliver!({
+          pid: null, path: authority.path ?? context.seat?.path ?? "", conversationId: wake.conversationId,
+          clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: delegatusMessageOrigin("seat-tick", context.project), policy: "context-or-queue" }));
         redispatched = deliveryOutcomeLabel(outcome);
         redispatchReason = sendRefusalDetail(outcome);
       } catch (error) {
         redispatched = "unreturned";
         redispatchReason = `the transport call did not return: ${redactBounded(error instanceof Error ? error.message : "unknown error", REASON_LIMIT)}`;
       }
-      if (outcome) {
-        accounting.returnedDispatch(wake.clientMessageId, token, !outcome.ok && !outcome.operationId && outcome.actuation !== "started" && outcome.resend !== "verify-first");
-        state = accounting.readState();
-        if (state.outstandingWake?.clientMessageId !== wake.clientMessageId) return state;
-        wake = state.outstandingWake!;
-      }
+      // The return observer also records exceptions and may have advanced the
+      // revision even when transport produced no outcome.
+      state = accounting.readState();
+      if (state.outstandingWake?.clientMessageId !== wake.clientMessageId || state.outstandingWake.dispatch?.token !== token) return state;
+      wake = state.outstandingWake!;
       if (outcome && wakeReached(outcome)) {
         settlement = { verdict: "landed", outcome: "landed", row: "commit",
           detail: "a wake the delivery layer had refused without keeping a record was re-dispatched under its original key and reached the seat; the wake stamp and the event cursor move now, on the plan the check that raised it wrote down" };
       } else if (outcome?.operationId) {
         /* The layer now holds it: the next check asks that holder. */
-        state = persist({ ...state, outstandingWake: { ...wake, operationId: outcome.operationId } });
+        state = await persist({ ...state, outstandingWake: { ...wake, operationId: outcome.operationId } });
         wake = state.outstandingWake!;
         // The absence read preceded admission. This operation now owns the wake.
         observed = "retained";
@@ -1207,7 +1332,7 @@ async function reconcileOutstandingWake(context: {
     || (wake.dispatch?.state === "refused" && !wake.operationId
       && (observed === "absent" || observed === "unknown" || observed === "unreadable")));
   if (recoveryChecked) {
-    state = persist({ ...state, outstandingWake: { ...wake, recovery: {
+    state = await persist({ ...state, outstandingWake: { ...wake, recovery: {
       checkedAt: context.at,
       lastAttemptAt: (redispatched && redispatched !== "admission-closed") || context.attemptReason !== undefined
         ? context.at : wake.recovery?.lastAttemptAt ?? null,
@@ -1237,12 +1362,12 @@ async function reconcileOutstandingWake(context: {
   if (retirement) {
     if (state.accounting) {
       const accounting = tickAccounting(state.accounting.filename, context.project);
-      const moved = accounting.retire(wake, context.at, retirement, context.now - seatTickFenceBoundMs(context.wakeIntervalMs));
+      const moved = await seatTickMutation("retire", () => accounting.retire(wake, context.at, retirement, context.now - seatTickFenceBoundMs(context.wakeIntervalMs)));
       retired = moved.retired;
       evicted = moved.evicted;
       state = accounting.readState();
     } else if (state.retiredWakes.length < SEAT_TICK_RETIRED_WAKE_LIMIT) {
-      state = persist({ ...state, outstandingWake: null,
+      state = await persist({ ...state, outstandingWake: null,
         retiredWakes: [...state.retiredWakes, { wake, retiredAt: context.at, ...retirement }],
         releasedWake: { clientMessageId: wake.clientMessageId, releasedAt: context.at } });
       retired = true;
@@ -1297,10 +1422,10 @@ async function reconcileOutstandingWake(context: {
   if (settlement!.row === "keep") return next;
   if (state.accounting) {
     const accounting = tickAccounting(state.accounting.filename, context.project);
-    accounting.settle(wake.clientMessageId, next, settlement!.row === "commit" ? "landed" : "unsent", observation.evidence?.record?.settledAt ?? null);
+    await seatTickMutation("settle", () => accounting.settle(wake.clientMessageId, next, settlement!.row === "commit" ? "landed" : "unsent", observation.evidence?.record?.settledAt ?? null, wake));
     return accounting.readState();
   }
-  context.writeState(context.project, next);
+  await seatTickMutation("writeState", () => context.writeState(context.project, next));
   return next;
 }
 
@@ -1326,6 +1451,10 @@ function tickAccounting(filename: string, project: string): SeatTickAccounting {
 
 /** Each check owns its deadline. A late source can finish, but its old
  * continuation cannot mutate accounting or enter delivery after this scope. */
+// Bind the admitted token across awaits before transport as well as inside it.
+// A later dispatch of the same key must never lend its token to an old caller.
+const dispatchCall = new AsyncLocalStorage<{ clientMessageId: string; token: string }>();
+
 export async function runSeatTickCheck(project: string, dependencies: SeatTickControllerDependencies = {}): Promise<SeatTickRunRecord | null> {
   const policy = dependencies.policy === undefined ? seatTickPolicy() : dependencies.policy;
   if (!policy) return null;
@@ -1333,14 +1462,30 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
   const work = new SeatTickWork(project, Math.min(dependencies.workBudgetMs ?? policy.checkIntervalMs / 4, policy.checkIntervalMs / 4),
     dependencies.workClock, dependencies.workScheduler);
   dependencies.workStarted?.(work);
-  const append = dependencies.appendRecord ?? appendSeatTickRecord;
+  const writeRecord = dependencies.appendRecord ?? appendSeatTickRecordAsync;
+  let journalWrites = Promise.resolve();
+  let pendingRecord: SeatTickRunRecord | undefined;
+  const flushRecord = () => {
+    if (!pendingRecord) return;
+    const row = pendingRecord;
+    row.timing = work.timings.snapshot();
+    journalWrites = journalWrites.then(() => writeRecord(row));
+    void journalWrites.catch(() => {});
+    pendingRecord = undefined;
+  };
+  const append = (record: SeatTickRunRecord) => {
+    // Keep only the last line until the check ends, so its phase ends include
+    // success, rejection and cancellation. Settlement lines keep their order.
+    flushRecord();
+    pendingRecord = record;
+  };
   const sourcePorts = dependencies.sources ?? defaultSeatTickSources();
   let snapshotRetried = false;
   const sources = new Proxy(sourcePorts, { get: (target, key, receiver) => {
     if (key === "liveness") return (...args: Parameters<SeatTickSources["liveness"]>) =>
       work.source("liveness", () => target.liveness(...args), []);
     if (key === "workerAsks" && target.workerAsks) return (project: string) =>
-      work.source("workerAsks", () => target.workerAsks!(project), []);
+      work.source("workerAsks", () => target.workerAsks!(project), null);
     if (key === "recordRuleReports" && target.recordRuleReports) return (project: string, at: string) =>
       work.source("recordRuleReports", () => target.recordRuleReports!(project, at), undefined);
     if (key === "prepareRead" && target.prepareRead) return async () => {
@@ -1361,11 +1506,29 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
     readState: dependencies.readState ?? readSeatTickState,
     writeState: dependencies.writeState ?? writeSeatTickState,
     ensureCard: dependencies.ensureCard ?? ensureSeatTickCard,
-    deliver: dependencies.deliver ?? deliverConversationMessage,
+    deliver: (message: Parameters<typeof deliverConversationMessage>[0]) => {
+      const state = (dependencies.readState ?? readSeatTickState)(project);
+      const caller = dispatchCall.getStore();
+      const token = caller && caller.clientMessageId === message.clientMessageId ? caller.token : null;
+      const accounting = state.accounting && token ? new SeatTickAccounting(state.accounting.filename, project) : null;
+      const returned = async (outcome: DeliveryOutcome | null, error?: unknown) => {
+        if (!accounting || !token || !message.clientMessageId) return;
+        await outsideSeatTickWork(() => waitForStateLock("seat-tick.dispatch.return", () => accounting.returnedDispatch(
+          message.clientMessageId!, token, !!outcome && !outcome.ok && !outcome.operationId
+            && outcome.actuation !== "started" && outcome.resend !== "verify-first",
+          outcome?.operationId, outcome ? sendRefusalDetail(outcome) ?? undefined
+            : redactBounded(error instanceof Error ? error.message : "transport threw", REASON_LIMIT),
+          !!outcome && !outcome.ok && (outcome.actuation === "started" || outcome.resend === "verify-first")), { waitMs: 5_000 }));
+      };
+      return Promise.resolve().then(() => (dependencies.deliver ?? deliverConversationMessage)(message)).then(
+        async outcome => { await returned(outcome); return outcome; },
+        async error => { await returned(null, error); throw error; });
+    },
     appendRecord: append,
   }, "check");
+  let record: SeatTickRunRecord | null;
   try {
-    return await work.run(() => work.wait("check", (async () => {
+    record = await work.run(() => work.wait("check", (async () => {
       for (let attempt = 0; ; attempt++) {
         const record = await runSeatTickAttempt(project, scoped);
         if (attempt || !record?.detail?.includes("Seat alarm sources changed")) return record;
@@ -1374,13 +1537,48 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
       }
     })()));
   } catch (error) {
-    const record: SeatTickRunRecord = { schemaVersion: 1, at: new Date().toISOString(), project,
+    record = { schemaVersion: 1, at: new Date().toISOString(), project,
       seatEpoch: null, verdict: "error", reasons: [], items: 0, deferred: 0, eventsThrough: 0, delivery: null,
       detail: `the check overflowed or was canceled: ${work.detail()}; ${redactMonitorText(error instanceof Error ? error.message : "unknown error")}; retry within one interval` };
     console.error(`[seat tick] ${record.detail}`);
     append(record);
-    return record;
-  } finally { work.close(); }
+  } finally { work.close(); flushRecord(); await journalWrites; }
+  if (record) {
+    // This notice must survive the deadline that ended the failed check. It
+    // gets one separate, bounded admission and carries no delivery authority.
+    try {
+      const recent = dependencies.readRecords
+        ? dependencies.readRecords(project, SEAT_TICK_RUN_HISTORY)
+        : readSeatTickAlarmRecords(SEAT_TICK_RUN_HISTORY, undefined, project);
+      const alarm = seatTickCheckErrorAlarm(recent);
+      const read = dependencies.readState ?? readSeatTickState;
+      const pending = read(project).checkErrorAlarmPending;
+      // Older writers have no marker. Their recent errors can still owe a
+      // close; once reconciled the explicit false ends this compatibility read.
+      if (alarm || (record.verdict !== "error" && (pending === true || (pending === undefined && recent.some(row => row.verdict === "error"))))) {
+        const mark = (pending: boolean) => {
+          const state = read(project);
+          const episodeActive = alarm !== null;
+          const version = (state.checkErrorAlarmVersion ?? 0) + (alarm && state.checkErrorAlarmEpisodeActive !== true ? 1 : 0);
+          if (state.checkErrorAlarmPending === pending && state.checkErrorAlarmEpisodeActive === episodeActive && state.checkErrorAlarmVersion === version) return;
+          (dependencies.writeState ?? writeSeatTickState)(project, { ...state, checkErrorAlarmPending: pending,
+            checkErrorAlarmEpisodeActive: episodeActive, checkErrorAlarmVersion: version });
+        };
+        // Persist debt before touching the board. An interrupted/refused close
+        // is retried by the successor even after errors leave journal retention.
+        await waitForStateLock("seat-tick.check-alarm.pending", () => mark(true), { waitMs: 1_000 });
+        const written = await waitForStateLock("seat-tick.check-alarm", () =>
+          (dependencies.ensureCard ?? ensureSeatTickCard)(project, {
+            ref: "seat-tick-check-errors", kind: "check-errors", state: alarm ? "open" : "resolved", detail: alarm?.detail ?? "",
+            instance: alarm ? String(read(project).checkErrorAlarmVersion ?? 0) : undefined,
+          }, record.at), { waitMs: 1_000 });
+        if (written && !alarm) await waitForStateLock("seat-tick.check-alarm.closed", () => mark(false), { waitMs: 1_000 });
+      }
+    } catch (error) {
+      console.error("[seat tick] check alarm write deferred", error instanceof Error ? error.name : "unknown");
+    }
+  }
+  return record;
 }
 
 /**
@@ -1406,6 +1604,7 @@ async function runSeatTickAttempt(
   const canonical = canonicalOrchestratorProject(project);
 
   try {
+    await seatTickMutation("state.open", () => (dependencies.readState ?? readSeatTickState)(canonical));
     return await withViewerOperation("seat-tick.check", () => check(canonical, policy, dependencies, appendRecord));
   } catch (error) {
     let detail = `the check failed: ${redactMonitorText(error instanceof Error ? error.message : "unknown error")}`;
@@ -1423,11 +1622,11 @@ async function runSeatTickAttempt(
           const fresh = readState(canonical);
           const updated = { ...fresh, pullRequestGap: error.pullRequestGap };
           if (!fresh.accounting) {
-            writeState(canonical, updated);
+            await seatTickMutation("writeState", () => writeState(canonical, updated));
             break;
           }
           try {
-            tickAccounting(fresh.accounting.filename, canonical).writeState(updated);
+            await seatTickMutation("writeState", () => tickAccounting(fresh.accounting!.filename, canonical).writeState(updated));
             break;
           } catch (writeError) {
             if (attempt < 2 && writeError instanceof Error && writeError.message === "stale seat tick state") continue;
@@ -1519,7 +1718,14 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       mandateCarriesContract: input.seat?.mandateCarriesTickContract === true,
     }) };
   const text = payload.text;
-  if (renderedVerdict.kind === "wake") renderedVerdict.items = [...payload.items];
+  if (renderedVerdict.kind === "wake") {
+    if (renderedVerdict.catchUp && payload.items.length < renderedVerdict.items.length) {
+      renderedVerdict.deferred += renderedVerdict.items.length - payload.items.length;
+      renderedVerdict.catchUp = { ...renderedVerdict.catchUp, pending: true,
+        after: seatTickCatchUpItemCursor(payload.items.at(-1)!) };
+    }
+    renderedVerdict.items = [...payload.items];
+  }
   const commit = seatTickWakeCommitPlan(renderedVerdict, {
     wakeIntervalMs: input.settings.wakeIntervalMs,
     fingerprint: input.changeFingerprint,
@@ -1532,7 +1738,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
     bridgeReports: input.reports?.bridgeReports === true,
     frozenText: text,
   });
-  return { text, commit: commit! };
+  return { text, commit: commit!, renderedVerdict };
 }
 
 async function check(
@@ -1560,9 +1766,10 @@ async function check(
       const receipt = sources.registry().seatMcpReceipt?.(seat.conversationId) ?? null;
       const health = dependencies.mcpHealth?.(seat.conversationId, seat.designatedAt ?? null, now)
         ?? seatMcpHealth(receipt, seat.designatedAt ?? null,
-          path.dirname(statePath("mcp-runtime")), now, receipt?.viewerMcpTransport ?? "stdio");
+          path.dirname(statePath("mcp-runtime")), now, receipt?.viewerMcpTransport ?? "stdio",
+          structuredDeliveryMcpObservation(seat.conversationId, sources.registry()));
       return { ...health, ...(receipt?.viewerMcpTransport ? { transport: receipt.viewerMcpTransport } : {}) };
-    } catch { return { status: "untracked", detail: "MCP liveness could not be read" }; }
+    } catch { return { status: "dead", detail: "MCP liveness could not be read" }; }
   };
   // A missing MCP heartbeat cannot distinguish a finished dead host from a
   // live host with a broken pipe. Only the liveness plane can admit recovery.
@@ -1654,20 +1861,34 @@ async function check(
   };
   let retryAdmission: Awaited<ReturnType<typeof admissionFor>> = null;
   let recoveryDetail: string | null = null;
-  const persistRecovery = (record: SeatHostRecovery) => {
+  const persistRecovery = async (record: SeatHostRecovery) => {
     const fresh = readState(canonical);
-    writeState(canonical, { ...fresh, hostRecovery: record });
+    await seatTickMutation("writeState", () => writeState(canonical, { ...fresh, hostRecovery: record }));
   };
-  const tellRecovery = (record: SeatHostRecovery) => {
+  const tellRecovery = async (record: SeatHostRecovery) => {
     if (record.told) return;
     try {
       if (ensureCard(canonical, seatHostRecoveryCard(record, operatorLocale() === "en" ? "en" : "uk"), record.at))
-        persistRecovery({ ...record, told: true });
+        await persistRecovery({ ...record, told: true });
     } catch { /* The durable notice is retried by the next ordinary check. */ }
   };
   const owedNotice = readState(canonical).hostRecovery;
-  if (owedNotice) tellRecovery(owedNotice);
+  if (owedNotice) await tellRecovery(owedNotice);
   const deliverWake: typeof deliverConversationMessage = async message => {
+    const dispatchState = readState(canonical);
+    const caller = dispatchCall.getStore();
+    const dispatchStore = dispatchState.accounting && caller
+      ? new SeatTickAccounting(dispatchState.accounting.filename, canonical) : null;
+    const assertDispatch = () => {
+      assertSeatTickWork();
+      if (caller && (!dispatchStore || !dispatchStore.dispatchAdmitted(caller.clientMessageId, caller.token)))
+        throw new DeliveryAdmissionRefusedError("wake-dispatch-fenced");
+    };
+    const admissionGuard = message.admissionGuard;
+    const recoveryAuthorityGuard = message.recoveryAuthorityGuard;
+    message = { ...message,
+      admissionGuard: reconciled => { assertDispatch(); admissionGuard?.(reconciled); },
+      recoveryAuthorityGuard: () => { assertDispatch(); recoveryAuthorityGuard?.(); } };
     const activeSeat = sources.seatFor(canonical).active;
     const seat = activeSeat?.conversationId ? { ...activeSeat, conversationId: activeSeat.conversationId } : null;
     try { message.admissionGuard?.(); }
@@ -1684,7 +1905,7 @@ async function check(
     if (outcome.ok && outcome.spawned) {
       const record: SeatHostRecovery = { id: seatHostRecoveryKey(canonical, seat.seatEpoch, message.clientMessageId ?? seat.conversationId), conversationId: seat.conversationId,
         seatEpoch: seat.seatEpoch, at, state: "revived", detail: "shared composer recovery started a fresh host", told: false };
-      persistRecovery(record); tellRecovery(record);
+      await persistRecovery(record); await tellRecovery(record);
       // Recovery changed the launch capability. Never close the old outage
       // from its old receipt or infer that a successful send proves MCP health.
       const fresh = sources.seatFor(canonical).active;
@@ -1722,7 +1943,7 @@ async function check(
     if (previous?.id === id && previous.state !== "pending") return outcome;
     const record: SeatHostRecovery = { id, conversationId: seat.conversationId, seatEpoch: seat.seatEpoch,
       at, state: "pending", detail: redactMonitorText(outcome.error).slice(0, 500), told: false };
-    persistRecovery(record);
+    await persistRecovery(record);
     try {
       const rotate = dependencies.seatRecovery?.rotate ?? (await import("@/lib/orchestrator/seatCommand")).executeOrchestratorRotation;
       const replacementHold = (): SeatCommandResult | null => {
@@ -1737,7 +1958,7 @@ async function check(
         : result.status >= 200 && result.status < 300 && result.body.ok !== false ? "rotated" : "failed";
       record.detail = redactMonitorText(String(result.body.error ?? record.detail)).slice(0, 500);
     } catch (error) { record.state = "failed"; record.detail = redactMonitorText(error instanceof Error ? error.message : "rotation failed").slice(0, 500); }
-    persistRecovery(record); tellRecovery(record);
+    await persistRecovery(record); await tellRecovery(record);
     recoveryDetail = `seat host recovery: ${record.state}; ${record.detail}`;
     return outcome;
   };
@@ -1798,14 +2019,14 @@ async function check(
     const shown = [...new Set([...(creditOwed?.shown ?? []), ...(openingRow.itemsShown ?? [])])].slice(-2_000);
     if (shown.length) {
       const owed = { shown, recipient: creditOwed?.recipient ?? openingRecipient };
-      writeState(canonical, { ...openingRow, memoryProblemCreditOwed: owed });
+      await seatTickMutation("writeState", () => writeState(canonical, { ...openingRow, memoryProblemCreditOwed: owed }));
       openingRow = readState(canonical);
     }
   }
   let opened = seatTickStateForEpoch(openingRow, openingSeat?.seatEpoch ?? null);
   if (memoryProblemsReady && sources.memoryProblems && opened.memoryProblemCreditOwed) {
     opened = { ...opened, memoryProblemCreditOwed: undefined };
-    writeState(canonical, opened);
+    await seatTickMutation("writeState", () => writeState(canonical, opened));
   }
   if (openingSeat?.conversationId) {
     const reachability = await hostReachabilityFor({ ...openingSeat, conversationId: openingSeat.conversationId });
@@ -1815,7 +2036,7 @@ async function check(
       const fresh = seatTickStateForEpoch(readState(canonical), openingSeat.seatEpoch);
       opened = fresh.unreachableSince ? fresh : { ...fresh,
         unreachableSince: observedAt, unreachableBacklogSince: fresh.lastWakeAt ?? observedAt };
-      writeState(canonical, opened);
+      await seatTickMutation("writeState", () => writeState(canonical, opened));
       opened = seatTickStateForEpoch(readState(canonical), openingSeat.seatEpoch);
     }
   }
@@ -1862,7 +2083,8 @@ async function check(
       const verdict = seatTickDecision(input).verdict;
       if (!input.seat || input.seat.seatEpoch !== wake.seatEpoch || input.seat.conversationId !== wake.conversationId
         || (verdict.kind !== "wake" && verdict.kind !== "proactive")) return null;
-      return alarmPayload(input, verdict, issues);
+      const { text, commit } = alarmPayload(input, verdict, issues);
+      return { text, commit };
     },
     mayDispatch: async () => {
       if ((opened.authIncident && opened.authIncident.recoveredThrough === undefined) || activeDrain()) {
@@ -2002,7 +2224,7 @@ async function check(
      attempt was unresolved, and nothing anywhere said what had refused it or
      why. A refusal an operator cannot read is a refusal nobody acts on. */
   let sendDetail: string | null = null;
-  const verdict = decision.verdict;
+  let verdict = decision.verdict;
 
   if ((verdict.kind === "wake" || verdict.kind === "proactive") && input.seat) {
     /* The note is shown in full only when this seat's last landed wake did not
@@ -2019,7 +2241,10 @@ async function check(
       instructionLines: input.settings.instructionLines,
       monitorPrompt: input.settings.monitorPrompt,
     });
-    const { text, commit } = withViewerOperation("seat-tick.payload", () => alarmPayload(input, verdict, proposalIssues, new Date(gathered.now).toISOString()));
+    state = { ...state, wakeDecidedSince: state.wakeDecidedSince ?? state.outstandingWake?.preparedAt ?? at };
+    const payloadVerdict = verdict;
+    const { text, commit, renderedVerdict } = withViewerOperation("seat-tick.payload", () => alarmPayload(input, payloadVerdict, proposalIssues, new Date(gathered.now).toISOString()));
+    verdict = renderedVerdict;
 
     /* The prompt above came off the settings row this check read, not out of
        anything the controller carries between checks or between seats: the row
@@ -2093,7 +2318,7 @@ async function check(
          bound that overwrote an attempt still in a holder's queue would put
          the second wake in flight that the bound was never meant to license
          (#1746). */
-      const prepared = accounting ? accounting.prepare(state, wake) : !state.outstandingWake;
+      const prepared = accounting ? await seatTickMutation("prepare", () => accounting.prepare(state, wake)) : !state.outstandingWake;
       if (!prepared) {
         /* A refusal moves no revision, so this check's own state — its gap run,
            its stall memory, its sealed cursor — is still the row's to write.
@@ -2116,29 +2341,30 @@ async function check(
         if (raced) fenceDetail = seatTickFenceSentence(raced);
       } else {
         state = accounting ? accounting.readState() : { ...state, outstandingWake: wake };
-        if (!accounting) writeState(input.project, state);
+        if (!accounting) await seatTickMutation("writeState", () => writeState(input.project, state));
         // Preparation is durable before transport, and seat authority is re-read afterward.
         const authority = sources.seatFor(input.project).active;
         if (!authority || authority.seatEpoch !== wake.seatEpoch || authority.conversationId !== wake.conversationId) {
           delivery = { clientMessageId, outcome: "seat-rotated" };
           // This invocation has not entered transport, so non-delivery is proven.
           if (accounting) {
-            accounting.cancelUndispatched(wake);
+            await seatTickMutation("cancelUndispatched", () => accounting.cancelUndispatched(wake));
             state = accounting.readState();
           } else state = { ...state, outstandingWake: null };
         } else {
-          const token = accounting?.beginDispatch(wake);
+          const token = accounting ? await seatTickMutation("dispatch.begin", () => accounting.beginDispatch(wake, new Date(sources.now() + (seatTickWorkRemainingMs() ?? policy.checkIntervalMs / 4)).toISOString())) : null;
           if (accounting) state = accounting.readState();
           let outcome: DeliveryOutcome | null = null;
           try {
             if (accounting && !token) throw new Error("wake dispatch already claimed");
             const admission = await admissionFor(input.seat);
             if (!admission) throw new DeliveryAdmissionRefusedError("seat-mcp-unavailable");
-            /* A wake waits for the seat to go idle: the default policy would
-               interrupt a turn the seat or the operator has running. */
-            outcome = await deliverWake({ pid: null, path: authority.path ?? input.seat.path ?? "", conversationId: authority.conversationId,
-              clientMessageId, text, images: [], origin: delegatusMessageOrigin("seat-tick", input.project), policy: "queue",
-              admissionGuard: admission.guard, recoveryAuthorityGuard: admission.authorityGuard });
+            /* The executor chooses native context on a supported running host,
+               or a normal wake when idle, under this one durable key. */
+            const message = { pid: null, path: authority.path ?? input.seat.path ?? "", conversationId: authority.conversationId,
+              clientMessageId, text, images: [], origin: delegatusMessageOrigin("seat-tick", input.project), policy: "context-or-queue" as const,
+              admissionGuard: admission.guard, recoveryAuthorityGuard: admission.authorityGuard };
+            outcome = token ? await dispatchCall.run({ clientMessageId, token }, () => deliverWake(message)) : await deliverWake(message);
             delivery = { clientMessageId, outcome: deliveryOutcomeLabel(outcome) };
             sendDetail = sendRefusalDetail(outcome);
           } catch (error) {
@@ -2149,21 +2375,27 @@ async function check(
             // Missing receipts do not authorize forgetting a prepared attempt.
             sendDetail = `the transport call for the wake did not return: ${redactBounded(error instanceof Error ? error.message : "unknown error", REASON_LIMIT)}`;
           }
-          if (accounting && token && outcome) {
-            accounting.returnedDispatch(clientMessageId, token, !outcome.ok && !outcome.operationId && outcome.actuation !== "started" && outcome.resend !== "verify-first");
+          if (accounting && token) {
+            state = accounting.readState();
+            if (outcome && state.outstandingWake?.dispatch?.token === token && state.outstandingWake.dispatch.state === "active") {
+              const returnedOutcome = outcome;
+              await seatTickMutation("dispatch.return", () => accounting.returnedDispatch(clientMessageId, token,
+                !returnedOutcome.ok && !returnedOutcome.operationId && returnedOutcome.actuation !== "started" && returnedOutcome.resend !== "verify-first", returnedOutcome.operationId));
+            }
             state = accounting.readState();
           }
-          if (outcome && wakeReached(outcome)) {
+          const ownsDispatch = !accounting || (state.outstandingWake?.clientMessageId === clientMessageId && state.outstandingWake.dispatch?.token === token);
+          if (ownsDispatch && outcome && wakeReached(outcome)) {
             const landed = seatTickWakeCommit(state, commit, input.now);
             if (accounting) {
-              accounting.settle(clientMessageId, landed, "landed");
+              await seatTickMutation("settle", () => accounting.settle(clientMessageId, landed, "landed", null, state.outstandingWake ?? undefined));
               state = accounting.readState();
             } else state = landed;
-          } else {
+          } else if (ownsDispatch) {
             if (outcome?.operationId && state.outstandingWake) {
               state = { ...state, outstandingWake: { ...state.outstandingWake, operationId: outcome.operationId } };
-              if (accounting) { accounting.writeState(state); state = accounting.readState(); }
-              else writeState(input.project, state);
+              if (accounting) { await seatTickMutation("writeState", () => accounting.writeState(state)); state = accounting.readState(); }
+              else await seatTickMutation("writeState", () => writeState(input.project, state));
             }
             /* The record is asked for what became of the send, whatever the
                transport answered: a refusal's shape proves nothing about which
@@ -2179,10 +2411,14 @@ async function check(
     }
   }
 
-  writeState(input.project, state);
-  const standing = standingWakeCard(state,
+  await seatTickMutation("writeState", () => writeState(input.project, state));
+  const alarm = seatTickDeliveryAlarm(state, input.now);
+  const blockerCard = standingWakeCard(state,
     seatTickActiveRefusalRun(state, input.seat ? refusalBasis(input.seat.seatEpoch, state, input.settings.updatedAt) : null),
     unresolved, openedStanding, openedRun);
+  const standing = alarm ? { ref: SEAT_TICK_WAKE_UNRESOLVED_REF, kind: "wake-unresolved" as const, state: "open" as const,
+    attempt: alarm.clientMessageId ?? undefined, instance: alarm.clientMessageId ?? alarm.since,
+    detail: [alarm.detail, blockerCard?.detail].filter(Boolean).join("; ") } : blockerCard;
   if (standing) {
     try {
       ensureCard(input.project, standing, at);
@@ -2207,7 +2443,7 @@ async function check(
     deferred: verdict.kind === "wake" ? verdict.deferred : 0,
     eventsThrough: state.eventsThrough ?? 0,
     delivery,
-    detail: [rollbackDetail, authDetail, autoRotateDetail, recoveryDetail, admissionDetail, verdictDetail(verdict), fenceDetail, sendDetail, ...maintenanceDetails, seatTickSkippedSources()].filter((part): part is string => !!part).join("; ") || null,
+    detail: [alarm?.detail, rollbackDetail, authDetail, autoRotateDetail, recoveryDetail, admissionDetail, verdictDetail(verdict), fenceDetail, sendDetail, ...maintenanceDetails, seatTickSkippedSources()].filter((part): part is string => !!part).join("; ") || null,
   };
   appendRecord(record);
   return record;
@@ -2313,9 +2549,13 @@ function wakeIntervalFor(project: string, now: number, sources: SeatTickSources)
   }
 }
 
-async function defaultProposalIssues(project: string, sources: SeatTickSources): Promise<ProposalIssue[]> {
-  const cwd = repoDirForProject(project, sources);
-  return cwd ? openIssuesForProposal({ cwd }) : [];
+async function defaultProposalIssues(project: string): Promise<ProposalIssue[]> {
+  try {
+    const repository = githubRepositoryOfRemote(recordedProjectRemote(project));
+    return repository ? [...(forgeCacheView().repository(repository)?.proposalIssues ?? [])] : [];
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -2399,10 +2639,22 @@ function kickTurboWork(project: string, kick: ((project: string) => void) | unde
   }
 }
 
-export async function reconcileSeatTick(dependencies: SeatTickControllerDependencies = {}): Promise<SeatTickRunRecord[]> {
+/** A resumed conversation may request only its current designated project. */
+export async function reconcileResumedSeatTick(conversationId: string, dependencies: SeatTickControllerDependencies = {}): Promise<void> {
+  const sources = dependencies.sources ?? defaultSeatTickSources();
+  const project = sources.activeSeats().find(project => sources.seatFor(project).active?.conversationId === conversationId);
+  if (project) await reconcileSeatTick({ ...dependencies, sources }, [project]);
+}
+
+export async function reconcileSeatTick(dependencies: SeatTickControllerDependencies = {}, requestedProjects?: readonly string[]): Promise<SeatTickRunRecord[]> {
   const sources = dependencies.sources ?? defaultSeatTickSources();
   const appendRecord = dependencies.appendRecord ?? appendSeatTickRecord;
-  if (!await (dependencies.ownsTraffic ?? releaseOwnsTraffic)()) {
+  const generation = tickHost.__llvSeatTickGeneration;
+  const ownsTraffic = await (dependencies.ownsTraffic ?? releaseOwnsTraffic)();
+  // Admission may outlive this clock. Its continuation may neither start work
+  // after stop nor withdraw a replacement clock on a stale refusal.
+  if (generation !== tickHost.__llvSeatTickGeneration) return [];
+  if (!ownsTraffic) {
     const refusal = "this release no longer owns viewer traffic, so the seats belong to the promoted one";
     console.error(`[seat tick] refused: ${refusal}`);
     try {
@@ -2426,18 +2678,22 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
     stopSeatTick();
     return [];
   }
+  // A foreground resume uses the same handoff/drain fence as the clock.
+  if (requestedProjects && (activeRestartGate(statePath("self-update", "auto-admission.json")) || activeDrain())) return [];
   followProjectSuccessions(dependencies.recordSuccessions);
   const records: SeatTickRunRecord[] = [];
-  const projects = new Set(seatTickProjects(sources));
+  const projects = new Set(requestedProjects?.map(canonicalOrchestratorProject) ?? seatTickProjects(sources));
   // Recovery must settle a curator whose project no longer has a seat or open work.
   const incumbent = machinePass();
-  if (incumbent) projects.add(canonicalOrchestratorProject(incumbent.project));
+  if (incumbent && !requestedProjects) projects.add(canonicalOrchestratorProject(incumbent.project));
+  const curator = dependencies.curation === undefined ? productionCurationController(sources) : dependencies.curation;
+  const curation = curator ? curationForSweep(curator, [...projects].sort(), () => generation === tickHost.__llvSeatTickGeneration) : null;
   // Each project starts independently. Its own deadline includes every phase;
   // an overdue project never holds the roster behind its await.
   const checked = await Promise.all([...projects].sort().map(project => checkSeatTickProject(project, {
     ...dependencies, sources, ownsTraffic: dependencies.ownsTraffic ?? releaseOwnsTraffic,
     release: dependencies.release === undefined ? releaseControllerForSources(sources) : dependencies.release,
-    curation: dependencies.curation === undefined ? productionCurationController(sources) : dependencies.curation,
+    curation,
     maintenance: dependencies.maintenance === undefined ? productionBoardMaintenanceController(sources) : dependencies.maintenance,
   })));
   records.push(...checked.filter((record): record is SeatTickRunRecord => record !== null));
@@ -2449,6 +2705,12 @@ function checkSeatTickProject(project: string, dependencies: SeatTickControllerD
   const checks = tickHost.__llvSeatTickProjects ??= new Map();
   const active = checks.get(project);
   if (active) {
+    // This sweep borrows an existing check. Release this sweep's coordination
+    // slot only when the borrowed check has refreshed its state and finished.
+    void active.promise.then(
+      () => dependencies.curation?.finishProject?.(project),
+      () => dependencies.curation?.finishProject?.(project),
+    );
     active.owed = true;
     console.error(`[seat tick] project held: ${active.work?.detail() ?? `project=${project}; opening`}; retry owed`);
     return active.promise;
@@ -2468,10 +2730,12 @@ function checkSeatTickProject(project: string, dependencies: SeatTickControllerD
       return null;
     } finally {
       if (checks.get(project) === entry) checks.delete(project);
+      dependencies.curation?.finishProject?.(project);
       if (entry.owed && generation === tickHost.__llvSeatTickGeneration) {
         // A callback which arrived during this check is a fresh obligation.
         // Coalesce it once; the new check re-reads all durable state.
-        void checkSeatTickProject(project, dependencies);
+        const fresh = dependencies.curation?.fresh?.(project);
+        void checkSeatTickProject(project, fresh ? { ...dependencies, curation: fresh } : dependencies);
       }
     }
   })();
@@ -2588,6 +2852,10 @@ export function startSeatTick(ports: {
   const timer = schedule(run, policy.checkIntervalMs / 2);
   timer.unref?.();
   tickHost.__llvSeatTickTimer = timer;
+  bindResumedSeatTick(async conversationId => {
+    if (generation !== tickHost.__llvSeatTickGeneration || handoffHeld() || drainHeld()) return;
+    await reconcileResumedSeatTick(conversationId, { policy });
+  });
   // Read durable stall observations immediately; a restart owes no new interval.
   run();
   return true;
@@ -2600,6 +2868,7 @@ export function seatTickIdle(): boolean {
 /** Test seam: the timer is process-global, so a suite must be able to start
     from an unstarted one without reaching into module internals. */
 export function stopSeatTick(): void {
+  bindResumedSeatTick(null);
   tickHost.__llvSeatTickGeneration = (tickHost.__llvSeatTickGeneration ?? 0) + 1;
   for (const entry of tickHost.__llvSeatTickProjects?.values() ?? []) entry.work?.close();
   tickHost.__llvSeatTickProjects?.clear();

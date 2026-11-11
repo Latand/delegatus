@@ -2,7 +2,8 @@
 
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { RuntimePillFace, RuntimePopover, RuntimeSheet, tierWord, type AccountChoice, type RuntimePanel } from "@/components/RuntimePill";
+import { ultraRowOf, useCodexTierOffer } from "@/components/codexTierOffer";
+import { RuntimePillFace, RuntimePopover, RuntimeSheet, tierWord, type AccountChoice, type RuntimePanel, type SpeedTier } from "@/components/RuntimePill";
 import { useAccountName } from "@/hooks/useEngineAccounts";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { effortScale } from "@/lib/agent/efforts";
@@ -48,13 +49,18 @@ export function DraftRuntimePill({ launch, disabled = false }: { launch: AgentLa
   const efforts = effortScale(engine, launch.model) ?? [];
   /* Speed is Codex's, and only a Codex launch carries it: the choice is kept for a return to Codex and
      said nowhere while another engine is chosen. */
-  const fast = engine === "codex" && launch.speed === "fast";
+  const fast = engine === "codex" && (launch.speed === "fast" || launch.speed === "ultrafast");
+  const ultrafast = engine === "codex" && launch.speed === "ultrafast";
   /* No tier chosen is the engine's own default, and the launch sends none: the face says so in a word
      instead of naming a tier the agent may not run at. */
   const effort = efforts.includes(launch.effort) ? launch.effort : "";
   const tier = effort ? tierWord(t, effort, isMobile) : t("draft.tierDefault");
   const short = ENGINE_MODELS[engine].find((model) => model.id === launch.model)?.shortLabel ?? launch.model;
-  const text = [launchEngineLabel(engine), short, tier, fast ? t("composer.speedFastTier") : ""].filter(Boolean).join(" · ");
+  /* Ultrafast by the tier's own name, as a conversation's face says it. */
+  const text = [launchEngineLabel(engine), short, tier, ultrafast ? "Ultrafast" : fast ? t("composer.speedFastTier") : ""].filter(Boolean).join(" · ");
+  /* Ultrafast is offered as the launch account's catalog lists it, read while the pill is open. */
+  const ultraOffer = useCodexTierOffer({ account: launch.launchAccountId, model: launch.model, enabled: open && engine === "codex" });
+  const ultra = engine === "codex" ? ultraRowOf(t, ultraOffer, ENGINE_MODELS.codex.find((model) => model.id === launch.model)?.label ?? launch.model) : null;
   /* The account is named once the operator picked one; before that the engine's active account takes the
      launch, which the panels say in their own account line. The phone's chip names no account, as a
      conversation's does not: its sheet leads with the accounts and marks the one the launch goes to. */
@@ -101,9 +107,10 @@ export function DraftRuntimePill({ launch, disabled = false }: { launch: AgentLa
     t, engine, modelOptions, account: launch.launchAccountId, nameOf, accountChoice, ownAccounts, efforts,
     accountStart: launch.launchAccountId ? t("draft.accountStartsOn", { account: nameOf(launch.launchAccountId) }) : "",
     menuLabel: t("draft.runtimePill"),
-    face: { model: launch.model, effort, fast },
+    face: { model: launch.model, effort, fast, serviceTier: ultrafast ? "ultrafast" : null },
     speedShown: engine === "codex",
-    speedDetail: fast ? t("composer.speedFastTier") : t("composer.speedStandard"),
+    speedDetail: ultrafast ? t("composer.speedUltraTier") : fast ? t("composer.speedFastTier") : t("composer.speedStandard"),
+    ultra,
     effortLocked: false, modelLocked: false, speedLocked: false, lockReason: "",
     onSelectEffort: (value: string) => {
       launch.setEffort(value);
@@ -118,8 +125,8 @@ export function DraftRuntimePill({ launch, disabled = false }: { launch: AgentLa
       if (launch.effort && !(effortScale(foreign ?? engine, model) ?? []).includes(launch.effort)) launch.setEffort("");
       if (!isMobile) close();
     },
-    onSelectFast: (value: boolean) => {
-      launch.setSpeed(value ? "fast" : "standard");
+    onSelectSpeed: (value: SpeedTier) => {
+      launch.setSpeed(value === "ultrafast" ? "ultrafast" : value === "priority" ? "fast" : "standard");
       if (!isMobile) close();
     },
     onClose: close,

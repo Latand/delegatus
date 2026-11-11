@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type { LaunchProfile } from "@/lib/accounts/migration/contracts";
 import { statePath } from "@/lib/configDir";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
@@ -10,12 +11,14 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { recordMemoryDelivery, type MemoryEngineStart } from "./deliveryLedger";
 import { roleMemoryEnabled } from "./settings";
 import { applyOperatorMemorySelector, operatorMemoryEnabled } from "./operatorMemory";
-import { memorySelection, prepareRoleSelection, selectionCandidate, frozenSelection } from "./roleSelection";
+import { memorySelection, prepareRoleSelection, selectionCandidate, frozenSelection, selectedSnapshot, legacySelectionBypass } from "./roleSelection";
 import { MEMORY_SELECTION_DEADLINE_MS, selectRoleMemory } from "./roleSelect";
 import { stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
+import { emptySelectionEvidence } from "./roleSelectionProvider";
 
 /** Leave headroom below Linux's single-argument ceiling, including the notice. */
 export const LEARNED_RULES_MAX_BYTES = 120_000;
+const hashRule = (text: string) => createHash("sha256").update(text).digest("hex");
 
 /** Rebuild the text-free selector only after durable seat membership proves
     adoption. A stage can use a seat role name and still retain its own clean
@@ -54,7 +57,7 @@ export function memoryStartIdentity(registry: AgentRegistry, conversationId: str
 
 /** The selector survives in receipts; only engine options carry its text.
  * A ledger refusal stops a start: a successfully started attempt must have evidence. */
-export async function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, "cleanMemory" | "learnedRules"> | null | undefined, start?: MemoryEngineStart): Promise<string | undefined> {
+export async function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, "cleanMemory" | "learnedRules"> & Partial<Pick<LaunchProfile, "title" | "goal">> | null | undefined, start?: MemoryEngineStart): Promise<string | undefined> {
   const marker = profile?.learnedRules;
   const clean = profile?.cleanMemory === true;
   const select = () => {
@@ -69,22 +72,55 @@ export async function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, 
       return undefined;
     }
   };
-  if (!start?.attempt || !marker || clean || roleIsClean(marker.roleId) || !roleMemoryEnabled()) return start ? recordMemoryDelivery(start, clean, select) : select()?.block;
+  if (!marker || clean || roleIsClean(marker.roleId) || !roleMemoryEnabled()) return start ? recordMemoryDelivery(start, clean, select) : select()?.block;
+  if (!start?.attempt) {
+    const snapshot = await waitForStateLock("memory.selection-snapshot", select);
+    if (!snapshot) return start ? recordMemoryDelivery(start, clean, select) : undefined;
+    const selection = await selectRoleMemory(snapshot.candidates, [marker.roleId, profile?.title, profile?.goal?.objective].filter(Boolean).join("\n"));
+    const projected = selectedSnapshot(snapshot, selection, marker.reader);
+    const delivery = () => {
+      if (!roleMemoryEnabled() || (marker.reader === "operator" && !operatorMemoryEnabled())) return undefined;
+      // Decisions can take long enough for the operator to withdraw a rule.
+      // Re-read the current scoped view under delivery admission, then retain
+      // only the exact selected text that is still eligible for this launch.
+      const current = learnedRulesSnapshot(marker.project, marker.roleId, LEARNED_RULES_MAX_BYTES, marker.reader === "operator" ? "operator" : undefined);
+      const eligible = new Set(current.candidates.flatMap(scope => scope.rules.map(rule => `${rule.id}:${hashRule(rule.rule)}`)));
+      const survivingIds = new Set([...projected.rules].filter(rule => eligible.has(`${rule.id}:${rule.hash}`)).map(rule => rule.id));
+      const validated = selectedSnapshot(current, { ...selection, shadowIds: selection.shadowIds.filter(id => survivingIds.has(id)) }, marker.reader);
+      return { ...validated, reason: selection.reason, shadowIds: selection.shadowIds.filter(id => survivingIds.has(id)), evidence: selection.evidence };
+    };
+    return start ? recordMemoryDelivery(start, clean, delivery) : delivery()?.block;
+  }
   await prepareRoleSelection();
-  const existing = await waitForStateLock("memory.selection-read", () => memorySelection(start.attempt!));
+  const saved = await waitForStateLock("memory.selection-read", () => memorySelection(start.attempt!));
+  const existing = saved && !legacySelectionBypass(saved) ? saved : null;
   const snapshot = existing ? undefined : await waitForStateLock("memory.selection-snapshot", select);
   if (!existing && !snapshot) return recordMemoryDelivery(start, clean, select);
   const candidate = existing ?? selectionCandidate(start.attempt, snapshot!);
   if (!existing && snapshot) {
-    const deadline = performance.now() + MEMORY_SELECTION_DEADLINE_MS;
+    const started = performance.now();
+    const deadline = started + MEMORY_SELECTION_DEADLINE_MS;
     try {
       const { findPipelineRecord } = await import("@/lib/pipelines/store");
       const pipeline = await waitForStateLock("memory.selection-brief", () => findPipelineRecord(start.attempt!.pipelineId), { waitMs: Math.max(0, deadline - performance.now()) });
       const stage = pipeline?.stages.find(stage => stage.id === start.attempt!.stageId);
       const brief = [pipeline?.task?.slice(0, 2000), pipeline?.spec?.slice(0, 8000), stage?.prompt?.slice(0, 3000)].filter(Boolean).join("\n");
-      Object.assign(candidate, await selectRoleMemory(snapshot.candidates, brief, { timeoutMs: Math.max(0, deadline - performance.now()) }), { shadow: process.env.LLV_ROLE_MEMORY_SHADOW !== "off" });
+      const preparationMs = Math.max(0, performance.now() - started);
+      const selection = await selectRoleMemory(snapshot.candidates, brief, { timeoutMs: Math.max(0, deadline - performance.now()) });
+      if (selection.evidence) {
+        selection.evidence.timings.unshift(["brief", preparationMs]);
+        selection.evidence.latencyMs += preparationMs;
+      }
+      const projected = selectedSnapshot(snapshot, selection, marker.reader);
+      Object.assign(candidate, selection, { block: projected.block, entries: projected.entries, scores: projected.scores, mode: selection.selector, shadow: false });
     } catch {
-      Object.assign(candidate, { shadow: process.env.LLV_ROLE_MEMORY_SHADOW !== "off", reason: "selector-error" });
+      const elapsed = Math.max(0, performance.now() - started);
+      const evidence = emptySelectionEvidence("brief", elapsed);
+      evidence.timings.push(["brief", elapsed]);
+      const fallback = await selectRoleMemory(snapshot.candidates, marker.roleId ?? "agent", { apiKey: null, timeoutMs: Math.max(0, MEMORY_SELECTION_DEADLINE_MS - elapsed) });
+      const projected = selectedSnapshot(snapshot, fallback, marker.reader);
+      Object.assign(candidate, fallback, { block: projected.block, entries: projected.entries, scores: projected.scores, mode: fallback.selector, shadow: false,
+        reason: `${elapsed >= MEMORY_SELECTION_DEADLINE_MS ? "brief-timeout" : "brief-error"},${fallback.reason}`, evidence });
     }
   }
   return recordMemoryDelivery(start, clean, () => {

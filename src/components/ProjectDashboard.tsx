@@ -1,5 +1,7 @@
 "use client";
 
+import { usePipelineCreationCards } from "@/hooks/useFiles";
+
 import { Archive, Bot, Check, GitMerge, Users, EyeOff, Info, LayoutGrid, ListTodo, ListTree, MessageSquarePlus, Network, PanelRight, Search, UserRound } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -38,7 +40,7 @@ import { reviewerCloseMutations } from "./reviewerAutoClose";
 import { openProjectReviewHistory } from "./flows/ReviewHistory";
 import { isDirectReviewFlow } from "./flows/directReviewGroups";
 import { claimedReviewerDescendantPaths, isActiveFlow, resolveFlowMemberPaths } from "./flows/flowModel";
-import { compactPipelineArtifactPaths, compactPipelineLayoutFlows, createDraftPipeline, excludeCompactPipelineArtifacts, patchPipeline, pipelineFullPanePaths, pipelinesForProject, replaceCompactPipelineEphemeral, resolvePipelineMemberPaths, type PipelineTemplate } from "./pipelines/pipelineModel";
+import { compactPipelineArtifactPaths, compactPipelineLayoutFlows, createDraftPipeline, excludeCompactPipelineArtifacts, patchPipeline, pipelineFullPanePaths, pipelinesForProject, replaceCompactPipelineEphemeral, resolvePipelineMemberPaths, type PipelineDraftSource, type PipelineTemplate } from "./pipelines/pipelineModel";
 import { PipelineTemplatePicker } from "./pipelines/PipelineTemplatePicker";
 import { createProjectDashboardDerivation } from "./projectDashboardDerivation";
 import { buildSubagentTrays, subagentTraySignature } from "./scheme/subagentTray";
@@ -65,6 +67,7 @@ import { MobileSeatCard } from "./mobile/MobileSeatCard";
 import { HeaderMenuSheet } from "./headerMenu/HeaderMenu";
 import type { MobileMenuEntry } from "./mobile/MobileMenuSheet";
 import { showReceipt } from "./mobile/MobileReceipt";
+import { refusalText, type ProjectActionResult } from "./projectActions/rights";
 import { MobileAccountsScreen, MobileBarTitle, MobileReportsScreen, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
 import { MobilePipelineScreen, useClosingPipelines } from "./mobile/MobilePipelineScreen";
 import { MobilePipelinesScreen } from "./mobile/MobilePipelinesScreen";
@@ -76,6 +79,8 @@ import { Badge } from "@/components/ui/Badge";
 import { navigateToFragment } from "@/lib/navigation/fragmentNavigation";
 import { useStableCallback } from "./kanban/useStableCallback";
 import { KanbanBoard, type BarTrailExtra } from "./kanban/KanbanBoard";
+import { StageDrafts } from "./kanban/stageDrafts";
+import { ConversationDrafts } from "./pipelines/conversationDraftClient";
 import { KanbanSeat } from "./kanban/KanbanSeat";
 import { useKanbanSeat, useSeatSignal } from "./kanban/kanbanSeatStore";
 import { onTaskChipOpen } from "./orchestrator/taskChips";
@@ -103,6 +108,7 @@ import { ArchiveProjectButton, DeleteProjectButton } from "./ProjectTrash";
 import { AsksYouRow } from "./AsksYouRow";
 import { BridgeReportsRow } from "./BridgeReportsRow";
 import { MergeOnReviewRow } from "./MergeOnReviewRow";
+import { PipelineStageRuntimeRow } from "./PipelineStageRuntimeRow";
 import { ShareProjectRow } from "./links/ShareProjectRow";
 import { LearnedRulesRow } from "./roleMemory/LearnedRules";
 import { SoundToggle } from "./SoundToggle";
@@ -165,8 +171,8 @@ interface Props {
   archived: boolean;
   catalogKnown: boolean;
   catalogConversationCount: number;
-  onArchive: (project: string) => void;
-  onUnarchive: (project: string) => void;
+  onArchive: (project: string) => void | Promise<ProjectActionResult>;
+  onUnarchive: (project: string) => void | Promise<ProjectActionResult>;
   /** The phone shell's host (mobile v2 lane 1): the queue count for the bar's
       badge, the arrival for the banner slot, the search palette and the sheets
       the Viewer owns. Absent on the desktop. */
@@ -938,6 +944,11 @@ function ProjectDashboardView({
      screen share one set, so a move made on the task screen is still drawn on
      the board after ‹. */
   const phoneTaskMutations = useTaskMutations(isMobile ? projectTasks : EMPTY_TASKS);
+  /* First messages being edited and pipelines being drafted from a
+     conversation, shared by the board and the phone's screens so an edit or
+     a creation in flight survives the width crossing the breakpoint. */
+  const [stageDrafts] = useState(() => new StageDrafts());
+  const [conversationDrafts] = useState(() => new ConversationDrafts());
   /* Tasks that exist only for the orchestrator seat are the seat panel's to
      list (#1841): every task list leaves them out — the boards, the phone's
      task screens and their count — while the task
@@ -1353,9 +1364,9 @@ function ProjectDashboardView({
   /* `+ Пайплайн` (#136, #196, #388): the picker admits a repository before it
      creates a DRAFT. Its world-space PipelineGroup opens with the full role
      chain and shared editor before the first run. */
-  const addPipelineDraft = async (template: PipelineTemplate | null, repoDir: string) => {
+  const addPipelineDraft = async (template: PipelineTemplate | null, repoDir: string, from?: PipelineDraftSource) => {
     onUserNavigate?.();
-    return createDraftPipeline(project, repoDir, template ?? undefined);
+    return createDraftPipeline(project, repoDir, template ?? undefined, undefined, from);
   };
 
   /* The handoff handle under a pane: a draft that continues this conversation
@@ -1688,7 +1699,9 @@ function ProjectDashboardView({
     [hasNodes, groupFiles, hiddenSet, collapsedPaths, launchHistoryPaths, compactPipelinePaths, project],
   );
   const hasArchiveNodes = archiveGroups.length > 0;
-  const schemeAvailable = hasNodes || hasArchiveNodes;
+  const creationCards = usePipelineCreationCards();
+  const hasAcceptedCreations = creationCards.some(card => card.receipt?.project === project);
+  const schemeAvailable = hasNodes || hasArchiveNodes || hasAcceptedCreations;
   const isolatedCompactHistoryPaths = useMemo(
     () => new Set(ephemeral.filter((path) => compactPipelinePaths.has(path))),
     [ephemeral, compactPipelinePaths],
@@ -1727,7 +1740,7 @@ function ProjectDashboardView({
   const desktopEmptyBoard = !isMobile && !schemeAvailable && listAvailable;
   const projectView = landedOnConversation || desktopEmptyBoard ? "scheme" : resolveProjectView({
     preferredView,
-    hasNodes,
+    hasNodes: hasNodes || hasAcceptedCreations,
     hasArchiveNodes,
     hasHistoryRows: listAvailable,
   });
@@ -1865,6 +1878,7 @@ function ProjectDashboardView({
   const [mobileKanbanShown, setMobileKanbanShown] = useState("");
   /* What the phone's columns are not drawing, for ⋯ › Hidden tasks. */
   const [mobileHiddenCount, setMobileHiddenCount] = useState(0);
+  const [archiveError, setArchiveError] = useState<{ project: string; text: string } | null>(null);
   const reportMobileKanbanShown = useCallback((paths: readonly string[]) => setMobileKanbanShown(paths.join("\n")), []);
   /* The phone's board is the leaf when the scheme is this project's view and no
      conversation sits on top of the stack; the footer and the presence slice
@@ -1965,16 +1979,30 @@ function ProjectDashboardView({
     viewBus.reportSlice({ mode, focusedPath: null, selectedPaths: selectionInOrder(order, board.selection, { includeUnordered: true }), visiblePaths, camera: null });
   }, [projectView, schemeAvailable, listAvailable, historyRows, isMobile, boardWindowSignature, board.selection, mobileBoardSignature]);
 
-  const pipelinesAlert = pipelinesError ? (
+  const pendingCreationNotice = creationCards.find(card => !card.receipt);
+  const pipelinesAlert = <>{pendingCreationNotice ? <div className="shrink-0 border-b border-border px-3 py-1.5 text-body text-secondary" role="status" data-creation-notice={pendingCreationNotice.status}>
+    {t(`pipelineCreation.${pendingCreationNotice.status}`)}
+  </div> : null}{pipelinesError ? (
     <div className="shrink-0 border-b border-border bg-warning-soft px-3 py-1.5 text-[11.5px] text-warning" role="alert">
       {t("dash.pipelinesUnavailable")}
     </div>
-  ) : null;
+  ) : null}</>;
   /* The board menu (README §3.1, §4.1; the layout of docs/design/header-menu.md): the create
      actions as cells, the places as labelled 44 px rows, the header's entries, and the project's
      rules with the danger-free Archive last on a page of their own. No row asks for confirmation;
      Archive answers with a receipt carrying Restore. */
   const archiveAllowed = (projectFiles.length > 0 || catalogKnown) && !projectFiles.some((file) => file.proc === "running" || file.activity === "live");
+  const restoreProject = async () => {
+    setArchiveError(null);
+    const result = await onUnarchive(project);
+    if (result && !result.ok) {
+      const text = refusalText(t, result.code, "rail.row.ownerArchives");
+      if (isMobile) showReceipt(text, null, { error: true });
+      else setArchiveError({ project, text });
+      return false;
+    }
+    return true;
+  };
   const mobileMenuEntries = (): { create: MobileMenuEntry[]; board: MobileMenuEntry[]; rules: MobileMenuEntry[] } => {
     const create: MobileMenuEntry[] = [
       { kind: "row", key: "new-agent", icon: <MessageSquarePlus className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.newAgent"), disabled: !loaded, onSelect: () => { mobileNav.closeSheet(); addDraft(); } },
@@ -2026,6 +2054,7 @@ function ProjectDashboardView({
       /* The project's merge and bridge report settings (#2187 §6, #2146), the
          same rows as the desktop ⋯. */
       { kind: "custom", key: "merge-on-review", node: <MergeOnReviewRow project={project} variant="sheet" /> },
+      { kind: "custom", key: "stage-runtime", node: <PipelineStageRuntimeRow project={project} variant="sheet" /> },
       { kind: "custom", key: "share-project", node: <ShareProjectRow project={project} variant="sheet" /> },
       { kind: "custom", key: "bridge-reports", node: <BridgeReportsRow project={project} variant="sheet" /> },
       /* Role memory's rules window: always on, so a way in and no switch (docs/design/role-memory.md §3.1). */
@@ -2040,10 +2069,9 @@ function ProjectDashboardView({
         key: "unarchive",
         icon: <ArchiveRestore className="h-[18px] w-[18px]" aria-hidden />,
         label: t("mobile2.menu.unarchive"),
-        onSelect: () => {
+        onSelect: async () => {
           mobileNav.closeSheet();
-          onUnarchive(project);
-          showReceipt(t("mobile2.menu.unarchived"));
+          if (await restoreProject()) showReceipt(t("mobile2.menu.unarchived"));
         },
       });
     } else if (archiveAllowed) {
@@ -2052,13 +2080,18 @@ function ProjectDashboardView({
         key: "archive",
         icon: <Archive className="h-[18px] w-[18px]" aria-hidden />,
         label: t("mobile2.menu.archive"),
-        onSelect: () => {
+        onSelect: async () => {
           /* Acts on the tap (README Q4); the receipt's Restore is the safety
              net, and the board goes to the overview as the desktop button does. */
+          const location = window.location.hash;
           mobileNav.closeSheet();
-          onArchive(project);
-          showReceipt(t("mobile2.menu.archived"), { kind: "restore", run: () => onUnarchive(project) });
-          navigateToFragment("#p=" + encodeURIComponent(OVERVIEW));
+          const result = await onArchive(project);
+          if (result && !result.ok) {
+            showReceipt(refusalText(t, result.code, "rail.row.ownerArchives"), null, { error: true });
+            return;
+          }
+          showReceipt(t("mobile2.menu.archived"), { kind: "restore", run: () => { void restoreProject(); } });
+          if (window.location.hash === location) navigateToFragment("#p=" + encodeURIComponent(OVERVIEW));
         },
       });
     }
@@ -2146,6 +2179,7 @@ function ProjectDashboardView({
               {/* The four project switches carry their explanations, so each pair is a page of its own. */}
               <BarMenuSection id="merging" title={t("dash.menu.merging")} icon={<GitMerge className="h-[15px] w-[15px] shrink-0" aria-hidden />} page>
                 <MergeOnReviewRow project={project} variant="menu" />
+                <PipelineStageRuntimeRow project={project} variant="menu" />
                 <ShareProjectRow project={project} variant="menu" />
               </BarMenuSection>
               <BarMenuSection id="seat" title={t("dash.menu.seat")} icon={<Bot className="h-[15px] w-[15px] shrink-0" aria-hidden />} page>
@@ -2154,12 +2188,16 @@ function ProjectDashboardView({
               </BarMenuSection>
               <BarMenuSection id="project" title={t("dash.menu.project")} icon={<Archive className="h-[15px] w-[15px] shrink-0" aria-hidden />}>
                 {archived ? (
-                  <button type="button" className={BAR_MENU_ROW} data-project-unarchive="" onClick={() => { close(); onUnarchive(project); }}>
+                  <button type="button" className={BAR_MENU_ROW} data-project-unarchive="" onClick={async (event) => {
+                    const menu = event.currentTarget.closest("[data-bar-more-menu]");
+                    if (await restoreProject() && menu?.isConnected) close();
+                  }}>
                     <ArchiveRestore className="h-[15px] w-[15px]" aria-hidden /> {t("dash.unarchive")}
                   </button>
                 ) : (
-                  <ArchiveProjectButton files={projectFiles} allowEmpty={catalogKnown} onArchive={() => onArchive(project)} rowClassName={BAR_MENU_ROW} />
+                  <ArchiveProjectButton files={projectFiles} allowEmpty={catalogKnown} onArchive={() => { setArchiveError(null); return onArchive(project); }} onError={(text) => setArchiveError({ project, text })} rowClassName={BAR_MENU_ROW} />
                 )}
+                {archiveError?.project === project ? <p role="alert" className="px-2 py-1 text-[11px] text-danger">{archiveError.text}</p> : null}
                 <DeleteProjectButton project={project} files={projectFiles} available={catalogKnown} rowClassName={BAR_MENU_ROW} />
               </BarMenuSection>
             </BarMenuGroup>
@@ -2298,6 +2336,7 @@ function ProjectDashboardView({
             renderSheet={renderMobileSheet}
             onOpenConversation={openPipelineStageConversation}
             onOpenPipeline={openMobilePipeline}
+            conversationDrafts={conversationDrafts}
             onOpenDraft={(id) => showMobileConversation("draft::" + id)}
             onAddAgent={addBandAgentDraft}
             onShown={reportMobileKanbanShown}
@@ -2321,6 +2360,8 @@ function ProjectDashboardView({
               onOpenConversation={openPipelineStageConversation}
               onOpenTask={(task) => openMobileTask(task.id)}
               cameFromTask={mobileBelow?.kind === "task" ? mobileBelow.id : null}
+              drafts={stageDrafts}
+              conversationDrafts={conversationDrafts}
             />
           ) : (
             <MobilePipelinesScreen
@@ -2496,6 +2537,8 @@ function ProjectDashboardView({
               catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : <KanbanSkeleton project={project} />
             ) : kanbanLeaf ? (
               <KanbanBoard
+                stageDrafts={stageDrafts}
+                conversationDrafts={conversationDrafts}
                 layout={pipelineLayout}
                 project={project}
                 groups={layoutGroups}

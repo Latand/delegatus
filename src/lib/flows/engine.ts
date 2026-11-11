@@ -3,7 +3,7 @@ import { shortId } from "@/lib/shortIds";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { classifyProviderCondition } from "@/lib/pipelines/providerConditions";
 import { durableStageTurnEvidence } from "@/lib/pipelines/durableEvidence";
-import { accountProbeIdentity, accountProbeSnapshot, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { accountProbeIdentity, accountProbeSnapshot } from "@/lib/accounts/accountMutation";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 import { activeDrain, flowAwaitingAdmission } from "@/lib/selfUpdate/drain";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
@@ -14,9 +14,8 @@ import path from "node:path";
 import { relayClientMessageId } from "@/lib/reviewHistory/relayIdentity";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, stepBackgroundWait } from "@/lib/pipelines/backgroundTasks";
 import { loadPipelines } from "@/lib/pipelines/store";
-import { freshSpecFor, resumeSpecFor } from "@/lib/agent/cli";
-import { accountManager, resolveResumeAccountId } from "@/lib/accounts/manager";
-import { creditGuardBlock } from "@/lib/accounts/creditGuard";
+import { accountManager } from "@/lib/accounts/manager";
+import { accountCreditGuardBlock } from "@/lib/accounts/creditPolicy";
 import { interruptionObligationDirectory, accountGuardObligationStore, REVIEWER_CUT_RESOLUTION } from "@/lib/runtime/interruptionObligations";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { listCodexAccounts } from "@/lib/accounts/codex";
@@ -24,10 +23,8 @@ import { codexServiceTierRefusal, tierOffers, CodexServiceTierUnavailableError }
 import { allowedAccountIdsForProject, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { deliverToTranscriptHost } from "@/lib/agent/transcriptHost";
 import { agentRegistry, type AgentRegistry, type RegistryConversation, type SpawnBeginResult, type SpawnRequest, type SpawnReceipt, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { sessionKeyFromTranscript, sessionKeyId } from "@/lib/agent/sessionKey";
-import { resolveSpawnedTranscriptPath } from "@/lib/agent/spawnedTranscript";
 import { headCwd } from "@/lib/agent/transcript";
 import { isNativeCodexSubagentTranscript } from "@/lib/scanner/codexNative";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
@@ -36,9 +33,7 @@ import type { AccountPark } from "@/lib/runtime/accountPark";
 import { recoverDeadStructuredConversation } from "@/lib/runtime/structuredRecovery";
 import { pidAlive } from "@/lib/agent/headless";
 import { procBackend } from "@/lib/proc";
-import { isShellCommand } from "@/lib/status";
 import { cleanTitle, durableSemanticTitle, firstPromptLine, semanticTitle } from "@/lib/title";
-import { killPane, paneInfo, spawnAgentWithPrompt, TmuxDeliveryUncertainError } from "@/lib/tmux";
 import type { FileEntry } from "@/lib/types";
 
 import {
@@ -53,11 +48,9 @@ import { resolveCleanFlowHead, resolveFlowRemoteHead } from "./git";
 import { decisionHead, decisionStageMatches, decisionStillOwned, flowTurn } from "./decisions";
 import {
   fallbackReviewFromTranscript,
-  lastAssistantMessage,
-  parseFindings,
+    parseFindings,
   readFindingsFile,
-  type ParsedFindings,
-} from "./findings";
+  type ParsedFindings } from "./findings";
 import { relayPrompt, reviewerPrompt } from "./prompts";
 import { atomicWriteText, findingsPathFor, loadFlow, loadFlows, loadFlowsForTick, loadPresets, patchFlowRowsAsync as patchFlowRows, saveFlows } from "./store";
 import type { Flow, FlowPreset, FlowState, RelayDeliveryTransport, RoleConfig, Round } from "./types";
@@ -483,7 +476,6 @@ export class RelayHeldByProviderLimitError extends Error {
 export interface RelayDeliveryOverrides {
   recover?: typeof recoverDeadStructuredConversation;
   enqueueStructured?: typeof enqueueStructuredMessage;
-  deliver?: typeof deliverToTranscriptHost;
   /** Withhold the message when recovery reports the implementer's host parked
       behind a provider limit, instead of enqueuing into a host that cannot
       start the turn. Set by the relay tick, which owns a resume schedule and
@@ -560,50 +552,8 @@ export async function sendToImplementer(
     }
     flow.hostClaim = null;
   }
-  /* A restart leaves an uncertain send window. The structured queue dedupes
-     the stable client-message id above; legacy pane delivery has no comparable
-     receipt, so an automatic replay could duplicate the findings. */
-  if (overrides.requireIdempotentDelivery) throw new UnsafeInterruptedRelayRetryError();
-  /* #1279: the account this resume runs under. Recorded ownership is
-     CONTINUITY and asks neither the pool nor any quota — the session lives in
-     that home. With nothing recorded nobody has chosen, and omitting the id let
-     `claudeTranscriptOwnership` answer from the engine's ACTIVE account for a
-     transcript inside the SHARED store, where every account resolves to the
-     same root and the path names no owner (#935): a relay could hand a round's
-     verdict to the implementer under an account the flow's project never
-     allowed. That half is a pick, so it goes through the shared automatic
-     decision — this project's pool, then capacity — and a fenced pool or an
-     unreadable record refuses here, before the relay delivers anything. */
-  const profile = registry.launchProfileForPath(entry.path);
-  const spec = resumeSpecFor(entry.root, entry.path, {
-    fast: profile?.fast,
-    serviceTier: profile?.serviceTier,
-    model: entry.launchModel ?? entry.model,
-    effort: entry.effort,
-    accountId: entry.engine === "claude" || entry.engine === "codex"
-      ? resolveResumeAccountId(
-        entry.engine,
-        registry.transcriptAccountId(entry.engine, entry.path),
-        flow.project,
-      )
-      : null,
-    readOnly: profile?.readOnly,
-    permissionMode: profile?.permissionMode,
-    sandbox: profile?.sandbox,
-    allowSubagents: profile?.allowSubagents,
-    mcpServers: profile?.mcpServers,
-    plugins: profile?.plugins,
-  });
-  if (!spec) throw new Error("implementer session cannot be resumed");
-  await overrides.onTransportSelected?.("legacy");
-  const outcome = await (overrides.deliver ?? deliverToTranscriptHost)({ entry, spec, payload: text });
-  if (!outcome.ok) {
-    if (outcome.actuation === "started") {
-      throw new TmuxDeliveryUncertainError(`legacy relay delivery is uncertain after actuation started: ${outcome.error}`);
-    }
-    throw new Error(outcome.error);
-  }
-  return entry.path;
+  /* No structured host holds the implementer and recovery raised none. */
+  throw new Error("the implementer conversation has no host to deliver to");
 }
 
 sendRelay = sendToImplementer;
@@ -756,20 +706,6 @@ export function abandonLaunch(flowId: string, roundNumber: number): void {
   saveFlows(flows);
 }
 
-/** Best-effort kill of a pane reviewer we spawned but can no longer own. The
-    window-name check guards against pane-id reuse; a shell there means the agent
-    already exited. */
-async function stopOrphanPane(round: Round): Promise<void> {
-  const pane = round.reviewerPane;
-  if (!pane) return;
-  try {
-    const info = await paneInfo(pane.paneId);
-    if (info && info.windowName === pane.windowName && !isShellCommand(info.command)) await killPane(pane.paneId);
-  } catch {
-    /* pane already gone */
-  }
-}
-
 interface PreparedReviewerLaunch {
   role: Flow["roles"]["reviewer"];
   account: AccountContext;
@@ -799,7 +735,7 @@ async function settleReviewerSpawn(flow: Flow, round: Round, role: RoleConfig, a
   if (!fence) return false;
   await registry.deliveryWriteOrBusy({ label: "registry.flow-settlement", operationId: launchId }, () => {
     if (!flowRoundFenceCurrent(flow, round, fence) || round.launchId !== launchId) return;
-    const receipt = registry.readOnlySnapshot().receipts[launchId];
+    const receipt = registry.spawnReceipt(launchId);
     if (!receipt) return;
     if (receipt?.state === "completed") {
       round.reviewerConversationId = receipt.conversationId;
@@ -813,7 +749,7 @@ async function settleReviewerSpawn(flow: Flow, round: Round, role: RoleConfig, a
       cwd: flow.cwd,
       accountId,
       status: "starting",
-      host,
+      host: null,
       claimEpoch: 0,
       claimOwner: null,
       pendingAction: "spawn",
@@ -926,51 +862,9 @@ async function launchReviewer(
   const { role, account } = prepared;
   flow.state = "reviewing";
   flow.stateDetail = null;
-  if (flow.reviewerMode === "pane") {
-    const restricted = flow.reviewerSandbox === "restricted";
-    const spec = freshSpecFor(role.engine, flow.cwd, {
-      model: role.model,
-      effort: role.effort,
-      serviceTier: role.serviceTier,
-      readOnly: restricted,
-      codexHome: account.engine === "codex" ? account.home : null,
-      claudeConfigDir: account.engine === "claude" ? account.home : null,
-      claudeProjectsDir: account.engine === "claude" ? account.transcriptRoot : null,
-    });
-    const startedAtMs = Date.now();
-    const pane = await spawnAgentWithPrompt(spec, prompt, reservation.receipt);
-    /* The pane handle makes cancel-round reliable even while the reviewer's
-       transcript is still unattributed (codex, or an early stop click). */
-    round.reviewerPane = { paneId: pane.paneId, windowName: spec.windowName };
-    const transcript = await resolveSpawnedTranscriptPath({
-      engine: role.engine,
-      knownTranscript: spec.transcript ?? null,
-      panePid: pane.panePid ?? null,
-      cwd: flow.cwd,
-      startedAtMs,
-      codexSessionsDir: account.engine === "codex" ? account.transcriptRoot : null,
-    });
-    if (transcript) round.reviewerPath = transcript;
-    const settled = await settleReviewerSpawn(flow, round, role, account.accountId, pane.host ?? null);
-    if (!settled) {
-      await stopOrphanPane(round);
-      return;
-    }
-    if (!round.reviewerPath && pane.panePid) round.error = null;
-    round.launchLeaseUntil = null;
-    /* Persist the pane handle NOW so a close that races the tail of this spawn can
-       find and stop it. If a concurrent close/pause/retry took the flow over, the
-       merge dropped our handle — the pane is an orphan, so kill it, and let a
-       resume/retry re-spawn cleanly rather than parking as interrupted. */
-    await persistCheckpoint();
-    const paneDisk = loadFlows().find((item) => item.id === flow.id);
-    if (!reviewerLaunchPersisted(paneDisk, round)) {
-      if (await waitForStateLock("flows.adoptLaunch", () => adoptSyntheticLaunchTakeover(flow.id, round))) return;
-      await stopOrphanPane(round);
-      if (paneDisk && paneDisk.state !== "closed") await waitForStateLock("flows.abandonLaunch", () => abandonLaunch(flow.id, round.n));
-    }
-    return;
-  }
+  /* A stored flow may still ask for a reviewer in a terminal pane. No
+     release hosts one, so the launch is refused with that reason. */
+  if (flow.reviewerMode === "pane") throw new Error("pane reviewers were removed with the terminal transport; use a headless reviewer");
   const spawnCapability = (await agentRegistry().deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForReceipt" }, agentRegistry().rotateSpawnCapabilityForReceipt.bind(agentRegistry(), reservation.receipt.launchId)));
   const launched = await startHeadlessReview(
     flow.id,
@@ -1110,6 +1004,7 @@ export function enforceHeadlessAccountCreditGuard(registry: AgentRegistry, block
           || !["reviewing", "spawning"].includes(flow.state === "paused" ? flow.pausedState ?? "" : flow.state)
           || !round.reviewerPid && !round.reviewerPath
           || reviewerRoleFor(flow, round).engine !== "codex" || !blockedAccounts.has(round.accountId)) continue;
+        if (!accountCreditGuardBlock("codex", round.accountId, registry.quotaObservations("codex").find(row => row.accountId === round.accountId)?.limits)) continue;
         const current = loadFlow(flow.id);
         const currentRound = current && lastRound(current);
         if (!currentRound || currentRound.reviewerBindingId !== round.reviewerBindingId
@@ -1126,6 +1021,7 @@ export function enforceHeadlessAccountCreditGuard(registry: AgentRegistry, block
           boundary: "paid-credit-guard", reason: "account-guard", checkpoint: { lastEventKind: null, lastEventAt: Date.now() },
           seat: null, answeredBy: REVIEWER_CUT_RESOLUTION,
         });
+        if (!accountCreditGuardBlock("codex", round.accountId, registry.quotaObservations("codex").find(row => row.accountId === round.accountId)?.limits)) continue;
         if (!await stopHeadlessReviewAndWait(flow.id, round.n, round)) {
           throw new Error("paid-credit guard could not confirm reviewer termination");
         }
@@ -1753,7 +1649,7 @@ export async function tickFlow(
         const detail = error instanceof Error ? error.message : String(error);
         if (error instanceof RelayHeldByProviderLimitError) {
           holdRelayForProviderLimit(flow, round, error.hold);
-        } else if (error instanceof UnsafeInterruptedRelayRetryError || error instanceof TmuxDeliveryUncertainError) {
+        } else if (error instanceof UnsafeInterruptedRelayRetryError) {
           round.error = detail;
           round.relayRetryAt = null;
           markNeedsDecision(flow, detail);
@@ -1902,7 +1798,7 @@ export async function tickFlows(entries: FileEntry[]): Promise<TickResult & Part
   store.__llvFlowTick = true;
   try {
     const registry = agentRegistry();
-    const blocked = new Set(registry.quotaObservations("codex").filter(row => creditGuardBlock("codex", row.limits)).map(row => row.accountId));
+    const blocked = new Set(registry.quotaObservations("codex").filter(row => accountCreditGuardBlock("codex", row.accountId, row.limits)).map(row => row.accountId));
     if (blocked.size) await enforceHeadlessAccountCreditGuard(registry, blocked);
   } catch (error) {
     store.__llvFlowTick = false;

@@ -29,7 +29,7 @@ let registry: AgentRegistry;
   fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
   fs.mkdirSync(path.join(sandbox, "account"));
   const binary = path.join(sandbox, "codex-fixture");
-  fs.writeFileSync(binary, '#!/bin/sh\nif [ "$3 $4" = "mcp list" ]; then echo "[]"; else exit 1; fi\n', { mode: 0o700 });
+  fs.writeFileSync(binary, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "codex-cli 0.164.0"; elif [ "$3 $4" = "mcp list" ]; then echo "[]"; else exit 1; fi\n', { mode: 0o700 });
   process.env.LLV_CODEX_BINARY = binary;
   process.env.LLV_RUNTIME_HOST_SOCKET = path.join(sandbox, "unused-runtime.sock");
 }
@@ -81,7 +81,6 @@ function harness() {
     },
     storeImages: () => [],
     defer: () => {},
-    spawnTmuxAgent: async () => { throw new Error("a real agent must never launch"); },
     spawnStructuredConversation: async () => { throw new Error("a real agent must never launch"); },
   };
   const bindings = viewerMcpBindings(undefined, {
@@ -147,7 +146,7 @@ test("an advertised account pin cannot reserve a launch onto a resolver fallback
   await withClient(async (client, { resolveAs }) => {
     resolveAs("account-a");
     const response = await client.callTool({ name: "spawn_agent", arguments: args("account-b") });
-    expect(response.structuredContent).toMatchObject({ ok: false });
+    expect(response.structuredContent).toMatchObject({ ok: true, state: "failed", launched: false, outcome: "settled" });
     expect(registry.spawnReceiptForClientAttempt(requestId())?.state).toBe("failed");
   });
 });
@@ -221,4 +220,56 @@ test("the spawn HTTP route validates account without relying on the MCP schema",
   expect(response.status).toBe(400);
   expect(await response.json()).toMatchObject({ error: "account must be a string or null" });
   expect(resolutions).toEqual([]);
+});
+
+test("a workspace launch uses its default account pool and refuses an explicit pin outside it", async () => {
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { claimInstall } = await import("@/lib/team/members");
+  const { createWorkspace } = await import("@/lib/team/workspaces");
+  const { setWorkspaceDefaults } = await import("@/lib/team/workspaceDefaults");
+  const { selectProjectAccount } = await import("@/lib/accounts/projectSelection");
+  const { mintSession } = await import("@/lib/team/sessions");
+  const team = teamStore();
+  const owner = claimInstall(team, "Owner", { surface: "desktop", browser: "chrome" }, Date.parse("2026-10-20T09:00:00Z")).member;
+  const id = `w_${"a".repeat(32)}`;
+  createWorkspace(team, owner, { id, name: "Alpha", projects: [projectForCwd(sandbox)!] });
+  await setWorkspaceDefaults(team, owner, id, { accounts: { codex: ["account-b"] } });
+  try {
+    await withClient(async (client, { routeDependencies }) => {
+      const resolve = routeDependencies.resolveSpawnAccount;
+      routeDependencies.resolveHealthySpawnAccount = async (engine, requested, project) => {
+        const selected = selectProjectAccount({ engine, project: project ?? null, accounts: [{ id: "account-a", authPresent: true }, { id: "account-b", authPresent: true }],
+          observations: [], bindings: [], requestedId: requested, preferredId: "account-a", unbound: "engine-default" });
+        if (selected.kind !== "available") throw new Error("no account allowed");
+        return resolve(engine, selected.accountId);
+      };
+      expect((await client.callTool({ name: "spawn_agent", arguments: args() })).structuredContent).toMatchObject({ ok: true });
+      expect(registry.spawnReceiptForClientAttempt(requestId())?.accountId).toBe("account-b");
+      const rejected = await client.callTool({ name: "spawn_agent", arguments: { ...args("account-a"), clientRequestId: `${requestId()}-denied` } });
+      expect(rejected.structuredContent).toMatchObject({ ok: false, details: { code: "project_account_refused" } });
+      expect(registry.spawnReceiptForClientAttempt(`${requestId()}-denied`)).toBeNull();
+      const memberId = "m_workspace_member";
+      team.insertMember({ id: memberId, name: "Member", role: "member", status: "active", color: "teal", telegram: null,
+        createdAt: "2026-10-20T09:00:00.000Z", createdBy: owner.id, revokedAt: null });
+      team.putWorkspaceMember(id, memberId, "member", owner.id, "2026-10-20T09:00:00.000Z");
+      const cookie = mintSession(team, memberId, "claim", { surface: "desktop", browser: "chrome" }).value;
+      const direct = (clientAttemptId: string, accountId?: string) => POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+        method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json", cookie: `llv_member=${cookie}` },
+        body: JSON.stringify({ ...args(), clientAttemptId, ...(accountId ? { accountId } : {}) }),
+      }), routeDependencies);
+      const refused = await direct("workspace-member-pin-refused", "account-a");
+      expect({ status: refused.status, body: await refused.json() }).toMatchObject({ status: 409, body: { code: "project_account_refused" } });
+      expect(registry.spawnReceiptForClientAttempt("workspace-member-pin-refused")).toBeNull();
+      expect((await direct("workspace-member-pin-accepted", "account-b")).status).toBe(202);
+      expect(registry.spawnReceiptForClientAttempt("workspace-member-pin-accepted")?.launchProfile.workspace).toEqual({ memberId, workspaceId: id });
+      const select = routeDependencies.resolveHealthySpawnAccount;
+      routeDependencies.resolveHealthySpawnAccount = async (...input) => {
+        const selected = await select(...input);
+        await setWorkspaceDefaults(team, owner, id, { accounts: { codex: ["account-a"] } });
+        return selected;
+      };
+      expect((await direct("workspace-member-pool-edited")).status).toBe(409);
+      expect(registry.spawnReceiptForClientAttempt("workspace-member-pool-edited")).toBeNull();
+    });
+  } finally { resetTeamStoreForTests(); }
 });

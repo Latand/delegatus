@@ -26,6 +26,16 @@ const ACCOUNTS = [
   { id: "spare", label: "Spare" },
 ];
 
+test("reseat can select only the opted-in credited account at its limit", () => {
+  const credited = { ...observation("backup", 100), limits: { ...observation("backup", 100).limits!,
+    credits: { hasCredits: true, balance: "12", unlimited: false } } };
+  expect(chooseReseatTarget("limited", [credited], ACCOUNTS, NOW)).toBeNull();
+  const approved = ACCOUNTS.map(account => ({ ...account, spendCredits: account.id === "backup" }));
+  expect(chooseReseatTarget("limited", [credited], approved, NOW)?.accountId).toBe("backup");
+  expect(chooseReseatTarget("limited", [{ ...credited, accountId: "spare" }], approved, NOW)).toBeNull();
+  expect(chooseReseatTarget("limited", [{ ...credited, limits: { ...credited.limits, credits: { hasCredits: false, balance: "0", unlimited: false } } }], approved, NOW)).toBeNull();
+});
+
 test("the healthiest known account wins and the exhausted source is excluded", () => {
   const target = chooseReseatTarget("limited", [
     observation("limited", 100),

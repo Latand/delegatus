@@ -1,0 +1,86 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "synthetic": true,
+  "readings": [
+    {
+      "lang": "en",
+      "scheme": "light",
+      "state": "ended-unanswered",
+      "frame": "en-light-ended-unanswered.png",
+      "menuFrame": "en-light-ended-unanswered-menu.png",
+      "bubbles": 0,
+      "label": "Not connected"
+    },
+    {
+      "lang": "en",
+      "scheme": "light",
+      "state": "ended-backoff",
+      "frame": "en-light-ended-backoff.png",
+      "menuFrame": "en-light-ended-backoff-menu.png",
+      "text": "The connection dropped. What was said is kept.",
+      "inside": true,
+      "clipped": [],
+      "clamped": false
+    },
+    {
+      "lang": "en",
+      "scheme": "dark",
+      "state": "ended-unanswered",
+      "frame": "en-dark-ended-unanswered.png",
+      "menuFrame": "en-dark-ended-unanswered-menu.png",
+      "bubbles": 0,
+      "label": "Not connected"
+    },
+    {
+      "lang": "en",
+      "scheme": "dark",
+      "state": "ended-backoff",
+      "frame": "en-dark-ended-backoff.png",
+      "menuFrame": "en-dark-ended-backoff-menu.png",
+      "text": "The connection dropped. What was said is kept.",
+      "inside": true,
+      "clipped": [],
+      "clamped": false
+    },
+    {
+      "lang": "uk",
+      "scheme": "light",
+      "state": "ended-unanswered",
+      "frame": "uk-light-ended-unanswered.png",
+      "menuFrame": "uk-light-ended-unanswered-menu.png",
+      "bubbles": 0,
+      "label": "Не підключено"
+    },
+    {
+      "lang": "uk",
+      "scheme": "light",
+      "state": "ended-backoff",
+      "frame": "uk-light-ended-backoff.png",
+      "menuFrame": "uk-light-ended-backoff-menu.png",
+      "text": "Зʼєднання обірвалося. Сказане збережено.",
+      "inside": true,
+      "clipped": [],
+      "clamped": false
+    },
+    {
+      "lang": "uk",
+      "scheme": "dark",
+      "state": "ended-unanswered",
+      "frame": "uk-dark-ended-unanswered.png",
+      "menuFrame": "uk-dark-ended-unanswered-menu.png",
+      "bubbles": 0,
+      "label": "Не підключено"
+    },
+    {
+      "lang": "uk",
+      "scheme": "dark",
+      "state": "ended-backoff",
+      "frame": "uk-dark-ended-backoff.png",
+      "menuFrame": "uk-dark-ended-backoff-menu.png",
+      "text": "Зʼєднання обірвалося. Сказане збережено.",
+      "inside": true,
+      "clipped": [],
+      "clamped": false
+    }
+  ]
+}

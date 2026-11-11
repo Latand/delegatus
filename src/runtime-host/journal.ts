@@ -22,7 +22,7 @@ import { Database } from "bun:sqlite";
 
 import { codexAnswerMatchesDispatch, sameCodexRequest } from "@/lib/runtime/codexRequestReceipt";
 import {
-  RUNTIME_SCHEMA_VERSION,
+  RUNTIME_SCHEMA_VERSION, DeploymentAdmissionClosedError,
   compactViewerDeploymentError, parseViewerDeploymentListCursor, viewerDeploymentListCursor, viewerDeploymentListLimit,
   type ViewerDeploymentList, type ViewerDeploymentListOptions,
   RUNTIME_DELIVERY_DISCARDED_REASON,
@@ -90,6 +90,16 @@ export class RuntimeJournalFault extends RuntimeDataCorruptionError {}
 export const RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT = 128;
 export const RUNTIME_SNAPSHOT_TERMINAL_DEPLOYMENT_LIMIT = 50;
 export const RUNTIME_SNAPSHOT_STALE_EDGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+/** The parsed-entity cache has to hold one whole snapshot population in both
+    session representations. A cap below that population makes every rebuild
+    evict the rows it is about to read, in the same order, so each rebuild
+    parses every stored row again. One entity above the admission size is
+    never retained. */
+export const RUNTIME_ENTITY_READ_CACHE_ENTRIES = 65_536;
+export const RUNTIME_ENTITY_READ_CACHE_BYTES = 64 * 1024 * 1024;
+export const RUNTIME_ENTITY_READ_ADMISSION_BYTES = 16 * 1024 * 1024;
+// The eviction loop ends only when one admitted entity fits an empty cache.
+if (RUNTIME_ENTITY_READ_ADMISSION_BYTES > RUNTIME_ENTITY_READ_CACHE_BYTES) throw new Error("runtime entity read admission limit exceeds the cache size");
 /** A spawn or kill may wait through a short host succession. After one
     continuous hour with no runtime host and no current live registry
     conversation, the maintenance sweep terminalizes the orphaned work so
@@ -144,14 +154,6 @@ type EventRow = {
   hash: string;
 };
 type HashableEventRow = Omit<EventRow, "prev_hash" | "hash">;
-
-type EntityRow = {
-  kind: string;
-  id: string;
-  revision: number;
-  state_json: string;
-  checkpoint_seq: number;
-};
 
 type EncryptedSecret = {
   __runtimeEncrypted: 1;
@@ -302,17 +304,22 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
   const capabilities = record(payload.capabilities);
   const liveTurn = normalizeRuntimeLiveTurn(payload.liveTurn);
   const protocol = normalizeCodexProtocolReceipt(record(payload.diagnostics).protocol);
+  /* A row journalled for a terminal-pane host names a kind that no longer
+     exists. Nothing hosts that session and nothing can end its turn, so it
+     reads as unhosted (or dead, if that was recorded) with no open turn. */
+  const storedKind = typeof payload.hostKind === "string" ? payload.hostKind : null;
+  const retiredKind = storedKind !== null && storedKind !== "unhosted" && !isStructuredHostKind(storedKind);
   return {
     conversationId: typeof payload.conversationId === "string" ? payload.conversationId : id,
     sessionKey: {
       engine: key.engine === "claude" || key.engine === "copilot" ? key.engine : "codex",
       sessionId: typeof key.sessionId === "string" ? key.sessionId : id,
     },
-    hostKind: isStructuredHostKind(typeof payload.hostKind === "string" ? payload.hostKind : null) || payload.hostKind === "tmux-legacy"
-      ? payload.hostKind as RuntimeSession["hostKind"]
-      : "unhosted",
-    host: payload.host === "registering" || payload.host === "hosted" || payload.host === "recovering" || payload.host === "conflict" || payload.host === "dead" ? payload.host : "unhosted",
-    turn: payload.turn === "idle" || payload.turn === "running" || payload.turn === "interrupt_requested" ? payload.turn : "unknown",
+    hostKind: isStructuredHostKind(storedKind) ? storedKind as RuntimeSession["hostKind"] : "unhosted",
+    host: retiredKind ? (payload.host === "dead" ? "dead" : "unhosted")
+      : payload.host === "registering" || payload.host === "hosted" || payload.host === "recovering" || payload.host === "conflict" || payload.host === "dead" ? payload.host : "unhosted",
+    turn: retiredKind ? "unknown"
+      : payload.turn === "idle" || payload.turn === "running" || payload.turn === "interrupt_requested" ? payload.turn : "unknown",
     provenance: payload.provenance === "derived" || payload.provenance === "replayed" ? payload.provenance : "structured",
     revision,
     attentionIds: strings(payload.attentionIds),
@@ -355,7 +362,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
         : record(payload.diagnostics).authRecovery === "completed-unverified" ? "completed-unverified" as const : "unknown" as const,
       ...(protocol ? { protocol } : {}),
     } } : {}),
-    activeTurnId: typeof payload.activeTurnId === "string" ? payload.activeTurnId : null,
+    activeTurnId: !retiredKind && typeof payload.activeTurnId === "string" ? payload.activeTurnId : null,
     pendingReconfigure: payload.pendingReconfigure && typeof payload.pendingReconfigure === "object"
       ? payload.pendingReconfigure as RuntimeSession["pendingReconfigure"]
       : null,
@@ -426,6 +433,9 @@ const sessionArtifactIndexes = declaredIndexes([
 const operationRetryIndexes = declaredIndexes([
   `CREATE INDEX IF NOT EXISTS operations_retry_parent
         ON operations(json_extract(receipt_json, '$.retryOfOperationId'), event_seq DESC)`,
+  `CREATE INDEX IF NOT EXISTS outbox_conversation_sequence
+        ON outbox(CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.conversationId') END, event_seq)
+        WHERE state IN ('pending', 'retained')`,
 ]);
 
 export class RuntimeJournal {
@@ -440,7 +450,21 @@ export class RuntimeJournal {
   private fault: string | null = null;
   // Only the full and summary representations are retained. Targeted voice
   // reads must not evict either hot representation or accumulate per-card JSON.
-  private snapshotCaches = new Map<string, { changes: number; expiresAt: number | null; json: string }>();
+  private snapshotCaches = new Map<string, { changes: string; expiresAt: number | null; json: string }>();
+  // This journal owns one LRU of parsed entities, capped by both payload bytes
+  // and row count. Connection-local triggers evict even direct SQL writes and
+  // retention deletes; rollback can only cause an extra read. A peer commit
+  // drops the cache before the next read transaction uses it.
+  private entityReads = new Map<string, { value: unknown; bytes: number }>();
+  private entityReadBytes = 0;
+  private entityReadVersion: number | null = null;
+  private entityReadTriggers = false;
+  private entityReadMaintenanceChanges = 0;
+  private readingSnapshot = false;
+  snapshotProjectionReads = 0;
+  /** Entities the cache dropped to make room. A count that grows on every
+      rebuild means one snapshot population no longer fits the cache. */
+  snapshotEntityEvictions = 0;
   /** How often a snapshot request was answered from the cache, and how often it rebuilt. */
   snapshotCacheHits = 0;
   snapshotRebuilds = 0;
@@ -544,6 +568,9 @@ export class RuntimeJournal {
           request_hash TEXT NOT NULL, status_json TEXT NOT NULL,
           active INTEGER NOT NULL, updated_at INTEGER NOT NULL
         )`,
+        `CREATE TABLE IF NOT EXISTS viewer_deployment_refusals (
+          idempotency_key TEXT PRIMARY KEY, requested_revision TEXT NOT NULL
+        )`,
         `CREATE TABLE IF NOT EXISTS viewer_deployment_requests (
           idempotency_key TEXT PRIMARY KEY, deployment_id TEXT NOT NULL,
           requested_revision TEXT NOT NULL, request_hash TEXT NOT NULL
@@ -570,6 +597,7 @@ export class RuntimeJournal {
       this.metaSetDefault("health", "ready");
       this.metaSetDefault("files_revision", "0");
       this.sessionHostMetadata = new SessionHostMetadata(this.db);
+      this.prepareEntityReads();
       this.initialization = this.initialize();
     } catch (error) {
       this.db.close();
@@ -802,6 +830,7 @@ export class RuntimeJournal {
         ? JSON.parse(retryParent.receipt_json) as RuntimeOperationReceipt
         : null;
       const receipt = this.operationReceipt(command, operationId, retryOfOperationId, parentReceipt);
+      if (command.kind === "send" || command.kind === "steer") receipt.deliveryUnverified = false;
       const nativeCommand = this.nativeCommandAtAdmission(command, operationId);
       if (nativeCommand && receipt.status !== "rejected") {
         const entry = this.nativeQueue.admit(nativeCommand, operationId);
@@ -1086,7 +1115,7 @@ export class RuntimeJournal {
   transitionOperation(
     operationId: string,
     status: Exclude<RuntimeReceiptStatus, "pending">,
-    details: Partial<Pick<RuntimeOperationReceipt, "turnId" | "queuePosition" | "reason" | "delivery" | "interruptedTurnId">> = {},
+    details: RuntimeTransitionDetails = {},
     options: RuntimeTransitionOptions = {},
     nativeTransition?: NativeQueueTransition,
   ): RuntimeOperationResult {
@@ -1115,6 +1144,10 @@ export class RuntimeJournal {
     nativeTransition?: NativeQueueTransition,
   ): RuntimeOperationResult {
     try {
+      // Admission owns the initial false value. Callers can add uncertainty.
+      if (details.deliveryUnverified !== undefined && details.deliveryUnverified !== true) {
+        throw new Error("runtime delivery evidence cannot be cleared");
+      }
       const row = this.db.query<{ request_json: string; receipt_json: string }, [string]>("SELECT request_json, receipt_json FROM operations WHERE operation_id = ?").get(operationId);
       if (!row) throw new Error("runtime operation is unknown");
       const previous = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
@@ -1224,10 +1257,10 @@ export class RuntimeJournal {
       if (stopCompleted && !killBoundary) {
         throw new Error("runtime kill effect is missing");
       }
-      // Steer-first fallback follows the next live turn. Keep the observed turn
-      // on its receipt, without pinning the durable effect to the ended turn.
+      // Policies that select a running turn at dispatch retain its identity on
+      // the receipt. A proven pre-write refusal can then retry when idle.
       if (beginning && (command.kind === "send" || command.kind === "steer")
-        && command.policy !== "steer-or-queue" && details.turnId !== undefined) {
+        && command.policy !== "steer-or-queue" && command.policy !== "context-or-queue" && details.turnId !== undefined) {
         const effect = this.db.query<{ payload_json: string }, [string]>("SELECT payload_json FROM outbox WHERE id = ?")
           .get(`effect:${operationId}`);
         if (!effect) throw new Error("runtime operation effect is missing");
@@ -1245,6 +1278,8 @@ export class RuntimeJournal {
       const next: RuntimeOperationReceipt = {
         ...previous,
         ...details,
+        ...(previous.deliveryUnverified === true || previous.reason === "delivery-auto-retry" || details.deliveryUnverified === true
+          ? { deliveryUnverified: true as const } : {}),
         ...(command.kind === "kill" ? { origin: previous.origin ?? (command.onlyIfIdle || command.origin?.kind === "agent" ? "system" as const : "operator" as const) } : {}),
         ...(command.kind === "interrupt" ? { origin: previous.origin ?? "operator" as const } : {}),
         ...(automaticKill ? { retirementClaim: status === "delivering" ? claimant ?? owner ?? null : null } : {}),
@@ -1531,8 +1566,7 @@ export class RuntimeJournal {
     // keyed activity reads never grow a cache by ID.
     const key = `snapshot-read:${request.kind}`;
     const cacheable = request.kind === "owners" || request.kind === "activity" && request.conversationIds === undefined;
-    const changes = this.totalChanges()
-      + this.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version;
+    const changes = this.snapshotReadStamp();
     const cached = cacheable ? this.snapshotCaches.get(key) : undefined;
     if (cached?.changes === changes) return cached.json;
     const json = JSON.stringify(this.snapshotRead(request));
@@ -1616,9 +1650,13 @@ export class RuntimeJournal {
   private snapshotAt(now: number, voiceBodiesFor?: readonly string[]): RuntimeSnapshot {
     this.db.exec("BEGIN");
     try {
+      // Pin the main database before validating the peer-commit witness.
+      const snapshotSeq = Number(this.meta("published_seq"));
+      this.prepareEntityReads();
+      this.readingSnapshot = true;
       const snapshot: RuntimeSnapshot = {
         schemaVersion: RUNTIME_SCHEMA_VERSION,
-        snapshotSeq: Number(this.meta("published_seq")),
+        snapshotSeq,
         retentionFloorSeq: Number(this.meta("anchor_seq")),
         serverTime: new Date(now).toISOString(),
         runtime: { hostEpoch: Number(this.meta("host_epoch")), health: this.meta("health") },
@@ -1638,7 +1676,10 @@ export class RuntimeJournal {
       return snapshot;
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      this.clearEntityReads();
       throw error;
+    } finally {
+      this.readingSnapshot = false;
     }
   }
 
@@ -1657,7 +1698,7 @@ export class RuntimeJournal {
       frame dates from the last rebuild; no consumer reads it. */
   snapshotJson(voiceBodiesFor?: readonly string[]): string {
     const scope = JSON.stringify(voiceBodiesFor ?? null);
-    const changes = this.totalChanges();
+    const changes = this.snapshotReadStamp();
     const now = this.now();
     const cached = this.snapshotCaches.get(scope);
     if (cached?.changes === changes && (cached.expiresAt === null || now < cached.expiresAt)) {
@@ -1676,7 +1717,11 @@ export class RuntimeJournal {
 
   private totalChanges(): number {
     return Number(this.db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()?.changes ?? 0)
-      - this.sessionHostMetadata.excludedChanges + Number(this.sessionHostMetadata.ready);
+      - this.sessionHostMetadata.excludedChanges - this.entityReadMaintenanceChanges + Number(this.sessionHostMetadata.ready);
+  }
+
+  private snapshotReadStamp(): string {
+    return `${this.totalChanges()}:${this.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version}`;
   }
 
   replay(after: number, limit = 128): RuntimeReplay {
@@ -1724,6 +1769,7 @@ export class RuntimeJournal {
     const requestHash = createHash("sha256").update(stableJson({ requestedRevision: input.requestedRevision, revision: input.revision })).digest("hex");
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      this.assertViewerDeploymentOpen(input.idempotencyKey, input.requestedRevision);
       const existing = this.db.query<{ deployment_id: string; request_hash: string; status_json: string }, [string]>(
         `SELECT requests.deployment_id, requests.request_hash, deployments.status_json
           FROM viewer_deployment_requests requests
@@ -1816,6 +1862,39 @@ export class RuntimeJournal {
     return row ? JSON.parse(row.status_json) as ViewerDeploymentStatus : null;
   }
 
+  assertViewerDeploymentOpen(key: string, requestedRevision: string): void {
+    const row = this.db.query<{ requested_revision: string }, [string]>(
+      "SELECT requested_revision FROM viewer_deployment_refusals WHERE idempotency_key = ?").get(key);
+    if (!row) return;
+    if (row.requested_revision !== requestedRevision) throw new RuntimeIdempotencyConflictError("idempotency key already belongs to another deployment");
+    throw new DeploymentAdmissionClosedError();
+  }
+
+  /** This bypasses slow resolution, but shares the admission/join transaction. */
+  async reconcileViewerDeployment(key: string, requestedRevision: string): Promise<ViewerDeploymentReceipt> {
+    this.assertHealthy();
+    await waitForStateLock("runtime.viewer-deployment-reconcile", () => {
+      this.db.exec("PRAGMA busy_timeout = 0");
+      try { stateLockAttempt("runtime.viewer-deployment-reconcile", () => this.db.exec("BEGIN IMMEDIATE"), "viewer deployments"); }
+      finally { this.db.exec(`PRAGMA busy_timeout = ${RUNTIME_JOURNAL_BUSY_TIMEOUT_MS}`); }
+    }, { waitMs: RUNTIME_JOURNAL_BUSY_TIMEOUT_MS, subject: "viewer deployments" });
+    let receipt: ViewerDeploymentReceipt | null = null;
+    try {
+      this.assertViewerDeploymentOpen(key, requestedRevision);
+      const existing = this.viewerDeploymentByIdempotencyKey(key);
+      if (existing) {
+        if (existing.requestedRevision !== requestedRevision) throw new RuntimeIdempotencyConflictError("idempotency key already belongs to another deployment");
+        receipt = { state: "accepted", deploymentId: existing.deploymentId, revision: existing.revision, replayed: true };
+      } else this.db.query("INSERT INTO viewer_deployment_refusals(idempotency_key, requested_revision) VALUES (?, ?)").run(key, requestedRevision);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      throw error;
+    }
+    if (!receipt) throw new DeploymentAdmissionClosedError();
+    return receipt;
+  }
+
   viewerDeploymentByIdempotencyKey(idempotencyKey: string): ViewerDeploymentStatus | null {
     const row = this.db.query<{ status_json: string; requested_revision: string }, [string]>(`SELECT deployments.status_json, requests.requested_revision
       FROM viewer_deployment_requests requests JOIN viewer_deployments deployments USING (deployment_id)
@@ -1836,6 +1915,7 @@ export class RuntimeJournal {
       }
     }, { waitMs: RUNTIME_JOURNAL_BUSY_TIMEOUT_MS, subject: "viewer deployments" });
     try {
+      this.assertViewerDeploymentOpen(input.idempotencyKey, input.requestedRevision);
       const existing = this.db.query<{ deployment_id: string; requested_revision: string; request_hash: string; status_json: string }, [string]>(
         `SELECT requests.deployment_id, requests.requested_revision, requests.request_hash, deployments.status_json
           FROM viewer_deployment_requests requests
@@ -2210,7 +2290,7 @@ export class RuntimeJournal {
     return `${this.effectReaderGeneration}:${this.totalChanges()}:${peer}`;
   }
 
-  effectBatch(limit = 100, kinds?: readonly string[], afterEventSeq = 0): Array<RuntimeEffect & { eventSeq: number }> {
+  effectBatch(limit = 100, kinds?: readonly string[], afterEventSeq = 0, conversationId?: string): Array<RuntimeEffect & { eventSeq: number }> {
     this.assertHealthy();
     if (kinds?.length === 0) return [];
     if (!Number.isSafeInteger(afterEventSeq) || afterEventSeq < 0) throw new Error("runtime effect cursor is invalid");
@@ -2218,10 +2298,11 @@ export class RuntimeJournal {
       ? "(state = 'pending' OR (state = 'retained' AND kind IN ('runtime.kill-boundary', 'runtime.interrupt-boundary', 'runtime.stop-boundary')))"
       : "state = 'pending'";
     const kindFilter = kinds ? ` AND kind IN (${kinds.map(() => "?").join(", ")})` : "";
+    const conversationFilter = conversationId === undefined ? "" : " AND state IN ('pending', 'retained') AND CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.conversationId') END = ?";
     const rows = this.db.query<{ id: string; kind: string; payload_json: string; event_seq: number }, Array<string | number>>(
       `SELECT id, kind, payload_json, event_seq
        FROM outbox
-       WHERE ${stateFilter}${kindFilter}
+       WHERE ${stateFilter}${kindFilter}${conversationFilter}
          AND event_seq > ?
          AND (
            id NOT LIKE 'effect:%'
@@ -2234,7 +2315,7 @@ export class RuntimeJournal {
          )
        ORDER BY event_seq
        LIMIT ?`,
-    ).all(...(kinds ?? []), afterEventSeq, limit);
+    ).all(...(kinds ?? []), ...(conversationId === undefined ? [] : [conversationId]), afterEventSeq, limit);
     return rows.map((row) => {
       let payload: Record<string, unknown>;
       try {
@@ -2443,7 +2524,7 @@ export class RuntimeJournal {
     return { scanned: rows.length, deleted: stale.length, cycled };
   }
 
-  close(): void { this.sessionHostMetadata.close(); this.db.close(); }
+  close(): void { this.entityReads.clear(); this.entityReadBytes = 0; this.sessionHostMetadata.close(); this.db.close(); }
 
   private appendInTransaction(admitted: NormalizedRuntimeEventInput): RuntimeEvent {
     let input = admitted;
@@ -3422,20 +3503,90 @@ export class RuntimeJournal {
   }
 
   private entityValues<T>(kind: string): T[] {
-    return this.db.query<{ state_json: string }, [string]>("SELECT state_json FROM entities WHERE kind = ? ORDER BY id").all(kind).map((row) => JSON.parse(row.state_json) as T);
+    if (!this.readingSnapshot) return this.db.query<{ state_json: string }, [string]>("SELECT state_json FROM entities WHERE kind = ? ORDER BY id").all(kind)
+      .map(row => JSON.parse(row.state_json) as T);
+    return this.db.query<{ id: string }, [string]>("SELECT id FROM entities WHERE kind = ? ORDER BY id").all(kind)
+      .map(row => this.snapshotEntity<T>(kind, row.id));
+  }
+
+  private prepareEntityReads(): void {
+    if (!this.entityReadTriggers) {
+      this.db.exec("CREATE TEMP TABLE snapshot_entity_keys (key TEXT PRIMARY KEY, kind TEXT NOT NULL, id TEXT NOT NULL)");
+      this.db.exec("CREATE INDEX temp.snapshot_entity_identity ON snapshot_entity_keys(kind,id)");
+      this.db.exec("CREATE TEMP TABLE snapshot_entity_invalidations (key TEXT PRIMARY KEY)");
+      for (const action of ["INSERT", "UPDATE", "DELETE"]) {
+        const row = action === "DELETE" ? "old" : "new";
+        // An outer upsert's conflict policy also governs trigger statements.
+        // Avoid a duplicate before inserting instead of relying on OR IGNORE.
+        const invalidate = (source: string) => `INSERT INTO snapshot_entity_invalidations SELECT key FROM snapshot_entity_keys AS cached
+          WHERE kind=${source}.kind AND id=${source}.id AND NOT EXISTS (SELECT 1 FROM snapshot_entity_invalidations AS dirty WHERE dirty.key=cached.key);`;
+        this.db.exec(`CREATE TEMP TRIGGER snapshot_entity_${action.toLowerCase()} AFTER ${action} ON main.entities
+          BEGIN ${invalidate(row)} ${action === "UPDATE" ? invalidate("old") : ""} END`);
+      }
+      this.entityReadTriggers = true;
+    }
+    const version = this.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version;
+    if (version !== this.entityReadVersion) {
+      this.clearEntityReads(); this.entityReadVersion = version;
+    }
+    for (const { key } of this.db.query<{ key: string }, []>("SELECT key FROM snapshot_entity_invalidations").all()) this.evictEntityRead(key);
+    this.entityReadMaintenanceChanges += this.db.run("DELETE FROM snapshot_entity_invalidations").changes;
+  }
+
+  private clearEntityReads(): void {
+    this.entityReads.clear(); this.entityReadBytes = 0;
+    this.entityReadMaintenanceChanges += this.db.run("DELETE FROM snapshot_entity_keys").changes;
+    this.entityReadMaintenanceChanges += this.db.run("DELETE FROM snapshot_entity_invalidations").changes;
+  }
+
+  private evictEntityRead(key: string): void {
+    const cached = this.entityReads.get(key);
+    if (cached) { this.entityReadBytes -= cached.bytes; this.entityReads.delete(key); }
+    this.entityReadMaintenanceChanges += this.db.query("DELETE FROM snapshot_entity_keys WHERE key=?").run(key).changes;
+    this.entityReadMaintenanceChanges += this.db.query("DELETE FROM snapshot_entity_invalidations WHERE key=?").run(key).changes;
+  }
+
+  private snapshotEntity<T>(kind: string, id: string, summary = false, sessionPresentation = false): T {
+    const key = JSON.stringify([kind, id, sessionPresentation ? summary ? "session-summary" : "session-full" : "full"]);
+    const cached = this.entityReads.get(key);
+    if (cached) {
+      this.entityReads.delete(key); this.entityReads.set(key, cached);
+      return structuredClone(cached.value) as T;
+    }
+    const projection = summary ? `json_set(state_json,
+      '$.voiceDeliveries', json(COALESCE((SELECT json_group_array(json_set(delivery.value,
+        '$.responses', json(COALESCE((SELECT json_group_array(json_set(response.value, '$.text', ''))
+          FROM json_each(delivery.value, '$.responses') AS response), '[]'))))
+        FROM json_each(state_json, '$.voiceDeliveries') AS delivery), '[]')),
+      '$.voiceDeliverySnapshotRevision', json_extract(state_json, '$.revision'))` : "state_json";
+    const row = this.db.query<{ state_json: string }, [string, string]>(`SELECT ${projection} AS state_json FROM entities WHERE kind = ? AND id = ?`).get(kind, id)!;
+    this.snapshotProjectionReads++;
+    const parsed = JSON.parse(row.state_json) as T;
+    // Keep the public session projection, so stale live text that presentation
+    // removes never takes space in the retained cache. Durable readers keep
+    // the separate full entity variant.
+    const value = sessionPresentation && (parsed as RuntimeSession).turn !== "running"
+      ? { ...(parsed as RuntimeSession), liveTurn: null } as T : parsed;
+    const bytes = sessionPresentation ? Buffer.byteLength(JSON.stringify(value)) : Buffer.byteLength(row.state_json);
+    if (bytes <= RUNTIME_ENTITY_READ_ADMISSION_BYTES) {
+      while (this.entityReads.size >= RUNTIME_ENTITY_READ_CACHE_ENTRIES || this.entityReadBytes + bytes > RUNTIME_ENTITY_READ_CACHE_BYTES) {
+        const oldest = this.entityReads.keys().next().value!;
+        this.evictEntityRead(oldest);
+        this.snapshotEntityEvictions++;
+      }
+      this.entityReads.set(key, { value, bytes }); this.entityReadBytes += bytes;
+      this.entityReadMaintenanceChanges += this.db.query("INSERT OR REPLACE INTO snapshot_entity_keys(key,kind,id) VALUES (?,?,?)").run(key,kind,id).changes;
+      return structuredClone(value);
+    }
+    return value;
   }
 
   private snapshotSessionValues(voiceBodiesFor?: readonly string[]): RuntimeSession[] {
     // SQLite removes the heavy bodies before they cross into JS. The original
     // entity, receipts, tombstones and full snapshot API remain unchanged.
-    const projection = voiceBodiesFor === undefined ? "state_json" : `CASE WHEN entities.id = ? THEN state_json ELSE json_set(state_json,
-      '$.voiceDeliveries', json(COALESCE((SELECT json_group_array(json_set(delivery.value,
-        '$.responses', json(COALESCE((SELECT json_group_array(json_set(response.value, '$.text', ''))
-          FROM json_each(delivery.value, '$.responses') AS response), '[]'))))
-        FROM json_each(state_json, '$.voiceDeliveries') AS delivery), '[]')),
-      '$.voiceDeliverySnapshotRevision', json_extract(state_json, '$.revision')) END AS state_json`;
-    return this.snapshotSessionRows(projection, voiceBodiesFor === undefined ? [] : [voiceBodiesFor[0] ?? ""])
-      .map(row => JSON.parse(row.state_json) as RuntimeSession)
+    return this.snapshotSessionRows("entities.id AS state_json", [])
+      .map(row => this.snapshotEntity<RuntimeSession>("session", row.state_json,
+        voiceBodiesFor !== undefined && row.state_json !== (voiceBodiesFor[0] ?? ""), true))
       .sort((left, right) => left.conversationId.localeCompare(right.conversationId));
   }
 
@@ -3542,7 +3693,8 @@ export class RuntimeJournal {
   }
 
   private scopedValues<T>(kind: string): Array<{ revision: number; value: T }> {
-    return this.db.query<EntityRow, [string]>("SELECT kind, id, revision, state_json, checkpoint_seq FROM entities WHERE kind = ? ORDER BY id").all(kind).map((row) => ({ revision: row.revision, value: JSON.parse(row.state_json) as T }));
+    return this.db.query<{ id: string; revision: number }, [string]>("SELECT id, revision FROM entities WHERE kind = ? ORDER BY id").all(kind)
+      .map(row => ({ revision: row.revision, value: this.snapshotEntity<T>(kind, row.id) }));
   }
 
   private upsertEntity(kind: string, id: string, revision: number, value: unknown, seq: number): void {

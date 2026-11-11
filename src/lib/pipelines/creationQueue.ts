@@ -1,13 +1,79 @@
 import fs from "node:fs";
+import { open } from "node:fs/promises";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
+import { OperationLeaseExpiredError } from "@/lib/operationLease";
 import { STAGE_RETIREMENT, hasRetiredStage } from "@/lib/flows/retirement";
+import { workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 
 import { createPipelineWithDelivery, findPipelineRecord } from "./store";
 import type { Pipeline, PipelineDeliveryTarget } from "./types";
+import { MAX_TASK_LENGTH, MAX_SPEC_LENGTH, MAX_PIPELINE_STAGES, MAX_STAGE_PROMPT_LENGTH } from "./limits";
+
+/** Public readback contains no admission binding, prompt or delivery target. */
+export interface PipelineCreationReceipt {
+  id: string;
+  project: string;
+  title: string;
+  taskIds: string[];
+  queuedAt: string;
+  state: "queued" | "refused";
+  reason: "store_unavailable" | "creation_refused";
+}
+
+// JSON escaping costs at most six bytes per input code unit. Leave room for
+// stage configuration and server metadata; oversized evidence stays unknown.
+export const CREATION_READ_MAX_BYTES = 6 * (MAX_TASK_LENGTH + MAX_SPEC_LENGTH
+  + MAX_PIPELINE_STAGES * MAX_STAGE_PROMPT_LENGTH) + 1024 * 1024;
+
+export type PipelineCreationRead =
+  | { kind: "found"; receipt: PipelineCreationReceipt }
+  | { kind: "missing" | "unavailable" };
+
+/** Four exact paths, independent of retained queue history. No queue mutation. */
+export async function readPipelineCreationReceipt(id: string): Promise<PipelineCreationRead> {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) return { kind: "unavailable" };
+  let found: PipelineCreationReceipt | undefined;
+  for (const suffix of [".json", ".refused.json", ".admission", ".admission.refused"]) {
+    let file;
+    try {
+      file = await open(path.join(pipelineCreationQueueDir(), `${id}${suffix}`), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      const stat = await file.stat();
+      if (!stat.isFile() || stat.size > CREATION_READ_MAX_BYTES) return { kind: "unavailable" };
+      const bytes = Buffer.alloc(stat.size + 1);
+      const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
+      if (bytesRead !== stat.size) return { kind: "unavailable" };
+      const entry = JSON.parse(bytes.subarray(0, bytesRead).toString("utf8"));
+      const pipeline = entry?.pipeline;
+      const guarded = suffix.startsWith(".admission");
+      if (entry?.version !== 1 || pipeline?.id !== id || typeof pipeline.project !== "string"
+        || !pipeline.project || pipeline.project === "project_unresolved" || pipeline.project.length > 1024
+        || typeof pipeline.task !== "string" || pipeline.task.length > MAX_TASK_LENGTH
+        || typeof entry.queuedAt !== "string" || !Number.isFinite(Date.parse(entry.queuedAt))
+        || (pipeline.taskIds !== undefined && (!Array.isArray(pipeline.taskIds)
+          || pipeline.taskIds.some((value: unknown) => typeof value !== "string" || !value.trim())))
+        || (guarded && (pipeline.creationRequest?.admissionProtocol !== 1
+          || pipeline.creationRequest?.admissionBinding?.launchAdmission?.candidateId !== id))
+        || (!guarded && pipeline.creationRequest?.admissionProtocol === 1)) return { kind: "unavailable" };
+      const refused = suffix.includes("refused");
+      if (refused && (typeof entry.refusedAt !== "string" || !Number.isFinite(Date.parse(entry.refusedAt)))) return { kind: "unavailable" };
+      // During a rename both files can exist. Wait for an unambiguous read;
+      // neither prefix precedence nor a query hint establishes ownership.
+      if (found) return { kind: "unavailable" };
+      found = { id, project: pipeline.project, title: pipeline.task, taskIds: pipeline.taskIds ?? [],
+        queuedAt: entry.queuedAt, state: refused ? "refused" : "queued",
+        reason: refused ? "creation_refused" : "store_unavailable" };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { kind: "unavailable" };
+    } finally {
+      await file?.close();
+    }
+  }
+  return found ? { kind: "found", receipt: found } : { kind: "missing" };
+}
 
 /**
  * Pipeline creations the store refused before admission, kept for the release
@@ -137,13 +203,17 @@ export async function admitQueuedPipelineCreations(): Promise<Pipeline[]> {
     }
     try {
       if (!findPipelineRecord(entry.pipeline.id)) {
-        admitted.push(await createPipelineWithDelivery(entry.pipeline, entry.target, entry.comparison));
+        admitted.push(await createPipelineWithDelivery(entry.pipeline, entry.target, entry.comparison, { assertAuthority: () => {
+          if (entry.pipeline.workspace && !workspacePrincipalAllows(entry.pipeline.workspace, entry.pipeline.project)) throw new Error("workspace access denied");
+        } }));
       }
       fs.rmSync(file, { force: true });
     } catch (error) {
       /* Busy before admission stored nothing; busy after it may have stored
          the row, which the next pass finds by id or by its creation key. */
-      if (error instanceof FileTransactionBusyError) break;
+      // Cancellation revoked this pass before writer admission. Keep the
+      // original file and idempotency key for the next serving pass.
+      if (error instanceof FileTransactionBusyError || error instanceof OperationLeaseExpiredError) break;
       console.error("[pipelines] queued pipeline creation was refused", { pipelineId: entry.pipeline.id, error });
       writeJsonDurably(path.join(pipelineCreationQueueDir(), `${entry.pipeline.id}${REFUSED_SUFFIX}`),
         { ...entry, refusedAt: new Date().toISOString(), error: error instanceof Error ? error.message : String(error) });

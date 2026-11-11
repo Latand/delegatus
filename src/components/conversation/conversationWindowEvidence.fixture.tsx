@@ -1,6 +1,10 @@
 "use client";
 
 import { TelegramFileConfirmation } from "@/components/telegram/TelegramFileConfirmation";
+import { StagePlaceholderPane } from "@/components/pipelines/StagePlaceholderPane";
+import { MobilePipelineScreen } from "@/components/mobile/MobilePipelineScreen";
+import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
+import type { StageSlot } from "@/components/scheme/layout";
 import type { FileConfirmationView } from "@/lib/telegram/bot/fileConfirmationContract";
 
 
@@ -8,12 +12,10 @@ import { DeputyBlock } from "./DeputyBlock";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { StagesSheet } from "@/components/kanban/StagesSheet";
 import { summarizePipeline } from "@/components/kanban/pipelineSummary";
-import { ReaderPlacement } from "@/components/kanban/KanbanReaders";
+import { ReaderPlacement, ReaderPortals, ReaderSlot } from "@/components/kanban/KanbanReaders";
+import { RelayChatsView } from "@/components/externalRelay/RelayChats";
 import { StageDrafts } from "@/components/kanban/stageDrafts";
 import type { PipelinePorts } from "@/components/kanban/pipelinePorts";
-import type { Pipeline } from "@/lib/pipelines/types";
-import { StagePlaceholderPane } from "@/components/pipelines/StagePlaceholderPane";
-import type { StageSlot } from "@/components/scheme/layout";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 
 /**
@@ -38,22 +40,24 @@ import type { LogTailState } from "@/hooks/useLogTail";
 import { useComposer } from "@/hooks/useComposer";
 
 import { BranchPane } from "@/components/BranchPane";
+import { RuntimePill } from "@/components/RuntimePill";
 import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "@/components/ComposerBar";
 import { MobileBarTitle, MobileShell } from "@/components/mobile/MobileShell";
 import { OrchestratorConversation } from "@/components/orchestrator/OrchestratorConversation";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { attachModeFor, capabilitiesFor } from "@/components/agentCapabilities";
+import { capabilitiesFor } from "@/components/agentCapabilities";
 
 import { MessageProvenanceProvider, provenanceLookupFor } from "@/components/feed/messageProvenance";
 import { FeedItem } from "@/components/feed/FeedItem";
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
+import { ArtifactPreviewHost } from "@/components/preview/ArtifactPreviewHost";
 import { ImagePane } from "@/components/preview/ImagePane";
 import { createFeedSession, splitInboxBatchFeed, buildFeed, type Item } from "@/components/feed/parse";
 import { codexHistoryCorpus, codexHistorySeams, historyCall } from "@/components/feed/__fixtures__/codexHistory";
 import { LogFeed } from "@/components/LogFeed";
-import { appendComposerDraft, RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer";
+import { appendComposerDraft, RuntimeComposerReceipts, ConversationComposer } from "@/components/ConversationComposer";
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
-import { setTmuxComposerRuntimeDependenciesForTests } from "@/components/tmuxComposerRuntime";
+import { setConversationComposerRuntimeDependenciesForTests } from "@/components/conversationComposerRuntime";
 import { setRuntimeBusForTests, setRuntimeUiEnabledForTests, type RuntimeBusState } from "@/hooks/runtimeBus";
 import { ConversationAttention } from "@/components/runtime/ConversationAttention";
 import { emptyStore, type RuntimeAttention } from "@/components/runtime/runtimeModel";
@@ -65,6 +69,9 @@ import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import { ACTIVE_DELIVERY_PHASES, isDeliveryWaitReason, type DeliveryWaitReason } from "@/lib/runtime/deliveryWaitReason";
 import { relayMessageText } from "@/lib/orchestrator/relayText";
+import { NativeQueuePanel } from "@/components/NativeQueuePanel";
+import { projectNativeQueue } from "@/components/nativeQueueView";
+import type { NativeQueueRecord } from "@/lib/runtime/nativeQueueContracts";
 
 import { OWN_STEPS_TOTAL, ownStepsArrival, ownStepsTranscript, type OwnStepsArrival } from "./fixtures/ownMessageStepsTranscript";
 import { readStepState } from "./OwnMessageSteps";
@@ -84,6 +91,9 @@ import {
 } from "./outbox";
 
 import { messageTextExcerpt } from "@/lib/messageTextAttachment";
+import { ToolDisclosurePolicy } from "@/components/feed/toolDisclosure";
+import { ConversationRoleScope } from "@/components/brand/RoleAvatar";
+import { publishConversationAvailability } from "@/lib/mcp/availability";
 
 const params = new URLSearchParams(window.location.search);
 let longTextAttempts = 0;
@@ -110,6 +120,8 @@ const MANDATE = [
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
 export type ConversationWindowCase =
+  | "document-links"
+  | "project-setup"
   | "retired-orchestrator"
   | "file-confirmation"
   | "seat-inbox"
@@ -118,6 +130,9 @@ export type ConversationWindowCase =
   | "delivery-settlement"
   | "delivery-stalled"
   | "delivery-check-card"
+  | "consumed-delivery"
+  | "runtime-model-face"
+  | "runtime-model-face-headers"
   | "lifecycle"
   | "long-history"
   | "codex-history"
@@ -139,7 +154,8 @@ export type ConversationWindowCase =
   | "image-viewers"
   | "own-message-steps"
   | "payload-notice"
-  | "memory-cap";
+  | "memory-cap"
+  | "mcp-calls";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
    message at all, so the row the parser makes out of the turn-end record is
@@ -302,7 +318,7 @@ const ORPHANED_FILE = {
  * The composer on a conversation whose host is gone: text in the field, an
  * image staged beside it, Send live. Every prop the old gates worked through —
  * `showImage`, `imageDisabled`, `sendDisabledReason`, and the phone's
- * `sendSlot` — is derived here exactly as `TmuxComposer` derives it, from the
+ * `sendSlot` — is derived here exactly as `ConversationComposer` derives it, from the
  * matrix's verdict and `composerSlotKind`.
  *
  * The slot matters most and was the piece a standalone `ComposerBar` used to
@@ -463,7 +479,7 @@ function DeadQueueFixture({ id }: { id: ConversationWindowCase }) {
 
 /* ── One message, one row: the whole LIFE of an ordinary send ────────────────
    Not a gallery of reconstructed states — a conversation the driver actually
-   uses. The production `LogFeed` and `TmuxComposer` are mounted together over
+   uses. The production `LogFeed` and `ConversationComposer` are mounted together over
    the production outbox store, and behind them a configurable fake host
    answers `/api/runtime/send` and publishes receipts. The driver types into
    the real field, submits through the path it is exercising, and advances the
@@ -729,7 +745,6 @@ function installFakeTransport(): void {
   const realFetch = globalThis.fetch.bind(globalThis);
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
-    if (url === "/api/tmux/targets") return Response.json({ targets: {} });
     if (url.startsWith("/api/log/provenance")) {
       /* The review's own probe: the join held open for as long as the
          scenario says, so nothing about the row may depend on it arriving. */
@@ -1031,7 +1046,7 @@ function LifecycleFixture() {
         <LogFeed file={lifeFile()} showSvc={false} lineFilter="" onStatus={() => undefined}
           paused={false} follow setFollow={() => undefined} />
       </div>
-      <TmuxComposer file={lifeFile()} />
+      <ConversationComposer file={lifeFile()} />
     </div>
   );
 }
@@ -1075,7 +1090,7 @@ function PayloadNoticeFixture() {
         <LogFeed file={lifeFile()} showSvc={false} lineFilter="" onStatus={() => undefined}
           paused={false} follow setFollow={() => undefined} />
       </div>
-      {ready ? <TmuxComposer file={lifeFile()} /> : null}
+      {ready ? <ConversationComposer file={lifeFile()} /> : null}
       <span data-fixture-operation-reads hidden>{reads}</span>
     </div>
   );
@@ -1161,7 +1176,7 @@ function mountRetiredOrchestrator(root: HTMLElement): void {
 /** The composer's side of the fake host: a hosted structured session, its
     receipts and the transport behind Send. */
 function installFakeComposerHost(): void {
-  setTmuxComposerRuntimeDependenciesForTests({
+  setConversationComposerRuntimeDependenciesForTests({
     useAgentCapabilities: (candidate) => {
       const view = LIFE_SESSION();
       const options = { runtimeEnabled: true };
@@ -1170,7 +1185,6 @@ function installFakeComposerHost(): void {
         runtime: view,
         structuredSession: view,
         runtimeEnabled: true,
-        attachMode: attachModeFor(candidate, view, options),
       };
     },
     useRuntimeReceiptsForArtifact: () => {
@@ -1247,6 +1261,14 @@ function agentImageFeeds(): { engine: keyof typeof IMAGE_FILES; items: Item[] }[
       output: [{ type: "input_text", text: "Script completed" }, { type: "input_image", image_url: `data:image/png;base64,${chart}` }] } }),
     JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "item_completed", item: { type: "imageView", id: "exec-view-1", path: "/w/shot.png" } } }),
     JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "item_completed", item: { type: "imageView", id: "exec-view-2", path: "/w/deleted.png" } } }),
+    /* Generated pictures in both 0.164 representations, an attachment-store id alone and the migration's id beside an
+       empty result, and an older inline result; each draws its saved file. */
+    JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "item_completed", item: { type: "imageGeneration", id: "image-file", status: "completed",
+      revisedPrompt: "A compact widget", fileId: "file_generated_1", savedPath: "/w/generated/widget.png" } } }),
+    JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "item_completed", item: { type: "imageGeneration", id: "image-migrated", status: "completed",
+      revisedPrompt: "The same widget, migrated", fileId: "file_generated_2", result: "", savedPath: "/w/generated/migrated.png" } } }),
+    JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "item_completed", item: { type: "imageGeneration", id: "image-inline", status: "completed",
+      revisedPrompt: "An older inline widget", result: chart, savedPath: "/w/generated/inline.png" } } }),
   ];
   const copilotRecord = (type: string, data: Record<string, unknown>) => JSON.stringify({ type, data, id: `${type}-1`, timestamp: at, parentId: null });
   const copilot = [
@@ -1277,6 +1299,123 @@ function AgentImagesFixture() {
         <LiveTurnRows items={[{
           itemId: "exec-view-live", text: "", phase: "awaiting-echo", startedAt: "2026-09-20T10:00:00.000Z", completedAt: null,
           tool: { name: "view_image", engine: "codex", status: "run", args: { path: "/w/live.png" } },
+        }]} />
+      </section>
+    </div>
+  );
+}
+
+/* Viewer MCP calls in a Claude and a Codex conversation, written the way each
+   engine writes them, through the production parser into the production feed
+   rows (docs/design/codex-mcp-call-rendering-brief.md). Each engine renders on
+   the board's policy and in the dock's (collapsed tools, orchestrator role),
+   plus a live Codex spawn. Availability lists the ready child and the seat
+   only, so the starting child has no conversation to open; its spawn is an
+   idempotent replay, the row's densest state. */
+const MCP_FILES = {
+  claude: { path: "/tmp/mcp-calls-claude.jsonl", engine: "claude", fmt: "claude", activity: "recent" },
+  codex: { path: "/tmp/mcp-calls-codex.jsonl", engine: "codex", fmt: "codex", activity: "recent" },
+} as unknown as Record<"claude" | "codex", FileEntry>;
+
+type McpFixtureCall = { id: string; tool: string; args: Record<string, unknown>; result: Record<string, unknown>; failed?: boolean };
+
+const MCP_BATCH_A: McpFixtureCall[] = [
+  { id: "list", tool: "list_tasks", args: { project: "repo-demo", openOnly: true }, result: { count: 4, total: 4 } },
+  { id: "pipe", tool: "get_pipeline", args: { pipelineId: "pipe_parser_lane" }, result: { pipelineId: "pipe_parser_lane", state: "running" } },
+  { id: "lesson", tool: "leave_lesson", args: { rule: "" }, failed: true,
+    result: { ok: false, error: "Input validation error: rule must not be empty", code: "tool_failed", retryable: true } },
+];
+const MCP_BATCH_B: McpFixtureCall[] = [
+  { id: "spawn-starting", tool: "spawn_agent", args: { engine: "codex", model: "gpt-5.6-sol", role: "reviewer", prompt: "Review the parser change" },
+    result: { conversationId: "conversation_child_starting", transcriptPath: null, launchId: "launch_child_starting", state: "starting", initialMessage: "pending", replayed: true, ok: true } },
+  { id: "spawn-ready", tool: "spawn_agent", args: { engine: "claude", model: "opus", role: "builder", prompt: "Build the card states" },
+    result: { conversationId: "conversation_child_ready", transcriptPath: "/sessions/child-ready.jsonl", launchId: "launch_child_ready", state: "running", ok: true } },
+  { id: "send", tool: "send_message", args: { conversationId: "conversation_child_ready", text: "Start with the pending chip" },
+    result: { conversationId: "conversation_child_ready", operationId: "op_send_ready", ok: true } },
+  { id: "seat", tool: "send_message_to_orchestrator", args: { project: "repo-demo", text: "Two lanes are running" },
+    result: { conversationId: "conversation_seat", operationId: "op_seat", ok: true } },
+  { id: "task", tool: "get_task", args: { taskId: "task_parser_lane" }, result: { taskId: "task_parser_lane", task: { id: "task_parser_lane", status: "assigned" } } },
+  { id: "update", tool: "update_task", args: { taskId: "task_parser_lane", status: "done" }, result: { taskId: "task_parser_lane", ok: true } },
+];
+
+function mcpCallFeeds(): { engine: "claude" | "codex"; items: Item[] }[] {
+  let clock = Date.parse("2026-10-30T09:12:14.000Z");
+  const at = () => new Date(clock += 350).toISOString();
+  const resultText = (call: McpFixtureCall) => JSON.stringify(call.result);
+  const claudeText = (text: string) => JSON.stringify({ type: "assistant", timestamp: at(), message: { content: [{ type: "text", text }] } });
+  const claudeCall = (call: McpFixtureCall) => [
+    JSON.stringify({ type: "assistant", timestamp: at(), message: { content: [{ type: "tool_use", id: `toolu-${call.id}`, name: `mcp__viewer__${call.tool}`, input: call.args }] } }),
+    JSON.stringify({ type: "user", timestamp: at(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu-${call.id}`,
+      content: [{ type: "text", text: resultText(call) }], ...(call.failed ? { is_error: true } : {}) }] } }),
+  ];
+  const claude = [
+    claudeText("Reading the board before I start the lanes."),
+    ...MCP_BATCH_A.flatMap(claudeCall),
+    claudeText("Starting the reviewer and the builder."),
+    ...MCP_BATCH_B.flatMap(claudeCall),
+  ];
+  const codexText = (text: string) => JSON.stringify({ type: "response_item", timestamp: at(), payload: { type: "message", role: "assistant", content: [{ type: "output_text", text }] } });
+  const nested = (call: McpFixtureCall) => JSON.stringify({ type: "event_msg", timestamp: at(), payload: { type: "item_completed",
+    started_at_ms: clock - 180, completed_at_ms: clock, item: {
+    type: "McpToolCall", id: `exec-${call.id}`, server: "viewer", tool: call.tool, arguments: call.args,
+    status: call.failed ? "failed" : "completed", duration: { secs: 0, nanos: 180_000_000 },
+    result: { content: [{ type: "text", text: resultText(call) }], ...(call.failed ? { isError: true } : {}) },
+  } } });
+  const batch = (callId: string, named: McpFixtureCall[], returned: McpFixtureCall[], output: string) => [
+    JSON.stringify({ type: "response_item", timestamp: at(), payload: { type: "custom_tool_call", call_id: callId, name: "exec",
+      input: named.map((call) => `text(await tools.mcp__viewer__${call.tool}(${JSON.stringify(call.args)}));`).join("\n") } }),
+    ...returned.map(nested),
+    JSON.stringify({ type: "response_item", timestamp: at(), payload: { type: "custom_tool_call_output", call_id: callId, output } }),
+  ];
+  const partial: McpFixtureCall[] = [
+    { id: "partial-list", tool: "list_pipelines", args: { project: "repo-demo" }, result: { count: 2 } },
+    { id: "partial-flow", tool: "get_flow", args: { flowId: "flow_review" }, result: {} },
+  ];
+  const direct: McpFixtureCall = { id: "direct", tool: "get_conversation", args: { conversationId: "conversation_child_ready" }, result: { conversationId: "conversation_child_ready", state: "running" } };
+  const codex = [
+    codexText("Reading the board before I start the lanes."),
+    ...batch("batch_a", MCP_BATCH_A, MCP_BATCH_A, "Script completed"),
+    codexText("Starting the reviewer and the builder."),
+    ...batch("batch_b", MCP_BATCH_B, MCP_BATCH_B, "Script completed"),
+    codexText("One script stopped part way."),
+    ...batch("batch_partial", partial, partial.slice(0, 1), "Script failed\nError: flow_review: request timed out"),
+    codexText("And one direct call."),
+    JSON.stringify({ type: "response_item", timestamp: at(), payload: { type: "function_call", namespace: "mcp__viewer", name: direct.tool, call_id: "call_direct", arguments: JSON.stringify(direct.args) } }),
+    JSON.stringify({ type: "response_item", timestamp: at(), payload: { type: "function_call_output", call_id: "call_direct", output: resultText(direct) } }),
+  ];
+  return [
+    { engine: "claude", items: buildFeed(MCP_FILES.claude, claude, false, "").items },
+    { engine: "codex", items: buildFeed(MCP_FILES.codex, codex, false, "").items },
+  ];
+}
+
+function McpCallsFixture() {
+  const feeds = mcpCallFeeds();
+  useEffect(() => {
+    publishConversationAvailability(new Set(["conversation_child_ready", "conversation_seat"]));
+  }, []);
+  const rows = (items: Item[]) => items.map((item, index) => <FeedItem key={index} item={item} />);
+  return (
+    <div data-evidence-case="mcp-calls" className="min-h-dvh bg-canvas px-4 py-6 text-primary">
+      {feeds.map(({ engine, items }) => (
+        <div key={engine}>
+          <section data-evidence-engine={engine} data-evidence-surface="window" className="mb-6">
+            <div className="mb-1 text-caption font-semibold uppercase text-muted">{engine} · window</div>
+            {rows(items)}
+          </section>
+          <section data-evidence-engine={engine} data-evidence-surface="dock" className="mb-6">
+            <div className="mb-1 text-caption font-semibold uppercase text-muted">{engine} · dock</div>
+            <ConversationRoleScope value="orchestrator">
+              <ToolDisclosurePolicy value="collapsed">{rows(items)}</ToolDisclosurePolicy>
+            </ConversationRoleScope>
+          </section>
+        </div>
+      ))}
+      <section data-evidence-engine="live" className="mb-6">
+        <div className="mb-1 text-caption font-semibold uppercase text-muted">live turn</div>
+        <LiveTurnRows items={[{
+          itemId: "exec-spawn-live", text: "", phase: "streaming", startedAt: "2026-10-30T09:15:33.000Z", completedAt: null,
+          tool: { name: "mcp__viewer__spawn_agent", engine: "codex", status: "run", args: { engine: "codex", role: "auditor", prompt: "Audit the live row" } },
         }]} />
       </section>
     </div>
@@ -1483,12 +1622,235 @@ function DeliveryCheckCardFixture() {
   );
 }
 
+/* A queued send Codex consumed while its sender ended unverified, beside an
+   unrelated send with the same words whose fate is still unknown and a third
+   one Codex still holds. «Prove» lands the canonical proof for the consumed id
+   only: its receipt and its queue entry settle, and nothing else moves. The
+   queue view is the production projection of journal-shaped entries, and the
+   composer keeps an unsent draft and its staged image throughout. The receipt
+   list sits behind the undelivered chip in the slot the pane gives it: the
+   bottom row's right end on the desktop, the status line on a phone. */
+const CONSUMED_TEXT = "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.";
+
+function consumedQueueEntry(id: string, proven: boolean): NativeQueueRecord {
+  const input = [{ type: "text" as const, text: CONSUMED_TEXT, text_elements: [] }];
+  return {
+    entryId: id, conversationId: "conversation_consumed", binding: { threadId: "thread-consumed", accountId: "account-a" },
+    clientUserMessageId: id, nativeSubmissionId: `native-${id}`, revision: 1,
+    versions: [{ revision: 1, operationId: id, text: CONSUMED_TEXT, images: [], contentDigest: `digest-${id}`, input }],
+    profilePolicy: "thread-at-dispatch", state: proven ? "delivered" : "queued", mutationOperationId: null,
+    dispatchedRevision: proven ? 1 : null, dispatchedTurnId: proven ? "turn-consumed" : null,
+    proof: proven ? { threadId: "thread-consumed", clientUserMessageId: id, revision: 1, turnId: "turn-consumed", itemId: `item-${id}`, input } : null,
+    reason: null,
+  };
+}
+
+function ConsumedDeliveryFixture() {
+  const { t } = useLocale();
+  const [proven, setProven] = useState(false);
+  const composer = useComposer({
+    initialText: () => "an unsent draft",
+    persistText: () => undefined,
+    submit: () => undefined,
+    acceptFiles: true,
+    holdInputWhileBusy: false,
+  });
+  const isMobile = useIsMobile();
+  const [chipSlot, setChipSlot] = useState<HTMLElement | null>(null);
+  const [receiptsOpen, setReceiptsOpen] = useState(false);
+  const [receiptsDrawn, setReceiptsDrawn] = useState(false);
+  const [receiptsFirstRowSpace, setReceiptsFirstRowSpace] = useState<number | null>(null);
+  const staged = useRef(false);
+  const addFiles = composer.attachments.addFiles;
+  useEffect(() => {
+    if (staged.current) return;
+    staged.current = true;
+    addFiles([pngFile()]);
+  }, [addFiles]);
+  const unknown = (operationId: string): RuntimeReceipt => ({
+    operationId, idempotencyKey: `${operationId}-key`, conversationId: "conversation_consumed", kind: "send", status: "failed",
+    text: CONSUMED_TEXT, at: new Date().toISOString(), revision: 3,
+    reason: "delivery was started by an earlier executor; whether it reached the recipient is unverified", resend: "verify-first",
+  });
+  const consumed: RuntimeReceipt = proven
+    ? { ...unknown("consumed-tick"), status: "delivered", reason: null, resend: "not-needed", revision: 4 }
+    : unknown("consumed-tick");
+  const view = projectNativeQueue({
+    turn: "running", activeTurnId: "turn-live",
+    entries: [consumedQueueEntry("consumed-tick", proven), consumedQueueEntry("held-same-text", false)],
+    native: { threadId: "thread-consumed", stale: false, items: [{ id: "native-held-same-text", clientUserMessageId: "held-same-text",
+      input: [{ type: "text", text: CONSUMED_TEXT, text_elements: [] }] }] },
+  });
+  return (
+    <div data-evidence-case="consumed-delivery" data-proven={proven ? "" : undefined} className="flex h-dvh flex-col bg-canvas px-4 py-6 text-primary">
+      <div data-evidence-transcript className="my-3 flex min-h-0 flex-1 items-start justify-start overflow-hidden">
+        <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface border border-border px-4 py-2.5">Ready for the next task.</div>
+      </div>
+      {/* The pane's composer box and its bound before the box is measured:
+          the transcript keeps 60% of the column, a phone's box at most 38dvh. */}
+      <form
+        /* A Send pressed with the draft's image staged in Context mode: the
+           production composer answers it with this refusal line (the DOM case
+           drives the real path; this stage shows where the line is drawn). */
+        onSubmit={(event) => {
+          event.preventDefault();
+          composer.setStatus({ kind: "err", text: t(isMobile ? "composer.context.imagesBlockedQueueTouch" : "composer.context.imagesBlockedQueue", {
+            toggle: t("composer.context.toggle"), queue: t("queue.queueMessage"), menu: t("composer.sendMenuTitle"),
+          }) });
+        }}
+        className={`flex shrink-0 flex-col gap-1.5 border-t border-border bg-card px-2.5 overflow-x-clip overflow-y-auto overscroll-y-contain ${
+        isMobile ? "max-h-[min(38dvh,20rem)] py-1.5" : "max-h-[40%] py-2"}`}>
+      <ComposerBar
+        composer={composer}
+        placeholder={t("composer.placeholderSend")}
+        textareaAriaLabel={t("composer.sendStructuredAria")}
+        imageAriaLabel={t("composer.addAttachments")}
+        leftSlot={null}
+        sendSlot={{ kind: "send", label: t("composer.sendToAgent") }}
+        sendLabelIdle={t("composer.sendToAgent")}
+        sendLabelRecording={t("composer.sendToAgent")}
+        sendIdleClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-accent text-canvas"
+        showImage
+        rowControls={isMobile ? undefined : (
+          <span className="flex min-w-0 items-center gap-1"><span ref={setChipSlot} data-receipts-chip-slot="" className="contents" /></span>
+        )}
+        statusLine={isMobile ? (
+          <div data-composer-status-line="" hidden={receiptsOpen} className="flex min-h-11 min-w-0 items-center gap-1">
+            <span ref={setChipSlot} data-receipts-chip-slot="" className="contents" />
+          </div>
+        ) : undefined}
+        queuePanel={<NativeQueuePanel view={view} unresolved={[]} error={null} thread={{ model: null, effort: null }}
+          cardId="conversation_consumed" mintKey={() => "consumed-edit"} submit={async () => ({ ok: true })} onRefresh={() => {}} t={t} />}
+        receiptsHidden={!receiptsDrawn}
+        receiptsMinHeight={receiptsOpen ? receiptsFirstRowSpace : null}
+        receipts={<RuntimeComposerReceipts receipts={[unknown("unknown-send"), consumed]}
+          onRetry={() => {}} onEdit={() => {}} onDiscard={() => {}}
+          chipMount={chipSlot} onOpenChange={setReceiptsOpen} onRegionChange={setReceiptsDrawn}
+          onFirstRowSpace={setReceiptsFirstRowSpace} />}
+      />
+      </form>
+      <button type="button" data-prove-consumed className="sr-only" onClick={() => setProven(true)}>Prove</button>
+    </div>
+  );
+}
+
+/** What the transcript and the launch have told the pill, per fixture file. */
+const MODEL_FACE_FILES: Record<string, Partial<FileEntry>> = {
+  /* A stage launched on Luna that the board has not scanned yet: no observed model, the launch's own. */
+  luna: { engine: "codex", model: null, launchModel: "gpt-6-luna" },
+  /* Neither is known yet. */
+  unknown: { engine: "codex", model: null, launchModel: null },
+  /* The transcript reports a model the catalogue does not list. */
+  unlisted: { engine: "codex", model: "gpt-5.5", launchModel: "gpt-6-luna" },
+  /* A Claude stage launched on the Opus alias whose transcript reports Sonnet. */
+  sonnet: { engine: "claude", fmt: "claude", root: "claude-projects", model: "claude-sonnet-5-5", launchModel: "opus" },
+  /* A Claude stage launched with no model whose transcript has not reported one. */
+  "claude-unreported": { engine: "claude", fmt: "claude", root: "claude-projects", model: null, launchModel: null },
+  /* An older Opus release than the alias row names. */
+  "opus-old": { engine: "claude", fmt: "claude", root: "claude-projects", model: "opus-4-1", launchModel: "opus" },
+  /* A Fable stage whose transcript names the release the alias resolved to. */
+  fable: { engine: "claude", fmt: "claude", root: "claude-projects", model: "fable-5-1", launchModel: "fable" },
+  /* A Fable stage launched on the pinned Fable 5.2 row, as the picker offers it. */
+  fable52: { engine: "claude", fmt: "claude", root: "claude-projects", model: "claude-fable-5-2", launchModel: "claude-fable-5-2" },
+  /* Saved on a Codex model fresh menus retired: it stays listed and checked. */
+  "legacy-sol": { engine: "codex", model: "gpt-5.6-sol", launchModel: "gpt-5.6-sol" },
+  /* The new Terra at its top effort tier. */
+  "terra-ultra": { engine: "codex", model: "gpt-6.1-terra", launchModel: "gpt-6.1-terra", effort: "ultra" },
+  /* Luna's ladder tops out at max. */
+  "luna-max": { engine: "codex", model: "gpt-6-luna", launchModel: "gpt-6-luna", effort: "max" },
+  /* A Claude conversation saved on the retired Haiku 4.5. */
+  "haiku-legacy": { engine: "claude", fmt: "claude", root: "claude-projects", model: "claude-haiku-4-5-20251001", launchModel: "claude-haiku-4-5", effort: "max" },
+  /* Haiku 5.5 launched through the alias: one Haiku 5.5 row. */
+  haiku: { engine: "claude", fmt: "claude", root: "claude-projects", model: "claude-haiku-5-5", launchModel: "haiku" },
+};
+
+function modelFaceFile(which: string): FileEntry {
+  return {
+    ...DEAD_FILE, proc: "running", pid: 10, effort: "high", fast: false, mtime: 1, size: 1, activity: "idle", title: "Review the stage switch",
+    conversationId: `conversation_model_face_${which}`, path: `/model-face-${which}.jsonl`, name: `model-face-${which}.jsonl`,
+    ...MODEL_FACE_FILES[which],
+  } as FileEntry;
+}
+
+/** The headers that name a conversation's model: the pane's own, the board reader's and a relay chat's reader. */
+function RuntimeModelFaceHeadersFixture() {
+  /* Written seven minutes ago, so each header's age reads as a real conversation's does. */
+  const [file] = useState(() => ({ ...modelFaceFile(params.get("file") ?? "luna"), mtime: Math.floor(Date.now() / 1000) - 7 * 60 }));
+  const [placement] = useState(() => new ReaderPlacement());
+  const [now] = useState(() => Date.now());
+  if (params.get("part") === "relay") {
+    /* One relay chat over the same conversation; the driver opens it into the agent window's read-only reader. */
+    const chat = {
+      id: "model-face", relayId: "relay-1", relayName: "Support relay", targetId: "bot-1", targetName: "Support bot", chatKey: "QmF6x9Lk2pTw7RzA",
+      authority: "member" as const, engine: file.engine === "claude" ? "claude" as const : "codex" as const, turns: 3, compactions: 0, createdAt: "2026-10-09T08:00:00.000Z",
+      lastTurnAt: "2026-10-09T09:00:00.000Z", state: "idle" as const, file,
+    };
+    return (
+      <div data-evidence-case="runtime-model-face-headers" className="flex h-dvh min-h-0 flex-col bg-canvas text-primary">
+        <RelayChatsView relayId="relay-1" payload={{ relays: [{ id: "relay-1", name: "Support relay", origin: "https://relay.example" }], chats: [chat] }} />
+      </div>
+    );
+  }
+  if (params.get("part") !== "reader") {
+    return (
+      <div data-evidence-case="runtime-model-face-headers" className="flex h-dvh min-h-0 flex-col bg-canvas p-3 text-primary">
+        <div className="mx-auto flex min-h-0 w-full max-w-[720px] flex-1">
+          <BranchPane file={file} tasks={[]} isRoot onClose={noop} onToggleExpand={noop} />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <main data-evidence-case="runtime-model-face-headers" className="kb h-dvh bg-canvas p-3 text-primary">
+      <div className="aw-reader mx-auto h-full w-full max-w-[720px]">
+        <ReaderSlot placement={placement} readerKey="model-face" />
+        <ReaderPortals placement={placement} readers={[{ readerKey: "model-face", file, owner: null, composerPrimary: true }]} now={now} onClose={noop} onLeave={noop} onMenu={noop} />
+      </div>
+    </main>
+  );
+}
+
+function RuntimeModelFaceFixture() {
+  const { t } = useLocale();
+  const file = modelFaceFile(params.get("file") ?? "luna");
+  const composer = useComposer({
+    initialText: () => "",
+    persistText: () => undefined,
+    submit: () => undefined,
+    acceptFiles: true,
+    holdInputWhileBusy: false,
+  });
+  return (
+    <div data-evidence-case="runtime-model-face" className="flex h-dvh flex-col bg-canvas px-4 py-6 text-primary">
+      <div data-evidence-transcript className="my-3 flex min-h-0 flex-1 items-start justify-start">
+        <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface border border-border px-4 py-2.5">Ready for the next task.</div>
+      </div>
+      <ComposerBar
+        composer={composer}
+        placeholder={t("composer.placeholderSend")}
+        textareaAriaLabel={t("composer.sendStructuredAria")}
+        imageAriaLabel={t("composer.addAttachments")}
+        leftSlot={<RuntimePill file={file} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />}
+        sendSlot={{ kind: "send", label: t("composer.sendToAgent") }}
+        sendLabelIdle={t("composer.sendToAgent")}
+        sendLabelRecording={t("composer.sendToAgent")}
+        sendIdleClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-accent text-canvas"
+        showImage
+      />
+    </div>
+  );
+}
+
 function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
   if (id === "delivery-settlement") return <DeliverySettlementFixture />;
   if (id === "delivery-check-card") return <DeliveryCheckCardFixture />;
+  if (id === "consumed-delivery") return <ConsumedDeliveryFixture />;
+  if (id === "runtime-model-face") return <RuntimeModelFaceFixture />;
+  if (id === "runtime-model-face-headers") return <RuntimeModelFaceHeadersFixture />;
   if (id === "agent-images") return <AgentImagesFixture />;
   if (id === "image-viewers") return <ImageViewersFixture />;
+  if (id === "mcp-calls") return <McpCallsFixture />;
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
   if (id === "dead-host-composer") return <DeadComposerFixture file={DEAD_FILE} id={id} />;
   if (id === "dead-host-not-resumable") return <DeadComposerFixture file={ORPHANED_FILE} id={id} />;
@@ -1944,6 +2306,55 @@ if (root && requested === "memory-cap") {
   </main>);
 }
 else if (root && requested === "file-confirmation") mountFileConfirmation(root);
+else if (root && requested === "project-setup") {
+  /* The running setup started 42 s before this clock. */
+  Date.now = () => Date.parse("2026-10-23T10:00:42Z");
+  const role = { roleId: "builder", engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const state = params.get("state") ?? "switch";
+  const setups = (state === "switch" ? ["failed", "passed"] : [state]).map((kind, index) => setupRecord(kind, index));
+  /* A failed setup parks the stage before its agent starts; the passed retry
+     of `switch` started one, recorded off the board. */
+  const conversation = (index: number) => state === "switch" && index === 1;
+  const attempts = setups.map((setup, index) => ({
+    n: index + 1, state: setup.state === "failed" ? "needs_decision" : "spawning", effectiveRole: role,
+    launchId: null, conversationId: conversation(index) ? "conversation_setup_retry" : null, sessionId: null,
+    agentPath: conversation(index) ? "/repo-lane/.agent/build-2.jsonl" : null, paneId: null, flowId: null,
+    startedAt: setup.startedAt, completedAt: null, input: null, activatedBy: null, output: null,
+    verdict: null, error: null, setup,
+  })) as PipelineStageAttempt[];
+  const pipeline = { id: "setup-lane", task: "Prepare the project checkout", project: "atlas", repoDir: "/repo",
+    worktreeDir: "/repo-lane", branch: "pipeline/setup", baseBranch: "main", baseRef: "a".repeat(40), lastPassedCommit: "a".repeat(40),
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, effectiveRole: role, prompt: "Build the project", next: null }],
+    runs: [{ stageId: "build", attempts }], cursor: { stageId: "build", state: "spawning", input: null, activatedBy: null },
+    state: "running", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null,
+    createdAt: "2026-10-23T10:00:00.000Z", closedAt: null } as Pipeline;
+  const host = params.get("host");
+  createRoot(root).render(<main data-setup-fixture data-setup-host={host} data-setup-state={state} className="h-full min-h-0 min-w-0 bg-canvas text-primary">
+    {host === "mobile" ? <MobilePipelineScreen pipeline={pipeline} files={[]} now={Date.now() / 1000} onOpenConversation={() => {}} />
+      : <div className="kb fixed inset-0"><SetupStagesSheet pipeline={pipeline} /></div>}
+  </main>);
+}
+else if (root && requested === "document-links") {
+  setRuntimeUiEnabledForTests(false);
+  const cwd = params.get("cwd")!;
+  const lines = [JSON.stringify({ type: "response_item", timestamp: "2026-10-20T10:00:00.000Z", payload: {
+    type: "message", role: "assistant", content: [{ type: "output_text", text:
+      `[Source report](docs/report.md:102:7) · [Heading](docs/report.md#source-version) · [Invisible](\u200B${cwd}/docs/report.md:102) · [Missing](docs/missing.md) · [Changed](docs/changed.md) · [Denied](${params.get("denied")}) · [External](https://example.com/guide)` }],
+  } })];
+  setLogFeedDependenciesForTests({ useLogTail: () => ({
+    lines, linesStart: 0, size: lines.length, loading: false, error: null, tickTime: null, paused: false,
+    setPaused() {}, clear() {}, hasMore: false, loadingOlder: false, loadOlder: async () => 0, prependGen: 0,
+  }) });
+  const file = { ...CODEX_FILE, cwd, projectRoot: params.get("parent")!, project: "selected-later-project", conversationId: "conversation_document_source" };
+  function DocumentLinksFixture() {
+    const mobile = useIsMobile();
+    return <main className="flex h-dvh min-h-0 flex-col bg-canvas text-primary">
+      <LogFeed file={file} showSvc={false} lineFilter="" onStatus={() => undefined} paused follow={false} setFollow={() => undefined} />
+      <ArtifactPreviewHost mobile={mobile} />
+    </main>;
+  }
+  createRoot(root).render(<DocumentLinksFixture />);
+}
 else if (root && requested === "seat-inbox") createRoot(root).render(<InboxFixture />);
 else if (root && requested === "attention-answer") mountAttentionAnswer(root);
 else if (root && requested === "parallel-failure") createRoot(root).render(<ParallelFailureFixture />);
@@ -1962,6 +2373,55 @@ else if (root && requested === "delivery-stalled") {
 }
 
 
+/** One setup record per evidence state, as the engine writes it. */
+function setupRecord(kind: string, index: number): NonNullable<PipelineStageAttempt["setup"]> {
+  const startedAt = new Date(Date.parse("2026-10-23T10:00:00Z") + index * 60_000).toISOString();
+  const after = (seconds: number) => new Date(Date.parse(startedAt) + seconds * 1000).toISOString();
+  const base = { command: ["sh", "scripts/setup.sh"], cwd: "/repo-lane/web", hash: "a".repeat(64), startedAt };
+  const install = [
+    "> atlas-web@3.8.0 setup", "> node scripts/fetch-fixtures.mjs && pnpm install --frozen-lockfile",
+    ...Array.from({ length: 34 }, (_, i) => `Progress: resolved ${(i + 1) * 37}, reused ${(i + 1) * 35}, downloaded ${i + 2}, added ${(i + 1) * 29}`),
+    "Packages: +1258", "node_modules/esbuild: Running postinstall script, done in 412ms",
+    "ERR_PNPM_FETCH_503  GET https://registry.example.test/@atlas%2Fui/-/ui-4.2.1.tgz: Service Unavailable - 503",
+    "pnpm: exited with code 7",
+  ].join("\n") + "\n";
+  if (kind === "passed") return { ...base, state: "passed", completedAt: after(12), code: 0,
+    stdout: "Fetching fixtures: 14 files, 2.3 MB\nInstalled 1258 packages in 9.4s\nWorkspace ready\n", stderr: "" };
+  if (kind === "passed-empty") return { ...base, state: "passed", completedAt: after(1), code: 0, stdout: "", stderr: "" };
+  if (kind === "failed") return { ...base, state: "failed", completedAt: after(38), code: 7, stdout: install,
+    stderr: "Dependency unavailable: @atlas/ui@4.2.1 (registry answered 503)\n" };
+  if (kind === "stopped") return { ...base, state: "failed", completedAt: after(180), code: null, stdout: "",
+    stderr: "setup timed out after 180 seconds" };
+  if (kind === "running") return { ...base, state: "running", completedAt: null, code: null, stdout: "", stderr: "" };
+  /* long: cut at the 16,000-character cap as the engine stores it, with one
+     unbroken 300-character line among the last lines kept. */
+  const line = (i: number) => `[build ${String(i + 1).padStart(3, "0")}] compiled src/modules/feature-${i % 37}/index.ts in ${(i * 7) % 90 + 10}ms`;
+  const lines: string[] = [];
+  for (let i = 0; lines.join("\n").length < 15_600; i++) lines.push(line(i));
+  lines.push("dist/assets/" + "chunk-a1b2c3d4e5f6".repeat(17).slice(0, 288));
+  for (let i = lines.length, end = i + 8; i < end; i++) lines.push(line(i));
+  return { ...base, state: "failed", completedAt: after(95), code: 1, stdout: lines.join("\n").slice(0, 16_000) + "…", stderr: "" };
+}
+
+/** The board's stage sheet over the setup lane; its attempt chooser switches
+    the shown attempt as the board does. */
+function SetupStagesSheet({ pipeline }: { pipeline: Pipeline }) {
+  const attempts = pipeline.runs[0]!.attempts;
+  const [shown, setShown] = useState(attempts.at(-1)!.n);
+  const ports: PipelinePorts = {
+    read: async () => ({ pipeline, stageDigests: {}, revision: "fixture" }),
+    patch: async () => ({ ok: true, pipeline }), refresh: () => {},
+  };
+  const noop = () => {};
+  return <StagesSheet
+    title={pipeline.task} summary={summarizePipeline(pipeline)}
+    panes={[{ stage: pipeline.stages[0]!, folded: false, attempts, shown: attempts.find(attempt => attempt.n === shown)!, file: null, readerKey: null }]}
+    flowsById={new Map()} initialFocus="build" windowReader={null} placement={new ReaderPlacement()}
+    drafts={new StageDrafts(() => ADMITTED_AT)} ports={ports} onFold={noop} onFoldMany={noop} onChooseAttempt={(_stage, n) => setShown(n)}
+    onStageMenu={noop} onOpenRecorded={noop} onLeaveWindow={noop} onClose={noop}
+  />;
+}
+
 function InboxFixture() {
   const data = JSON.parse(params.get("batch")!) as { text: string; messages: Record<string, import("@/lib/runtime/messageOrigin").DeliveredMessageProvenance> };
   const parsed = createFeedSession({ engine: "claude", fmt: "claude", showSvc: true, lineFilter: "" }).feed([
@@ -1978,22 +2438,41 @@ function InboxFixture() {
 function mountFileConfirmation(root: HTMLElement) {
   Date.now = () => Date.parse("2026-10-22T12:00:00Z");
   const state = params.get("state") ?? "pending";
-  const view: FileConfirmationView = {
-    id: "fixture-confirmation", digest: "a".repeat(64), kind: "document", chatId: "-1000000000101", chatTitle: "Fixture reports", topicId: 7,
+  /* `data=media` sends two images from outside the roots; `data=long` gives the file and the chat 70-character names. */
+  const data = params.get("data");
+  const long = data === "long";
+  const filename = long ? `quarterly-${"revenue-".repeat(5)}export-final-v2.json` : "weekly-report.json";
+  const chatTitle = long ? "Fixture reports for the regional and international operations office" : "Fixture reports";
+  const decided = state === "sent" || state === "rejected" || state === "failed" || state === "uncertain" ? { decidedAt: "2026-10-22T12:03:00.000Z", decidedBy: "owner" as const } : {};
+  const images = [{ path: "/sandbox/shots/board-before.png", caption: "Before / До" }, { path: "/sandbox/shots/board-after.png", caption: "After / Після" }];
+  const view: FileConfirmationView = data === "media" ? {
+    id: "fixture-confirmation", digest: "a".repeat(64), kind: "media", chatId: "-1000000000101", chatTitle, topicId: null,
+    options: { conversationId: "conversation_fixture", clientRequestId: "fixture", chat: "-1000000000101", topicId: null, replyToMessageId: null, format: "plain", silent: false, images },
+    files: images.map((image, index) => ({ path: image.path, resolvedPath: image.path, filename: image.path.split("/").pop()!, sha256: String(index + 1).repeat(64), bytes: 48_213 + index })),
+    reasons: images.map(image => ({ code: "document_outside_roots" as const, path: image.path, roots: ["/sandbox/handoff"], reason: `${image.path} is outside the allowed document roots (/sandbox/handoff).` })),
+    createdAt: "2026-10-22T12:00:00.000Z", expiresAt: "2026-10-22T12:10:00.000Z", state: state === "owner" ? "pending" : state as FileConfirmationView["state"], ...decided,
+  } : {
+    id: "fixture-confirmation", digest: "a".repeat(64), kind: "document", chatId: "-1000000000101", chatTitle, topicId: 7,
     options: { conversationId: "conversation_fixture", clientRequestId: "fixture", chat: "-1000000000101", topicId: 7, replyToMessageId: 42, format: "html", silent: true,
-      document: { path: "/sandbox/handoff/weekly-report.json", filename: "weekly-report.json", caption: "Requested file / Запитаний файл" } },
-    files: [{ path: "/sandbox/handoff/weekly-report.json", resolvedPath: "/sandbox/.codex/auth.json", filename: "weekly-report.json", sha256: "b".repeat(64), bytes: 256 }],
+      document: { path: `/sandbox/handoff/${filename}`, filename, caption: "Requested file / Запитаний файл" } },
+    files: [{ path: `/sandbox/handoff/${filename}`, resolvedPath: "/sandbox/.codex/auth.json", filename, sha256: "b".repeat(64), bytes: 2458 }],
     reasons: [{ code: "document_forbidden_path", path: "/sandbox/.codex/auth.json", segment: ".codex", reason: "/sandbox/.codex/auth.json passes through dot-directory .codex." }, { code: "document_outside_roots", path: "/sandbox/.codex/auth.json", roots: ["/sandbox/handoff"], reason: "/sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff)." }, { code: "document_secret", reason: "The file contains what looks like a secret (private_key, line 1).", secretClass: "private_key", line: 1 }],
-    createdAt: "2026-10-22T12:00:00.000Z", expiresAt: "2026-10-22T12:10:00.000Z", state: state === "owner" ? "pending" : state as FileConfirmationView["state"],
+    createdAt: "2026-10-22T12:00:00.000Z", expiresAt: "2026-10-22T12:10:00.000Z", state: state === "owner" ? "pending" : state as FileConfirmationView["state"], ...decided,
   };
   let sends = 0;
-  Object.assign(window, { fileConfirmationSends: () => sends });
+  const posts: unknown[] = [];
+  /* `post=hold` keeps every decision unanswered until the driver releases it, so the sending state can be framed. */
+  let release: () => void = () => {};
+  const held = params.get("post") === "hold" ? new Promise<void>(resolve => { release = resolve; }) : null;
+  Object.assign(window, { fileConfirmationSends: () => sends, fileConfirmationPosts: () => structuredClone(posts), releaseFileConfirmation: () => release() });
   window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), location.origin);
     if (url.pathname !== "/api/telegram/bot/confirmation") return Response.json({});
     if (state === "owner") return Response.json({ code: "OPERATOR_REQUIRED" }, { status: 401 });
     if (init?.method === "POST") {
       const body = JSON.parse(String(init.body));
+      posts.push(body);
+      if (held) await held;
       if (body.approve) sends++;
       return Response.json(body.approve ? { messageIds: [100] } : { rejected: true });
     }

@@ -1,3 +1,4 @@
+import { REPOSITORY_IDENTITY, repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { OPERATOR_CREDENTIAL_ENV, withoutOperatorCredentials } from "./operatorCredentials";
 import { engineMemoryOff } from "@/lib/memory/source";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
@@ -24,7 +25,7 @@ import { claudeTranscriptPath, headCwd } from "./transcript";
 import { normalizedClaudePermissionMode, readClaudePermissionModeSync } from "./claudePermissionMode";
 import { grantedMcpServers } from "./mcpAllowlist";
 import { grantedPlugins } from "./pluginAllowlist";
-import { normalizeClaudeLaunchModel } from "./models";
+import { claudePinnedModelId, normalizeClaudeLaunchModel } from "./models";
 import {
   applyClaudeSpawnPolicy, claudeSpawnPolicyPaths, viewerMcpHttpCodexEntry,
   viewerMcpServerEntry, viewerMcpTransportForLaunch, viewerMcpHttpUrl, VIEWER_SPAWN_CAPABILITY_ENV,
@@ -157,15 +158,25 @@ export interface ResumeSpec {
       under structured transport (the migration successor fork). */
   printMode?: true;
   launchProfile?: LaunchProfile;
+  /** Bound repository selection; null explicitly retains machine policy. */
+  publicationIdentity?: string | null;
+  publicationSettings?: Record<string, unknown>;
   /** Only legacy launches probe native policy; structured hosts read it themselves. */
   codexPublication?: { home: string; command: string; mcpServers: string[]; operatorDecisionForms?: boolean; subcommand?: string; viewerMcpArgs?: string };
   claudeTerminalPolicy?: { home: string; options: Parameters<typeof applyClaudeSpawnPolicy>[1] };
 }
 
 export async function prepareAgentPublicationSpec(spec: ResumeSpec): Promise<ResumeSpec> {
+  const source = await repositoryPublicationSource(spec.cwd, withoutOperatorCredentials(process.env));
+  spec = { ...spec, publicationIdentity: source[REPOSITORY_IDENTITY] ?? null };
+  if (spec.publicationSettings) {
+    const settings = { ...spec.publicationSettings,
+      env: { ...spec.publicationSettings.env as Record<string, string>, ...agentPublicationIdentityEnv(source) } };
+    spec.command = spec.command.replace(shellQuote(JSON.stringify(spec.publicationSettings)), () => shellQuote(JSON.stringify(settings)));
+  }
   const input = spec.codexPublication;
   if (!input) return spec;
-  const source = withoutOperatorCredentials({ ...process.env, CODEX_HOME: input.home });
+  source.CODEX_HOME = input.home;
   const policy = await readCodexShellPolicy(resolveCodexBinary(), spec.cwd, source);
   const args = agentCodexPublicationArgs(policy, source).map(shellQuote).join(" ");
   return { ...spec, command: telegramScopedCommand(`${codexEnvPrefix(input.home, input.mcpServers)} ${input.command} ${args}${input.subcommand ?? ""}`, input.mcpServers) };
@@ -173,6 +184,11 @@ export async function prepareAgentPublicationSpec(spec: ResumeSpec): Promise<Res
 
 export function withSpawnCapability(spec: ResumeSpec, capability: string, source: NodeJS.ProcessEnv = process.env): ResumeSpec {
   if (!/^[A-Za-z0-9_-]{43}$/.test(capability)) throw new Error("Viewer spawn capability is invalid");
+  if (spec.publicationIdentity !== undefined) {
+    source = { ...source };
+    if (spec.publicationIdentity === null) delete source[REPOSITORY_IDENTITY];
+    else source[REPOSITORY_IDENTITY] = spec.publicationIdentity;
+  }
   const identity = Object.entries(agentPublicationIdentityEnv(source))
     .map(([key, value]) => `${key}=${shellQuote(value!)}; export ${key};`).join(" ");
   const publicationEnv = { ...source, LLV_SPAWN_CAPABILITY: capability };
@@ -454,17 +470,19 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
           profileId: sid,
         })
       : null;
-    if (installedPolicy) pushClaudePolicyArgs(args, installedPolicy);
-    else args.push("--settings", JSON.stringify({
+    const publicationSettings = installedPolicy ? undefined : {
       ...(engineMemoryOff(options) ? { autoMemoryEnabled: false } : {}),
       env: { ...agentPublicationIdentityEnv(process.env), ...(engineMemoryOff(options) ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } : {}) },
-    }), "--strict-mcp-config");
+    };
+    if (installedPolicy) pushClaudePolicyArgs(args, installedPolicy);
+    else args.push("--settings", JSON.stringify(publicationSettings), "--strict-mcp-config");
     const command = args.map(shellQuote).join(" ");
     return {
       command: telegramScopedCommand(`${claudeEnvPrefix(options.claudeConfigDir ?? legacyClaudeHome(), mcpServers)} ${command}`, mcpServers),
       cwd,
       windowName: "claude-new",
       engine: "claude",
+      publicationSettings,
       claudeTerminalPolicy: options.claudeConfigDir ? { home: options.claudeConfigDir, options: {
         providerAccount: Boolean(claudeProviderForHome(options.claudeConfigDir)), allowSubagents: options.allowSubagents, cleanMemory: options.cleanMemory,
         cwd, mcpServers, baseSettingsPath: managed ? claudeSettingsPath() : null, profileId: sid,
@@ -675,7 +693,7 @@ export function resumeSpecForSession(
     }
     if (options.operatorDecisionForms && !engineReadOnly && permissionMode !== "plan") args.push("--disallowedTools", "AskUserQuestion,ExitPlanMode");
     pushClaudePolicyArgs(args, policy);
-    const launchModel = providerLaunchModel(home, normalizeClaudeLaunchModel(options.model));
+    const launchModel = providerLaunchModel(home, claudePinnedModelId(options.model) ?? normalizeClaudeLaunchModel(options.model));
     if (launchModel) args.push("--model", launchModel);
     if (options.effort) args.push("--effort", options.effort);
     args.push("--resume", sessionId);

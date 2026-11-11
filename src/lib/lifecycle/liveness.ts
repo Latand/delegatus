@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { readHostExit, type HostExitRecord } from "@/lib/runtime/hostExit";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { hostTurnRecordIdentity, readHostTurnRecord } from "@/lib/runtime/eventStore";
@@ -8,17 +9,20 @@ import { recordValue, recordsValue } from "@/lib/scanner/json";
 import { livenessProbe, receiptIsLive, receiptProcessEvidence, type LivenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
-import { registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
-import { isAbortError } from "@/lib/deadline";
+import { registryConversationsForPath, registryHasPathIndex, registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { deadlineSignal, isAbortError } from "@/lib/deadline";
 import { hostProviderRetryAt } from "@/lib/limitsThrottle";
 import { pipelineSelectionSource, loadPipelines } from "@/lib/pipelines/store";
 import { flowSelectionSource, loadFlows } from "@/lib/flows/store";
-import { readHistoryProjection, historyPipelineRef, historyHeadlessFlows, historyHeadlessFlowsForTarget, pruneHistoryHeadlessRounds, canPruneHistoryHeadlessRounds, historyHeadlessDeadRounds } from "@/lib/state/historyProjection";
+import { readHistoryProjection, readHistoryPipelineRefs, historyHeadlessFlows, historyHeadlessFlowsForTarget, pruneHistoryHeadlessRounds, canPruneHistoryHeadlessRounds, historyHeadlessDeadRounds } from "@/lib/state/historyProjection";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { Flow } from "@/lib/flows/types";
 import { completedFileScan } from "@/lib/scanner/scanCache";
 import type { PendingPermissionRequest, PendingQuestionRequest } from "@/lib/runtime/permissionRequests";
 import type { Engine, FileEntry } from "@/lib/types";
+import { projectAliasResolver } from "@/lib/projects/aliases";
+import { isCanonicalProjectId, UNRESOLVED_PROJECT } from "@/lib/projects/identity";
+import { namedProjectDirectory, ProjectNameRefusal, indexedProjectResolver } from "@/lib/projects/nameResolution";
 
 import {
   completedGenerationSelection,
@@ -27,6 +31,7 @@ import {
   type CompletedGenerationRead,
   type ConversationSelection,
   type ConversationSelectionRequest,
+  type ConversationSelectionCatalog,
 } from "./inventorySelection";
 import {
   describeTranscriptPath,
@@ -35,7 +40,8 @@ import {
   type LivenessTranscript,
   type LivenessTranscriptEvidence,
 } from "./transcript";
-import { entryOwners, headlessRoundVerdict, ownerProcessAlive, type RecordedOwner } from "./owners";
+import { entryOwners, headlessRoundVerdict, ownerProcessAlive, registryHostEvidence as hostEvidence, STARTING_GRACE_MS } from "./owners";
+export { STARTING_GRACE_MS } from "./owners";
 import { classifyAgentActivity, type AgentActivity, type AgentActivityFacts } from "./agentActivity";
 import { activityProcessReader } from "./agentActivityProcesses";
 import { DEFAULT_STALL_AFTER_MS } from "./limits";
@@ -53,12 +59,6 @@ import type { LifecycleState, LifecycleTurnState } from "./vocabulary";
  * a pipeline stuck at `running` over a dead host is exactly the failure this
  * exists to catch.
  */
-
-/** A launch with no host evidence yet is `starting`, not `gone`. Mirrors the
-    unproven-launch grace the reaper and blocker evaluation already agree on.
-    Past it a launch that never produced host evidence is registry rot, and an
-    old transcript with no registry entry at all is not "starting up" either. */
-export const STARTING_GRACE_MS = 5 * 60_000;
 
 export type AgentHostState = "alive" | "gone" | "unknown";
 
@@ -124,7 +124,7 @@ export interface AgentLivenessRecord {
       counts, not only assistant prose. Null without a verified record clock. */
   lastRecordAt: string | null;
   turnState: LifecycleTurnState;
-  host: { state: AgentHostState; kind: "tmux" | "structured" | "headless" | "none"; pid: number | null };
+  host: { state: AgentHostState; kind: "structured" | "headless" | "none"; pid: number | null };
   /** Shared vocabulary. `stalled` means the turn cannot progress on its own. */
   lifecycle: LifecycleState;
   reason: AgentLivenessReason;
@@ -197,12 +197,12 @@ export interface AgentLivenessSelectionReport {
       named, that the answer budget ended before describing. They have no row
       in this answer; a later call resolves them. */
   recoveryPending: number;
-  /** Rows a transcript tail read was attempted for; `unreadable` is the subset
-      of those whose tail could not be used. */
+  /** Rows with current pipeline lineage whose transcript read was attempted;
+      `unreadable` is the subset whose tail could not be used. */
   hydrated: number;
   unreadable: number;
-  /** Selected rows with no tail evidence in this answer: a budget was exhausted
-      before their read started or before it finished. Equals the number of `evidenceSource: "projection"`
+  /** Selected rows with no usable tail evidence in this answer: a budget was exhausted
+      or pipeline lineage is still pending. Equals the number of `evidenceSource: "projection"`
       records by construction. */
   projected: number;
   generation: number | null;
@@ -210,13 +210,15 @@ export interface AgentLivenessSelectionReport {
   /** True only on the legacy whole-inventory adapter. */
   freshScan: boolean;
   evidenceBytes: number;
-  budget: "complete" | "byte_budget" | "deadline";
+  budget: "complete" | "byte_budget" | "deadline" | "projection_pending";
 }
 
 export interface AgentLivenessSnapshot {
   observedAt: string;
   stallAfterMs: number;
   count: number;
+  /** Project-scoped candidates whose project identity could not be resolved. */
+  unresolvedProjectCount?: number;
   /** Conversations whose lifecycle is `stalled`, so a poller can branch on one
       number instead of scanning the list. */
   stalledCount: number;
@@ -267,6 +269,9 @@ export interface AgentLivenessRequest {
    * Omitted, each phase keeps only its own budget.
    */
   answerBudgetMs?: number;
+  /** Explicit full inventories prepare the global registry cooperatively.
+      Targeted reads retain their existing keyed snapshot path. */
+  prepareRegistrySnapshot?: boolean;
 }
 
 /** Tail reads in flight at once. Small on purpose: a `limit: 10` read is ten
@@ -330,11 +335,13 @@ export interface AgentLivenessSources {
       as null like a path that names no file. */
   describeTranscript(transcriptPath: string, options?: { strict?: boolean }): Promise<LivenessTranscript | null>;
   registrySnapshot(): LivenessRegistrySnapshot;
+  /** Validated global view prepared under the caller's lifetime. */
+  prepareRegistrySnapshot?(signal: AbortSignal): Promise<LivenessRegistrySnapshot>;
   /** Keyed registry view for a conversation-only liveness request. */
   registrySnapshotForConversation?(conversationId: string): LivenessRegistrySnapshot;
   pipelines: {
     (): Pipeline[];
-    forLiveness?: (targets: { conversationId: string | null; path: string }[], options?: LivenessProjectionOptions) => Promise<(AgentLivenessPipelineRef | null)[]>;
+    forLiveness?: (targets: { conversationId: string | null; path: string }[], options?: LivenessProjectionOptions) => Promise<(AgentLivenessPipelineRef | null | undefined)[]>;
   };
   /** Active review-loop ownership, read only to resolve detached reviewers that
       intentionally have no structured-host registry entry. */
@@ -372,9 +379,10 @@ export function productionLivenessSources(
     }),
     describeTranscript: describeTranscriptPath,
     registrySnapshot: () => agentRegistry().readOnlySnapshot(),
+    prepareRegistrySnapshot: signal => agentRegistry().prepareReadOnlySnapshot(signal),
     registrySnapshotForConversation: conversationId => agentRegistry().livenessConversationSnapshot(conversationId),
     pipelines: Object.assign(() => loadPipelines(), { forLiveness: (targets: { conversationId: string | null; path: string }[], options: LivenessProjectionOptions = {}) =>
-      readHistoryProjection(db => targets.map(target => historyPipelineRef(db, target.conversationId, target.path)), { ...options, collections: ["pipelines", "pipelines_archive"] }) }),
+      readHistoryPipelineRefs(targets, options) }),
     flows: Object.assign(() => loadFlows(), {
       forLiveness: (options: LivenessProjectionOptions = {}) => {
         pipelineSelectionSource(); flowSelectionSource();
@@ -409,7 +417,7 @@ async function reconcileWriterIdle(
     const conversation = id ? canonicalConversation(snapshot, id) : null;
     const generation = conversation?.generations.at(-1);
     if (!generation || generation.path !== path) return null;
-    return Object.values(snapshot.entries).find(current => current.artifactPath === path
+    return registryRowsMatching(snapshot as RegistryFile, "entries", "artifactPath", path).find(current => current.artifactPath === path
       && current.key.engine === conversation!.engine && current.key.sessionId === generation.id) ?? null;
   };
   const entry = writerEntry(registry);
@@ -511,30 +519,6 @@ function entryForPath(
   return first;
 }
 
-/**
- * The host verdict of one registry entry, folded over the owners the census
- * lists for it (docs/design/update-drain-liveness.md), so `agent_activity`
- * and the update drain share one process rule. A live owner answers first,
- * then a recorded process that is gone; a hosted row that records no process
- * is a launch inside its grace, then rot.
- */
-function hostEvidence(
-  entry: AgentRegistryEntry | null,
-  probe: LivenessProbe,
-): { state: AgentHostState; kind: "tmux" | "structured" | "headless" | "none"; pid: number | null } {
-  if (!entry) return { state: "unknown", kind: "none", pid: null };
-  const { owners, ownerless } = entryOwners(entry, probe);
-  const kind = (owner: RecordedOwner) => owner.kind === "tmux" ? "tmux" as const : "structured" as const;
-  const live = owners.find((owner) => ownerProcessAlive(owner, probe));
-  if (live) return { state: "alive", kind: kind(live), pid: live.pid };
-  const recorded = owners[0];
-  if (recorded) return { state: "gone", kind: kind(recorded), pid: recorded.pid };
-  if (ownerless?.updatedAt !== null && ownerless?.updatedAt !== undefined && probe.now() - ownerless.updatedAt < STARTING_GRACE_MS) {
-    return { state: "unknown", kind: "none", pid: null };
-  }
-  return { state: "gone", kind: "none", pid: null };
-}
-
 /** Process ownership survives control phases and later review rounds. */
 function headlessHostEvidence(
   flows: readonly LivenessFlow[],
@@ -588,7 +572,7 @@ export function headlessRoundProcess(
   const caches=shared.__delegatusHeadlessVerdictsV1 ??= new WeakMap();
   const cacheKey=probe.cacheKey ?? probe;
   let cache=caches.get(cacheKey);
-  if(!cache){cache=new Map();caches.set(cacheKey,cache);}
+  if(!cache){cache=new MeasuredCache("headless-verdicts", "lifecycle/liveness");caches.set(cacheKey,cache);}
   const now=probe.now();
   const prior=cache.get(key);
   if (prior && ((prior.verdict==="gone" && round.reviewerIdentity) || now<prior.until)) { cache.delete(key);cache.set(key,prior);return prior.verdict; }
@@ -719,10 +703,15 @@ export function evaluateActivityLiveness(input: Parameters<typeof evaluateLivene
       workProcesses: input.workProcesses }, input.now, input.stallAfterMs)
     : undefined;
   const silent = input.silentForMs !== null && input.silentForMs >= input.stallAfterMs;
+  /* A host that exited over an unanswered tool call left its turn open for
+     certain: the open call is what keeps the boundary unverified, and it can
+     no longer be answered (#3740). Past the stall window that row stays a
+     stall, with its silence, so the board and the seat wake keep naming it. */
+  const goneOverOpenCall = input.host.state === "gone" && input.turnState === "busy" && !!input.activityFacts?.openCall;
   const verified = input.turnVerified !== false
     && !(input.host.state === "alive" && input.turnState !== "idle" && input.activityFacts?.backgroundVerified === false
       && activity?.state !== "checking" && silent)
-    && !((input.activityFacts?.turnBoundaryVerified === false || input.unresolvedActivityOwnership)
+    && !((input.activityFacts?.turnBoundaryVerified === false && !goneOverOpenCall || input.unresolvedActivityOwnership)
       && activity?.state !== "checking" && silent);
   const verdict = evaluateLiveness({ ...input, turnVerified: verified,
     settledStage: input.settledStage && activity?.state !== "checking" && !input.activityFacts?.openCall,
@@ -766,7 +755,7 @@ function canonicalConversation(
 /** Setup owns a conversation before its first transcript or host entry exists. */
 function receiptHostEvidence(registry: LivenessRegistrySnapshot, conversationId: string | null, probe: LivenessProbe, artifactPath?: string) {
   const ownerId = conversationId ? canonicalConversationId(registry, conversationId) : null;
-  let alive: { state: "alive"; kind: "structured" | "tmux"; pid: number; turnPending: boolean } | null = null;
+  let alive: { state: "alive"; kind: "structured"; pid: number; turnPending: boolean } | null = null;
   let gone = false;
   let unresolved = false;
   const candidates = new Map<string, RegistryFile["receipts"][string]>();
@@ -778,7 +767,7 @@ function receiptHostEvidence(registry: LivenessRegistrySnapshot, conversationId:
     const evidence = receiptProcessEvidence(receipt, probe);
     if (evidence?.state === "alive") {
       const candidate = { state: "alive" as const,
-        kind: receipt.transport === "structured" ? "structured" as const : "tmux" as const, pid: evidence.process.pid,
+        kind: "structured" as const, pid: evidence.process.pid,
         turnPending: receiptIsLive(registry as RegistryFile, receipt, probe) };
       if (candidate.turnPending) return candidate;
       alive ??= candidate;
@@ -854,22 +843,23 @@ export function conversationIdForPath(
   registry: Pick<LivenessRegistrySnapshot, "conversations" | "conversationAliases">,
   transcriptPath: string,
 ): string | null {
-  for (const conversation of Object.values(registry.conversations)) {
+  const candidates = registryHasPathIndex(registry)
+    ? registryConversationsForPath(registry, transcriptPath)
+    : Object.values(registry.conversations);
+  for (const conversation of candidates) {
     if (conversation.generations.some((generation) => generation.path === transcriptPath)
       || conversation.continuityPaths?.includes(transcriptPath)) return canonicalConversationId(registry, conversation.id);
   }
   return null;
 }
 
-function conversationPathIndex(
-  registry: Pick<LivenessRegistrySnapshot, "conversations" | "conversationAliases">,
-): Map<string, string> {
+/** Plain injected snapshots have no native path index. Build their compatibility
+ * index once, retaining the first recorded owner of each path. */
+function conversationPathIndex(registry: LivenessRegistrySnapshot): Map<string, string> {
   const paths = new Map<string, string>();
   for (const conversation of Object.values(registry.conversations)) {
     const id = canonicalConversationId(registry, conversation.id);
     for (const path of [...conversation.generations.map(generation => generation.path), ...(conversation.continuityPaths ?? [])]) {
-      // The existing lookup gives the first recorded owner precedence,
-      // including when another conversation claims the same path later.
       if (!paths.has(path)) paths.set(path, id);
     }
   }
@@ -880,11 +870,12 @@ function conversationPathIndex(
     generation can predate a launch by its whole refresh cadence, so liveness
     filtered on the scan projection alone would drop a conversation that started
     a minute ago — the correctness half of not sweeping the corpus (#860). */
-function hostedTranscriptPaths(snapshot: LivenessRegistrySnapshot, probe: LivenessProbe): Set<string> {
+function hostedTranscriptPaths(snapshot: LivenessRegistrySnapshot, probe: LivenessProbe,
+  owners = registryLivenessRows(snapshot as RegistryFile)): Set<string> {
   const hosted = new Set<string>();
   // Select durable owners before hydrating payloads; enumerating the registry
   // compatibility view makes every archived entry look like a candidate.
-  const { entries, receipts } = registryLivenessRows(snapshot as RegistryFile);
+  const { entries, receipts } = owners;
   for (const entry of entries) {
     if (entry.artifactPath && hostEvidence(entry, probe).state === "alive") hosted.add(entry.artifactPath);
   }
@@ -946,7 +937,7 @@ export const HOSTED_RECOVERY_MAX = 64;
 async function recoverHostedTranscripts(
   hostedPaths: ReadonlySet<string>,
   hostedSeen: ReadonlySet<string>,
-  project: string | undefined,
+  projectMatches: (entry: LivenessTranscript) => boolean,
   describe: AgentLivenessSources["describeTranscript"],
   answer: AnswerBudget,
 ): Promise<{ entries: LivenessTranscript[]; truncated: boolean; pending: number }> {
@@ -975,7 +966,7 @@ async function recoverHostedTranscripts(
     pending: described.filter((entry) => entry === ANSWER_SPENT).length,
     entries: described.filter((entry): entry is LivenessTranscript => entry !== null && entry !== ANSWER_SPENT
       && (entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
-      && (!project || entry.project === project)),
+      && projectMatches(entry)),
     truncated,
   };
 }
@@ -1008,6 +999,7 @@ interface AnswerBudget {
 }
 
 function answerBudget(budgetMs: number | null, signal: AbortSignal | null): AnswerBudget {
+  const deadlineMs = budgetMs === null ? undefined : performance.now() + budgetMs;
   let over = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
@@ -1020,14 +1012,14 @@ function answerBudget(budgetMs: number | null, signal: AbortSignal | null): Answ
   });
   void interrupted?.catch(() => undefined);
   return {
-    deadlineMs: budgetMs === null ? undefined : performance.now() + budgetMs,
+    deadlineMs,
     within: <T>(work: Promise<T>) => {
       if (!ended && !interrupted) return work;
       /* The loser keeps running; its rejection has nobody left to read it. */
       void work.catch(() => undefined);
       return Promise.race([work, ...(ended ? [ended] : []), ...(interrupted ? [interrupted] : [])]);
     },
-    spent: () => over,
+    spent: () => over || (deadlineMs !== undefined && performance.now() >= deadlineMs),
     bounded: ended !== null,
     cancelled: () => signal?.aborted === true,
     release: () => {
@@ -1107,6 +1099,59 @@ function roundMs(value: number): number {
   return Math.round(Math.max(0, value) * 100) / 100;
 }
 
+/** One request-local resolution cache for catalog selection and host recovery.
+ * Names and short keys use the same retained directory as other project reads;
+ * canonical keys remain usable before a new host reaches that catalog. */
+function livenessProjectSelection(project: string | undefined, catalog: ConversationSelectionCatalog, hosts: readonly LivenessTranscript[], answer: AnswerBudget) {
+  const unresolved = new Set<string>();
+  if (!project) return { matches: () => true, unresolved };
+  const canonical = projectAliasResolver();
+  const requestedKey = canonical(project.trim());
+  const directory = namedProjectDirectory({ includeActiveSeats: false, lastCompletedCatalog: () => ({
+    ...catalog,
+    // A row's unverified label cannot register itself as a project identity.
+    files: catalog.files.filter(entry => isCanonicalProjectId(canonical(entry.project))),
+  }) }, [
+    ...(isCanonicalProjectId(requestedKey) ? [requestedKey] : []),
+    ...hosts.map(entry => canonical(entry.project)).filter(isCanonicalProjectId),
+  ]);
+  const indexedResolve = indexedProjectResolver(directory);
+  const resolve = (key: string): string => {
+    const identity = canonical(key.trim());
+    const resolved = isCanonicalProjectId(identity) ? directory.canonical(identity) : indexedResolve(identity);
+    if (resolved === UNRESOLVED_PROJECT) throw new ProjectNameRefusal("unresolved project", { code: "unknown_project" });
+    return resolved;
+  };
+  let requested: string;
+  try { requested = resolve(project); }
+  catch (error) {
+    if (!(error instanceof ProjectNameRefusal) || error.details.code !== "unknown_project") throw error;
+    // Existing callers can still name an opaque legacy project key exactly.
+    requested = requestedKey;
+  }
+  const resolutions = new Map<string, string | null>();
+  if (requested && requested !== UNRESOLVED_PROJECT) {
+    resolutions.set(project, requested);
+    resolutions.set(requested, requested);
+  }
+  const matches = (entry: Pick<LivenessTranscript, "project" | "path">) => {
+    if (answer.cancelled()) throw livenessAbortError();
+    let identity = resolutions.get(entry.project);
+    if (identity === undefined) {
+      try { identity = answer.spent() && !isCanonicalProjectId(canonical(entry.project.trim())) ? null : resolve(entry.project); }
+      catch (error) {
+        if (!(error instanceof ProjectNameRefusal)) throw error;
+        identity = null;
+      }
+      resolutions.set(entry.project, identity);
+    }
+    if (identity === null) unresolved.add(entry.path);
+    else unresolved.delete(entry.path);
+    return identity === requested;
+  };
+  return { matches, unresolved };
+}
+
 /**
  * The liveness answer for a request, bounded end to end (#860).
  *
@@ -1149,16 +1194,42 @@ async function livenessSnapshotWithin(
 
   const projectionStartedAt = phaseClock();
   const targeted = Boolean(request.transcriptPath || request.conversationId);
-  const registry = performanceSpans.sync("liveness.snapshot", () => request.conversationId && sources.registrySnapshotForConversation
-    ? sources.registrySnapshotForConversation(request.conversationId)
-    : sources.registrySnapshot());
-  // Archive rows are getters that check the database on every access. A
-  // fallback through every entry must not enumerate every conversation for
-  // each candidate. These indexes belong only to this captured snapshot.
-  let paths: Map<string, string> | undefined;
-  const conversationForPath = (path: string) => (paths ??= conversationPathIndex(registry)).get(path) ?? null;
-  let entriesInRegistry: AgentRegistryEntry[] | undefined;
-  const registryEntries = () => entriesInRegistry ??= Object.values(registry.entries);
+  let projectSelection = { matches: (_entry: Pick<LivenessTranscript, "project" | "path">) => true, unresolved: new Set<string>() };
+  let registry: LivenessRegistrySnapshot;
+  if (!targeted && request.prepareRegistrySnapshot && sources.prepareRegistrySnapshot) {
+    const preparation = deadlineSignal(answer.deadlineMs === undefined ? Infinity : Math.max(0, answer.deadlineMs - performance.now()), {
+      signal, reason: "full inventory registry preparation exceeded its deadline",
+    });
+    try {
+      registry = await performanceSpans.wait("liveness.snapshot", () => sources.prepareRegistrySnapshot!(preparation.signal));
+      preparation.signal.throwIfAborted();
+    } finally {
+      preparation.release();
+    }
+  } else {
+    registry = performanceSpans.sync("liveness.snapshot", () => request.conversationId && sources.registrySnapshotForConversation
+      ? sources.registrySnapshotForConversation(request.conversationId)
+      : sources.registrySnapshot());
+  }
+  // Memoize only paths this request asks about, including missing paths. Native
+  // readers retain collection order and the captured view across peer writes.
+  const paths = new Map<string, string | null>();
+  let compatibilityPaths: Map<string, string> | undefined;
+  const conversationForPath = (path: string) => {
+    if (!paths.has(path)) paths.set(path, registryHasPathIndex(registry)
+      ? conversationIdForPath(registry, path)
+      : (compatibilityPaths ??= conversationPathIndex(registry)).get(path) ?? null);
+    return paths.get(path)!;
+  };
+  let owners: ReturnType<typeof registryLivenessRows> | undefined;
+  const ownerRows = () => owners ??= registryLivenessRows(registry as RegistryFile);
+  const entriesByPath = new Map<string, AgentRegistryEntry | null>();
+  const entryAtPath = (path: string) => {
+    // Selected terminal rows retain exit evidence outside the active-owner
+    // projection. The keyed reader reconciles peer moves against this view.
+    if (!entriesByPath.has(path)) entriesByPath.set(path, entryForPath(registry, path, sources.probe));
+    return entriesByPath.get(path) ?? null;
+  };
   const pipelines = performanceSpans.sync("liveness.snapshot", () => pipelineIndex(targeted ? [] : sources.pipelines.forLiveness ? [] : sources.pipelines()));
   const projectionOptions = { ...(request.signal ? { signal: request.signal } : {}), deadlineMs: answer.deadlineMs };
   const flows = targeted
@@ -1169,7 +1240,7 @@ async function livenessSnapshotWithin(
       : sources.flows?.() ?? []
     : await (sources.flows?.forLiveness ? sources.flows.forLiveness(projectionOptions) : sources.flows?.() ?? []);
   const hostedPaths = performanceSpans.sync("liveness.snapshot", () => targeted ? new Set<string>() : new Set([
-    ...hostedTranscriptPaths(registry, sources.probe),
+    ...hostedTranscriptPaths(registry, sources.probe, ownerRows()),
     ...activeHeadlessTranscriptPaths(flows, registry, sources.probe, Boolean(sources.flows?.forLiveness && canPruneHistoryHeadlessRounds(flows))),
   ]));
   const indexProjectionMs = phaseClock() - projectionStartedAt;
@@ -1196,8 +1267,8 @@ async function livenessSnapshotWithin(
         return null;
       }
   };
-  // Hosted files are independent of catalog membership. Give their bounded
-  // reads the time spent waiting for the catalog, with the same concurrency.
+  // Hosted descriptions are independent of catalog membership. Project-scoped
+  // evidence waits for scope resolution, then uses the shared hydration budget.
   const hostedEvidence = new Map<string, LivenessTranscriptEvidence | null | typeof ANSWER_SPENT>();
   const hostedDescriptions = new Map<string, LivenessTranscript>();
 
@@ -1231,17 +1302,9 @@ async function livenessSnapshotWithin(
       const descriptions = await Promise.all([...paths].map(path => describeWithin(path, sources.describeTranscript, answer).catch(() => null)));
       const describedPaths = new Set(descriptions.flatMap((entry, index) => entry && entry !== ANSWER_SPENT ? [[...paths][index]] : []));
       const currentWriterPaths = new Set<string>();
-      if (targeted) {
-        for (const path of paths) {
-          const entry = entryForPath(registry, path, sources.probe);
-          if (entry && hostEvidence(entry, sources.probe).state === "alive") currentWriterPaths.add(path);
-        }
-      } else {
-        for (const entry of registryEntries()) {
-          if (hostEvidence(entry, sources.probe).state === "alive" && entry.artifactPath && paths.has(entry.artifactPath)) {
-            currentWriterPaths.add(entry.artifactPath);
-          }
-        }
+      for (const path of paths) {
+        const entry = entryAtPath(path);
+        if (entry && hostEvidence(entry, sources.probe).state === "alive") currentWriterPaths.add(path);
       }
       for (const path of currentWriterPaths) {
         if (!describedPaths.has(path)) unresolvedCurrentWriters.add(conversationForPath(path) ?? path);
@@ -1253,7 +1316,7 @@ async function livenessSnapshotWithin(
       for (const path of paths) hostedDescriptions.set(path, entry);
       previousPaths.set(entry.path, [...paths].filter(path => path !== entry.path));
       if (!targeted && [...paths].some(path => hostedPaths.has(path))) hostedPaths.add(entry.path);
-      if (!targeted && request.project && entry.project !== request.project) return;
+      if (!targeted && request.project) return;
       hostedEvidence.set(entry.path, await readEntry(entry, readSignal));
     },
     { concurrency: request.evidenceConcurrency ?? DEFAULT_EVIDENCE_CONCURRENCY,
@@ -1290,8 +1353,36 @@ async function livenessSnapshotWithin(
       freshScan: false,
     };
   } else {
+    let prepared = false;
+    let preparedRecovery: Awaited<ReturnType<typeof recoverHostedTranscripts>> | undefined;
+    const prepareProjectMatches = async (catalog: ConversationSelectionCatalog) => {
+      await hostedRead;
+      if (signal?.aborted) throw livenessAbortError(signal.reason);
+      // Catalog membership does not prove current project membership. Resolve
+      // active hosts beyond the evidence prefetch limit too, within recovery's
+      // own cap and the shared answer deadline.
+      const seen = new Set(hostedDescriptions.keys());
+      preparedRecovery = await recoverHostedTranscripts(hostedPaths, seen, () => true,
+        path => sources.describeTranscript(path), answer);
+      for (const entry of preparedRecovery.entries) hostedDescriptions.set(entry.path, entry);
+      // Give cancellation a turn after asynchronous host recovery and before
+      // compiling the request-local indexes and walking retained metadata.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      if (signal?.aborted) throw livenessAbortError(signal.reason);
+      projectSelection = livenessProjectSelection(request.project, catalog,
+        [...hostedDescriptions.values()], answer);
+      for (const path of hostedPaths) {
+        if (!hostedDescriptions.has(path)) projectSelection.unresolved.add(path);
+      }
+      prepared = true;
+    };
     const selectionRequest: ConversationSelectionRequest = {
       project: request.project,
+      ...(request.project ? { prepareProjectMatches } : {}),
+      projectMatches: entry => {
+        if (request.project && hostedPaths.has(entry.path) && !hostedDescriptions.has(entry.path)) return false;
+        return projectSelection.matches(hostedDescriptions.get(entry.path) ?? entry);
+      },
       liveOnly: request.liveOnly,
       limit,
       hostedPaths,
@@ -1299,6 +1390,7 @@ async function livenessSnapshotWithin(
     let hostedSeen: ReadonlySet<string>;
     if (sources.selectInventory) {
       const selected = await sources.selectInventory(selectionRequest, { signal });
+      if (request.project && !prepared) await prepareProjectMatches({ files: selected.entries, projectCatalog: [] });
       entries = selected.entries.map(transcriptFromEntry);
       hostedSeen = selected.hostedSeen ?? new Set(selected.entries.map((entry) => entry.path));
       selection = {
@@ -1314,7 +1406,9 @@ async function livenessSnapshotWithin(
         freshScan: selected.freshScan,
       };
     } else if (sources.listFiles) {
-      const selected = selectConversationEntries(await sources.listFiles(), selectionRequest);
+      const files = await sources.listFiles();
+      if (request.project) await prepareProjectMatches({ files, projectCatalog: [] });
+      const selected = selectConversationEntries(files, selectionRequest);
       entries = selected.entries.map(transcriptFromEntry);
       hostedSeen = selected.hostedSeen;
       selection = {
@@ -1337,8 +1431,10 @@ async function livenessSnapshotWithin(
        priority. Order by freshness within each group before the final limit,
        so newer scan-only history cannot displace a recovered owner. */
     await hostedRead;
-    const prefetched = [...new Set(hostedDescriptions.values())].filter(entry => hostedPaths.has(entry.path) && !hostedSeen.has(entry.path) && (!request.project || entry.project === request.project));
-    const recovery = await recoverHostedTranscripts(hostedPaths, new Set([...hostedSeen, ...prefetched.map(entry => entry.path)]), request.project, async path => hostedDescriptions.get(path) ?? sources.describeTranscript(path), answer);
+    const prefetched = [...new Set(hostedDescriptions.values())].filter(entry => hostedPaths.has(entry.path) && !hostedSeen.has(entry.path) && projectSelection.matches(entry));
+    const recovery = preparedRecovery
+      ? { ...preparedRecovery, entries: preparedRecovery.entries.filter(entry => !hostedSeen.has(entry.path) && projectSelection.matches(entry)) }
+      : await recoverHostedTranscripts(hostedPaths, new Set([...hostedSeen, ...prefetched.map(entry => entry.path)]), projectSelection.matches, async path => hostedDescriptions.get(path) ?? sources.describeTranscript(path), answer);
     recovery.entries.push(...prefetched);
     const known = new Set(entries.map((entry) => entry.path));
     const added = recovery.entries.filter((entry) => {
@@ -1378,17 +1474,9 @@ async function livenessSnapshotWithin(
     const descriptions = await Promise.all([...paths].map(path => describeWithin(path, sources.describeTranscript, answer).catch(() => null)));
     const describedPaths = new Set(descriptions.flatMap((entry, index) => entry && entry !== ANSWER_SPENT ? [[...paths][index]] : []));
     const currentWriterPaths = new Set<string>();
-    if (targeted) {
-      for (const path of paths) {
-        const entry = entryForPath(registry, path, sources.probe);
-        if (entry && hostEvidence(entry, sources.probe).state === "alive") currentWriterPaths.add(path);
-      }
-    } else {
-      for (const entry of registryEntries()) {
-        if (hostEvidence(entry, sources.probe).state === "alive" && entry.artifactPath && paths.has(entry.artifactPath)) {
-          currentWriterPaths.add(entry.artifactPath);
-        }
-      }
+    for (const path of paths) {
+      const entry = entryAtPath(path);
+      if (entry && hostEvidence(entry, sources.probe).state === "alive") currentWriterPaths.add(path);
     }
     for (const path of currentWriterPaths) {
       if (!describedPaths.has(path)) unresolvedCurrentWriters.add(conversationForPath(path) ?? path);
@@ -1409,7 +1497,7 @@ async function livenessSnapshotWithin(
     if (!existing || entry.mtimeMs > existing.mtimeMs) folded.set(key, { ...entry, conversationId: id });
     if (original.path !== entry.path) previousPaths.set(entry.path, [...new Set([...(previousPaths.get(entry.path) ?? []), original.path])]);
   }
-  entries = [...folded.values()].filter(entry => targeted || !request.project || entry.project === request.project);
+  entries = [...folded.values()].filter(projectSelection.matches);
   selection.selected = entries.length;
   const hydratable = entries.filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot");
   const evidenceStartedAt = phaseClock();
@@ -1458,7 +1546,9 @@ async function livenessSnapshotWithin(
        produced none, and a row the budget never reached. The counters below are
        derived from the same distinction, so the report and the per-row labels
        cannot disagree. */
-    const read = hydration.results.get(index);
+    // An unresolved pipeline may have changed the stage's terminal evidence.
+    // Keep the host visible and use the existing unverified projection contract.
+    const read = narrowRefs && narrowRefs[index] === undefined ? ANSWER_SPENT : hydration.results.get(index);
     const attempted = hydration.results.has(index) && read !== ANSWER_SPENT;
     const evidence = read === ANSWER_SPENT ? null : read ?? null;
     if (attempted) answered += 1;
@@ -1470,8 +1560,8 @@ async function livenessSnapshotWithin(
     const lastRecordMs = evidence?.lastRecordTs ?? null;
     const silentForMs = lastRecordMs !== null ? Math.max(0, now - lastRecordMs) : null;
     const conversationId = conversationForPath(entry.path) ?? entry.conversationId;
-    const registryEntry = entryForPath(registry, entry.path, sources.probe)
-      ?? (conversationId ? registryEntries().find(candidate => candidate.artifactPath && conversationForPath(candidate.artifactPath) === conversationId && hostEvidence(candidate, sources.probe).state === "alive") ?? null : null);
+    const registryEntry = entryAtPath(entry.path)
+      ?? (conversationId ? ownerRows().entries.find(candidate => candidate.artifactPath && conversationForPath(candidate.artifactPath) === conversationId && hostEvidence(candidate, sources.probe).state === "alive") ?? null : null);
     const reviewerHost = headlessHostEvidence(flows, entry.path, conversationId, sources.probe, registry);
     const registeredHost = hostEvidence(registryEntry, sources.probe);
     const receiptHost = receiptHostEvidence(registry, conversationId, sources.probe, entry.path);
@@ -1487,7 +1577,7 @@ async function livenessSnapshotWithin(
     const pendingQuestion = host.state === "alive" && host.kind === "structured"
       ? registryEntry?.structuredHost?.pendingQuestions?.[0] ?? null
       : null;
-    const pipeline = narrowRefs ? narrowRefs[index] : (conversationId ? pipelines.byConversation.get(conversationId) : undefined)
+    const pipeline = narrowRefs ? narrowRefs[index] ?? null : (conversationId ? pipelines.byConversation.get(conversationId) : undefined)
       ?? pipelines.byPath.get(entry.path) ?? null;
     const matchingStage = conversationId && pipeline?.conversationId
       ? canonicalConversationId(registry, pipeline.conversationId) === canonicalConversationId(registry, conversationId)
@@ -1569,6 +1659,7 @@ async function livenessSnapshotWithin(
     observedAt: new Date(now).toISOString(),
     stallAfterMs,
     count: conversations.length,
+    ...(projectSelection.unresolved.size ? { unresolvedProjectCount: projectSelection.unresolved.size } : {}),
     stalledCount: conversations.filter((record) => record.lifecycle === "stalled").length,
     stalledConfirmedCount: conversations
       .filter((record) => record.lifecycle === "stalled" && record.evidenceSource === "transcript").length,
@@ -1579,7 +1670,9 @@ async function livenessSnapshotWithin(
       unreadable,
       projected: hydratable.length - answered,
       evidenceBytes: hydration.bytes,
-      budget: hydration.stopped === "complete" && answered < hydration.hydrated ? "deadline" : hydration.stopped,
+      budget: hydration.stopped === "complete" && answered < hydration.hydrated
+        ? answer.spent() ? "deadline" : narrowRefs?.some(ref => ref === undefined) ? "projection_pending" : "deadline"
+        : hydration.stopped,
     },
     timings: {
       inventorySelectionMs: roundMs(inventorySelectionMs),

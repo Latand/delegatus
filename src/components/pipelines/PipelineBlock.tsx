@@ -13,12 +13,12 @@ import { humanizeDuration } from "@/components/turnDuration";
 import { fmtAge } from "@/components/utils";
 import { WorkLinkRow, WorkLinkText } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
-import { CountCircle, identityTitle, StageIdentity } from "@/components/kanban/identityMarks";
+import { CountCircle, identityTitle, StageIdentity, StagePlaceLine, StagePlaceMark } from "@/components/kanban/identityMarks";
 import type { KanbanPipeline, KanbanStageChip } from "@/components/kanban/kanbanModel";
 import { ChevronDown, ChevronRight, MoreGlyph, svgProps } from "@/components/kanban/kanbanGlyphs";
 import { STAGE_TONE } from "@/components/kanban/pipelineGraph";
 import {
-  arcTitle, GraphEditLine, GraphGlyph, graphStateWord, ListGlyph, loopArcs, PipelineGraph, pipelineProgress, pipelineTitle, ReturnSuffix, spentEdgeSentence, StageReportLine, StageToneMark,
+  arcTitle, GraphEditLine, GraphGlyph, graphStateWord, loopArcs, pipelineProgress, pipelineTitle, ReturnSuffix, spentEdgeSentence, StageReportLine, StageToneMark,
   type LoopArc,
 } from "@/components/kanban/PipelineSection";
 
@@ -41,7 +41,31 @@ import {
   blockAgeSeconds, cardChain, chainSteps, cardChainLevels, laneMergeWord, mergeNeedsYou, mergeReasonText, parkedStage, pipelineAnswers, pipelineEnded, pipelineMovedAtMs, pipelineNeedsYou, pipelineReason, reviewStopFindings, reviewStopReason, sameTitle, screenCurrentStageId, STAGE_MARK, stageFindings,
   type ChainItem, type PipelineAnswers, type PipelineBlockDensity, type ReviewStop,
 } from "./pipelineBlockModel";
+import { currentProviderWait } from "@/lib/pipelines/stageChip";
 import { laneState } from "@/components/kanban/cardState";
+import { attachPipelineCreationLink, dismissPipelineCreation, retryPipelineCreationRead, type CreationCard } from "@/hooks/useFiles";
+
+/** Accepted operations are read-only cards; they have no stage controls. */
+export function PipelineCreationBlock({ creation, controls = true }: { creation: CreationCard; controls?: boolean }) {
+  const { t } = useLocale();
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const actionClass = "btn min-h-11 rounded-control border border-border bg-card px-3 text-left text-ui font-semibold text-primary shadow-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+  const attach = async () => {
+    setLinkBusy(true);
+    try { setLinkError(await attachPipelineCreationLink(creation.id)); }
+    finally { setLinkBusy(false); }
+  };
+  return <div className="pblock" data-creation={creation.receipt ? creation.id : undefined} data-creation-state={creation.status}>
+    <p className="pb-reason" role="status">{t(`pipelineCreation.${creation.status}`)}</p>
+    {creation.status === "refused" ? <p className="pb-reason">{t("pipelineCreation.reason")}</p> : null}
+    {creation.recoveryUnavailable ? <p className="pb-reason">{t("pipelineCreation.persistence")}</p> : null}
+    {linkError ? <p className="pb-reason" role="alert">{linkError}</p> : null}
+    {controls && creation.status === "linkPending" ? <button type="button" className={actionClass} disabled={linkBusy} onClick={() => void attach()}>{t("pipelineCreation.attach")}</button> : null}
+    {controls && creation.status === "unavailable" ? <button type="button" className={actionClass} onClick={() => void retryPipelineCreationRead()}>{t("pipelineCreation.retry")}</button> : null}
+    {controls && creation.status === "refused" ? <button type="button" className={actionClass} onClick={() => dismissPipelineCreation(creation.id)}>{t("pipelineCreation.dismiss")}</button> : null}
+  </div>;
+}
 
 /*
  * One pipeline, drawn by one component everywhere it appears (#2072 slice 3;
@@ -130,14 +154,16 @@ function StagePill({ pipeline, chip, name, suffix, interactive, selected, onOpen
   /* The wide row hangs a branch under its gate and drops the word "branch" (the elbow says it), so the word is its own span. */
   const label = chip.branch ? t("kanban.branch", { stage: name }) : name;
   const branchWord = chip.branch ? t("kanban.branch", { stage: "" }).trim() : "";
+  const identity = chip.stage.effectiveRole ? stageIdentity(pipeline, chip.stage) : null;
   const body = (
     <>
-      <StageGlyph state={chip.state} model={chip.stage.effectiveRole ? stageIdentity(pipeline, chip.stage) : null} live={chip.rework} fallback="mark" />
+      <StageGlyph state={chip.state} model={identity} live={chip.rework} motion={chip.motion} fallback="mark" />
       <span className="pb-name">
         {branchWord && label.startsWith(branchWord) ? <><span className="pb-branch-word">{branchWord}</span>{label.slice(branchWord.length)}</> : label}
       </span>
       {chip.rounds ? <CountCircle n={chip.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: name, state, count: chip.rounds })} /> : null}
       {drawn(suffix) ? <ReturnSuffix arc={suffix.arc} title={suffix.title} /> : null}
+      {identity?.place ? <StagePlaceMark place={identity.place} /> : null}
     </>
   );
   if (onCard === "face" && interactive && conversation) {
@@ -236,7 +262,7 @@ function CardLine({ summary, nameOf, suffixes, age, tail, opens, onOpenStage }: 
   onOpenStage?: (pipeline: Pipeline, stage: PipelineStage) => void;
 }) {
   const { t } = useLocale();
-  const levels = useMemo(() => cardChainLevels(cardChain(summary)), [summary]);
+  const levels = useMemo(() => cardChainLevels(cardChain(summary), currentProviderWait(summary.pipeline) ? summary.pipeline.cursor?.stageId : undefined), [summary]);
   /* A chain that changed starts the fold over, as a new width does. */
   const key = `${summary.pipeline.id}|${levels.map((level) => level.map((item) => (item.kind === "stage" ? `${item.chip.stage.id}:${item.chip.state}` : `${item.kind}${item.n}`)).join(",")).join("/")}`;
   const [fit, setFit] = useState({ key, width: 0, level: 0, alone: false, wrap: false });
@@ -327,11 +353,11 @@ function DecisionReport({ pipeline, stage, names, nameOf }: {
 }) {
   const { t } = useLocale();
   const report: PipelineStageReportEntry | null = stage ? (pipeline.stageReports ?? []).filter((entry) => entry.stageId === stage.id).at(-1) ?? null : null;
-  if (report) return <StageReportLine pipeline={pipeline} entry={report} names={names} shown={ANSWER_FINDINGS} />;
+  if (report && currentProviderWait(pipeline)?.condition.kind !== "transient") return <StageReportLine pipeline={pipeline} entry={report} names={names} shown={ANSWER_FINDINGS} />;
   const reason = pipelineReason(t, pipeline, nameOf);
   return (
     <>
-      {reason ? <p className="stage-report">{reason}</p> : null}
+      {reason ? <p className="stage-report" data-provider-wait={currentProviderWait(pipeline)?.condition.kind === "transient" ? "" : undefined}>{reason}</p> : null}
       <FindingList findings={stage ? stageFindings(pipeline, stage.id) : []} shown={ANSWER_FINDINGS} />
     </>
   );
@@ -492,32 +518,6 @@ function AnswerPanel({ pipeline, answers, names, nameOf }: {
   );
 }
 
-/** The operator's graph, measured to the row's width (task density). */
-function GraphSlot({ summary, names, selected, onOpenStage }: {
-  summary: KanbanPipeline;
-  names: ReadonlyMap<string, string>;
-  selected: ReadonlySet<string>;
-  onOpenStage: (pipeline: Pipeline, stage: PipelineStage) => void;
-}) {
-  const slot = useRef<HTMLDivElement>(null);
-  const [available, setAvailable] = useState<number | null>(null);
-  useLayoutEffect(() => {
-    const element = slot.current;
-    if (!element) return;
-    const measure = () => setAvailable(Math.floor(element.clientWidth));
-    measure();
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-  return (
-    <div className="graph-slot pb-graph" ref={slot} data-graph={summary.pipeline.id} data-open="1">
-      {available === null ? null : <PipelineGraph summary={summary} names={names} available={available} selected={selected} onOpenStage={onOpenStage} />}
-    </div>
-  );
-}
-
 /** How far from a pill a tap still lands on it: the pill is 22 px tall, so 11 px
     above and below make the 44 px a finger needs, and half the 4 px gap sideways. */
 const PILL_REACH = { x: 2, y: 11 };
@@ -553,9 +553,8 @@ export interface PipelineBlockProps {
   selected?: ReadonlySet<string>;
   /** The pipeline action this page sent and the server has not answered. */
   acting?: PipelineActionKind | null;
-  /** Task density: the operator opened the graph in place of the chain. */
-  graphOpen?: boolean;
-  onToggleGraph?: (open: boolean) => void;
+  /** Task density: «Graph» opens the Stages sheet with its graph shown. */
+  onOpenGraph?: (pipeline: Pipeline) => void;
   /** Task and screen density: a pill opens its stage. Card density: a pill whose
       stage has an agent opens that agent, on the closed card as on the open one
       (a lane managed elsewhere has none to open). */
@@ -595,6 +594,12 @@ export interface PipelineBlockProps {
       words as at home, and none of the ways to act on it. A lane that waits on
       a person says where to answer instead of offering the answer. */
   managedOn?: ManagedOn;
+  /** Task density, a draft lane made from a conversation: its Start, at the
+      head of the lane's tail, and the line that says what holds it back. */
+  start?: React.ReactNode;
+  startNote?: React.ReactNode;
+  /** Stages density: a control right under the last stage row, before the loops and Attach. */
+  afterStages?: React.ReactNode;
 }
 
 export interface StageConversation {
@@ -620,7 +625,8 @@ export function PipelineBlock(props: PipelineBlockProps) {
   const moved = pipelineMovedAtMs(pipeline);
   const selected = props.selected ?? NO_STAGES;
   const title = pipelineTitle(t, pipeline);
-  const progress = pipelineProgress(t, summary, nameOf);
+  const providerReason = currentProviderWait(pipeline)?.condition.kind === "transient" ? pipelineReason(t, pipeline, nameOf) : null;
+  const progress = providerReason ?? pipelineProgress(t, summary, nameOf);
   const cpuWaiting = !!parseCpuQueueDetail(pipeline.stateDetail);
   const answers = props.managedOn ? null : pipelineAnswers(pipeline, nameOf);
   const root = {
@@ -630,7 +636,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
     "data-needs": owner === "you" ? "1" : undefined,
     "data-seat-stop": seatStop ? "1" : undefined,
     /* A stop nobody is asked about (an automatic retry, a cleared wait) waits in grey. */
-    "data-stop-waits": (needs || laneMergeWord(pipeline) === "stopped") && owner === "waiting" ? "1" : undefined,
+    "data-stop-waits": (needs || currentProviderWait(pipeline) || laneMergeWord(pipeline) === "stopped") && owner === "waiting" ? "1" : undefined,
   };
 
   if (density === "card") {
@@ -685,7 +691,6 @@ export function PipelineBlock(props: PipelineBlockProps) {
      side by side cut the lane's title at 1440 in uk. */
   const age = moved === null || laneMergeWord(pipeline) ? null : fmtAge(moved / 1000);
   const managed = props.managedOn ?? null;
-  const graphOpen = !managed && Boolean(props.graphOpen && props.onToggleGraph && props.onOpenStage);
   const report = !managed && !needs && pipeline.stageReports?.length ? pipeline.stageReports.at(-1)! : null;
   const openerBody = (
     <>
@@ -718,17 +723,17 @@ export function PipelineBlock(props: PipelineBlockProps) {
   const acting = !managed && props.acting ? <span className="pb-acting" role="status" data-pipeline-acting={props.acting}>{t(`kanban.pipelineAct.pending.${props.acting}`)}</span> : null;
   const controls = managed ? null : (
     <>
-      {props.onToggleGraph && props.onOpenStage ? (
+      {/* The card draws the chain only; its graph is the Stages sheet's. */}
+      {props.onOpenGraph ? (
         <button
           type="button"
           className="pb-icon pb-graph-toggle"
-          aria-pressed={graphOpen}
-          aria-label={graphOpen ? t("kanban.graph.showSummary") : t("kanban.graph.showGraph")}
-          title={graphOpen ? t("kanban.graph.summary") : t("kanban.graph.graph")}
+          aria-label={t("kanban.graph.showGraph")}
+          title={t("kanban.graph.graph")}
           data-graph-toggle={pipeline.id}
-          onClick={() => props.onToggleGraph!(!graphOpen)}
+          onClick={() => props.onOpenGraph!(pipeline)}
         >
-          {graphOpen ? <ListGlyph /> : <GraphGlyph />}
+          <GraphGlyph />
         </button>
       ) : null}
       {props.onMenu ? (
@@ -751,8 +756,8 @@ export function PipelineBlock(props: PipelineBlockProps) {
      same row, and nothing above it repeats the card. A lane with a title or a
      menu of its own keeps its head row; at 390 px the chain, the age and a
      44 px ⋯ do not fit one line. */
-  const chainHead = !showTitle && !graphOpen && !props.onMenu;
-  const diskWait = !managed && pipeline.state === "provisioning" ? pipelineReason(t, pipeline, nameOf) : null;
+  const chainHead = !showTitle && !props.onMenu;
+  const laneReason = !managed && !answers ? providerReason ?? (pipeline.state === "provisioning" ? pipelineReason(t, pipeline, nameOf) : null) : null;
   return (
     <div className="pblock" role="group" aria-label={t("kanban.pipelineAria", { title, progress })} {...root} data-managed={managed ? "" : undefined}>
       {chainHead ? null : (
@@ -760,25 +765,19 @@ export function PipelineBlock(props: PipelineBlockProps) {
           {opener}
           {acting}
           <span className="pb-grow" />
+          {managed ? null : props.start}
           {controls}
         </div>
       )}
       {cpuWaiting ? <p className="pb-line sub" data-cpu-queue>{progress}</p> : null}
-      {graphOpen ? (
-        <>
-          <GraphSlot summary={summary} names={names} selected={selected} onOpenStage={props.onOpenStage!} />
-          <FinishFlag pipeline={pipeline} taskId={props.taskId} />
-          <WorkLinkRow resolved={links} showNoPr className="pb-links end" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />
-        </>
-      ) : (
-        <div className={!managed && finishFlagShown(pipeline, props.taskId) ? "pb-chain has-finish" : "pb-chain"}>
-          <ChainPills summary={summary} nameOf={nameOf} suffixes={suffixes} selected={selected} onOpenStage={managed ? undefined : props.onOpenStage} />
-          {managed ? null : <FinishFlag pipeline={pipeline} taskId={props.taskId} />}
-          {managed ? null : <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />}
-          {chainHead ? <span className="pb-tail">{acting}{controls}{opener}</span> : null}
-        </div>
-      )}
-      {diskWait ? <p className="pb-reason" data-pipeline-reason={pipeline.id}>{diskWait}</p> : null}
+      <div className={!managed && finishFlagShown(pipeline, props.taskId) ? "pb-chain has-finish" : "pb-chain"}>
+        <ChainPills summary={summary} nameOf={nameOf} suffixes={suffixes} selected={selected} onOpenStage={managed ? undefined : props.onOpenStage} />
+        {managed ? null : <FinishFlag pipeline={pipeline} taskId={props.taskId} />}
+        {managed ? null : <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />}
+        {chainHead ? <span className="pb-tail">{acting}{managed ? null : props.start}{controls}{opener}</span> : null}
+      </div>
+      {managed ? null : props.startNote}
+      {laneReason ? <p className="pb-reason" data-pipeline-reason={pipeline.id}>{laneReason}</p> : null}
       {managed ? (
         managed.note ? <p className="pb-note" data-managed-on={managed.host}>{managed.note}</p> : null
       ) : (
@@ -823,9 +822,10 @@ export function PipelineStateLine({ summary, nowMs }: { summary: KanbanPipeline;
     pipelineEnded(pipeline) ? null : position.charAt(0).toLocaleLowerCase() + position.slice(1),
     moved === null ? null : humanizeDuration(blockAgeSeconds((nowMs - moved) / 1000)),
   ].filter((part): part is string => Boolean(part));
+  const waiting = pipeline.state === "running" && Boolean(currentProviderWait(pipeline));
   const head = (
     <>
-      <span className="pstate-word" data-pstate={pipeline.state}>{pipelineStateLabel(t, pipeline.state)}</span>
+      <span className="pstate-word" data-pstate={waiting ? "waiting" : pipeline.state}>{waiting ? t("pipelinePresentation.waiting") : pipelineStateLabel(t, pipeline.state)}</span>
       <MergeWord pipeline={pipeline} nowMs={nowMs} />
     </>
   );
@@ -871,7 +871,7 @@ function ScreenBlock(props: PipelineBlockProps & {
   answers: PipelineAnswers | null;
   root: Record<string, string | undefined>;
 }) {
-  const { summary, nowMs, names, nameOf, suffixes, answers } = props;
+  const { summary, nowMs, names, nameOf, suffixes, answers, afterStages } = props;
   const { t } = useLocale();
   const { pipeline } = summary;
   const links = useWorkLinks().of({ kind: "pipeline", id: pipeline.id });
@@ -924,6 +924,9 @@ function ScreenBlock(props: PipelineBlockProps & {
     const report = (pipeline.stageReports ?? []).filter((entry) => entry.stageId === chip.stage.id).at(-1) ?? null;
     if (report && (!attempt || report.attempt === attempt.n)) return <StageReportLine pipeline={pipeline} entry={report} names={names} shown={ANSWER_FINDINGS} />;
     if (!attempt) return null;
+    if (pipeline.cursor?.stageId === chip.stage.id && currentProviderWait(pipeline)?.condition.kind === "transient") {
+      return <p className="stage-report" data-stage-now={chip.stage.id}>{pipelineReason(t, pipeline, nameOf)}</p>;
+    }
     const live = ATTEMPT_LIVE.has(attempt.state);
     const at = Date.parse((live ? attempt.startedAt : attempt.completedAt ?? attempt.startedAt) ?? "");
     const age = Number.isFinite(at) ? (live ? humanizeDuration(blockAgeSeconds((nowMs - at) / 1000)) : ago(at)) : "";
@@ -974,7 +977,7 @@ function ScreenBlock(props: PipelineBlockProps & {
         <span className="pb-num">{index + 1}</span>
         <span className="pb-stage-main">
           <span className="pb-stage-title">
-            <StageGlyph state={shown} model={identity} live={chip.rework} fallback="mark" badge={false} />
+            <StageGlyph state={shown} model={identity} live={chip.rework} motion={chip.motion} fallback="mark" badge={false} />
             {/* The number flows after the name's last word, wrapped or not. */}
             <span className="pb-name">{chip.branch ? t("kanban.branch", { stage: name }) : name}{attemptN !== null ? <span className="pb-attempt">{` · ${attemptN}`}</span> : null}</span>
             {chip.rounds ? <CountCircle n={chip.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: name, state, count: chip.rounds })} /> : null}
@@ -986,6 +989,7 @@ function ScreenBlock(props: PipelineBlockProps & {
               {words ? <span className="pb-ident-words">{identity ? `· ${words}` : words}</span> : null}
             </span>
           ) : null}
+          {identity?.place?.movedLocal ? <StagePlaceLine place={identity.place} /> : null}
         </span>
         <span className={`pb-stage-state tone-${tone}`}>
           {state}
@@ -1131,6 +1135,7 @@ function ScreenBlock(props: PipelineBlockProps & {
         ) : null}
         {chips.map((chip, index) => (folded.has(chip.stage.id) ? null : row(chip, index)))}
       </ol>
+      {afterStages}
       {summary.loops.length ? (
         <ul className="pb-loops">
           {summary.loops.map((loop) => (

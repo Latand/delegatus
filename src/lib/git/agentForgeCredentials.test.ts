@@ -10,6 +10,7 @@ import { statePath } from "@/lib/configDir";
 
 import { FORGE_APP_REPOSITORIES_FILE, agentForgeWriteEnv, engineForgeWriteEnv, forgeAppRepositories, isForgeAppRepository } from "./agentForgeCredentials";
 import { agentCodexPublicationPolicy, agentPublicationIdentityEnv } from "./agentPublicationIdentity";
+import { productionPorts } from "../../../bin/forge-app-token.mjs";
 
 const posix = process.platform !== "win32";
 /* Address-shaped fixtures are joined, never written out. */
@@ -173,6 +174,7 @@ describe.skipIf(!posix).each([...ENGINES])("a write to a declared repository thr
   test("finds the shim as gh, and no token variable", () => {
     expect(sh(["sh", "-c", "command -v gh"], env).stdout.toString().trim()).toBe(path.join(env.LLV_AGENT_FORGE_DIR!, "gh"));
     expect(env.LLV_AGENT_FORGE_REPOSITORIES).toBe("acme/widgets");
+    expect(env.LLV_AGENT_FORGE_AUDIT_FILE).toBe(statePath("forge-app-tokens.ndjson"));
     expect(env.GH_TOKEN ?? env.GITHUB_TOKEN).toBeUndefined();
   });
 
@@ -477,4 +479,105 @@ test.skipIf(!posix)("no token, key or identifier is written into the launch dire
   expect(fs.readFileSync(path.join(directory, "forge-app-token.mjs"), "utf8")).toBe(fs.readFileSync(path.join(process.cwd(), "bin", "forge-app-token.mjs"), "utf8"));
   expect(fs.readdirSync(path.join(directory, "gh-config"))).toEqual([]);
   expect(fs.statSync(directory).mode & 0o077).toBe(0);
+});
+
+(posix ? test : test.skip).each(["gh", "gh changing args", "git remote", "git config", "git origin", "git remote accepted", "secret-tool"])("a changed HOME and a %s wrapper cannot re-enter the generated gh shim", route => {
+  const fixture = fs.mkdtempSync(path.join(root, "reentry-"));
+  const tools = path.join(fixture, "bin");
+  fs.mkdirSync(tools);
+  const count = path.join(fixture, "launches");
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  // A hard launch cap bounds old-code recursion across fresh interpreter processes.
+  fs.writeFileSync(path.join(tools, "bun"), `#!/bin/sh
+n=0
+if [ -f ${quote(count)} ]; then read -r n < ${quote(count)}; fi
+n=$((n + 1))
+printf '%s\\n' "$n" > ${quote(count)}
+if [ "$n" -ge ${route === "gh changing args" ? 12 : 4} ]; then echo fixture-launch-cap >&2; exit 92; fi
+exec ${quote(process.execPath)} "$@"
+`, { mode: 0o700 });
+  const inherited = { ...source, HOME: fixture, PATH: `${tools}:${source.PATH}` };
+  const launch: NodeJS.ProcessEnv = { ...inherited, ...agentForgeWriteEnv(inherited, ["acme/widgets"], false) };
+  const capturedGh = path.join(launch.LLV_AGENT_FORGE_DIR!, "gh");
+  if (route.startsWith("gh")) {
+    fs.writeFileSync(path.join(tools, "gh"), `#!/bin/sh\n${route === "gh changing args" ? `n=0\nif [ -f ${quote(count)} ]; then read -r n < ${quote(count)}; fi\n` : ""}exec ${quote(capturedGh)} repo set-default --view${route === "gh changing args" ? ' "$n"' : ""}\n`, { mode: 0o700 });
+  } else if (route === "secret-tool") {
+    fs.writeFileSync(path.join(tools, "secret-tool"), `#!/bin/sh\nexec ${quote(capturedGh)} pr create --fill\n`, { mode: 0o700 });
+  } else {
+    const realGit = Bun.which("git", { PATH: source.PATH })!;
+    fs.writeFileSync(path.join(tools, "git"), `#!/bin/sh
+if [ "$1" = ${quote(route === "git origin" ? "remote" : route.split(" ")[1]!)} ]; then
+  ${route.endsWith("accepted") ? "" : "exec "}${quote(capturedGh)} pr create --fill
+  exit 0
+fi
+exec ${quote(realGit)} "$@"
+`, { mode: 0o700 });
+  }
+  const changedHome = path.join(fixture, "changed-home");
+  fs.mkdirSync(changedHome);
+  const changed = { ...launch, HOME: changedHome, PATH: `${tools}:${launch.PATH}` };
+  for (const declared of route.startsWith("gh") ? ["acme/widgets", ""] : ["acme/widgets"]) {
+    fs.rmSync(count, { force: true });
+    const args = route.startsWith("gh") ? ["gh", "pr", "list"]
+      : [capturedGh, "pr", "create", "--fill", ...["git origin", "secret-tool"].includes(route) ? ["--repo", "acme/widgets"] : []];
+    const result = Bun.spawnSync(args, {
+      cwd: repo, env: { ...changed, LLV_AGENT_FORGE_REPOSITORIES: declared },
+      stdout: "pipe", stderr: "pipe", timeout: 10_000,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("gh shim re-entry refused");
+    expect(result.stderr.toString()).not.toContain("fixture-launch-cap");
+    expect(fs.readFileSync(count, "utf8").trim()).toBe(route === "gh changing args" ? "9" : "2");
+  }
+}, 25_000);
+
+(posix ? test : test.skip)("real gh shell aliases and extensions can launch fresh gh commands", () => {
+  const realGh = productionPorts().findGh();
+  expect(realGh).not.toBeNull();
+  if (!realGh) throw new Error("This regression requires an installed gh executable");
+  const fixture = fs.mkdtempSync(path.join(root, "nested-gh-"));
+  const tools = path.join(fixture, "bin");
+  const config = path.join(fixture, "gh-config");
+  const extension = path.join(fixture, "gh-nested-extension");
+  fs.mkdirSync(tools);
+  fs.mkdirSync(config);
+  fs.mkdirSync(extension);
+  fs.symlinkSync(realGh, path.join(tools, "gh"));
+  fs.writeFileSync(path.join(config, "config.yml"), "aliases:\n  nested-version: '!gh --version'\n  nested-alias: '!gh nested-version && gh --version'\n");
+  fs.writeFileSync(path.join(extension, "gh-nested-extension"), '#!/bin/sh\nexec gh --version "$@"\n', { mode: 0o700 });
+  const inherited = { ...source, HOME: fixture, XDG_DATA_HOME: path.join(fixture, "data"), GH_CONFIG_DIR: config, GH_TOKEN: "offline", PATH: `${tools}:${source.PATH}` };
+  const installed = Bun.spawnSync([realGh, "extension", "install", "."], {
+    cwd: extension, env: inherited, stdout: "pipe", stderr: "pipe", timeout: 10_000,
+  });
+  expect(installed.exitCode, installed.stderr.toString()).toBe(0);
+  const launch = { ...inherited, ...agentForgeWriteEnv(inherited, ["acme/widgets"], false) };
+  const version = Bun.spawnSync([realGh, "--version"], { env: inherited, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+  expect(version.exitCode).toBe(0);
+  for (const declared of ["acme/widgets", ""]) {
+    for (const command of ["nested-version", "nested-alias", "nested-extension"]) {
+      const result = Bun.spawnSync(["gh", command], {
+        cwd: fixture, env: { ...launch, LLV_AGENT_FORGE_REPOSITORIES: declared },
+        stdout: "pipe", stderr: "pipe", timeout: 10_000,
+      });
+      expect(result.stderr.toString()).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toString()).toBe(version.stdout.toString().repeat(command === "nested-alias" ? 2 : 1));
+    }
+  }
+}, 25_000);
+
+(posix ? test : test.skip)("the production builder discovers ordinary repositories and their selected base", async () => {
+  const fixture = fs.mkdtempSync(path.join(root, "discovery-"));
+  const git = (args: string[]) => {
+    const result = sh(["git", ...args], source, "", fixture);
+    expect(result.exitCode).toBe(0);
+  };
+  git(["init", "-q"]);
+  git(["remote", "add", "origin", "https://github.com/acme/widgets.git"]);
+  git(["remote", "add", "upstream", "https://github.com/acme/gadgets.git"]);
+  git(["config", "remote.origin.gh-resolved", "base"]);
+  const launch = { ...source, ...agentForgeWriteEnv(source, ["acme/widgets"], false) };
+  const ports = productionPorts(launch, fixture);
+  expect(await ports.checkoutRepositories()).toEqual(["acme/widgets", "acme/gadgets"]);
+  expect(await ports.originRepository()).toBe("acme/widgets");
 });

@@ -24,6 +24,7 @@ import { DONE_TASK_BOARD_RETENTION_MS, taskShowsOnBoard } from "@/lib/tasks/boar
 import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import { bandHoldsMembers } from "@/components/scheme/taskBands";
 
+import { glyphTier, type GlyphTier } from "./modelGlyph";
 import { pastAttempts, type PastAttempt, type WorkingConversations } from "./pipelineGraph";
 import { summarizePipeline, type KanbanLoop, type KanbanPipeline, type KanbanStageChip } from "./pipelineSummary";
 import { awaitsName, placeholderTitle } from "./placeholderTitle";
@@ -117,6 +118,7 @@ export interface KanbanCard {
   /** Agent drafts the card holds, in the band's order: its own «+ Agent», a handoff, a retried launch. */
   drafts: string[];
   pipelines: KanbanPipeline[];
+  creations?: readonly import("@/hooks/useFiles").CreationCard[];
   holdTarget?: { title: string; done: boolean };
   motion: TaskMotion;
   stepSummary: TaskStepsSummary | null;
@@ -325,12 +327,13 @@ function descriptionOf(text: string): string {
 
 /** The stage conversations working right now, by the rule the card's
     «N working» reads. Only a stage's own transcripts are asked. */
-function workingStageConversationsOf(stagePaths: { has(path: string): boolean }, files: readonly FileEntry[], now: number): Set<string> {
-  const working = new Set<string>();
+function workingStageConversationsOf(stagePaths: { has(path: string): boolean }, files: readonly FileEntry[], now: number): Map<string, GlyphTier> {
+  const working = new Map<string, GlyphTier>();
   for (const file of files) {
     if (!stagePaths.has(file.path) || !isWorkingAgent(file, now)) continue;
-    working.add(file.path);
-    if (file.conversationId) working.add(file.conversationId);
+    const tier = glyphTier(file.engine, file.serviceTier);
+    working.set(file.path, tier);
+    if (file.conversationId) working.set(file.conversationId, tier);
   }
   return working;
 }
@@ -477,7 +480,7 @@ interface CachedCard {
 }
 interface CachedVisibility { dependencies: readonly unknown[]; visible: boolean }
 interface CachedMembership { dependencies: readonly unknown[]; value: ReturnType<typeof bandMembership> }
-interface CachedPipelineSummary { flows: KanbanModelInput["flows"]; working: Set<string>; value: KanbanPipeline }
+interface CachedPipelineSummary { flows: KanbanModelInput["flows"]; working: WorkingConversations; value: KanbanPipeline }
 interface ModelCache {
   previous: Map<string, CachedCard>;
   next: Map<string, CachedCard>;
@@ -970,6 +973,7 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: ModelCache): KanbanM
          it; a band without one takes it from the container or the first
          conversation it carries, which is where the board got the band. */
       project: task?.project
+        || band.creations?.[0]?.receipt?.project
         || band.pipeline?.project
         || band.flow?.project
         || members[0]?.file.project
@@ -991,6 +995,7 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: ModelCache): KanbanM
       otherSurfaces,
       drafts,
       pipelines: summaries,
+      ...(band.creations ? { creations: band.creations } : {}),
       stepSummary: stepProjection.summary,
       ...(holdTarget ? { holdTarget: { title: holdTarget.text.split("\n")[0]!, done: holdTarget.status === "done" } } : {}),
       /* A card holding only unsent drafts has started nothing, so nothing stopped: it reads as not started in any column. */

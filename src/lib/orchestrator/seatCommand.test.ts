@@ -14,6 +14,8 @@ import { saveRoleOverrides } from "@/lib/roles/store";
 import { procBackend } from "@/lib/proc";
 import { drainFile, writeDrain } from "@/lib/selfUpdate/drain";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
+import { changeConversationSpeed } from "@/lib/runtime/conversationSpeed";
+import type { EngineHost, RuntimeTierRequest } from "@/lib/runtime/engineHost";
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection } from "@/lib/telegram/sessionStore";
 
 import {
@@ -22,17 +24,12 @@ import {
   HISTORY_BUDGET_BYTES,
   HISTORY_HEADING,
   launchOverheadBytes,
-  splitMandate,
   type HandoffDigestRequest,
 } from "./handoffDigest";
 import {
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
-  ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
-  ORCHESTRATOR_SEAT_TICK_CONTRACT,
   ORCHESTRATOR_SYSTEM_PROMPT,
-  ORCHESTRATOR_SHIPPED_CLOCK_OPENING,
-  ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
   orchestratorMandateForDelivery,
   orchestratorMandateStale,
   orchestratorMandateUpgraded,
@@ -457,6 +454,30 @@ test("a completed seat replay repairs a failed registry stamp without revalidati
   expect(stampAttempts).toBe(2);
   expect(targetReads).toBe(1);
   expect(recorded.deliveries).toHaveLength(1);
+});
+
+/* create_orchestrator sends the default mandate with the current version. */
+test("a new default seat is spawned with the current routing policy and its version", async () => {
+  const { deps, recorded } = dependencies();
+  const result = await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000041"), mandate: ORCHESTRATOR_SYSTEM_PROMPT, promptVersion: ORCHESTRATOR_PROMPT_VERSION }, deps);
+
+  expect(result.status).toBe(200);
+  const delivered = String(recorded.spawns[0]!.prompt);
+  expect(delivered).toStartWith(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(orchestratorSeatFor("proj-a").active).toMatchObject({ mandate: expect.stringContaining(ORCHESTRATOR_SYSTEM_PROMPT), promptVersion: ORCHESTRATOR_PROMPT_VERSION });
+});
+
+for (const version of [64, 65]) test(`a stored v${version} default is delivered the current policy without rewriting its recorded version`, async () => {
+  const v64 = fs.readFileSync(path.join(import.meta.dir, `fixtures/mandate-v${version}.txt`), "utf8");
+  const { deps, recorded } = dependencies();
+  const result = await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000042"), mandate: v64, promptVersion: version }, deps);
+
+  expect(result.status).toBe(200);
+  const delivered = String(recorded.spawns[0]!.prompt);
+  expect(delivered).toStartWith(ORCHESTRATOR_SYSTEM_PROMPT);
+  /* The seat keeps the version it was recorded on, so it still reads as stale
+     and its next rotation rebuilds the core from the default. */
+  expect(orchestratorSeatFor("proj-a").active?.promptVersion).toBe(version);
 });
 
 test("a caller-edited current-version mandate stores the correction duty and receives the status directive once", async () => {
@@ -889,10 +910,7 @@ test("rotation composes a bounded handoff, switches designation atomically, and 
   expect(result.status).toBe(200);
   expect(result.body.rotatedFrom).toMatchObject({ conversationId: NEW_ID });
   const spawnedPrompt = String(recorded2[0]!.prompt);
-  /* Successor mandate = incumbent mandate + bounded handoff naming the
-     predecessor, its MCP read, where the board report comes from and the
-     caller's notes. */
-  expect(spawnedPrompt).toStartWith("own the board");
+  expect(orchestratorSeatFor("proj-a").active?.promptVersion).toBe(ORCHESTRATOR_PROMPT_VERSION);
   expect(spawnedPrompt).toContain(NEW_ID);
   expect(spawnedPrompt).toContain(`conversation_messages({"clientRequestId":"rotation-predecessor-recent-turns-${NEW_ID}","conversationId":"${NEW_ID}","roles":["user","assistant"],"limit":40})`);
   expect(spawnedPrompt).not.toContain(`/tmp/${NEW_ID.slice(-4)}.jsonl`);
@@ -915,10 +933,6 @@ test("rotation composes a bounded handoff, switches designation atomically, and 
   })]);
 });
 
-/* #1452: the recorded version follows the TEXT. A stale seat rotated onto the
-   built-in default is on the current version. #2030: a rotation that names no
-   mandate over a stale incumbent rebuilds the core from the current default;
-   `keepIncumbentMandate: true` keeps the incumbent's text AND version. */
 test("a rotation onto the built-in default records the CURRENT version, whatever the incumbent ran on", async () => {
   const seeded = dependencies();
   await executeOrchestratorSeatRequest({
@@ -945,53 +959,28 @@ test("a rotation onto the built-in default records the CURRENT version, whatever
   expect(active?.mandate).toStartWith(ORCHESTRATOR_SYSTEM_PROMPT);
 });
 
-test("a rotation asked to keep the incumbent's mandate keeps its text and version", async () => {
+test.each([false, true])("an older seat rotates onto the default version (legacy keep flag=%s)", async (keepIncumbentMandate) => {
   const seeded = dependencies();
   await executeOrchestratorSeatRequest({
     ...spawnRequest("req_00000033"),
-    mandate: "v3 rules: you do not talk to the user",
-    promptVersion: 3,
+    mandate: `${ORCHESTRATOR_SYSTEM_PROMPT}\n\n${HANDOFF_HEADING}\nPrior rotation notes.`,
+    promptVersion: ORCHESTRATOR_PROMPT_VERSION - 1,
   }, seeded.deps);
-
+  // Stored rotations include a handoff, so their mandate is never byte-equal
+  // to the default even when its core happens to be current.
+  const incumbent = orchestratorSeatFor("proj-a").active!;
+  expect(incumbent.promptVersion).toBe(ORCHESTRATOR_PROMPT_VERSION - 1);
   const successor = "conversation_66666666-6666-4666-8666-666666666666";
   const { deps } = dependencies({
-    spawn: async () => ({ status: 200, body: { ok: true, conversationId: successor, path: "/tmp/successor-kept.jsonl" } }),
+    spawn: async () => ({ status: 200, body: { ok: true, conversationId: successor, path: "/tmp/successor-default.jsonl" } }),
   });
-  const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00000034", keepIncumbentMandate: true }, deps);
+  const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00000034", keepIncumbentMandate }, deps);
 
   expect(result.status).toBe(200);
-  const active = orchestratorSeatFor("proj-a").active;
-  expect(active).toMatchObject({ conversationId: successor, promptVersion: 3 });
-  expect(active?.mandate).toStartWith("v3 rules: you do not talk to the user");
+  expect(orchestratorSeatFor("proj-a").active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
 });
 
-/* #2030 review: a seat carried forward on its v20 mandate holds the clock
-   heading with the v17–v20 paragraph under it. Delivery replaces that shipped
-   section, so the successor reads every tick contract clause once. */
-test("a rotation that keeps a v20 incumbent's mandate still delivers every tick contract clause once", async () => {
-  /* A v20 seat carries the opening as it shipped, heading included. */
-  const v20Clock = `${ORCHESTRATOR_SHIPPED_CLOCK_OPENING}\nBetween wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.`;
-  const v20Core = ORCHESTRATOR_SYSTEM_PROMPT.replace(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, v20Clock);
-  const seeded = dependencies();
-  await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000039"), mandate: v20Core, promptVersion: 20 }, seeded.deps);
-
-  const successor = "conversation_66666666-6666-4666-8666-666666666666";
-  const { deps, recorded } = dependencies({
-    spawn: async (body) => {
-      recorded.spawns.push(body);
-      return { status: 200, body: { ok: true, conversationId: successor, path: "/tmp/successor-kept-v20.jsonl" } };
-    },
-  });
-  const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00000040", keepIncumbentMandate: true }, deps);
-
-  expect(result.status).toBe(200);
-  expect(orchestratorSeatFor("proj-a").active).toMatchObject({ conversationId: successor, promptVersion: 20 });
-  const delivered = String(recorded.spawns[0]!.prompt);
-  for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(delivered.split(clause)).toHaveLength(2);
-  expect(delivered).not.toContain("act on the items it lists first, then make one bounded pass over the rest of the board");
-});
-
-test("a no-mandate rotation preserves an edited older core and bounded handoff history", async () => {
+test("a no-mandate rotation refreshes the version and retains bounded handoff history", async () => {
   const olderCore = "Edited seat rules: keep the operator's triage order and limit: 200.";
   const seeded = dependencies();
   await executeOrchestratorSeatRequest({
@@ -1011,14 +1000,12 @@ test("a no-mandate rotation preserves an edited older core and bounded handoff h
 
   expect(result.status).toBe(200);
   const active = orchestratorSeatFor("proj-a").active;
-  expect(active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION - 1 });
-  expect(splitMandate(active!.mandate).core).toBe(olderCore);
-  expect(result.body.mandateDisposition).toBe("preserved");
+  expect(active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
+  expect(result.body.mandateDisposition).toBe("replaced");
   expect(recorded.digests).toHaveLength(1);
   expect(active!.mandate).toContain("merged the exporter lane");
   expect(active!.mandate).toContain("digest lane parked on review");
-  /* And what the successor was delivered opens with the same bytes. */
-  expect(String(recorded.spawns[0]!.prompt)).toContain(olderCore);
+  expect(recorded.spawns).toHaveLength(1);
 });
 
 test("an EDITED mandate over a stale seat records no version, so the successor is neither flagged stale nor prefilled over on the next rotation (#1452)", async () => {
@@ -1073,7 +1060,7 @@ test("a current-version rotation override receives one directive while its store
   expect(delivered).toStartWith("rotation override mandate");
   expect(delivered.split(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE)).toHaveLength(2);
   const active = orchestratorSeatFor("proj-a").active;
-  expect(active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
+  expect(active).toMatchObject({ conversationId: successor, promptVersion: null });
   expect(active?.mandate).toStartWith("rotation override mandate");
   expect(active?.mandate).not.toContain(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE);
 });
@@ -1972,14 +1959,9 @@ async function seatIncumbent(mandate: string, clientRequestId: string): Promise<
   expect(seeded.status).toBe(200);
 }
 
-/* The task-list pointer leaves room for history. Required mandate rules
-   (#2518) consume the same bounded envelope: keep a fitting history and drop
-   an oversized one, while preserving both reporting and cross-project rules.
-   v58's maintenance practice (536 bytes, the operator, 2026-10-20) takes the
-   same bytes from this room: the largest history the default mandate keeps
-   fell from 1 150–1 199 bytes to 600–649 (measured in steps of 50), so the
-   fitting case is 500 bytes and a 900-byte history is now dropped. */
-test.each([{ historyBytes: 500, dropped: false }, { historyBytes: 900, dropped: true }, { historyBytes: 2_000, dropped: true }])("a default mandate rotation preserves required rules with $historyBytes bytes of history", async ({ historyBytes, dropped }) => {
+/* Keep a minimal nonempty digest and drop oversized digests within the
+   delivered envelope. The default mandate's own text also consumes room. */
+test.each([{ historyBytes: 1, dropped: false }, { historyBytes: 900, dropped: true }, { historyBytes: 2_000, dropped: true }])("a default mandate rotation bounds $historyBytes bytes of history", async ({ historyBytes, dropped }) => {
   await seatIncumbent(stackedMandate(ORCHESTRATOR_SYSTEM_PROMPT, 1), "req_00002301");
   const prompts: string[] = [];
   const { deps } = dependencies({
@@ -1995,9 +1977,7 @@ test.each([{ historyBytes: 500, dropped: false }, { historyBytes: 900, dropped: 
   expect((rotated.body.handoff as { historyDropped?: boolean }).historyDropped).toBe(dropped);
   if (dropped) expect(historySection(prompts[0]!)).toBe("");
   else expect(historySection(prompts[0]!)).toContain("d".repeat(historyBytes));
-  expect(prompts[0]).toContain(ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE);
   expect(prompts[0]).toContain(`"conversationId":"${NEW_ID}"`);
-  expect(prompts[0]).toContain(HANDOFF_BOARD_REPORT_POINTER);
   expect(launchBytes(prompts[0]!)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
 });
 
@@ -2017,7 +1997,7 @@ test("AC1: three stacked handoffs compact into ONE rotation history section", as
     },
   });
 
-  const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00001002" }, deps);
+  const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00001002", mandate: stackedMandate(core, 3) }, deps);
 
   expect(rotated.status).toBe(200);
   const prompt = String(recorded.spawns[0]!.prompt);
@@ -2130,7 +2110,7 @@ test("AC3: a failed summarizer falls back to the latest two handoffs, verbatim a
     summarizeHandoffs: async () => ({ kind: "fallback", reason: "timeout" }),
   });
 
-  const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00001021" }, deps);
+  const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00001021", mandate: stackedMandate("own the board", 4) }, deps);
 
   expect(rotated.status).toBe(200);
   const prompt = String(recorded.spawns[0]!.prompt);
@@ -2156,7 +2136,7 @@ test("AC3: a throwing summarizer never blocks the rotation", async () => {
     summarizeHandoffs: async () => { throw new Error("headless runner is unreachable"); },
   });
 
-  const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00001026" }, deps);
+  const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00001026", mandate: stackedMandate("own the board", 2) }, deps);
 
   expect(rotated.status).toBe(200);
   expect(rotated.body.handoff).toMatchObject({ history: "fallback", reason: "error" });
@@ -2325,6 +2305,7 @@ test("AC5: retrying a failed rotation with its OWN key delivers the recomposed m
   const failed = await executeOrchestratorRotation({
     project: "proj-a",
     clientRequestId: "req_00001061",
+    mandate: stackedMandate("own the board", 3),
     handoffNotes: "first attempt",
   }, failing.deps);
 
@@ -2341,6 +2322,7 @@ test("AC5: retrying a failed rotation with its OWN key delivers the recomposed m
   const rotated = await executeOrchestratorRotation({
     project: "proj-a",
     clientRequestId: "req_00001061",
+    mandate: stackedMandate("own the board", 3),
     handoffNotes: "second attempt",
   }, retry.deps);
 
@@ -2516,7 +2498,7 @@ test("a rotation whose summarizer is slow cannot revoke the designation that set
   });
   const second = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00001203" }, retried.deps);
   expect(second.status).toBe(200);
-  expect(String(retried.recorded.spawns[0]!.prompt)).toStartWith("own the board, freshly designated");
+  expect(orchestratorSeatFor("proj-a").active?.promptVersion).toBe(ORCHESTRATOR_PROMPT_VERSION);
   expect(orchestratorSeatFor("proj-a").active!.conversationId).toBe(successorId(22));
 });
 
@@ -2928,4 +2910,135 @@ test("an exhausted admission revision replay keeps its own safe cause", async ()
   expect(result.status).toBe(503);
   expect(result.body).toMatchObject({ code: "account_admission_changed", retryable: true, error: new AccountAdmissionChangedError().message });
   expect(recorded.spawns).toHaveLength(1);
+});
+
+
+for (const lastAuthor of ["member", "owner"] as const) test(`automatic rotation retains message authority until the owner speaks: ${lastAuthor}`, async () => {
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { createWorkspace } = await import("@/lib/team/workspaces");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  resetTeamStoreForTests();
+  const registry = new AgentRegistry(path.join(sandbox, "workspace-rotation-registry.json"));
+  setAgentRegistryForTests(registry);
+  try {
+    const store = teamStore();
+    const owner = { id: "m_owner", name: "Owner", role: "owner" as const, status: "active" as const, color: "teal" as const,
+      telegram: null, createdAt: AT, createdBy: "claim", revokedAt: null };
+    store.insertMember(owner); store.insertMember({ ...owner, id: "m_member", name: "Member", role: "member" });
+    const workspaceId = `w_${"f".repeat(32)}`;
+    createWorkspace(store, owner, { id: workspaceId, name: "Workspace", projects: ["proj-a"] });
+    store.putWorkspaceMember(workspaceId, "m_member", "member", owner.id, AT);
+    const conversation = registry.ensureForkedConversation("claude", path.join(sandbox, "seat.jsonl"), null,
+      emptyLaunchProfile({ cwd: sandbox, project: "proj-a" }));
+    const { deps } = dependencies();
+    let admittedWorkspace: unknown;
+    const spawn = deps.spawn;
+    deps.spawn = (body, automatic, admission) => {
+      admittedWorkspace = admission?.workspace;
+      return spawn(body, automatic, admission);
+    };
+    expect((await executeOrchestratorSeatRequest({ ...spawnRequest("workspace-old-seat"), conversationId: conversation.id }, deps)).status).toBe(200);
+    store.admitConversationMember(conversation.id, "m_member");
+    if (lastAuthor === "owner") store.admitConversationMember(conversation.id, owner.id);
+    expect((await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "workspace-seat-rotation" }, deps)).status).toBe(200);
+    const expected = lastAuthor === "owner" ? undefined : { memberId: "m_member", workspaceId };
+    // The launch is told the fence came from a message; the seat record says so in its own field.
+    expect(admittedWorkspace).toEqual(expected && { ...expected, fromMessage: true });
+    expect(orchestratorSeatFor("proj-a").active?.workspace).toEqual(expected);
+    expect(orchestratorSeatFor("proj-a").active?.workspaceFromMessage).toBe(expected ? true : undefined);
+  } finally { registry.close(); resetTeamStoreForTests(); }
+});
+
+test("tier roundtrip: create and rotate forward an explicit tier", async () => {
+  const { deps, recorded } = dependencies();
+  await executeOrchestratorSeatRequest({ ...spawnRequest(), engine: "codex", model: "gpt-6.1-sol", serviceTier: "ultrafast" }, deps);
+  expect(recorded.spawns[0]).toMatchObject({ serviceTier: "ultrafast" });
+  const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "tier-rotation", serviceTier: "priority" }, deps);
+  expect(result.status).toBe(200);
+  expect(recorded.spawns[1]).toMatchObject({ serviceTier: "priority" });
+  expect(recorded.spawns[1]).not.toHaveProperty("inheritedServiceTier");
+});
+
+for (const offline of [false, true]) test.each([
+  { selected: "ultrafast", applied: "ultrafast", fast: true },
+  { selected: "priority", applied: "priority", fast: true },
+  { selected: "standard", applied: "default", fast: false },
+  { selected: "default", applied: "default", fast: false },
+])(`selected $selected survives resume and rotation (offline=${offline})`, async ({ selected, applied, fast }) => {
+  const filename = path.join(sandbox, "registry.json");
+  let registry = new AgentRegistry(filename);
+  const transcript = path.join(sandbox, "incumbent.jsonl");
+  const conversation = registry.ensureConversation("codex", transcript, "account-a");
+  registry.updateConversationLaunchProfile(conversation.id, { model: "gpt-6.1-sol", effort: "high", fast: true, serviceTier: "priority" });
+  fs.writeFileSync(path.join(sandbox, "models_cache.json"), JSON.stringify({ models: [
+    { slug: "gpt-6.1-sol", service_tiers: [{ id: "ultrafast" }, { id: "priority" }] },
+  ] }));
+  const calls: RuntimeTierRequest[] = [];
+  const host = { setTier: async (request: RuntimeTierRequest) => {
+    request.authorizeDispatch?.();
+    calls.push(request);
+    return { appliedTier: request.serviceTier, echoed: true, cut: "none" as const };
+  } } as unknown as EngineHost;
+  const { deps, recorded } = dependencies({ spawn: async body => {
+    recorded.spawns.push(body);
+    return { status: 200, body: { ok: true, conversationId: recorded.spawns.length === 1 ? conversation.id : NEW_ID, path: null } };
+  } });
+  try {
+    expect((await executeOrchestratorSeatRequest({ ...spawnRequest(), engine: "codex", model: "gpt-6.1-sol" }, deps)).status).toBe(200);
+    const selection = await changeConversationSpeed(conversation.id, selected, "selected-speed", {
+      registry, host: async () => offline ? null : host,
+      accounts: () => [{ id: "account-a", label: "Account A", home: sandbox, kind: "managed", sessionsDir: sandbox,
+        authPresent: true, loginPane: null, createdAt: 0 }],
+    });
+    expect(selection).toMatchObject({ status: 200, body: { appliedTier: applied, echoed: !offline } });
+    expect(calls.map(call => [call.serviceTier, call.cut])).toEqual(offline ? [] : [[applied, "none"]]);
+    registry.close();
+    registry = new AgentRegistry(filename);
+    const generation = registry.conversation(conversation.id)!.generations.at(-1)!;
+    const resumed = await registry.beginSpawnRequestAsync({
+      engine: "codex", cwd: sandbox, accountId: "account-a", conversationId: conversation.id,
+      purpose: "resume-successor", transport: "structured", expectedArtifactPath: transcript,
+      launchProfile: { ...generation.launchProfile, title: "Resume selected speed" },
+    });
+    // The host replaces its input with this receipt before forwarding the tier.
+    expect(resumed.receipt.launchProfile).toMatchObject({ serviceTier: applied, fast });
+    expect(registry.settleSpawn(resumed.receipt.launchId, {
+      key: { engine: "codex", sessionId: generation.id }, artifactPath: transcript, cwd: sandbox,
+      accountId: "account-a", status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+    }).kind).toBe("settled");
+    registry.close();
+    registry = new AgentRegistry(filename);
+    expect(registry.conversation(conversation.id)!.generations.at(-1)!.launchProfile).toMatchObject({ serviceTier: applied, fast });
+    setAgentRegistryForTests(registry);
+    expect((await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "selected-speed-rotation" }, deps)).status).toBe(200);
+    expect(recorded.spawns[1]).toMatchObject({ inheritedServiceTier: applied });
+    expect(recorded.spawns[1]).not.toHaveProperty("serviceTier");
+    expect(recorded.spawns[1]).not.toHaveProperty("fast");
+  } finally { registry.close(); }
+});
+
+test.each([false, true])("tier roundtrip: rotation inherits the explicit profile, excluding Turbo (turbo=%s)", async turbo => {
+  const { writeSeatTickSettings, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  const registry = new AgentRegistry(path.join(sandbox, "registry.json"));
+  setAgentRegistryForTests(registry);
+  const conversation = registry.ensureConversation("codex", path.join(sandbox, "incumbent.jsonl"), "account-a");
+  registry.updateConversationLaunchProfile(conversation.id, { model: "gpt-6.1-sol", effort: "high", fast: false, serviceTier: "ultrafast" });
+  const { deps, recorded } = dependencies({ spawn: async body => {
+    recorded.spawns.push(body);
+    return { status: 200, body: { ok: true, conversationId: recorded.spawns.length === 1 ? conversation.id : NEW_ID, path: null } };
+  } });
+  try {
+    await executeOrchestratorSeatRequest({ ...spawnRequest(), engine: "codex", model: "gpt-6.1-sol" }, deps);
+    if (turbo) writeSeatTickSettings("proj-a", { ...defaultSeatTickSettings("proj-a"), turbo: {
+      enabled: true, startedAt: AT, until: null, endedAt: null, endReason: null, updatedAt: AT,
+      setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, why: null, plan: [],
+      credits: { approved: false, accounts: [], approvedAt: null, withdrawnAt: null, withdrawnBy: null, withdrawnWhy: null },
+      switches: [{ conversationId: conversation.id, accountId: "account-a", model: "gpt-6.1-sol", from: "priority", to: "ultrafast", state: "switched", at: AT }],
+    } });
+    const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "tier-inherited" }, deps);
+    expect(result.status).toBe(200);
+    expect(recorded.spawns[1]).toMatchObject({ inheritedServiceTier: turbo ? "priority" : "ultrafast" });
+    expect(recorded.spawns[1]).not.toHaveProperty("serviceTier");
+    expect(recorded.spawns[1]).not.toHaveProperty("fast");
+  } finally { registry.close(); }
 });

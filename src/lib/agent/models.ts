@@ -9,6 +9,9 @@ export type AgentModelOption = {
   /** This row is a launch alias of the row with this id: it stays a valid
       model id but is not offered beside it (see listedModels). */
   duplicateOf?: string;
+  /** A choice fresh menus no longer offer. The row stays so a saved selection
+      keeps its label and stays listed while it is the current choice. */
+  retired?: true;
 };
 
 export const CODEX_ASTRA_MODEL = "gpt-6-astra";
@@ -57,27 +60,36 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
     // Claude Code 2.1.280 resolves the `opus` alias to claude-opus-5-5 on
     // first-party auth, so the alias row names what it launches.
     { id: "opus", label: "Opus 5.5", shortLabel: "Opus 5.5", use: "review" },
-    { id: "fable", label: "Fable", shortLabel: "Fable", use: "general" },
+    // What `fable` runs depends on the installed Claude Code: 2.1.318 resolves
+    // it to claude-fable-5-1, 2.1.321 to claude-fable-5-2. Its label names no
+    // version, and fresh menus offer the pinned Fable 5.2 row instead, which
+    // both releases launch as itself (2.1.318 accepts the id with a warning).
+    // Fable 5.1 is retired: its conversations keep reading and relaunching as 5.1.
+    { id: "fable", label: "Fable", shortLabel: "Fable", use: "general", retired: true },
+    { id: "claude-fable-5-2", label: "Fable 5.2", shortLabel: "Fable 5.2", use: "general" },
+    { id: "claude-fable-5-1", label: "Fable 5.1", shortLabel: "Fable 5.1", use: "general", retired: true },
     { id: "sonnet", label: "Sonnet", shortLabel: "Sonnet", use: "implement" },
     // Pinned id of the Sonnet the `sonnet` alias resolves to in Claude Code
     // 2.1.284. The alias moves when the next Sonnet ships; this row does not.
     { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", shortLabel: "Sonnet 5.5", use: "implement" },
     // Claude Code 2.1.296 resolves `haiku` to claude-haiku-5-5 on
-    // first-party auth. Pinned rows keep both generations selectable.
+    // first-party auth. Haiku 4.5 is retired: saved selections still read and launch.
     { id: "haiku", label: "Haiku 5.5", shortLabel: "Haiku 5.5", use: "general", duplicateOf: "claude-haiku-5-5" },
     { id: "claude-haiku-5-5", label: "Haiku 5.5", shortLabel: "Haiku 5.5", use: "general" },
-    { id: "claude-haiku-4-5", label: "Haiku 4.5", shortLabel: "Haiku 4.5", use: "general" },
+    { id: "claude-haiku-4-5", label: "Haiku 4.5", shortLabel: "Haiku 4.5", use: "general", retired: true },
   ],
   codex: [
     // Catalogue order is independent of the shipped launch fallback below.
-    // Astra and Terra remain selectable for explicit launches.
+    // Fresh menus offer the first four; the retired rows keep saved
+    // selections and transcript provenance readable.
     { id: CODEX_ASTRA_MODEL, label: "GPT-6-Astra", shortLabel: "6-Astra", use: "review" },
     { id: CODEX_GPT61_SOL_MODEL, label: "GPT-6.1-Sol", shortLabel: "6.1-Sol", use: "review" },
-    { id: CODEX_GPT6_SOL_MODEL, label: "GPT-6-Sol", shortLabel: "6-Sol", use: "review" },
+    { id: CODEX_GPT61_TERRA_MODEL, label: "GPT-6.1-Terra", shortLabel: "6.1-Terra", use: "implement" },
     { id: CODEX_GPT6_LUNA_MODEL, label: "GPT-6-Luna", shortLabel: "6-Luna", use: "general" },
-    { id: CODEX_SOL_MODEL, label: "GPT-5.6-Sol", shortLabel: "5.6-Sol", use: "review" },
-    { id: CODEX_TERRA_MODEL, label: "GPT-5.6-Terra", shortLabel: "5.6-Terra", use: "implement" },
-    { id: CODEX_LUNA_MODEL, label: "GPT-5.6-Luna", shortLabel: "5.6-Luna", use: "general" },
+    { id: CODEX_GPT6_SOL_MODEL, label: "GPT-6-Sol", shortLabel: "6-Sol", use: "review", retired: true },
+    { id: CODEX_SOL_MODEL, label: "GPT-5.6-Sol", shortLabel: "5.6-Sol", use: "review", retired: true },
+    { id: CODEX_TERRA_MODEL, label: "GPT-5.6-Terra", shortLabel: "5.6-Terra", use: "implement", retired: true },
+    { id: CODEX_LUNA_MODEL, label: "GPT-5.6-Luna", shortLabel: "5.6-Luna", use: "general", retired: true },
   ],
   // `auto` heads the list because it is the one value every Copilot plan
   // accepts, Free included. The ids after it are unverified against a
@@ -92,13 +104,25 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
   ],
 };
 
-/** The rows a picker offers for `engine`. A launch alias that names the same
-    release as a pinned row stays valid but is not listed beside it, unless it
-    is the current choice, which then stands in for the pinned row. */
-export function listedModels(engine: "claude" | "codex" | "copilot", current?: string | null): readonly AgentModelOption[] {
+/** The rows a picker offers for `engine`. A retired row is listed only while it
+    is a current choice, so a saved selection is never rewritten. A launch alias
+    that names the same release as a pinned row stays valid but is not listed
+    beside it, unless it is a current choice, which then stands in for the
+    pinned row. With several current choices (what runs, what is drafted), the
+    earlier one decides between an alias and its pinned row. */
+export function listedModels(
+  engine: "claude" | "codex" | "copilot",
+  current?: string | null | readonly (string | null | undefined)[],
+): readonly AgentModelOption[] {
   const rows = ENGINE_MODELS[engine];
-  const alias = rows.find((option) => option.duplicateOf && option.id === current);
-  return rows.filter((option) => option.duplicateOf ? option === alias : option.id !== alias?.duplicateOf);
+  const order = (Array.isArray(current) ? current : [current]).flatMap((value) => typeof value === "string" && value.trim() ? [value.trim()] : []);
+  const kept = new Set(order);
+  for (const row of rows) {
+    if (!row.duplicateOf || !kept.has(row.id) || !kept.has(row.duplicateOf)) continue;
+    kept.delete(order.indexOf(row.id) < order.indexOf(row.duplicateOf) ? row.duplicateOf : row.id);
+  }
+  const alias = rows.find((option) => option.duplicateOf && kept.has(option.id));
+  return rows.filter((option) => kept.has(option.id) || (!option.duplicateOf && !option.retired && option.id !== alias?.duplicateOf));
 }
 
 export type LaunchModelValidation = { model: string } | { error: string };
@@ -130,6 +154,20 @@ export function defaultModelFor(engine: "claude" | "codex" | "copilot"): string 
 const CLAUDE_MODEL_FAMILIES = ["fable", "opus", "sonnet", "haiku"] as const;
 export type ClaudeLaunchModel = (typeof CLAUDE_MODEL_FAMILIES)[number];
 
+/** The release each launch alias runs on the installed Claude Code (2.1.321),
+    as its bundled catalogue's `aliases.<family>.default` names it for
+    first-party auth. The context-window registry and the onboarding cost
+    estimate read an alias through this table, so they price and size what the
+    alias launches. Claude Code 2.1.318 and earlier resolve `fable` to
+    claude-fable-5-1 instead; the picker therefore launches Fable 5.2 by its
+    pinned id, which does not depend on the installed alias table. */
+export const CLAUDE_ALIAS_RELEASES: Readonly<Record<ClaudeLaunchModel, string>> = {
+  fable: "claude-fable-5-2",
+  opus: "claude-opus-5-5",
+  sonnet: "claude-sonnet-5-5",
+  haiku: "claude-haiku-5-5",
+};
+
 /**
  * Claude transcripts preserve provider model provenance, including dated ids
  * that the installed CLI may reject as launch arguments. Resume and migration
@@ -152,10 +190,18 @@ export function normalizeClaudeLaunchModel(value: string | null | undefined): Cl
     id falls back to its family alias (`sonnet`), as normalizeClaudeLaunchModel
     does. */
 export function claudeCatalogModelId(value: string | null | undefined): string | null {
+  return claudePinnedModelId(value) ?? normalizeClaudeLaunchModel(value);
+}
+
+/** The pinned catalogue id a Claude model id names (`claude-fable-5-2`, with or
+    without a dated suffix), or null for an alias or an id the catalogue does
+    not pin. Resume keeps such an id, so a conversation goes on with the release
+    it ran on instead of whatever the family alias names in the installed CLI. */
+export function claudePinnedModelId(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
   const model = value.trim().toLowerCase().replace(/-20\d{6}$/, "");
-  const pinned = ENGINE_MODELS.claude.find((option) => option.id === model);
-  return pinned ? pinned.id : normalizeClaudeLaunchModel(value);
+  const pinned = ENGINE_MODELS.claude.find((option) => option.id === model && /\d/.test(option.id));
+  return pinned ? pinned.id : null;
 }
 
 /* A versioned Claude id as the scanner keeps it (`opus-5-5`, `claude-opus-5`,

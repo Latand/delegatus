@@ -13,7 +13,7 @@ import type { TelegramErrorCode, TelegramPhase, TelegramStatusPayload } from "@/
 
 import { Loader2, Trash2, X } from "./icons";
 import { LINE_EDGE, type RailFooterDensity } from "./railFooterDensity";
-import { TelegramBotSection } from "./TelegramBot";
+import { TelegramBotRow } from "./settings/TelegramSection";
 import { ActionButton, ConfirmingAction } from "./TelegramControls";
 import { TelegramReportsSection } from "./TelegramReports";
 import { Z } from "@/components/layers";
@@ -403,7 +403,7 @@ export function TelegramPanel({ state, reports, bot, onClose }: { state: Telegra
             </div>
           ) : null}
 
-          {bot ? <TelegramBotSection state={bot} /> : null}
+          {bot ? <TelegramBotRow state={bot} onOpen={onClose} /> : null}
         </div>
       </div>
     </>

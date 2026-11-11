@@ -17,6 +17,8 @@ import { useLocale } from "@/lib/i18n";
 import type { PatchPipelineRequest, Pipeline, PipelineRoleId } from "@/lib/pipelines/types";
 import { renderStagePrompt } from "@/lib/pipelines/prompts";
 import { StageGlyph } from "@/components/kanban/StageGlyph";
+import { stageGlyphMotion } from "@/components/kanban/pipelineGraph";
+import { latestAttempt } from "@/lib/pipelines/stageChip";
 import { defaultRoleParameterValues } from "@/lib/roles/parameters";
 
 import {
@@ -83,11 +85,17 @@ function predictedOverride(pipeline: Pipeline, stageId: string, body: Omit<Patch
   };
 }
 
-export function StagePlaceholderPane({ slot, interactive }: { slot: StageSlot; interactive: boolean }) {
+/** `flow`: the pane sits in a parent that scrolls (a draft's configuration on
+    the card's sheet, the phone's stage sheet), so it grows with its content
+    and its prompt form follows the body instead of covering its last rows. */
+export function StagePlaceholderPane({ slot, interactive, flow = false }: { slot: StageSlot; interactive: boolean; flow?: boolean }) {
   const { t } = useLocale();
   const { pipeline, stage } = slot;
   const roles = useRoleCatalog();
   const state = stageChipState(pipeline, stage);
+  /* The pane stands in for a conversation that is not open, so it knows of no
+     agent at work: its glyph waits for the agent or holds still. */
+  const motion = stageGlyphMotion(pipeline, state, latestAttempt(pipeline, stage.id), false, new Map());
   const tone = STAGE_TONES[state];
   const label = stageChipLabel(t, stage);
   /* Role first, then the stage id, then the position (#658) — never the prompt's
@@ -269,14 +277,19 @@ export function StagePlaceholderPane({ slot, interactive }: { slot: StageSlot; i
       data-pipeline-stage-card={`${pipeline.id}::${stage.id}`}
       data-pipeline-stage-state={state}
       aria-label={t("pipelineSlot.paneAria", { title })}
-      className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-control border-2 border-dashed bg-card shadow-1"
+      className={`relative flex min-w-0 flex-col overflow-hidden rounded-control border-2 border-dashed bg-card shadow-1 ${flow ? "flex-none" : "h-full min-h-0 flex-1"}`}
       style={{ borderColor: active ? tone.color : "var(--border-strong)" }}
     >
       <span aria-hidden className="h-1 w-full shrink-0 opacity-60" style={{ backgroundColor: tint.color }} />
-      <header className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-2.5" style={{ backgroundColor: tint.soft }}>
+      {/* A header wider than the pane (a longer kind word, finger-sized
+          controls) wraps its controls to a second line inside the pane; the
+          title keeps a few words before they do. The controls wrap together,
+          so no line holds a lone ×. */}
+      <header className="flex min-h-10 shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-2.5 py-1" style={{ backgroundColor: tint.soft }}>
         <StageGlyph
           state={state}
           model={{ engine: stage.effectiveRole.engine, model: effectiveModel }}
+          motion={motion}
           fallback="tone"
           named
           badge={false}
@@ -289,56 +302,61 @@ export function StagePlaceholderPane({ slot, interactive }: { slot: StageSlot; i
             {engine}
           </span>
         )}
-        <span className="min-w-0 flex-1 truncate text-ui font-semibold text-muted" title={title}>
+        <span className="min-w-16 flex-1 truncate text-ui font-semibold text-muted" title={title}>
           {title}
         </span>
         <span className="shrink-0 rounded-full border border-border bg-card/70 px-1.5 py-0.5 text-caption font-bold uppercase tracking-wide text-muted">
           {review ? `⟳ ${t("groupOverride.reviewKind")}` : t("groupOverride.runKind")}
         </span>
-        {reorderable ? (
-          <span className="flex shrink-0 items-center gap-0.5" role="group" aria-label={t("groupOverride.stagesHeading")}>
-            <button
-              type="button"
-              data-stage-move="earlier"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-control border border-border bg-card/80 text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-30"
-              aria-label={t("pipelineSlot.moveEarlier", { role: label })}
-              disabled={busy || !canMoveTo(slot.index - 1)}
-              onClick={() => moveTo(slot.index - 1)}
-            >
-              <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
-            </button>
-            <button
-              type="button"
-              data-stage-move="later"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-control border border-border bg-card/80 text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-30"
-              aria-label={t("pipelineSlot.moveLater", { role: label })}
-              disabled={busy || !canMoveTo(slot.index + 1)}
-              onClick={() => moveTo(slot.index + 1)}
-            >
-              <ChevronRight className="h-3.5 w-3.5" aria-hidden />
-            </button>
+        {reorderable || interactive || canRemove ? (
+          <span className="flex shrink-0 items-center gap-1.5" data-stage-pane-controls="">
+            {reorderable ? (
+              <span className="flex shrink-0 items-center gap-0.5" role="group" aria-label={t("groupOverride.stagesHeading")}>
+                <button
+                  type="button"
+                  data-stage-move="earlier"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-control border border-border bg-card/80 text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-30"
+                  aria-label={t("pipelineSlot.moveEarlier", { role: label })}
+                  disabled={busy || !canMoveTo(slot.index - 1)}
+                  onClick={() => moveTo(slot.index - 1)}
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  data-stage-move="later"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-control border border-border bg-card/80 text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-30"
+                  aria-label={t("pipelineSlot.moveLater", { role: label })}
+                  disabled={busy || !canMoveTo(slot.index + 1)}
+                  onClick={() => moveTo(slot.index + 1)}
+                >
+                  <ChevronRight className="h-3.5 w-3.5" aria-hidden />
+                </button>
+              </span>
+            ) : null}
+            {interactive ? (
+              <button
+                type="button"
+                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-control border border-border bg-card/80 text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                aria-label={t("groupOverride.applyStage")}
+                aria-expanded={configOpen}
+                onClick={() => setConfigOpen((value) => !value)}
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            ) : null}
+            {canRemove ? (
+              <button
+                className="inline-flex shrink-0 items-center justify-center rounded-control border border-border bg-canvas px-1.5 py-0.5 text-muted hover:border-danger/40 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
+                aria-label={t("groupOverride.removeStage")}
+                title={t("groupOverride.removeStage")}
+                disabled={busy}
+                onClick={removeStage}
+              >
+                <X className="h-3 w-3" aria-hidden />
+              </button>
+            ) : null}
           </span>
-        ) : null}
-        {interactive ? (
-          <button
-            type="button"
-            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-control border border-border bg-card/80 text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            aria-label={t("groupOverride.applyStage")}
-            aria-expanded={configOpen}
-            onClick={() => setConfigOpen((value) => !value)}
-          >
-            <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
-          </button>
-        ) : null}
-        {canRemove ? (
-          <button
-            className="inline-flex shrink-0 items-center rounded-control border border-border bg-canvas px-1.5 py-0.5 text-muted hover:border-danger/40 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
-            aria-label={t("groupOverride.removeStage")}
-            disabled={busy}
-            onClick={removeStage}
-          >
-            <X className="h-3 w-3" aria-hidden />
-          </button>
         ) : null}
       </header>
       <AgentMemoryCapNote cap={slot.attempt?.memoryCap} />
@@ -404,7 +422,7 @@ export function StagePlaceholderPane({ slot, interactive }: { slot: StageSlot; i
           the prompt renders as a bounded PREVIEW (clamped), and the card clips
           rather than scrolls. The full prompt stays editable in the config
           textarea below, so nothing is lost. */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-3">
+      <div className={`flex flex-col px-4 py-3 ${flow ? "" : "min-h-0 flex-1 overflow-hidden"}`} data-stage-pane-body="">
         <div className="mb-3 flex items-center justify-between gap-2">
           <span className="rounded-full px-3 py-1 text-body font-bold" style={{ backgroundColor: tone.soft, color: tone.color }}>
             {t(`pipelineChipState.${state}`)}

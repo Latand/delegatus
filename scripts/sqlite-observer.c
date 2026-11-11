@@ -156,14 +156,25 @@ static int trace(unsigned type, void *argument, void *statement, void *detail) {
   }
   return 0;
 }
-/* close_v2 can leave outstanding statements on a zombie connection. Its
- * CLOSE trace precedes their finalization. The function destructor runs when
- * SQLite actually destroys the connection, after those statements finish. */
+/* The collation owns the context independently of the replaceable marker
+ * function. Unlike the CLOSE trace, its destructor waits for outstanding
+ * statements on a close_v2 zombie connection. The collation API is available
+ * on the minimum supported SQLite, including macOS. */
 static void destroyed(void *argument) {
   Connection *c = argument;
+  /* Also safe if the lifetime anchor itself is replaced or removed. */
+  sqlite3_trace_v2(c->db, 0, NULL, NULL);
+  sqlite3_commit_hook(c->db, NULL, NULL);
+  sqlite3_rollback_hook(c->db, NULL, NULL);
+  if (running == c) running = NULL;
   event(c, "close", 1, NULL);
   free(c->name);
   free(c);
+}
+static int owner_order(void *argument, int left_size, const void *left, int right_size, const void *right) {
+  (void)argument;
+  int order = memcmp(left, right, left_size < right_size ? left_size : right_size);
+  return order ? order : (left_size > right_size) - (left_size < right_size);
 }
 static void marker(sqlite3_context *context, int count, sqlite3_value **values) {
   (void)count; (void)values;
@@ -185,8 +196,13 @@ int sqlite3_observer_init(sqlite3 *db, char **error, const sqlite3_api_routines 
   c->name = strdup(file && strrchr(file, '/') ? strrchr(file, '/') + 1 : "memory");
   c->changes = sqlite3_total_changes64(db);
   int registered = sqlite3_create_function_v2(db, "delegatus_observer_context", 0, SQLITE_UTF8,
-    c, marker, NULL, NULL, destroyed);
-  if (registered != SQLITE_OK) return registered;
+    NULL, marker, NULL, NULL, NULL);
+  if (registered == SQLITE_OK)
+    registered = sqlite3_create_collation_v2(db, "delegatus_observer_context", SQLITE_UTF8,
+      c, owner_order, destroyed);
+  /* create_collation_v2 does not call the destructor on registration failure.
+   * No callback references this new context until both registrations succeed. */
+  if (registered != SQLITE_OK) { free(c->name); free(c); return registered; }
   event(c, "open", sqlite3_db_readonly(db, "main"), NULL);
   sqlite3_commit_hook(db, committing, c);
   sqlite3_rollback_hook(db, rollback, c);

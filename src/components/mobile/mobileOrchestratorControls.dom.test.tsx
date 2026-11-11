@@ -5,6 +5,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import { diffTextLines } from "@/components/feed/diff";
+import { translate } from "@/lib/i18n";
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import type { FileEntry } from "@/lib/types";
@@ -497,6 +498,27 @@ test("confirming a rotation posts to the ROTATE route once — never the seat ro
   expect(String(posts[0]!.body.clientRequestId)).toMatch(/^[A-Za-z0-9_-]{8,128}$/);
   /* No cwd: the server continues the successor in the predecessor's checkout. */
   expect(posts[0]!.body.cwd).toBeUndefined();
+});
+
+/* A Turbo-applied tier would otherwise become the successor's explicit choice;
+   untouched, the rotate route's own inheritance decides the successor's tier. */
+test("an untouched phone rotate draft on a Codex seat sends no speed, and says the tier is inherited", async () => {
+  incumbentAnswer = incumbent({ engine: "codex", model: "gpt-6.1-sol", accountId: "codex-primary" });
+  const codexSeat = { ...orchestrator, engine: "codex", model: "gpt-6.1-sol", serviceTier: "ultrafast", fast: true } as FileEntry;
+  const files = [conversation({}), codexSeat];
+  const { host, root } = await mount(files);
+  await openControls(host, root, files);
+  await openRotate(host, root, files);
+  const speed = sheet(host)!.querySelector('select[aria-label="Codex speed mode"]') as HTMLSelectElement;
+  expect(speed.value).toBe("");
+  expect(speed.selectedOptions[0]?.textContent).toBe(translate("en", "draft.speedInherited"));
+  flushSync(() => confirmButton(host).click());
+  await settle(root, view(files), 3);
+  const posts = rotatePosts();
+  expect(posts).toHaveLength(1);
+  expect(posts[0]!.body).toMatchObject({ engine: "codex", model: "gpt-6.1-sol" });
+  expect("fast" in posts[0]!.body).toBe(false);
+  expect("serviceTier" in posts[0]!.body).toBe(false);
 });
 
 test("a double tap rotates ONCE, and a retry after a lost reply replays the SAME key instead of rotating twice", async () => {

@@ -8,8 +8,9 @@ import { renderStagePrompt } from "@/lib/pipelines/prompts";
 import { buildStagePrompt, stagePromptExtra, stageReceivesPrevOutput } from "@/components/pipelines/pipelineModel";
 
 import { StageAccountChip } from "./AccountPicker";
-import { BranchGlyph, ChevronRight, CloseGlyph, CollapseGlyph, ExpandGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
+import { BranchGlyph, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import { graphOrder } from "./pipelineGraph";
+import { stageDraftStateKey } from "./openAgents";
 import type { PipelinePorts } from "./pipelinePorts";
 import { stageDraftKey, type StageDraft, type StageDrafts } from "./stageDrafts";
 import { stageIdentity } from "./stageIdentity";
@@ -66,13 +67,17 @@ export function StageDraftFeed({ pipeline, stage, names, drafts, ports }: {
   );
 }
 
-/** The first message: the stage's own words, edited in place until it starts. */
-export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
+/** The first message: the stage's own words, edited in place until it starts.
+    `fromConversation` is for a surface whose heading already names the first
+    message (the phone's draft screen): its waiting line names where the words
+    came from instead (frame 3b). */
+export function StageDraftMessage({ pipeline, stage, name, drafts, ports, fromConversation = false }: {
   pipeline: Pipeline;
   stage: PipelineStage;
   name: string;
   drafts: StageDrafts;
   ports: PipelinePorts;
+  fromConversation?: boolean;
 }) {
   const { t } = useLocale();
   const key = stageDraftKey(pipeline.id, stage.id);
@@ -183,7 +188,7 @@ export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
               </div>
             ) : null}
             <div className="draft-acts">
-              <span className="hint">{t("kanban.draft.hint")}</span>
+              <span className="hint keys">{t("kanban.draft.hint")}</span>
               <button type="button" className="btn quiet" data-draft-cancel={key} onClick={cancel}>{t("common.cancel")}</button>
               <button type="button" className="btn primary" data-draft-save={key} disabled={!canSave} onClick={() => save()}>{t("kanban.draft.save")}</button>
             </div>
@@ -216,7 +221,7 @@ export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
       <span className={`bstatus ${status}`} role="status" data-draft-status={status}>
         <ClockGlyph />
         <span>
-          {t(status === "ended" ? "kanban.draft.statusEnded" : status === "starting" ? "kanban.draft.statusStarting" : status === "started" ? "kanban.draft.stateStarted" : "kanban.draft.status")}
+          {t(status === "ended" ? "kanban.draft.statusEnded" : status === "starting" ? "kanban.draft.statusStarting" : status === "started" ? "kanban.draft.stateStarted" : fromConversation ? "kanban.fromConversation.status" : "kanban.draft.status")}
           {saved ? t("kanban.draft.edited", { time: clockTime(saved) }) : ""}
         </span>
       </span>
@@ -291,22 +296,21 @@ export function DraftLeftover({ kind, draft, draftKey, name, drafts, onOpenConve
 }
 
 /**
- * A waiting stage opened from its node on the card (prototype
- * `renderStageDraft`): the conversation it will become, with its own
- * Collapse, actions and Close. When the stage starts the board turns this
- * panel into that conversation's reader; a draft that did not make it stays
- * here, marked as not delivered, until the operator lets it go.
+ * A waiting stage opened from its pill or its node, in the agent window
+ * (prototype `renderStageDraft`): the conversation it will become, with its
+ * actions and the window's Close. When the stage starts the board puts that
+ * conversation in its place; a draft that did not make it stays here, marked
+ * as not delivered, until the operator lets it go.
  */
-export function StageDraftPanel({ panelKey, cardTitle, pipeline, stage, names, folded, drafts, ports, onFold, onClose, onMenu, onOpenConversation }: {
+export function StageDraftPanel({ panelKey, cardTitle, pipeline, stage, names, drafts, ports, onClose, onMenu, onOpenConversation }: {
   panelKey: string;
   cardTitle: string;
   pipeline: Pipeline;
   stage: PipelineStage;
   names: ReadonlyMap<string, string>;
-  folded: boolean;
   drafts: StageDrafts;
   ports: PipelinePorts;
-  onFold: (folded: boolean) => void;
+  /** Close the agent window, as a conversation's × does. */
   onClose: () => void;
   onMenu: (anchor: HTMLElement) => void;
   onOpenConversation: (() => void) | null;
@@ -321,17 +325,15 @@ export function StageDraftPanel({ panelKey, cardTitle, pipeline, stage, names, f
   const k = order.findIndex((entry) => entry.id === stage.id) + 1;
   const roleId = stage.role?.roleId ?? (stage.kind === "review-loop" ? "reviewer" : "builder");
   const title = `${name} · ${cardTitle}`;
-  const stored = stagePromptExtra(stage.prompt);
-  const stateWord = pipelineEnded(pipeline) ? t("kanban.draft.stateEnded") : started ? t("kanban.draft.stateStarted") : t("kanban.draft.state");
+  const stateWord = t(stageDraftStateKey(started, pipelineEnded(pipeline)));
   return (
     <section
-      className={`stage-detail reader conv draft role-${roleId}${folded ? " folded" : ""}`}
+      className={`stage-detail reader conv draft role-${roleId}`}
       data-stage-detail={panelKey}
       data-draft-stage={stage.id}
-      data-collapsed={folded ? "1" : "0"}
       role="region"
       tabIndex={-1}
-      aria-label={t(folded ? "kanban.draft.panelAriaFolded" : "kanban.draft.panelAria", { stage: name, k, n: order.length })}
+      aria-label={t("kanban.draft.panelAria", { stage: name, k, n: order.length })}
       onKeyDown={(event) => {
         if (event.key !== "Escape" || event.defaultPrevented) return;
         if ((event.target as HTMLElement).closest("textarea, input")) return;
@@ -344,37 +346,28 @@ export function StageDraftPanel({ panelKey, cardTitle, pipeline, stage, names, f
           <span className="ch-dot" aria-hidden="true" />
           <span className="ch-title" title={title}>{title}</span>
           <span className="spacer" />
-          <button type="button" className="icon-btn sm" data-panel-fold={panelKey} aria-expanded={!folded} aria-label={t(folded ? "kanban.draft.expandPanel" : "kanban.draft.collapsePanel", { stage: name })} title={t(folded ? "kanban.readerExpand" : "kanban.readerCollapse")} onClick={() => onFold(!folded)}>
-            {folded ? <ExpandGlyph /> : <CollapseGlyph />}
-          </button>
           <button type="button" className="icon-btn sm" aria-haspopup="menu" data-panel-menu={panelKey} aria-label={t("kanban.stages.stageActions", { stage: name })} onClick={(event) => onMenu(event.currentTarget)}>
             <MoreGlyph />
           </button>
-          <button type="button" className="icon-btn sm" data-panel-close={panelKey} aria-label={t("kanban.draft.closePanel", { stage: name })} title={t("kanban.readerClose")} onClick={onClose}>
+          <button type="button" className="icon-btn sm" data-panel-close={panelKey} aria-label={t("kanban.agentWindow.close")} title={t("kanban.agentWindow.close")} onClick={onClose}>
             <CloseGlyph />
           </button>
         </div>
-        {folded ? null : (
-          <div className="ch-meta">
-            <span className="ch-state">{stateWord}</span>
-            <StageIdentity identity={stageIdentity(pipeline, stage)} density="header" showWord />
-            <StageAccountChip pipeline={pipeline} stage={stage} />
-            {started ? null : <span className="ch-ctx">{t("kanban.draft.noContext")}</span>}
-            {pipeline.branch ? (
-              <span className="ch-tree" title={t("branch.worktree", { name: pipeline.branch })}>
-                <BranchGlyph />
-                <span>{pipeline.branch}</span>
-              </span>
-            ) : null}
-            <span className="ch-stage num">{t("kanban.draft.stageOf", { k, n: order.length })}</span>
-          </div>
-        )}
+        <div className="ch-meta">
+          <span className="ch-state">{stateWord}</span>
+          <StageIdentity identity={stageIdentity(pipeline, stage)} density="header" showWord />
+          <StageAccountChip pipeline={pipeline} stage={stage} />
+          {started ? null : <span className="ch-ctx">{t("kanban.draft.noContext")}</span>}
+          {pipeline.branch ? (
+            <span className="ch-tree" title={t("branch.worktree", { name: pipeline.branch })}>
+              <BranchGlyph />
+              <span>{pipeline.branch}</span>
+            </span>
+          ) : null}
+          <span className="ch-stage num">{t("kanban.draft.stageOf", { k, n: order.length })}</span>
+        </div>
       </div>
-      {folded ? (
-        <button type="button" className="rlatest" onClick={() => onFold(false)}>
-          {t("kanban.draft.foldedLine", { words: stored || t("kanban.draft.onlyWiring") })}
-        </button>
-      ) : draft && (outcome === "undelivered" || outcome === "ended-before-start") ? (
+      {draft && (outcome === "undelivered" || outcome === "ended-before-start") ? (
         <DraftLeftover kind={outcome === "undelivered" ? "undelivered" : "ended"} draft={draft} draftKey={draftKey} name={name} drafts={drafts} onOpenConversation={onOpenConversation} />
       ) : (
         <StageDraftFeed pipeline={pipeline} stage={stage} names={names} drafts={drafts} ports={ports} />

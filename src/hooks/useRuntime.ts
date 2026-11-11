@@ -23,6 +23,7 @@ import {
 import type { AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
 import type { Flow } from "@/lib/flows/types";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
+import { INGRESS_BOUNDARIES, INGRESS_STOP_REASONS, type IngressBoundary, type IngressStopReason } from "@/lib/runtime/ingressStop";
 
 import { awaitingReplies, type ReplyPolicy } from "@/lib/audio/fleetCues";
 
@@ -129,7 +130,6 @@ export interface RuntimeSessionView {
   uiState: SessionUiState;
   attentions: RuntimeAttention[];
   receipts: RuntimeReceipt[];
-  legacy: boolean;
   structuredControlsEnabled: boolean;
 }
 
@@ -144,7 +144,6 @@ function sessionViewFor(
     uiState: deriveSessionState(session, hasBlockingAttention(store, session)),
     attentions: openAttentions(store, session),
     receipts: session.recentReceipts,
-    legacy: session.hostKind === "tmux-legacy",
     structuredControlsEnabled,
   };
 }
@@ -405,11 +404,32 @@ export async function sendRuntimeMessage(options: SendOptions): Promise<CommandR
  */
 export type RuntimeAdmissionOutcome = "admitted" | "not-executed" | "unknown";
 
+/** Where the route stopped a message it never admitted, as recorded by the
+    Viewer that served it (2026-11-09). Absent on a `not-executed` answer, it
+    means the request never finished reaching the route. */
+export interface RuntimeAdmissionStop {
+  boundary: IngressBoundary;
+  reason: IngressStopReason;
+  status: number;
+  at: string;
+}
+
 export interface RuntimeAdmissionLookup {
   outcome: RuntimeAdmissionOutcome;
   operationId?: string;
   receipt?: RuntimeReceipt;
   reason?: string;
+  stop?: RuntimeAdmissionStop;
+}
+
+function admissionStop(value: unknown): RuntimeAdmissionStop | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const stop = value as Record<string, unknown>;
+  return INGRESS_BOUNDARIES.includes(stop.boundary as IngressBoundary)
+    && INGRESS_STOP_REASONS.includes(stop.reason as IngressStopReason)
+    && Number.isSafeInteger(stop.status) && typeof stop.at === "string"
+    ? { boundary: stop.boundary as IngressBoundary, reason: stop.reason as IngressStopReason, status: stop.status as number, at: stop.at }
+    : null;
 }
 
 export async function lookupRuntimeAdmission(
@@ -443,7 +463,10 @@ export async function lookupRuntimeAdmission(
         ...(receipt ? { receipt } : {}),
       };
     }
-    if (json.outcome === "not-executed") return { outcome: "not-executed" };
+    if (json.outcome === "not-executed") {
+      const stop = admissionStop(json.stop);
+      return stop ? { outcome: "not-executed", stop } : { outcome: "not-executed" };
+    }
     return { outcome: "unknown", reason: typeof json.reason === "string" ? json.reason : undefined };
   } catch {
     return { outcome: "unknown" };

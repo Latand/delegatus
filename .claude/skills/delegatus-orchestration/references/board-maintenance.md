@@ -57,7 +57,7 @@ Read these Delegatus surfaces before changing anything:
 - `GET /api/files?project=<project>` for canonical path, conversation identity, title revision,
   activity, process state, durable lineage, role, memberships, and review outcome;
 - `GET /api/board?project=<project>` for the revision fence and hidden/manual/expanded state;
-- `GET /api/flows`, `GET /api/pipelines`, and `GET /api/tasks` for durable associations, rounds,
+- `GET /api/pipelines`, `GET /api/tasks` and, for retired flows kept as history, `GET /api/flows` for durable associations, rounds,
   exact reviewed heads, assignments, and current container state;
 - GitHub pull-request state only when transcript and Delegatus metadata identify a repository and PR.
 

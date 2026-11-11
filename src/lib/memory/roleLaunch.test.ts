@@ -30,7 +30,7 @@ fs.writeFileSync(path.join(checkout, "tracked.txt"), "base\n");
 git("add", "tracked.txt");
 git("commit", "-m", "base");
 
-for (const language of ["en", "uk"] as const) test(`a full ${language} stage prompt keeps every rule in its engine channel and creates no rule file`, async () => {
+for (const language of ["en", "uk"] as const) test(`a full ${language} stage prompt keeps selected rules in its engine channel and creates no rule file`, async () => {
   const project = `launch-${language}`;
   let attempt = 0;
   for (const scope of ["role", "project", "machine"] as const) {
@@ -54,14 +54,22 @@ for (const language of ["en", "uk"] as const) test(`a full ${language} stage pro
   expect(message).toBe(expected);
   const profile = emptyLaunchProfile({ cwd: checkout, learnedRules: { project, roleId: "builder" } });
   const options = await claudeStructuredHostOptions({ spec: { cwd: checkout, launchProfile: profile }, account: { home: sandbox, kind: "managed" } } as never, { env: {}, host: {} } as never);
+  let selected = 0, offered = 0;
   for (const scope of [`role:${project}:builder`, `project:${project}`, "machine"]) {
     expect(activeRules(scope).length).toBeGreaterThan(25);
     for (const rule of activeRules(scope)) {
-      expect(options.appendSystemPrompt).toContain(`- [${rule.id}] ${rule.rule}`);
+      offered++;
+      if (options.appendSystemPrompt?.includes(`[${rule.id}]`)) {
+        selected++;
+        expect(options.appendSystemPrompt).toContain(`- [${rule.id}] ${rule.rule}`);
+      }
       expect(message).not.toContain(rule.rule);
       expect(JSON.stringify(profile)).not.toContain(rule.rule);
     }
   }
+  expect(selected).toBeGreaterThan(0);
+  expect(selected).toBeLessThan(offered);
+  expect(Buffer.byteLength(options.appendSystemPrompt!)).toBeLessThanOrEqual(24_000);
   expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "role-memory", "launch"))).toBe(false);
 }, 60_000);
 

@@ -6,9 +6,12 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { AgentRegistry, normalizeRegistry, type RegistryFile } from "./registry";
-import { registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { registryHasLookupIndex, registryRowProjection, registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { DatabaseReplacedError } from "@/lib/state/currentDatabase";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import { performanceSites, performanceSpans } from "@/lib/performanceSpans";
+import { cacheSizes } from "@/lib/cacheTelemetry";
+import { registryLockHolder } from "./registryLockHolderFixture";
 
 /* The shared read-only registry view (viewer-hot-path-clones): every reader of
    `readOnlySnapshot` holds the same objects, so none may change them, and every
@@ -33,13 +36,338 @@ function fixture() {
   const initial = seed.snapshot();
   seed.close();
   const filename = path.join(directory, "agent-registry.sqlite");
-  const open = (options: { onSnapshotLoad?: () => void } = {}) => {
+  const open = (options: { onSnapshotLoad?: () => void; onRowPayloadRead?: (collection: string, count: number) => void } = {}) => {
     const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry, ...options });
     stores.push(store);
     return store;
   };
-  return { filename, open, conversation, delivery, kept: kept.launchId, removed: removed.launchId };
+  return { filename, open, initial, conversation, delivery, kept: kept.launchId, removed: removed.launchId };
 }
+
+// Observe ownership without changing admission or replacing the real reader.
+function transactionState(store: SqliteAgentRegistryStore) {
+  return store as unknown as { db: Database; writerHeld: boolean };
+}
+
+for (const prepared of [false, true]) {
+  for (const admission of ["optimistic", "async", "immediate"] as const) {
+    test(`nested keyed read preserves ${admission} mutation ownership, prepared=${prepared}`, async () => {
+      const { open, kept } = fixture();
+      const store = open();
+      if (prepared) await store.prepareReadOnlySnapshot();
+      const state = transactionState(store);
+      const write = (fail: boolean) => store.mutate(file => {
+        expect(state.db.inTransaction).toBe(true);
+        expect(state.writerHeld).toBe(false);
+        expect(store.read(inner => inner.receipts[kept]!.error)).toBeNull();
+        const failure = new Error("nested reader refused");
+        expect(() => store.read(() => { throw failure; })).toThrow(failure);
+        expect(state.db.inTransaction).toBe(true);
+        file.receipts[kept]!.error = "committed by parent";
+        if (fail) throw failure;
+      }, false);
+      const run = async (fail: boolean) => {
+        if (admission === "async") return store.withWriter(() => write(fail));
+        if (admission === "immediate") return store.tryWriter(() => write(fail));
+        return write(fail);
+      };
+      await expect(run(true)).rejects.toThrow("nested reader refused");
+      expect(state.db.inTransaction).toBe(false);
+      expect(state.writerHeld).toBe(false);
+      expect(store.read(file => file.receipts[kept]!.error)).toBeNull();
+      await run(false);
+      expect(state.db.inTransaction).toBe(false);
+      expect(state.writerHeld).toBe(false);
+      expect(open().read(file => file.receipts[kept]!.error)).toBe("committed by parent");
+      expect(await store.withWriter(() => store.read(file => file.receipts[kept]!.error)))
+        .toEqual({ acquired: true, value: "committed by parent" });
+      expect(state.db.inTransaction).toBe(false);
+      expect(state.writerHeld).toBe(false);
+    });
+  }
+
+  test(`nested readers share one revision across a peer commit, prepared=${prepared}`, async () => {
+    const { open, kept } = fixture();
+    const reader = open(), peer = open();
+    if (prepared) await reader.prepareReadOnlySnapshot();
+    reader.read(outer => {
+      expect(outer.receipts[kept]!.error).toBeNull();
+      peer.mutate(file => { file.receipts[kept]!.error = "peer commit"; }, false);
+      expect(reader.read(inner => inner.receipts[kept]!.error)).toBeNull();
+      expect(outer.receipts[kept]!.error).toBeNull();
+    });
+    expect(reader.read(file => file.receipts[kept]!.error)).toBe("peer commit");
+    expect(transactionState(reader).db.inTransaction).toBe(false);
+  });
+}
+
+test("nested read-only errors leave the parent open and standalone errors close it", () => {
+  const { filename, open, kept } = fixture();
+  const initial = open().snapshot().file;
+  const reader = new SqliteAgentRegistryStore(filename, { readOnly: true, initialSnapshot: initial, normalize: normalizeRegistry });
+  stores.push(reader);
+  const state = transactionState(reader);
+  const refusal = new Error("read refused");
+  reader.read(() => {
+    expect(() => reader.read(() => { throw refusal; })).toThrow(refusal);
+    expect(state.db.inTransaction).toBe(true);
+    expect(reader.read(file => file.receipts[kept]!.error)).toBeNull();
+  });
+  expect(state.db.inTransaction).toBe(false);
+  expect(() => reader.read(() => reader.read(() => { throw refusal; }))).toThrow(refusal);
+  expect(state.db.inTransaction).toBe(false);
+  expect(state.writerHeld).toBe(false);
+  expect(() => reader.mutate(file => { file.receipts[kept]!.error = "forbidden"; }, false)).toThrow();
+  expect(reader.read(file => file.receipts[kept]!.error)).toBeNull();
+});
+
+test("nested reads preserve mutation-batch savepoints and earlier committed members", async () => {
+  const { open, kept, removed } = fixture();
+  const store = open();
+  await store.withWriter(() => store.withMutationBatch(() => {
+    store.mutate(file => { file.receipts[kept]!.error = "first member"; }, false);
+    expect(() => store.mutate(file => {
+      expect(store.read(inner => inner.receipts[kept]!.error)).toBe("first member");
+      file.receipts[removed]!.error = "rolled back";
+      store.read(() => { throw new Error("member refused"); });
+    }, false)).toThrow("member refused");
+    expect(transactionState(store).writerHeld).toBe(true);
+    expect(transactionState(store).db.inTransaction).toBe(true);
+    store.mutate(file => { file.receipts[removed]!.error = "last member"; }, false);
+  }));
+  expect(transactionState(store).writerHeld).toBe(false);
+  expect(transactionState(store).db.inTransaction).toBe(false);
+  const reopened = open();
+  expect(reopened.read(file => [file.receipts[kept]!.error, file.receipts[removed]!.error]))
+    .toEqual(["first member", "last member"]);
+});
+
+test("nested reservation guards enforce the total deadline without blocking and preserve FIFO", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nested-reservation-bound-"));
+  directories.push(directory);
+  const filename = path.join(directory, "registry.json");
+  const registry = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
+  const conversation = registry.ensureConversation("claude", path.join(directory, "session.jsonl"), null);
+  const store = (registry as unknown as { sqliteStore: SqliteAgentRegistryStore }).sqliteStore;
+  const holder = registryLockHolder(store.filename);
+  // The parent owns the real SQLite lock and observes the child's event loop.
+  // Only time and timers are controlled; admission, leases, reads and writes
+  // all run through production. Wall time bounds the harness, never the budget.
+  const script = `
+    const { AgentRegistry } = await import(process.argv[1]);
+    const { runtimeSwitchRetirementReason } = await import(process.argv[2]);
+    const registry = new AgentRegistry(process.argv[3], () => false, undefined,
+      { sqliteMode: "sqlite", sqliteWriterDeadlineMs: 80 });
+    const conversationId = process.argv[4];
+    let clock = 0;
+    const timers = new Map();
+    performance.now = () => clock;
+    Math.random = () => 0.5;
+    globalThis.setTimeout = (callback, delay = 0, ...args) => {
+      const timer = { at: clock + delay, run: () => callback(...args), unref() { return this; } };
+      timers.set(timer, timer);
+      return timer;
+    };
+    globalThis.clearTimeout = timer => timers.delete(timer);
+    const flush = () => new Promise(resolve => setImmediate(resolve));
+    const admitted = [];
+    let results = null;
+    let completedAt = null;
+    let pending = 0;
+    const reserve = key => registry.holdDeliveryOffLoop(conversationId, "wake", key, "text", [], null, {}, {
+      admissionGuard: () => {
+        const reason = runtimeSwitchRetirementReason(conversationId, registry);
+        if (reason !== null) throw new Error(reason);
+        admitted.push(key);
+      },
+    });
+    process.on("message", async ({ command, at }) => {
+      try {
+        if (command === "start" || command === "accept") {
+          const keys = command === "start" ? ["expired-one", "expired-two"] : ["first", "second"];
+          pending = keys.length;
+          results = null;
+          void Promise.all(keys.map(key => reserve(key).finally(() => pending--)))
+            .then(value => { results = value.map(item => item?.state ?? null); completedAt = clock; })
+            .catch(error => process.send({ error: String(error) }));
+        }
+        await flush();
+        if (command === "advance") {
+          for (;;) {
+            const next = [...timers.values()].filter(timer => timer.at <= at).sort((a, b) => a.at - b.at)[0];
+            if (!next) break;
+            clock = next.at;
+            timers.delete(next);
+            next.run();
+            await flush();
+          }
+          clock = at;
+        }
+        const state = registry.sqliteStore;
+        process.send({ command, clock, pending, results, completedAt, admitted,
+          reservations: Object.keys(registry.snapshot().heldDeliveries).length,
+          writerHeld: state.writerHeld, inTransaction: state.db.inTransaction });
+      } catch (error) { process.send({ error: String(error) }); }
+    });
+    process.send({ command: "ready" });
+  `;
+  type Observation = {
+    command: string; clock: number; pending: number; results: Array<string | null> | null;
+    completedAt: number | null; admitted: string[]; reservations: number;
+    writerHeld: boolean; inTransaction: boolean; error?: string;
+  };
+  let receive: ((message: Observation) => void) | undefined;
+  const ready = new Promise<Observation>(resolve => { receive = resolve; });
+  const child = Bun.spawn([process.execPath, "-e", script,
+    new URL("./registry.ts", import.meta.url).href,
+    new URL("../pipelines/runtimeSwitchFence.ts", import.meta.url).href, filename, conversation.id], {
+    stdin: "pipe", stdout: "ignore", stderr: "inherit",
+    ipc(message: Observation) { receive?.(message); },
+  });
+  const bounded = async (reply: Promise<Observation>) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const message = await Promise.race([reply, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("reservation child did not answer the parent handshake")), 5_000);
+      })]);
+      expect(message.error).toBeUndefined();
+      return message;
+    } finally { clearTimeout(timer); }
+  };
+  const request = async (command: string, at?: number) => {
+    const reply = new Promise<Observation>(resolve => { receive = resolve; });
+    child.send({ command, at });
+    const message = await bounded(reply);
+    expect(message.command).toBe(command);
+    return message;
+  };
+  try {
+    expect((await bounded(ready)).command).toBe("ready");
+    await holder.hold();
+    expect((await request("start")).pending).toBe(2);
+    // This round trip is observed outside the process waiting for SQLite.
+    expect((await request("ping")).pending).toBe(2);
+    const beforeDeadline = await request("advance", 79);
+    expect(beforeDeadline).toMatchObject({ clock: 79, pending: 2, results: null, reservations: 0 });
+    const expired = await request("advance", 80);
+    expect(expired).toMatchObject({
+      clock: 80, pending: 0, results: [null, null], completedAt: 80,
+      admitted: [], reservations: 0, writerHeld: false, inTransaction: false,
+    });
+    expect(Object.keys(registry.snapshot().heldDeliveries)).toEqual([]);
+    await holder.release();
+    const accepted = await request("accept");
+    expect(accepted).toMatchObject({
+      pending: 0, results: ["assigned", "assigned"], admitted: ["first", "second"],
+      reservations: 2, writerHeld: false, inTransaction: false,
+    });
+    console.info(JSON.stringify({ case: "nested-reservation-bound", beforeDeadline, expired, accepted }));
+  } finally {
+    // Kill only this recorded child, including a mutant stuck in synchronous SQLite.
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    await holder.close();
+    registry.close();
+  }
+});
+
+test("real registry parse-cache counters follow replacement, deletion and retained owner lifetime", () => {
+  const { open, conversation } = fixture();
+  const reader = open();
+  const totals = () => cacheSizes().caches.filter(row => row.owner === "agent/sqliteRegistryStore" && row.name.startsWith("rows."))
+    .reduce((total, row) => ({ count: total.count + row.count, bytes: total.bytes + row.bytes }), { count: 0, bytes: 0 });
+  const initial = totals();
+  reader.readOnlySnapshot();
+  const loaded = totals();
+  expect(loaded.count).toBeGreaterThan(initial.count);
+  expect(loaded.bytes).toBeGreaterThan(initial.bytes);
+  reader.mutate(file => { file.conversations[conversation.id]!.continuityPaths.push("/sessions/telemetry-extra.jsonl"); }, false);
+  reader.readOnlySnapshot();
+  expect(totals().count).toBe(loaded.count);
+  expect(totals().bytes).toBeGreaterThan(loaded.bytes);
+  reader.mutate(file => { delete file.conversations[conversation.id]; }, false);
+  reader.readOnlySnapshot();
+  expect(totals().count).toBeLessThan(loaded.count);
+  const retained = totals();
+  reader.close();
+  // A closed store still owns its parsed rows while someone retains the store.
+  expect(totals()).toEqual(retained);
+});
+
+test("JSON views equal the mutable reader, keep prior results immutable, and recover after a refused read", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-json-readonly-view-"));
+  directories.push(directory);
+  const filename = path.join(directory, "registry.json");
+  fs.writeFileSync(filename, JSON.stringify({ version: 2, entries: {}, receipts: {}, conversations: {
+    conversation_fixed: { id: "conversation_fixed", engine: "codex", generations: [{ id: "session-fixed", path: "/sessions/fixed.jsonl", accountId: "default" }] },
+  } }));
+  const reader = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  try {
+    const expected = structuredClone(reader.snapshot());
+    const first = reader.readOnlySnapshot();
+    expect(first).toEqual(expected);
+    expect(Object.isFrozen(first.conversations.conversation_fixed!.generations)).toBe(true);
+    expected.conversations.conversation_fixed!.generations[0]!.path = "/sessions/changed.jsonl";
+    expect(first.conversations.conversation_fixed!.generations[0]!.path).toBe("/sessions/fixed.jsonl");
+    const replacement = `${filename}.next`;
+    fs.writeFileSync(replacement, JSON.stringify(expected));
+    fs.renameSync(replacement, filename);
+    expect(reader.readOnlySnapshot()).toEqual(reader.snapshot());
+    expect(reader.readOnlySnapshot().conversations.conversation_fixed!.generations[0]!.path).toBe("/sessions/changed.jsonl");
+    expect(first.conversations.conversation_fixed!.generations[0]!.path).toBe("/sessions/fixed.jsonl");
+    fs.writeFileSync(filename, "{");
+    expect(() => reader.readOnlySnapshot()).toThrow();
+    fs.writeFileSync(filename, JSON.stringify(expected));
+    expect(reader.readOnlySnapshot()).toEqual(reader.snapshot());
+  } finally { reader.close(); }
+});
+
+test("metadata refresh shares immutable history and equals a fresh full read, including the next row change", () => {
+  const { filename, open, kept } = fixture();
+  const reader = open();
+  const writer = open();
+  const before = reader.readOnlySnapshot().file;
+  const beforeRevision = before.engineRouting.codex.revision;
+  for (let index = 1; index <= 3; index++) {
+    writer.mutate(file => { file.engineRouting.codex = { activeAccountId: `account-${index}`, revision: index }; }, false);
+    const query = Database.prototype.query;
+    const historyReads: string[] = [];
+    const reads = spyOn(Database.prototype, "query").mockImplementation((function (this: Database, sql: string, ...args: unknown[]) {
+      if (/\bregistry_(?:rows|cold|archive)\b/.test(sql)) historyReads.push(sql);
+      return query.call(this, sql, ...args as []);
+    }) as typeof Database.prototype.query);
+    let after!: RegistryFile;
+    let revision!: number;
+    try {
+      const refreshed = reader.readOnlySnapshot();
+      after = refreshed.file;
+      revision = refreshed.revision;
+      expect(reads).toHaveBeenCalled();
+      expect(historyReads).toEqual([]);
+    } finally { reads.mockRestore(); }
+    expect(revision).toBe(writer.readOnlySnapshot().revision);
+    expect(registryHasLookupIndex(after)).toBe(true);
+    expect(registryRowsMatching(after, "receipts", "launchId", kept)).toEqual([before.receipts[kept]!]);
+    const fresh = open();
+    expect(after).toEqual(fresh.readOnlySnapshot().file);
+    expect(after.receipts).toBe(before.receipts);
+    expect(after.conversations).toBe(before.conversations);
+    expect(Object.isFrozen(after.engineRouting.codex)).toBe(true);
+    expect(before.engineRouting.codex.revision).toBe(beforeRevision);
+  }
+  writer.mutate(file => { file.receipts[kept]!.error = "row after metadata"; }, false);
+  const fresh = open();
+  expect(reader.readOnlySnapshot().file).toEqual(fresh.readOnlySnapshot().file);
+  expect(reader.readOnlySnapshot().file.receipts[kept]?.error).toBe("row after metadata");
+  writer.mutate(file => { file.receipts.engineRouting = { ...file.receipts[kept]!, launchId: "engineRouting", error: "metadata-named receipt" }; }, false);
+  expect(reader.readOnlySnapshot().file.receipts.engineRouting?.error).toBe("metadata-named receipt");
+  expect(reader.readOnlySnapshot().file).toEqual(open().readOnlySnapshot().file);
+  const peer = new Database(filename);
+  try { peer.run("INSERT INTO registry_meta(key,value) VALUES ('future_metadata','true')"); }
+  finally { peer.close(); }
+  expect(Object.hasOwn(reader.readOnlySnapshot().file, "future_metadata")).toBe(false);
+  expect(reader.readOnlySnapshot().file).toEqual(open().readOnlySnapshot().file);
+});
 
 function attempt(write: () => void): boolean {
   try {
@@ -186,6 +514,225 @@ test("a retained archived collection keeps its retired reader alive after its ro
   for (let turn = 0; turn < 3; turn++) await nextTask();
   expect(retained.collection["retained-collection-0"]?.error).toBe("receipt-0");
 }, 30_000);
+
+test.skipIf(process.platform !== "linux")("retired prepared readers release their connections after peer writes", async () => {
+  const { open, kept, filename } = fixture();
+  const reader = open();
+  const writer = open();
+  const handles = () => fs.readdirSync("/proc/self/fd").filter(fd => {
+    try { return fs.readlinkSync(`/proc/self/fd/${fd}`) === filename; } catch { return false; }
+  }).length;
+  const collect = async () => {
+    await new Promise<void>(resolve => setTimeout(resolve, 1));
+    Bun.gc(true);
+    await new Promise<void>(resolve => setImmediate(resolve));
+  };
+  await reader.prepareReadOnlySnapshot();
+  const baseline = handles();
+  for (let index = 0; index < 3; index++) {
+    // The second mutable snapshot installs the writer snapshot cache on the
+    // prepared reader; that cache must not pin a retired view either.
+    reader.snapshot();
+    reader.snapshot();
+    writer.mutate(file => { file.receipts[kept]!.error = `peer-write-${index}`; }, false);
+    await reader.prepareReadOnlySnapshot();
+    await collect();
+  }
+  // The async call's most recent view may still be held until its job ends.
+  // Earlier generations must all release their connections.
+  const deadline = performance.now() + 5_000;
+  do { await collect(); } while (handles() > baseline + 1 && performance.now() < deadline);
+  expect(handles()).toBeLessThanOrEqual(baseline + 1);
+}, 30_000);
+
+test("a held mutable snapshot survives retirement of its prepared reader", async () => {
+  const { open, kept } = fixture();
+  const reader = open();
+  const writer = open();
+  await reader.prepareReadOnlySnapshot();
+  const held = reader.snapshot().file;
+  reader.snapshot();
+  writer.mutate(file => { file.receipts[kept]!.error = "peer updated"; }, false);
+  const refreshed = await reader.prepareReadOnlySnapshot();
+  expect(refreshed.file.receipts[kept]?.error).toBe("peer updated");
+  expect(held.receipts[kept]?.error).toBeNull();
+  held.receipts[kept]!.error = "local edit";
+  expect(held.receipts[kept]?.error).toBe("local edit");
+  expect(reader.readOnlySnapshot().file.receipts[kept]?.error).toBe("peer updated");
+});
+
+test("retired prepared readers release hydrated archive rows after their views are dropped", async () => {
+  const { open, kept } = fixture();
+  const reader = open(), writer = open();
+  const seed = writer.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let i = 0; i < 32; i++) {
+      const id = `hydrated-archive-${i}`;
+      file.receipts[id] = { ...seed, launchId: id, state: "failed", error: "x".repeat(32_768), createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  expect(writer.archiveInactive(32)).toBe(32);
+  const count = () => cacheSizes().caches.filter(row => row.owner === "agent/sqliteRegistryStore" && row.name === "cold-stable")
+    .reduce((sum, row) => sum + row.count, 0);
+  const initial = count();
+  for (let generation = 0; generation < 6; generation++) {
+    await (async () => {
+      const view = await reader.prepareReadOnlySnapshot();
+      for (let i = 0; i < 32; i++) expect(view.file.receipts[`hydrated-archive-${i}`]?.error?.length).toBe(32_768);
+    })();
+    writer.mutate(file => { file.receipts[kept]!.error = `generation-${generation}`; }, false);
+  }
+  await reader.prepareReadOnlySnapshot();
+  const deadline = performance.now() + 5_000;
+  do {
+    await new Promise(resolve => setTimeout(resolve, 1));
+    Bun.gc(true);
+    await new Promise(resolve => setImmediate(resolve));
+  } while (count() > initial + 32 && performance.now() < deadline);
+  expect(count() - initial).toBeLessThanOrEqual(32);
+}, 30_000);
+
+test("held prepared generations share a bounded cache of unchanged archived payloads", async () => {
+  const { open, kept } = fixture();
+  const reader = open(), writer = open();
+  const seed = writer.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let i = 0; i < 32; i++) {
+      const id = `shared-archive-${i}`;
+      file.receipts[id] = { ...seed, launchId: id, state: "failed", error: "x".repeat(32_768), createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  expect(writer.archiveInactive(32)).toBe(32);
+  const count = () => cacheSizes().caches.filter(row => row.owner === "agent/sqliteRegistryStore" && row.name === "cold-stable")
+    .reduce((sum, row) => sum + row.count, 0);
+  const initial = count(), held: RegistryFile[] = [];
+  for (let generation = 0; generation < 6; generation++) {
+    const view = (await reader.prepareReadOnlySnapshot()).file;
+    held.push(view);
+    for (let i = 0; i < 32; i++) expect(view.receipts[`shared-archive-${i}`]?.error?.length).toBe(32_768);
+    writer.mutate(file => { file.receipts[kept]!.error = `generation-${generation}`; }, false);
+  }
+  expect(count() - initial).toBeLessThanOrEqual(32);
+  for (const [generation, view] of held.entries()) {
+    expect(view.receipts[kept]?.error).toBe(generation === 0 ? null : `generation-${generation - 1}`);
+    expect(view.receipts["shared-archive-0"]?.error?.length).toBe(32_768);
+  }
+});
+
+test("held prepared generations share unchanged hot rows and release retired parse caches", async () => {
+  const { open, kept, removed } = fixture();
+  const writer = open(), reader = open();
+  writer.mutate(file => { file.receipts[removed]!.error = "x".repeat(32_768); }, false);
+  const count = () => cacheSizes().caches.filter(row => row.owner === "agent/sqliteRegistryStore" && row.name.startsWith("rows."))
+    .reduce((sum, row) => sum + row.count, 0);
+  const held: RegistryFile[] = [];
+  let firstCount = 0;
+  for (let generation = 0; generation < 6; generation++) {
+    const view = (await reader.prepareReadOnlySnapshot()).file;
+    held.push(view);
+    writer.mutate(file => { file.receipts[kept]!.error = `generation-${generation}`; }, false);
+    if (!generation) firstCount = count();
+  }
+  // Old immutable results stay readable without owning another parse cache
+  // or another frozen copy of every unchanged hot row.
+  expect(count()).toBeLessThanOrEqual(firstCount);
+  for (const [generation, view] of held.entries()) {
+    expect(view.receipts[kept]?.error).toBe(generation ? `generation-${generation - 1}` : null);
+    expect(view.receipts[removed]).toBe(held[0]!.receipts[removed]);
+    expect(view.receipts[removed]?.error?.length).toBe(32_768);
+    expect(Object.isFrozen(view.receipts[removed])).toBe(true);
+  }
+});
+
+test("prepared hot-row reuse observes receipt backfill when only its conversation changes", async () => {
+  const { open, kept, conversation, filename } = fixture();
+  const writer = open(), reader = open();
+  const snapshot = writer.readOnlySnapshot().file;
+  const receipt = { ...snapshot.receipts[kept]!, conversationId: conversation.id,
+    transport: "structured", state: "completed", artifactLifecycle: "pending",
+    artifactPath: "/sessions/backfill-later.jsonl", completionMode: "observed-completed" };
+  const original = structuredClone(snapshot.conversations[conversation.id]!);
+  const db = new Database(filename);
+  try {
+    const update = db.query("UPDATE registry_rows SET value_json=? WHERE collection=? AND row_key=?");
+    update.run(JSON.stringify(receipt), "receipts", kept);
+    const before = (await reader.prepareReadOnlySnapshot()).file;
+    expect(before.receipts[kept]?.artifactLifecycle).toBe("pending");
+    const changed = structuredClone(original);
+    changed.generations[0]!.path = receipt.artifactPath;
+    update.run(JSON.stringify(changed), "conversations", conversation.id);
+    const after = (await reader.prepareReadOnlySnapshot()).file;
+    expect(after.receipts[kept]?.artifactLifecycle).toBe("materialized");
+    expect(before.receipts[kept]?.artifactLifecycle).toBe("pending");
+    update.run(JSON.stringify(original), "conversations", conversation.id);
+    expect((await reader.prepareReadOnlySnapshot()).file.receipts[kept]?.artifactLifecycle).toBe("pending");
+    expect(after.receipts[kept]?.artifactLifecycle).toBe("materialized");
+  } finally { db.close(); }
+});
+
+test("prepared readers reuse immutable archive projections and refresh a new archive version", async () => {
+  const { open, kept, removed } = fixture();
+  const writer = open(), reader = open();
+  writer.mutate(file => {
+    file.receipts[removed]!.state = "failed";
+    file.receipts[removed]!.createdAt = "2020-01-01T00:00:00Z";
+  }, false);
+  expect(writer.archiveInactive(32)).toBeGreaterThan(0);
+  const held = (await reader.prepareReadOnlySnapshot()).file;
+  const query = Database.prototype.query;
+  let projections = 0;
+  const observed = spyOn(Database.prototype, "query").mockImplementation(function (this: Database, sql: string) {
+    if (sql.includes("AS claims,")) projections++;
+    return query.call(this, sql);
+  } as typeof query);
+  try {
+    writer.mutate(file => { file.receipts[kept]!.error = "changed hot receipt"; }, false);
+    projections = 0;
+    const next = (await reader.prepareReadOnlySnapshot()).file;
+    expect(projections).toBe(0);
+    expect(next.receipts[kept]?.error).toBe("changed hot receipt");
+    expect(held.receipts[kept]?.error).toBeNull();
+    writer.mutate(file => { file.receipts[removed]!.error = "new archived version"; }, false);
+    expect(writer.archiveInactive(32)).toBeGreaterThan(0);
+    projections = 0;
+    const updated = (await reader.prepareReadOnlySnapshot()).file;
+    expect(projections).toBeGreaterThan(0);
+    expect(updated.receipts[removed]?.error).toBe("new archived version");
+    expect(held.receipts[removed]?.error).toBeNull();
+  } finally { observed.mockRestore(); }
+});
+
+test("projection handoff stops within a slice when its last caller cancels", async () => {
+  const { open, kept } = fixture();
+  const writer = open(), reader = open();
+  const seed = writer.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let index = 0; index < 512; index++) {
+      const launchId = `cancel-history-${index}`;
+      file.receipts[launchId] = { ...structuredClone(seed), launchId,
+        state: "failed", createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  expect(writer.archiveInactive(1000)).toBeGreaterThanOrEqual(512);
+  await reader.prepareReadOnlySnapshot();
+  const internal = reader as unknown as { preparedReader: { coldRowProjections: Map<number, unknown> } };
+  const projections = internal.preparedReader.coldRowProjections;
+  const controller = new AbortController();
+  let copied = 0;
+  Object.defineProperty(projections, Symbol.iterator, { configurable: true, value: function* (this: Map<number, unknown>) {
+    for (const item of Map.prototype.entries.call(this)) {
+      if (++copied === 1) controller.abort(new Error("projection caller cancelled"));
+      yield item;
+    }
+  } });
+  writer.mutate(file => { file.receipts[kept]!.error = "next generation"; }, false);
+  try {
+    await expect(reader.prepareReadOnlySnapshot(controller.signal)).rejects.toThrow("projection caller cancelled");
+    expect(copied).toBeGreaterThan(0);
+    expect(copied - 1).toBeLessThanOrEqual(128);
+  } finally { Reflect.deleteProperty(projections, Symbol.iterator); }
+  expect((await reader.prepareReadOnlySnapshot()).file.receipts[kept]?.error).toBe("next generation");
+});
 
 test("the first keyed archived read visits only its requested payload", async () => {
   const { open, kept, filename } = fixture();
@@ -992,4 +1539,260 @@ test.each([256, 257, 512])("a %i row hot journal batch retains the validated col
   writer.mutate(file => { file.receipts["cold-batch"]!.error = "archive changed"; }, false);
   expect((reader.readOnlySnapshot()).file.receipts["cold-batch"]!.error).toBe("archive changed");
   expect(held.file.receipts["cold-batch"]!.error).toBe("retained history");
+});
+
+test("a complete header read measures its rows in batches", async () => {
+  const { open, kept } = fixture();
+  const writer = open();
+  const template = writer.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let index = 0; index < 600; index++) {
+      const id = `batched-receipt-${index}`;
+      file.receipts[id] = { ...template, launchId: id, state: "failed", error: "retained history", createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  while (writer.archiveInactive(1024) > 0) { /* archive the retained fixture */ }
+  const reader = open();
+  const started = performance.now();
+  const view = await reader.prepareReadOnlySnapshot();
+  const measurements = performanceSpans.snapshot(started).records
+    .filter(record => record.kind === "sync" && performanceSites[record.site] === "registry.headers")
+    .reduce((total, record) => total + record.count, 0);
+  expect(Object.keys(view.file.receipts).filter(id => id.startsWith("batched-receipt-")))
+    .toEqual(Array.from({ length: 600 }, (_, index) => `batched-receipt-${index}`));
+  // 600 archived headers and the keys of their collection, a row at a time,
+  // are more than 1,200 measurements.
+  expect(measurements).toBeGreaterThan(0);
+  expect(measurements).toBeLessThan(60);
+}, 30_000);
+
+test("a peer's appended and removed rows keep the kept collection order", () => {
+  const { open, kept, removed } = fixture();
+  const writer = open(), reader = open();
+  const template = writer.snapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    file.receipts["cold-order"] = { ...template, launchId: "cold-order", state: "failed",
+      createdAt: "2020-01-01T00:00:00Z", error: "retained history" };
+  }, false);
+  expect(writer.archiveInactive(1)).toBe(1);
+  const before = Object.keys(reader.readOnlySnapshot().file.receipts);
+  const headerReads = (started: number) => performanceSpans.snapshot(started).records
+    .filter(record => performanceSites[record.site] === "registry.headers").length;
+
+  writer.mutate(file => {
+    file.receipts["appended-one"] = { ...template, launchId: "appended-one" };
+    file.receipts["appended-two"] = { ...template, launchId: "appended-two" };
+  }, false);
+  let started = performance.now();
+  const appended = reader.readOnlySnapshot().file;
+  expect(headerReads(started)).toBe(0);
+  expect(Object.keys(appended.receipts)).toEqual([...before, "appended-one", "appended-two"]);
+
+  writer.mutate(file => { delete file.receipts[removed]; }, false);
+  started = performance.now();
+  const shortened = reader.readOnlySnapshot().file;
+  expect(headerReads(started)).toBe(0);
+  expect(Object.keys(shortened.receipts)).toEqual([...before, "appended-one", "appended-two"].filter(key => key !== removed));
+  // The view the reader held keeps the order it was built with.
+  expect(Object.keys(appended.receipts)).toEqual([...before, "appended-one", "appended-two"]);
+  // A store that reads the order whole agrees.
+  expect(Object.keys(open().readOnlySnapshot().file.receipts)).toEqual(Object.keys(shortened.receipts));
+});
+
+test("a peer's archive changes refresh the view from the journal", () => {
+  const { open, kept } = fixture();
+  const writer = open(), reader = open();
+  const template = writer.snapshot().file.receipts[kept]!;
+  const retained = (id: string) => ({ ...template, launchId: id, state: "failed" as const,
+    createdAt: "2020-01-01T00:00:00Z", error: "retained history" });
+  writer.mutate(file => {
+    for (let index = 0; index < 40; index++) file.receipts[`cold-${index}`] = retained(`cold-${index}`);
+  }, false);
+  while (writer.archiveInactive(1024) > 0) { /* archive the retained fixture */ }
+  const held = reader.readOnlySnapshot().file;
+  const heldKeys = Object.keys(held.receipts);
+  const collections = ["entries", "receipts", "conversations", "conversationAliases", "heldDeliveries", "deliveryOperationOwners", "lineageEdges", "memberships"] as const;
+  const refreshed = () => {
+    const started = performance.now();
+    const view = reader.readOnlySnapshot().file;
+    const headerReads = performanceSpans.snapshot(started).records
+      .filter(record => performanceSites[record.site] === "registry.headers").length;
+    const complete = open().readOnlySnapshot().file;
+    for (const collection of collections) {
+      expect(Object.keys(view[collection])).toEqual(Object.keys(complete[collection]));
+      expect(view[collection]).toEqual(complete[collection]);
+    }
+    return { view, headerReads };
+  };
+
+  // A rewritten archived row leaves the archive.
+  writer.mutate(file => { file.receipts["cold-3"]!.error = "rewritten"; }, false);
+  const rewritten = refreshed();
+  expect(rewritten.view.receipts["cold-3"]!.error).toBe("rewritten");
+  expect(rewritten.headerReads).toBe(0);
+
+  // A peer's archive pass takes it back, with rows the view never held.
+  writer.mutate(file => {
+    for (let index = 40; index < 48; index++) file.receipts[`cold-${index}`] = retained(`cold-${index}`);
+  }, false);
+  reader.readOnlySnapshot();
+  while (writer.archiveInactive(1024) > 0) { /* archive the new rows */ }
+  const archived = refreshed();
+  expect(archived.view.receipts["cold-47"]!.error).toBe("retained history");
+  expect(archived.view.receipts["cold-3"]!.error).toBe("rewritten");
+  expect(archived.headerReads).toBe(0);
+
+  // An archived row is removed.
+  writer.mutate(file => { delete file.receipts["cold-5"]; }, false);
+  const removed = refreshed();
+  expect(removed.view.receipts["cold-5"]).toBeUndefined();
+  expect(removed.headerReads).toBe(0);
+
+  // The view held from before every change still reads its own versions.
+  expect(Object.keys(held.receipts)).toEqual(heldKeys);
+  expect(held.receipts["cold-3"]!.error).toBe("retained history");
+  expect(held.receipts["cold-5"]!.error).toBe("retained history");
+});
+
+test("a traversal of archived rows asks the filesystem for the file identity once", async () => {
+  const { open, filename, kept } = fixture();
+  const writer = open();
+  const template = writer.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let index = 0; index < 300; index++) {
+      const id = `identity-receipt-${index}`;
+      file.receipts[id] = { ...template, launchId: id, state: "failed", error: "retained history", createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  while (writer.archiveInactive(1024) > 0) { /* archive the retained fixture */ }
+  const view = writer.readOnlySnapshot().file;
+  const traverse = () => Object.values(view.receipts).filter(receipt => receipt.error === "retained history").length;
+  expect(traverse()).toBe(300);
+  await Promise.resolve();
+  const stat = spyOn(fs, "statSync");
+  try {
+    expect(traverse()).toBe(300);
+    const asked = stat.mock.calls.filter(call => call[0] === filename).length;
+    // One answer covers the run; a row at a time it was asked 300 times.
+    expect(asked).toBeGreaterThan(0);
+    expect(asked).toBeLessThan(5);
+    // The next run asks again, so a replaced file is still refused.
+    await Promise.resolve();
+    stat.mockClear();
+    expect(traverse()).toBe(300);
+    expect(stat.mock.calls.filter(call => call[0] === filename).length).toBeGreaterThan(0);
+  } finally { stat.mockRestore(); }
+});
+
+for (const replacement of ["other payloads under the same version ids", "no archived versions"] as const) {
+  test(`a file replaced inside one synchronous run refuses the held view's archived rows: ${replacement}`, async () => {
+    const { open, filename, initial, kept } = fixture();
+    const store = open();
+    const template = store.readOnlySnapshot().file.receipts[kept]!;
+    store.mutate(file => {
+      for (let index = 0; index < 4; index++) {
+        const id = `cold-${index}`;
+        file.receipts[id] = { ...template, launchId: id, state: "failed", error: `original-${index}`, createdAt: "2020-01-01T00:00:00Z" };
+      }
+    }, false);
+    while (store.archiveInactive(1024) > 0) { /* archive the retained fixture */ }
+    const view = store.readOnlySnapshot().file;
+    const raw = new Database(filename);
+    raw.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    raw.close();
+    const other = `${filename}.replacement`;
+    if (replacement === "no archived versions") {
+      new SqliteAgentRegistryStore(other, { initialSnapshot: initial, normalize: normalizeRegistry }).close();
+    } else {
+      fs.copyFileSync(filename, other);
+      const edited = new Database(other);
+      edited.exec("DROP TRIGGER registry_archive_immutable_update");
+      edited.exec("UPDATE registry_archive SET value_json=replace(value_json,'original-','other-database-')");
+      edited.close();
+    }
+    await Promise.resolve();
+    // This read keeps the file identity for the rest of the synchronous run.
+    expect(view.receipts["cold-0"]!.error).toBe("original-0");
+    fs.renameSync(other, filename);
+    // The connection moves to the new file on its next statement. Nothing read
+    // from that file may answer for, or be remembered under, the held view.
+    expect(() => view.receipts["cold-1"]).toThrow(DatabaseReplacedError);
+    expect(() => view.receipts["cold-1"]).toThrow(DatabaseReplacedError);
+    expect(() => view.receipts["cold-2"]).toThrow(DatabaseReplacedError);
+    await Promise.resolve();
+    expect(() => view.receipts["cold-3"]).toThrow(DatabaseReplacedError);
+    const fresh = store.readOnlySnapshot().file;
+    expect(fresh.receipts["cold-1"]?.error ?? null).toBe(replacement === "no archived versions" ? null : "other-database-1");
+  });
+}
+
+test("a fresh preparation keeps the projections of unchanged archived versions", async () => {
+  const { open, kept } = fixture();
+  let reads = 0;
+  const store = open({ onRowPayloadRead: (collection, count) => { if (collection === "receipts") reads += count; } });
+  const peer = open();
+  const template = store.readOnlySnapshot().file.receipts[kept]!;
+  store.mutate(file => {
+    for (let index = 0; index < 200; index++) {
+      const id = `cold-${index}`;
+      file.receipts[id] = { ...template, launchId: id, state: "failed", error: "retained history", createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  while (store.archiveInactive(1024) > 0) { /* archive the retained fixture */ }
+  const projector = { id: "fresh-preparation-state", collection: "receipts" as const, project: (row: { state: string }) => row.state };
+  const project = (file: RegistryFile) => {
+    const before = reads;
+    const states = registryRowProjection(file, projector);
+    return { read: reads - before, failed: states.filter(([, state]) => state === "failed").length };
+  };
+  expect(project((await store.prepareReadOnlySnapshot()).file)).toEqual({ read: 200, failed: 200 });
+  peer.mutate(file => { file.receipts[kept]!.error = "peer commit"; }, false);
+  // Every archived version is the one already projected: nothing is read again.
+  expect(project((await store.prepareReadOnlySnapshot()).file)).toEqual({ read: 0, failed: 200 });
+  // A version that entered the archive since is the only one read.
+  peer.mutate(file => {
+    file.receipts["cold-new"] = { ...template, launchId: "cold-new", state: "failed", error: "retained history", createdAt: "2020-01-01T00:00:00Z" };
+  }, false);
+  while (peer.archiveInactive(1024) > 0) { /* archive the new row */ }
+  expect(project((await store.prepareReadOnlySnapshot()).file)).toEqual({ read: 1, failed: 201 });
+});
+
+test("a hot row a peer deletes and adds again with the same content takes its new place among archived rows", () => {
+  const { open, kept } = fixture();
+  const writer = open(), reader = open();
+  const template = writer.readOnlySnapshot().file.receipts[kept]!;
+  const moving = { ...template, launchId: "moving" };
+  writer.mutate(file => {
+    file.receipts.moving = moving;
+    file.receipts.archived = { ...template, launchId: "archived", state: "failed", error: "retained history", createdAt: "2020-01-01T00:00:00Z" };
+  }, false);
+  while (writer.archiveInactive(1024) > 0) { /* archive the retained row */ }
+  const before = Object.keys(reader.readOnlySnapshot().file.receipts);
+  expect(before.indexOf("moving")).toBeLessThan(before.indexOf("archived"));
+  writer.mutate(file => { delete file.receipts.moving; }, false);
+  writer.mutate(file => { file.receipts.moving = moving; }, false);
+  const refreshed = Object.keys(reader.readOnlySnapshot().file.receipts);
+  expect(refreshed).toEqual(Object.keys(open().readOnlySnapshot().file.receipts));
+  expect(refreshed.indexOf("archived")).toBeLessThan(refreshed.indexOf("moving"));
+});
+
+test("a refresh lists an owner synthesized from a delivery in the order a whole load gives it", () => {
+  const { open, delivery } = fixture();
+  const writer = open(), reader = open();
+  const template = writer.readOnlySnapshot().file.heldDeliveries[delivery.id]!;
+  const held = (id: string, delivered: boolean) => ({ ...template, id, clientMessageId: `message-${id}`,
+    command: { ...template.command, operationId: `operation-${id}` },
+    ...(delivered ? { state: "delivered", deliveredAt: "2020-01-01T00:00:00Z" } : {}) }) as typeof template;
+  writer.mutate(file => { file.heldDeliveries.first = held("first", true); }, false);
+  while (writer.archiveInactive(1024) > 0) { /* archive the delivered row */ }
+  writer.mutate(file => {
+    file.heldDeliveries.second = held("second", false);
+    file.heldDeliveries.third = held("third", false);
+  }, false);
+  reader.readOnlySnapshot();
+  // The archived delivery returns to the hot rows; its owner is synthesized again.
+  writer.mutate(file => { file.heldDeliveries.first!.error = "rewritten"; }, false);
+  const refreshed = Object.keys(reader.readOnlySnapshot().file.deliveryOperationOwners);
+  expect(refreshed).toEqual(Object.keys(open().readOnlySnapshot().file.deliveryOperationOwners));
+  expect(refreshed.indexOf("operation-first")).toBeLessThan(refreshed.indexOf("operation-second"));
 });

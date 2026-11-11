@@ -3,6 +3,7 @@
 import { describe, expect, spyOn, test, fs, path, SANDBOX, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, startSeatTick, stopSeatTick, writeDrain, drainFile, releaseDrain, DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSettings, settleRecordFromJournal, readSeatTickState, writeSeatTickState, SeatTickAccounting, FileRuntimeEventStore, statePath, AgentRegistry, setAgentRegistryForTests, emptyLaunchProfile, emptySeatTickState, PROJECT, CONVERSATION, SUCCESSOR, NOW, MINUTE, pipelineRecord, harness, OVERDUE, RECENT, OPEN_LANE, HELD, childFixture, childRig, ago, ownLane, ageTranscript, sweepRegistryRow, agendaOf, endedTurnUnderADeadHost, STANDING_BOARD, unresolvedCardsOn, standingProject, MIGRATION_REFUSAL, REPORT_SHA, reportDeploys, settledLane, reportPort } from "./seatTickController.fixture";
 import type { SeatTickControllerDependencies, SeatTickProjectState, AgentLivenessRecord, ConversationMessage, DeliveryOutcome } from "./seatTickController.fixture";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
+import { spawn, RuntimeJournal, journalClient } from "./seatTickController.fixture";
 
 
 test("one child with a failed and a finished turn is one line carrying its latest state (#1783)", async () => {
@@ -466,7 +467,9 @@ test("two unresolved attempts of one project share one standing card, updated in
   const firstKey = first.rig.sent[0]!.clientMessageId!;
   /* Past the interval: the first attempt is carded. */
   await check(NOW + 61 * MINUTE, kept);
-  expect(await unresolvedCardsOn(project)).toHaveLength(1);
+  const firstCards = await unresolvedCardsOn(project);
+  expect(firstCards).toHaveLength(1);
+  expect(firstCards[0]!.text).toContain(firstKey);
   /* Past the age bound: it retires, and a second attempt goes out. */
   const third = await check(NOW + 121 * MINUTE, kept);
   expect(third.rig.sent).toHaveLength(1);
@@ -477,14 +480,25 @@ test("two unresolved attempts of one project share one standing card, updated in
 
   const cards = await unresolvedCardsOn(project);
   expect(cards).toHaveLength(1);
+  expect(cards[0]!.id).toBe(firstCards[0]!.id);
   const storedCard = (await import("@/lib/tasks/store")).loadTasks(STANDING_BOARD()).find(task => task.id === cards[0]!.id)!;
   expect(storedCard.dueAt).toBeUndefined(); expect(storedCard.dueTz).toBeUndefined();
   expect(cards[0]!.text).toContain(secondKey);
   expect(cards[0]!.text).toContain("Attempts on this card: 2");
 
-  /* A check that changes nothing leaves it exactly as it stands. */
-  await check(NOW + 187 * MINUTE, kept);
+  /* Re-reading the same instant changes neither the card nor its count. */
+  await check(NOW + 182 * MINUTE, kept);
   expect(await unresolvedCardsOn(project)).toEqual(cards);
+
+  /* Only the watchdog's age advances while both attempts stay unresolved. */
+  expect(cards[0]!.text).toContain("without delivery for 182 minutes;");
+  expect(cards[0]!.text).toContain(`ageMs=${182 * MINUTE};`);
+  await check(NOW + 187 * MINUTE, kept);
+  expect(await unresolvedCardsOn(project)).toEqual(cards.map(card => ({
+    ...card,
+    text: card.text.replace("without delivery for 182 minutes;", "without delivery for 187 minutes;")
+      .replace(`ageMs=${182 * MINUTE};`, `ageMs=${187 * MINUTE};`),
+  })));
 });
 
 test("a permanent refusal of the re-dispatch releases the attempt at once instead of fencing for the age bound", async () => {
@@ -529,11 +543,22 @@ test("three consecutive permanent refusals open the circuit: the fourth check pr
   expect(cards[0]!.text).toContain("Attempts on this card: 3");
   expect(cards[0]!.text).toContain("prepares no new wake");
 
-  /* Held: the next check sends nothing and rewrites nothing. */
+  /* A same-instant check sends nothing and leaves the card byte-identical. */
+  const repeated = await check(NOW + 15 * MINUTE, refusing);
+  expect(repeated.rig.sent).toHaveLength(0);
+  expect(repeated.record.delivery?.outcome).toBe("refusal-circuit");
+  expect(await unresolvedCardsOn(project)).toEqual(cards);
+
+  /* The circuit stays held while only the alarm's age advances. */
+  expect(cards[0]!.text).toContain("without delivery for 15 minutes;");
+  expect(cards[0]!.text).toContain(`ageMs=${15 * MINUTE};`);
   const fifth = await check(NOW + 20 * MINUTE, refusing);
   expect(fifth.rig.sent).toHaveLength(0);
   expect(fifth.record.delivery?.outcome).toBe("refusal-circuit");
-  expect(await unresolvedCardsOn(project)).toEqual(cards);
+  expect(await unresolvedCardsOn(project)).toEqual(cards.map(card => ({ ...card,
+    text: card.text.replace("without delivery for 15 minutes;", "without delivery for 20 minutes;")
+      .replace(`ageMs=${15 * MINUTE};`, `ageMs=${20 * MINUTE};`),
+  })));
 
   /* An operator's settings write for the project resets it, without the tick
      having touched the settings or the seat. */
@@ -560,10 +585,22 @@ test("a rotation onto a seat that is still refusing closes the stale circuit car
   const { project, check } = standingProject("refusal-rotation-refusing");
   const refusing = { wakeState: "absent" as const, delivery: MIGRATION_REFUSAL };
   for (let index = 0; index < 4; index++) await check(NOW + index * 5 * MINUTE, refusing);
-  expect(await unresolvedCardsOn(project)).toHaveLength(1);
-  const rotated = await check(NOW + 20 * MINUTE, { ...refusing, seat: { conversationId: SUCCESSOR, seatEpoch: 8, path: null } });
+  const oldCards = await unresolvedCardsOn(project);
+  expect(oldCards).toHaveLength(1);
+  const successor = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
+  const rotated = await check(NOW + 20 * MINUTE, { ...refusing, seat: successor });
   expect(rotated.rig.sent).toHaveLength(1);
+  expect(rotated.row.wakeDecidedSince).toBe(new Date(NOW + 20 * MINUTE).toISOString());
   expect(await unresolvedCardsOn(project)).toEqual([]);
+  /* The successor earns its own alarm only after its own fifteen minutes. */
+  await check(NOW + 35 * MINUTE, { ...refusing, seat: successor });
+  const currentCards = await unresolvedCardsOn(project);
+  expect(currentCards).toHaveLength(1);
+  // The predecessor's resolved occurrence stays closed when the new alarm opens.
+  expect(currentCards[0]!.id).not.toBe(oldCards[0]!.id);
+  expect(currentCards[0]!.text).toContain("without delivery for 15 minutes;");
+  expect(currentCards[0]!.text).toContain(`ageMs=${15 * MINUTE};`);
+  expect(currentCards[0]!.text).not.toContain("3 consecutive attempts");
 });
 
 test("a project that never had an unresolved wake asks nothing of the board", async () => {
@@ -1134,6 +1171,7 @@ describe("seat authentication recovery through production seams", () => {
     let fixture: Awaited<ReturnType<typeof makeAuthFixture>> | undefined;
     try { fixture = await makeAuthFixture(dir, allowed, engine, history); await run(fixture); }
     finally {
+      await fixture?.mcp?.close();
       await fixture?.telegram.stopPoller();
       setAgentRegistryForTests(null);
       for (const [key, value] of Object.entries(previous)) {
@@ -1301,7 +1339,43 @@ describe("seat authentication recovery through production seams", () => {
       expect({ status: await child.exited, errors }).toEqual({ status: 0, errors: "" });
       return JSON.parse(output) as SeatTickProjectState;
     }
-    return { a, b, original, successor, transcript, registry, command, rig, spawns, telegram, transport, appendTurn, capacity, sendRequests, restartAuthentication, migrateAccount,
+    // Authentication repair permits a wake only while the independent MCP
+    // owner is verified. Use the real adapter and registration, with the
+    // existing protocol process replacing the provider executable.
+    let mcp: { bind: () => Promise<void>; disconnect: () => Promise<void>; close: () => Promise<void> } | undefined;
+    if (engine === "codex") {
+      const { CodexAppServerHost } = await import("@/lib/runtime/codexAppServerHost");
+      const { codexHostColumns } = await import("@/lib/runtime/registry");
+      const { bindStructuredDeliveryQueue, structuredDeliveryMcpObservation } = await import("@/lib/runtime/structuredDeliveryController");
+      const key = { engine, sessionId: conversation.generations.at(-1)!.id };
+      const host = await CodexAppServerHost.adopt(key.sessionId, {
+        cwd: dir, mcpServers: [], cleanMemory: true, readProtocolVersion: () => "0.162.1",
+        eventStore: new FileRuntimeEventStore(path.join(dir, "events")),
+        spawnProcess: (_binary, _args, options) => spawn(process.execPath,
+          [path.resolve("src/lib/runtime/fixtures/codexCallbackProcess.ts"), "engine", dir, path.join(dir, "protocol.jsonl")], options),
+      });
+      const journal = new RuntimeJournal(path.join(dir, "runtime.sqlite"), { structuredHosts: true });
+      const disconnect = () => bindStructuredDeliveryQueue([], { registry, client: null });
+      const close = async () => {
+        try { await disconnect(); }
+        finally { try { await host.release(); } finally { journal.close(); } }
+      };
+      try {
+        expect((await host.health()).sessionKey).toBe(key.sessionId);
+        registry.upsert({ key, artifactPath: transcript, cwd: dir, accountId: a.id,
+          launchProfile: emptyLaunchProfile({ cwd: dir }), status: "idle", host: null,
+          claimEpoch: 1, claimOwner: "auth-fixture", pendingAction: null,
+          structuredHost: codexHostColumns(await host.health(), 1) });
+        const bind = () => bindStructuredDeliveryQueue([{ key, host }], { registry, client: journalClient(journal),
+          watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+        await bind();
+        // The delivery controller's registry identity is part of ownership.
+        rig.deps.sources!.registry = () => registry;
+        expect(structuredDeliveryMcpObservation(conversation.id, registry)).toBeUndefined();
+        mcp = { bind, disconnect, close };
+      } catch (error) { await close(); throw error; }
+    }
+    return { a, b, original, successor, transcript, registry, command, rig, spawns, telegram, transport, appendTurn, capacity, sendRequests, restartAuthentication, migrateAccount, mcp,
       check: async () => { const result = await runSeatTickCheck(PROJECT, rig.deps); clock += 5 * MINUTE; return result; },
       seat: () => orchestratorSeatFor(PROJECT).active!, row: () => readSeatTickState(PROJECT),
       reports: () => readBridgeReportLog().reports, cards: () => loadTasks(statePath("tasks.json")).filter((task) => task.text.includes("monitor-ref: seat-auth-failed")),
@@ -1329,6 +1403,24 @@ describe("seat authentication recovery through production seams", () => {
       }, engine);
     });
   }
+
+  test("Codex credential repair keeps wakes held until the MCP owner is registered again", async () => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
+      expect(f.rig.sent).toHaveLength(0);
+      await f.mcp!.disconnect();
+      fs.writeFileSync(path.join(f.a.home, "auth.json"), '{"repaired":true}', { mode: 0o600 });
+      const held = await f.check();
+      expect(f.row().authIncident).toBeUndefined();
+      expect(held?.delivery?.outcome).toBe("seat-mcp-unavailable");
+      expect(f.rig.sent).toHaveLength(0);
+      await f.mcp!.bind();
+      await f.check();
+      expect(f.rig.sent).toHaveLength(1);
+      expect(f.reports()).toHaveLength(1);
+    }, "codex");
+  });
 
   test("an empty Codex completion cannot promote an older assistant answer into recovery evidence", async () => {
     await authFixture(false, async (f) => {

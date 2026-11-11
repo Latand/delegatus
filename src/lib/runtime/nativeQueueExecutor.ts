@@ -29,7 +29,7 @@ export interface NativeQueueHost {
   /** Read canonical history only. Absence and partial history return null. */
   evidence(entry: NativeQueueRecord): Promise<NativeQueueProof | null>;
   evidenceBatch?(entries: NativeQueueRecord[]): Promise<Array<NativeQueueProof | null>>;
-  /** The native queue entry has already been withdrawn before this call. */
+  /** The payload is not held by native: withdrawn, or a guarded add retained locally. */
   sendWithdrawn(entry: NativeQueueRecord, expectedTurnId: string | null): Promise<{ turnId: string }>;
 }
 export interface NativeQueueExecutorPort {
@@ -38,13 +38,16 @@ export interface NativeQueueExecutorPort {
   binding(conversationId: string): NativeQueueBinding | null;
   /** Synchronous account admission after journal/health waits. Cleanup stays available. */
   authorizeDispatch?(conversationId: string): void;
+  /** Revocable work must stay in our journal until an idle, guarded turn start. */
+  requiresDispatchGuard?(conversationId: string): boolean;
   /** Registry evidence of a succession from this predecessor's generation chain. */
   succession?(conversationId: string, binding: NativeQueueBinding, admittedAt?: string):
     | { status: "pending" }
     | { status: "committed"; binding: NativeQueueBinding }
     | { status: "refused"; reason: string }
     | null;
-  settled?(entry: NativeQueueRecord): Promise<void> | void;
+  /** False retains the sender settlement for the next reconciliation pass. */
+  settled?(entry: NativeQueueRecord): Promise<void | boolean> | void | boolean;
 }
 
 export const NATIVE_ADD_FENCED_BY_SETTLEMENT =
@@ -130,6 +133,11 @@ export class NativeQueueExecutor {
       if ((command.action === "start" || command.action === "send-now") && health.status === "attention") throw new StructuredSendRefusedError("blocking-attention");
       if ((command.action === "start" || (command.action === "send-now" && command.turnId === null)) && health.status !== "idle") throw new StructuredSendRefusedError("idle state is unproven");
       if (command.action === "add" && health.status === "attention" && health.activeTurnRef === null) throw new StructuredSendRefusedError("blocking attention prevents native auto-dispatch");
+      if (command.action === "add" && this.port.requiresDispatchGuard?.(command.conversationId) && health.status !== "idle") {
+        this.port.authorizeDispatch?.(command.conversationId);
+        note("awaiting-turn", "waiting for the current turn to finish");
+        return false;
+      }
       /* The durable record can end this send while the journal is out of
          reach (#1131); an add it ended never reaches Codex. Asked last, so
          the window between this read and the CAS holds no await. */
@@ -150,8 +158,22 @@ export class NativeQueueExecutor {
       prepared = true;
       if (!owns()) throw new StructuredSendRefusedError("native queue writer changed before actuation");
       if (command.action !== "delete" && command.action !== "reorder") this.port.authorizeDispatch?.(command.conversationId);
+      const guardedAdd = command.action === "add" && this.port.requiresDispatchGuard?.(command.conversationId);
+      if (guardedAdd && health.status !== "idle") {
+        await transition({ phase: "deferred", reason: "waiting for guarded idle dispatch" });
+        return false;
+      }
       actuated = true;
       if (command.action === "add") {
+        if (guardedAdd) {
+          // The host checks the actual idle turn synchronously before turn/start.
+          // No payload enters Codex's automatic queue, even across a restart.
+          const ready = { ...entry!, versions: entry!.versions.map(v => v.revision === entry!.revision ? { ...v, input } : v) };
+          const result = await native.sendWithdrawn(ready, null);
+          await transition({ phase: "acknowledged", turnId: result.turnId });
+          note("awaiting-turn", "waiting for the turn to appear in the conversation");
+          return;
+        }
         const ack = await native.queue.add(entry!.clientUserMessageId, input);
         if (!nativeQueueInputMatches({ ...version!, input }, ack.result.queuedSubmission.input)) throw new Error("native queue acknowledged a different input");
         await transition({ phase: "acknowledged", nativeSubmissionId: ack.result.queuedSubmission.id });
@@ -224,6 +246,27 @@ export class NativeQueueExecutor {
     const { client } = this.port;
     if (!client.nativeQueueRead || !client.nativeQueueTransition) return false;
     const records = await client.nativeQueueRead(conversationId);
+    let pending = false;
+    const failures: Error[] = [];
+    const settle = async (entry: NativeQueueRecord) => {
+      try { if (await this.port.settled?.(entry) === false) pending = true; }
+      catch (error) {
+        failures.push(new Error(`native queue sender settlement failed (${entry.entryId}): ${error instanceof Error ? error.message : String(error)}`, { cause: error }));
+      }
+    };
+    // Finish independent entries before reporting failures to the controller's
+    // existing diagnostic and backoff path. Committed proofs stay untouched.
+    const result = () => {
+      if (failures.length) throw new AggregateError(failures, failures.map(error => error.message).join("; "));
+      return pending;
+    };
+    for (const entry of records) {
+      // A proof can commit before the reply or sender settlement is lost.
+      // The durable journal already validated it; recovery requires no engine
+      // read or write, even if the original host has since gone away.
+      if (entry.state !== "delivered" || !entry.proof) continue;
+      await settle(entry);
+    }
     const host = this.port.resolveHost(conversationId);
     const binding = this.port.binding(conversationId);
     if (!host?.nativeQueue || !binding) {
@@ -231,9 +274,11 @@ export class NativeQueueExecutor {
          an unproven entry was still owed. Entries waiting keep the pass failing,
          with its reason, so the host's backoff brings it back. */
       const owed = records.filter(entry => !entry.proof && entry.state !== "refused" && entry.state !== "removed" && entry.state !== "delivered").length;
-      if (!owed) return false;
-      const reason = !host ? "no host for the conversation" : !host.nativeQueue ? "the host has no native queue reader" : "no native queue binding";
-      throw new Error(`native queue reconcile unavailable (${owed} owed): ${reason}`);
+      if (owed) {
+        const reason = !host ? "no host for the conversation" : !host.nativeQueue ? "the host has no native queue reader" : "no native queue binding";
+        failures.push(new Error(`native queue reconcile unavailable (${owed} owed): ${reason}`));
+      }
+      return result();
     }
     const unknownMutations = records.filter(entry => sameNativeQueueBinding(entry.binding, binding) && entry.mutationOperationId && entry.versions.some(version => version.operationId === entry.mutationOperationId && version.input));
     if (unknownMutations.length) {
@@ -251,7 +296,6 @@ export class NativeQueueExecutor {
         }
       }
     }
-    let pending = false;
     for (const entry of records) {
       if (entry.state === "removed") {
         /* One removed entry the journal refuses cannot hold up the proofs of the
@@ -262,7 +306,7 @@ export class NativeQueueExecutor {
              discard record, and asking for the transition anyway threw on every
              pass, so no later entry of this conversation could ever converge. */
           if (operation && operation.receipt.status !== "failed") await client.nativeQueueTransition(entry.entryId, { phase: "removed" });
-          await this.port.settled?.(entry);
+          await settle(entry);
         } catch {
           pending = true;
         }
@@ -270,9 +314,15 @@ export class NativeQueueExecutor {
     }
     const entries = records.filter(entry =>
       !entry.proof && entry.state !== "refused" && entry.state !== "removed" && sameNativeQueueBinding(entry.binding, binding));
-    if (!entries.length) return pending;
-    const proofs = host.nativeQueue.evidenceBatch ? await host.nativeQueue.evidenceBatch(entries)
-      : await Promise.all(entries.map(entry => host.nativeQueue!.evidence(entry)));
+    if (!entries.length) return result();
+    let proofs;
+    try {
+      proofs = host.nativeQueue.evidenceBatch ? await host.nativeQueue.evidenceBatch(entries)
+        : await Promise.all(entries.map(entry => host.nativeQueue!.evidence(entry)));
+    } catch (error) {
+      failures.push(error instanceof Error ? error : new Error(String(error)));
+      return result();
+    }
     for (let index = 0; index < entries.length; index++) {
       const entry = entries[index]!;
       const proof = proofs[index];
@@ -296,9 +346,9 @@ export class NativeQueueExecutor {
         pending = true;
         continue;
       }
-      await this.port.settled?.({ ...entry, proof, state: "delivered" });
+      await settle({ ...entry, proof, state: "delivered" });
     }
-    return pending;
+    return result();
   }
 }
 
