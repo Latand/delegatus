@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { ultraRowOf, useCodexTierOffer } from "@/components/codexTierOffer";
 import { RuntimePillFace, RuntimePopover, RuntimeSheet, tierWord, type AccountChoice, type RuntimePanel, type SpeedTier } from "@/components/RuntimePill";
@@ -101,6 +101,16 @@ export function DraftRuntimePill({ launch, disabled = false, projectAccounts }: 
   useLayoutEffect(() => {
     if (open && !isMobile) place();
   }, [open, panel, isMobile, place, efforts.length]);
+  /* The Account panel's rows can arrive after it opens (the owner's list is read then), and a popover
+     that opens downward keeps its top where its height put it: place it again whenever it changes size. */
+  useEffect(() => {
+    if (!open || isMobile || typeof ResizeObserver === "undefined") return;
+    const popover = pillRef.current?.ownerDocument.querySelector("[data-runtime-popover]");
+    if (!popover) return;
+    const observer = new ResizeObserver(() => place());
+    observer.observe(popover);
+    return () => observer.disconnect();
+  }, [open, panel, isMobile, place]);
 
   /* Copilot's accounts come from the draft's catalog, the ones that can take a launch; with none listed
      there is nothing to choose and the launch runs on the CLI's own profile. */

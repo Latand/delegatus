@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { roleDescription, roleName, roleParamDescription, roleParamLabel, roleParamOptionLabel } from "@/components/builderCopy";
 import {
+  CATALOG_REFRESH_EVENT,
   EngineRadioGroup,
   launchEngineLabel,
   openLaunchSignIn,
@@ -11,7 +12,6 @@ import {
   useLaunchReadiness,
 } from "@/components/draft/AgentLaunchControls";
 import { DraftRuntimePill } from "@/components/draft/DraftRuntimePill";
-import { CATALOG_REFRESH_EVENT } from "@/components/draft/AgentLaunchControls";
 import { offeredEngines, useIsMember, useMemberLaunchCatalog, useProjectAccounts } from "@/components/team/projectAccountsClient";
 import { FeedMessageRow } from "@/components/conversation/OutboxBubbles";
 import { FeedSkeleton, SKELETON_BAR } from "@/components/skeletons";

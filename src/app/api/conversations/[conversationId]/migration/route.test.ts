@@ -350,6 +350,24 @@ describe("a member's explicit account choice on a running conversation", () => {
     }
   });
 
+  test("is refused for an agent bound to the member, and left alone for an agent bound to nobody", async () => {
+    const { registry, id } = await setup(["account-a"]);
+    const profile = (workspace?: { memberId: string; workspaceId: string }) => emptyLaunchProfile({ cwd: "/repo/checkout", title: "Agent", project: "repo", role: "worker", model: "gpt-6.1-sol", effort: "high", fast: false, ...(workspace ? { workspace } : {}) });
+    registry.reconcileConversations([
+      { ...observation("/sessions/bound-agent.jsonl", "limited"), launchProfile: profile({ memberId: "m_member", workspaceId: W }) },
+      { ...observation("/sessions/free-agent.jsonl", "limited"), launchProfile: profile() },
+    ]);
+    const bound = registry.conversationForPath("/sessions/bound-agent.jsonl")!.id;
+    const free = registry.conversationForPath("/sessions/free-agent.jsonl")!.id;
+    const { conversationAccountChoiceRefusal } = await import("@/lib/team/conversationAccountChoice");
+    const request = new NextRequest("http://127.0.0.1/api/conversation-host", { method: "POST", headers: { host: "127.0.0.1" } });
+    const refused = await conversationAccountChoiceRefusal(request, { kind: "agent", conversationId: bound }, id, "account-b");
+    expect(refused?.status).toBe(409);
+    expect(await refused!.json()).toMatchObject({ code: "project_account_refused", reason: "outside_account_list" });
+    expect(await conversationAccountChoiceRefusal(request, { kind: "agent", conversationId: bound }, id, "account-a")).toBeNull();
+    expect(await conversationAccountChoiceRefusal(request, { kind: "agent", conversationId: free }, id, "account-b")).toBeNull();
+  });
+
   test("keeps the account the conversation already runs on, an account in the pool, and the owner's choice", async () => {
     const { registry, id, member, owner } = await setup(["account-a"]);
     const current = registry.conversation(id)!.generations.at(-1)!.accountId!;

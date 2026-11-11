@@ -1601,7 +1601,8 @@ function MenuRow({
         row.checked ? "text-primary" : "text-secondary"
       }`}
     >
-      <span className="min-w-0 flex-1 truncate" data-runtime-row-label>{row.label}</span>
+      {/* An account is named by its label and nothing else tells two of them apart, so a long one wraps between words. */}
+      <span className={`min-w-0 flex-1 ${row.kind === "account" ? "break-words" : "truncate"}`} data-runtime-row-label>{row.label}</span>
       {row.detail ? (
         <span className={`shrink-0 text-caption ${row.detailAction ? "font-semibold text-accent" : "text-muted"}`} data-runtime-row-detail={row.detailAction ? "action" : undefined}>{row.detail}</span>
       ) : null}
@@ -1934,7 +1935,7 @@ function AccountSectionRows({ t, engine, account, nameOf, limit, choice, start =
         <span className="shrink-0 text-label font-semibold text-secondary">{t("mobile2.composer.accountGroup")}</span>
         {/* Named even when no row carries it: the legacy home is an account
             the accounts list does not enumerate. */}
-        <span className={`min-w-0 text-label ${error ? "break-words text-danger" : "truncate text-muted"}`} data-runtime-sheet-account-current>
+        <span className={`min-w-0 text-label ${error ? "break-words text-danger" : start !== null ? "break-words text-muted" : "truncate text-muted"}`} data-runtime-sheet-account-current>
           {error ?? start ?? accountLine(t, account, choice, nameOf)}
         </span>
       </div>
