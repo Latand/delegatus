@@ -595,6 +595,8 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
       <ChatBarTitle
         file={activeFile}
         offline={offline}
+        seat={holdsSeat}
+        decisionWaiting={holdsSeat && openDecisions > 0}
         stage={stage}
         bump={bumpPulse?.side ?? null}
         renamed={renamed && renamed.path === activeFile.path ? renamed.title : null}
@@ -698,6 +700,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
           isRoot={activeNode.isRoot}
           showFavorite
           chromeInMenu
+          {...(holdsSeat ? { composerPlaceholder: t("composer.placeholderOrchestrator", { project: displayName }) } : {})}
           onClose={() => onClose(activeNode.file.path)}
           relatedTasks={relatedTasksByPath.get(activeNode.file.path)}
           onOpenTask={openPipelineTask}
@@ -964,9 +967,13 @@ function ChatAccountTag({ file }: { file: FileEntry }) {
  * operator must not read as a running one because its own word ran out of room
  * (2026-08 audit findings 3 and 4).
  */
-export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskChange = null }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null; taskChange?: string | null }) {
+export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskChange = null, seat = false, decisionWaiting = false }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null; taskChange?: string | null;
+  /** The project's orchestrator: its title is its role's name, whole, and its account is under ⋯ → Details. */
+  seat?: boolean;
+  /** A decision form of the seat's project is open: a finished turn reads «waiting». */
+  decisionWaiting?: boolean }) {
   const { t } = useLocale();
-  const bits = chatStateBits(t, file, { offline });
+  const bits = chatStateBits(t, file, { offline, decisionWaiting });
   /* While the server is being reconnected (#2071 D7) the quiet reconnecting
      line takes the meta line's place: the state it would show is the state
      from before the outage. */
@@ -980,9 +987,9 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskC
     >
       <span className="flex min-w-0 items-baseline gap-1.5">
         <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">
-          {cleanTitle(renamed ?? file.title, 90)}
+          {seat ? t("orchPanel.title") : cleanTitle(renamed ?? file.title, 90)}
         </span>
-        <ChatAccountTag file={file} />
+        {seat ? null : <ChatAccountTag file={file} />}
       </span>
       {reach.kind === "reconnecting" ? <ReachLine reach={reach} /> : taskChange ? (
         <span data-mobile2-chat-task-change="" className="min-w-0 truncate text-label font-medium leading-tight text-secondary">
