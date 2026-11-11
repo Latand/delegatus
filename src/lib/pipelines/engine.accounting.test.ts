@@ -54,3 +54,28 @@ test("unknown and declared operator repeat causes persist through the real retry
     expect(isStoredPipeline(loadPipelines()[0])).toBe(true);
   }
 });
+
+
+test("reopening an attempt clears its old split and a later completion records its new interval", async () => {
+  const h = harness();
+  h.ports.now = () => new Date(1_000_000).toISOString();
+  await create(h.ports, BUILD_ONLY as never);
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  let lane = loadPipelines()[0]!;
+  let attempt = lane.runs[0]!.attempts[0]!;
+  attempt.state = "failed"; attempt.completedAt = new Date(1_001_000).toISOString();
+  lane.state = "needs_decision";
+  savePipelines([lane]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accounting!.time!.intervalMs).toBe(1000);
+  lane = loadPipelines()[0]!; attempt = lane.runs[0]!.attempts[0]!;
+  attempt.state = "running"; attempt.completedAt = null; lane.state = "running";
+  savePipelines([lane]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accounting!.time).toBeNull();
+  lane = loadPipelines()[0]!; attempt = lane.runs[0]!.attempts[0]!;
+  attempt.state = "failed"; attempt.completedAt = new Date(1_003_000).toISOString(); lane.state = "needs_decision";
+  savePipelines([lane]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accounting!.time).toMatchObject({ intervalMs: 3000, unknownMs: 3000 });
+  lane = loadPipelines()[0]!; attempt = lane.runs[0]!.attempts[0]!;
+  attempt.completedAt = new Date(1_004_000).toISOString(); savePipelines([lane]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accounting!.time!.intervalMs).toBe(4000);
+});

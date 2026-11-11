@@ -51,8 +51,10 @@ API/CLI surface; there is no accounting dashboard.
 
 An attempt records the controller's admission and start observations separately.
 Pending admission survives the time spent waiting for launch. A finished
-attempt freezes its timing observations in its own record so later reports need
-neither the native ledger nor check files.
+attempt freezes its timing observations for its current completion interval in
+its own record so later reports need
+neither the native ledger nor check files. Reopening an existing attempt clears
+that snapshot; its next completion records the new interval.
 
 Native timing uses observed turn and tool boundaries. Model time means observed
 time inside a native turn outside tool execution. It is not a provider's compute

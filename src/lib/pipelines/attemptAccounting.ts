@@ -16,11 +16,19 @@ export function checkTimeSpans(row: CheckRow): TimeSpan[] {
   return spans;
 }
 
-/** Called only for a record being written. A finalized snapshot is immutable;
+/** Called only for a record being written. A snapshot follows the current completion interval;
  * the weekly report needs neither a host nor retained runtime files. */
 export function settleAttemptAccounting(attempt: PipelineStageAttempt): void {
   const accounting = attempt.accounting;
-  if (!accounting || !attempt.completedAt || accounting.time) return;
+  if (!accounting) return;
+  if (!attempt.completedAt) {
+    if (accounting.time) { accounting.time = null; delete accounting.spans; }
+    return;
+  }
+  const start = accounting.startedAt ?? attempt.startedAt ?? accounting.admittedAt;
+  const delta = Date.parse(attempt.completedAt) - Date.parse(start ?? "");
+  const interval = Number.isFinite(delta) && delta >= 0 ? delta : null;
+  if (accounting.time && accounting.time.intervalMs === interval) return;
   const spans: TimeSpan[] = [];
   try { if (attempt.sessionId) spans.push(...readNativeTiming(attempt.sessionId)); }
   catch { /* A missing timing source leaves its whole interval unknown. */ }
@@ -37,5 +45,5 @@ export function settleAttemptAccounting(attempt: PipelineStageAttempt): void {
     finally { checks?.close(); }
   }
   accounting.spans = spans.slice(0, 4096);
-  accounting.time = splitAttemptTime(accounting.startedAt ?? attempt.startedAt ?? accounting.admittedAt, attempt.completedAt, accounting.spans);
+  accounting.time = splitAttemptTime(start, attempt.completedAt, accounting.spans);
 }

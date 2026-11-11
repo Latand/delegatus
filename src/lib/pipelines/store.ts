@@ -1929,7 +1929,7 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
       : new PipelineStoreError("pipeline registry contains malformed records", { cause: error }),
     validate: (pipeline: Pipeline) => {
       for (const run of pipeline.runs) for (const attempt of run.attempts.slice(-2)) {
-        if (attempt.completedAt && attempt.accounting && !attempt.accounting.time) settleAttemptAccounting(attempt);
+        if (attempt.accounting) settleAttemptAccounting(attempt);
       }
       releaseTerminalDelivery(pipeline);
       if (!isPipeline(pipeline)) {
