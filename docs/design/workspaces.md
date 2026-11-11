@@ -986,6 +986,21 @@ conversations fall back to their latest recorded message author. Owner
 conversations and installation-owned seats without a member binding retain
 their existing reach.
 
+A project's seat states its own reach, and resolution ends at it. A seat a
+person designated is bound to that person: a member's seat keeps the member's
+reach whoever writes later, and the owner's seat has installation reach. A
+member's message to the owner's seat fences it as message authority, and the
+owner's next message there restores its reach. A rotation the seat or the seat
+tick triggers keeps the kind of reach it inherits: a binding stays a binding,
+and a member's message travels as message authority (`workspaceFromMessage` on
+the seat record), so the successor starts fenced and the next person who writes
+to it decides. One member message therefore never becomes a permanent binding.
+The handover parent of a successor carries no authority. The trade-off is the
+one every owner conversation already has: after the owner writes, the seat acts
+with the owner's reach while the member's earlier request is still in its
+context. An older build reads a `workspaceFromMessage` seat as a plain member
+binding, which is the narrower answer.
+
 Authority resolution shares one lazy seat map across the parent chain. The
 process retains one map for the seats file's path and filesystem identity;
 unchanged files are never reparsed by repeated calls. Each resolution checks
