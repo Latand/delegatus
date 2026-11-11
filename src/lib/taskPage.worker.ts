@@ -10,6 +10,7 @@ import { scrubIssueReport } from "./issueReports/scrub";
 import type { PrivacyCorrelation } from "./memory/privacyDiagnostics";
 import type { PrivacyRequest } from "./memory/privacyWork";
 import { performanceSpans } from "./performanceSpans";
+import { residentWorkerRssBytes } from "./residentWorkerMemory";
 
 const builder = new TaskPageBuilder();
 const lines = readline.createInterface({ input: process.stdin });
@@ -47,7 +48,7 @@ for await (const line of lines) {
       // Also repairs the known-value file after a committed undo whose first
       // acknowledgement was lost. All history work stays in this leased worker.
       refreshLessonKnownValues();
-      process.stdout.write(`${JSON.stringify({ id, correlation, result: { privacyRevision: storedLessonRevision(), value } })}\n`);
+      process.stdout.write(`${JSON.stringify({ id, correlation, rssBytes: residentWorkerRssBytes(), result: { privacyRevision: storedLessonRevision(), value } })}\n`);
       continue;
     }
     if (["filter", "report", "issue"].includes(frame.request.kind)) {
@@ -71,14 +72,14 @@ for await (const line of lines) {
           : scrubIssueReport(request.report, localDeny));
       }
       if (storedLessonRevision() !== privacyRevision) throw new PrivacyWorkError("store-changed");
-      process.stdout.write(`${JSON.stringify({ id, correlation, result: { privacyRevision, value } })}\n`);
+      process.stdout.write(`${JSON.stringify({ id, correlation, rssBytes: residentWorkerRssBytes(), result: { privacyRevision, value } })}\n`);
       continue;
     }
     const result = builder.build(frame.request as PageBuildRequest);
     const cpuUsed = process.cpuUsage(cpu);
-    process.stdout.write(`{"id":${JSON.stringify(id)},${correlation ? `"correlation":${JSON.stringify(correlation)},` : ""}"result":{"page":${result.pageJson},"privacyRevision":${JSON.stringify(result.privacyRevision)},"builds":${result.builds},"startRevision":${result.startRevision},"cpu":${JSON.stringify(cpuUsed)}}}\n`);
+    process.stdout.write(`{"id":${JSON.stringify(id)},${correlation ? `"correlation":${JSON.stringify(correlation)},` : ""}"rssBytes":${residentWorkerRssBytes()},"result":{"page":${result.pageJson},"privacyRevision":${JSON.stringify(result.privacyRevision)},"builds":${result.builds},"startRevision":${result.startRevision},"cpu":${JSON.stringify(cpuUsed)}}}\n`);
   } catch (error) {
     // Store errors may contain task text or paths. Carry only the error class.
-    process.stdout.write(`${JSON.stringify({ id, correlation, error: "LESSON_PRIVACY_UNAVAILABLE", failure: privacyFailureOf(error) })}\n`);
+    process.stdout.write(`${JSON.stringify({ id, correlation, rssBytes: residentWorkerRssBytes(), error: "LESSON_PRIVACY_UNAVAILABLE", failure: privacyFailureOf(error) })}\n`);
   }
 }
