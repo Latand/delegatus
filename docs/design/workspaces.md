@@ -1000,9 +1000,26 @@ one every owner conversation already has: after the owner writes, the seat acts
 with the owner's reach while the member's earlier request is still in its
 context. An older build reads a `workspaceFromMessage` seat as a plain member
 binding, which is the narrower answer.
-A seat record written before the field existed, bound by an agent-triggered
-designation, is read as message authority, so a seat an earlier release bound
-this way answers to the next person who writes to it with no state edit.
+A seat belongs to its project, so the Telegram grant on its record stays
+usable under member reach: the project's current seat passes the five
+`telegram_bot_*` tools while a member's message fences it. Its workers hold no
+grant, a seat a person designated for a member stays without the tools, and
+losing the project ends the grant. The grant adds no chat scoping: the seat
+reaches every chat the agent route serves, so a member can read and write
+through the seat to any of them (operator decision, 2026-11-11).
+`publish_prototype_review` and `read_prototype_review` pass to their routes,
+which apply the workspace fence to the caller themselves. Every other
+installation-wide tool stays refused. A record's agent author carries the
+sender's project as a label; the result scan does not read it as a project
+key, and the answer withholds an author from outside the caller's reach.
+A seat record written before the field existed, bound by a rotation an agent
+or the seat tick triggered (an agent trigger, the automatic-replacement fence
+or the authentication recovery key on its intent), is read as message authority, so a seat an earlier
+release bound this way answers to the next person who writes to it with no
+state edit. The seat launch records the same marker in its launch profile
+(`workspace.fromMessage`), so the conversation keeps answering to the latest
+person after it leaves the seat. An adopted conversation without a durable
+launch binding of its own receives the fence as message authority too.
 
 Authority resolution shares one lazy seat map across the parent chain. The
 process retains one map for the seats file's path and filesystem identity;

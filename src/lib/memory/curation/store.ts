@@ -9,7 +9,7 @@ import { ROLE_IDS } from "@/lib/roles/types";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 import { canonicalScope, projectScope, roleMemoryCollection, roleScope } from "../roleStore";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeProject } from "../roleScopes";
-import { budgetArchiveCandidates, curationReadVersion, curationScopeInputs, curationScopeInputSteps, curationRuleInputs, roleScopeRowKeys, curationRowRevisionSteps } from "../roleViewSource";
+import { budgetArchiveCandidates, curationReadVersion, curationScopeInputs, curationScopeInputSteps, curationRuleInputs, roleRowWithHistory, roleScopeRowKeys, curationRowRevisionSteps } from "../roleViewSource";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { ROLE_MEMORY_BOUND, type RoleMemoryScopeRow, CURATION_NEW_LESSONS, type CuratorPassView } from "../roleTypes";
 
@@ -242,7 +242,8 @@ export function curationScopes(project: string): RoleMemoryScopeRow[] {
   if (!held) return [];
   const projects = [...new Set([p, ...Object.keys(projectAliasSnapshot().aliases).filter(key => canonicalProject(key) === p)])];
   const scopes = new Map<string, RoleMemoryScopeRow>();
-  const take = (row: ReturnType<typeof held.get>) => { if (row?.kind === "scope") scopes.set(row.scope, row); };
+  // Callers count lessons and pass receipts over the whole history.
+  const take = (row: ReturnType<typeof held.get>) => { if (row?.kind === "scope") scopes.set(row.scope, row.historyRows ? roleRowWithHistory(`s:${row.scope}`) as RoleMemoryScopeRow ?? row : row); };
   for (const key of [...projects.map(projectScopeRaw => `s:project:${projectScopeRaw}`), "s:machine"]) take(held.get(key));
   for (const prefix of [...projects.map(project => `s:role:${project}:`), "s:role:*:"]) {
     let after = prefix;
@@ -604,7 +605,7 @@ export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass 
     const next = { ...held, ...patch, id, kind: "pass" as const, project: held.project, scopes: held.scopes, admittedHost: held.admittedHost ?? patch.admittedHost, launchBody: held.launchBody ?? patch.launchBody };
     if (next.state === "succeeded" && held.budgetSweepCandidates) {
       const missing = Object.entries(held.budgetSweepCandidates).filter(([scope, ids]) => {
-        const row = roleMemoryCollection()?.get(`s:${canonicalScope(scope)}`);
+        const row = roleRowWithHistory(`s:${canonicalScope(scope)}`);
         return ids.some(candidate => {
           const rule = roleMemoryCollection()?.get(`r:${candidate}`);
           return rule?.kind !== "rule" || rule.state === "archived" && rule.reason !== "deleted" && !(row?.kind === "scope"

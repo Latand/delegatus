@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import { agentBinaryCandidates } from "./agent-binaries.mjs";
+import { inspectLoginService } from "./login-service-status.mjs";
 
 /** @typedef {import('../src/lib/doctor/contracts').DoctorHost} DoctorHost */
 /** @typedef {import('../src/lib/doctor/contracts').CapabilityStatus} CapabilityStatus */
@@ -17,7 +18,7 @@ export const DOCTOR_PROBE_TIMEOUT_MS = 1500;
 
 /** No file contents, executable output, paths or environment values enter a report.
  * @param {string} file
- * @param {'directory' | 'real-directory' | 'credential' | 'executable'} kind
+ * @param {'directory' | 'real-directory' | 'credential' | 'executable' | 'file'} kind
  * @param {AbortSignal} [signal]
  * @returns {Promise<Inspection>}
  */
@@ -41,6 +42,7 @@ export function doctorHost() {
   return {
     home: homedir(), platform: process.platform, arch: process.arch, env: process.env,
     now: Date.now, inspect,
+    loginService(signal) { return inspectLoginService(this, signal); },
     async viewer(port, signal) {
       // node:http connects directly, ignoring ambient proxies. HEAD runs no probes.
       try {
@@ -166,6 +168,7 @@ export async function runDoctor({ host = doctorHost(), port = 8898 } = {}) {
       if (result === "unrecognized") return ["unknown", "VIEWER_UNRECOGNIZED"];
       return ["blocked", "VIEWER_UNREACHABLE"];
     }],
+    ["service.login", async signal => host.loginService ? host.loginService(signal) : ["unknown", "SERVICE_UNAVAILABLE"]],
   ];
   const capabilities = await Promise.all(probes.map(async ([id, probe]) => {
     const start = host.now();

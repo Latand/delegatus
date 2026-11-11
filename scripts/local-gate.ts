@@ -1,4 +1,5 @@
 import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
+import { gateTaskDiagnostics } from "./gate-tasks";
 import { AppServerCloudTransport, cloudCheckInputs, runCloudChecks } from "./cloud-checks";
 import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
@@ -792,9 +793,12 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
             const ready = await prepared(prepare, member, until, cancel.signal, budget.env);
             const outcome = isOutcome(ready) ? ready : await runPrepared(member, ready, log, cancel.signal);
             if (!outcome.cancelled && !settle(member, outcome)) throw new Error(String(outcome.code));
-            if (!outcome.stopped && ["touched tests", "Linux tests", "eslint"].includes(member.name) && existsSync(log)) say(readFileSync(log, "utf8").trimEnd());
+            const showOutput = ["touched tests", "Linux tests", "eslint"].includes(member.name);
+            const output = !outcome.stopped && existsSync(log) ? readFileSync(log, "utf8").trimEnd() : "";
+            if (showOutput && output) say(output);
+            const taskPeak = showOutput ? null : gateTaskDiagnostics(output).peak;
             if (!outcome.stopped && !outcome.cancelled && outcome.code === 0) options.passes?.passed(member);
-            if (!outcome.stopped) say(`${mode}: ${member.name}: passed in ${seconds(Date.now() - started)}`);
+            if (!outcome.stopped) say(`${mode}: ${member.name}: passed in ${seconds(Date.now() - started)}${taskPeak ? `; ${taskPeak}` : ""}`);
             return outcome;
           } catch (error) { errors.set(at, error); cancel.abort(); return null; }
         })();

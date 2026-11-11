@@ -102,6 +102,25 @@ This installs three commands into `~/.bun/bin`: `delegatus`, its short alias
 --help` lists its options. The command stays installed. Update it from the
 **Update** dialog, or run `bunx delegatus-cli@latest`.
 
+### Start at login
+
+For an installed command on Linux or macOS, opt in with:
+
+```bash
+delegatus service install
+# A different local port:
+delegatus service install --port 9123
+```
+
+It writes a per-user service, starts Delegatus when no other instance is
+running, and prints its file, log and undo command. It needs no elevation.
+Check with `delegatus doctor`; remove it with `delegatus service remove`.
+If Delegatus already runs from a terminal, finish that work, run
+`delegatus stop --all`, then repeat the install command to start the service.
+An older installed command needs `bun add -g delegatus-cli@latest` first.
+Temporary `bunx` copies and checkouts keep their own start procedure.
+See [operations](operations.md#running-as-a-user-service) for limits and logs.
+
 ### Let your coding agent install it
 
 The Delegatus website, [delegatus.org](https://delegatus.org), has an install
@@ -111,8 +130,9 @@ agent and it does the following, in order:
 1. checks for Bun 1.4 or newer and installs it if needed;
 2. checks for the agent's own CLI and installs it if it is missing;
 3. installs the package with `bun add -g delegatus-cli`;
-4. starts Delegatus in the background with `--no-open`, so it keeps running
-   after that session, and waits for `http://127.0.0.1:8898/` to answer;
+4. asks whether to start at login, runs `delegatus service install` if you
+   agree, and otherwise starts it in the background with `--no-open`; then
+   waits for `http://127.0.0.1:8898/` to answer;
 5. registers the MCP server for that agent under the name `viewer`, which
    takes effect in the agent's next session;
 6. gives you the link to open.

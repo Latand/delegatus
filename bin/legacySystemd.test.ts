@@ -38,7 +38,7 @@ test("no unit, no notice", () => {
 test("the notice names every unit found, the commands that stop and remove them, and the Docker guide", () => {
   const notice = legacySystemdNotice([{ name: "agent-log-viewer.service", path: VIEWER_UNIT }])!;
   expect(notice).toBe([
-    "The systemd install of Delegatus is retired: Docker is the only install.",
+    "The legacy Delegatus units are retired. Use delegatus service install for a packaged install, or Docker.",
     `This machine still has the legacy units: ${VIEWER_UNIT}`,
     "Stop and remove them:",
     "  systemctl --user disable --now agent-log-viewer.service",
@@ -58,7 +58,7 @@ test("the tmux supervisor unit carries a warning that stopping it ends its sessi
   expect(en).toContain(`rm ${VIEWER_UNIT} ${TMUX_UNIT}`);
   expect(en).toContain("ends every tmux session it hosts");
   const uk = legacySystemdNotice(units, "uk")!;
-  expect(uk).toContain("єдиний спосіб встановлення — Docker");
+  expect(uk).toContain("delegatus service install");
   expect(uk).toContain("закриває всі tmux-сесії");
   expect(uk).toContain("systemctl --user disable --now agent-log-viewer.service agent-log-viewer-legacy-tmux.service");
   expect(uk).toContain(DOCKER_INSTALL_GUIDE);

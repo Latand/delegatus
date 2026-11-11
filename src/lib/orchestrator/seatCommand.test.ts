@@ -2946,8 +2946,10 @@ for (const lastAuthor of ["member", "owner"] as const) test(`automatic rotation 
     if (lastAuthor === "owner") store.admitConversationMember(conversation.id, owner.id);
     expect((await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "workspace-seat-rotation" }, deps)).status).toBe(200);
     const expected = lastAuthor === "owner" ? undefined : { memberId: "m_member", workspaceId };
-    expect(admittedWorkspace).toEqual(expected);
+    // The launch is told the fence came from a message; the seat record says so in its own field.
+    expect(admittedWorkspace).toEqual(expected && { ...expected, fromMessage: true });
     expect(orchestratorSeatFor("proj-a").active?.workspace).toEqual(expected);
+    expect(orchestratorSeatFor("proj-a").active?.workspaceFromMessage).toBe(expected ? true : undefined);
   } finally { registry.close(); resetTeamStoreForTests(); }
 });
 
