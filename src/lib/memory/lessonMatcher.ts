@@ -1,4 +1,4 @@
-import { lessonPatternSource } from "./roleConsolidate";
+import { codePoints, LESSON_MATCH_MIN_CHARS, lessonPatternSource } from "./roleConsolidate";
 
 /* Finding stored lessons in text without a compiled pattern per lesson.
 
@@ -8,17 +8,38 @@ import { lessonPatternSource } from "./roleConsolidate";
    of lessons in a non-Latin script cost gigabytes once its patterns ran, and
    matching took seconds per hundred kilobytes.
 
-   A pattern can match only where the words of its lesson occur in the text
-   one after another as whole words. This index answers that from the text's
-   own words, and only the lessons that pass get their pattern compiled and
-   run. The answer on any text is the one the patterns of all lessons would
-   give. */
+   Under `iu` the engine reads a word as a run of the characters its class
+   `[\p{L}\p{N}]` accepts: letters, digits and U+0345, which it equates with
+   iota. Where a lesson's pattern matches, the text holds the lesson's words
+   in order as such runs, each run equal to its lesson word under `iu`. The
+   index splits the text the same way and compares folded words, so it offers
+   every lesson whose pattern matches the text, and possibly some whose
+   pattern then finds nothing. Only the offered lessons get their pattern
+   compiled and run. Patterns that are never offered cannot match, so the
+   matches found are those the patterns of all lessons would find, apart from
+   lessons the engine refuses to compile, which `skipped` counts. */
 
 // Leave headroom under JSC's limit for one pattern.
 export const LESSON_MATCHER_SOURCE_LIMIT = 32_000;
 /** Compiled patterns kept between calls. */
 const COMPILED_PATTERNS = 512;
+/** How a lesson's long-form pattern splits it into words. */
 const WORDS = /[\p{L}\p{N}]+/gu;
+/** A character the engine reads as part of a word under `iu`: a letter, a
+ * digit, or U+0345, which it equates with iota. */
+export const TEXT_WORD_CHARACTER = /[\p{L}\p{N}\u0345]/u;
+/** How the engine splits text into words under `iu`. */
+const TEXT_WORDS = new RegExp(`${TEXT_WORD_CHARACTER.source}+`, "gu");
+
+/** A lesson's words as its pattern reads them. The long form joins the words
+ * WORDS finds; the short form keeps the text as written, so a U+0345 in it
+ * stands inside a word, as it does in the text that pattern matches. */
+function lessonWords(text: string): string[] {
+  const normalized = text.normalize("NFKC");
+  const words = normalized.match(WORDS) ?? [];
+  if (codePoints(words.join("")) >= LESSON_MATCH_MIN_CHARS) return words;
+  return normalized.match(TEXT_WORDS) ?? [];
+}
 
 /** Two words the engine treats as equal under `iu` fold to the same string.
  * The fold may also join words the engine keeps apart; a lesson then reaches
@@ -53,7 +74,7 @@ export function buildLessonIndex(texts: readonly string[]): LessonIndex {
     const source = lessonPatternSource(text);
     if (!source) continue;
     if (source.length + 4 > LESSON_MATCHER_SOURCE_LIMIT) { index.skipped += 1; continue; }
-    const words = (text.normalize("NFKC").match(WORDS) ?? []).map(foldLessonWord);
+    const words = lessonWords(text).map(foldLessonWord);
     index.lessons.push({ source, words, rarest: 0 });
     for (const word of new Set(words)) frequency.set(word, (frequency.get(word) ?? 0) + 1);
   }
@@ -79,7 +100,7 @@ function pattern(index: LessonIndex, position: number): RegExp | null {
     if (!(error instanceof SyntaxError)) throw error;
     // The engine refused this one lesson. Count it: a caller that needs every lesson refuses.
     lesson.unusable = true; index.skipped += 1;
-    console.warn("stored-lesson matcher skipped 1 oversized or uncompilable lesson text(s)");
+    console.warn(`stored-lesson matcher skipped ${index.skipped} oversized or uncompilable lesson text(s)`);
     return null;
   }
   index.compiled.set(position, compiled);
@@ -91,7 +112,7 @@ function pattern(index: LessonIndex, position: number): RegExp | null {
  * another, longest lesson first. No other lesson's pattern can match there. */
 export function lessonPatternsIn(index: LessonIndex, text: string): RegExp[] {
   if (!text || !index.lessons.length) return [];
-  const words = (text.match(WORDS) ?? []).map(foldLessonWord);
+  const words = (text.match(TEXT_WORDS) ?? []).map(foldLessonWord);
   const found = new Set<number>(index.wordless);
   words.forEach((word, at) => {
     for (const position of index.byWord.get(word) ?? []) {

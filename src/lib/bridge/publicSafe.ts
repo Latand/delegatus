@@ -68,8 +68,6 @@ export interface PublicDenyList {
   projects: readonly { repository: string | null; names: readonly string[] }[];
   /** Role memory's stored rules and whys (src/lib/memory/roleStore.ts), which stay on this machine. */
   lessons?: readonly string[];
-  /** Worker-local patterns from the shared role-memory revision. Never serialized. */
-  lessonPatterns?: readonly RegExp[];
   /** The lesson patterns that can occur in one text. A store of many lessons
       supplies these per scanned text and never compiles the rest. */
   lessonPatternsIn?: (text: string) => readonly RegExp[];
@@ -193,7 +191,7 @@ export function privateMatches(text: string, deny: PublicDenyList = EMPTY_DENY_L
     if (project.repository?.includes("/")) scan("project", new RegExp(escape(project.repository), "i"));
     names("project", project.names.filter(repositoryShaped));
   }
-  for (const pattern of deny.lessonPatternsIn?.(text) ?? deny.lessonPatterns ?? (deny.lessons ?? []).flatMap(text => {
+  for (const pattern of deny.lessonPatternsIn?.(text) ?? (deny.lessons ?? []).flatMap(text => {
     const pattern = lessonPattern(text);
     return pattern ? [pattern] : [];
   })) scan("lesson", pattern);
