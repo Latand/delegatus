@@ -10637,7 +10637,6 @@ export class AgentRegistry {
     const source = conversation.generations.at(-1);
     if (!targetId || !source || source.accountId === null || source.accountId === targetId) return clone(conversation);
     if (conversation.migrationOptOut?.targetId === targetId) return clone(conversation);
-    if (stopSweepStillOptsOut(conversation, pendingStopSweeps(file, conversation.engine, targetId))) return clone(conversation);
     /* The launch's own first message (#2051). The launch picked this account
        moments ago by the automatic rule, where the project's pool ranks
        accounts by room and routing only breaks a tie. Moving the
@@ -10679,6 +10678,10 @@ export class AgentRegistry {
       return clone(conversation);
     }
 
+    /* A stop whose sweep has not reached this conversation yet already opted
+       it out. Read here, where the intents are listed anyway, so the checks
+       above cost a send nothing more than they did. */
+    if (stopSweepStillOptsOut(conversation, pendingStopSweeps(file, conversation.engine, targetId))) return clone(conversation);
     const changedAt = now();
     let intent = Object.values(file.migrationIntents)
       .filter((candidate) => candidate.engine === conversation.engine && candidate.targetId === targetId && candidate.state !== "stopped" && engineScopedIntent(candidate))
