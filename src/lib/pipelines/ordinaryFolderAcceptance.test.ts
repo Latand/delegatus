@@ -1,7 +1,9 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
-import { laneChangeSummary, laneFileDiff } from "./laneChanges";
+import { laneChangeSummary, laneFileDiff, laneFileVersion } from "./laneChanges";
 import { realProvisionExec } from "./git";
+import type { Pipeline } from "./types";
 import {
   fs, os, path, realExec, defaultPipelinePorts, harness, createPipelineFromRequest,
   tickPipelines, loadPipelines, savePipelines, finishReported, entry,
@@ -21,10 +23,15 @@ const observed = {
   completed: false,
   admission: "unobserved",
   changes: false,
-  apply: "absent (G4)",
-  undo: "absent (G5)",
+  applyCompleted: false,
+  undoCompleted: false,
+  applyCapabilityAvailable: false,
+  undoCapabilityAvailable: false,
   resultInFolder: false,
   restored: false,
+  initialFiles: new Map<string, string>(),
+  portRefusals: [] as string[],
+  attemptedRemoteCommands: [] as string[],
 };
 
 afterAll(() => {
@@ -66,7 +73,7 @@ async function git(cwd: string, ...args: string[]) {
   return result.stdout.trim();
 }
 
-test("G0 fixture generates its office documents and proves both command ports refuse network access", async () => {
+beforeAll(async () => {
   expect(await git(root, "--version")).toStartWith("git version ");
   fs.mkdirSync(folder);
   for (const name of names) {
@@ -82,25 +89,26 @@ test("G0 fixture generates its office documents and proves both command ports re
   fs.mkdirSync(path.join(folder, "out"));
   fs.writeFileSync(path.join(folder, "out/letter.txt"), "Original letter\n");
   fs.writeFileSync(path.join(folder, "secret-handling.pdf"), "Ordinary document about handling\n");
-  expect(fs.statSync(path.join(folder, "archive.bin")).size).toBe(80 * 1024 * 1024);
-  expect(fs.statSync(path.join(folder, "drawing.pdf")).size).toBe(3 * 1024 * 1024);
-  expect(fs.readdirSync(folder)).toHaveLength(204);
+  for (const name of [...admitted, "secret-handling.pdf"]) observed.initialFiles.set(name, fileDigest(path.join(folder, name)));
   for (const command of [["gh", "pr", "list"], ...["fetch", "push", "pull", "ls-remote", "clone"].map(arg => ["git", arg]), ["git", "remote", "update"]]) {
     const [program, ...args] = command;
-    expect((await exec(program!, args, folder)).code).toBe(1);
-    expect((await provisionExec(program!, args, folder)).code).toBe(1);
+    const normalResult = await exec(program!, args, folder);
+    const provisionResult = await provisionExec(program!, args, folder, undefined);
+    if (normalResult.code === 1 && provisionResult.code === 1) observed.portRefusals.push([program, ...args].join(" "));
   }
-  expect(refusedCommands).toHaveLength(14);
   refusedCommands.length = 0;
-  expect(fs.existsSync(path.join(folder, ".git"))).toBe(false);
-});
 
-test("G0 observes admission and the build, review, fix, second review through product entry points", async () => {
   savePipelines([]);
   const h = harness();
   h.ports.preflightRepo = defaultPipelinePorts().preflightRepo;
   h.ports.exec = exec;
   h.ports.provisionExec = provisionExec;
+  const lifecycle = h.ports as typeof h.ports & {
+    applyReviewedResult?: (lane: Pipeline) => Promise<{ applied: boolean }>;
+    undoAppliedResult?: (lane: Pipeline) => Promise<{ restored: boolean }>;
+  };
+  observed.applyCapabilityAvailable = typeof lifecycle.applyReviewedResult === "function";
+  observed.undoCapabilityAvailable = typeof lifecycle.undoAppliedResult === "function";
   const admission = await h.ports.preflightRepo(folder);
   observed.admission = admission.ok ? "admitted" : admission.detail ?? admission.code;
   if (admission.ok) observed.leftOut = admission.repositoryInitialization?.ignoredPaths ?? [];
@@ -149,21 +157,47 @@ test("G0 observes admission and the build, review, fix, second review through pr
     const summary = await laneChangeSummary(lane, exec);
     if (!("error" in summary)) {
       const diffs = await Promise.all(summary.files.map(file => laneFileDiff(lane, summary.base, summary.head, file.path, exec)));
+      const drawing = summary.files.find(file => file.path === "drawing.pdf");
+      const oldDrawing = drawing && await laneFileVersion(lane, summary.base, summary.head, summary.base, drawing.path, exec, summary.files);
+      const newDrawing = drawing && await laneFileVersion(lane, summary.base, summary.head, summary.head, drawing.path, exec, summary.files);
+      const textDiff = diffs.find((diff, index) => summary.files[index]?.path === "result.txt");
       observed.changes = summary.total === 2 && !summary.truncated
-        && diffs.every(diff => !("error" in diff) && !diff.binary);
+        && diffs.every(diff => !("error" in diff))
+        && Boolean(textDiff && !("error" in textDiff) && textDiff.hunks.some(hunk => hunk.lines.some(line => line.t === "+" && line.text === "Reviewed result")))
+        && Boolean(drawing?.binary && Buffer.isBuffer(oldDrawing) && oldDrawing.equals(Buffer.alloc(3 * 1024 * 1024))
+          && Buffer.isBuffer(newDrawing) && newDrawing.equals(Buffer.alloc(3 * 1024 * 1024, 1)));
     }
     observed.resultInFolder = fs.existsSync(path.join(folder, "result.txt"))
       && fs.readFileSync(path.join(folder, "result.txt"), "utf8") === "Reviewed result\n";
+    if (lifecycle.applyReviewedResult) {
+      const applied = await lifecycle.applyReviewedResult(pipeline);
+      observed.applyCompleted = applied.applied;
+      observed.resultInFolder = applied.applied && fs.existsSync(path.join(folder, "result.txt"))
+        && fs.readFileSync(path.join(folder, "result.txt"), "utf8") === "Reviewed result\n";
+      if (lifecycle.undoAppliedResult) {
+        const undone = await lifecycle.undoAppliedResult(pipeline);
+        observed.undoCompleted = undone.restored;
+        const restored = !fs.existsSync(path.join(folder, "result.txt")) && [...observed.initialFiles].every(([name, digest]) =>
+          fs.existsSync(path.join(folder, name)) && fileDigest(path.join(folder, name)) === digest);
+        observed.restored = undone.restored && restored;
+      }
+    }
+    observed.attemptedRemoteCommands = [...refusedCommands];
     expect(await git(folder, "remote")).toBe("");
-  } else {
-    expect(created.error).toContain(observed.admission);
   }
-  // Advance this stop when G1 supplies admission. Apply and undo remain absent
-  // until G4/G5 supply their product operations.
-  expect(observed.admission).toBe("project exceeds the initial commit path-list bound");
-  expect(fs.existsSync(path.join(folder, ".git"))).toBe(false);
-  expect(h.spawnInputs).toHaveLength(0);
-  expect(refusedCommands).toEqual([]);
+});
+
+function fileDigest(file: string): string {
+  return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
+test("G0 fixture builds every office file and refuses forge commands on both command ports", () => {
+  expect(fs.statSync(path.join(folder, "archive.bin")).size).toBe(80 * 1024 * 1024);
+  expect(fs.statSync(path.join(folder, "drawing.pdf")).size).toBe(3 * 1024 * 1024);
+  expect(fs.readdirSync(folder)).toHaveLength(204);
+  expect(observed.initialFiles.size).toBe(admitted.length + 1);
+  expect(observed.portRefusals).toHaveLength(7);
+  expect(observed.attemptedRemoteCommands).toEqual([]);
 });
 
 test.failing("G0 completes build → review → fix → second review without remote — gap 1 path-list bound (G1)", () => {
@@ -177,7 +211,8 @@ test.failing("G0 every stage sees every admitted office file — gaps 1, 2, 3 bo
 });
 
 test.failing("G0 reviewed result reaches the person's folder — gap 5 local landing absent (G4)", () => {
-  expect(observed.apply).toBe("applied");
+  expect(observed.applyCapabilityAvailable).toBe(true);
+  expect(observed.applyCompleted).toBe(true);
   expect(observed.resultInFolder).toBe(true);
 });
 
@@ -186,6 +221,7 @@ test.failing("G0 what changed lists and opens every changed document — gap 6 b
 });
 
 test.failing("G0 undo restores the folder — gap 7 undo operation absent (G5)", () => {
-  expect(observed.undo).toBe("restored");
+  expect(observed.undoCapabilityAvailable).toBe(true);
+  expect(observed.undoCompleted).toBe(true);
   expect(observed.restored).toBe(true);
 });
