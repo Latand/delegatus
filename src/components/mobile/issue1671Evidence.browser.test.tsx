@@ -9199,6 +9199,164 @@ describe("launching an agent on the phone", () => {
   }, 90_000);
 });
 
+describe("a member's account chip on the phone", () => {
+  /*
+   * The new agent's composer on a phone, for a member of a workspace: the sheet leads with the accounts
+   * of the project's list (a pool of both engines, no pool, a pool whose only account is not signed in, a
+   * very long label), a launch the list refuses, and the owner's unchanged sheet. 360, 390 and 430 wide,
+   * both languages, both schemes, real touch. Every row and line is measured from its text range inside the
+   * window and inside the sheet's scroller, scrolled until it is whole, and every tappable row is at least
+   * 44 px tall. A tap on an account that is not signed in sends no request. Frames go to
+   * $LLV_EVIDENCE_DIR/phone-member-account-chip (not committed); the readings are
+   * `evidence/phone-member-account-chip/readings.json`.
+   */
+  const FRAMES = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "phone-member-account-chip");
+  const words = (lang: "en" | "uk", key: string, params?: Record<string, string | number>) => translate(lang, key as Parameters<typeof translate>[1], params as never);
+
+  /** Each text range under `selector`, scrolled into view first, against the window and the clipping ancestors. */
+  const wholeness = (selector: string) => {
+    const found: string[] = [];
+    for (const root of document.querySelectorAll(selector)) {
+      root.scrollIntoView({ block: "nearest" });
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if (!node.textContent?.trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          if (rect.width === 0) continue;
+          if (rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.top < -0.5 || rect.bottom > innerHeight + 0.5) found.push(`outside window: ${node.textContent!.trim()}`);
+          for (let ancestor = node.parentElement; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
+            const style = getComputedStyle(ancestor);
+            if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+            const box = ancestor.getBoundingClientRect();
+            if (rect.left < box.left - 0.5 || rect.right > box.right + 0.5 || rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5) {
+              found.push(`clipped by ${ancestor.tagName.toLowerCase()}: ${node.textContent!.trim()}`);
+              break;
+            }
+          }
+        }
+      }
+    }
+    return { found, scrollWidth: document.documentElement.scrollWidth <= innerWidth };
+  };
+
+  browserTest("the sheet lists the pool, keeps an account without sign-in inert, and says what a refusal means", async () => {
+    fs.mkdirSync(FRAMES, { recursive: true });
+    const { base, stop } = await serveEvidenceFixture(FRAMES, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
+    const browserServer = await chromium.launchServer({ headless: true, args: ["--no-sandbox"], executablePath: process.env.CHROME_BIN });
+    const browserPid = browserServer.process().pid;
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const width of [360, 390, 430]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const scenes: Array<{ name: string; query: string; run: (page: Page, key: string) => Promise<void> }> = [];
+        const frame = async (page: Page, key: string, label: string) => {
+          const sheet = page.locator("[data-runtime-sheet]");
+          const found = await page.evaluate(wholeness, "[data-runtime-sheet] [data-runtime-sheet-header], [data-runtime-sheet] [data-runtime-sheet-account-current], [data-runtime-sheet] [data-runtime-sheet-account]");
+          readings[`${key}-${label}`] = found;
+          expect({ key, label, ...found }).toEqual({ key, label, found: [], scrollWidth: true });
+          await sheet.screenshot({ path: path.join(FRAMES, `${key}-${label}.png`) });
+        };
+        scenes.push(
+          { name: "both", query: "who=member&pool=both", run: async (page, key) => {
+            await page.locator("[data-runtime-pill]").tap();
+            await page.locator("[data-runtime-sheet]").waitFor();
+            const rows = page.locator("[data-runtime-sheet-account]");
+            expect(await rows.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-runtime-sheet-account")))).toEqual(["acct-a", "acct-c"]);
+            expect(await page.locator("[data-runtime-sheet-account-current]").innerText()).toBe(words(lang, "draft.accountFromList"));
+            const signedOut = rows.nth(1);
+            expect(await signedOut.getAttribute("data-runtime-account-state")).toBe("needs-sign-in");
+            expect(await signedOut.innerText()).toContain(words(lang, "mobile2.composer.accountNeedsSignIn"));
+            for (const row of await rows.all()) expect((await row.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+            await frame(page, key, "sheet");
+            const before = (await page.evaluate(() => (window as unknown as { memberAccounts: { requests(): string[] } }).memberAccounts.requests())).length;
+            await signedOut.tap({ force: true });
+            await page.waitForTimeout(250);
+            const after = await page.evaluate(() => (window as unknown as { memberAccounts: { requests(): string[] } }).memberAccounts.requests());
+            expect(after.slice(before).filter((request) => request.includes("/api/accounts"))).toEqual([]);
+            await rows.first().tap();
+            expect(await rows.first().getAttribute("data-runtime-account-next")).toBe("true");
+            await frame(page, key, "picked");
+            /* Both engines are offered: the model list names Claude and Codex rows. */
+            const models = await page.locator(`[data-runtime-sheet] [role="radiogroup"][aria-label="${words(lang, "composer.modelGroup")}"] [data-runtime-sheet-row]`).evaluateAll((rows) => rows.map((row) => row.textContent!.split(" · ")[0]));
+            expect([...new Set(models)]).toEqual(["Claude", "Codex", "Copilot"]);
+          } },
+          { name: "none", query: "who=member&pool=none", run: async (page, key) => {
+            await page.locator("[data-runtime-pill]").tap();
+            await page.locator("[data-runtime-sheet]").waitFor();
+            expect(await page.locator("[data-runtime-sheet-account]").count()).toBe(0);
+            expect(await page.locator("[data-runtime-sheet-account-current]").innerText()).toBe(words(lang, "draft.accountNoList"));
+            await frame(page, key, "sheet");
+          } },
+          { name: "signedout", query: "who=member&pool=signedout", run: async (page, key) => {
+            await page.locator("[data-runtime-pill]").tap();
+            await page.locator("[data-runtime-sheet]").waitFor();
+            expect(await page.locator("[data-runtime-sheet-account]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-runtime-account-state")))).toEqual(["needs-sign-in"]);
+            await frame(page, key, "sheet");
+          } },
+          { name: "long", query: "who=member&pool=long", run: async (page, key) => {
+            await page.locator("[data-runtime-pill]").tap();
+            await page.locator("[data-runtime-sheet]").waitFor();
+            await frame(page, key, "sheet");
+          } },
+          { name: "owner", query: "who=owner&pool=both", run: async (page, key) => {
+            await page.locator("[data-runtime-pill]").tap();
+            await page.locator("[data-runtime-sheet]").waitFor();
+            await page.waitForFunction(() => document.querySelectorAll("[data-runtime-sheet-account]").length >= 3);
+            expect(await page.locator("[data-runtime-sheet-account]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-runtime-sheet-account")))).toEqual(["acct-a", "acct-b", "acct-c"]);
+            const requests = await page.evaluate(() => (window as unknown as { memberAccounts: { requests(): string[] } }).memberAccounts.requests());
+            expect(requests.some((request) => request.includes("project-accounts"))).toBe(false);
+            await frame(page, key, "sheet");
+          } },
+        );
+        for (const [pool, expected] of [["both", "draft.accountRefusedOutsideList"], ["none", "draft.accountRefusedNoList"]] as const) {
+          scenes.push({ name: `refused-${pool}`, query: `who=member&pool=${pool}&refused=1`, run: async (page, key) => {
+            if (pool === "both") {
+              await page.locator("[data-runtime-pill]").tap();
+              await page.locator("[data-runtime-sheet-account]").first().tap();
+              await page.locator("[data-runtime-sheet-close]").tap();
+            }
+            await page.locator("textarea").fill("Refused launch text");
+            await page.locator("form").evaluate((form) => (form as HTMLFormElement).requestSubmit());
+            const status = page.locator('[data-testid="composer-status"]');
+            await status.waitFor();
+            expect(await status.innerText()).toBe(expected === "draft.accountRefusedOutsideList" ? words(lang, expected, { account: "Account A" }) : words(lang, expected));
+            expect(await page.locator("textarea").inputValue()).toBe("Refused launch text");
+            expect(await page.locator("[data-runtime-pill-next-account]").count()).toBe(0);
+            const found = await page.evaluate(wholeness, '[data-testid="composer-status"]');
+            readings[`${key}-status`] = found;
+            expect({ key, ...found }).toEqual({ key, found: [], scrollWidth: true });
+            await page.screenshot({ path: path.join(FRAMES, `${key}-refused.png`) });
+          } });
+        }
+        for (const scene of scenes) {
+          const context = await browser.newContext({ viewport: { width, height: 760 }, hasTouch: true, isMobile: true, deviceScaleFactor: 1, colorScheme: scheme, reducedMotion: "reduce" });
+          try {
+            await context.addInitScript((value) => localStorage.setItem("llv_lang", value), lang);
+            const page = await context.newPage();
+            const pageErrors: string[] = [];
+            page.on("pageerror", (error) => pageErrors.push(error.message));
+            await page.goto(`${base.replace(/\/$/, "")}/?case=member-accounts&lang=${lang}&${scene.query}`);
+            await page.locator("[data-runtime-pill]").waitFor();
+            await scene.run(page, `${scene.name}-${width}-${lang}-${scheme}`);
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+      }
+      const file = "evidence/phone-member-account-chip/readings.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `${JSON.stringify(readings, null, 2)}\n`);
+    } finally {
+      await browser.close();
+      await browserServer.close();
+      console.error(`phone member account chip: closed owned browser PID ${browserPid}`);
+      stop();
+    }
+  }, 900_000);
+});
+
 describe("older history on the phone", () => {
   /*
    * A real touch drag toward the start of an 800-line conversation, on a

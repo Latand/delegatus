@@ -64,7 +64,7 @@ import { adoptPipelineAttemptFromSource, pipelineAttemptTargetForSource } from "
 import { loadPipelines } from "@/lib/pipelines/store";
 import { listFiles } from "@/lib/scanner";
 import { projectForCwd } from "@/lib/scanner/describe";
-import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
+import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject, MemberAccountRefusedError } from "@/lib/accounts/projectBindings";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, workspacePrincipalAllows, type WorkspacePrincipal } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
 import { TeamError } from "@/lib/team/members";
@@ -113,6 +113,16 @@ export function viewerTitleLocale(chosen: "en" | "uk" | null, acceptLanguage: st
 
 function prefersUkrainian(req: Pick<NextRequest, "headers">): boolean {
   return viewerTitleLocale(operatorLocale(), req.headers.get("accept-language")) === "uk";
+}
+
+/** The one body of a refused account choice. `reason` says whether the project
+    has no account list or the named account is outside it; a refusal for lack
+    of capacity carries none. */
+function projectAccountRefusedResponse(error: ProjectAccountRefusedError | MemberAccountRefusedError): NextResponse<ApiError> {
+  const reason = error instanceof MemberAccountRefusedError ? error.reason
+    : error.resolution.kind === "not_allowed" ? "outside_account_list" : undefined;
+  const body: ApiError & { code: string; reason?: string } = { error: error.message, code: "project_account_refused", ...(reason ? { reason } : {}) };
+  return NextResponse.json(body, { status: 409 });
 }
 
 function isSqliteBusy(error: unknown): boolean {
@@ -951,6 +961,11 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       const named = workspacePrincipal ? requestedAccountId : typeof body.account === "string" ? body.account : null;
       if (!named) return;
       const allowedAccountIds = allowedAccountIdsForProject(spawnProject, engine);
+      /* A member picks from the list they were shown. Where the project has
+         none, naming an account is refused before any account is read. */
+      if (workspacePrincipal && allowedAccountIds === null) {
+        throw new MemberAccountRefusedError({ kind: "no_account_list" }, engine, named, spawnProject ?? "");
+      }
       if (allowedAccountIds !== null && !allowedAccountIds.includes(named)) {
         throw new ProjectAccountRefusedError({ kind: "not_allowed", accountId: named, allowedAccountIds }, engine, spawnProject);
       }
@@ -976,8 +991,8 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
          forbids, and the pool with no account left to launch on. Answered
          before any receipt exists, so there is nothing for a retry to replay
          onto an account this project does not allow. */
-      if (error instanceof ProjectAccountRefusedError) {
-        return NextResponse.json({ error: error.message, code: "project_account_refused" }, { status: 409 });
+      if (error instanceof ProjectAccountRefusedError || error instanceof MemberAccountRefusedError) {
+        return projectAccountRefusedResponse(error);
       }
       /* A Copilot launch with no account set up, or naming one that is gone. */
       if (error instanceof NoCopilotAccountError || error instanceof UnknownCopilotAccountError) {
@@ -1512,7 +1527,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     if (error instanceof SpawnAdmissionFenceError) return NextResponse.json({ error: error.fence.error, code: "spawn_admission_refused" }, { status: error.fence.status });
     if (error instanceof CuratorSpawnAdmissionError) return NextResponse.json({ error: error.message, code: "curator_admission_refused" }, { status: 409 });
     if (error instanceof AccountProjectBindingsUnreadableError) return NextResponse.json({ error: error.message }, { status: 409 });
-    if (error instanceof ProjectAccountRefusedError) return NextResponse.json({ error: error.message, code: "project_account_refused" }, { status: 409 });
+    if (error instanceof ProjectAccountRefusedError || error instanceof MemberAccountRefusedError) return projectAccountRefusedResponse(error);
     /* Typed terminal admission rejection (#393): the durable receipt already
        exists and no transcript or process was created. */
     if (error instanceof SpawnAdmissionError) return NextResponse.json(spawnRejectionResponse(error), { status: 403 });

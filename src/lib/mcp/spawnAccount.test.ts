@@ -34,7 +34,10 @@ let registry: AgentRegistry;
   process.env.LLV_RUNTIME_HOST_SOCKET = path.join(sandbox, "unused-runtime.sock");
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  /* A team claimed by an earlier test must not turn a later owner call into a sign-in demand. */
+  (await import("@/lib/team/store")).resetTeamStoreForTests();
+  fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "team"), { recursive: true, force: true });
   resetAccountCollectionsForTests();
   clearAccountFixture(BINDINGS_SOURCE);
   registry?.close();
@@ -272,4 +275,62 @@ test("a workspace launch uses its default account pool and refuses an explicit p
       expect(registry.spawnReceiptForClientAttempt("workspace-member-pool-edited")).toBeNull();
     });
   } finally { resetTeamStoreForTests(); }
+});
+
+test("a member's launch that names an account is refused where the project has no account list, and says the same for any account", async () => {
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { claimInstall } = await import("@/lib/team/members");
+  const { createWorkspace } = await import("@/lib/team/workspaces");
+  const { mintSession } = await import("@/lib/team/sessions");
+  const team = teamStore();
+  const owner = claimInstall(team, "Owner", { surface: "desktop", browser: "chrome" }, Date.parse("2026-10-20T09:00:00Z")).member;
+  const id = `w_${"c".repeat(32)}`;
+  createWorkspace(team, owner, { id, name: "Alpha", projects: [projectForCwd(sandbox)!] });
+  const memberId = "m_no_list_member";
+  team.insertMember({ id: memberId, name: "Member", role: "member", status: "active", color: "teal", telegram: null,
+    createdAt: "2026-10-20T09:00:00.000Z", createdBy: owner.id, revokedAt: null });
+  team.putWorkspaceMember(id, memberId, "member", owner.id, "2026-10-20T09:00:00.000Z");
+  const cookie = mintSession(team, memberId, "claim", { surface: "desktop", browser: "chrome" }).value;
+  try {
+    await withClient(async (client, { routeDependencies, resolutions }) => {
+      const direct = (clientAttemptId: string, accountId?: string) => POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+        method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json", cookie: `llv_member=${cookie}` },
+        body: JSON.stringify({ ...args(), clientAttemptId, ...(accountId ? { accountId } : {}) }),
+      }), routeDependencies);
+      /* One account that exists and one that never did: the same answer, decided before any account is read. */
+      const answers: { status: number; body: { error: string; code: string; reason: string } }[] = [];
+      for (const [attempt, account] of [["no-list-existing", "account-a"], ["no-list-unknown", "account-zzz"]] as const) {
+        const response = await direct(attempt, account);
+        answers.push({ status: response.status, body: await response.json() });
+        expect(registry.spawnReceiptForClientAttempt(attempt)).toBeNull();
+      }
+      expect(answers[0]).toMatchObject({ status: 409, body: { code: "project_account_refused", reason: "no_account_list" } });
+      expect(answers[1]!.status).toBe(answers[0]!.status);
+      expect(answers[1]!.body.code).toBe(answers[0]!.body.code);
+      expect(answers[1]!.body.reason).toBe(answers[0]!.body.reason);
+      expect(answers[1]!.body.error.replaceAll("account-zzz", "account-a")).toBe(answers[0]!.body.error);
+      expect(resolutions).toEqual([]);
+      /* No account named: Delegatus picks, as before. */
+      expect((await direct("no-list-automatic")).status).toBe(202);
+      expect(registry.spawnReceiptForClientAttempt("no-list-automatic")?.launchProfile.workspace).toEqual({ memberId, workspaceId: id });
+      /* An agent bound to the member is refused the same way through spawn_agent. */
+      routeDependencies.workspacePrincipal = { memberId, workspaceId: id };
+      const refused = await client.callTool({ name: "spawn_agent", arguments: { ...args("account-a"), clientRequestId: `${requestId()}-agent` } });
+      expect(refused.structuredContent).toMatchObject({ ok: false, details: { status: 409, code: "project_account_refused" } });
+      expect(registry.spawnReceiptForClientAttempt(`${requestId()}-agent`)).toBeNull();
+      /* The owner, with no member principal, still names any account. */
+      routeDependencies.workspacePrincipal = null;
+      expect((await client.callTool({ name: "spawn_agent", arguments: { ...args("account-a"), clientRequestId: `${requestId()}-owner` } })).structuredContent).toMatchObject({ ok: true });
+    });
+  } finally { resetTeamStoreForTests(); }
+});
+
+test("a pin outside a set pool is refused with the reason that says so", async () => {
+  bind(["account-b"]);
+  const { routeDependencies } = harness();
+  const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+    body: JSON.stringify({ ...args("account-a"), clientAttemptId: "owner-outside-pool" }),
+  }), routeDependencies);
+  expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 409, body: { code: "project_account_refused", reason: "outside_account_list" } });
 });

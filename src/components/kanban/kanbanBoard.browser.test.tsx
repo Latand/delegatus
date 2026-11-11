@@ -39719,6 +39719,28 @@ describe("team workspaces slice (a)", () => {
             if (pageErrors.length) failures.push(`${tag} D6: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
         }
+        /* D8 (workspaces W1): the line on a workspace's page naming the projects without an account list, per engine.
+           The owner and the workspace's manager read it; a plain member and a page whose pool read fails read nothing. */
+        for (const [who, query, shown] of [["owner", "", true], ["manager", "&manager=1", true], ["member", "&member=1", false], ["unreadable", "&poolrefused=harbor-docs", false]] as const) {
+          const { context, page, pageErrors } = await open(`scenario=workspaces-page&rail=1&page=client&nopool=acme-ledger,harbor-docs${query}`);
+          try {
+            await page.locator("[data-workspace-title]").waitFor();
+            if (shown) {
+              await page.locator("[data-workspace-account-list-note]").first().waitFor();
+              const projects = "Acme Ledger, Harbor Docs";
+              await frame(page, tag, `D8-${who}`, [
+                ["[data-workspace-account-list-note='claude']", words(lang, "workspaces.page.noAccountList", { engine: "Claude", projects })],
+                ["[data-workspace-account-list-note='codex']", words(lang, "workspaces.page.noAccountList", { engine: "Codex", projects })],
+              ]);
+            } else {
+              /* Both pool reads have had every chance to answer before the absence is read. */
+              await page.waitForTimeout(600);
+              if (await page.locator("[data-workspace-account-list-note]").count()) failures.push(`${tag} D8 ${who}: a line stands where none belongs`);
+              await frame(page, tag, `D8-${who}`, [["[data-workspace-title]", names[lang].client]]);
+            }
+            if (pageErrors.length) failures.push(`${tag} D8 ${who}: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
       }
       fs.mkdirSync("evidence/team-workspaces", { recursive: true });
       fs.writeFileSync("evidence/team-workspaces/rendered.json", JSON.stringify({

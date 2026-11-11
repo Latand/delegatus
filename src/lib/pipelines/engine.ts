@@ -703,6 +703,9 @@ function stageAccountRefusal(
   stages: readonly PipelineStage[],
   project: string,
   ports: PipelinePorts,
+  /** A lane bound to a member: where the project has no account list the lane
+      runs on an automatically chosen account, so no stage may name one. */
+  memberBound = false,
 ): StageAccountRefusal | null {
   const violations: PipelineValidationViolation[] = [];
   for (const [index, stage] of stages.entries()) {
@@ -720,6 +723,14 @@ function stageAccountRefusal(
     const read = stageAccountPool(ports, project, engine);
     if ("refusal" in read) return read.refusal;
     const allowed = read.pool;
+    if (allowed === null && memberBound) {
+      violations.push({
+        field: `stages[${index}].account`,
+        message: `stage ${stage.id} names ${engine} account ${requested}, and project ${project} has no ${engine} account list; a member's lane runs on an automatically chosen account`,
+        expected: STAGE_ACCOUNT_SHAPE,
+      });
+      continue;
+    }
     if (allowed === null || allowed.includes(requested)) continue;
     violations.push({
       field: `stages[${index}].account`,
@@ -15611,6 +15622,12 @@ export async function createPipelineFromRequest(
         options.briefer?.kind === "agent" ? options.briefer.conversationId : pipeline.srcConversationId));
   if (workspace && !workspacePrincipalAllows(workspace, project)) return { error: "workspace access denied", code: "workspace_forbidden", status: 403 };
   if (workspace) pipeline.workspace = workspace;
+  /* Read again for the member's rule: the first reading above ran before the
+     lane's author was resolved. Nothing has been stored between the two. */
+  if (workspace) {
+    const memberAccountRefusal = stageAccountRefusal(normalized.stages, project, ports, true);
+    if (memberAccountRefusal) return memberAccountRefusal;
+  }
   if (finishes.ids.length) pipeline.finishesTaskIds = finishes.ids;
   if (base?.ok) {
     pipeline.baseBranch = base.baseBranch;
@@ -17324,7 +17341,7 @@ export async function patchPipeline(
          park, discovered later. Read before any field is assigned, so a
          refusal leaves the draft where it was rather than half-moved. */
       if (project !== pipeline.project) {
-        const movedAccountRefusal = stageAccountRefusal(pipeline.stages, project, ports);
+        const movedAccountRefusal = stageAccountRefusal(pipeline.stages, project, ports, Boolean(pipeline.workspace));
         if (movedAccountRefusal) return movedAccountRefusal;
       }
       pipeline.task = task;
@@ -17390,7 +17407,7 @@ export async function patchPipeline(
          which allowed set applies — is what role resolution just settled. The
          early return leaves the transaction unpersisted, as every other
          post-mutation refusal in this function does. */
-      const addedAccountRefusal = stageAccountRefusal(pipeline.stages, pipeline.project, ports);
+      const addedAccountRefusal = stageAccountRefusal(pipeline.stages, pipeline.project, ports, Boolean(pipeline.workspace));
       if (addedAccountRefusal) return addedAccountRefusal;
       /* The added stage, and the fix stage a review-loop conversion adds beside it. */
       const before = new Set(inputs.map((stage) => stage.id).filter((stageId) => stageId !== inserted.id));
@@ -18223,7 +18240,7 @@ export async function patchPipeline(
       // Validate the resolved runtime against the account this request leaves
       // on the stage; clearing the pin checks the project's full allowed pool.
       if (changesRoleOrRuntime || req.account !== undefined) {
-        const tierRefusal = stageAccountRefusal([target], pipeline.project, ports);
+        const tierRefusal = stageAccountRefusal([target], pipeline.project, ports, Boolean(pipeline.workspace));
         if (tierRefusal) return tierRefusal;
       }
       let runtimeSwitch: PipelineRuntimeSwitch | null = null;

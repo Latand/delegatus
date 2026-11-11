@@ -3546,6 +3546,227 @@ describe("the runtime pill offers only current models and keeps a saved one", ()
   }, 900_000);
 });
 
+describe("a member picks an account of the project's list in the new agent's composer", () => {
+  /*
+   * The production new-agent composer (`DraftAgentPane`) as a member of a workspace sees it, over stubbed
+   * server answers: a pool of both engines, of Claude only, no pool, a pool whose only account is not
+   * signed in, a pool with a very long label, a launch the account list refuses, and the owner's unchanged
+   * view with Account B outside any pool. Two desktop widths, both languages, both schemes. Every text
+   * range of the open popover and of the status line is measured inside the window and inside every
+   * clipping ancestor. Frames go to $LLV_EVIDENCE_DIR/member-account-chip (not committed); the readings
+   * are `evidence/member-account-chip/readings.json`.
+   */
+  const FRAMES = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "member-account-chip");
+  const VIEWPORTS = [{ name: "1440", width: 1440, height: 900 }, { name: "900", width: 900, height: 800 }] as const;
+  const t = (lang: "en" | "uk", key: string, params?: Record<string, string | number>) => translate(lang, key as Parameters<typeof translate>[1], params as never);
+
+  /** Every text range under `selector` against the window and the clipping ancestors; empty when whole. */
+  const problems = (selector: string) => {
+    const roots = [...document.querySelectorAll(selector)];
+    const found: string[] = [];
+    for (const root of roots) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if (!node.textContent?.trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          if (rect.width === 0) continue;
+          if (rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.top < -0.5 || rect.bottom > innerHeight + 0.5) found.push(`outside window: ${node.textContent!.trim()}`);
+          for (let ancestor = node.parentElement; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
+            const style = getComputedStyle(ancestor);
+            if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+            const box = ancestor.getBoundingClientRect();
+            if (rect.left < box.left - 0.5 || rect.right > box.right + 0.5 || rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5) {
+              found.push(`clipped by ${ancestor.tagName.toLowerCase()}: ${node.textContent!.trim()}`);
+              break;
+            }
+          }
+        }
+      }
+    }
+    return found;
+  };
+
+  browserTest("the chip, its panels and a refusal fit and say the right thing in every language and scheme", async () => {
+    fs.mkdirSync(FRAMES, { recursive: true });
+    const served = await serveEvidenceFixture(FRAMES, FIXTURE);
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const browserPid = browserServer.process().pid;
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const open = async (query: string, key: string) => {
+          const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=member-accounts&lang=${lang}&${query}`,
+            { width: viewport.width, height: viewport.height }, scheme, lang, "reduce");
+          await page.locator("[data-runtime-pill]").waitFor();
+          /* The pool is read after the first paint. */
+          await page.waitForFunction(() => window.performance.now() > 0);
+          return { context, page, pageErrors, key: `${key}-${viewport.name}-${lang}-${scheme}` };
+        };
+        /* The composer, its popover and its status, with a margin: the rest of the window is empty canvas. */
+        const shot = async (page: import("playwright-core").Page, key: string, label: string) => {
+          const box = await page.evaluate(() => {
+            const rects = ["[data-kanban-draft]", "[data-runtime-popover]", '[data-testid="composer-status"]']
+              .flatMap((selector) => [...document.querySelectorAll(selector)].map((element) => element.getBoundingClientRect()));
+            const left = Math.max(0, Math.min(...rects.map((rect) => rect.left)) - 12), top = Math.max(0, Math.min(...rects.map((rect) => rect.top)) - 12);
+            const right = Math.min(innerWidth, Math.max(...rects.map((rect) => rect.right)) + 12), bottom = Math.min(innerHeight, Math.max(...rects.map((rect) => rect.bottom)) + 12);
+            return { x: left, y: top, width: right - left, height: bottom - top };
+          });
+          await page.screenshot({ path: path.join(FRAMES, `${key}-${label}.png`), clip: box });
+        };
+        const whole = async (page: import("playwright-core").Page, selector: string, key: string, label: string) => {
+          const found = await page.evaluate(problems, selector);
+          readings[`${key}-${label}`] = { problems: found };
+          expect({ key, label, problems: found }).toEqual({ key, label, problems: [] });
+        };
+        const pill = (page: import("playwright-core").Page) => page.locator("[data-runtime-pill]");
+        const popoverRows = (page: import("playwright-core").Page, kind: string) => page.locator(`[data-runtime-popover] [data-runtime-row="${kind}"]`);
+
+        /* A pool of both engines: the face, the root, the account panel, the model panel, a pick. */
+        {
+          const { context, page, pageErrors, key } = await open("who=member&pool=both", "both");
+          try {
+            await page.locator('[data-runtime-pill]').click();
+            const account = page.locator("[data-runtime-popover-account]");
+            await account.waitFor();
+            expect(await account.innerText()).toBe(t(lang, "draft.accountFromList"));
+            await shot(page, key, "root");
+            await whole(page, "[data-runtime-popover]", key, "root");
+            await page.locator('[data-runtime-popover] [data-runtime-value="account"]').click();
+            await popoverRows(page, "account").first().waitFor();
+            const rows = await popoverRows(page, "account").evaluateAll((nodes) => nodes.map((node) => [node.getAttribute("data-runtime-value"), node.getAttribute("aria-disabled"), node.textContent]));
+            expect(rows.map((row) => row[0])).toEqual(["account-acct-a", "account-acct-c"]);
+            expect(rows[1]![1]).toBe("true");
+            expect(await page.locator("[data-runtime-row-note]").innerText()).toBe(t(lang, "mobile2.composer.accountNeedsSignIn"));
+            readings[`${key}-account-rows`] = rows;
+            await shot(page, key, "account");
+            await whole(page, "[data-runtime-popover]", key, "account");
+            await popoverRows(page, "account").nth(1).click({ force: true });
+            expect(await pill(page).locator("[data-runtime-pill-next-account]").count()).toBe(0);
+            await popoverRows(page, "back").click();
+            await page.locator('[data-runtime-popover] [data-runtime-value="model"]').click();
+            await popoverRows(page, "model").first().waitFor();
+            const models = await popoverRows(page, "model").evaluateAll((nodes) => nodes.map((node) => node.textContent!.split(" · ")[0]));
+            expect([...new Set(models)]).toEqual(["Claude", "Codex", "Copilot"]);
+            await shot(page, key, "models");
+            await whole(page, "[data-runtime-popover]", key, "models");
+            await popoverRows(page, "back").click();
+            await page.locator('[data-runtime-popover] [data-runtime-value="account"]').click();
+            await popoverRows(page, "account").first().click();
+            expect((await pill(page).locator("[data-runtime-pill-next-account]").innerText()).trim()).toBe("→ Account A");
+            await shot(page, key, "picked");
+            await whole(page, "[data-runtime-pill]", key, "picked-face");
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+
+        /* One engine only, no pool, only a signed-out account, and a long label. */
+        {
+          const { context, page, pageErrors, key } = await open("who=member&pool=claude", "claude");
+          try {
+            await pill(page).click();
+            await page.locator('[data-runtime-popover] [data-runtime-value="model"]').click();
+            await popoverRows(page, "model").first().waitFor();
+            const models = await popoverRows(page, "model").evaluateAll((nodes) => nodes.map((node) => node.textContent!.split(" · ")[0]));
+            expect([...new Set(models)]).toEqual(["Claude", "Copilot"]);
+            await shot(page, key, "models");
+            await whole(page, "[data-runtime-popover]", key, "models");
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+        {
+          const { context, page, pageErrors, key } = await open("who=member&pool=none", "none");
+          try {
+            await pill(page).click();
+            const account = page.locator("[data-runtime-popover-account]");
+            await account.waitFor();
+            expect(await account.innerText()).toBe(t(lang, "draft.accountNoList"));
+            expect(await page.locator('[data-runtime-popover] [data-runtime-value="account"]').count()).toBe(0);
+            await shot(page, key, "root");
+            await whole(page, "[data-runtime-popover]", key, "root");
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+        {
+          const { context, page, pageErrors, key } = await open("who=member&pool=signedout", "signedout");
+          try {
+            await pill(page).click();
+            await page.locator('[data-runtime-popover] [data-runtime-value="account"]').click();
+            await popoverRows(page, "account").first().waitFor();
+            expect(await popoverRows(page, "account").first().getAttribute("aria-disabled")).toBe("true");
+            await shot(page, key, "account");
+            await whole(page, "[data-runtime-popover]", key, "account");
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+        {
+          const { context, page, pageErrors, key } = await open("who=member&pool=long", "long");
+          try {
+            await pill(page).click();
+            await page.locator('[data-runtime-popover] [data-runtime-value="account"]').click();
+            await popoverRows(page, "account").first().waitFor();
+            await shot(page, key, "account");
+            await whole(page, "[data-runtime-popover]", key, "account");
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+
+        /* A launch the list refuses: the words, the text back, the pick dropped. */
+        for (const [pool, reason] of [["both", "draftAccountRefusedOutsideList"], ["none", "draftAccountRefusedNoList"]] as const) {
+          const { context, page, pageErrors, key } = await open(`who=member&pool=${pool}&refused=1`, `refused-${pool}`);
+          try {
+            if (pool === "both") {
+              await pill(page).click();
+              await page.locator('[data-runtime-popover] [data-runtime-value="account"]').click();
+              await popoverRows(page, "account").first().click();
+            }
+            await page.locator("textarea").fill("Refused launch text");
+            await page.locator("textarea").press("Enter");
+            const status = page.locator('[data-testid="composer-status"]');
+            await status.waitFor();
+            expect(await status.innerText()).toBe(reason === "draftAccountRefusedOutsideList"
+              ? t(lang, "draft.accountRefusedOutsideList", { account: "Account A" }) : t(lang, "draft.accountRefusedNoList"));
+            expect(await page.locator("textarea").inputValue()).toBe("Refused launch text");
+            expect(await pill(page).locator("[data-runtime-pill-next-account]").count()).toBe(0);
+            await shot(page, key, "refused");
+            await whole(page, '[data-testid="composer-status"]', key, "refused");
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+
+        /* The owner's view is not narrowed: every account, Account B included, and no member route read. */
+        {
+          const { context, page, pageErrors, key } = await open("who=owner&pool=both", "owner");
+          try {
+            await pill(page).click();
+            await page.locator('[data-runtime-popover] [data-runtime-value="account"]').click();
+            await popoverRows(page, "account").first().waitFor();
+            await page.waitForFunction(() => document.querySelectorAll('[data-runtime-popover] [data-runtime-row="account"]').length >= 2);
+            const labels = await popoverRows(page, "account").evaluateAll((nodes) => nodes.map((node) => node.querySelector("[data-runtime-row-label]")!.textContent));
+            expect(labels).toEqual(["Account A", "Account B"]);
+            const requests = await page.evaluate(() => (window as unknown as { memberAccounts: { requests(): string[] } }).memberAccounts.requests());
+            expect(requests.some((request) => request.includes("project-accounts"))).toBe(false);
+            await shot(page, key, "account");
+            await whole(page, "[data-runtime-popover]", key, "account");
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+      }
+      const file = "evidence/member-account-chip/readings.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(readings, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      await browserServer.close();
+      console.error(`member account chip: closed owned browser PID ${browserPid}`);
+      served.stop();
+    }
+  }, 900_000);
+});
+
 describe("the headers name the model the conversation runs on", () => {
   /*
    * The pane's own header chip, the board reader's header chip and a relay

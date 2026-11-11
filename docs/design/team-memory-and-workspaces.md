@@ -819,6 +819,26 @@ exist and are enforced. What is missing is the member's view of them.
 - Whether a provider's plan allows several people to work through one login
   is the owner's check. Provider terms were not examined here.
 
+What W1 built, and where it goes past the list above. The read is
+`GET /api/team/project-accounts?project=<key>` (`src/lib/team/projectAccounts.ts`).
+It answers 401 without a session, 409 on a solo install, 400 for a missing
+project, and 403 with the same bytes for any project the member may not act
+on, decided before any account is read. One rule governs a choice made for a
+member, and its refusal is 409 `project_account_refused` with a `reason` of
+`no_account_list` or `outside_account_list` (an outside pin set by the owner
+now carries the second reason too). It is applied to every path that answers
+a named account for a call bound to a member, not only a new launch:
+`/api/spawn` and `spawn_agent`, the agent fence for `account`, `accountId` and
+`targetAccountId`, switching a running conversation (the browser's reconfigure
+action and the migration route's `select-account`, which the text above did
+not list and which only checked that the account exists), and a member's
+lane (create, add-stage, override-stage and moving a draft). Naming the
+account a conversation already runs on stays allowed, so a waiting choice can
+be withdrawn. The composer's chip, the phone's sheet and the workspace page's
+line are the member's side of it. Deferred: the chip of a conversation that
+is already running, the stage and orchestrator pickers, and a control for the
+workspace's allow-list.
+
 **W2. One decision for each owner-only route a member's work touches.** Each
 row is a small change with its own threat cases; none is opened without one.
 
