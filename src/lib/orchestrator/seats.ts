@@ -1466,15 +1466,22 @@ export function activeOrchestratorSeatsOrUnknown(): OrchestratorSeat[] | null {
 // One file and one map per process, evicted on path or filesystem identity
 // changes. Every call stats the file: peer writes, revocations, permission
 // changes and atomic replacements take effect without a polling interval.
+/** The request key authentication recovery rotates under
+    (`seatAuthRotationKey`). That rotation records no other durable mark. */
+const AUTH_RECOVERY_ROTATION_KEY = /^seat-auth-[0-9a-f]{64}$/;
+
 /** A record written before the field existed cannot say where its binding came
     from. A rotation an agent or the seat tick triggered only ever copied the
     reach of the conversation behind it, and that copy is how a member's message
     became a permanent binding. Such a record is read as message authority: it
     stays fenced until a person writes to the seat, and then that person
-    decides. A person's own designation names the operator or replaces nobody. */
-export function seatWorkspaceFromMessage(seat: Pick<OrchestratorSeat, "workspace" | "workspaceFromMessage" | "triggeredBy" | "predecessorConversationId">): boolean {
+    decides. Only durable marks of such a rotation count: an agent trigger, the
+    automatic-replacement fence, or the authentication recovery key. A person's
+    designation carries none of them, also when it replaced an incumbent. */
+export function seatWorkspaceFromMessage(seat: Pick<OrchestratorSeat, "workspace" | "workspaceFromMessage" | "triggeredBy" | "intent">): boolean {
   if (!seat.workspace) return false;
-  return seat.workspaceFromMessage ?? (seat.triggeredBy?.kind === "agent" || (!seat.triggeredBy && Boolean(seat.predecessorConversationId)));
+  return seat.workspaceFromMessage ?? (seat.triggeredBy?.kind === "agent" || Boolean(seat.intent.automaticReplacement)
+    || AUTH_RECOVERY_ROTATION_KEY.test(seat.intent.clientRequestId));
 }
 
 /** What a designation recorded about one seat conversation's workspace reach. */

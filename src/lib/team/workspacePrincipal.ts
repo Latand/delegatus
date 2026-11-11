@@ -67,9 +67,13 @@ export function conversationWorkspaceReach(snapshot: RegistryFile | ((id: string
     const conversation = typeof snapshot === "function" ? snapshot(id) : Object.hasOwn(snapshot.conversations, id) ? snapshot.conversations[id] : undefined;
     const profile = conversation?.generations.at(-1)?.launchProfile;
     const seat = seatBinding(id, Boolean(profile?.workspace));
-    // The launch marker keeps the answer once the conversation leaves the seat map.
-    const inherited = seat?.fromMessage ? seat.workspace : profile?.workspace?.fromMessage ? profile.workspace : undefined;
-    const principal = inherited ? undefined : profile?.workspace ?? seat?.workspace;
+    // A person's designation for a member outranks everything a message left
+    // behind. The launch marker keeps a message's answer once the conversation
+    // leaves the seat map.
+    const designated = seat?.fromMessage ? undefined : seat?.workspace;
+    const marked = profile?.workspace?.fromMessage ? profile.workspace : undefined;
+    const inherited = designated ? undefined : seat?.fromMessage ? seat.workspace : marked;
+    const principal = inherited ? undefined : designated && marked ? designated : profile?.workspace ?? seat?.workspace;
     if (principal) return bound(principal, false);
     const memberId = store?.latestConversationMember(id);
     if (memberId) {

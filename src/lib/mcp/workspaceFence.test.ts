@@ -875,6 +875,11 @@ test("a fenced seat keeps the Telegram tools its record grants; no other fenced 
   await refused();
   designate("owner-seat-again", true);
   await served();
+  // A conversation a member launched keeps its binding as the owner's seat, and gets no grant.
+  snapshot.conversations[seat] = conversation(seat, own) as never;
+  await refused();
+  snapshot.conversations[seat] = conversation(seat, own, false) as never;
+  await served();
   // An unreadable seat record and a lost project both end the grant.
   const seats = path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json");
   const saved = fs.readFileSync(seats, "utf8");

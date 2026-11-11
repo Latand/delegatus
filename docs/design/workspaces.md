@@ -1013,7 +1013,8 @@ installation-wide tool stays refused. A record's agent author carries the
 sender's project as a label; the result scan does not read it as a project
 key, and the answer withholds an author from outside the caller's reach.
 A seat record written before the field existed, bound by a rotation an agent
-or the seat tick triggered, is read as message authority, so a seat an earlier
+or the seat tick triggered (an agent trigger, the automatic-replacement fence
+or the authentication recovery key on its intent), is read as message authority, so a seat an earlier
 release bound this way answers to the next person who writes to it with no
 state edit. The seat launch records the same marker in its launch profile
 (`workspace.fromMessage`), so the conversation keeps answering to the latest

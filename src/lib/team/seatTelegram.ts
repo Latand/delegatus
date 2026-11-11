@@ -18,7 +18,9 @@ import { conversationWorkspaceReach, memberWorkspacePrincipal, workspacePrincipa
 export function seatHoldsTelegramGrant(conversationId: string | null, store: TeamStore | null,
   lookup: (id: string) => RegistryConversation | null): boolean {
   const reach = conversationWorkspaceReach(lookup, conversationId, store);
-  if (!reach.principal || !store) return false;
+  // Only a fence a message put up: a conversation a member launched keeps its
+  // binding, and the grant with it stays out, whoever designated it a seat.
+  if (!reach.principal || !reach.fromMessage || !store) return false;
   const seat = activeOrchestratorSeats().find(candidate => candidate.conversationId === conversationId);
   if (!seat || seat.telegramGrant !== true || (seat.workspace && !seatWorkspaceFromMessage(seat))) return false;
   const principal = memberWorkspacePrincipal(store, reach.principal.memberId, seat.project);

@@ -14,6 +14,8 @@ import { resetTeamStoreForTests, teamStore, type TeamStore } from "@/lib/team/st
 import { conversationWorkspacePrincipal, type WorkspacePrincipal } from "@/lib/team/workspacePrincipal";
 import { createWorkspace } from "@/lib/team/workspaces";
 
+import { seatAuthRotationKey } from "@/lib/monitor/seatAuthRecovery";
+
 import { executeOrchestratorRotation, executeOrchestratorSeatRequest, type SeatCommandDependencies, type SeatLaunchAdmission } from "./seatCommand";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "./seats";
 
@@ -247,12 +249,37 @@ test("an automatic rotation carries a member's message as message authority, and
 
   // The earlier release copied the incumbent's member onto the automatic successor and named no trigger.
   const stamped = "conversation_33333333-3333-4333-8333-333333333333";
-  designate(stamped, scope);
-  asEarlierRelease(seat => { seat.triggeredBy = null; seat.predecessorConversationId = successor; });
-  launched.set(stamped, { workspace: scope, parent: successor });
-  expect(await reach(stamped)).toEqual(MEMBER_REACH);
-  writes(owner, stamped);
-  expect(await reach(stamped)).toEqual(OWNER_REACH);
+  for (const [conversation, mark] of [
+    ["conversation_33333333-3333-4333-8333-333333333333", (seat: Record<string, unknown>) => { (seat.intent as Record<string, unknown>).automaticReplacement = { conversationId: successor, seatEpoch: 1 }; }],
+    ["conversation_44444444-4444-4444-8444-444444444444", (seat: Record<string, unknown>) => { (seat.intent as Record<string, unknown>).clientRequestId = seatAuthRotationKey("incident"); }],
+  ] as const) {
+    designate(conversation, scope);
+    asEarlierRelease(seat => { seat.triggeredBy = null; seat.predecessorConversationId = successor; mark(seat); });
+    launched.set(conversation, { workspace: scope, parent: successor });
+    expect(await reach(conversation)).toEqual(MEMBER_REACH);
+    writes(owner, conversation);
+    expect(await reach(conversation)).toEqual(OWNER_REACH);
+  }
+});
+
+test("an earlier record of a member's own designation over an incumbent stays the member's", async () => {
+  const replaced = "conversation_22222222-2222-4222-8222-222222222222";
+  designate(replaced, scope);
+  // The seat route names no trigger, and replacing an incumbent records a predecessor.
+  asEarlierRelease(seat => { seat.triggeredBy = null; seat.predecessorConversationId = SEAT; });
+  launched.set(replaced, { workspace: scope, parent: SEAT });
+  writes(owner, replaced);
+  expect(await reach(replaced)).toEqual(MEMBER_REACH);
+});
+
+test("a person's designation for a member binds a conversation that once answered to messages", async () => {
+  const conversation = "conversation_22222222-2222-4222-8222-222222222222";
+  // Launched as a message-authority seat, later designated for the member in person.
+  launched.set(conversation, { workspace: { ...scope, fromMessage: true }, parent: SEAT });
+  designate(conversation, scope);
+  writes(owner, conversation);
+  expect(await reach(conversation)).toEqual(MEMBER_REACH);
+  expect(conversationWorkspacePrincipal(lookup, conversation)).toEqual(scope);
 });
 
 test("a fenced seat that adopts a conversation hands it the fence as message authority", async () => {
