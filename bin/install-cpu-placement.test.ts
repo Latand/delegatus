@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { workAggregateCpuQuota as productQuota } from "../src/lib/runtime/cpuPlacement";
-import { activationSteps, cpuPlacementFiles, installCpuPlacement, workAggregateCpuQuota } from "./install-cpu-placement.mjs";
+import { activationSteps, cpuPlacementFiles, installCpuPlacement, validMemoryHigh, workAggregateCpuQuota } from "./install-cpu-placement.mjs";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -14,7 +14,6 @@ const sandbox = () => { const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-
 test("the files put production and the agents branch under one parent and cap the work slice", () => {
   for (const cpus of [1, 6, 24, 64]) expect(workAggregateCpuQuota(cpus)).toBe(productQuota(cpus));
   expect(cpuPlacementFiles({ cpus: 24 })).toEqual([
-    { path: "delegatus.service.d/memory.conf", text: "[Service]\nMemoryAccounting=yes\nMemoryHigh=50%\n" },
     { path: "delegatus.service.d/cpu.conf", text: "[Service]\nSlice=delegatus.slice\nCPUAccounting=yes\nCPUWeight=1000\n" },
     { path: "delegatus-agents.slice.d/cpu.conf", text: "[Slice]\nCPUAccounting=yes\nCPUWeight=100\n" },
     { path: "delegatus-agents-work.slice", text: "[Unit]\nDescription=Delegatus test and pipeline workloads\n\n[Slice]\nCPUAccounting=yes\nCPUWeight=100\nCPUQuota=1800%\nCPUQuotaPeriodSec=20ms\n" },
@@ -23,13 +22,13 @@ test("the files put production and the agents branch under one parent and cap th
 
 test("installing writes into the given directory, keeps a different file unless forced, and is idempotent", () => {
   const dir = sandbox();
-  expect(installCpuPlacement({ dir, unit: "viewer.service", cpus: 8 }).map((result) => result.outcome)).toEqual(["written", "written", "written", "written"]);
+  expect(installCpuPlacement({ dir, unit: "viewer.service", cpus: 8 }).map((result) => result.outcome)).toEqual(["written", "written", "written"]);
   expect(fs.readFileSync(path.join(dir, "viewer.service.d/cpu.conf"), "utf8")).toContain("Slice=delegatus.slice");
-  expect(installCpuPlacement({ dir, unit: "viewer.service", cpus: 8 }).map((result) => result.outcome)).toEqual(["unchanged", "unchanged", "unchanged", "unchanged"]);
+  expect(installCpuPlacement({ dir, unit: "viewer.service", cpus: 8 }).map((result) => result.outcome)).toEqual(["unchanged", "unchanged", "unchanged"]);
   fs.writeFileSync(path.join(dir, "delegatus-agents-work.slice"), "[Slice]\nCPUQuota=400%\n");
-  expect(installCpuPlacement({ dir, unit: "viewer.service", cpus: 8 })[3]!.outcome).toBe("kept");
+  expect(installCpuPlacement({ dir, unit: "viewer.service", cpus: 8 })[2]!.outcome).toBe("kept");
   expect(fs.readFileSync(path.join(dir, "delegatus-agents-work.slice"), "utf8")).toBe("[Slice]\nCPUQuota=400%\n");
-  expect(installCpuPlacement({ dir, unit: "viewer.service", cpus: 8, force: true })[3]!.outcome).toBe("replaced");
+  expect(installCpuPlacement({ dir, unit: "viewer.service", cpus: 8, force: true })[2]!.outcome).toBe("replaced");
   expect(fs.readFileSync(path.join(dir, "delegatus-agents-work.slice"), "utf8")).toContain("CPUQuota=600%");
 });
 
@@ -44,24 +43,47 @@ test.skipIf(process.platform !== "linux")("the command writes under XDG_CONFIG_H
   expect(refused.status).toBe(2);
 });
 
-// The service cgroup holds agent pipe relays, so only the soft limit is ever written.
-test.skipIf(process.platform !== "linux")("the service gets a soft memory ceiling with a chosen value and never a hard one", () => {
+// The service cgroup holds agent pipe relays, so a memory ceiling is written
+// only when the operator names one, and only the soft limit.
+test.skipIf(process.platform !== "linux")("a memory ceiling is written only when asked for, replaces its own file alone, and is never hard", () => {
   const dir = sandbox();
   const command = (...args: string[]) => spawnSync(process.execPath, [path.join(import.meta.dir, "install-cpu-placement.mjs"), "--dir", dir, ...args],
     { encoding: "utf8", env: { NODE_ENV: "test", PATH: process.env.PATH, HOME: sandbox() } });
   const file = path.join(dir, "delegatus.service.d/memory.conf");
-  expect(command().status).toBe(0);
-  expect(fs.readFileSync(file, "utf8")).toBe("[Service]\nMemoryAccounting=yes\nMemoryHigh=50%\n");
-  const chosen = command("--memory-high", "48G");
-  expect(chosen.stdout).toContain(`kept      ${file}`);
-  expect(command("--memory-high", "48G", "--force").status).toBe(0);
+  const plain = command();
+  expect(plain.status).toBe(0);
+  expect(fs.existsSync(file)).toBe(false);
+  expect(plain.stdout).not.toContain("Memory");
+  expect(command("--memory-high", "48G").status).toBe(0);
   expect(fs.readFileSync(file, "utf8")).toBe("[Service]\nMemoryAccounting=yes\nMemoryHigh=48G\n");
+  // A CPU file the operator edited survives a change of the ceiling.
+  const edited = path.join(dir, "delegatus-agents-work.slice");
+  fs.writeFileSync(edited, "[Slice]\nCPUQuota=400%\n");
+  const changed = command("--memory-high", "infinity");
+  expect(changed.status).toBe(0);
+  expect(changed.stdout).toContain(`replaced  ${file}`);
+  expect(fs.readFileSync(file, "utf8")).toBe("[Service]\nMemoryAccounting=yes\nMemoryHigh=infinity\n");
+  expect(fs.readFileSync(edited, "utf8")).toBe("[Slice]\nCPUQuota=400%\n");
+  // A later run for the CPU files alone leaves the ceiling as it is.
+  expect(command().status).toBe(0);
+  expect(fs.readFileSync(file, "utf8")).toBe("[Service]\nMemoryAccounting=yes\nMemoryHigh=infinity\n");
   for (const written of fs.readdirSync(dir, { recursive: true, withFileTypes: true })) {
     if (written.isFile()) expect(fs.readFileSync(path.join(written.parentPath, written.name), "utf8")).not.toContain("MemoryMax");
   }
-  const refused = command("--memory-high", "lots\nMemoryMax=1G");
-  expect(refused.status).toBe(2);
-  expect(fs.readFileSync(file, "utf8")).toBe("[Service]\nMemoryAccounting=yes\nMemoryHigh=48G\n");
+  for (const refused of ["0", "150%", "0%", "512M", "lots\nMemoryMax=1G"]) {
+    expect(command("--memory-high", refused).status).toBe(2);
+    expect(fs.readFileSync(file, "utf8")).toBe("[Service]\nMemoryAccounting=yes\nMemoryHigh=infinity\n");
+  }
+  expect(command("--memory-high").status).toBe(2);
+});
+
+test("a memory ceiling is a value the service can run under", () => {
+  const total = 128 * 1024 ** 3;
+  for (const value of ["infinity", "48G", "1G", "1024M", "1073741824", "1%", "50%", "100%", "37.5%"]) expect(validMemoryHigh(value, total)).toBe(true);
+  for (const value of ["0", "0G", "1%0", "0%", "0.5%", "101%", "150%", "512M", "1073741823", "1.5G", "max", "", "48 G", "-1G"]) expect(validMemoryHigh(value, total)).toBe(false);
+  // One percent of a small machine is below the floor.
+  expect(validMemoryHigh("1%", 8 * 1024 ** 3)).toBe(false);
+  expect(validMemoryHigh("50%", 8 * 1024 ** 3)).toBe(true);
 });
 
 // A restart left the service in its old cgroup while a spared process held it

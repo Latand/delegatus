@@ -711,11 +711,10 @@ shared directory into their isolated environment.
 
 ## Installation files (written by the operator, applied at a quiet moment)
 
-`bin/install-cpu-placement.mjs` writes three CPU files into
-`${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user`, plus the service's soft
-memory ceiling `delegatus.service.d/memory.conf`
-([resource limits](../agent-resource-limits.md)). It writes files only and
-prints the steps that apply them:
+`bin/install-cpu-placement.mjs` writes three files into
+`${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user`. It writes files only and
+prints the steps that apply them. With `--memory-high` it also writes the
+service's soft memory ceiling ([resource limits](../agent-resource-limits.md)):
 
 `delegatus.service.d/cpu.conf`
 
