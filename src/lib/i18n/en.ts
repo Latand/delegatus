@@ -7462,6 +7462,7 @@ export const en = {
   "workspaces.create.submit": "Create workspace",
   "workspaces.inWs": "in {ws}",
   "workspaces.page.sub": "Workspace · {projects}",
+  "workspaces.page.noAccountList": "Members can't choose a {engine} account in {projects} until an account list is set there. Until then Delegatus picks the account.",
   "workspaces.page.add": "Add project",
   "workspaces.page.remove": "Remove from workspace",
   "workspaces.page.empty": "No projects yet.",

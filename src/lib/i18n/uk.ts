@@ -7373,6 +7373,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "workspaces.create.submit": "Створити простір",
   "workspaces.inWs": "у «{ws}»",
   "workspaces.page.sub": "Простір · {projects}",
+  "workspaces.page.noAccountList": "Учасники не можуть обрати акаунт {engine} у {projects}, доки там не задано списку акаунтів. До того акаунт обирає Delegatus.",
   "workspaces.page.add": "Додати проєкт",
   "workspaces.page.remove": "Прибрати з простору",
   "workspaces.page.empty": "Проєктів ще немає.",
