@@ -43,6 +43,8 @@ export interface DoneSources {
   /** The project whose records live in a repository no lane of the PR names. */
   repositoryProject(repository: string): string | null;
   accountLabel?(engine: string, accountId: string): string | null;
+  /** A lane as stored now, by id. */
+  pipelineRecord?(pipelineId: string): Pipeline | null;
 }
 
 export interface DoneCandidate {
@@ -179,6 +181,14 @@ export function doneCandidates(sources: DoneSources): DoneCandidates {
     }
     return "";
   };
+  /* An archived lane's long task text is read from its row. A lane archived
+     again since the list was read has lost the listed version's text and the
+     read refuses; its title then comes from the lane as stored now. */
+  const laneTask = (lane: Pipeline | null) => {
+    if (!lane) return null;
+    try { return lane.task; }
+    catch { return sources.pipelineRecord?.(lane.id)?.task ?? null; }
+  };
   const laneTasks = (lane: Pipeline | null) => (lane ? [...new Set([...(lane.finishesTaskIds ?? []), ...lane.taskIds])] : []);
 
   for (const landed of landedPullRequests(sources.forge)) {
@@ -193,7 +203,7 @@ export function doneCandidates(sources: DoneSources): DoneCandidates {
       look: "technical",
       project: lane?.project ?? first?.project ?? sources.repositoryProject(landed.repository),
       at: landed.at,
-      title: sentence(taskIds, [lane?.task, landed.pr.title, `#${landed.number}`]),
+      title: sentence(taskIds, [laneTask(lane), landed.pr.title, `#${landed.number}`]),
       icon: first?.icon ?? null,
       refs: {
         ...(lane ? { pipelineId: lane.id } : {}),
@@ -219,7 +229,7 @@ export function doneCandidates(sources: DoneSources): DoneCandidates {
       look: "closed",
       project: lane.project,
       at: lane.closedAt!,
-      title: sentence(taskIds, [lane.task]),
+      title: sentence(taskIds, [laneTask(lane)]),
       icon: first?.icon ?? null,
       refs: { pipelineId: lane.id, ...(taskIds.length ? { taskIds } : {}) },
       subject: { pipeline: lane, taskIds },

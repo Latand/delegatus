@@ -1893,6 +1893,12 @@ export function pipelineStateCollectionSeeds(): [StateCollectionSeed<unknown>, S
   ];
 }
 
+/** The archive list keeps every lane's structure, ids, states and short
+    values in memory. Role scaffolds, prompts, stage inputs, outputs and report
+    texts are nine tenths of an archived lane and are read from its row when a
+    reader asks for one. */
+const ARCHIVED_PIPELINE_INLINE_TEXT = 512;
+
 function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteStateCollection<Pipeline> } {
   const filename = stateDatabaseFile();
   const held = pipelineStores.get(filename);
@@ -1931,6 +1937,7 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
     collection: "pipelines_archive",
     decode: (value) => decodePipeline(value, "pipelines_archive"),
     strictDecode: true,
+    deferTextLongerThan: ARCHIVED_PIPELINE_INLINE_TEXT,
   });
   const created = { active, archive };
   pipelineStores.set(filename, created);
@@ -2353,7 +2360,24 @@ export function savePipelines(pipelines: Pipeline[]): void {
 const SETTLED_PIPELINE_ARCHIVE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
 
 /** Shared archive rows, validated by revision, database identity and decoder
- * authority. Projection consumers must never mutate this frozen graph. */
+ * authority. Projection consumers must never mutate this frozen graph.
+ *
+ * Contract of a listed lane. Its structure and every value up to
+ * ARCHIVED_PIPELINE_INLINE_TEXT characters are in memory. A longer text (role
+ * scaffold, prompt, spec, stage input, output, report text) is read from the
+ * lane's row when a reader asks for it: one row read per lane, named
+ * `state.deferred-text` in the loop-gap reads, with rows kept decoded up to
+ * 32 MB. A reader that walks long text across the whole list therefore reads
+ * every archived row once per walk; take `selectArchivedPipelines` or a by-id
+ * read for that instead.
+ *
+ * A lane held across a rewrite of its own row keeps its listed values.
+ * `JSON.stringify` of it serializes the current row whole, so a response is
+ * one consistent record. A direct read of one of its long texts throws
+ * StateSnapshotChangedError, because the listed version's text is gone and a
+ * later version's text does not belong to the listed values. Archived rows
+ * are written once when a lane settles, so this needs the same lane archived
+ * again while a reader holds the list. */
 export function loadArchivedPipelinesForList(): readonly Pipeline[] {
   const rows = archiveStore().loadReadonly();
   freezeArchive(rows);
