@@ -280,3 +280,30 @@ test.skipIf(process.platform !== "linux")("repair updates protection through an 
     { permissionChange: protection.permissionChange });
   expect(fs.existsSync(f.directory)).toBeFalse();
 });
+
+test.skipIf(process.platform !== "linux").each(["mountinfo", "fdinfo"] as const)(
+  "a directory moved during its last %s read keeps its mode without a protection callback", async observation => {
+    const f = fixture(), outside = path.join(f.parent, "outside");
+    const nativeOpen = fs.openSync.bind(fs), nativeRead = fs.readFileSync.bind(fs);
+    let pinned: number | undefined, observations = 0, moved = false;
+    const open = spyOn(fs, "openSync").mockImplementation(((file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+      const fd = nativeOpen(file, flags, mode);
+      if (String(file).startsWith("/proc/self/fd/") && String(file).endsWith("/module-cache")) pinned = fd;
+      return fd;
+    }) as typeof fs.openSync);
+    const read = spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) => {
+      const value = nativeRead(file, options as BufferEncoding);
+      const target = observation === "mountinfo" ? "/proc/self/mountinfo" : `/proc/self/fdinfo/${pinned}`;
+      if (pinned !== undefined && file === target && ++observations === 2) {
+        moved = true;
+        fs.chmodSync(f.cache, 0o755); fs.renameSync(f.cache, outside); fs.chmodSync(outside, 0o555);
+      }
+      return value;
+    }) as typeof fs.readFileSync);
+    try {
+      await expect(repair(f.directory)).rejects.toThrow("entry left its admitted root or mount");
+      expect(moved).toBeTrue();
+      expect(fs.statSync(outside).mode & 0o777).toBe(0o555);
+      expect(fs.readFileSync(path.join(outside, "payload"), "utf8")).toBe("cache");
+    } finally { read.mockRestore(); open.mockRestore(); }
+  });

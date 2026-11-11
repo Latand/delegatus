@@ -104,6 +104,51 @@ test.skipIf(process.platform !== "linux")("an external hardlink made after fstat
   } finally { stat.mockRestore(); process.env.PATH = previousPath; f.store.close(); }
 });
 
+test.skipIf(process.platform !== "linux").each(["move", "keep", "revision"] as const)(
+  "the last mount observation cannot authorize a late permission change (%s)", async mutation => {
+    const f = fixture(), outside = path.join(f.parent, "outside"), previousPath = process.env.PATH;
+    const bin = path.join(f.parent, "bin"); fs.mkdirSync(bin);
+    for (const command of ["find", "du"]) fs.symlinkSync(`/usr/bin/${command}`, path.join(bin, command));
+    process.env.PATH = bin;
+    const nativeOpen = fs.openSync.bind(fs), nativeRead = fs.readFileSync.bind(fs);
+    let pinned: number | undefined, observations = 0, injected = false, current = true;
+    const open = spyOn(fs, "openSync").mockImplementation(((file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+      const fd = nativeOpen(file, flags, mode);
+      if (String(file).startsWith("/proc/self/fd/") && String(file).endsWith("/module-cache")) pinned = fd;
+      return fd;
+    }) as typeof fs.openSync);
+    const read = spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) => {
+      const value = nativeRead(file, options as BufferEncoding);
+      if (pinned !== undefined && file === "/proc/self/mountinfo" && ++observations === 2) {
+        injected = true;
+        const cache = fs.realpathSync(`/proc/self/fd/${pinned}`);
+        if (mutation === "move") {
+          fs.chmodSync(cache, 0o755); fs.renameSync(cache, outside); fs.chmodSync(outside, 0o555);
+        }
+        if (mutation === "keep") {
+          fs.chmodSync(cache, 0o755); fs.writeFileSync(path.join(cache, ".delegatus-keep"), "pin"); fs.chmodSync(cache, 0o555);
+        }
+        if (mutation === "revision") current = false;
+      }
+      return value;
+    }) as typeof fs.readFileSync);
+    try {
+      const report = await sweepAttemptTemps(f.store, { now: () => NOW, maxRoots: 1, state: async () => "expired",
+        authority: async () => ({ state: "expired", revision: "fixture", isCurrent: () => current }),
+        scan: emptyScan, references: async () => true });
+      expect(injected).toBeTrue();
+      expect(report).toMatchObject({ checked: 1, removed: 0, errors: 0 });
+      expect(report.outcomes[0]).toMatchObject({ disposition: "deferred" });
+      expect(f.store.has(f.directory)).toBeTrue();
+      const journal = JSON.parse(fs.readFileSync(attemptTempJournalPath(f.directory), "utf8"));
+      expect(fs.statSync(journal.trash).isDirectory()).toBeTrue();
+      const retained = mutation === "move" ? outside : path.join(journal.trash, "module-cache");
+      expect(fs.readFileSync(path.join(retained, "payload"), "utf8")).toBe("cache");
+      expect(fs.statSync(retained).mode & 0o777).toBe(0o555);
+      if (mutation === "keep") expect(fs.readFileSync(path.join(retained, ".delegatus-keep"), "utf8")).toBe("pin");
+    } finally { read.mockRestore(); open.mockRestore(); process.env.PATH = previousPath; f.store.close(); }
+  });
+
 test.skipIf(process.platform === "win32").each(["live", "unknown", "settled", "orphan", "keep", "git", "references", "dry-run", "revision", "expiry"] as const)(
   "an ineligible root is never permission-repaired (%s)", async reason => {
     const f = fixture();

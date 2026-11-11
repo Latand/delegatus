@@ -743,9 +743,10 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
   type Entry = { fd: number; pinned: string; expected: string; identity: string };
   const stack: Array<Entry & { entries: fs.Dir }> = [];
   const bound = (entry: Entry) => {
+    const mount = descriptorMount(entry.fd);
     const linked = fs.lstatSync(entry.expected, { throwIfNoEntry: false });
     if (fs.readlinkSync(entry.pinned) !== entry.expected || !linked || linked.isSymbolicLink()
-      || `${linked.dev}:${linked.ino}` !== entry.identity || descriptorMount(entry.fd) !== rootMount)
+      || `${linked.dev}:${linked.ino}` !== entry.identity || mount !== rootMount)
       throw new AttemptTempBudgetDeferred("permission repair entry left its admitted root or mount");
   };
   const enter = (file: string, expected: string, root = false) => {
@@ -765,14 +766,19 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
       if (root) rootMount = descriptorMount(fd);
       const entry = { fd, pinned, expected, identity: `${stat.dev}:${stat.ino}` };
       const validate = () => {
-        check();
+        // Inventory can be slow. Recheck the pinned binding and authority
+        // after it, before granting any permission change.
+        assertAttemptMountsClear(physicalRoot);
         for (const parent of stack) bound(parent);
         bound(entry);
-        assertAttemptMountsClear(physicalRoot);
+        check();
       };
       validate();
       if (mode !== stat.mode) {
-        const apply = () => { validate(); fs.chmodSync(pinned, mode & 0o7777); };
+        validate();
+        // Protection must observe changes made during the last inventory too.
+        // Only the synchronous authority fence remains inside its apply callback.
+        const apply = () => { check(); fs.chmodSync(pinned, mode & 0o7777); };
         if (permissionChange) permissionChange(path.join(directory, path.relative(physicalRoot, expected)), mode & 0o7777, apply);
         else apply();
       }
