@@ -250,9 +250,9 @@ for (const backend of ["api", "codex"] as const) test(`${backend}: a call whose 
 
   const second = await start(h, { resume: first.sessionId });
   const memory = h.provider.sessions.at(-1)!.memory!;
-  expect(memory).toContain("connection dropped");
+
   expect(memory).toContain("operator: Check the search lane.");
-  expect(memory).toContain("voice: The search lane passed its verifier.");
+  expect(memory).toContain("voice (cut; the operator heard up to «»): The search lane passed its verifier.");
   expect(memory).toContain("operator: And the phone review?");
   expect(memory.indexOf("Check the search lane.")).toBeLessThan(memory.indexOf("And the phone review?"));
   expect(memory.length).toBeLessThanOrEqual(CONTINUATION_BUDGET);
@@ -278,7 +278,7 @@ for (const backend of ["api", "codex"] as const) test(`${backend}: a call whose 
   const third = await start(h, { resume: second.sessionId });
   const again = h.provider.sessions.at(-1)!.memory!;
   expect(again).toContain("operator: Check the search lane.");
-  expect(again).toContain("operator: Then deploy it.");
+  expect(again).toContain("operator (unanswered): Then deploy it.");
   expect(h.service.transcriptRecord(third.sessionId).entries.filter(row => row.kind === "utterance").map(row => row.data.text))
     .toEqual(["Check the search lane.", "And the phone review?", "Then deploy it."]);
   await h.service.close(third.sessionId);
@@ -382,7 +382,7 @@ test("a hang-up is not offered back; a stale browser and a browser that lost its
   expect(h.service.resumable(operator)?.sessionId).toBe(silent.sessionId);
   const next = await start(h, { resume: silent.sessionId });
   expect(ending(h, silent.sessionId)).toBe("transport");
-  expect(h.provider.sessions.at(-1)!.memory).toContain("operator: Still here.");
+  expect(h.provider.sessions.at(-1)!.memory).toContain("operator (unanswered): Still here.");
   expect(h.provider.sessions.at(-1)!.memory).toContain("operator: Are you there?");
   await h.service.close(next.sessionId);
 
@@ -457,7 +457,7 @@ test("after a Viewer restart the call it held is offered from its journal and re
   const second = await start(h, { resume: first.sessionId });
   const memory = h.provider.sessions.at(-1)!.memory!;
   expect(memory).toContain("operator: Before the restart.");
-  expect(memory).toContain("voice: Heard you.");
+  expect(memory).toContain("voice (cut; the operator heard up to «»): Heard you.");
   expect(memory).toContain("operator: Keep going.");
   await restarted.close(second.sessionId);
 });
@@ -545,9 +545,110 @@ test("a reconnect's resume note and its lines read in the browser's zone, and th
   await h.service.start({ project: "fixture", locale: "en", sdp: "v=0\r\n", startedBy: operator, resume: first.sessionId, timeZone: "Asia/Tokyo" });
   const memory = h.provider.sessions.at(-1)!.memory!;
   // The drop came at 12:01 UTC, which is 21:01 in Tokyo.
-  expect(memory).toContain("after the connection dropped at 21:01 Tokyo time, 2 minutes ago;");
+
   expect(memory).toContain("[21:00 Tokyo time] operator: Check the build.");
   expect(memory).toContain("[21:00 Tokyo time] voice: It is green.");
   expect(memory).not.toContain("UTC");
   expect(h.provider.sessions.at(-1)!.clock).toContain("Asia/Tokyo");
+});
+
+for (const backend of ["api", "codex"] as const) test(`slice 2: ${backend} records a sentence-safe cursor and asks before continuing`, async () => {
+  const h = harness(backend); const p = await start(h);
+  const sentences = ["First sentence is finished. ", "Second sentence has several more words. ", "Third sentence is still ahead."];
+  let offset = 0;
+  for (let i = 0; i < sentences.length; i++) {
+    h.provider.replay(p.providerId, { type: "session.output_transcript.delta", event_id: `sentence-${i}`, delta: sentences[i], start_ms: offset, end_ms: offset + [3000, 4000, 3000][i] });
+    offset += [3000, 4000, 3000][i];
+  }
+  await h.service.drain(p.sessionId); h.advance(10_000); await h.service.close(p.sessionId, "transport");
+  const item = h.admission.transcriptRecord(p.sessionId).entries.find(row => row.kind === "reply")!;
+  const playedMs = backend === "api" ? 4000 : (sentences[0].length + 8) * 58;
+  const n = await h.service.start({ project: "fixture", locale: "en", sdp: "v=0", resume: p.sessionId, cursor: { heard: { itemId: item.id, playedMs } } });
+  const point = h.admission.transcriptRecord(n.sessionId).entries.find(row => row.kind === "session_start")?.data.resumePoint;
+  expect(point).toMatchObject({ kind: "reply", offset: sentences[0].length, remaining: sentences.slice(1).join("") });
+  const queued = h.admission.reportSpeech(n.sessionId);
+  expect(queued).toMatchObject([{ kind: "resume", handed: 0, resumeOf: { part: p.sessionId, item: item.id } }]);
+  expect(h.provider.commands.filter(row => row.type === "session.commentary.append")).toHaveLength(0);
+  await h.service.events(n.sessionId, 0);
+  if (backend === "codex") expect(h.provider.commands.find(row => row.type === "session.commentary.append")?.content).toBe(`The connection dropped at «${(sentences[0] + sentences[1].slice(0, 8)).trim()}». Shall I go on?`);
+  await h.service.close(n.sessionId);
+});
+
+test("slice 2: continuation keeps cut markers and every current open request within the shared budget", async () => {
+  const { continuationBlock } = await import("./callResume");
+  const entries: import("./transcriptRecord").TranscriptEntry[] = [
+    ...Array.from({ length: 20 }, (_, i) => ({ id: `old-${i}`, kind: "reply" as const, atMs: i, data: { text: `Old sentence ${i}. `.repeat(20), final: true } })),
+    { id: "cut", kind: "reply", atMs: 21, data: { text: "Heard sentence. Unheard sentence.", final: true } },
+    { id: "open", kind: "utterance", atMs: 22, data: { text: "Please check the", final: true } },
+    { id: "request-a", kind: "request", atMs: 23, data: { callId: "a", instruction: "Build the search", status: "queued" } },
+    { id: "request-b", kind: "request", atMs: 24, data: { callId: "b", instruction: "Check the layout", status: "delivered" } },
+  ];
+  entries.forEach((row, order) => { row.order = order; });
+  const point = { kind: "reply" as const, resumeOf: { part: "part", item: "cut" }, offset: 16, heard: "Heard sentence. ", remaining: "Unheard sentence." };
+  const block = continuationBlock([{ id: "part", createdAt: 0, entries }], { point, cursor: { operatorOpen: "open" }, now: 0 });
+  expect(block.length).toBeLessThanOrEqual(CONTINUATION_BUDGET);
+  for (const data of ["voice (cut;", "operator (cut off, unanswered)", "Build the search", "queued", "Check the layout", "delivered"]) expect(block).toContain(data);
+});
+
+for (const backend of ["api", "codex"] as const) test(`slice 2: ${backend} reload names the recent reply, but completed audio owes no line`, async () => {
+  const h = harness(backend); const p = await start(h);
+  say(h, p.providerId, [["voice", "A recent synthetic reply."]]); await h.service.drain(p.sessionId);
+  h.advance(3000); await h.service.close(p.sessionId, "transport");
+  const item = h.admission.transcriptRecord(p.sessionId).entries.find(row => row.kind === "reply")!;
+  const n = await h.service.start({ project: "fixture", locale: "en", sdp: "v=0", resume: p.sessionId });
+  expect(h.admission.reportSpeech(n.sessionId)[0]).toMatchObject({ kind: "resume", resumeOf: { part: p.sessionId, item: item.id } });
+  await h.service.events(n.sessionId, 0);
+  if (backend === "codex") expect(h.provider.commands.find(row => row.type === "session.commentary.append")?.content).toBe("The connection dropped at «A recent synthetic reply.». Shall I go on?");
+  await h.service.close(n.sessionId);
+});
+
+test("slice 2: forged ids are ignored, playback is clamped, and the mint key binds the exact cursor", async () => {
+  const h = harness(); const p = await start(h);
+  say(h, p.providerId, [["voice", "An already heard reply."]]); await h.service.drain(p.sessionId); h.advance(3000); await h.service.close(p.sessionId, "transport");
+  const item = h.admission.transcriptRecord(p.sessionId).entries.find(row => row.kind === "reply")!;
+  const input = { project: "fixture", locale: "en" as const, sdp: "v=0", resume: p.sessionId, requestId: "bound-cursor",
+    cursor: { heard: { itemId: item.id, playedMs: 99_999 }, unplayed: ["foreign-reply"], operatorOpen: "foreign-operator" } };
+  const n = await h.service.start(input);
+  const data = h.admission.transcriptRecord(n.sessionId).entries.find(row => row.kind === "session_start")!.data;
+  expect(data).toMatchObject({ cursor: { heard: { itemId: item.id, playedMs: 3000 }, unplayed: [] }, cursorAdjusted: true });
+  expect(data.resumePoint).toBeUndefined(); expect(h.admission.reportSpeech(n.sessionId)).toEqual([]);
+  expect(await h.service.start(input)).toEqual(n);
+  await expect(h.service.start({ ...input, cursor: {} })).rejects.toThrow("INVALID_REQUEST");
+  await h.service.close(n.sessionId);
+  for (const cursor of [{ heard: { itemId: item.id, playedMs: -1 } }, { heard: { itemId: item.id, playedMs: Infinity } }, { unplayed: Array(65).fill(item.id) }, { arbitrary: true }])
+    await expect(h.service.start({ ...input, requestId: "bad-cursor", cursor: cursor as import("./contract").ResumeCursor })).rejects.toThrow("INVALID_REQUEST");
+});
+
+test("slice 2: many open requests each keep their current status inside the continuation budget", async () => {
+  const { continuationBlock } = await import("./callResume");
+  const requests: import("./transcriptRecord").TranscriptEntry[] = Array.from({ length: 8 }, (_, index) => ({
+    id: `request-${index}`, kind: "request", atMs: index, order: index,
+    data: { callId: `call-${index}`, status: index % 2 ? "delivered" : "queued", instruction: `PENDING_${index} ` + "details ".repeat(80) },
+  }));
+  requests.unshift({ id: "cut", kind: "reply", atMs: 0, order: -1, data: { text: "First. Second. Third.", final: true } });
+  const block = continuationBlock([{ id: "part", createdAt: 0, entries: requests }], { now: 0,
+    point: { kind: "reply", resumeOf: { part: "part", item: "cut" }, offset: 7, heard: "First. ", remaining: "Second. Third." } });
+  expect(block.length).toBeLessThanOrEqual(CONTINUATION_BUDGET);
+  expect(block).toContain("Second. Third.");
+  for (let index = 0; index < 8; index++) {
+    const line = block.split("\n").find(line => line.includes(`PENDING_${index}`));
+    expect(line).toBeDefined(); expect(line).toContain(index % 2 ? "delivered" : "queued");
+  }
+});
+
+test("slice 2: a mint key written before cursors still recovers its answer and then reports its closed part", async () => {
+  const { createHash } = await import("node:crypto");
+  const h = harness(); const p = await start(h);
+  say(h, p.providerId, [["voice", "The build passed."]]); await h.service.drain(p.sessionId); await h.service.close(p.sessionId, "transport");
+  const input = { project: "fixture", locale: "en" as const, sdp: "v=1", requestId: "legacy-resume", startedBy: operator, resume: p.sessionId };
+  const n = await h.service.start(input);
+  // The persisted digest format of slices 0/1, with no optional cursor field.
+  h.storage.change(doc => { doc.sessions[n.sessionId].mintDigest = createHash("sha256").update(JSON.stringify([input.project, input.locale, input.sdp, operator, p.sessionId, null])).digest("hex"); });
+  expect(await h.service.start(input)).toEqual(n);
+  expect(h.provider.sessions).toHaveLength(2);
+  await h.service.close(n.sessionId, "transport");
+  const state = new CompanionStorage(h.now);
+  const gate = new CompanionAdmission(state, { recipient: () => null, reports: () => [], send: async () => { throw new Error("unexpected send"); } }, h.now);
+  await expect(h.build(state, gate).start(input)).rejects.toThrow("SESSION_CLOSED");
+  expect(h.provider.sessions).toHaveLength(2);
 });

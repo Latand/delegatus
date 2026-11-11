@@ -7,7 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 
 import { VIEWER_CONTROL_TOKEN_ENV } from "@/lib/mcp/controlEndpoint";
 import { MCP_HEALTH_PROBE_CAPABILITY_ENV } from "@/lib/mcp/healthProbeAdmission";
-import { MCP_TOOL_NAMES } from "@/lib/mcp/server";
+import { MCP_TOOL_NAMES, MCP_UPDATE_BRIDGE_TOOL_NAMES } from "@/lib/mcp/server";
 
 import { RuntimeHost } from "./host";
 import { RuntimeJournal } from "./journal";
@@ -243,7 +243,7 @@ test("host-admitted managed MCP probes discover the complete surface, call requi
         processReady: true,
         calls: { deploymentStatus: true, boardSnapshot: true },
       });
-      expect(evidence.tools).toEqual([...MCP_TOOL_NAMES, "suggest_replies"].sort());
+      expect(evidence.tools).toEqual([...MCP_TOOL_NAMES, ...MCP_UPDATE_BRIDGE_TOOL_NAMES].sort());
       expect(evidence.tools).toContain("deployment_status");
       expect(evidence.tools).toContain("board_snapshot");
       expect(evidence.callFailures).toBeUndefined();
