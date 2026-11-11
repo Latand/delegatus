@@ -211,3 +211,60 @@ test.skipIf(process.platform !== "linux" || process.env.LLV_ATTEMPT_TEMP_DOCKER_
       fs.chmodSync(f.cache, 0o700); expect(fs.existsSync(path.join(f.cache, "deep/new"))).toBeTrue();
     } else { await removal; expect(fs.existsSync(f.directory)).toBeFalse(); }
   });
+
+test.skipIf(process.platform !== "linux").each(["before-repair", "after-repair"] as const)(
+  "native removal refuses a same-device mount added %s", async boundary => {
+    const f = fixture(), nativeRead = fs.readFileSync.bind(fs);
+    let mounted = boundary === "before-repair", removed = false;
+    const read = spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) => {
+      const value = nativeRead(file, options as BufferEncoding);
+      if (mounted && file === "/proc/self/mountinfo")
+        return String(value).trimEnd() + `\n2147483647 1 0:1 / ${f.cache} rw - tmpfs tmpfs rw\n`;
+      return value;
+    }) as typeof fs.readFileSync);
+    const rm = spyOn(fs.promises, "rm").mockImplementation(async () => { removed = true; });
+    try {
+      await expect(removeAttemptTree(f.directory, f.directory, async () => { mounted = true; return true; }, false,
+        allowed, allowed, true)).rejects.toThrow("mount boundary");
+      expect(removed).toBeFalse();
+      expect(fs.statSync(f.cache).mode & 0o777).toBe(boundary === "before-repair" ? 0o555 : 0o755);
+      expect(fs.readFileSync(path.join(f.cache, "payload"), "utf8")).toBe("cache");
+    } finally { read.mockRestore(); rm.mockRestore(); }
+  });
+
+test.skipIf(process.platform !== "linux").each(["child", "ancestor"] as const)(
+  "a pinned %s moved outside the root keeps its mode before native removal", async kind => {
+    const f = fixture(), outside = path.join(f.parent, "outside");
+    if (kind === "ancestor") {
+      fs.chmodSync(f.cache, 0o755); fs.mkdirSync(path.join(f.cache, "deep"), { mode: 0o555 });
+    }
+    const nativeOpen = fs.openSync.bind(fs);
+    let moved = false;
+    const open = spyOn(fs, "openSync").mockImplementation(((file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+      const fd = nativeOpen(file, flags, mode);
+      if (!moved && String(file).startsWith("/proc/self/fd/") && String(file).endsWith(kind === "child" ? "/module-cache" : "/deep")) {
+        moved = true;
+        const current = kind === "child" ? f.cache : path.dirname(fs.realpathSync(String(file)));
+        const priorMode = fs.statSync(current).mode & 0o777;
+        fs.chmodSync(current, 0o755); fs.renameSync(current, outside); fs.chmodSync(outside, priorMode);
+      }
+      return fd;
+    }) as typeof fs.openSync);
+    const rm = spyOn(fs.promises, "rm").mockRejectedValue(new Error("fixture stops before deletion"));
+    try {
+      await expect(repair(f.directory)).rejects.toThrow(); expect(moved).toBeTrue();
+      expect(fs.statSync(kind === "child" ? outside : path.join(outside, "deep")).mode & 0o777).toBe(0o555);
+      expect(fs.readFileSync(path.join(outside, "payload"), "utf8")).toBe("cache");
+    } finally { open.mockRestore(); rm.mockRestore(); }
+  });
+
+
+test.skipIf(process.platform !== "linux")("repair updates protection through an admitted parent alias", async () => {
+  const f = fixture(), alias = path.join(f.parent, "alias");
+  fs.symlinkSync(f.parent, alias, "dir");
+  const directory = path.join(alias, path.basename(f.directory));
+  const protection = await snapshotAttemptProtection(directory);
+  await removeAttemptTree(directory, directory, async () => true, false, allowed, allowed, true, undefined,
+    { permissionChange: protection.permissionChange });
+  expect(fs.existsSync(f.directory)).toBeFalse();
+});

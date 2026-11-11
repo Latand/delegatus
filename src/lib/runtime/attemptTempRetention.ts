@@ -5,7 +5,7 @@ import { statePath } from "@/lib/configDir";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { attemptTempJournalPath, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
-import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, snapshotAttemptProtection, removeAttemptTree, RepositoryLinkInventory, type RetainedCheckoutReads, type AttemptNamespaceProtection } from "./attemptTempFilesystem";
+import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, snapshotAttemptProtection, removeAttemptTree, RepositoryLinkInventory, type RetainedCheckoutReads, type AttemptNamespaceProtection, type AttemptProtection } from "./attemptTempFilesystem";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
 import { recordedRootHeld, recordRootRetirement, expireRecordedRootHolds, type CheckRow } from "@/lib/recordedChecks/store";
@@ -359,7 +359,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       let namespaceProtection: AttemptNamespaceProtection | undefined;
       let dispatchAuthority: AttemptTempAuthority | undefined;
       let dispatchState: AttemptTempState | undefined;
-      let dispatchEvidence: { current: () => boolean } | undefined;
+      let dispatchEvidence: AttemptProtection | undefined;
       const retirementAuthorityCurrent = (directory: string, validateCheckouts = true) => {
         const current = fs.lstatSync(directory, { throwIfNoEntry: false });
         return !recordedRootHeld(owner.directory)
@@ -415,7 +415,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           || state === "orphan" && now() - owner.createdAt >= (options.maxAgeMs ?? 86400000);
         if (!settled) return false;
         if (state === "expired") await claim();
-        const protection = state === "expired" || options.mode === "dry-run" ? await snapshotAttemptProtection(directory, deadline - now(), true, bytes) : { current: () => true, namespace: undefined };
+        const protection: AttemptProtection = state === "expired" || options.mode === "dry-run" ? await snapshotAttemptProtection(directory, deadline - now(), true, bytes) : { current: () => true };
         namespaceProtection = protection.namespace;
         if (!await inspectAttemptTree(directory, owner.directory, { budgetMs: deadline - now(), bytes })) { store.retainRoot(owner.directory, null); disposition = "evidence"; reason = "tree evidence, mount or Git boundary"; return false; }
         checkBudget();
@@ -487,7 +487,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         }
         dispatchAuthority = typeof authorityObservation === "string" ? undefined : authorityObservation;
         dispatchState = authority;
-        dispatchEvidence = { current: () => protection.current() && evidence.current() };
+        dispatchEvidence = { current: () => protection.current() && evidence.current(), permissionChange: protection.permissionChange };
         return true;
       };
       if (stat && !await eligible()) { outcome(owner.directory, disposition, bytes, reason); continue; }
@@ -501,7 +501,12 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           ? options.remove(directory, () => eligible(directory), () => dispatchEligible(directory))
           : removeAttemptTree(directory, owner.directory, () => eligible(directory), namespaceOnly,
             () => dispatchEligible(directory), () => retirementAuthorityCurrent(directory), dispatchState === "expired", namespaceProtection,
-            { budgetMs: deadline - now(), bytes, permissionAuthority: () => retirementAuthorityCurrent(directory, false) }),
+            { budgetMs: deadline - now(), bytes,
+              permissionAuthority: () => retirementAuthorityCurrent(directory, false),
+              permissionChange: (file, mode, apply) => {
+                if (!dispatchEvidence?.permissionChange) throw new AttemptTempBudgetDeferred("permission protection unavailable");
+                dispatchEvidence.permissionChange(file, mode, apply);
+              } }),
         measure: async () => bytes,
         // Settlement owns freshness. Preserve the full mount/Git/readability
         // inspection, including the reinspection after quarantine.

@@ -114,3 +114,65 @@ test.skipIf(process.platform !== "linux" || process.env.LLV_ATTEMPT_TEMP_DOCKER_
       if (kind === "remove") expect(report.errors).toBe(0);
     } finally { f.store.close(); }
   });
+
+// Inject at the descriptor boundary, after eligibility and quarantine have
+// already completed. Assert modes as well as content on the refused tree.
+test.skipIf(process.platform !== "linux").each(["move-child", "move-ancestor", "keep"] as const)(
+  "repair stops before chmod when a pinned entry changes (%s)", async kind => {
+    const f = fixture(), outside = path.join(f.parent, "outside");
+    if (kind === "move-ancestor") {
+      fs.chmodSync(f.cache, 0o755); fs.mkdirSync(path.join(f.cache, "deep"), { mode: 0o555 });
+    }
+    const nativeOpen = fs.openSync.bind(fs);
+    let injected = false;
+    const target = kind === "move-ancestor" ? "deep" : "module-cache";
+    const open = spyOn(fs, "openSync").mockImplementation(((file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+      const fd = nativeOpen(file, flags, mode);
+      if (!injected && String(file).startsWith("/proc/self/fd/") && String(file).endsWith("/" + target)) {
+        injected = true;
+        const current = fs.realpathSync(String(file));
+        if (kind === "keep") {
+          fs.chmodSync(current, 0o755); fs.writeFileSync(path.join(current, ".delegatus-keep"), "pin"); fs.chmodSync(current, 0o555);
+        } else {
+          const moving = kind === "move-ancestor" ? path.dirname(current) : current;
+          const priorMode = fs.statSync(moving).mode & 0o777;
+          fs.chmodSync(moving, 0o755); fs.renameSync(moving, outside); fs.chmodSync(outside, priorMode);
+        }
+      }
+      return fd;
+    }) as typeof fs.openSync);
+    try {
+      const report = await sweepAttemptTemps(f.store, { now: () => NOW, maxRoots: 1, state: async () => "expired", scan: emptyScan, references: async () => true });
+      expect(injected).toBeTrue(); expect(report.removed).toBe(0);
+      expect(f.store.has(f.directory)).toBeTrue();
+      const trash = JSON.parse(fs.readFileSync(attemptTempJournalPath(f.directory), "utf8")).trash;
+      const cache = path.join(trash, "module-cache");
+      const retained = kind === "keep" ? cache : kind === "move-ancestor" ? path.join(outside, "deep") : outside;
+      expect(fs.statSync(retained).mode & 0o777).toBe(0o555);
+      expect(fs.readFileSync(path.join(kind === "keep" ? cache : outside, "payload"), "utf8")).toBe("cache");
+      if (kind === "keep") expect(fs.readFileSync(path.join(cache, ".delegatus-keep"), "utf8")).toBe("pin");
+    } finally { open.mockRestore(); f.store.close(); }
+  });
+
+test.skipIf(process.platform !== "linux")("permission repair observes a late bind mount identity on the same device", async () => {
+  const f = fixture(), nativeRead = fs.readFileSync.bind(fs), nativeOpen = fs.openSync.bind(fs);
+  let mountedFd: number | undefined;
+  const open = spyOn(fs, "openSync").mockImplementation(((file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+    const fd = nativeOpen(file, flags, mode);
+    if (String(file).startsWith("/proc/self/fd/") && String(file).endsWith("/module-cache")) mountedFd = fd;
+    return fd;
+  }) as typeof fs.openSync);
+  const read = spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) => {
+    const value = nativeRead(file, options as BufferEncoding);
+    if (mountedFd !== undefined && String(file) === `/proc/self/fdinfo/${mountedFd}`)
+      return String(value).replace(/mnt_id:\s*\d+/, "mnt_id:\t2147483647");
+    return value;
+  }) as typeof fs.readFileSync);
+  try {
+    const report = await sweepAttemptTemps(f.store, { now: () => NOW, maxRoots: 1, state: async () => "expired", scan: emptyScan, references: async () => true });
+    expect(mountedFd).toBeDefined(); expect(report.removed).toBe(0);
+    const trash = JSON.parse(fs.readFileSync(attemptTempJournalPath(f.directory), "utf8")).trash;
+    expect(fs.statSync(path.join(trash, "module-cache")).mode & 0o777).toBe(0o555);
+    expect(fs.readFileSync(path.join(trash, "module-cache/payload"), "utf8")).toBe("cache");
+  } finally { read.mockRestore(); open.mockRestore(); f.store.close(); }
+});

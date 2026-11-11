@@ -538,6 +538,7 @@ type NamespaceBudget = { budgetMs?: number; bytes?: number };
 type AttemptRemovalSettings = NamespaceBudget & {
   /** Synchronous entry authority; full checkout validation brackets repair. */
   permissionAuthority?: () => boolean;
+  permissionChange?: AttemptProtection["permissionChange"];
 };
 function namespaceTimeout(settings: NamespaceBudget): number {
   // At least five seconds, then one second per 16 MiB, clipped to the
@@ -633,12 +634,17 @@ export async function inspectAttemptTree(directory: string, original = directory
   }
 }
 
+export type AttemptProtection = {
+  current: () => boolean;
+  namespace?: AttemptNamespaceProtection;
+  permissionChange?: (file: string, mode: number, apply: () => void) => void;
+};
 /** An independent directory snapshot protects new markers even when expired
  * evidence is deliberately discarded. Native metadata is checked synchronously
  * after awaited observations. Opaque descendants also require their digest
  * to be checked inside the removal namespace. Never follow links. */
 export async function snapshotAttemptProtection(directory: string, budgetMs = 30_000, namespaceRemoval = false, bytes?: number):
-  Promise<{ current: () => boolean; namespace?: AttemptNamespaceProtection }> {
+  Promise<AttemptProtection> {
   const until = performance.now() + Math.max(0, Math.min(30_000, budgetMs));
   const directories = new Map<string, string>();
   const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.mtimeNs, stat.ctimeNs].join(":");
@@ -672,7 +678,7 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
     if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error("invalid attempt namespace protection reply");
     namespace = { digest };
   }
-  return { namespace, current: () => {
+  const current = () => {
     // Callers using native deletion cannot validate opaque descendants.
     // The retention adapter opts in only when it passes the digest to the
     // removal namespace, which rechecks every directory before deletion.
@@ -681,14 +687,45 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
       for (const [file, before] of directories) if (signature(fs.lstatSync(file, { bigint: true })) !== before) return false;
       return true;
     } catch { return false; }
+  };
+  return { namespace, current, permissionChange: (file, mode, apply) => {
+    if (namespace || !current()) throw new AttemptTempBudgetDeferred("protection changed before permission repair");
+    const before = fs.lstatSync(file, { bigint: true });
+    apply();
+    const after = fs.lstatSync(file, { bigint: true });
+    // Only our chmod may advance ctime/mode. A new entry changes mtime;
+    // replacement, ownership and link changes are never absorbed into proof.
+    if (before.dev !== after.dev || before.ino !== after.ino || before.mtimeNs !== after.mtimeNs
+      || before.uid !== after.uid || before.gid !== after.gid || before.nlink !== after.nlink
+      || after.mode !== (before.mode & ~0o7777n | BigInt(mode)))
+      throw new AttemptTempBudgetDeferred("directory changed during permission repair");
+    if (before.isDirectory()) directories.set(file, signature(after));
+    if (!current()) throw new AttemptTempBudgetDeferred("protection changed during permission repair");
   } };
 }
+
+/** Refuse even same-device bind mounts, including mounts added while an
+ * awaited guard was running. An unreadable mount table grants no permission. */
+function assertAttemptMountsClear(directory: string) {
+  if (process.platform !== "linux") return;
+  for (const line of fs.readFileSync("/proc/self/mountinfo", "utf8").trim().split("\n")) {
+    const encoded = line.split(" ")[4];
+    if (!encoded) throw new Error("attempt mount inventory is invalid");
+    const mount = encoded.replace(/\\([0-7]{3})/g, (_, octal: string) => String.fromCharCode(parseInt(octal, 8)));
+    if (inside(mount, directory)) throw new AttemptTempBudgetDeferred("mount boundary changed before attempt removal");
+  }
+}
+const descriptorMount = (fd: number) => {
+  const id = /^mnt_id:\s*(\d+)$/m.exec(fs.readFileSync(`/proc/self/fdinfo/${fd}`, "utf8"))?.[1];
+  if (!id) throw new Error("attempt descriptor mount identity unavailable");
+  return id;
+};
 
 /** Repair only an admitted, expired tree. Pin each entry without following a
  * symlink, then chmod its descriptor. On Linux O_PATH also opens mode 000;
  * the proc descriptor names that inode even if its directory entry changes.
  * All child paths are relative to a held parent, on the root's device. */
-function repairAttemptPermissions(directory: string, authority: () => boolean, budgetMs: number) {
+function repairAttemptPermissions(directory: string, authority: () => boolean, budgetMs: number, permissionChange?: AttemptProtection["permissionChange"]) {
   // Descendant lookup through these pinned descriptors requires Linux procfs.
   // Other platforms keep their existing native removal path.
   if (process.platform !== "linux") return;
@@ -696,12 +733,22 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
   const uid = process.getuid?.();
   if (uid === undefined) return;
   const initial = fs.lstatSync(directory);
+  const physicalRoot = fs.realpathSync(directory);
+  assertAttemptMountsClear(physicalRoot);
+  let rootMount: string | undefined;
   const check = () => {
     if (performance.now() >= until) throw new AttemptTempBudgetDeferred("attempt permission repair time budget exhausted");
     if (!authority()) throw new AttemptTempBudgetDeferred("authority changed before permission repair");
   };
-  const stack: Array<{ fd: number; pinned: string; entries: fs.Dir }> = [];
-  const enter = (file: string, root = false) => {
+  type Entry = { fd: number; pinned: string; expected: string; identity: string };
+  const stack: Array<Entry & { entries: fs.Dir }> = [];
+  const bound = (entry: Entry) => {
+    const linked = fs.lstatSync(entry.expected, { throwIfNoEntry: false });
+    if (fs.readlinkSync(entry.pinned) !== entry.expected || !linked || linked.isSymbolicLink()
+      || `${linked.dev}:${linked.ino}` !== entry.identity || descriptorMount(entry.fd) !== rootMount)
+      throw new AttemptTempBudgetDeferred("permission repair entry left its admitted root or mount");
+  };
+  const enter = (file: string, expected: string, root = false) => {
     check();
     // O_PATH is Linux-specific and is intentionally combined with O_NOFOLLOW:
     // a symlink descriptor is classified and closed without touching its target.
@@ -716,12 +763,23 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
       if (stat.isFile() && stat.nlink !== 1) return;
       const mode = stat.mode | (stat.isDirectory() || stat.mode & 0o111 ? 0o700 : 0o600);
       const pinned = `/proc/self/fd/${fd}`;
-      if (mode !== stat.mode) {
+      if (root) rootMount = descriptorMount(fd);
+      const entry = { fd, pinned, expected, identity: `${stat.dev}:${stat.ino}` };
+      const validate = () => {
         check();
-        fs.chmodSync(pinned, mode & 0o7777);
+        for (const parent of stack) bound(parent);
+        bound(entry);
+        if (stat.isDirectory() || mode !== stat.mode) assertAttemptMountsClear(physicalRoot);
+      };
+      validate();
+      if (mode !== stat.mode) {
+        const apply = () => { validate(); fs.chmodSync(pinned, mode & 0o7777); };
+        if (permissionChange) permissionChange(path.join(directory, path.relative(physicalRoot, expected)), mode & 0o7777, apply);
+        else apply();
       }
       if (stat.isDirectory()) {
-        stack.push({ fd, pinned, entries: fs.opendirSync(pinned) });
+        validate();
+        stack.push({ ...entry, entries: fs.opendirSync(pinned) });
         retained = true;
       }
     } finally { if (!retained) fs.closeSync(fd); }
@@ -731,11 +789,13 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
     try { frame.entries.closeSync(); } finally { fs.closeSync(frame.fd); }
   };
   try {
-    enter(directory, true);
+    enter(directory, physicalRoot, true);
     while (stack.length) {
       check();
-      const frame = stack[stack.length - 1], entry = frame.entries.readSync();
-      if (entry) enter(path.join(frame.pinned, entry.name));
+      const frame = stack[stack.length - 1];
+      for (const parent of stack) bound(parent);
+      const entry = frame.entries.readSync();
+      if (entry) enter(path.join(frame.pinned, entry.name), path.join(frame.expected, entry.name));
       else close();
     }
   } finally { while (stack.length) close(); }
@@ -758,11 +818,12 @@ export async function removeAttemptTree(directory: string, original = directory,
     }
     if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before native removal");
     if (discardExpiredEvidence && guard && dispatchGuard && postDeleteGuard) {
-      repairAttemptPermissions(directory, settings.permissionAuthority ?? postDeleteGuard, settings.budgetMs ?? 30_000);
-      // Chmod changes directory ctime. Rebuild the protection proof after our
-      // own repair, and reauthorize after that awaited observation.
+      repairAttemptPermissions(directory, settings.permissionAuthority ?? postDeleteGuard, settings.budgetMs ?? 30_000, settings.permissionChange);
+      // Repeat all observations after repair, including checkout references,
+      // and reauthorize after the last await.
       if (!await guard() || !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed after permission repair");
     }
+    assertAttemptMountsClear(fs.realpathSync(directory));
     try { await fs.promises.rm(directory, { recursive: true, force: true }); }
     catch (error) {
       if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
