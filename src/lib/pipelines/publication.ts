@@ -4,7 +4,7 @@ import { publicationFailurePhase, publicationPrivacyRefusal, publicationRemoteRe
 
 const RUNNER_DEADLINE = /^NEW .*<runner error> runner did not finish \(124\)$/;
 
-function decisiveRefusal(line: string, allowFrozenInstall = false): boolean {
+export function decisiveRefusal(line: string, allowFrozenInstall = false): boolean {
   const member = /^pre-push: ([^;:]{1,60}): failed \(([^)]*)\)/.exec(line);
   const otherCheckFailed = member && !["touched tests", "Linux tests"].includes(member[1]!) && member[2] !== "124"
     && !(allowFrozenInstall && member[1] === "frozen install");
