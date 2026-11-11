@@ -1,6 +1,8 @@
 # Pipelines in an ordinary folder on local Git
 
-Design, 2026-11-11. Read-only stage: nothing here is built. Every `file:line`
+Design and G0, 2026-11-11. G0 implements the three starts in §8.2 and records
+the office-folder acceptance clauses as expected failures. G1 to G6 remain
+deferred. Every `file:line`
 was read on main at `803f12c1` (2026-11-10 21:59 UTC). Where an earlier reading
 of the same code gave another line, the code at `803f12c1` is used and the
 difference is noted in one line. Numbers carried over from earlier
@@ -17,8 +19,7 @@ the same cell or sentence.
 
 ## 0. Requirement
 
-2026-11-10, a spoken request in a private conversation. This file restates its
-purpose and quotes nothing from it.
+Requirement recorded on 2026-11-10.
 
 - A person can start a pipeline in any folder with as little setup as
   possible: open the project, give it an orchestrator, and the pipeline runs.
@@ -28,8 +29,7 @@ purpose and quotes nothing from it.
 - Git may stay underneath for one purpose: a person can see what changed and
   go back.
 
-The same evening, at 23:37 UTC, this was chosen as the first thing to build,
-under the name "pipelines without GitHub on local Git".
+The program starts with local Git workflows that can run without a forge.
 
 **Outcome of the program** (slices G0 to G6, one lane each). A person starts a
 pipeline in an ordinary folder of documents with no GitHub, no sign-in and no
@@ -619,8 +619,9 @@ preview refuses with `SOURCE_WORKING_COPY_UNAVAILABLE`.
 When a creation request names neither `baseBranch` nor `baseRef` and the
 repository has no `origin` (`git remote get-url origin` exits 2, the test
 `git.ts:286-288` and `engine.ts:15621` already use), creation reads the
-checked-out branch with one local read (`git symbolic-ref --quiet --short
-HEAD`) and records it as the lane's base branch in place of `main`
+checked-out branch with one local read (`git symbolic-ref --quiet HEAD`,
+stripping the full `refs/heads/` prefix so a same-named tag cannot change the
+branch name) and records it as the lane's base branch in place of `main`
 (`engine.ts:15669`); a draft records it the same way. Nothing is fetched,
 which keeps the rule of `engine.ts:15613-15619`. Unchanged: a repository with
 `origin`, a named branch or commit, a detached checkout (keeps `main`), and a

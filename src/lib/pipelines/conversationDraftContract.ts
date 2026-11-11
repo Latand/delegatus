@@ -23,6 +23,7 @@ export type ConversationDraftPreview = {
     head: string;
     sourceRevision: string;
     canCreate: boolean;
+    repositoryInitialization?: string;
     refusal?: ConversationDraftError;
   };
 };
