@@ -311,3 +311,29 @@ test.each(["viewer", "runtime-host"] as const)("%s without the bounded choice, a
   expect(summaries(firstWindow)).toHaveLength(25);
   for (const summary of summaries(firstWindow)) expect(summary).not.toHaveProperty("loopGapsWithheld");
 });
+
+test("a loop-gap reports the cooperative slices resumed inside it and what still waits", async () => {
+  const { yieldToRuntime } = await import("./cooperative");
+  /* Settle whatever earlier tests left queued, so the counts below are this test's own. */
+  await yieldToRuntime();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  let at = 0;
+  const lines: string[] = [];
+  const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, createPerformanceSpans(() => at));
+  try {
+    at = 10; monitor.tick();
+    /* Five slices resume between two ticks, and three more jobs are still waiting at the second. */
+    for (let slice = 0; slice < 5; slice += 1) await yieldToRuntime();
+    const waiting = Array.from({ length: 3 }, () => yieldToRuntime());
+    at = 1_020; monitor.tick();
+    const gap = JSON.parse(lines[0]!.slice("[viewer loop-gap] ".length));
+    expect(gap.gapMs).toBe(1_000);
+    expect(gap.cooperative).toMatchObject({ resumed: 5, depth: 3, maxDepth: 3 });
+    expect(gap.cooperative.turns).toBeGreaterThanOrEqual(5);
+    await Promise.all(waiting);
+    /* The next gap counts from the previous tick, never from the start of the process. */
+    at = 2_030; monitor.tick();
+    const next = JSON.parse(lines[1]!.slice("[viewer loop-gap] ".length));
+    expect(next.cooperative).toMatchObject({ resumed: 3, depth: 0 });
+  } finally { monitor.stop(); }
+});

@@ -534,6 +534,10 @@ export async function startCurrentReleaseControllers(
   }
   try {
     const tempSweep = await loaders.loadTempSweep?.();
+    if (tempSweep) {
+      const { AttemptTempStore } = await import("./runtime/attemptTempRetention");
+      new AttemptTempStore().close();
+    }
     tempSweep?.startTempSweep();
   } catch (error) {
     console.error("[temp sweep] start failed", error instanceof Error ? error.name : "unknown");

@@ -1,4 +1,6 @@
 import { settleClosedPipelineAttempts } from "./closeAttempts";
+import { assertPipelineNotRetiring, admitAttemptRetirement } from "./retirementClaim";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import { agentRegistry } from "@/lib/agent/registry";
 import { defaultStageFailEdge } from "./failEdgeBudget";
 import { isTaskSummaryContent } from "@/lib/tasks/summary";
@@ -8,7 +10,7 @@ import { projectStoreSignature } from "@/lib/projects/persistence";
 import { isPublicationRecovery, mergePublicationRecovery, publicationInterrupted, PUBLICATION_RETRY_DELAYS_MS, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { pipelinePauseInputSchema } from "./pauseMetadata";
-import { forEachCooperatively } from "@/lib/cooperative";
+import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { controllerPipelineKeys, controllerReferences, inheritControllerGuards } from "./controllerScope";
 import { StateLockDeferredError, outsideStateLockWait, stateLockAttempt, stateLockProcessKind, waitForStateLock } from "@/lib/state/lockWait";
 import { withWaitCorrelation } from "@/lib/blockingWaits";
@@ -1515,7 +1517,7 @@ export async function loadPipelinesForStartupAsync(): Promise<Pipeline[]> {
   for (const pipeline of evidence.pipelines) {
     result.push(performanceSpans.sync("pipeline.copy", () => cloneLoadedPipeline(pipeline, resolveProject), 1));
     if (performance.now() - slice >= 4) {
-      await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
+      await performanceSpans.wait("pipeline.yield", () => yieldToRuntime());
       // A project move may have committed while this copy yielded.
       resolveProject = projectAliasResolver();
       slice = performance.now();
@@ -1921,6 +1923,7 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
       if (!isPipeline(pipeline)) {
         throw new PipelineStoreError("refusing to persist a malformed pipeline record");
       }
+      assertPipelineNotRetiring(pipeline.id, () => pipelineRevision(pipeline));
     },
   };
   const active = new SqliteStateCollection<Pipeline>(filename, {
@@ -2191,6 +2194,19 @@ export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedT
     admitted();
     return operation(tx);
   }, remaining()));
+}
+
+/** A short state admission publishes the durable fence. The sweep owns its
+ * lifetime outside this lease and re-reads authority before removing data. */
+export async function claimAttemptRetirement(pipelineId: string, directory: string) {
+  const owner = captureProcessIdentity(process.pid);
+  return waitForStateLock("pipelines.retirement-claim", () => {
+    const { active, archive } = stores();
+    return active.boundedPatch(2, tx => {
+      const pipeline = tx.get(pipelineId) ?? archive.get(pipelineId);
+      return admitAttemptRetirement(pipelineId, directory, pipeline ? pipelineRevision(pipeline) : "missing", owner);
+    }, undefined, { collection: archive, prepare: () => ({ records: [] }) });
+  });
 }
 
 /** Called under the existing pipeline lease; indexed reads, no provisioning. */

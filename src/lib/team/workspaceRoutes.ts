@@ -99,6 +99,7 @@ export const WORKSPACE_ROUTES = {
   "/api/onboarding/diagnostics": "owner",
   "/api/onboarding/health": "owner",
   "/api/openai-services": "owner",
+  "/api/operator/heap": "owner",
   "/api/operator/settings": "owner",
   "/api/operator/worker-limit": "owner",
   "/api/orchestrator/ghost": "project",

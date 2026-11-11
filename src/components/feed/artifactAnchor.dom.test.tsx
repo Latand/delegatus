@@ -250,3 +250,17 @@ test("source CWD belongs only to native prose; deputy, relay and user rows stay 
     for (const link of links) expect(link.getAttribute("href")).toBe("docs/report.md");
   }
 });
+
+test("a picture whose bytes never load leaves a frame that says so and names it", async () => {
+  await renderMd("Before ![phone hint](/lanes/repo-pipeline-ab12cd34/.artifacts/hint.png) after");
+  /* This DOM tries the load itself and reports the failure, as a browser
+     does when the route answers with no picture. */
+  expect(dom.document.querySelector("img")).toBeNull();
+  const frame = dom.document.querySelector("[data-picture-missing]");
+  expect(frame).not.toBeNull();
+  expect(frame!.getAttribute("role")).toBe("img");
+  expect(frame!.getAttribute("aria-label")).toContain("phone hint");
+  /* The frame carries words of its own beside the picture's name. */
+  expect(frame!.textContent!.replace("phone hint", "").trim().length).toBeGreaterThan(0);
+  expect(frame!.querySelector("a")!.textContent).toBe("phone hint");
+});

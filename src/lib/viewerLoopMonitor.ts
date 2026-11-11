@@ -7,9 +7,10 @@ import { createLoopHeapSignals, readLoopMemoryUsage } from "./loopHeapSignals";
 import type { createLoopProfiler, LoopGapProfile } from "./loopProfiler";
 import { startupDiagnosticsQuiet } from "./startupDiagnostics";
 import { cacheSizes } from "./cacheTelemetry";
+import { observeCooperativeQueue } from "./cooperative";
 
 export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines.from-conversation.capture" | "pipelines.from-conversation.create" | "state.index-repair" | "temp.sweep" | "resources.read" | "worktrees.sweep" | "history.prepare" | "history.read" | "history.project-row" | "memory.curation-admission" | "pipelines.repository-initialization" | "memory.curation-panel" | "tasks.note" | "mcp.receipts" | "mcp.tasks.executor" | "memory.engine-start" | "memory.curation-status" | "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
-  | "loop-profiler.collect" | "loop-profiler.trim" | "loop-profiler.settings"
+  | "loop-profiler.collect" | "loop-profiler.trim" | "loop-profiler.settings" | "diagnostics.heap"
   | "cloud.environment-preparation"
   | "voice-tools.catalog"
   | "transcript.index" | "catalog.search" | "memory.discovery" | "memory.refresh" | "scanner.worker"
@@ -130,8 +131,17 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
   let gapCount = 0, gapTotalMs = 0, maxGapMs = 0, omittedLabels = 0, droppedOperations = 0;
   const gapLabels = new Set<ViewerOperation>();
   const gapSites = new Set<string>();
+  let cooperativeBefore = observeCooperativeQueue();
   const tick = () => {
     const at = now();
+    /* The cooperative queue between the last tick and this one: how many
+       slices the gap resumed and in how many turns. A stall made of many
+       resumed slices is the queue's; one with none or one is something else
+       (docs/design/viewer-stalls-root-cause.md, section 3.3). */
+    const cooperativeNow = observeCooperativeQueue();
+    const cooperative = { resumed: cooperativeNow.resumed - cooperativeBefore.resumed, turns: cooperativeNow.turns - cooperativeBefore.turns,
+      depth: cooperativeNow.depth, maxDepth: cooperativeNow.maxDepth, longestWaitMs: cooperativeNow.longestWaitMs };
+    cooperativeBefore = cooperativeNow;
     // The launcher pins each child to its own release, including checkout
     // installs with no container identity or hot-state activation record.
     const revision = performanceProcess.revision ?? [process.env.LLV_DIAGNOSTIC_REVISION, process.env.LLV_HOT_STATE_RELEASE_REVISION]
@@ -186,6 +196,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         ...performanceProcess, revision, sequence: ++sequence, lastTick: last, tick: at, utc: new Date().toISOString(),
         pendingOperations: active.size, activeDropped, completedDropped, logDropped: sink.dropped(),
         requests: spans.requests(),
+        cooperative,
         reads,
         attribution: { pending: attribution.pending, dropped: attribution.dropped, droppedMs: attribution.droppedMs,
           omitted: Math.max(0, attribution.records.length - longest.length),

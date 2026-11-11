@@ -850,6 +850,9 @@ test("terminal migration history goes cold while draining and referenced intents
     initial.migrationIntents[key] = { id: key,engine: "codex",targetId: "fixture-account",origin: "manual",revision: 1,
       state,createdAt: time,updatedAt: time,requestIds: [key],evidence: null,stoppedAt: state === "stopped" ? time : null };
   }
+  /* A stopped intent whose opt-out sweep is unfinished is found by enumeration, so it stays hot. */
+  initial.migrationIntents["migration-sweeping"] = { ...initial.migrationIntents["migration-stopped"]!,id: "migration-sweeping",
+    requestIds: ["migration-sweeping"],stopSweep: { stampedAt: time,optOut: true } };
   initial.conversations[conversationId(0)]!.migration = { intentId: "migration-referenced",phase: "committed",
     targetId: "fixture-account",revision: 1,error: null,errorCode: null,operationId: "migration-operation",
     sourceGenerationId: id(0),providerReceipt: null,pendingContinuityPaths: [],boardProject: null,
@@ -859,7 +862,7 @@ test("terminal migration history goes cold while draining and referenced intents
   const db = new Database(filename,{ readonly: true });
   try {
     expect(db.query("SELECT row_key FROM registry_hot_rows WHERE collection='migrationIntents' ORDER BY row_key").all())
-      .toEqual([{ row_key: "migration-draining" },{ row_key: "migration-referenced" }]);
+      .toEqual([{ row_key: "migration-draining" },{ row_key: "migration-referenced" },{ row_key: "migration-sweeping" }]);
     expect(db.query("SELECT row_key FROM registry_cold WHERE collection='migrationIntents' ORDER BY row_key").all())
       .toEqual([{ row_key: "migration-complete" },{ row_key: "migration-stopped" }]);
   } finally { db.close(); }

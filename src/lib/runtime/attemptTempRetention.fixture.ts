@@ -1,6 +1,22 @@
 import { attemptReferencesClear } from "./attemptTempFilesystem";
 import fs from "node:fs";
 import path from "node:path";
+import { discoverAttemptCopies } from "./attemptCopyDiscovery";
+import { claimAttemptRetirement } from "@/lib/pipelines/store";
+
+if (process.argv[2] === "--claim-hold") {
+  await claimAttemptRetirement(process.argv[3]!, process.argv[4]!);
+  process.stdout.write("ready\n");
+  for await (const chunk of process.stdin) { void chunk; }
+  // Model a process that exits without releasing its durable retirement claim.
+  process.exit(0);
+}
+
+if (process.argv[2] === "--copy-page") {
+  const result = discoverAttemptCopies(process.argv[3]!, process.argv[4]!, Date.now, Date.now() + 10000);
+  process.stdout.write(JSON.stringify(result));
+  process.exit(0);
+}
 
 if (process.argv[2] === "--load") {
   process.stdout.write("ready\n");
@@ -14,14 +30,50 @@ if (process.argv[2] === "--load") {
   }
 }
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
+import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
+import { attemptTempAuthority, runAttemptTempSweep } from "./attemptTempProduction";
+
+if (process.argv[2] === "--production-report") {
+  Date.now = () => Number(process.argv[3]);
+  const report = await runAttemptTempSweep({ scan: () => ({ ownNamespace: null, processes: [] }) },
+    { ...process.env, LLV_TEMP_SWEEP: "on" });
+  process.stdout.write(JSON.stringify(report) + "\n");
+  process.exit(0);
+}
 
 if (process.argv[2] === "--hold") {
   process.stdout.write("ready\n");
-  for await (const _chunk of process.stdin) { /* The parent owns this hold. */ }
+  for await (const chunk of process.stdin) { void chunk; /* The parent owns this hold. */ }
   process.exit(0);
 }
 
 const store = new AttemptTempStore(process.argv[2]!);
+if (process.argv[4] === "reporting") {
+  try {
+    const now = Number(process.argv[3]);
+    store.refreshReporting(() => now, now + 1000);
+    process.stdout.write(JSON.stringify({ retention: store.retention(now), unattributed: store.unattributedCopies() }));
+  } finally { store.close(); }
+  process.exit(0);
+}
+if (process.argv[4] === "scheduled-copies") {
+  try {
+    const now = Number(process.argv[3]), expiresAt = Number(process.argv[5]);
+    const report = await sweepEvidenceCopies(store, { now: () => now, state: async () => "closed",
+      authority: async () => ({ state: "closed", expiresAt, revision: "fixture", isCurrent: () => true }),
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
+    process.stdout.write(JSON.stringify({ report, retention: store.retention(now) }));
+  } finally { store.close(); }
+  process.exit(0);
+}
+if (process.argv[4] === "copies") {
+  try {
+    const report = await sweepEvidenceCopies(store, { now: () => Number(process.argv[3]), state: async () => "expired",
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
+    process.stdout.write(JSON.stringify(report));
+  } finally { store.close(); }
+  process.exit(0);
+}
 try {
   const budgetMode = process.argv[4] === "budget-run" || process.argv[4] === "budget-inventory" || process.argv[4] === "budget-read";
   if (process.argv[4] === "budget-read") {
@@ -45,9 +97,11 @@ try {
   const repository = path.join(path.dirname(process.argv[2]!), "budget-repository");
   const report = await sweepAttemptTemps(store, {
     now: () => now, runBudgetMs: budgetMode && process.argv[4] === "budget-run" ? 40_000 : undefined,
-    maxRoots: process.argv[4] === "pressure" ? 4 : budgetMode ? 2 : process.argv.includes("--default-budget") ? undefined : 1,
-    capBytes: process.argv[4] === "pressure" || budgetMode ? 0 : undefined,
+    ...(process.argv[4] === "production" ? { authority: (owner, inventory) => attemptTempAuthority(owner, inventory, () => now) } : {}),
+    maxRoots: process.argv[4] === "expired-pressure" ? 32 : process.argv[4] === "pressure" ? 4 : budgetMode ? 2 : process.argv.includes("--default-budget") ? undefined : 1,
+    capBytes: process.argv[4] === "expired-pressure" || process.argv[4] === "pressure" || budgetMode ? 0 : undefined,
     state: async (owner, inventory) => {
+      if (process.argv[4] === "production") return (await attemptTempAuthority(owner, inventory, () => now)).state;
       if (process.argv[4] === "budget-inventory" || process.argv[4] === "budget-read") {
         await inventory.targets(repository);
       }
@@ -57,9 +111,9 @@ try {
       }
       if (process.argv[4] === "hold-state") {
         process.stdout.write("ready\n");
-        for await (const _chunk of process.stdin) { /* The parent releases this observation. */ }
+        for await (const chunk of process.stdin) { void chunk; /* The parent releases this observation. */ }
       }
-      return process.argv[4] === "live" ? "live" : process.argv[4] === "orphan" ? "orphan" : "settled";
+      return process.argv[4]?.startsWith("expired") ? "expired" : process.argv[4] === "closed" ? "closed" : process.argv[4] === "live" ? "live" : process.argv[4] === "orphan" ? "orphan" : "settled";
     }, scan: () => ({ ownNamespace: null, processes: [] }),
     references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true),
     onRetired: retired,
