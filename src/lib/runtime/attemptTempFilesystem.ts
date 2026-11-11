@@ -445,17 +445,17 @@ export async function attemptReferencesClear(original: string, current: string, 
   return [...repositories].every(repository => inventory.unchanged(repository));
 }
 
-async function containerMountsClear(roots: readonly string[]): Promise<boolean> {
+async function containerMountsClear(roots: readonly string[], remaining?: () => number): Promise<boolean> {
   const physicalRoots = [...new Set(roots.flatMap(root => [root, resolvePhysicalPath(root)]))];
   let active: string[];
-  try { active = (await run("docker", ["ps", "-q"])).stdout.trim().split(/\s+/).filter(Boolean); }
+  try { active = (await run("docker", ["ps", "-q"], remaining?.())).stdout.trim().split(/\s+/).filter(Boolean); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return true; throw error; }
   if (active.length > 1024 || new Set(active).size !== active.length) return false;
   for (let offset = 0; offset < active.length; offset += 32) {
     const ids = active.slice(offset, offset + 32);
     // Read only ownership metadata, in bounded replies. Whole inspect output
     // also includes credentials and unrelated configuration.
-    const output = (await run("docker", ["inspect", "--format", '{"Id":{{json .Id}},"Mounts":{{json .Mounts}}}', ...ids])).stdout;
+    const output = (await run("docker", ["inspect", "--format", '{"Id":{{json .Id}},"Mounts":{{json .Mounts}}}', ...ids], remaining?.())).stdout;
     const containers = output.trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
     if (containers.length !== ids.length) return false;
     if (!ids.every(id => {
@@ -513,10 +513,10 @@ const containerClassifier = `
     case "$target" in /attempt/*) ;; *) exit 75;; esac
   done`;
 const utilityImages = ["busybox:*", "alpine:*", "debian:*", "ubuntu:*", "postgres:*", "redis:*"];
-export async function attemptTempUtilityImage(): Promise<string> {
+export async function attemptTempUtilityImage(remaining?: () => number): Promise<string> {
   if (process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE) return process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
   for (const pattern of utilityImages) {
-    const found = (await run("docker", ["image", "ls", "--filter", `reference=${pattern}`, "--format", "{{.ID}}"])).stdout.trim().split(/\s+/)[0];
+    const found = (await run("docker", ["image", "ls", "--filter", `reference=${pattern}`, "--format", "{{.ID}}"], remaining?.())).stdout.trim().split(/\s+/)[0];
     if (found) return found;
   }
   throw new Error("no installed container cleanup utility image");
@@ -525,24 +525,57 @@ const noEvidence = 'found=$(find /attempt -xdev "(" -name .artifacts'
   + PRESERVED_MEDIA_EXTENSIONS.map(extension => ` -o -iname "*.${extension}"`).join("")
   + ' ")" -print -quit) || exit; test -z "$found" || exit 75; ';
 
-async function containerCommand(directory: string, operation: "inspect" | "remove" | "measure" | "evidence", original = directory,
-  guard?: () => Promise<boolean>, requireNoEvidence = false, dispatchGuard?: () => boolean): Promise<{ identity: string; stdout: string }> {
+// The same utility computes and verifies this digest. Include sub-second
+// directory timestamps, modes and identities without parsing file names.
+// Each command writes separately so a failed find/stat/sort cannot be hidden
+// by a successful last command in a pipeline.
+const namespaceSnapshot = "find /attempt -xdev -type d -exec stat -c '%d:%i:%f:%y:%z' {} + > /tmp/directories || exit; "
+  + 'test "$(wc -l < /tmp/directories)" -le 10000 || exit 75; '
+  + 'LC_ALL=C sort /tmp/directories > /tmp/sorted || exit; '
+  + 'sha256sum /tmp/sorted > /tmp/digest || exit; read digest rest < /tmp/digest; ';
+export type AttemptNamespaceProtection = { digest: string };
+type NamespaceBudget = { budgetMs?: number; bytes?: number };
+type AttemptRemovalSettings = NamespaceBudget & {
+  /** Synchronous entry authority; full checkout validation brackets repair. */
+  permissionAuthority?: () => boolean;
+};
+function namespaceTimeout(settings: NamespaceBudget): number {
+  // At least five seconds, then one second per 16 MiB, clipped to the
+  // caller's remaining observation budget. Large trees get the whole bound.
+  const bytes = settings.bytes && settings.bytes > 0 ? settings.bytes : 512 * 1024 ** 2;
+  const sized = 5_000 + Math.ceil(bytes / (16 * 1024 ** 2)) * 1_000;
+  return Math.max(0, Math.min(30_000, settings.budgetMs ?? 30_000, sized));
+}
+
+async function containerCommand(directory: string, operation: "inspect" | "remove" | "measure" | "evidence" | "snapshot", original = directory,
+  guard?: () => Promise<boolean>, requireNoEvidence = false, dispatchGuard?: () => boolean,
+  settings: NamespaceBudget = {}, protection?: AttemptNamespaceProtection): Promise<{ identity: string; stdout: string }> {
+  // A measurement has no trustworthy size yet: use the remaining maximum.
+  const until = performance.now() + namespaceTimeout(operation === "measure" ? { budgetMs: settings.budgetMs } : settings);
+  const remaining = () => {
+    const ms = Math.floor(until - performance.now());
+    if (ms <= 0) throw new AttemptTempBudgetDeferred("attempt namespace time budget exhausted");
+    return ms;
+  };
   const initial = fs.lstatSync(directory);
   if (!initial.isDirectory() || initial.isSymbolicLink()) throw new Error("attempt namespace root changed");
   const identity = `${initial.dev}:${initial.ino}`;
   // Running containers may hold files through mount aliases that an ordinary
   // proc observer cannot read. Never stop or exec into one for reclamation.
-  if (!await containerMountsClear([directory, original])) throw new Error("container ownership could not be cleared for the attempt tree");
-  const image = await attemptTempUtilityImage();
+  if (!await containerMountsClear([directory, original], remaining)) throw new Error("container ownership could not be cleared for the attempt tree");
+  const image = await attemptTempUtilityImage(remaining);
   if (!/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(image) || directory.includes(",")) throw new Error("invalid container cleanup input");
   const inspection = 'export ORIGINAL=$1; shift; find /attempt -xdev "$@" -print > /tmp/markers || exit; '
     + 'test "$(wc -l < /tmp/markers)" -le 10000 || exit 75; '
     + `find /attempt -xdev "$@" -exec /bin/sh -c ${"'" + containerClassifier.replaceAll("'", "'\\''") + "'"} sh {} + || exit; `;
-  const body = operation === "measure" ? 'exec du -skx /attempt'
+  const body = operation === "snapshot" ? namespaceSnapshot + 'printf "%s\\n" "$digest"'
+    : operation === "measure" ? 'exec du -skx /attempt'
     : operation === "evidence" ? noEvidence
       : inspection + (requireNoEvidence ? noEvidence : "")
         + (operation === "remove" ? 'exec find /attempt -xdev -depth -mindepth 1 -delete' : 'exit 0');
-  const script = 'identity=$1; shift; test "$(stat -c %d:%i /attempt)" = "$identity" || exit 75; ' + body;
+  if (protection && !/^[a-f0-9]{64}$/.test(protection.digest)) throw new Error("invalid attempt namespace snapshot");
+  const verify = protection ? namespaceSnapshot + `test "$digest" = '${protection.digest}' || exit 75; ` : "";
+  const script = 'identity=$1; shift; test "$(stat -c %d:%i /attempt)" = "$identity" || exit 75; ' + verify + body;
   if (guard && !await guard()) throw new Error("attempt authority changed before namespace removal");
   const final = fs.lstatSync(directory);
   if (!final.isDirectory() || final.isSymbolicLink() || `${final.dev}:${final.ino}` !== identity)
@@ -551,10 +584,13 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
     throw new Error("attempt temp deferred: authority changed before namespace removal");
   // Only this owned tree is writable. No pull, network, socket, privileged
   // mode or host namespace is granted to the cleanup container.
-  const result = await run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1m",
+  const timeout = remaining();
+  let result: { stdout: string };
+  try { result = await run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=4m",
     "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
     "--mount", `type=bind,source=${directory},target=/attempt${operation !== "remove" ? ",readonly" : ""}`,
-    "--entrypoint", "timeout", image, "12", "/bin/sh", "-c", script, "sh", identity, original, ...markers]);
+    "--entrypoint", "timeout", image, String(Math.max(1, Math.floor(timeout / 1000))), "/bin/sh", "-c", script, "sh", identity, original, ...markers], timeout); }
+  catch (error) { throw new Error(attemptTempFailureDetail(error), { cause: error }); }
   return { identity, stdout: result.stdout };
 }
 
@@ -569,7 +605,7 @@ function removeEmptyNamespaceRoot(directory: string, identity: string, postDelet
 /** Native find streams an arbitrarily large owned tree; the owned worker and
  * each command impose time bounds instead of permanently retaining it at an
  * entry-count ceiling. Linked worktrees remain with their preservation owner. */
-export async function inspectAttemptTree(directory: string, original = directory): Promise<boolean> {
+export async function inspectAttemptTree(directory: string, original = directory, settings: NamespaceBudget = {}): Promise<boolean> {
   if (process.platform === "win32") {
     const pending = [directory]; let found = 0;
     while (pending.length) {
@@ -584,45 +620,125 @@ export async function inspectAttemptTree(directory: string, original = directory
     }
     return true;
   }
+  const until = performance.now() + namespaceTimeout(settings);
   try {
-    const found = (await run("find", [directory, "-xdev", ...markers, "-print0"])).stdout.split("\0").filter(Boolean);
+    const found = (await run("find", [directory, "-xdev", ...markers, "-print0"], Math.max(1, Math.min(15_000, Math.floor(until - performance.now()))))).stdout.split("\0").filter(Boolean);
     return found.length <= MARKER_LIMIT && !found.some(file => markerHolds(file, directory, original));
   }
   catch (error) {
     if (process.platform !== "linux") throw error;
-    try { await containerCommand(directory, "inspect", original); return true; }
+    try { await containerCommand(directory, "inspect", original, undefined, false, undefined,
+      { ...settings, budgetMs: until - performance.now() }); return true; }
     catch { return false; }
   }
 }
 
 /** An independent directory snapshot protects new markers even when expired
- * evidence is deliberately discarded. Check it synchronously after every
- * awaited observation and again at removal dispatch. Never follow links. */
-export async function snapshotAttemptProtection(directory: string, budgetMs = 30_000): Promise<{ current: () => boolean }> {
+ * evidence is deliberately discarded. Native metadata is checked synchronously
+ * after awaited observations. Opaque descendants also require their digest
+ * to be checked inside the removal namespace. Never follow links. */
+export async function snapshotAttemptProtection(directory: string, budgetMs = 30_000, namespaceRemoval = false, bytes?: number):
+  Promise<{ current: () => boolean; namespace?: AttemptNamespaceProtection }> {
   const until = performance.now() + Math.max(0, Math.min(30_000, budgetMs));
   const directories = new Map<string, string>();
   const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.mtimeNs, stat.ctimeNs].join(":");
   const pending = [directory];
+  const device = fs.lstatSync(directory).dev;
+  let inaccessible = false;
   while (pending.length) {
     if (performance.now() >= until || directories.size >= 10000) throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
     const current = pending.pop()!, stat = fs.lstatSync(current, { bigint: true });
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("attempt protection directory changed");
     directories.set(current, signature(stat));
-    const entries = fs.opendirSync(current);
+    if (stat.dev !== BigInt(device)) continue;
+    let entries: fs.Dir | undefined;
     try {
+      entries = fs.opendirSync(current);
       for (let entry; (entry = entries.readSync());) {
         if (performance.now() >= until || pending.length + directories.size >= 10000)
           throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
         if (entry.isDirectory()) pending.push(path.join(current, entry.name));
       }
-    } finally { entries.closeSync(); }
+    } catch (error) {
+      if (process.platform !== "linux" || !["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      inaccessible = true;
+    } finally { entries?.closeSync(); }
   }
-  return { current: () => {
+  let namespace: AttemptNamespaceProtection | undefined;
+  if (inaccessible) {
+    const result = await containerCommand(directory, "snapshot", directory, undefined, false, undefined,
+      { budgetMs: until - performance.now(), bytes });
+    const digest = result.stdout.trim();
+    if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error("invalid attempt namespace protection reply");
+    namespace = { digest };
+  }
+  return { namespace, current: () => {
+    // Callers using native deletion cannot validate opaque descendants.
+    // The retention adapter opts in only when it passes the digest to the
+    // removal namespace, which rechecks every directory before deletion.
+    if (namespace && !namespaceRemoval) return false;
     try {
       for (const [file, before] of directories) if (signature(fs.lstatSync(file, { bigint: true })) !== before) return false;
       return true;
     } catch { return false; }
   } };
+}
+
+/** Repair only an admitted, expired tree. Pin each entry without following a
+ * symlink, then chmod its descriptor. On Linux O_PATH also opens mode 000;
+ * the proc descriptor names that inode even if its directory entry changes.
+ * All child paths are relative to a held parent, on the root's device. */
+function repairAttemptPermissions(directory: string, authority: () => boolean, budgetMs: number) {
+  // Descendant lookup through these pinned descriptors requires Linux procfs.
+  // Other platforms keep their existing native removal path.
+  if (process.platform !== "linux") return;
+  const until = performance.now() + Math.max(0, Math.min(30_000, budgetMs));
+  const uid = process.getuid?.();
+  if (uid === undefined) return;
+  const initial = fs.lstatSync(directory);
+  const check = () => {
+    if (performance.now() >= until) throw new AttemptTempBudgetDeferred("attempt permission repair time budget exhausted");
+    if (!authority()) throw new AttemptTempBudgetDeferred("authority changed before permission repair");
+  };
+  const stack: Array<{ fd: number; pinned: string; entries: fs.Dir }> = [];
+  const enter = (file: string, root = false) => {
+    check();
+    // O_PATH is Linux-specific and is intentionally combined with O_NOFOLLOW:
+    // a symlink descriptor is classified and closed without touching its target.
+    const fd = fs.openSync(file, 0x200000 | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    let retained = false;
+    try {
+      const stat = fs.fstatSync(fd);
+      if (stat.isSymbolicLink() || stat.dev !== initial.dev || stat.uid !== uid || !stat.isDirectory() && !stat.isFile()) return;
+      if (root && `${stat.dev}:${stat.ino}` !== `${initial.dev}:${initial.ino}`) throw new Error("attempt permission repair root changed");
+      // A linked file may also belong to an entry outside this root. Its
+      // permissions do not prevent unlink, so leave that shared inode alone.
+      if (stat.isFile() && stat.nlink !== 1) return;
+      const mode = stat.mode | (stat.isDirectory() || stat.mode & 0o111 ? 0o700 : 0o600);
+      const pinned = `/proc/self/fd/${fd}`;
+      if (mode !== stat.mode) {
+        check();
+        fs.chmodSync(pinned, mode & 0o7777);
+      }
+      if (stat.isDirectory()) {
+        stack.push({ fd, pinned, entries: fs.opendirSync(pinned) });
+        retained = true;
+      }
+    } finally { if (!retained) fs.closeSync(fd); }
+  };
+  const close = () => {
+    const frame = stack.pop()!;
+    try { frame.entries.closeSync(); } finally { fs.closeSync(frame.fd); }
+  };
+  try {
+    enter(directory, true);
+    while (stack.length) {
+      check();
+      const frame = stack[stack.length - 1], entry = frame.entries.readSync();
+      if (entry) enter(path.join(frame.pinned, entry.name));
+      else close();
+    }
+  } finally { while (stack.length) close(); }
 }
 
 /** An unreadable tree can retire only when the readonly namespace proves it
@@ -632,28 +748,43 @@ export async function attemptTreeHasNoEvidence(directory: string, original: stri
 }
 
 export async function removeAttemptTree(directory: string, original = directory, guard?: () => Promise<boolean>, requireNoEvidence = false,
-  dispatchGuard?: () => boolean, postDeleteGuard = dispatchGuard, discardExpiredEvidence = false): Promise<void> {
-  if (requireNoEvidence) {
-    const { identity } = await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
-    removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
-    return;
-  }
-  if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before native removal");
-  try { await fs.promises.rm(directory, { recursive: true, force: true }); }
-  catch (error) {
-    if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
-    const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard);
-    removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
+  dispatchGuard?: () => boolean, postDeleteGuard = dispatchGuard, discardExpiredEvidence = false,
+  protection?: AttemptNamespaceProtection, settings: AttemptRemovalSettings = {}): Promise<void> {
+  try {
+    if (requireNoEvidence || protection) {
+      const { identity } = await containerCommand(directory, "remove", original, guard, requireNoEvidence || !discardExpiredEvidence, dispatchGuard, settings, protection);
+      removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
+      return;
+    }
+    if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before native removal");
+    if (discardExpiredEvidence && guard && dispatchGuard && postDeleteGuard) {
+      repairAttemptPermissions(directory, settings.permissionAuthority ?? postDeleteGuard, settings.budgetMs ?? 30_000);
+      // Chmod changes directory ctime. Rebuild the protection proof after our
+      // own repair, and reauthorize after that awaited observation.
+      if (!await guard() || !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed after permission repair");
+    }
+    try { await fs.promises.rm(directory, { recursive: true, force: true }); }
+    catch (error) {
+      if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
+      const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard, settings, protection);
+      removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
+    }
+  } catch (error) {
+    if (error instanceof AttemptTempBudgetDeferred) throw error;
+    throw new Error(attemptTempFailureDetail(error), { cause: error });
   }
 }
 
-export async function allocatedAttemptBytes(directory: string): Promise<number> {
+export async function allocatedAttemptBytes(directory: string, settings: NamespaceBudget = {}): Promise<number> {
   if (process.platform === "win32") return measureTempBytes(directory);
+  const until = performance.now() + Math.max(0, Math.min(30_000, settings.budgetMs ?? 30_000));
+  if (performance.now() >= until) throw new AttemptTempBudgetDeferred("attempt measurement time budget exhausted");
   let output: string | undefined;
-  try { output = (await run("du", ["-skx", "--", directory])).stdout; }
+  try { output = (await run("du", ["-skx", "--", directory], Math.max(1, Math.min(15_000, Math.floor(until - performance.now()))))).stdout; }
   catch {
     if (process.platform === "linux") {
-      try { output = (await containerCommand(directory, "measure")).stdout; }
+      try { output = (await containerCommand(directory, "measure", directory, undefined, false, undefined,
+        { ...settings, budgetMs: until - performance.now() })).stdout; }
       catch { /* Preserve a lower bound if namespace measurement is unavailable. */ }
     }
   }
