@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { admitPortableTestRunner } from "../src/lib/testing/portableTestAdmission";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
+import { GATE_TASKS_MAX } from "./gate-tasks";
 
 for (const platform of ["darwin", "win32", "linux"] as const) test(`portable ${platform} admission warns once and permits best-effort execution`, () => {
   const env: NodeJS.ProcessEnv = { NODE_ENV: "test" };
@@ -37,6 +38,8 @@ function fixture(systemd: boolean) {
 test.skipIf(process.platform !== "linux")("a Linux gate without systemd uses the explicit portable fallback", () => {
   const f = fixture(false); const run = f.run('echo "$NODE_OPTIONS"; exit 37');
   expect(run.status).toBe(37); expect(run.stderr).toContain("portable cleanup on linux is best effort");
+  expect(run.stderr).toContain("task limit unavailable: no systemd user gate unit");
+  expect(run.stderr.match(/gate-slot: task limit unavailable:/g)).toHaveLength(1);
 });
 test("memory service forwards args, status and bounded tree termination", () => {
   const f = fixture(true);
@@ -45,6 +48,7 @@ test("memory service forwards args, status and bounded tree termination", () => 
   const args = readFileSync(join(f.root, "log"), "utf8");
   expect(args).toContain("MemoryMax=14G"); expect(args).toContain("KillMode=control-group"); expect(args).toContain("TimeoutStopSec=2s");
   expect(args).toContain("CPUWeight=10"); expect(args).toContain("IOWeight=10");
+  expect(args).toContain(`TasksMax=${GATE_TASKS_MAX}`);
   expect(f.run('echo "$NODE_OPTIONS"').stdout).toContain("--max-old-space-size=11264");
 });
 test("a command sent through the gate without a deadline gets an hour of execution, and a caller's deadline is kept", () => {
