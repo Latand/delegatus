@@ -57,7 +57,10 @@ export function normalizeProjectOwnership(value: unknown): ConversationProjectOw
 
 export interface LaunchProfile {
   /** Server-attributed team launch; copied on resume, migration and delegation. */
-  workspace?: { memberId: string; workspaceId: string | null };
+  /** `fromMessage` marks a seat launch whose fence came from a member's message
+      and no designation: the next person who writes to the conversation decides
+      its reach. Absent, the binding is durable. */
+  workspace?: { memberId: string; workspaceId: string | null; fromMessage?: true };
   /** Stage request; null/absent inherits project and role settings at launch. */
   agentMemoryMaxBytes?: number | null;
   /** Text-free role variant selector for resource planning after restart. */
@@ -289,6 +292,31 @@ export interface MigrationIntent {
   requestIds: string[];
   evidence: MigrationEvidence | null;
   stoppedAt: string | null;
+  /** Present from the transaction that stopped the intent until the last
+      transaction of its sweep. The stop itself settles the conversations the
+      intent owns; the engine's other conversations are opted out of the
+      stopped target afterwards, a bounded number per transaction, so the
+      registry's write lock is never held for the whole engine. `stampedAt` is
+      the stop's own time, which every row the sweep writes carries. `optOut`
+      is the stop's decision: whether the engine was routed to this intent's
+      target when it stopped. While it is present, every conversation whose
+      migration the intent still owns is rolled back as far as any reader or
+      writer is concerned, whether or not the sweep has reached it. */
+  stopSweep?: MigrationStopSweep | null;
+}
+
+export interface MigrationStopSweep {
+  stampedAt: string;
+  optOut: boolean;
+  /** The stop's place among the opt-out decisions of its engine: a number the
+      registry hands out in the transaction that decides, each larger than the
+      one before, so two decisions of one millisecond are still ordered. A
+      conversation that starts or changes account while the stop's sweep is
+      still writing is placed against the same number, so what the stop
+      covered is never read from the clock. */
+  order?: number;
+  /** What the stop tells the senders of the input it cancels. */
+  reason?: string;
 }
 
 export interface AutoBalancePolicy {

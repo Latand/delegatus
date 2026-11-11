@@ -56,6 +56,12 @@ export function refreshOwnerEndingSql(predicate: string): string {
       delivery_id=excluded.delivery_id,ending_ms=excluded.ending_ms,ending_text=excluded.ending_text`;
 }
 
+/** Triggers of earlier builds of this projection, which refreshed it inside the
+    row write. The installation drops them, so a registry that still has one
+    is not up to date however complete the rest of its schema is. */
+export const RETIRED_ENDING_TRIGGERS: readonly string[] = ["registry_rows", "registry_cold"]
+  .flatMap(table => ["insert", "update", "delete"].map(event => `${table}_ending_${event}`));
+
 export function installRegistryEndings(db: Database): void {
   for (const statement of [
     `CREATE TABLE IF NOT EXISTS registry_owner_endings (
