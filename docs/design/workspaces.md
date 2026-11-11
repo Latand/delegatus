@@ -1012,9 +1012,13 @@ routes, which apply the workspace fence to the caller themselves. Every other
 installation-wide tool stays refused. A record's agent author carries the
 sender's project as a label; the result scan does not read it as a project
 key, and the answer withholds an author from outside the caller's reach.
-A seat record written before the field existed, bound by an agent-triggered
-designation, is read as message authority, so a seat an earlier release bound
-this way answers to the next person who writes to it with no state edit.
+A seat record written before the field existed, bound by a rotation an agent
+or the seat tick triggered, is read as message authority, so a seat an earlier
+release bound this way answers to the next person who writes to it with no
+state edit. The seat launch records the same marker in its launch profile
+(`workspace.fromMessage`), so the conversation keeps answering to the latest
+person after it leaves the seat. An adopted conversation without a durable
+launch binding of its own receives the fence as message authority too.
 
 Authority resolution shares one lazy seat map across the parent chain. The
 process retains one map for the seats file's path and filesystem identity;

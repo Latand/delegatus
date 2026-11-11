@@ -337,7 +337,7 @@ function normalizeSeat(value: unknown): OrchestratorSeat | null {
     : Boolean(engine || model);
   return {
     project: seat.project,
-    ...(seat.workspace ? { workspace: { ...seat.workspace } } : {}),
+    ...(seat.workspace ? { workspace: { memberId: seat.workspace.memberId, workspaceId: seat.workspace.workspaceId } } : {}),
     ...(seat.workspace && typeof seat.workspaceFromMessage === "boolean" ? { workspaceFromMessage: seat.workspaceFromMessage } : {}),
     seatEpoch: seat.seatEpoch,
     conversationId: seat.conversationId ?? null,
@@ -1071,7 +1071,7 @@ export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginS
       delete file.pending[project];
     }
     const seat: OrchestratorSeat = {
-      ...(input.workspace ? { workspace: { ...input.workspace } } : {}),
+      ...(input.workspace ? { workspace: { memberId: input.workspace.memberId, workspaceId: input.workspace.workspaceId } } : {}),
       ...(input.workspace ? { workspaceFromMessage: input.workspaceFromMessage === true } : {}),
       project,
       seatEpoch: file.nextSeatEpoch,
@@ -1467,13 +1467,14 @@ export function activeOrchestratorSeatsOrUnknown(): OrchestratorSeat[] | null {
 // changes. Every call stats the file: peer writes, revocations, permission
 // changes and atomic replacements take effect without a polling interval.
 /** A record written before the field existed cannot say where its binding came
-    from. An agent-triggered designation only ever copied the reach of the
-    conversation behind it, and that copy is how a member's message became a
-    permanent binding, so such a record is read as message authority: it stays
-    fenced until a person writes to the seat, and then that person decides. */
-export function seatWorkspaceFromMessage(seat: Pick<OrchestratorSeat, "workspace" | "workspaceFromMessage" | "triggeredBy">): boolean {
+    from. A rotation an agent or the seat tick triggered only ever copied the
+    reach of the conversation behind it, and that copy is how a member's message
+    became a permanent binding. Such a record is read as message authority: it
+    stays fenced until a person writes to the seat, and then that person
+    decides. A person's own designation names the operator or replaces nobody. */
+export function seatWorkspaceFromMessage(seat: Pick<OrchestratorSeat, "workspace" | "workspaceFromMessage" | "triggeredBy" | "predecessorConversationId">): boolean {
   if (!seat.workspace) return false;
-  return seat.workspaceFromMessage ?? seat.triggeredBy?.kind === "agent";
+  return seat.workspaceFromMessage ?? (seat.triggeredBy?.kind === "agent" || (!seat.triggeredBy && Boolean(seat.predecessorConversationId)));
 }
 
 /** What a designation recorded about one seat conversation's workspace reach. */

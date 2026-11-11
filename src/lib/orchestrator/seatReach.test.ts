@@ -14,7 +14,7 @@ import { resetTeamStoreForTests, teamStore, type TeamStore } from "@/lib/team/st
 import { conversationWorkspacePrincipal, type WorkspacePrincipal } from "@/lib/team/workspacePrincipal";
 import { createWorkspace } from "@/lib/team/workspaces";
 
-import { executeOrchestratorRotation, type SeatCommandDependencies, type SeatLaunchAdmission } from "./seatCommand";
+import { executeOrchestratorRotation, executeOrchestratorSeatRequest, type SeatCommandDependencies, type SeatLaunchAdmission } from "./seatCommand";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "./seats";
 
 /**
@@ -185,7 +185,7 @@ test("the fence follows an unanswered member request through repeated rotations 
 test("the owner's rotation of a member-bound seat designates a seat with the owner's reach", async () => {
   const bound = "conversation_22222222-2222-4222-8222-222222222222";
   const successor = "conversation_33333333-3333-4333-8333-333333333333";
-  // The record the incident left behind: seat and launch profile both name the member.
+  // A seat a person designated for the member, with a launch profile to match.
   designate(bound, scope);
   launched.set(bound, { workspace: scope, parent: SEAT });
   writes(owner, bound);
@@ -222,4 +222,65 @@ test("a seat stamped by an agent's rotation before the fix answers to the owner'
   expect(await reach(stamped)).toEqual(MEMBER_REACH);
   writes(owner, stamped);
   expect(await reach(stamped)).toEqual(OWNER_REACH);
+});
+
+/** The record an earlier release left: no word on where the binding came from. */
+function asEarlierRelease(change: (seat: Record<string, unknown>) => void = () => {}): void {
+  const file = statePath("orchestrator-seats.json");
+  const seats = JSON.parse(fs.readFileSync(file, "utf8"));
+  delete seats.seats[PROJECT].workspaceFromMessage;
+  change(seats.seats[PROJECT]);
+  fs.writeFileSync(file, JSON.stringify(seats));
+}
+
+test("an automatic rotation carries a member's message as message authority, and an earlier automatic stamp heals", async () => {
+  const successor = "conversation_22222222-2222-4222-8222-222222222222";
+  designate(SEAT);
+  writes(member, SEAT);
+  const answer = await executeOrchestratorRotation({ project: PROJECT, clientRequestId: "auto_rotation_0001" }, dependencies(successor), null, { autonomous: true });
+  expect(answer.status).toBe(200);
+  expect(await reach(successor)).toEqual(MEMBER_REACH);
+  // What the fenced successor launches or designates is bound in the ordinary way.
+  expect(conversationWorkspacePrincipal(lookup, successor)).toEqual(scope);
+  writes(owner, successor);
+  expect(await reach(successor)).toEqual(OWNER_REACH);
+
+  // The earlier release copied the incumbent's member onto the automatic successor and named no trigger.
+  const stamped = "conversation_33333333-3333-4333-8333-333333333333";
+  designate(stamped, scope);
+  asEarlierRelease(seat => { seat.triggeredBy = null; seat.predecessorConversationId = successor; });
+  launched.set(stamped, { workspace: scope, parent: successor });
+  expect(await reach(stamped)).toEqual(MEMBER_REACH);
+  writes(owner, stamped);
+  expect(await reach(stamped)).toEqual(OWNER_REACH);
+});
+
+test("a fenced seat that adopts a conversation hands it the fence as message authority", async () => {
+  const adopted = "conversation_22222222-2222-4222-8222-222222222222";
+  designate(SEAT);
+  writes(member, SEAT);
+  writes(owner, adopted);
+  const answer = await executeOrchestratorSeatRequest({ project: PROJECT, clientRequestId: "adopt_000000001", conversationId: adopted, mandate: "own the board", replaceIncumbent: true },
+    dependencies(adopted), { kind: "agent", conversationId: SEAT, seatEpoch: orchestratorSeatFor(PROJECT).active!.seatEpoch },
+    { workspace: conversationWorkspacePrincipal(lookup, SEAT) ?? undefined });
+  expect(answer).toMatchObject({ status: 200 });
+  expect(orchestratorSeatFor(PROJECT).active?.conversationId).toBe(adopted);
+  expect(await reach(adopted)).toEqual(MEMBER_REACH);
+  writes(owner, adopted);
+  expect(await reach(adopted)).toEqual(OWNER_REACH);
+});
+
+test("a message-authority seat keeps answering to the latest person after it leaves the seat, seats file readable or broken", async () => {
+  const fenced = "conversation_22222222-2222-4222-8222-222222222222";
+  const next = "conversation_33333333-3333-4333-8333-333333333333";
+  designate(SEAT);
+  writes(member, SEAT);
+  await seatRotatesItself(fenced);
+  await personRotates(owner, next);
+  // No longer the seat: the launch profile alone says the fence came from a message.
+  expect(await reach(fenced)).toEqual(MEMBER_REACH);
+  fs.writeFileSync(statePath("orchestrator-seats.json"), "{");
+  expect(await reach(fenced)).toEqual(MEMBER_REACH);
+  writes(owner, fenced);
+  expect(await reach(fenced)).toEqual(OWNER_REACH);
 });

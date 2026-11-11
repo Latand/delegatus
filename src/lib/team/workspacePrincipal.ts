@@ -55,16 +55,20 @@ export function conversationWorkspaceReach(snapshot: RegistryFile | ((id: string
     }
     return seats.get(id);
   };
+  // The answer never carries the launch marker, so whatever a conversation
+  // launches or designates from it is bound in the ordinary way.
   const bound = (principal: WorkspacePrincipal, fromMessage: boolean): WorkspaceReach => {
     const member = store?.member(principal.memberId);
-    return { principal: member?.status === "active" && member.role === "owner" ? null : principal, fromMessage };
+    return { principal: member?.status === "active" && member.role === "owner" ? null
+      : { memberId: principal.memberId, workspaceId: principal.workspaceId }, fromMessage };
   };
   while (id && !seen.has(id)) {
     seen.add(id);
     const conversation = typeof snapshot === "function" ? snapshot(id) : Object.hasOwn(snapshot.conversations, id) ? snapshot.conversations[id] : undefined;
     const profile = conversation?.generations.at(-1)?.launchProfile;
     const seat = seatBinding(id, Boolean(profile?.workspace));
-    const inherited = seat?.fromMessage ? seat.workspace : undefined;
+    // The launch marker keeps the answer once the conversation leaves the seat map.
+    const inherited = seat?.fromMessage ? seat.workspace : profile?.workspace?.fromMessage ? profile.workspace : undefined;
     const principal = inherited ? undefined : profile?.workspace ?? seat?.workspace;
     if (principal) return bound(principal, false);
     const memberId = store?.latestConversationMember(id);
