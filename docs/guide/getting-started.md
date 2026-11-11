@@ -209,11 +209,15 @@ lists what it sends.
 Delegatus serves a web app manifest, so a browser can give it its own window
 and icon instead of a tab.
 
-- **Chrome and Edge** on a computer: open Delegatus, then use the
-  browser's **Install** entry. In the address bar it is the install icon; in
-  the menu it reads **Install Delegatus** or **Cast, save, and share** →
-  **Install page as app**. The app opens in its own window with the Delegatus
-  icon, from `127.0.0.1` as well.
+- **Chrome** on a computer: open Delegatus, then click the install icon in
+  the address bar, or open the ⋮ menu and choose **Cast, save, and share** →
+  **Install page as app** (some versions show **Install Delegatus** in the
+  menu directly). The app opens in its own window with the Delegatus icon,
+  from `127.0.0.1` as well.
+- **Edge** on a computer: click the install icon in the address bar, or open
+  the **Settings and more** (⋯) menu and choose **Apps** → **Install this site
+  as an app**, which reads **Install Delegatus** once Edge finds the
+  manifest. The window and icon are the same.
 - **Safari on macOS 14 or later**: **File** → **Add to Dock**. Safari adds any
   site to the Dock this way, with or without a manifest, so this works today.
 - **Phone**: open the [phone address](phone.md#phone-access). Chrome on
