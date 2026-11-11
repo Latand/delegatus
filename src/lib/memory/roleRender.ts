@@ -68,7 +68,11 @@ export function renderLearnedRulesSelection(scopes: readonly { scope: string; ru
 /** Incremental size of the same block rendered above. Each id can occur in
  * several scopes after succession; adding it accounts for every occurrence,
  * empty-scope placeholders and the decimal counts in the first line. */
-export function learnedRulesByteCounter(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[], initial: ReadonlySet<string>) {
+export async function learnedRulesByteCounter(
+  scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[],
+  initial: ReadonlySet<string>,
+  checkpoint: () => Promise<void> | undefined = () => undefined,
+) {
   const selected = new Set(initial);
   const counts = scopes.map(scope => scope.rules.filter(rule => selected.has(rule.id)).length);
   const kinds = scopes.map(scope => scopeKind(scope.scope));
@@ -76,13 +80,16 @@ export function learnedRulesByteCounter(scopes: readonly { scope: string; rules:
   scopes.forEach((_, i) => totals.set(kinds[i], (totals.get(kinds[i]) ?? 0) + counts[i]));
   let bytes = Buffer.byteLength(renderBlock(scopes.map(scope => ({ ...scope, rules: scope.rules.filter(rule => selected.has(rule.id)) })), {}));
   const additions = new Map<string, Map<number, { count: number; bytes: number }>>();
-  scopes.forEach((scope, index) => scope.rules.forEach(rule => {
-    if (selected.has(rule.id)) return;
-    let places = additions.get(rule.id);
-    if (!places) additions.set(rule.id, places = new Map());
-    const held = places.get(index) ?? { count: 0, bytes: 0 };
-    held.count++; held.bytes += Buffer.byteLength(ruleLine(rule)); places.set(index, held);
-  }));
+  for (let index = 0; index < scopes.length; index++) {
+    for (const rule of scopes[index].rules) {
+      const pending = checkpoint(); if (pending) await pending;
+      if (selected.has(rule.id)) continue;
+      let places = additions.get(rule.id);
+      if (!places) additions.set(rule.id, places = new Map());
+      const held = places.get(index) ?? { count: 0, bytes: 0 };
+      held.count++; held.bytes += Buffer.byteLength(ruleLine(rule)); places.set(index, held);
+    }
+  }
   return {
     get bytes() { return bytes; },
     add(id: string, ceiling: number): boolean {

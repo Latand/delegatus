@@ -8,6 +8,7 @@ import { selectionCorpus, localSelectionProvider, corpusRule, CORPUS_PROJECT } f
 import expected from "./roleSelectionCorpus.expected.json";
 import { selectRoleMemory } from "./roleSelect";
 import * as rendering from "./roleRender";
+import { cooperativeSlice } from "@/lib/cooperative";
 import { learnedRulesSnapshot, roleMemoryCollection } from "./roleStore";
 import { persistProjectAliases } from "@/lib/projects/aliases";
 import { statePath } from "@/lib/configDir";
@@ -52,10 +53,11 @@ test("scoring and packing share 32 ms slices and exclude time waiting for a turn
     turn: async () => { turns.push(clock); clock += 1000; },
   } });
   expect(result.shadowIds).toEqual(expected[0].shadowIds);
-  // 95 documents + 95 scores + 100 pack visits. No phase resets the slice.
-  expect(turns).toHaveLength(Math.floor(290 / 32));
+  // 95 documents + 95 scores + 100 byte-counter visits + 100 pack visits.
+  // No phase resets the slice.
+  expect(turns).toHaveLength(Math.floor(390 / 32));
   expect(turns[0]).toBe(33);
-  expect(turns.slice(1).map((at, i) => at - turns[i])).toEqual(Array(8).fill(1033));
+  expect(turns.slice(1).map((at, i) => at - turns[i])).toEqual(Array(turns.length - 1).fill(1033));
 });
 
 test("cancellation while awaiting a slice stops before the next rule", async () => {
@@ -101,23 +103,50 @@ test("provider packing checks the deadline even before a timer can run", async (
   } finally { now.mockRestore(); }
 });
 
-test("incremental bytes match rendering through count boundaries, empty scopes and duplicate ids", () => {
+test("incremental bytes match rendering through count boundaries, empty scopes and duplicate ids", async () => {
   const { scopes } = selectionCorpus(650, true);
   const duplicate = scopes[0].rules[0];
   const input = [...scopes, { scope: "machine", rules: [duplicate] }];
   const ids = new Set<string>();
-  const counter = learnedRulesByteCounter(input, ids);
+  const counter = await learnedRulesByteCounter(input, ids);
   const bytes = () => Buffer.byteLength(renderLearnedRulesSelection(input.map(scope => ({ ...scope, rules: scope.rules.filter(rule => ids.has(rule.id)) }))).block);
   expect(counter.bytes).toBe(bytes());
   for (const rule of scopes.flatMap(scope => scope.rules)) {
     expect(counter.add(rule.id, Infinity)).toBe(true); ids.add(rule.id);
     expect(counter.bytes).toBe(bytes());
   }
-  const fresh = learnedRulesByteCounter(input, new Set());
+  const fresh = await learnedRulesByteCounter(input, new Set());
   const before = fresh.bytes;
   expect(fresh.add(duplicate.id, before)).toBe(false);
   expect(fresh.bytes).toBe(before);
   expect(fresh.add(duplicate.id, Infinity)).toBe(true);
+});
+
+test("byte-counter preparation yields on the shared 32 ms budget and stops after cancellation", async () => {
+  const { scopes } = selectionCorpus(650, true);
+  let clock = 0, checkpoints = 0;
+  const turns: number[] = [];
+  const signal = new AbortController();
+  const checkpoint = cooperativeSlice(signal.signal, {
+    now: () => ++clock,
+    turn: async () => { turns.push(checkpoints); },
+  });
+  await learnedRulesByteCounter(scopes, new Set(), () => { checkpoints++; return checkpoint(); });
+  expect(turns[0]).toBe(32);
+  expect(turns.length).toBeGreaterThan(0);
+
+  const cancelled = new AbortController();
+  let cancelledChecks = 0, cancelledTurns = 0;
+  const stopAtTurn = cooperativeSlice(cancelled.signal, {
+    now: () => ++clock,
+    turn: async () => { cancelledTurns++; cancelled.abort(); },
+  });
+  await expect(learnedRulesByteCounter(scopes, new Set(), () => {
+    cancelledChecks++;
+    return stopAtTurn();
+  })).rejects.toThrow();
+  expect(cancelledTurns).toBe(1);
+  expect(cancelledChecks).toBe(32);
 });
 
 test("a launch touches only its keyed scopes and active rules with 1,000 or 100,000 foreign rows", () => {

@@ -61,7 +61,7 @@ export async function packRoleSelection(scopes: Scopes, rules: RoleMemoryRule[],
   // Layers arrive in slice 3; operator-kept rules already exist today.
   const protectedIds = alwaysOn(rules);
   const selected = new Set(protectedIds);
-  const byteCount = learnedRulesByteCounter(scopes, protectedIds);
+  const byteCount = await learnedRulesByteCounter(scopes, protectedIds, checkpoint);
   let chars = 0;
   const order = rules.map((rule, rank) => ({ rule, rank, score: scores[rank] })).sort((a, b) => b.score - a.score || a.rank - b.rank || a.rule.id.localeCompare(b.rule.id));
   for (let i = 0; i < order.length; i++) {
