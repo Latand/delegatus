@@ -65,11 +65,12 @@ measurement. Reconstructed history carries no clock. An unfinished turn can
 contribute only through its last observed boundary. A different process cannot
 join a lost owner's open interval to its own observations.
 
-Checks retain closed CPU/slot wait observations and the producer's command
+Foreground and custody-backed checks retain closed CPU/slot wait observations and the producer's command
 dispatch and close times. Unobserved setup, cleanup, missing dispatch, malformed
 boundaries and gaps remain unknown. A deadline and a test runner's printed
-duration are never substituted for observations. Ordinary tools that did not run
-through the recorded-check protocol cannot supply a check split.
+duration are never substituted for observations. Foreground `gate-slot.sh --record` checks write observations under the launch's
+registered scratch root without requiring a custody manifest. Other tools
+without recorded gate observations cannot supply a check split.
 
 The partition counts overlapping wall time once: checks take precedence over
 tools, which take precedence over model turns. Concurrent checks and tools count

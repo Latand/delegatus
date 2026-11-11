@@ -1,3 +1,4 @@
+import { readAttemptCheckTiming } from "@/lib/runtime/attemptCheckTiming";
 import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
 import { readNativeTiming } from "@/lib/runtime/attemptTiming";
@@ -18,7 +19,7 @@ export function checkTimeSpans(row: CheckRow): TimeSpan[] {
 
 /** Called only for a record being written. A snapshot follows the current completion interval;
  * the weekly report needs neither a host nor retained runtime files. */
-export function settleAttemptAccounting(attempt: PipelineStageAttempt): void {
+export function settleAttemptAccounting(attempt: PipelineStageAttempt, pipelineId?: string): void {
   const accounting = attempt.accounting;
   if (!accounting) return;
   if (!attempt.completedAt) {
@@ -32,6 +33,8 @@ export function settleAttemptAccounting(attempt: PipelineStageAttempt): void {
   const spans: TimeSpan[] = [];
   try { if (attempt.sessionId) spans.push(...readNativeTiming(attempt.sessionId)); }
   catch { /* A missing timing source leaves its whole interval unknown. */ }
+  try { if (pipelineId && attempt.launchId) spans.push(...readAttemptCheckTiming(attempt.launchId, pipelineId)); }
+  catch { /* Unavailable foreground timing stays unknown. */ }
   const filename = statePath("state.sqlite");
   if (attempt.launchId && fs.existsSync(filename)) {
     let checks: RecordedCheckStore | undefined;
@@ -44,6 +47,6 @@ export function settleAttemptAccounting(attempt: PipelineStageAttempt): void {
     } catch { /* Unknown is retained, never extrapolated from a deadline. */ }
     finally { checks?.close(); }
   }
-  accounting.spans = spans.slice(0, 4096);
+  accounting.spans = spans.length > 4096 ? [] : spans;
   accounting.time = splitAttemptTime(start, attempt.completedAt, accounting.spans);
 }

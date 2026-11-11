@@ -1,3 +1,4 @@
+import { retainForegroundCheckTiming } from "../src/lib/recordedChecks/timing";
 // One background recorder, any number of resumable foreground waits. Admission
 // and descendant cleanup remain with the unmodified command path in gate-slot.
 import fs from "node:fs";
@@ -60,7 +61,7 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
     descriptor = { ...input, wrapper: null, descriptorDigest: descriptorDigest(input) };
     writeEnvelope(path.join(dir, "descriptor.json"), descriptor);
   }
-  let queueTiming: string | null = descriptor ? path.join(dir, "queue-timing") : null;
+  let queueTiming: string | null = path.join(dir, "queue-timing");
   try { if (queueTiming) fs.mkdirSync(queueTiming, { mode: 0o700 }); }
   catch { queueTiming = null; }
   let code = 127;
@@ -76,9 +77,10 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
   try {
     const child = spawn("bash", [path.join(import.meta.dir, "gate-slot.sh"), ...command], {
       stdio: ["ignore", fd, "pipe"],
-      env: { ...process.env, LLV_GATE_WAIT_STARTED: path.join(dir, "running"), ...(descriptor ? {
+      env: { ...process.env, LLV_GATE_WAIT_STARTED: path.join(dir, "running"),
+        LLV_GATE_TIMING_DIRECTORY: dir, LLV_GATE_TIMING_DIRECTORY_IDENTITY: physical(dir),
+        ...(queueTiming ? { LLV_RECORDED_CHECK_WAIT_ROOT: queueTiming } : {}), ...(descriptor ? {
         LLV_RECORDED_CHECK_DIRECTORY: dir, LLV_RECORDED_CHECK_ID: descriptor.runId,
-        ...(queueTiming ? { LLV_RECORDED_CHECK_WAIT_ROOT: queueTiming } : {}),
         LLV_GATE_RUNNER: "off", LLV_OWNED_RUN_TIMEOUT_MS: String(executionAllowance),
       } : {}) },
     });
@@ -149,6 +151,7 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
       wrapperExit: code, wrapperSignal, cancellation, queueSpans, closedAt: Date.now(), closedUptimeMs: custodyClock(), report, reports,
       dispatch: fs.existsSync(path.join(dir, "running")) || report || reports.length ? "started" : "not-started" } satisfies Terminal);
   }
+  retainForegroundCheckTiming(dir, closedQueueSpans(queueTiming));
   const exit = fs.openSync(path.join(dir, "exit.tmp"), "wx", 0o600);
   try { fs.writeFileSync(exit, `${code}\n`); fs.fsyncSync(exit); } finally { fs.closeSync(exit); }
   fs.renameSync(path.join(dir, "exit.tmp"), path.join(dir, "exit"));

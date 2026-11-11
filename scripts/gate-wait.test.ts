@@ -1,3 +1,5 @@
+import { materializeStructuredHostAccess } from "../src/lib/runtime/structuredSpawn";
+import { readAttemptCheckTiming } from "../src/lib/runtime/attemptCheckTiming";
 import { reportCpuWait, cpuInheritedWaitMs } from "../src/lib/runtime/cpuAdmissionBudget";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -379,3 +381,28 @@ test("closed queue observations round-trip independently of execution budgets", 
     expect(closedQueueSpans(path.join(f.root, "missing"))).toBeUndefined();
   } finally { end?.(); clock.mockRestore(); }
 });
+
+
+test.skipIf(process.platform !== "linux")("a plain recorded foreground gate supplies controller timing without a custody manifest", async () => {
+  const parent = fixture();
+  const access = materializeStructuredHostAccess(false, process.env, null, parent.root,
+    { pipelineId: "foreground-lane", launchId: "foreground-launch", retainUntilClose: false });
+  const log = path.join(access.env.TMPDIR!, "plain.log");
+  const f = { root: access.scratchDirectory, log, dir: log + ".gate" };
+  const env = portableEnvironment(f);
+  for (const key of ["LLV_ATTEMPT_TIMING_ROOT", "LLV_ATTEMPT_TIMING_ROOT_IDENTITY", "TMPDIR"]) env[key] = access.env[key];
+  const go = path.join(f.root, "go");
+  const command = `import fs from "node:fs"; import path from "node:path"; const go=process.argv[1]; await new Promise(resolve=>{ const watcher=fs.watch(path.dirname(go),()=>{ if(fs.existsSync(go)){watcher.close();resolve();} }); if(fs.existsSync(go)){watcher.close();resolve();} });`;
+  try {
+    const recording = background(["--record", log, process.execPath, "-e", command, go], env);
+    await recording.ticketReady;
+    await observe(f.dir, () => fs.readdirSync(f.dir).some(name => name.startsWith("clock-")));
+    fs.writeFileSync(go, "continue");
+    expect(await recording.closed).toBe(0);
+    expect(fs.existsSync(path.join(f.dir, "descriptor.json"))).toBe(false);
+    const spans = readAttemptCheckTiming("foreground-launch", "foreground-lane");
+    expect(spans.some(span => span.kind === "checkRunner")).toBe(true);
+    expect(spans.some(span => span.kind === "checkQueue")).toBe(true);
+    expect(spans.every(span => Number.isFinite(span.start) && span.end >= span.start)).toBe(true);
+  } finally { access.cleanup(); }
+}, 30_000);

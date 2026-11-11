@@ -1,3 +1,4 @@
+import { observeCheckProducer } from "./timing";
 // Standalone producer protocol. Bundled into the gate; never resolves Viewer state.
 import fs from "node:fs";
 import path from "node:path";
@@ -294,6 +295,7 @@ export function recordedSupervisorRefusal(obligation: RecordedSupervisorObligati
   return cpuOwnerStatus(obligation.recorder) !== "alive" || cpuOwnerExited(obligation.recorder) ? "owner" : null;
 }
 export function producerReport(kind: ProducerReport["kind"], command: ProcessIdentity | null, fields: Partial<ProducerReport> = {}): ProducerReport | null {
+  if (command || fields.phase === "close") observeCheckProducer(kind, fields.phase !== "close", digest(cpuOwnerIdentity(process.pid)));
   const directory = process.env.LLV_RECORDED_CHECK_DIRECTORY;
   if (!directory) return null;
   const descriptor = descriptorSchema.parse(readEnvelope(path.join(directory, "descriptor.json")));
