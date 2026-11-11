@@ -47,3 +47,32 @@ test("serving Next tracer retains render phase, static site and failure semantic
   } finally { restore(); monitor.stop(); }
   expect(tracer.trace).toBe(original);
 });
+
+test("a response still being sent after the bound is counted as a stream", async () => {
+  let at = 0;
+  const lines: string[] = [];
+  const spans = createPerformanceSpans(() => at);
+  const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, spans);
+  const restore = await installServingNextRenderMonitor(monitor, spans, 20);
+  const operations = () => {
+    at += 1300; monitor.tick();
+    return (JSON.parse(lines.at(-1)!.slice("[viewer loop-gap] ".length)).operations as Array<{ name: string; completed: boolean }>);
+  };
+  try {
+    const tracer = getTracer();
+    let close!: (value: string) => void;
+    const stream = tracer.trace(BaseServerSpan.renderToResponseWithComponents, async () => await new Promise<string>(done => { close = done; }));
+    const quick = tracer.trace(BaseServerSpan.renderToResponseWithComponents, async () => "page");
+    expect(await quick).toBe("page");
+    expect(operations().filter(operation => !operation.completed).map(operation => operation.name)).toEqual(["http.render"]);
+    await Bun.sleep(60);
+    // The open response no longer reads as a render that never finished.
+    const open = operations();
+    expect(open.filter(operation => !operation.completed).map(operation => operation.name)).toEqual(["http.stream"]);
+    expect(open).toContainEqual(expect.objectContaining({ name: "http.render", completed: true }));
+    close("closed");
+    expect(await stream).toBe("closed");
+    await Bun.sleep(0);
+    expect(operations().filter(operation => !operation.completed)).toEqual([]);
+  } finally { restore(); monitor.stop(); }
+});

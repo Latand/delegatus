@@ -411,6 +411,76 @@ test("HTTP refuses worker, unidentified and invalid-capability relays before del
   expect(delivered).toEqual([]);
 });
 
+/** The journal lines a relay refusal writes, parsed; other lines are skipped. */
+function refusalJournal() {
+  const lines: Record<string, unknown>[] = [];
+  const spy = spyOn(console, "warn").mockImplementation((...args) => {
+    try {
+      const line = JSON.parse(String(args[1])) as Record<string, unknown>;
+      if (line.event === "orchestrator_relay_refused") lines.push(line);
+    } catch { /* Unstructured warnings are not refusal lines. */ }
+  });
+  return { lines, restore: () => spy.mockRestore() };
+}
+
+test("each admission refusal names its own failed condition under the stable code", async () => {
+  const recipient = actor("project-b");
+  const worker = actor();
+  const journal = refusalJournal();
+  try {
+    const reasons: unknown[] = [];
+    for (const capability of [worker.capability, "invalid"]) {
+      const response = await POST(request(capability, relayBody(recipient.id)));
+      const body = await response.json();
+      expect(response.status).toBe(403);
+      expect(body.code).toBe("orchestrator_relay_refused");
+      reasons.push(body.reason);
+    }
+    expect(reasons).toEqual(["sender_not_authorized", "caller_unidentified"]);
+    expect(journal.lines.map(line => line.reason)).toEqual(reasons);
+    expect(journal.lines[0]).toMatchObject({ stage: "admission", sender: worker.id, clientMessageId: "fixture-send", operationId: null });
+    for (const line of journal.lines) expect(JSON.stringify(line)).not.toContain("Please investigate");
+  } finally { journal.restore(); }
+  expect(delivered).toEqual([]);
+});
+
+/* Issue 3737's shape: a designated seat's cross-project relay passes admission
+   and is then refused with 409 under the stable code and no operation id. That
+   is the delivery-time guard; here two of its conditions are staged. */
+for (const [cause, reason] of [["recipient", "recipient_seat_changed"], ["sender", "sender_seat_revoked"]] as const)
+test(`a relay refused at delivery after the ${cause} seat changed answers 409 with its reason and one journal line`, async () => {
+  const { DeliveryAdmissionRefusedError } = await import("@/lib/deliveryAdmission");
+  const sender = actor("project-a");
+  const recipient = actor("project-b");
+  const journal = refusalJournal();
+  setConversationHostDependenciesForTests({
+    collectImagePayloads: () => ({ images: [], error: null }),
+    // The delivery queue runs the guard under its own lock, after a seat
+    // changed, and turns its refusal into this pre-reservation failure.
+    enqueueStructuredMessage: async (message) => {
+      actor(cause === "recipient" ? "project-b" : "project-a");
+      try { message.admissionGuard?.(); message.admissionGuard?.(); }
+      catch (error) {
+        if (!(error instanceof DeliveryAdmissionRefusedError)) throw error;
+        return { ok: false, structured: true, outcome: "failed", error: error.message, code: error.code, status: 409, admission: "refused" };
+      }
+      throw new Error("the guard admitted a relay whose seat changed");
+    },
+    recordOperatorRequest: () => null,
+  });
+  try {
+    const response = await POST(request(sender.capability, relayBody(recipient.id)));
+    const body = await response.json();
+    expect(response.status).toBe(409);
+    expect(body).toMatchObject({ code: "orchestrator_relay_refused", reason, admission: "refused" });
+    expect(body.operationId).toBeUndefined();
+    expect(journal.lines).toHaveLength(1);
+    expect(journal.lines[0]).toMatchObject({ reason, stage: "delivery", sender: sender.id, recipient: recipient.id,
+      clientMessageId: "fixture-send", operationId: null });
+    expect(JSON.stringify(journal.lines[0])).not.toContain("Please investigate");
+  } finally { journal.restore(); }
+});
+
 test("a rotated former seat loses relay authority immediately", async () => {
   const sender = actor("project-a");
   const recipient = actor("project-b");

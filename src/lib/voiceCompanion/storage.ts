@@ -74,7 +74,10 @@ export type SessionStarter = { memberId: string } | { operator: true };
  * committed with the scan position that found it, so a failed hand-off resumes
  * at the first part not handed and never repeats one that was. */
 export interface ReportSpeech { reportId: string; project: string; status: string; text: string; parts?: string[]; handed: number;
-  kind?: "message"; at?: string | null;
+  kind?: "message" | "resume";
+  resumeOf?: { part: string; item: string };
+  resumePoint?: import("./callResume").ResumePoint;
+  at?: string | null;
   /** The operator asked to hear a report this call already relayed once more. */
   reread?: boolean }
 export interface StoredSession {

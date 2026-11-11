@@ -1,4 +1,3 @@
-import { markTaskExport } from "./taskExportPrivacy";
 import { sharedLinkState } from "./runtimeState";
 /**
  * A's half of the `tasks` part of `boards/sync` (docs/design/linked-installs.md
@@ -127,12 +126,10 @@ export class TaskExchange {
     if (this.pushScan) {
       const page = await readScanPage(this.pushScan.after, { ...filter, projects: new Set(this.pushScan.p), skipPrefix: null });
       if (this.pushScan.full && this.pushScan.at === null) this.pushScan.at = page.at;
-      markTaskExport(request, page);
       this.inflight = { kind: "scan", next: page.next, rows: page.rows.length };
       request.push = { rows: page.rows, scan: page.next };
     } else if (this.pushed) {
       const page = await readLogPage(this.pushed, { ...filter, projects: linked });
-      markTaskExport(request, page);
       if (page.kind === "resync") {
         this.pushed = null;
         this.pushCovered.clear();

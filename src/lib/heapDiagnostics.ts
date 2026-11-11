@@ -61,6 +61,9 @@ export interface JscHeapStats {
 export interface HeapDiagnosticsDeps {
   heapStats(): JscHeapStats;
   memoryUsage(): NodeJS.MemoryUsage;
+  /** The resident set split into anonymous memory and file pages, where the
+      platform reports it. A memory-mapped database counts as file pages. */
+  residentSet?(): { anonBytes: number; fileBytes: number } | null;
   /** The whole snapshot in the V8 `.heapsnapshot` JSON encoding. */
   generateSnapshot(): ArrayBuffer | Uint8Array;
   /** Where snapshots live; created 0700 on first use. */
@@ -184,6 +187,7 @@ export function createHeapDiagnostics(deps: HeapDiagnosticsDeps, state: State = 
       cached, ageMs: now - at,
       blockedMs: Math.round(blockedMs * 10) / 10,
       memoryUsage: { rss, heapUsed, heapTotal, external, arrayBuffers },
+      residentSet: deps.residentSet?.() ?? null,
       heap: {
         heapSize: heap.heapSize, heapCapacity: heap.heapCapacity, extraMemorySize: heap.extraMemorySize,
         objectCount: heap.objectCount, protectedObjectCount: heap.protectedObjectCount,
@@ -323,6 +327,13 @@ export async function servingHeapDiagnostics(): Promise<ReturnType<typeof create
   return createHeapDiagnostics({
     heapStats: () => jsc.heapStats(),
     memoryUsage: () => process.memoryUsage(),
+    residentSet: () => {
+      try {
+        const status = fs.readFileSync("/proc/self/status", "utf8");
+        const anon = /^RssAnon:\s+(\d+) kB$/m.exec(status), file = /^RssFile:\s+(\d+) kB$/m.exec(status);
+        return anon && file ? { anonBytes: Number(anon[1]) * 1024, fileBytes: Number(file[1]) * 1024 } : null;
+      } catch { return null; }
+    },
     generateSnapshot: () => bun.generateHeapSnapshot!("v8", "arraybuffer"),
     directory: () => cacheEntryPath("heap-snapshots"),
     freeDiskBytes: directory => {

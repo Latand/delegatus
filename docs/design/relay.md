@@ -3384,7 +3384,14 @@ while delivery is pending. A validated `SentMessage` receipt acknowledges the
 send; a 404 during rollout or an unavailable service keeps it queued with a
 30-second retry interval. The client never switches to another transport.
 An unresolved send is retried only within Celestia's 24-hour key retention
-window; expiry leaves `retry-expired` for reconciliation. A service
+window; expiry leaves `retry-expired` for reconciliation. An answer that was
+never attempted and has a delivery context has no such limit: an install that
+was off for days still sends it. An answer whose request carried no usable
+delivery context (`pending-delivery-context`) is written off as `retry-expired`
+24 hours after the request started, with `failed:delivery_expired` in its
+answer record. The orphan sweep never retries, rewrites or deletes a
+`retry-expired`, `refused` or `uncertain` row: the answer, its files and the
+row stay for reconciliation. A service
 `send_uncertain` or `idempotency_conflict` leaves `uncertain` for operator
 reconciliation and stops automatic dispatch. Definite unused-key refusals can
 be retried with the same payload; permanent text or format refusals retain

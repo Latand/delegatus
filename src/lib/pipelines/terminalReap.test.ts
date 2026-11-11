@@ -131,11 +131,9 @@ function harness() {
     sourcePathAllowed: () => true,
     conversationIdForPath: () => null,
     pipelineAdoptionCandidates: () => [],
-    createFlow: async () => ({ error: "no flows in this suite" }),
     patchFlow: () => ({}),
     closeFlow: async () => {},
     getFlow: () => null,
-    findFlow: () => null,
     projectForCwd: () => "viewer",
     now: () => new Date((clock += 1_000)).toISOString(),
   };
