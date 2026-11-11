@@ -5,7 +5,6 @@ import { createContext, useContext, useEffect } from "react";
 import { DraftAgentPane } from "@/components/DraftAgentPane";
 import { TaskComposer } from "@/components/tasks/TaskComposer";
 import { useTaskCreateDraft } from "@/components/tasks/useTaskCreateDraft";
-import { WorkflowDraftPane } from "@/components/workflows/WorkflowDraftPane";
 import { isWorkflowDraftId } from "@/components/workflows/workflowModel";
 import { useLocale } from "@/lib/i18n";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -44,19 +43,15 @@ function DraftPanes({ ids }: { ids: readonly string[] }) {
   if (!actions) return null;
   return (
     <div className="agent-drafts">
-      {ids.map((id) => (
+      {ids.filter((id) => !isWorkflowDraftId(id)).map((id) => (
         <div key={id} className="agent-draft" data-kanban-draft={id}>
-          {isWorkflowDraftId(id) ? (
-            <WorkflowDraftPane draftId={id} project={actions.project} onClose={() => actions.onClose(id)} onLaunched={() => actions.onClose(id)} />
-          ) : (
-            <DraftAgentPane
-              draftId={id}
-              project={actions.project}
-              files={actions.files}
-              onClose={() => actions.onClose(id)}
-              onSpawned={(file) => actions.onSpawned(id, file)}
-            />
-          )}
+          <DraftAgentPane
+            draftId={id}
+            project={actions.project}
+            files={actions.files}
+            onClose={() => actions.onClose(id)}
+            onSpawned={(file) => actions.onSpawned(id, file)}
+          />
         </div>
       ))}
     </div>

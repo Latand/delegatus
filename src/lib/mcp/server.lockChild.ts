@@ -468,14 +468,14 @@ async function claimReceipt(
 
   const { FileMcpReceiptStore, MCP_TOOL_NAMES, createMcpToolService } = await import("./server");
   const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((toolName) => [toolName, async () => ({})]));
-  bindings.flow_action = async () => {
+  bindings.conversation_action = async () => {
     fs.appendFileSync(countPath, `${process.pid}\n`);
     return { operationId: "operation_multiprocess_lock" };
   };
   const service = createMcpToolService(bindings as unknown as McpToolBindings, new FileMcpReceiptStore(receiptPath));
-  const result = await service.callTool("flow_action", {
+  const result = await service.callTool("conversation_action", {
     clientRequestId: "request-multiprocess-lock",
-    flowId: "flow_multiprocess",
+    conversationId: "conversation_multiprocess",
     action: "pause",
   });
   fs.writeFileSync(resultPath, JSON.stringify(result));

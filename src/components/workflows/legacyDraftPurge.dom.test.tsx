@@ -13,7 +13,7 @@ import type { FileEntry } from "@/lib/types";
    (#136/#156). It seeds sessionStorage the way a pre-fencing tab left it, mounts
    the real ProjectDashboard so ITS restoration effect (ProjectDashboard.tsx:303,
    `setDrafts(loadDrafts(project))` — the production wiring itself) runs, and
-   asserts the real WorkflowDraftPane never mounts while the ordinary agent
+   asserts no workflow draft pane mounts while the ordinary agent
    draft's pane does. Disable that effect and drafts stay `[]`, so the agent pane
    never appears and this test fails — the regression the review asks for. */
 
@@ -271,7 +271,7 @@ afterEach(async () => {
   dom.sessionStorage.clear();
 });
 
-test("the dashboard's restoration effect purges the legacy draft and never mounts WorkflowDraftPane (#136/#156)", async () => {
+test("the dashboard's restoration effect purges the legacy draft and never mounts a workflow draft pane (#136/#156)", async () => {
   const project = "restore-demo";
   /* The pre-fencing tab state: an agent draft interleaved with a legacy wf-*
      draft that still has all its pane fields persisted. */
@@ -282,7 +282,7 @@ test("the dashboard's restoration effect purges the legacy draft and never mount
 
   /* Wait for the dashboard's restoration effect to populate `drafts` from
      storage and the phone surface to mount the ordinary agent draft's real pane.
-     Its presence makes the WorkflowDraftPane check below a live signal — an empty
+     Its presence makes the workflow pane check below a live signal — an empty
      surface would pass that check on its own. */
   expect(await waitFor(() => dom.document.querySelector(AGENT_PANE) !== null)).toBe(true);
   /* The legacy workflow pane never mounts — restoration dropped its id. */
@@ -828,11 +828,9 @@ test("closing a conversation card reports its path to the dashboard owner", asyn
   expect(closed).toEqual([path]);
 });
 
-test("the phone surface DOES mount the real WorkflowDraftPane for a live wf draft (routing is real)", async () => {
-  /* Positive control: fed a workflow draft directly (no purge), the same surface
-     the dashboard renders mounts the genuine WorkflowDraftPane. This pins down
-     what the previous test's absence means: the purge removed it, and the surface
-     can otherwise render it. */
+test("a workflow draft id fed straight to the phone surface mounts no draft pane", async () => {
+  /* The workflow draft pane is gone with the workflow engine: a stale wf id
+     that reaches the surface without the dashboard's purge renders nothing. */
   roots.push(
     mount(
       <MobileFocusView
@@ -853,6 +851,6 @@ test("the phone surface DOES mount the real WorkflowDraftPane for a live wf draf
       />,
     ),
   );
-  expect(await waitFor(() => dom.document.querySelector(WF_PANE) !== null)).toBe(true);
+  expect(await waitFor(() => dom.document.querySelector(WF_PANE) !== null, 300)).toBe(false);
   expect(dom.document.querySelector(AGENT_PANE)).toBeNull();
 });

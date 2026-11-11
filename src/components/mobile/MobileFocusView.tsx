@@ -23,8 +23,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { BranchPane } from "@/components/BranchPane";
 import { DraftAgentPane } from "@/components/DraftAgentPane";
-import { isWorkflowDraftId } from "@/components/workflows/workflowModel";
-import { WorkflowDraftPane } from "@/components/workflows/WorkflowDraftPane";
+import { dropLegacyWorkflowDrafts } from "@/components/workflows/workflowModel";
 import { RoundDeck } from "@/components/flows/RoundDeck";
 import { useServerReach } from "@/hooks/serverReach";
 import { BoardRowsSkeleton } from "../skeletons";
@@ -264,7 +263,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
   const deckFlows = useMemo(() => (reviewGroups.length ? [...flows, ...reviewGroups] : flows), [flows, reviewGroups]);
   const layoutFlows = useMemo(() => compactPipelineLayoutFlows(pipelines, deckFlows), [pipelines, deckFlows]);
   const layout = useMemo(
-    () => buildSchemeLayout(groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths),
+    () => buildSchemeLayout(groups, manual, files, layoutFlows, dropLegacyWorkflowDrafts(drafts), pipelines, surfacePipelines, favorites, isolatedManualPaths),
     [groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths],
   );
   /* Scheme order (depth-first, groups left to right) is the order the switcher
@@ -721,24 +720,14 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
       </ConversationRoleScope>
     </div>
   ) : activeDraft ? (
-    isWorkflowDraftId(activeDraft.id) ? (
-      <WorkflowDraftPane
-        key={activeDraft.key}
-        draftId={activeDraft.id}
-        project={project}
-        onClose={() => onDraftClose(activeDraft.id)}
-        onLaunched={() => onDraftClose(activeDraft.id)}
-      />
-    ) : (
-      <DraftAgentPane
-        key={activeDraft.key}
-        draftId={activeDraft.id}
-        project={project}
-        files={files}
-        onClose={() => onDraftClose(activeDraft.id)}
-        onSpawned={(file) => onDraftSpawned(activeDraft.id, file)}
-      />
-    )
+    <DraftAgentPane
+      key={activeDraft.key}
+      draftId={activeDraft.id}
+      project={project}
+      files={files}
+      onClose={() => onDraftClose(activeDraft.id)}
+      onSpawned={(file) => onDraftSpawned(activeDraft.id, file)}
+    />
   ) : loaded ? (
     /* Nothing to show. The board is the phone's leaf for that (lane 2), and a
        provisioning pipeline is a row there with a screen behind it (lane 7);

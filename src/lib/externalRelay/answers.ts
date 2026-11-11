@@ -6,6 +6,7 @@ import type { AnswerDrop } from "./answerV2";
 import type { RelayMediaKind, ExternalRelayAnswer, ExternalRelayRequester } from "./protocol";
 import { exemptFromMemberLimit, type RelayAnswerProfile } from "./profile";
 import type { OwnerTurnDiagnostic } from "./diagnostic";
+import { RELAY_FAILURE_NOTICE_OUTCOME } from "./activity";
 
 /**
  * One read-only record per relayed request this install claimed (relay.md
@@ -60,7 +61,8 @@ export type RelayAnswerRecord = {
   finishedAt: string | null;
   durationMs: number | null;
   state: "running" | "finished";
-  /** `answered`, `declined:<reason>`, `failed:<reason>` or `lease_lost`; hand-off is `declined:handoff`. */
+  /** `answered`, `failure_notice` (the requester got a failure notice in place of an answer),
+   * `declined:<reason>`, `failed:<reason>` or `lease_lost`; hand-off is `declined:handoff`. */
   outcome: string | null;
   answer: (Omit<ExternalRelayAnswer, "action"> & { action: string }) | null;
   /** Whether the service acknowledged the completion; null when none was sent. */
@@ -221,14 +223,15 @@ export type AnswerRecorder = NonNullable<ReturnType<typeof answerRecorder>>;
 
 /** Settles a record a dead owner left running, as the orphan sweep settles its lease. */
 export function settleInterruptedAnswer(relayId: string, targetId: string, requestId: string, delivery: RelayAnswerDelivery, conversationId?: string,
-  answer?: ExternalRelayAnswer | null, deliveredLate = false): void {
+  answer?: ExternalRelayAnswer | null, deliveredLate = false, failureNotice = false): void {
+  const answered = failureNotice ? RELAY_FAILURE_NOTICE_OUTCOME : "answered";
   try {
     for (const file of recordFiles(targetDir(relayId, targetId), requestId)) {
       const record = readRecord(file);
       if (!record) continue;
       if (record.state !== "running") {
         if (deliveredLate) {
-          writeRecord(file, { ...record, delivery, ...(answer ? { answer, outcome: "answered" } : {}),
+          writeRecord(file, { ...record, delivery, ...(answer ? { answer, outcome: answered } : {}),
             ...(conversationId ? { conversationId } : {}) });
           continue;
         }
@@ -240,12 +243,30 @@ export function settleInterruptedAnswer(relayId: string, targetId: string, reque
         ...record,
         ...(conversationId ? { conversationId } : {}),
         state: "finished",
-        outcome: answer ? "answered" : "failed:install_restarted",
+        outcome: answer ? answered : "failed:install_restarted",
         ...(answer ? { answer } : {}),
         delivery,
         finishedAt: new Date(now).toISOString(),
         durationMs: now - Date.parse(record.startedAt),
       });
+    }
+  } catch (error) {
+    logFailure("settle", error);
+  }
+}
+
+/** Marks the record of a late answer that was written off undelivered, so the
+ * write-off is readable beside the kept answer and its diagnostic. */
+export const RELAY_LATE_ANSWER_EXPIRED_OUTCOME = "failed:delivery_expired";
+export function recordLateAnswerExpired(relayId: string, targetId: string, requestId: string): void {
+  try {
+    for (const file of recordFiles(targetDir(relayId, targetId), requestId)) {
+      const record = readRecord(file);
+      if (!record || record.delivery === "accepted") continue;
+      const now = Date.now();
+      writeRecord(file, { ...record, outcome: RELAY_LATE_ANSWER_EXPIRED_OUTCOME, delivery: record.delivery ?? "unconfirmed",
+        ...(record.state === "running" ? { state: "finished" as const, finishedAt: new Date(now).toISOString(),
+          durationMs: now - Date.parse(record.startedAt) } : {}) });
     }
   } catch (error) {
     logFailure("settle", error);

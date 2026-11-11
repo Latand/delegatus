@@ -11,8 +11,6 @@ import * as engine from "./engine";
 import { loadPipelines, savePipelines } from "./store";
 import { writeDrain, drainFile, releaseDrain } from "../selfUpdate/drain";
 import { realExec } from "../workflows/provision";
-import * as workflowEngine from "../workflows/engine";
-import { buildWorkflow, loadWorkflows, saveWorkflows } from "../workflows/store";
 import { closeAgentRegistryForTests } from "../agent/registry";
 
 registerPipelineTick(async () => {});
@@ -31,7 +29,6 @@ beforeEach(() => {
     return wait ? { since: wait.since, avg10: 90, deferred: false, policy: DEFAULT_CPU_PRESSURE_POLICY, queue: wait } : null;
   } }, 20);
   savePipelines([]);
-  saveWorkflows([]);
 });
 
 afterEach(async () => {
@@ -321,85 +318,6 @@ test("a retired review releases its CPU ticket without advancing its stored lane
     expect(h.launches).toHaveLength(1);
   } finally { h.abort.abort(); h.release(); await pending; h.close(); }
 }, 20_000);
-
-// Retired workflow scheduling scenarios are superseded by flows/retirement.test.ts.
-test.skip.each(["expiry", "pause", "close", "update"] as const)("the scanner services workflow %s while a pipeline's real commit hook waits behind it", async action => {
-  const h = await harness(["one"]);
-  const wf = buildWorkflow({ id: "workflow-one", name: "CPU queue", task: "Build", project: "fixture",
-    repoDir: path.join(directory, "workflow"), mode: "auto", now: new Date().toISOString(),
-    template: { name: "CPU queue", setup: "bun install", finish: "pr", stages: [
-      { kind: "implement", agent: { engine: "codex", model: null, effort: "high" }, scope: "Build" },
-      { kind: "review-loop", fixer: { engine: "codex", model: null, effort: "high" },
-        reviewer: { engine: "codex", model: null, effort: "high" }, roundLimit: 3, reviewerMode: "headless" },
-    ] } });
-  wf.baseRef = "base";
-  wf.baseBranch = "main";
-  saveWorkflows([wf]);
-  let starts = 0, finished = false;
-  const wfPorts = { ...workflowEngine.defaultPorts(),
-    startSetup: () => { starts++; return { pid: 123 }; },
-    setupStatus: () => ({ status: "running" as const, detail: "" }),
-  };
-  await workflowEngine.tickWorkflows([], wfPorts);
-  expect(starts).toBe(0);
-  const originalPipelineTick = engine.tickPipelines, originalWorkflowTick = workflowEngine.tickWorkflows;
-  const pipelineTick = spyOn(engine, "tickPipelines").mockImplementation(entries => originalPipelineTick(entries, h.ports));
-  const workflowTick = spyOn(workflowEngine, "tickWorkflows").mockImplementation(entries => originalWorkflowTick(entries, wfPorts));
-  const { reconcileFileControllers } = await import("../scanner/index");
-  const pending = reconcileFileControllers([]).finally(() => { finished = true; });
-  try {
-    await until(h.hookQueued);
-    if (action === "expiry") h.age();
-    else if (action === "update") writeDrain(drainFile(), { id: "update", target: "candidate", since: new Date().toISOString(), until: 0, persistent: true });
-    else expect((await workflowEngine.patchWorkflow(wf.id, { action }, wfPorts)).error).toBeUndefined();
-    await until(() => h.hookCode() !== undefined);
-    expect(h.hookCode()).toBe(0);
-    expect(starts).toBe(action === "expiry" ? 1 : 0);
-    expect(loadWorkflows()[0]!.setupPid).toBe(action === "expiry" ? 123 : null);
-    expect(finished).toBe(false);
-  } finally {
-    h.abort.abort(); h.release(); await pending;
-    pipelineTick.mockRestore(); workflowTick.mockRestore(); h.close();
-  }
-}, 20_000);
-
-test.skip("the scanner services a pipeline head after its pass ends while a workflow finish command waits", async () => {
-  const h = await harness();
-  const rows = loadPipelines(), first = rows[0]!;
-  first.cursor!.state = "running";
-  const attempt = first.runs[0]!.attempts.at(-1)!;
-  attempt.state = "running";
-  attempt.verdict = null;
-  savePipelines(rows);
-  const role = { engine: "codex" as const, model: null, effort: "high" as const };
-  const wf = buildWorkflow({ id: "workflow-one", name: "CPU queue", task: "Build", project: "fixture",
-    repoDir: path.join(directory, "workflow"), mode: "auto", now: new Date().toISOString(),
-    template: { name: "CPU queue", setup: "bun install", finish: "pr", stages: [
-      { kind: "implement", agent: role, scope: "Build" },
-      { kind: "review-loop", fixer: role, reviewer: role, roundLimit: 3, reviewerMode: "headless" },
-    ] } });
-  wf.state = "finishing";
-  saveWorkflows([wf]);
-  const wfPorts = { ...workflowEngine.defaultPorts(), exec: () => h.ports.exec("git", ["commit"], wf.worktreeDir) };
-  const originalPipelineTick = engine.tickPipelines, originalWorkflowTick = workflowEngine.tickWorkflows;
-  const pipelineTick = spyOn(engine, "tickPipelines").mockImplementation(entries => originalPipelineTick(entries, h.ports));
-  const workflowTick = spyOn(workflowEngine, "tickWorkflows").mockImplementation(entries => originalWorkflowTick(entries, wfPorts));
-  const { reconcileFileControllers } = await import("../scanner/index");
-  let finished = false;
-  const pending = reconcileFileControllers([]).finally(() => { finished = true; });
-  try {
-    await until(h.hookQueued);
-    h.age();
-    await until(() => h.hookCode() !== undefined);
-    expect(h.hookCode()).toBe(0);
-    expect(h.launches).toHaveLength(2);
-    expect(finished).toBe(false);
-  } finally {
-    h.abort.abort(); h.release(); await pending;
-    pipelineTick.mockRestore(); workflowTick.mockRestore(); h.close();
-  }
-}, 20_000);
-
 
 test("a CPU snapshot change preserves every queued ticket until the next observation", async () => {
   const h = await harness();

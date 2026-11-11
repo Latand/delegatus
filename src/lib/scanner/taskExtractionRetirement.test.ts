@@ -29,9 +29,7 @@ const scanner = await import("./index");
 const processes = await import("./process");
 const reader = await import("@/lib/session/reader");
 const durableJson = await import("@/lib/state/durableJson");
-const flows = await import("@/lib/flows/engine");
 const pipelines = await import("@/lib/pipelines/engine");
-const workflows = await import("@/lib/workflows/engine");
 const { loadTasks, saveTasks, TASKS_FILE } = await import("@/lib/tasks/store");
 const { legacyDatabasePath } = await import("@/lib/state/legacyImport");
 const { readStateCollectionRows, readStateCollectionRevision } = await import("@/lib/state/sqliteStateStore");
@@ -76,9 +74,7 @@ function fixture() {
   const cacheRead = spyOn(durableJson, "readJsonCache");
   spies.push(sessionRead, cacheRead,
     spyOn(processes, "agentProcesses").mockReturnValue([]),
-    spyOn(flows, "tickFlows").mockResolvedValue({ flows: [], changed: false }),
-    spyOn(pipelines, "tickPipelines").mockResolvedValue({ pipelines: [], changed: false }),
-    spyOn(workflows, "tickWorkflows").mockResolvedValue({ workflows: [], changed: false }));
+    spyOn(pipelines, "tickPipelines").mockResolvedValue({ pipelines: [], changed: false }));
   return { transcript, assertPreserved() {
     expect(sessionRead).not.toHaveBeenCalled();
     expect(cacheRead.mock.calls.some(([file]) => file === scanState)).toBe(false);

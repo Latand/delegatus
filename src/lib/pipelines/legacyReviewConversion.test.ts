@@ -99,11 +99,9 @@ function harness() {
       return n ? `conversation_stage_${n}` : null;
     },
     pipelineAdoptionCandidates: () => [],
-    createFlow: async () => { flowCalls.push("create"); return { error: "no new review flows in this suite" }; },
     patchFlow: (id, action) => { flowCalls.push(`patch:${id}:${action}`); return {}; },
     closeFlow: async (id) => { flowCalls.push(`close:${id}`); return {}; },
     getFlow: (id) => flows.get(id) ?? null,
-    findFlow: () => null,
     projectForCwd: () => "viewer",
     now: () => new Date((clock += 1_000)).toISOString(),
   };

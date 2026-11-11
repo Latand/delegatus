@@ -8,6 +8,8 @@ import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/mi
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { ResumeSpec } from "@/lib/agent/cli";
 import { conversationIdsResolvingTo, agentRegistry, storedPaneAgentRuns, type AgentRegistry, type ProcessIdentity, type RegistryFile, type SpawnBeginResult } from "@/lib/agent/registry";
+import { livenessProbe, receiptProcessEvidence } from "@/lib/agent/accountLiveness";
+import { entryOwners } from "@/lib/lifecycle/owners";
 import { procBackend } from "@/lib/proc";
 import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
@@ -43,6 +45,52 @@ import { cpuPriorityEnv } from "./cpuPriority";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { CodexAppServerHost } from "./codexAppServerHost";
+
+export const DEAD_STAGE_HOST_REASON = "stage host is gone; retry the stage, then send the message again";
+
+/** A negative delivery result, fenced against any journal actuation that won meanwhile. */
+export class StructuredStageHostGoneError extends Error {
+  constructor(reason: string) { super(reason); this.name = "StructuredStageHostGoneError"; }
+}
+
+/** An unactuated follow-up belongs to the stage controller once its published
+    host is proven gone. Missing or unreadable identity never supplies that proof. */
+export function deadStageHostReason(registry: AgentRegistry, conversationId: string, pathname: string,
+  generationId?: string | null): string | null {
+  try {
+    const conversation = registry.conversation(conversationId as ViewerConversationId);
+    const generation = conversation?.generations.at(-1);
+    if (!conversation || !generation || generation.path !== pathname
+      || generationId !== undefined && generation.id !== generationId) return null;
+    const membership = registry.conversationMemberships(conversation.id).filter(row => row.kind === "pipeline");
+    if (membership.length !== 1) return null;
+    const member = membership[0]!;
+    const pipeline = findPipelineRecord(member.containerId);
+    const run = pipeline?.runs.find(row => row.stageId === member.stageId);
+    const attempt = run?.attempts.at(-1);
+    if (!pipeline || !["running", "paused", "needs_decision"].includes(pipeline.state)
+      || pipeline.closedAt || pipeline.cursor?.stageId !== member.stageId
+      || !attempt || attempt.n !== member.round || attempt.paneId || !attempt.startedAt
+      || attempt.sessionId !== generation.id || attempt.agentPath !== generation.path
+      || !attempt.conversationId || registry.canonicalConversationId(attempt.conversationId as ViewerConversationId) !== conversation.id) return null;
+    const snapshot = registry.livenessConversationSnapshot(conversation.id);
+    const current = snapshot.conversations[conversation.id]?.generations.at(-1);
+    if (current?.id !== generation.id || current.path !== pathname) return null;
+    const entry = snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
+    const published = entry?.structuredHost?.process ?? entry?.hostExitProcess;
+    if (!entry || !published || entry.claimEpoch < 1 || entry.pendingAction !== null
+      || entry.status === "starting" || entry.status === "handoff"
+      || processIdentityStatus(published) !== "dead") return null;
+    const probe = livenessProbe();
+    if (entryOwners(entry, probe).owners.some(owner => owner.identities.some(identity => processIdentityStatus(identity) !== "dead"))) return null;
+    // A launch still publishing, or any surviving receipt owner, keeps custody.
+    if (Object.values(snapshot.receipts).some(receipt =>
+      receiptProcessEvidence(receipt, probe)?.state !== "gone")) return null;
+    return DEAD_STAGE_HOST_REASON;
+  } catch {
+    return null;
+  }
+}
 
 export interface StructuredRecoveryRequest {
   /** Reconnect a verified native listener without a successor. Ordinary
