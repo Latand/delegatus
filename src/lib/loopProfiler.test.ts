@@ -571,10 +571,12 @@ test("route chunks with dynamic segments and groups keep their own file", () => 
 test("a long gap with full frames and a full histogram stays within the record budget", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "loop-profile-budget-"));
   try {
-    await mkdir(path.join(directory, "src"), { recursive: true });
+    // Long locations fill the frames' own budget, so the histogram has to be made room for.
+    const deep = `src/${Array.from({ length: 6 }, (_, i) => `${"deeply-nested-folder-".repeat(2)}${i}`).join("/")}`;
+    await mkdir(path.join(directory, deep), { recursive: true });
     const names = Array.from({ length: 40 }, (_, i) => `blockingFunctionWithALongDescriptiveName${i}`);
-    await writeFile(path.join(directory, "src/wide.ts"), names.map(name => `function ${name}() {}`).join("\n"));
-    const wide = path.join(directory, "src/wide.ts");
+    const wide = path.join(directory, deep, "wide.ts");
+    await writeFile(wide, names.map(name => `function ${name}() {}`).join("\n"));
     const long = (i: number) => path.join(directory, `.next/server/chunks/${"segment-".repeat(18)}${i % 40}.js`);
     const traces = [
       ...Array.from({ length: 2000 }, (_, i) => ({ frames: [{ name: names[i % 40]!, sourceURL: wide, line: i % 40 + 1, column: 1 }] })),
@@ -587,6 +589,9 @@ test("a long gap with full frames and a full histogram stays within the record b
     h.finish({ stackTraces: { traces } }); await done;
     const [record] = h.emitted as Extract<LoopGapProfile, { status: "captured" }>[];
     expect(record!.frames!.rows.length).toBeGreaterThan(0);
+    // The fixture is large enough to need the cut: frames and histogram at their own limits pass the budget.
+    expect(Buffer.byteLength(JSON.stringify(trimLoopProfile({ traces }, directory))) + Buffer.byteLength(JSON.stringify(record!.categories)))
+      .toBeGreaterThan(LOOP_PROFILE_BYTES);
     expect(record!.categories!.native.length).toBe(8);
     expect(Buffer.byteLength(JSON.stringify(record!.categories))).toBeGreaterThan(1500);
     expect(Buffer.byteLength(JSON.stringify(record))).toBeLessThanOrEqual(LOOP_PROFILE_BYTES);
