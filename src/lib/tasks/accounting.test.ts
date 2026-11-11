@@ -69,3 +69,18 @@ test("real task persistence and a fresh process preserve declarations, acceptanc
   expect({ code, errors }).toEqual({ code: 0, errors: "" });
   expect(JSON.parse(output)).toEqual(accepted.task.accounting);
 });
+
+
+test("changing a hold kind records the change time while preserving the board's wait age", () => {
+  const root = create();
+  const external = patchTask(root.tasks, "original", { hold: { kind: "external" } }, later);
+  if (!external.ok) throw new Error(external.error);
+  const changedAt = "2026-11-03T00:00:00.000Z";
+  const operator = patchTask(external.tasks, "original", { hold: { kind: "operator" } }, changedAt);
+  if (!operator.ok) throw new Error(operator.error);
+  expect(operator.task.hold!.since).toBe(later);
+  const expected = [{ kind: "external", since: later, endedAt: changedAt }, { kind: "operator", since: changedAt, endedAt: null }];
+  expect(operator.task.accounting!.holds).toEqual(expected);
+  const note = patchTask(operator.tasks, "original", { note: "Awaiting the answer" }, "2026-11-04T00:00:00.000Z");
+  expect(note.ok && note.task.accounting!.holds).toEqual(expected);
+});

@@ -47,9 +47,9 @@ export function retainAccountingHold(task: BoardTask): void {
   const accounting = task.accounting;
   const holds = accounting.holds ?? [];
   const open = holds.at(-1);
-  if (open?.endedAt === null && open.kind === task.hold?.kind && open.since === task.hold?.since) return;
+  if (open?.endedAt === null && open.kind === task.hold?.kind) return;
   if (open?.endedAt === null) open.endedAt = task.updatedAt;
-  if (task.hold) holds.push({ kind: task.hold.kind, since: task.hold.since, endedAt: null });
+  if (task.hold) holds.push({ kind: task.hold.kind, since: task.updatedAt, endedAt: null });
   accounting.holds = holds;
   if (!task.hold && task.status !== "blocked" && !accounting.readyAt) accounting.readyAt = task.updatedAt;
 }
