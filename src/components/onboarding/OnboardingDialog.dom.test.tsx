@@ -752,6 +752,26 @@ const connectedBot = (chats: unknown[]) => ({
   receiving: "polling", lastUpdateAt: null, lastCheckedAt: null, chats, limits: [],
 });
 
+/* Counts the bot answers the dialog has read to the end, so a case waits for the state it needs instead of for a time. */
+function watchBotAnswers() {
+  const real = globalThis.fetch;
+  let answered = 0;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    const response = await real(input, init);
+    if (!url.startsWith("/api/telegram/bot") || init?.method === "POST") return response;
+    const read = response.json.bind(response);
+    response.json = async () => { try { return await read(); } finally { answered += 1; } };
+    return response;
+  }) as typeof fetch;
+  return {
+    answered: () => answered,
+    /* Resolves once the answer counted so far has been applied: a macrotask boundary drains every microtask it started. */
+    applied: async (count: number) => { await until(() => answered >= count); await new Promise((resolve) => setTimeout(resolve, 0)); },
+    restore: () => { globalThis.fetch = real; },
+  };
+}
+
 function renderTelegramStep(onClose: (outcome: string, steps?: unknown) => void = () => {}) {
   const host = document.createElement("div");
   document.body.appendChild(host);
@@ -799,10 +819,11 @@ test("a connected bot makes Telegram the third numbered step: Continue is the on
 test("a bot connected inside the Later Telegram step keeps its filled Use this in the body and the footer's one way back bordered", async () => {
   requests.length = 0;
   botStatus = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+  const watching = watchBotAnswers();
   const { host, done } = renderTelegramStep();
   await until(() => (host.textContent ?? "").includes("paste the token BotFather gave you"));
   /* The first read of the bot answered: no bot, so the lists are fixed. */
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await watching.applied(1);
   botStatus = connectedBot([chatView({})]);
   const token = host.querySelector("input[type=password]") as HTMLInputElement;
   token.value = "123456:ABC";
@@ -814,7 +835,68 @@ test("a bot connected inside the Later Telegram step keeps its filled Use this i
   expect(Array.from(host.querySelectorAll("footer button")).map((button) => button.textContent)).toEqual(["Back to setup"]);
   expect((host.querySelector("footer [data-onboarding-primary]") as HTMLElement).className).not.toContain("bg-brand");
   done();
+  watching.restore();
   botStatus = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+});
+
+/* A guide opened with no explicit step picks its first open step from the lists the first bot answer fixes. */
+function renderFirstOpen(marker: unknown) {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="guide" marker={marker as never} markerStatus="read" projects={PROJECTS} currentProject="repo-widgets" onClose={() => {}} />));
+  return { host, done: () => { flushSync(() => root.unmount()); host.remove(); } };
+}
+const settledMarker = () => ({ schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: "done", telegram: null, orchestrator: null, agents: null, memory: null, phone: null, voice: null, check: null, relay: null } });
+
+test("a guide reopened with a bot connected lands on the unresolved Telegram step once the first bot answer is in, not on the orchestrator", async () => {
+  botStatus = connectedBot([chatView({})]);
+  const { host, done } = renderFirstOpen(settledMarker());
+  try {
+    await until(() => (host.textContent ?? "").includes("Step 3 of 4"));
+    expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current")).toBe("telegram");
+    expect(host.querySelector("[data-onboarding-step=telegram]")?.getAttribute("aria-current")).toBe("step");
+    expect(host.textContent).not.toContain("Step 4 of 4");
+  } finally {
+    done();
+    botStatus = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+  }
+});
+
+test("the same reopened guide without a bot opens on the orchestrator as step 3 of 3", async () => {
+  botStatus = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+  const { host, done } = renderFirstOpen(settledMarker());
+  try {
+    await until(() => (host.textContent ?? "").includes("Step 3 of 3"));
+    expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current")).toBe("orchestrator");
+  } finally {
+    done();
+  }
+});
+
+test("a person who already moved to another step before the bot answered is not pulled back to Telegram", async () => {
+  botStatus = connectedBot([chatView({})]);
+  const gate: { release: () => void } = { release: () => {} };
+  const held = new Promise<void>((resolve) => { gate.release = resolve; });
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.startsWith("/api/telegram/bot")) await held;
+    return real(input, init);
+  }) as typeof fetch;
+  const { host, done } = renderFirstOpen(settledMarker());
+  try {
+    await until(() => host.querySelector("[data-onboarding-step=orchestrator]") !== null);
+    flushSync(() => (host.querySelector("[data-onboarding-step=orchestrator]") as HTMLElement).click());
+    gate.release();
+    await until(() => (host.textContent ?? "").includes("Step 4 of 4"));
+    expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current")).toBe("orchestrator");
+  } finally {
+    gate.release();
+    globalThis.fetch = real;
+    done();
+    botStatus = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+  }
 });
 
 test("Continue on the numbered Telegram step saves the chosen chat first and moves on only once it is kept", async () => {

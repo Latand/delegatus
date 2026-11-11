@@ -156,15 +156,29 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
      its first answer: while the read is out, or when it fails, there is no bot. */
   const bot = useTelegramBot(view === "guide");
   const [botConnected, setBotConnected] = useState<boolean | null>(null);
-  if (botConnected === null && bot.status) setBotConnected(bot.status.connected === true);
   const { guide: GUIDE, later: LATER } = onboardingStepLists(botConnected === true);
   const isGuideStep = (id: OnboardingStepId): id is OnboardingGuideStepId => (GUIDE as readonly string[]).includes(id);
-  const [current, setCurrent] = useState<OnboardingStepId>(() => {
-    const target = mode === "mapping" ? "agents" : mode === "voice" ? "voice" : initialStep ?? null;
-    return target ?? firstOpenStep(marker);
-  });
+  const target: OnboardingStepId | null = mode === "mapping" ? "agents" : mode === "voice" ? "voice" : initialStep ?? null;
+  const [current, setCurrent] = useState<OnboardingStepId>(() => target ?? firstOpenStep(marker));
   /* The guide step a "Later" step returns to. */
   const [lastGuide, setLastGuide] = useState<OnboardingGuideStepId>(() => isGuideStep(current) ? current : firstOpenStep(marker));
+  /* The step the notice rides on, besides the first. */
+  const [noticeStep, setNoticeStep] = useState<OnboardingGuideStepId>(lastGuide);
+  /* Whether the person has moved between steps yet; until then the opening step is the guide's own choice. */
+  const [moved, setMoved] = useState(false);
+  if (botConnected === null && bot.status) {
+    const connected = bot.status.connected === true;
+    setBotConnected(connected);
+    /* The first answer about the bot fixes the step lists. A guide opened on its first open step, and not yet left,
+       picks that step again from the lists it now has: a connected bot brings its numbered Telegram step back
+       into the walk, and an unresolved one is the step the guide opens on. */
+    if (connected && !moved && target === null) {
+      const opening = firstOpenStep(marker, onboardingStepLists(true).guide);
+      setCurrent(opening);
+      setLastGuide(opening);
+      setNoticeStep(opening);
+    }
+  }
   const [steps, setSteps] = useState<Record<OnboardingStepId, OnboardingStepState>>(() => ({ ...Object.fromEntries(ONBOARDING_STEP_IDS.map((id) => [id, null])), ...marker?.steps }) as Record<OnboardingStepId, OnboardingStepState>);
   const [chosen, setChosen] = useState<GuideProject | null>(null);
   const [cleanStart, setCleanStart] = useState(false);
@@ -178,7 +192,6 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   const [projectDraft, setProjectDraft] = useState<CreateDraft>("none");
   /* The notice rides on the first guide step and on the step the guide opened
      on, so a later step opens on its own heading. */
-  const [noticeStep] = useState<OnboardingGuideStepId>(lastGuide);
   const stateNotice = view === "guide" && legacyState && (current === GUIDE[0] || current === noticeStep) ? (
     <div role="status" data-onboarding-legacy-state="" className="mb-4 rounded-[10px] border border-border bg-sunken p-3 text-ui text-secondary">
       <p>{t("onboarding.legacy.notice")}</p>
@@ -279,6 +292,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   };
   const markDone = (id: OnboardingStepId) => mark(id, "done");
   const goTo = (id: OnboardingStepId) => {
+    setMoved(true);
     setStepListOpen(false);
     setCurrent(id);
     if (isGuideStep(id)) setLastGuide(id);

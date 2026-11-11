@@ -31,13 +31,20 @@ afterEach(async () => {
   dom.calls.length = 0;
 });
 
+/* Polls an observable condition; the loop yields a macrotask, it never sleeps for a fixed time. */
+async function until(check: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 400 && !check(); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(check()).toBe(true);
+}
+
 async function mount() {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   mounted = { root, host };
   await act(async () => root.render(<TelegramFooterRow density="line" />));
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+  await until(() => botReads() >= 1);
+  await until(() => (host.textContent ?? "").length > 0);
   return host;
 }
 const botReads = () => dom.calls.filter((call) => call.url.startsWith("/api/telegram/bot")).length;
@@ -64,18 +71,32 @@ test("a connected personal account keeps its own word, bot or not", async () => 
   expect(host.textContent).not.toContain("Bot connected");
 });
 
-test("the row reads the bot once on mount and again after its panel closes, with no interval", async () => {
-  const host = await mount();
+test("the row reads the bot once on mount and again after its panel closes, and no timer it plants reads the bot", async () => {
+  /* Collect every timer of seconds the mounted row plants, then fire each one: a poll of the bot would read it again. */
+  const realInterval = globalThis.setInterval;
+  const realTimeout = globalThis.setTimeout;
+  const planted: (() => void)[] = [];
+  globalThis.setInterval = ((handler: TimerHandler, delay?: number, ...rest: unknown[]) => { planted.push(handler as () => void); return realInterval(handler as () => void, delay, ...rest); }) as unknown as typeof setInterval;
+  globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...rest: unknown[]) => { if ((delay ?? 0) >= 1000) planted.push(handler as () => void); return realTimeout(handler as () => void, delay, ...rest); }) as unknown as typeof setTimeout;
+  let host: HTMLElement;
+  try {
+    host = await mount();
+  } finally {
+    globalThis.setInterval = realInterval;
+    globalThis.setTimeout = realTimeout;
+  }
   expect(botReads()).toBe(1);
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 60)); });
+  const firedAt = dom.calls.length;
+  await act(async () => { for (const handler of planted) handler(); });
+  await until(() => dom.calls.length > firedAt);
+  expect(dom.calls.slice(firedAt).filter((call) => call.url.startsWith("/api/telegram/bot"))).toEqual([]);
   expect(botReads()).toBe(1);
   const trigger = host.querySelector("button[aria-haspopup=dialog]") as HTMLButtonElement;
   await act(async () => trigger.click());
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+  await until(() => botReads() >= 2);
   botConnected = true;
   const whileOpen = botReads();
   await act(async () => trigger.click());
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
-  expect(botReads()).toBe(whileOpen + 1);
-  expect(host.textContent).toContain("Bot connected");
+  await until(() => botReads() === whileOpen + 1);
+  await until(() => (host.textContent ?? "").includes("Bot connected"));
 });

@@ -110,7 +110,8 @@ function EngineCard({ state, cli, now, recheck }: { state: EngineAccountsState; 
     <div
       data-onboarding-engine={engine}
       data-engine-state={loading ? "loading" : connected ? "connected" : missing ? "missing" : "signed-out"}
-      className="flex min-w-0 flex-col gap-2 rounded-[12px] border border-border bg-card p-3"
+      /* In one column a card that still needs an action goes first, so its state and its "Check again" sit on the first screen above the long connected card. */
+      className={`flex min-w-0 flex-col gap-2 rounded-[12px] border border-border bg-card p-3${loading || connected ? "" : " max-[859px]:order-first"}`}
       style={{ borderLeft: `3px solid var(--color-${engine})` }}
     >
       {loading ? (
