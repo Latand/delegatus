@@ -158,6 +158,7 @@ served API route has no declared decision or a project handler loses its gate.
 | `/api/logs` | POST | project |
 | `/api/logs/stream` | GET | project |
 | `/api/mcp` | DELETE, GET, POST | capability |
+| `/api/memory/history-rows` | GET, PUT | owner |
 | `/api/memory/inject` | POST | owner |
 | `/api/memory/settings` | GET, PUT | owner |
 | `/api/memory/source` | GET, PUT | owner |
@@ -166,6 +167,7 @@ served API route has no declared decision or a project handler loses its gate.
 | `/api/monitor/seat-tick/settings` | GET, PUT | owner |
 | `/api/onboarding` | GET, PUT | owner |
 | `/api/onboarding/health` | DELETE, GET, POST | owner |
+| `/api/operator/heap` | GET | owner |
 | `/api/operator/settings` | GET, PUT | owner |
 | `/api/operator/worker-limit` | GET, PUT | owner |
 | `/api/orchestrator/ghost` | GET, POST | project |

@@ -1,3 +1,4 @@
+import { keepReportPicturesSoon } from "@/lib/reportMedia/paths";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -882,7 +883,7 @@ export function appendBridgeReports(
   // Prepare it before the report writer takes SQLite's transaction; the
   // cursor itself is still read inside the transaction below.
   channelsCollection("read");
-  return mutateLog((file) => {
+  const written = mutateLog((file) => {
     const known = new Set<string>([...file.reports.map((report) => report.id), ...file.retired]);
     const appended: BridgeReportV1[] = [];
     let skipped = 0;
@@ -934,6 +935,8 @@ export function appendBridgeReports(
     trimToCapacity(file, readBridgeChannel()?.managerReportCursor ?? 0);
     return { result: { appended, skipped }, changed: true };
   });
+  keepReportPicturesSoon(written.appended.map((report) => [report.body, report.complete, report.cards]));
+  return written;
 }
 
 /**

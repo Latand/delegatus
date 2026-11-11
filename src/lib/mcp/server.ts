@@ -36,6 +36,7 @@ import { FOCUS_TARGET_SHAPES } from "@/lib/attention/targets";
 import { statePath } from "@/lib/configDir";
 import { openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { stateDatabaseBusy, stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
+import { deferredBeforeAnyWriter, witnessStoreWriters } from "./admittedWriters";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
 import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/limits";
@@ -666,6 +667,16 @@ export class McpToolRefusal extends Error {
  * IS meant to be remembered stays an ordinary `McpToolRefusal`, answers
  * `retryable: false`, and keeps its receipt.
  */
+/**
+ * Mutating tools whose every effect is a write to a store of this process,
+ * so a state-lock deferral raised before any such store admitted a writer
+ * proves the call changed nothing ({@link deferredBeforeAnyWriter}). A tool
+ * that reaches another process or a network before its first write here does
+ * not belong: the witness cannot see that effect. A tool is added once its
+ * binding has been read for that order.
+ */
+const STORE_ONLY_MUTATING_TOOLS: ReadonlySet<string> = new Set(["seat_tick_settings"]);
+
 export class McpUnadmittedRefusal extends McpToolRefusal {
   constructor(message: string, details: McpToolPayload = {}) {
     super(message, {
@@ -2830,6 +2841,7 @@ export function createMcpToolService(
   // binding. Retain that proof if its owner-bound claim release is temporarily
   // unavailable, so a same-process retry can finish cleanup before claiming.
   const pendingLocalReleases = new Map<string, { digest: string; binding: McpRequestBinding; store: McpRecoveryReceiptStore }>();
+  bindings = witnessStoreWriters(bindings);
   const service: McpToolService = {
     callTool: async function callTool(toolName: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
       if (!(MCP_TOOL_NAMES as readonly string[]).includes(toolName)) {
@@ -3748,7 +3760,11 @@ export function createMcpToolService(
             && ["STAGE_REPORT_SETTLED", "STAGE_REPORT_NOT_AN_ATTEMPT", "STAGE_REPORT_NOT_HELD",
               "STAGE_REPORT_SUPERSEDED", "STAGE_REPORT_NOT_A_RUN_STAGE", "STAGE_REPORT_INVALID", "STAGE_REPORT_CONTRADICTORY"].includes(String(error.details.code))
             ? { code: String(error.details.code), retryable: false } : null;
-          unadmitted = error instanceof McpUnadmittedRefusal;
+          /* The state lock refused this binding before any store of this
+             process admitted a writer for it, and the tool's effects live in
+             those stores: nothing was written, so the key is given back. */
+          const deferred = STORE_ONLY_MUTATING_TOOLS.has(typedTool) ? deferredBeforeAnyWriter(error) : null;
+          unadmitted = error instanceof McpUnadmittedRefusal || deferred !== null;
           // Tools without a downstream recovery reader still preserve an
           // uncertain dispatch as unknown. Cache that answer under the original
           // key so replay cannot repeat a possibly executed control.
@@ -3762,9 +3778,9 @@ export function createMcpToolService(
             : failure(
             typedTool,
             requestId,
-            taskCode ?? retiredRefusal?.code ?? stageReportRefusal?.code ?? botRefusal?.code ?? namedRefusal?.code ?? "tool_failed",
+            taskCode ?? retiredRefusal?.code ?? stageReportRefusal?.code ?? botRefusal?.code ?? namedRefusal?.code ?? (deferred ? "store_busy" : "tool_failed"),
             error instanceof Error ? error.message : String(error),
-            retiredRefusal || stageReportRefusal ? false : botRefusal ? botRefusal.retryable : namedRefusal ? namedRefusal.retryable : taskCode === null,
+            deferred ? true : retiredRefusal || stageReportRefusal ? false : botRefusal ? botRefusal.retryable : namedRefusal ? namedRefusal.retryable : taskCode === null,
             false,
             error instanceof McpToolRefusal ? error.details : undefined,
           );

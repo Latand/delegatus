@@ -1,7 +1,8 @@
 import { candidateState, candidateById } from "../importCuration";
-import { roleScopePassLastAt } from "../roleViewSource";
+import { roleScopePassLastAt, scopeRowForRewrite } from "../roleViewSource";
 import { importCollection, readImportRecord } from "../importStore";
 import { prepareImportEdits } from "./importApply";
+import { scopeRowWithEntry } from "../roleHistoryRows";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import fs from "node:fs";
@@ -131,14 +132,11 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
 
     operation?.assertCurrent();
     if (JSON.stringify(readPassAuthority(pass.id)) !== JSON.stringify(fresh)) refuse("CURATE_STALE", "the curator pass changed before commit");
-    // Only the named scopes are rewritten below. Decoding every other scope of
-    // the pass for one timestamp parsed each retained history on every apply;
-    // their answer comes from the per-row digest instead.
-    const named = new Set(input.scopes.map(item => item.scope));
+    // Only the named scopes are rewritten below, and a scope row holds only
+    // its newest entries. The pass's last timestamp in every scope comes from
+    // the per-row digest, which covers the whole history.
     const previousAt = Math.max(0, ...[...allowedScopes].flatMap(scope => {
-      if (!named.has(scope)) { consume(); const at = roleScopePassLastAt(scope, pass.id); return at === null ? [] : [at]; }
-      const row = tx.get(`s:${scope}`);
-      return row?.kind === "scope" ? row.history.filter(h => h.pass === pass.id).map(h => Date.parse(h.at)) : [];
+      consume(); const at = roleScopePassLastAt(scope, pass.id); return at === null ? [] : [at];
     }));
     now = new Date(Math.max(Date.parse(now), previousAt + 1)).toISOString();
     const scopes = new Map<string, RoleMemoryScopeRow>();
@@ -300,11 +298,11 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
     const counts = { calls: 1, changed: touched.size + created.size, rewritten: input.rewrite?.length ?? 0, merged: input.merge?.reduce((n, m) => n + m.from.length, 0) ?? 0, moved: input.move?.length ?? 0, split: input.split?.length ?? 0, archived: (input.archive?.length ?? 0) + (input.problem?.length ?? 0), restored: input.restore?.length ?? 0 };
     for (const [scope, row] of scopes) {
       const revision = row.revision + 1;
-      tx.put({ ...row, active: orders.get(scope)!, curatedAt: now, revision, history: [...row.history, { revision, revisionScope: row.revisionScope ?? scope, at: now, by: "curator", pass: pass.id, ...(scope === input.scopes[0].scope ? { counts } : {}), before: row.active, prior: [...prior.values()].filter(p => canonicalScope(p.fields.scope) === scope), created: [...created.values()].filter(r => r.scope === scope).map(r => r.id), added: [],
+      tx.put(scopeRowWithEntry(row, { active: orders.get(scope)!, curatedAt: now, revision }, { revision, revisionScope: row.revisionScope ?? scope, at: now, by: "curator", pass: pass.id, ...(scope === input.scopes[0].scope ? { counts } : {}), before: row.active, prior: [...prior.values()].filter(p => canonicalScope(p.fields.scope) === scope), created: [...created.values()].filter(r => r.scope === scope).map(r => r.id), added: [],
         rewritten: [...prior.values()].flatMap(p => p.version && canonicalScope(p.fields.scope) === scope ? [{ id: p.id, version: p.version }] : []),
         moved: (input.move ?? []).filter(m => get(m.id).scope === scope).map(m => ({ id: m.id, from: scope, to: m.to })),
         split: (input.split ?? []).filter(s => get(s.id).scope === scope).map(s => ({ id: s.id, parts: [s.id, ...s.parts.slice(1).map((_, index) => placeholders[`split:${s.id}:${index + 1}`])] })),
-        merged: (input.merge ?? []).flatMap(m => m.from.map(from => ({ from, into: m.into }))), archived: [...(input.archive ?? []).map(a => a.id), ...(input.problem ?? []).map(p => p.id)], restored: input.restore ?? [] }] });
+        merged: (input.merge ?? []).flatMap(m => m.from.map(from => ({ from, into: m.into }))), archived: [...(input.archive ?? []).map(a => a.id), ...(input.problem ?? []).map(p => p.id)], restored: input.restore ?? [] }, { window: false }));
     }
     result = { placeholders, counts };
     const record = fresh.importBatch ? readImportRecord(fresh.importBatch.importId) : null;
@@ -385,8 +383,12 @@ export function revertCuratorPass(id: string, now = new Date().toISOString(), op
   // A pass can contain many individually bounded calls. Prepare its whole undo
   // under the collection lease, then persist every changed row atomically.
   held.patchSync(() => {
+    // An undo reads and rewrites whole histories, undo payloads included, so
+    // each scope it touches is taken with every entry in its row. A scope it
+    // changes is stored that way; the drain moves the entries out again.
+    const whole = (row: RoleMemoryRow | null) => row?.kind === "scope" ? scopeRowForRewrite(row, now) : row;
     const snapshot = [...new Set(pass.scopes.map(canonicalScope))].flatMap(scope => {
-      const row = held.get(`s:${scope}`); return row?.kind === "scope" ? [row] : [];
+      const row = whole(held.get(`s:${scope}`)); return row?.kind === "scope" ? [row] : [];
     });
     const allHistories = snapshot.flatMap(row => row.kind === "scope" ? row.history.filter(h => h.pass === id).map(h => ({ scope: row.scope, history: h })) : []);
     const histories = allHistories.filter(h => !h.history.revertedAt).sort((a, b) => b.history.at.localeCompare(a.history.at));
@@ -398,7 +400,7 @@ export function revertCuratorPass(id: string, now = new Date().toISOString(), op
     const rows = new Map<string, RoleMemoryRow | null>(snapshot.map(row => [key(row), row]));
     const changed = new Map<string, RoleMemoryRow>();
     const tx = {
-      get: (key: string) => { if (!rows.has(key)) rows.set(key, held.get(key)); return rows.get(key) ?? null; },
+      get: (key: string) => { if (!rows.has(key)) rows.set(key, whole(held.get(key))); return rows.get(key) ?? null; },
       put: (row: RoleMemoryRow) => { rows.set(key(row), row); changed.set(key(row), row); },
     };
     const last = new Map<string, string>();

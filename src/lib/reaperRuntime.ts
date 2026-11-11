@@ -508,6 +508,9 @@ export async function terminalizeStaleUndeliverableHeldDeliveries(
        (progress accounting, per-conversation opt-out) stays intact; the
        atomic ownership fence above already protects new messages meanwhile. */
     if (intent.state !== "draining") {
+      /* A stop whose sweep was interrupted, by a refused write or by the
+         process ending, left its marker on the intent: carry on from there. */
+      if (intent.state === "stopped" && intent.stopSweep) await registry.continueMigrationStop(intent.id);
       for (const conversationId of rolledBackConversationIds) {
         await offLoop("migration.rollback", null, () => registry.clearRolledBackConversationMigration(conversationId, intent.id));
       }
@@ -538,7 +541,9 @@ export async function terminalizeStaleUndeliverableHeldDeliveries(
     if (!noProgress) continue;
     const reason =
       `delivery cancelled because its owning account migration made no progress for ${MIGRATION_INTENT_PROGRESS_TIMEOUT_MS}ms; send again to authorize a fresh delivery`;
-    if (!await offLoop("migration.stop", null, () => registry.setMigrationIntentState(intent.id, "stopped", intent.revision, reason))) continue;
+    /* The stop takes the write lock for the intent's own conversations and
+       gives it up between the slices of its engine-wide opt-out. */
+    if (!(await registry.stopMigrationIntent(intent.id, { expectedRevision: intent.revision, reason })).acquired) continue;
     const settledSnapshot = registry.readOnlySnapshot();
     for (const id of activeIds) {
       if (settledSnapshot.heldDeliveries[id]?.state === "failed") terminalized.add(id);

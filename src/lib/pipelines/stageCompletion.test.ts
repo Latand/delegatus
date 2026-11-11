@@ -1284,3 +1284,22 @@ test("an older agent note is replaced on park, in the operator's chosen language
     expect(loadTasks()[0]!.note).toBeUndefined();
   } finally { updateOperatorSettings({ locale: "uk" }); }
 });
+
+test("a picture a stage report names is kept after the stage's scratch directory is removed", async () => {
+  const { keptReportPicture } = await import("@/lib/reportMedia/lookup");
+  const scratch = path.join(process.env.LLV_STATE_DIR!, "scratch", "llv-stage-report-picture");
+  const shot = path.join(scratch, "tmp", "verified-desktop.png");
+  const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  fs.mkdirSync(path.dirname(shot), { recursive: true });
+  fs.writeFileSync(shot, bytes);
+  const h = harness();
+  await started(h.ports, [stage("build", null)]);
+  const answer = await h.report(1, { verdict: "pass", summary: `Checked on desktop. Screenshot: ${shot}` });
+  expect(answer.error).toBeUndefined();
+  /* The copy is made beside the write and never holds the report's answer. */
+  for (let waited = 0; waited < 200 && !keptReportPicture(shot); waited++) await new Promise((resolve) => setTimeout(resolve, 10));
+  fs.rmSync(scratch, { recursive: true, force: true });
+  const kept = keptReportPicture(shot);
+  expect(kept).not.toBeNull();
+  expect(fs.readFileSync(kept!).equals(bytes)).toBeTrue();
+});
