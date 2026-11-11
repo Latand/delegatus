@@ -5,6 +5,11 @@ Design only. Nothing here is built. Code references are to revision
 and carry their source. Measurements were taken on 2026-11-11 between 13:03
 and 13:10 UTC on the installation this design was written on.
 
+Revision 1 (2026-11-11) answers the first review round: the dev server's own
+port, the login on a separate preview site, the capture browser's network
+reach, the crop's path into the message box and what production React still
+names. §12 lists each change and what was re-checked for it.
+
 ## 0. The originating requirement
 
 The board task, created 2026-10-23 from the operator's decision form on the
@@ -117,6 +122,10 @@ committed 2026-11-11 11:10 UTC. The research document read `d5cbb53`
   ([click_to_component_script.js:190-232](https://github.com/BloopAI/vibe-kanban/blob/2d03b13cced7759ee94c5eb6e23ebd10cf00b063/crates/preview-proxy/src/click_to_component_script.js#L190-L232)),
   posted to the parent with target origin `'*'`
   ([15-21](https://github.com/BloopAI/vibe-kanban/blob/2d03b13cced7759ee94c5eb6e23ebd10cf00b063/crates/preview-proxy/src/click_to_component_script.js#L15-L21)).
+  When no owner stack with source files is available, it falls back to
+  component names it reads by walking up the fiber tree to composite fibers
+  ([150-180](https://github.com/BloopAI/vibe-kanban/blob/2d03b13cced7759ee94c5eb6e23ebd10cf00b063/crates/preview-proxy/src/click_to_component_script.js#L150-L180),
+  [219-233](https://github.com/BloopAI/vibe-kanban/blob/2d03b13cced7759ee94c5eb6e23ebd10cf00b063/crates/preview-proxy/src/click_to_component_script.js#L219-L233)).
   The parent accepts it only from its own iframe's window and puts it into a
   pending chat draft that the user sends
   ([PreviewBrowserContainer.tsx:453-470](https://github.com/BloopAI/vibe-kanban/blob/2d03b13cced7759ee94c5eb6e23ebd10cf00b063/packages/web-core/src/pages/workspaces/PreviewBrowserContainer.tsx#L453-L470)).
@@ -172,8 +181,9 @@ different first step (§5.2).
 
 Ideas worth taking: the click lands in a **draft** the user sends; the picker
 sends a **component name, an element excerpt and an owner stack** when the
-framework exposes one; previews need a **development build** to name
-components; one origin per dev server.
+framework exposes one, and **component names alone** when it does not;
+previews need a **development build** for owner stacks and source locations;
+one origin per dev server.
 
 ## 3. What Delegatus stands on today
 
@@ -210,9 +220,15 @@ Viewer's `NODE_ENV`: both structured hosts start the child environment from
 and the Viewer runs `next start` with `NODE_ENV=production` (observed in this
 stage's own environment and the Viewer's, 2026-11-11). A Vite dev server
 started in that environment pre-bundled `react-dom-client.production.js`, and
-its React fibers carried no `_debug*` fields (probe in §11). An agent's dev
-server today therefore hides component names unless the agent overrides
-`NODE_ENV`.
+its React fibers carried no `_debug*` fields (probe in §11): no owner, no
+owner stack and so no source location. Component names stay readable:
+walking `fiber.return` up to the nearest function component and reading its
+`type.name` returned `App`, and `Card` then `App` for an element inside a
+`Card`, under production React too (revision-1 probe in §11, React 19.2.8;
+the review round observed the same on 19.3.1). An agent's dev server today
+therefore names components but gives no owner stack or source location unless
+the agent overrides `NODE_ENV`. The names come from the functions as the dev
+server serves them; a minified production build was not tested.
 
 **When it ends.** The kernel's manual for PID namespaces: when the namespace's
 init exits, "the kernel terminates all of the processes in the namespace via
@@ -238,6 +254,17 @@ started through any of them outlives the agent. Where the namespace boundary
 cannot be established, the engine starts without it (same document, the
 2026-10-20 availability decision). Both cases are why slice 2 checks which
 process holds the listening socket (§6.2) before it trusts a URL.
+
+**Where it listens.** A dev server listens on whatever address its command
+names. One bound to every address is reachable from the network on its own
+port, and that port is outside Delegatus's perimeter: no access key, no
+session and no `workspaceRoute` stand in front of it. Such a listener still
+accepts loopback connections, so a loopback URL proves nothing about it: a
+listener on `0.0.0.0` shows the local address `00000000` in `/proc/net/tcp`
+and one on `::` shows all zeros in `/proc/net/tcp6`, while `127.0.0.1` shows
+`0100007F` and `::1` ends in `01000000` (revision-1 probe in §11; the review
+round connected over loopback to a `0.0.0.0` listener). Slice 2 therefore
+reads the listener's own address (§6.2).
 
 **What runs now.** At 13:03 UTC on 2026-11-11 no Node or Bun process on this
 machine ran Vite, `next dev`, webpack, Astro, Nuxt or a Python HTTP server,
@@ -329,10 +356,28 @@ conversation-window fixture already drives `appendComposerDraft`
   mounted composer reloads it and takes focus
   ([ConversationComposer.tsx:1886-1893](../../src/components/ConversationComposer.tsx#L1886-L1893),
   [1919-1923](../../src/components/ConversationComposer.tsx#L1919-L1923)).
+  `appendComposerDraft` writes session storage without catching an error
+  ([1919-1924](../../src/components/ConversationComposer.tsx#L1919-L1924)).
   Draft pictures live in session storage too, but `writeDraftImages` is not
-  exported ([1532-1544](../../src/components/ConversationComposer.tsx#L1532-L1544)),
-  and the compose-event handler reloads only the text
+  exported, and it swallows a storage error without touching the visible tray
+  ([1532-1544](../../src/components/ConversationComposer.tsx#L1532-L1544));
+  its comment, "The visible in-memory tray remains authoritative", holds for
+  pictures that are already in the tray, because the composer writes the tray
+  to storage after each change
+  ([3358-3361](../../src/components/ConversationComposer.tsx#L3358-L3361)).
+  The compose-event handler reloads only the text
   ([3530-3548](../../src/components/ConversationComposer.tsx#L3530-L3548)).
+- **The tray.** A mounted composer holds its pictures in memory in
+  `useImageAttachments`
+  ([imageAttachments.tsx:196-234](../../src/components/imageAttachments.tsx#L196-L234)).
+  Its limit check refuses past the engine's picture count and byte budget
+  ([115-129](../../src/components/imageAttachments.tsx#L115-L129)), and
+  `replace` restores a whole tray from a draft
+  ([506-551](../../src/components/imageAttachments.tsx#L506-L551)); nothing
+  adds one ready picture to a tray from outside. The composer's text is
+  published in memory first and then persisted, with no catch around the
+  persist ([useComposer.ts:145-149](../../src/hooks/useComposer.ts#L145-L149),
+  [ConversationComposer.tsx:2289-2292](../../src/components/ConversationComposer.tsx#L2289-L2292)).
 - **The send.** The composer seals text, pictures (`{ base64, mime }`) and
   files into one envelope with an idempotency key and a delivery policy
   ([3805-3835](../../src/components/ConversationComposer.tsx#L3805-L3835)).
@@ -417,12 +462,19 @@ machine's memory and CPU.
    whatever the agent wrote, including text a web page or an issue planted in
    the agent. It runs wherever the dev server and the page run.
 2. **Another member's agent** on a team installation.
-3. **A network peer** that can reach a port the preview opens.
+3. **A network peer** that can reach a port the preview opens, or the dev
+   server's own port.
+4. **Anyone holding a copied preview link**: a link pasted into a chat, a
+   screenshot of the address bar, a browser history on another computer.
 
 **The boundary this design does not move.** An agent and its dev server run
 as the installation's own OS user. On a solo installation and below
 workspace level 4, nothing here keeps that code from the machine, and this
-design claims nothing of the kind (workspaces.md D3).
+design claims nothing of the kind (workspaces.md D3). In particular the dev
+server itself runs on the host network and can fetch anything that user can,
+including another agent's dev server, and serve it as its own page. Nothing
+below prevents that; the claims are about what Delegatus itself opens,
+registers, fetches and shows.
 
 **What this design does claim, and the check that holds each claim:**
 
@@ -430,7 +482,10 @@ design claims nothing of the kind (workspaces.md D3).
 | --- | --- |
 | App code never runs in the operator's browser with access to Delegatus's cookies, storage or same-origin routes. | Slices 1 to 3 send the browser pictures and validated data only: bytes through `/api/artifact` and `/api/image` with `nosniff` and a raster MIME, drawn by `<img>`. Slice 4 needs a separate site (§5.2) plus the `Sec-Fetch-Site` check at [sameOrigin.ts:104-105](../../src/lib/sameOrigin.ts#L104-L105). |
 | Page text cannot pose as the operator's words. | Page-derived strings go into a labelled quote block of the draft, capped in length, and nothing is sent until the operator presses Send in the composer (§5.4). |
-| A preview shows only the registering agent's own server (slice 2). | The kernel's socket table and the agent scope's `cgroup.procs`: the listening socket's inode must belong to a process inside that scope (§6.2). |
+| A registered port is the registering agent's own (slice 2). | The kernel's socket table and the agent scope's `cgroup.procs`: every listening socket on the port must have an inode held by a process inside that scope, at registration and again before every capture (§6.2). |
+| Delegatus never registers, captures or shows a dev server whose port is reachable from the network (slices 2 to 4). | The listening socket's own local address in `/proc/net/tcp` and `/proc/net/tcp6`: every listener on the port must be loopback, checked at registration, before every capture and when a preview connection opens; a product-owned unit with any non-loopback listener is stopped (§6.2, §6.3). The URL's host name is not the check. |
+| The capture browser reaches only the registered port (slice 2). | The browser runs in its own network namespace whose only reachable address is a relay to that port, so subresources, nested frames, redirects, fetch, WebSocket, EventSource, workers and beacons to any other address find no route (§6.2, probe in §11). |
+| A copied preview link opens nothing for anyone else (slice 4). | The preview site admits a request only with a cookie that a one-time login code set in the owner's own browser, checked on every HTTP request and every WebSocket upgrade against a live session (§6.4). |
 | A product-owned process ends (slices 2 and 3). | `KillMode=control-group`: "all remaining processes in the control group of this unit will be killed on unit stop" ([systemd.kill(5)](https://www.freedesktop.org/software/systemd/man/latest/systemd.kill.html), read 2026-11-11); `RuntimeMaxSec=`: a service "active for longer than the specified time … is terminated and put into a failure state" ([systemd.service(5)](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html), read 2026-11-11); then the owned runner's empty-cgroup check ([owned-runner.ts:302](../../scripts/owned-runner.ts#L302)). |
 | A member sees and comments only inside their workspace. | `workspaceRoute` on every route that names a conversation or a project ([conversation-host/route.ts:12](../../src/app/api/conversation-host/route.ts#L12), [workspaceRoute.ts:259](../../src/lib/team/workspaceRoute.ts#L259)). |
 
@@ -482,11 +537,11 @@ A (and D for pictures) until the operator wants to look at finished lanes.
 | Option | C1 | C2 | C3 | C4 | C7 | C8 |
 | --- | --- | --- | --- | --- | --- | --- |
 | **R1. Pictures the agent already takes**, with a point-and-comment control | None | None | Yes, phone and remote | Existing feed and composer checks | Small, client-only | Point at a spot |
-| **R2. Capture on request**: Delegatus photographs the running app at chosen widths, with an element map | None; the app runs in a headless browser on the machine with a fresh profile | None | Yes | New capture route and store, behind `workspaceRoute` | Medium: runner, store, pane | Pick an element precisely; no clicking through the app |
-| **R3. A link to the dev server's own address** | Full, in the app's own origin | Opened on the Viewer's host name, the browser sends `llv_auth` (the access key) to the dev server (RFC 6265 §8.5) | Only if the dev server listens on a public interface | None | Tiny | Full, but no picker |
+| **R2. Capture on request**: Delegatus photographs the running app at chosen widths, with an element map | None; the app runs in a headless browser on the machine with a fresh profile, in a network namespace that reaches only the registered port | None | Yes | New capture route and store, behind `workspaceRoute` | Medium: runner, store, pane | Pick an element precisely; no clicking through the app |
+| **R3. A link to the dev server's own address** | Full, in the app's own origin | Opened on the Viewer's host name, the browser sends `llv_auth` (the access key) to the dev server (RFC 6265 §8.5) | Only if the dev server listens on a public interface, which leaves its port open to the whole network with no login | None | Tiny | Full, but no picker |
 | **R4. A path proxy under the Viewer's origin, sandboxed** like report frames | Opaque origin: no cookies, no storage | None reach the app | Yes | Fits the frame-scope model ([frameScope.ts](../../src/lib/artifact/frameScope.ts)) | Medium | Apps that use storage or absolute asset paths (`/@vite/client`, `/_next/…`) break |
-| **R5. A proxy on another port of the Viewer's host name** | Full | The browser sends every Delegatus cookie to the proxy (the proxy can drop them), and app code can **write** cookies that Delegatus then receives (RFC 6265 §8.5). Over plain HTTP on a non-loopback host no `Sec-Fetch-Site` is sent and the origin gate ignores ports ([sameOrigin.ts:94-105](../../src/lib/sameOrigin.ts#L94-L105)), so app code can post to Delegatus routes with the operator's `SameSite=Lax` cookies. | Needs that port reachable | Needs a capability bound to the session | Medium plus origin-gate hardening | Full |
-| **R6. A proxy on a separate site** (`<id>.localhost` locally; a second host name remotely) | Full, in its own site | None | Locally yes. Remotely only with a second host name and its certificate. | Needs a capability bound to the session, as W3 binds frames | Large; a new listener with WebSocket bridging for hot reload | Full, plus a picker script |
+| **R5. A proxy on another port of the Viewer's host name** | Full | The browser sends every Delegatus cookie to the proxy (the proxy can drop them), and app code can **write** cookies that Delegatus then receives (RFC 6265 §8.5). Over plain HTTP on a non-loopback host no `Sec-Fetch-Site` is sent and the origin gate ignores ports ([sameOrigin.ts:94-105](../../src/lib/sameOrigin.ts#L94-L105)), so app code can post to Delegatus routes with the operator's `SameSite=Lax` cookies. | Needs that port reachable | Needs a login bound to the operator's browser (§6.4) | Medium plus origin-gate hardening | Full |
+| **R6. A proxy on a separate site** (`<id>.localhost` locally; a second host name remotely) | Full, in its own site | None | Locally yes. Remotely only with a second host name and its certificate. | Needs a login on the preview site bound to the operator's browser and checked against a live session on every request (§6.4). A token in the URL or host name alone is a bearer credential that works in any browser. | Large; a new listener with WebSocket bridging for hot reload, plus the login | Full, plus a picker script |
 
 Observed for R6: Chromium 156 resolved `preview-a1.localhost` to the loopback
 dev server and reported a secure context (probe in §11). Vite allows
@@ -510,8 +565,14 @@ option, and remotely it needs infrastructure the operator has to choose
 
 ### 5.3 Access control
 
-- **Solo installation.** Every option behind the existing perimeter: the
-  access key or the solo session ([proxy.ts:99-146](../../src/proxy.ts#L99-L146)).
+- **Solo installation.** Every route these slices add sits behind the
+  existing perimeter: the access key or the solo session
+  ([proxy.ts:99-146](../../src/proxy.ts#L99-L146)). The perimeter guards
+  Delegatus's own port only. A dev server's port is outside it, so no slice
+  links to a dev server's address, and slices 2 to 4 refuse a dev server whose
+  port listens on anything but loopback (§3.2, §6.2). Whether the machine's
+  firewall closes other ports is outside this design; an agent can still open
+  a public port from its shell (D3), and Delegatus then shows nothing of it.
 - **Team installation, slice 1.** No new route. Who sees a picture is who can
   read the conversation; who can send the comment is who passes
   `workspaceRoute` on `/api/conversation-host`. A revoked member's next send is
@@ -525,10 +586,15 @@ option, and remotely it needs infrastructure the operator has to choose
   prototype review store is ([localFile.ts:91](../../src/lib/artifact/localFile.ts#L91)),
   and answers only through its manifest, its conversation and the workspace
   check. It is not shown in search or the task album.
-- **Slice 4.** A preview capability minted by a same-origin read and bound to
-  the minting session, the shape W3 gives report frames (PR #3861), so
-  revocation, sign-out and expiry end the preview. Whichever of slice 4 and
-  W3 lands second reuses the other's binding. Owner-only first (Q3).
+- **Slice 4.** A login on the preview site, set in the operator's own browser
+  by a one-time code that only an authenticated same-origin request to
+  Delegatus can mint, and checked on every request (§6.4). The W3 binding
+  (PR #3861, open, read 2026-11-11) is a different guarantee: its
+  `verifyFrameScope` checks that the session named inside the signed token is
+  still live and its member active; it does not look at the requester's own
+  cookie. A copied token therefore keeps working in another browser until
+  that session ends. Slice 4 reuses W3's liveness test for the grant and adds
+  the browser binding on top. Owner-only first (Q3).
 - **Agents.** No agent reads a capture through a path route. An agent reaches
   previews only through the tools named in §6, fenced to its workspace by the
   existing MCP fence.
@@ -545,17 +611,33 @@ option, and remotely it needs infrastructure the operator has to choose
    smallest box that contains the point, with "larger" and "smaller" to walk
    to the parent or a child. Measured on the fixture: 29 and 32 visible
    elements, 1.8 and 2.1 KB of JSON (§5.6).
-3. **A component and source location**, when the framework exposes one. React
-   owner stacks are "only available in development" and `captureOwnerStack`
-   "will always return `null` outside of development"
-   ([captureOwnerStack](https://react.dev/reference/react/captureOwnerStack),
-   read 2026-11-11). Observed on React 19.3.1 with Vite 8.3.8: under the
-   inherited `NODE_ENV=production` a fiber had no `_debug*` fields; under
-   `NODE_ENV=development` it had `_debugOwner` (`App`) and `_debugStack`
-   naming `App (…/src/main.jsx:25:28)`, while the element is on line 5 of the
-   source file. The stack names the component and the module file; its line
-   belongs to the transformed module and needs that module's source map to
-   become a source line (U9). This is an optional field of slice 2.
+3. **A component, its owners and a source location**, when the framework
+   exposes them. These are three different facts with different conditions:
+   - **Component name.** Walk `fiber.return` from the element's host fiber to
+     the nearest function or class component and read
+     `type.displayName ?? type.name`; keep walking for the enclosing ones.
+     Observed under production React (19.2.8 here, 19.3.1 in the review round,
+     both with `NODE_ENV=production`): `App` for a button rendered by `App`,
+     and `Card` then `App` for a button inside a `Card`. Vibe Kanban falls
+     back to the same walk (§2.1). A fixed number of `return` steps is wrong:
+     two steps from the button in `App` land on the host `main` element, which
+     is what the first version of this design's probe read.
+   - **Owner and owner stack.** React owner stacks are "only available in
+     development" and `captureOwnerStack` "will always return `null` outside
+     of development"
+     ([captureOwnerStack](https://react.dev/reference/react/captureOwnerStack),
+     read 2026-11-11). Observed on React 19.3.1 with Vite 8.3.8: under the
+     inherited `NODE_ENV=production` a fiber had no `_debug*` fields; under
+     `NODE_ENV=development` it had `_debugOwner` (`App`) and `_debugStack`.
+   - **Source location.** The development `_debugStack` named
+     `App (…/src/main.jsx:25:28)`, while the element is on line 5 of the
+     source file. The stack names the component and the module file; its line
+     belongs to the transformed module and needs that module's source map to
+     become a source line (U9).
+
+   Slice 2 records the component names by the walk whenever React is present,
+   and the owner stack head only when the build has one. Source mapping stays
+   optional and deferred (§9).
 
 **Untrusted text.** Element text, ids and classes come from the page and may
 carry instructions planted for the agent. They go into the draft as a quote
@@ -565,7 +647,8 @@ sees exactly that before Send. The picture crop is pixels of the agent's own
 screenshot and adds nothing the agent did not already see.
 
 **Delivery.** The comment goes into the conversation's composer as a draft,
-with the crop as a draft picture. The operator edits and sends; delivery,
+with the crop as a draft picture, handed to the mounted composer whole or not
+at all (§6.1). The operator edits and sends; delivery,
 retry and receipts are the composer's own (§3.6). A one-tap direct send, like
 the lane review's, was considered and not chosen: it would put page-derived
 text under the operator's name without a look. Several comments in a row
@@ -627,7 +710,9 @@ What this means, per option:
 short text naming the picture and the spot, the note, and a crop of the
 picture with the spot ringed. Nothing is sent until Send. It works for every
 picture in that conversation: the agent's screenshots, pictures it viewed,
-pictures the operator attached.
+pictures the operator attached. When the message box cannot take the comment
+whole, the viewer stays open with the ring and the note and says why;
+nothing is half-added.
 
 **Where it lives.**
 
@@ -639,10 +724,15 @@ pictures the operator attached.
   mode is on; the first Esc leaves the mode, the
   next one closes the viewer as today. A one-line note field and "Add to
   message" appear once a ring is placed. The control appears only when the
-  viewer was opened from a conversation feed that has a composer
-  (`TaskAlbum` provides none, so the album shows no control).
-- `src/components/LogFeed.tsx`: provides the conversation id next to the
-  existing gallery provider ([LogFeed.tsx:1923](../../src/components/LogFeed.tsx#L1923)).
+  viewer was opened from a conversation feed and a composer for that
+  conversation is mounted (`TaskAlbum` provides no conversation, so the album
+  shows no control). "Add to message" closes the viewer only on the answer
+  `added`; on `refused` it keeps the ring and the note and shows the reason
+  in the viewer's control row.
+- `src/components/LogFeed.tsx`: provides the conversation identity next to
+  the existing gallery provider ([LogFeed.tsx:1923](../../src/components/LogFeed.tsx#L1923)),
+  computed as the composer computes its own, `conversationIdentity(file)`
+  ([ConversationComposer.tsx:2124](../../src/components/ConversationComposer.tsx#L2124)).
 - `src/lib/pointComment/` (new, pure): map a click to natural pixels, compute
   the crop, compose the text.
   - Mapping: `x = (clientX - rect.left) / rect.width * naturalWidth`, from the
@@ -673,12 +763,37 @@ pictures the operator attached.
     Примітка: <примітка>
     ```
 
-- `src/components/ConversationComposer.tsx`: export
-  `appendComposerDraftImage(id, image)` beside `appendComposerDraft`, writing
-  through the private `writeDraftImages`
-  ([1532](../../src/components/ConversationComposer.tsx#L1532)), and make the
-  compose-event handler ([3530-3548](../../src/components/ConversationComposer.tsx#L3530-L3548))
-  reload draft pictures as well as text.
+- `src/components/ConversationComposer.tsx`: a mounted composer registers an
+  intake under its conversation identity and removes it on unmount. A new
+  export, `offerToComposer(id, { text, image })`, answers synchronously with
+  `added` or with `refused` and a reason. The intake runs these steps in
+  order and stops at the first refusal:
+  1. `no-composer` when nothing is registered for the id, for example when
+     the composer unmounted while the viewer was open;
+  2. `limit` when the in-memory tray plus the crop fails the tray's own limit
+     check ([imageAttachments.tsx:115-129](../../src/components/imageAttachments.tsx#L115-L129))
+     or would pass 16 pictures, counting slots that are still being read;
+  3. `storage` when session storage refuses: the intake reads the two keys it
+     is about to change (the draft text and the draft pictures), writes the
+     grown picture list (the tray's ready pictures plus the crop) and the
+     grown text with each error caught, and when either write throws, writes
+     both keys back to the values it read;
+  4. otherwise it commits the crop to the in-memory tray as one ready picture
+     and the text through the composer's own `setText`, and answers `added`.
+
+  The crop never goes through `appendComposerDraft`, which can throw after a
+  change has begun ([1919-1924](../../src/components/ConversationComposer.tsx#L1919-L1924)),
+  or through `writeDraftImages`, which swallows the error and never reaches
+  the tray ([1532-1544](../../src/components/ConversationComposer.tsx#L1532-L1544)).
+  With the crop in the tray, the composer's existing write of the tray to
+  storage after each change
+  ([3358-3361](../../src/components/ConversationComposer.tsx#L3358-L3361))
+  covers it like any pasted picture.
+- `src/components/imageAttachments.tsx`: an additive `appendReady(images)`
+  beside `replace` ([506-551](../../src/components/imageAttachments.tsx#L506-L551)),
+  which adds ready picture slots after the existing ones and leaves reading,
+  failed and file slots as they are. `replace` cannot serve: it aborts uploads
+  and rebuilds the whole tray.
 - `src/lib/i18n/en.ts` and `uk.ts`: the new strings. Lanes `edab49ae` and
   `078240ea` also edit these two files; whichever lands second resolves an
   additive conflict.
@@ -686,9 +801,10 @@ pictures the operator attached.
 **Bounds.** The draft holds at most 16 pictures, the message limit
 ([runtimeImageStore.ts:22](../../src/lib/runtime/runtimeImageStore.ts#L22)).
 At 16 the control reads "This message already has 16 pictures; send it
-first". A note is 1 to 2,000 characters. Session storage refusing a picture
-leaves the picture in the visible tray, as the composer already handles
-([ConversationComposer.tsx:1543](../../src/components/ConversationComposer.tsx#L1543)).
+first". A note is 1 to 2,000 characters. When session storage has no room,
+the viewer reads "The browser has no room to keep this draft. Send the
+message or remove a picture, then add again." and keeps the ring and the
+note; the message box and storage are as they were.
 
 **What it adds and what it does not.** No route, MCP tool, process, store or
 setting. No element identity (the agent maps the point), no live view, no dev
@@ -706,23 +822,33 @@ server management.
    the pixel coordinates, the percentages and the note, plus one new
    thumbnail of the ringed crop.
 4. Two comments in a row produce two text blocks and two thumbnails in one
-   draft; a reload keeps both.
-5. Send delivers the text and the pictures with the usual delivery marks, and
+   draft; a remount of the composer and a reload of the page keep both.
+5. With session storage refusing writes, "Add to message" leaves the viewer
+   open with the ring and the note and shows the storage reason; the
+   composer's text, its tray and both storage keys are exactly as before.
+   The same holds when only the second of the two writes is refused. With
+   the composer unmounted while the viewer was open, "Add to message" says
+   the message box is closed and keeps the ring and the note.
+6. Send delivers the text and the pictures with the usual delivery marks, and
    the agent's transcript records the image blocks.
-6. Esc in point mode leaves the mode and adds nothing; nothing is ever sent
+7. Esc in point mode leaves the mode and adds nothing; nothing is ever sent
    without Send.
-7. A member whose workspace does not hold the conversation is refused at Send
+8. A member whose workspace does not hold the conversation is refused at Send
    by the existing route, with no new path to it.
-8. Rendered evidence through the conversation-window driver and the phone
+9. Rendered evidence through the conversation-window driver and the phone
    driver, en and uk, light and dark, at 390, 900 and 1440 px: point mode
    before a tap; the ring with a note; the composer with the draft; the
-   16-picture refusal.
+   16-picture refusal; the storage refusal.
 
 **Tests.** Pure: mapping under zoom and pan, the crop rectangle at the four
 corners and for pictures smaller than the crop, both languages of the text,
-the 16-picture limit. DOM: the control appears only with a conversation, Esc
-layering, the draft text and picture appear in a mounted composer, a
-remounted composer restores both.
+the 16-picture limit. DOM: the control appears only with a conversation and
+a mounted composer, Esc layering, the draft text and picture appear in a
+mounted composer, a remounted composer restores both. The intake against a
+session-storage double that throws `QuotaExceededError` on the first write,
+and one that throws only on the second: the answer is `refused` with
+`storage`, both keys hold their earlier values, and the tray and the text
+are unchanged. A refusal test fails when the rollback is removed.
 
 ### 6.2 Slice 2: capture the running app on request, with element picking
 
@@ -736,15 +862,28 @@ note goes to the composer as in slice 1 with an element block.
 
 - `preview_register { url }` on the Viewer MCP, agent-only, bound to the
   calling conversation. It refuses a URL that is not `http` on `127.0.0.1`,
-  `::1` or `localhost`, and refuses unless the listening socket for that port
-  belongs to a process inside the caller's own agent scope: the socket's
-  inode from `/proc/net/tcp` and `/proc/net/tcp6` must appear among the
-  `/proc/<pid>/fd` links of a PID listed in the scope's `cgroup.procs`. The
-  same check runs again before every capture; when it fails, the pane says
-  the dev server stopped with its agent. A server started outside the agent's
-  domain (§3.2) cannot be registered, and the Viewer's own port is refused by
-  construction. An agent that runs without a scope (no user manager, macOS)
-  cannot be checked, and its registration is refused with that reason.
+  `::1` or `localhost`; that only names the port. The check that counts reads
+  every row of `/proc/net/tcp` and `/proc/net/tcp6` in the listening state
+  (`0A`) whose local port is that port, and refuses unless there is at least
+  one and every one of them:
+  - has a loopback local address: `127.0.0.0/8` in `tcp`, and `::1` or
+    `::ffff:127.0.0.0/104` in `tcp6`. A wildcard (`00000000`, or all zeros in
+    `tcp6`) or any other address refuses with "the dev server listens on
+    <address>, which the network can reach; restart it on 127.0.0.1". The
+    URL's host never stands in for this: a wildcard listener accepts loopback
+    connections too (§3.2);
+  - has an inode that appears among the `/proc/<pid>/fd` links of a PID listed
+    in the caller's own agent scope's `cgroup.procs`.
+
+  The same check runs again before every capture; when the port has no
+  listener left, the pane says the dev server stopped with its agent, and
+  when a listener has moved off loopback, it says so and captures nothing. A
+  server started outside the agent's domain (§3.2) cannot be registered, and
+  the Viewer's own port is refused by construction. An agent that runs
+  without a scope (no user manager, macOS) cannot be checked, and its
+  registration is refused with that reason. Between two checks a server can
+  rebind; Delegatus then captures nothing until the next check passes, and
+  what the port exposed meanwhile is the agent's own doing (D3).
 - **The capture runner**: a product unit in the work slice, owned-runner
   pattern, `MemoryMax=1G`, `RuntimeMaxSec=60`, `KillMode=control-group` and a
   `TasksMax` task limit (gate units carry `TasksMax=768` since #3860, merged
@@ -756,10 +895,57 @@ note goes to the composer as in slice 1 with an element block.
   would have to move from development to production dependencies. The browser
   is the installation's own, from `CHROME_BIN` or a found Chromium; without
   one the pane says "Capture needs a browser on this computer" and names what
-  was looked for (U2). It navigates only within the registered origin.
+  was looked for (U2).
+- **The capture browser's network.** A rule about where the page may
+  navigate covers only the top frame. Everything else the page asks for
+  (images, stylesheets, nested frames, redirects, fetch, WebSocket,
+  EventSource, workers, beacons) would leave a browser on the host network
+  for any address the machine can reach: another workspace's dev server,
+  other local services, the local network. So the browser runs in a network
+  namespace of its own, where the registered port is the only address with
+  anything behind it:
+  - the unit starts the browser under `unshare --user --map-root-user --net
+    --pid --fork --kill-child`, brings the namespace's loopback up, and starts
+    a relay inside it that listens on the registered port on `127.0.0.1` and
+    `::1`, so the page keeps its own origin;
+  - the relay forwards each connection over a Unix socket in the run's
+    scratch directory to a relay outside, which connects to the registered
+    port on the host loopback and nowhere else;
+  - every other connection finds no listener and fails at once; a name
+    lookup should fail the same way, since a resolver is just another
+    address (an inference; the probe did not test a lookup);
+  - the runner records the URLs of failed loads through the DevTools
+    protocol and the pane lists their origins under the picture ("3 requests
+    to other addresses were blocked: …"), so a page that renders without its
+    web fonts or a remote API says why.
+
+  Observed on this machine on 2026-11-11 (revision-1 probe, §11): with page A
+  reaching for B through an iframe, an iframe redirected by A, an image on
+  `localhost:B`, a stylesheet, fetch, WebSocket, EventSource, a worker's fetch
+  and a beacon, B accepted 9 connections from a browser on the host network
+  and 0 from the same browser in such a namespace, while A loaded with status
+  200 in both. Bubblewrap's own `--unshare-net` failed here at loopback setup
+  ("Failed RTM_NEWADDR: Operation not permitted") while `unshare` from
+  util-linux brought loopback up. The repository already knows that message:
+  the setup recipe adds `--unshare-net` for a restricted sandbox
+  ([setupExecution.ts:42-44](../../src/lib/pipelines/setupExecution.ts#L42-L44)),
+  its test accepts the message as an isolation refusal
+  ([setupExecution.test.ts:23](../../src/lib/pipelines/setupExecution.test.ts#L23)),
+  and an earlier diagnosis met the same failure with explicit user and network
+  namespaces too ([issue-3647-diagnosis.md:34](issue-3647-diagnosis.md#L34)).
+  Which tool works where is therefore unknown (U12). Where no network
+  namespace can be made (macOS, user namespaces disabled or restricted),
+  capture is refused with that reason and never runs unfenced. A browser
+  proxy setting was considered as the fence and not chosen: it is a
+  preference of the browser being fenced, and it was not observed against
+  every channel above. Exceptions an app may need, such as web fonts, a CDN
+  or a remote API, are not allowed in slice 2. A per-project list of HTTPS origins the operator
+  approves, served by an outside relay that resolves the name and refuses
+  loopback, private and link-local results, is deferred (§9).
 - **The map script** records, for each visible element, tag, id, the first
   three classes, a 120-character text excerpt and the box, at most 2,000 rows
-  and 256 KB, plus the React owner name and stack head when present. The
+  and 256 KB, plus the nearest component names found by walking `fiber.return`
+  (up to three) and the owner stack head when the build has one (§5.4). The
   Viewer validates the shape and the bounds before storing it.
 - **The store**: `state/preview-captures/<id>/`, fenced like the prototype
   review store, the newest 20 captures per conversation and none older than
@@ -770,42 +956,151 @@ note goes to the composer as in slice 1 with an element block.
   needs no frame token. W3's session binding matters to slice 4 only.
 
 **Acceptance (outline).** Registration refused for a non-loopback URL, for a
-port held by another agent's process and for the Viewer's port; a capture at
-390 and 1440 appears within 10 s on the fixture; a tap selects the element
-the map names; the draft carries the labelled page-text block; with no
-browser installed the pane names the reason; after the agent's host is
-released the pane reads "stopped with its agent" and keeps the old captures.
+port held by another agent's process and for the Viewer's port; registration
+refused for a server of the agent's own scope listening on `0.0.0.0` and for
+one listening on `::`, each registered under an `http://127.0.0.1:<port>`
+URL, and accepted for the same server on `127.0.0.1`; a server that rebinds to
+`0.0.0.0` after registration gets no further capture. With two stub servers A
+and B on loopback ports, a capture of A whose page reaches for B through an
+iframe, a redirect, an image, a stylesheet, fetch, WebSocket, EventSource, a
+worker and a beacon shows A, B records no connection, and the pane lists B's
+origin as blocked. A capture at 390 and 1440 appears within 10 s on the
+fixture; a tap selects the element the map names, with its component name
+under production React; the draft carries the labelled page-text block; with
+no browser installed, or no network namespace available, the pane names the
+reason; after the agent's host is released the pane reads "stopped with its
+agent" and keeps the old captures.
 
 ### 6.3 Slice 3: Delegatus starts the dev server from an approved command
 
 Only if the operator answers Q2 with B or C. A project "preview command"
 modelled on the setup recipe: reviewed, hash-pinned, relative cwd, approved
 once ([setupRecipe.ts:9-50](../../src/lib/projects/setupRecipe.ts#L9-L50)). It
-runs in the setup sandbox ([setupExecution.ts:40-53](../../src/lib/pipelines/setupExecution.ts#L40-L53)),
-keeping the host network so the port is reachable, with
-`NODE_ENV=development`, a port the server chooses and Delegatus reads from its
-output, `MemoryMax`, a `TasksMax` task limit, an idle stop 15 minutes after
-the last capture or view,
-`RuntimeMaxSec` of two hours, and a stop on lane close and on worktree sweep.
-Stop is by the recorded unit, followed by the empty-cgroup check. A Viewer
-restart adopts the unit by its recorded name and checks the same socket
-ownership as slice 2 against the unit's cgroup. `preview_start` on the Viewer
-MCP lets the agent ask for the same unit, which keeps "the agent starts it"
-true. Rendered evidence and states as in slice 2.
+runs in the setup sandbox ([setupExecution.ts:40-53](../../src/lib/pipelines/setupExecution.ts#L40-L53))
+with `NODE_ENV=development`, `MemoryMax`, a `TasksMax` task limit, an idle
+stop 15 minutes after the last capture or view, `RuntimeMaxSec` of two hours,
+and a stop on lane close and on worktree sweep. Stop is by the recorded unit,
+followed by the empty-cgroup check. `preview_start` on the Viewer MCP lets
+the agent ask for the same unit, which keeps "the agent starts it" true.
+Rendered evidence and states as in slice 2.
+
+**Its port, and who can reach it.** The unit keeps the host network, so the
+app can still reach the remote APIs and packages it needs: it uses the setup
+sandbox without the `--unshare-net` that a restricted recipe adds
+([setupExecution.ts:43](../../src/lib/pipelines/setupExecution.ts#L43)), and
+which fails on this machine anyway (§6.2). Its ingress is
+closed by Delegatus's own enforcement:
+
+- the approved command must bind loopback, and the preview setting shows the
+  operator that requirement before approval;
+- Delegatus finds the port from the unit's own listening sockets (the inodes
+  of PIDs in the unit's cgroup matched to `/proc/net/tcp` and
+  `/proc/net/tcp6`), never from the server's printed output, which is a hint
+  for the log only;
+- at readiness, every 10 seconds while the unit runs, and before every
+  capture or view, every listening socket held by the unit's cgroup must
+  have a loopback local address, as in slice 2. One that does not stops the
+  unit, records the address in the unit's log and tells the operator "the
+  dev server opened <address>:<port> to the network and was stopped";
+- a Viewer restart adopts the unit by its recorded name and runs the same
+  check before showing anything.
+
+Two stronger fences were considered and not chosen. A network namespace for
+the server itself, as for the capture browser, closes ingress by
+construction but also cuts the app off from every remote API and package
+registry. systemd's `IPAddressDeny=` filters by peer address in both
+directions, so it cannot allow outbound traffic while refusing inbound from
+the same addresses, and its manual says the settings "will have no effect"
+where control-group eBPF is unavailable
+([systemd.resource-control(5)](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html),
+read 2026-11-11); whether it acts in a user manager was not observed. The
+check above leaves a window of up to 10 seconds in which a misbehaving app
+can serve the network before it is stopped; the ADR for slice 3 decides
+whether that window is acceptable or the namespace's loss of outbound access
+is.
+
+**Acceptance (outline).** A command that binds `0.0.0.0` or `::` is stopped
+within 10 seconds of readiness with the address named, and nothing is
+captured or shown from it; one that binds `127.0.0.1` runs, is found by its
+socket and is captured; a server that prints a port it does not hold is not
+trusted on that port.
 
 ### 6.4 Slice 4: the live app inside Delegatus
 
 Only with a preview address the operator has chosen (Q4). A small proxy
 process owned like the units above and kept out of the runtime host, which is
-this repository's critical process. It routes `<capability>.<preview site>` to
-the registered port, drops every Delegatus cookie from forwarded requests,
-strips or rewrites `Origin` for the dev server's own host checks, bridges
-WebSockets for hot reload, and injects one picker script whose messages the
-pane accepts only from its own frame's window and origin, with the payload
-shape and size checked. The capability is minted by a same-origin read and
-bound to the session. Owner only first. It needs an ADR, measured proxy and
+this repository's critical process. It routes `<preview id>.<preview site>`
+to the registered port, strips or rewrites `Origin` for the dev server's own
+host checks, bridges WebSockets for hot reload, and injects one picker script
+whose messages the pane accepts only from its own frame's window and origin,
+with the payload shape and size checked. Before it forwards a connection it
+runs the loopback-listener check of §6.2 on the registered port, cached for
+at most 2 seconds. Owner only first. It needs an ADR, measured proxy and
 connection costs, and the origin-gate case of §5.2 R5 kept closed by design:
-the preview lives on a separate site and on no other port of the Viewer's name.
+the preview lives on a separate site and on no other port of the Viewer's
+name.
+
+**Who may open a preview: a login bound to the browser.** The host name
+names the preview; it is no credential, because the app's own code reads it
+from `location.hostname` and a copied link carries it anywhere. The
+credential is a cookie that only the owner's browser can obtain:
+
+1. **Open.** The pane asks Delegatus, on its own origin,
+   `POST /api/preview/<preview>/open`. The route passes the same-origin gate
+   ([sameOrigin.ts:94-105](../../src/lib/sameOrigin.ts#L94-L105)),
+   `workspaceRoute` for the conversation's project, and is person-only, owner
+   only at first (Q3). It records a grant: preview, conversation, workspace,
+   the requesting member session (team) or the solo marker, and an expiry of
+   12 hours like report frames ([frameScope.ts:21-40](../../src/lib/artifact/frameScope.ts#L21-L40)).
+   It answers with a one-time login code: 32 random bytes, stored only as a
+   hash, valid for 60 seconds, consumed on first use.
+2. **Log in.** The pane points its frame at
+   `https://<preview id>.<preview site>/__delegatus/login?code=…`. The proxy
+   consumes the code atomically, mints a new random 32-byte value, stores its
+   hash with the grant, and answers with a redirect to `/` that sets
+   `__Host-dlg-preview=<value>` with `HttpOnly`, `Secure` and `Path=/`; the
+   `__Host-` prefix keeps the cookie host-only, so a sibling preview cannot
+   set or shadow it. In a frame the cookie also carries `SameSite=None` and
+   `Partitioned`; opened in its own tab it carries `SameSite=Lax`.
+3. **Every request.** Each HTTP request and each WebSocket upgrade must carry
+   that cookie. The proxy looks up the grant by the value's hash and admits
+   only while the grant has not expired, the preview is still registered and
+   loopback-only, and, on a team installation, the grant's session is live
+   and its member active and still in the conversation's workspace, the same
+   test W3 adds for frames (PR #3861, `verifyFrameScope`). A solo grant ends
+   once the installation has an active team owner, as W3's solo scope does.
+   A WebSocket upgrade must also carry an `Origin` equal to the preview's own
+   origin. The decision may be cached per cookie for 5 seconds, and open
+   WebSockets are re-checked every 30 seconds and closed when the grant ends.
+   Anything else gets 401 and no byte from upstream.
+4. **Upstream.** The proxy removes every `__Host-dlg-` cookie and every
+   header it set before forwarding, and adds no Delegatus credential.
+   Delegatus's own cookies are set without a `Domain` attribute, so they are
+   host-only on Delegatus's name and never reach the preview site
+   ([proxy.ts:25-39](../../src/proxy.ts#L25-L39),
+   [sessions.ts:111-120](../../src/lib/team/sessions.ts#L111-L120),
+   [gate.ts:147](../../src/lib/team/gate.ts#L147)). The proxy's only path of its own on the preview
+   origin is `/__delegatus/login`: the app's code shares that origin, so
+   stop, capture and the picker's delivery all go through the Delegatus
+   origin and never through the preview's.
+
+What is not known yet: whether every browser the operator uses keeps a
+`Partitioned` cookie set inside a cross-site frame, and whether `__Host-`
+cookies work on `http://<id>.localhost` for the local case (U11). Where the
+framed cookie is refused, the frame shows the 401, and the pane offers to
+open the preview in its own tab, where the same login sets a first-party
+cookie. In its own tab the picker has no Delegatus window to post to, so
+pointing there falls back to slice 1 and 2.
+
+**Acceptance (outline).** The owner's browser opens the preview, loads its
+assets and keeps hot reload. The same preview URL, and the same login URL
+after its first use or after 60 seconds, opened in a second browser profile
+without the cookie, gets 401 for the page, for a script asset and for the
+WebSocket upgrade, and the upstream stub records none of those requests. A
+WebSocket upgrade with a foreign `Origin` is refused even with the cookie.
+Signing the member out, revoking them or moving the conversation out of
+their workspace refuses new requests within 5 seconds and closes an open
+WebSocket within 30. The upstream stub never sees a `__Host-dlg-` cookie.
 
 ### 6.5 The requirement's example through each slice
 
@@ -814,7 +1109,7 @@ the preview lives on a separate site and on no other port of the Viewer's name.
 | 1 | As today, from its shell | As the agent's screenshots in the conversation | A point on the screenshot, with the note and the ringed crop, sent from the composer |
 | 2 | As today, then registers it | On request, at phone and desktop width, while the agent runs | The element under the tap, with its excerpt and box, sent from the composer |
 | 3 | Asks Delegatus, or Delegatus starts it on the operator's click | Also after the agent has finished | As slice 2 |
-| 4 | As slice 2 or 3 | Live, interactive | The element the picker names, with component and file when the build exposes them |
+| 4 | As slice 2 or 3 | Live, interactive | The element the picker names, with its component names, and its owner stack and file when the build is a development build |
 
 Nothing that exists today is removed by any slice. The agent's own screenshots
 stay the result shown in slice 1 and stay available in every later slice.
@@ -831,7 +1126,9 @@ These are the decisions only the operator can make. Each stands on its own.
   phone. You still see the app only through the agent's screenshots.
 - b) A "Capture" button: Delegatus photographs the agent's running app at
   phone and desktop width, and you tap the exact element. Medium; needs a
-  browser installed on the server; works only while the agent runs.
+  browser installed on the server and a Linux server; works only while the
+  agent runs. The photographing browser can reach only that app, so a page
+  that loads fonts or data from the internet shows up without them.
 - c) The live app inside Delegatus that you can click through. Large; needs a
   second web address for previews (Q4); desktop first.
 
@@ -857,7 +1154,9 @@ use?**
 
 - **a) Decide later, when the live app is next (recommended).**
 - b) A second domain name just for previews, with its own certificate. Safe:
-  the preview cannot see or use your Delegatus login.
+  the preview cannot see or use your Delegatus login. You open each preview
+  from Delegatus, which signs that browser in to it; a copied preview link
+  opens nothing for anyone else.
 - c) The same address on another port. Cheaper to set up, but your Delegatus
   login would be sent to the preview and the app's code could change it, so it
   is not offered as safe.
@@ -875,7 +1174,10 @@ use?**
 | U7 | Whether a restricted stage (`workspace-write`) may listen on loopback. | In a restricted stage, run a one-line server on port 0 and record the result. |
 | U8 | Element-map size on real pages. Measured only on a 40-card fixture: 29–32 rows. | Run the map script on three real applications at both widths. |
 | U9 | Whether an owner-stack line maps to a source line through the module's source map under Vite and Next. | Fetch the module's map from the dev server and resolve the observed frame. |
-| U10 | Session-storage room for several draft crops on a phone browser. | Add sixteen 800-pixel crops on iOS Safari and Android Chrome and read the storage errors. |
+| U10 | Session-storage room for several draft crops on a phone browser. Slice 1 refuses an add that does not fit, so this decides how often the refusal shows, never whether a comment is lost. | Add sixteen 800-pixel crops on iOS Safari and Android Chrome and count the refusals. |
+| U11 | Whether the browsers the operator uses keep a `Partitioned; SameSite=None; Secure; HttpOnly` cookie set by the preview site inside a Delegatus frame (Chromium, Firefox, Safari on macOS and iOS), and whether a `__Host-` cookie works on `http://<id>.localhost`. Decides whether slice 4 is framed or opens its own tab. | In each browser, frame a stub preview site from a stub Delegatus page, run the login of §6.4 and read whether the next request carries the cookie. |
+| U12 | Which tool makes the capture browser's network namespace on each supported Linux: `unshare` worked here and bubblewrap's `--unshare-net` did not (§6.2). | On each target distribution, run the §11 network probe with both tools and record which one brings loopback up. |
+| U13 | Whether Chromium's own sandbox starts inside the capture namespace. The probes ran with `--no-sandbox`; without the sandbox a renderer exploit has the OS user's files, which the app's own server code already has (D3). | Start the headless shell inside the namespace without `--no-sandbox` and read whether it starts and which sandbox layers it reports. |
 
 ## 9. Deferred — not currently justified
 
@@ -889,6 +1191,12 @@ use?**
 - Pointing at frames in decision forms and the task album; their comments go
   to a decision or to no single agent, a different target from a conversation.
 - Mapping owner-stack lines to source lines through source maps (U9).
+- Letting a capture load approved outside origins (web fonts, a CDN, a remote
+  API) through a relay that refuses loopback, private and link-local
+  addresses (§6.2). Slice 2 lists what it blocked instead.
+- A network namespace for product-owned dev servers, which closes their
+  ingress by construction and cuts their outbound access (§6.3); the ADR for
+  slice 3 decides.
 - Changing what agents inherit as `NODE_ENV` (§10); it is a separate change
   with effects beyond previews.
 - A phone frame drawn on desktop. Slice 2 captures at 390 px.
@@ -901,8 +1209,9 @@ Both structured hosts pass the Viewer's `NODE_ENV` to the agent
 ([claudeStreamBrokerHost.ts:480](../../src/lib/runtime/claudeStreamBrokerHost.ts#L480),
 [codexAppServerHost.ts:545](../../src/lib/runtime/codexAppServerHost.ts#L545)),
 and the Viewer runs production. A Vite dev server started by an agent then
-serves production React, without the component metadata a picker relies on
-(probe in §11). This design does not change it. Slices 3 and 4 set
+serves production React: component names stay readable by walking the fiber
+tree, but there is no owner, no owner stack and no source location (§5.4,
+probes in §11). This design does not change it. Slices 3 and 4 set
 `NODE_ENV=development` for the units they own; whether agents' environments
 should stop inheriting it belongs to a separate task.
 
@@ -930,6 +1239,12 @@ agent drive the operator's browser ([worker-browser-control.md](worker-browser-c
 and §6.3 now name. Open pull requests and open lanes were read
 from the forge and the board on 2026-11-11; the two lanes without pushed
 commits were read from their worktrees with `git --no-optional-locks`.
+For revision 1, `main` was at `1037130eed9d` (#3858 added, which changes
+`scripts/local-gate.ts`, cited nowhere here); the forge's comparison from
+`662a6012b39f` showed no other cited file changed. Of the open pull requests
+read on 2026-11-11, only #3861 touches a file this design cites
+(`frameScope.ts`); none touches the composer, the picture tray, the image
+viewer or the feed.
 
 **Vendors.** Cloned with `git clone --depth 1 --filter=blob:none` into the
 stage scratch directory; revisions and licences in §2. Documentation pages
@@ -943,7 +1258,10 @@ the stage's evidence directory under `live-preview-design-probe/`.
 
 - `measure.mjs`: §5.6, three runs.
 - `probe-fiber.mjs` and `probe-fiber-dev.mjs`: the React fields of §5.4 under
-  the inherited `NODE_ENV=production` and under `development`.
+  the inherited `NODE_ENV=production` and under `development`. They read the
+  component two `return` steps up, which for the button in `App` is the host
+  `main` element; the name conclusion of the first version rested on that
+  and is corrected by the revision-1 probe below.
 - `probe-localhost.mjs`: Chromium 156 resolved `preview-a1.localhost` to the
   loopback server (status 200, `isSecureContext` true).
 - Machine observations of §3.9: `nproc`, `free -b`, `/proc/loadavg`,
@@ -951,5 +1269,80 @@ the stage's evidence directory under `live-preview-design-probe/`.
   dev-server command lines, and the names (never the values) of the Viewer
   process's access variables.
 
+**Revision-1 probes**, 2026-11-11 between 14:43 and 14:45 UTC, kept under
+`live-preview-design-probe/revise-1/` with the same isolation:
+
+- `run.sh` with `stubA.py`, `stubB.py`, `relay.py`, `chrome-netns.sh` and
+  `drive.mjs`: Chromium 156.0.8078.4 headless shell through `playwright-core`
+  1.62.1 loads page A, which reaches for B through nine channels. On the host
+  network B accepted 9 connections; inside `unshare -Urn --pid --fork
+  --kill-child` with the relay to A's port only, B accepted 0 and A loaded
+  with status 200 (§6.2). The same session's `bwrap --unshare-user
+  --unshare-net` refused with the loopback error quoted in §6.2. Every server
+  and relay was stopped by its recorded PID; a final process listing found
+  none left.
+- `listeners.py`: the `/proc/net/tcp` and `/proc/net/tcp6` rows of
+  listeners on `127.0.0.1`, `::1`, `0.0.0.0` and `::` (dual stack), each on
+  port 0 and closed within the same run (§3.2, §6.2).
+- `probe-depth.mjs`: React and react-dom 19.2.8 (the repository's own) in
+  happy-dom 21.0.4 under `NODE_ENV=production` and `development`: no
+  `_debug*` fields in production; the walk to composite fibers returned
+  `App`, and `Card` then `App`, in both; two `return` steps from the button
+  in `App` landed on `main` (§5.4).
+- The Vibe Kanban picker re-read at `2d03b13` for its name fallback (§2.1),
+  PR #3861's diff re-read for what `verifyFrameScope` checks (§5.3), and the
+  systemd resource-control manual for `IPAddressDeny=` (§6.3).
+
 No dev server ran against the operator's live state, no browser was left
 open, and no product file other than this document was written.
+
+## 12. What changed in revision 1
+
+The first review round found five defects. Each was re-checked against the
+code or the source behind it before the text changed.
+
+1. **A dev server's own port could bypass the preview's protections.** The
+   first version checked the URL's host name and the socket's owner; a server
+   on `0.0.0.0` registered under a `127.0.0.1` URL passed both while its port
+   stayed open to the network with no login. Re-checked: the
+   `/proc/net/tcp{,6}` encodings of loopback and wildcard listeners
+   (revision-1 probe). Changed: §3.2 says where a dev server listens and
+   what that exposes; slice 2 registration now requires every listener on
+   the port to be loopback and owned by the agent's scope, rechecked before
+   every capture (§6.2); slice 3 finds its port from the unit's sockets and
+   stops a unit that listens beyond loopback, with the 10-second window and
+   the stronger alternatives stated (§6.3); §4, §5.2 and §5.3 no longer
+   claim the perimeter covers the dev server's port.
+2. **The separate preview site had no login of its own.** The first version
+   relied on a capability in the host name and on W3's session binding.
+   Re-checked: PR #3861's `verifyFrameScope` tests the life of the session
+   named inside the token and never reads the requester's cookie, so a copied link
+   works in another browser. Changed: §6.4 now specifies a one-time code
+   minted by an authenticated same-origin request, a host-only `__Host-`
+   cookie set in the owner's browser, the per-request and WebSocket checks,
+   what is stripped upstream, and acceptance with a second browser; U11
+   records what browsers must still show; §5.2, §5.3, §4 and Q4 follow.
+3. **The capture browser could reach any address.** The first version
+   limited navigation only. Re-checked by a probe: a page reached another
+   loopback server through nine channels from a browser on the host network,
+   and through none from a browser in its own network namespace. Changed:
+   §6.2 runs the capture browser in a namespace whose only reachable address
+   is a relay to the registered port, says what happens to fonts, CDNs and
+   remote APIs, and refuses capture where no namespace can be made; the
+   acceptance carries the two-server test; U12 and U13 are new; the
+   outside-origin allow-list is deferred (§9).
+4. **A refused session-storage write would have lost the crop.** The first
+   version wrote through `writeDraftImages` and claimed the tray kept the
+   picture. Re-checked: that function swallows the error and never touches
+   the tray (`ConversationComposer.tsx:1532-1544`); the review round's probe
+   on the real function confirmed it. Changed: slice 1 hands the comment to
+   the mounted composer, which checks the limit, writes both storage keys or
+   rolls both back, and only then adds the crop and the text to its
+   in-memory state; the viewer keeps the ring and the note on any refusal
+   (§6.1); §3.6 records the composer facts this rests on; U10 is reworded.
+5. **Production React was said to hide component names.** It hides owners,
+   owner stacks and source locations; component names stay readable. Re-checked by a probe on
+   the repository's React 19.2.8 and against Vibe Kanban's fallback.
+   Changed: §3.2, §5.4, §2.1, §2.3, §6.2's map script, §6.5 and §10 now
+   keep the three facts apart, and §11 says why the first probe read the
+   wrong fiber.
