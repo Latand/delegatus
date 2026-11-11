@@ -573,7 +573,7 @@ createInterface({ input: process.stdin }).on("line", async line => {
   process.stdout.write(JSON.stringify({ id, ok: true, result: { bodyFile, contentType: "application/json", etag: "", timing: "" }, rssBytes: 1 }) + "\n");
 });
 `);
-  const runtime = { ...runtimeFor(state, mode === "timing" ? { LLV_FIXTURE_SOURCE_TIMING: "1" } : {}), launch: { executable: process.execPath, workerPath: program }, seatSourceFloorMs: 0 };
+  const runtime = { ...runtimeFor(state, mode === "timing" ? { LLV_FIXTURE_SOURCE_TIMING: "1" } : {}), launch: { executable: process.execPath, workerPath: program } };
   const peer = buildFilesResponseInWorker(request, runtime);
   let peerFailure: unknown;
   void peer.catch(error => { peerFailure = error; });
@@ -737,6 +737,7 @@ createInterface({ input: process.stdin }).on("line", line => { queue = queue.the
   if (request.type !== "project") {
     fs.appendFileSync(path.join(state, "dispatches"), "one\n");
     while (fs.existsSync(path.join(state, "hold"))) await new Promise(resolve => setTimeout(resolve, 2));
+    if (fs.existsSync(path.join(state, "delay"))) await new Promise(resolve => setTimeout(resolve, Number(fs.readFileSync(path.join(state, "delay"), "utf8"))));
   }
   const directory = path.join(state, "files-response-results"); fs.mkdirSync(directory, { recursive: true });
   const bodyFile = path.join(directory, id + ".json"); fs.writeFileSync(bodyFile, JSON.stringify(request.type));
@@ -755,7 +756,7 @@ test("a seat source whose check budget expires leaves the resident worker alive 
   const { SeatTickWork } = await import("@/lib/monitor/seatTickWork");
   const { DeadlineExceededError } = await import("@/lib/deadline");
   const state = scratchState();
-  const runtime = { ...heldSeatWorker(state), seatSourceFloorMs: 0 };
+  const runtime = heldSeatWorker(state);
   const dispatches = () => fs.readFileSync(path.join(state, "dispatches"), "utf8").split("\n").filter(Boolean).length;
   const seat = async (budgetMs: number) => {
     const work = new SeatTickWork("fixture", budgetMs);
@@ -798,35 +799,50 @@ test("a seat source whose check budget expires leaves the resident worker alive 
   }
 });
 
-test("a seat source with a sliver of its check left starts no worker and stops none", async () => {
+test("seat sources with a sliver of their check left start one worker between them and stop none", async () => {
   const { runSeatSourceInWorker } = await import("./filesResponseWorker");
   const { SeatTickWork } = await import("@/lib/monitor/seatTickWork");
   const { DeadlineExceededError } = await import("@/lib/deadline");
   const state = scratchState();
   const runtime = heldSeatWorker(state);
-  const sliver = async () => {
-    const work = new SeatTickWork("fixture", 300);
-    try { return await work.run(() => runSeatSourceInWorker({ type: "seat-reports", project: "fixture" }, runtime)); }
-    finally { work.close(); }
-  };
   try {
     fs.writeFileSync(path.join(state, "hold"), "hold");
     const before = filesResponseWorkerPoolDiagnostics().spawns;
-    for (let round = 0; round < 3; round += 1) await expect(sliver()).rejects.toBeInstanceOf(DeadlineExceededError);
-    expect(filesResponseWorkerPoolDiagnostics().spawns - before).toBe(0);
-    expect(filesResponseWorkerPoolDiagnostics().pid).toBeNull();
-
-    /* With a warm resident the same sliver leaves it untouched. */
-    fs.rmSync(path.join(state, "hold"));
-    await buildFilesResponseInWorker(request, runtime);
+    for (let round = 0; round < 4; round += 1) {
+      const work = new SeatTickWork("fixture", 100);
+      try { await expect(work.run(() => runSeatSourceInWorker({ type: "seat-reports", project: "fixture" }, runtime))).rejects.toBeInstanceOf(DeadlineExceededError); }
+      finally { work.close(); }
+      await new Promise(resolve => setTimeout(resolve, 50)); // every timer armed for that deadline has fired
+    }
     const child = residentChild()!;
-    fs.writeFileSync(path.join(state, "hold"), "hold");
-    for (let round = 0; round < 3; round += 1) await expect(sliver()).rejects.toBeInstanceOf(DeadlineExceededError);
     expect(filesResponseWorkerPoolDiagnostics().spawns - before).toBe(1);
-    expect(child.exitCode === null && child.signalCode === null, "the resident worker is still running").toBe(true);
-    expect(fs.existsSync(path.join(state, "dispatches"))).toBe(false);
+    expect(child.exitCode === null && child.signalCode === null, "the one worker is still running").toBe(true);
+    expect(fs.readFileSync(path.join(state, "dispatches"), "utf8")).toBe("one\n");
   } finally {
     fs.rmSync(path.join(state, "hold"), { force: true });
+    await stopTestWorker();
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+});
+
+/* A check every minute gives a source 1.5 s. A warm worker answers well
+   inside that, and a refused source is skipped for the rest of the check. */
+test("a seat source with a 1.5 s share is served by a warm worker that answers in 200 ms", async () => {
+  const { runSeatSourceInWorker } = await import("./filesResponseWorker");
+  const { SeatTickWork } = await import("@/lib/monitor/seatTickWork");
+  const state = scratchState();
+  const runtime = heldSeatWorker(state);
+  const work = new SeatTickWork("fixture", 12_000);
+  try {
+    await buildFilesResponseInWorker(request, runtime);
+    const pid = filesResponseWorkerPoolDiagnostics().pid;
+    fs.writeFileSync(path.join(state, "delay"), "200");
+    const answer = await work.run(() => work.source("reports", () => runSeatSourceInWorker({ type: "seat-reports", project: "fixture" }, runtime), null));
+    expect(answer?.body).toBe('"seat-reports"');
+    expect([...work.skippedSources]).toEqual([]);
+    expect(filesResponseWorkerPoolDiagnostics().pid).toBe(pid);
+  } finally {
+    work.close();
     await stopTestWorker();
     fs.rmSync(state, { recursive: true, force: true });
   }

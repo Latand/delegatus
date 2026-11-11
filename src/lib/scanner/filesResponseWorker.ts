@@ -16,9 +16,6 @@ import type { FileCatalogScan } from "./index";
 const FILES_RESPONSE_WORKER_TIMEOUT_MS = 60_000;
 const FILES_RESPONSE_WORKER_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
 const FILES_RESPONSE_WORKER_STDERR_MAX_BYTES = 4 * 1024;
-/* A seat check with less than this left cannot be answered in time, and the
-   worker would compute an answer nobody reads. */
-const SEAT_SOURCE_DISPATCH_FLOOR_MS = 2_000;
 // Keep one warm projection process for this Viewer generation. RSS after a
 // build includes allocator headroom; cache hits can legitimately avoid builds
 // for minutes. Neither observation is evidence that the worker failed.
@@ -63,8 +60,6 @@ export interface FilesResponseWorkerRuntime {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
-  /** Least seat-check time left for which a seat source is still dispatched. */
-  seatSourceFloorMs?: number;
 }
 
 /** What the pool has done since this process started, for tests and diagnosis. */
@@ -535,9 +530,10 @@ export function runSeatSourceInWorker(request: SeatSourceWorkerRequest, runtime:
   /* The deadline bounds this one request. The worker's cap, which stops the
      worker, stays `runtime.timeoutMs`. */
   const budget = seatTickWorkRemainingMs();
-  const floor = runtime.seatSourceFloorMs ?? SEAT_SOURCE_DISPATCH_FLOOR_MS;
-  const deferred = (remaining: number) => budget !== undefined && (remaining < floor || (pool.__llvFilesResponseWorker?.abandoned.size ?? 0) > 0);
-  if (deferred(budget ?? Infinity)) return Promise.reject(new DeadlineExceededError("seat source worker deferred to the next check", 0));
+  /* While the worker still owes an answer nobody waits for, a seat check
+     would spend its time behind that work, so it retries on the next check. */
+  const deferred = () => budget !== undefined && (pool.__llvFilesResponseWorker?.abandoned.size ?? 0) > 0;
+  if (deferred()) return Promise.reject(new DeadlineExceededError("seat source worker deferred to the next check", 0));
   const deadline = Date.now() + Math.min(runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS, budget ?? Infinity);
   const previous = pool.__llvFilesResponseWorkerTail ?? Promise.resolve();
   const endQueue = seatTickQueueSpan(`files.${request.type}.queue`);
@@ -548,7 +544,7 @@ export function runSeatSourceInWorker(request: SeatSourceWorkerRequest, runtime:
     assertSeatTickWork();
     const remaining = deadline - Date.now();
     if (expired || remaining <= 0) throw new DeadlineExceededError("seat source worker deadline exceeded in queue", 0);
-    if (deferred(remaining)) throw new DeadlineExceededError("seat source worker deferred to the next check", 0);
+    if (deferred()) throw new DeadlineExceededError("seat source worker deferred to the next check", 0);
     const endService = seatTickQueueSpan(`files.${request.type}.service`);
     try { return await dispatch(request.type === "seat-rule-reports" ? { ...request, deadlineAt: deadline } : request, runtime, undefined, remaining); }
     finally { endService(); }
