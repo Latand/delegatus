@@ -72,7 +72,7 @@ import { validateMigrationTargetRoot } from "@/lib/accounts/migration/targetRoot
 import { sanitizeProviderError } from "@/lib/accounts/migration/safeHistoryCopy";
 import type { AccountContext, ProjectSpawnResolution } from "@/lib/accounts/contracts";
 import { accountQuotaVerdict, selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
-import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
+import { AccountProjectBindingsUnreadableError, accountsHiddenFromMember, allowedAccountIdsForProject, memberAccountChoice, MemberAccountRefusedError } from "@/lib/accounts/projectBindings";
 import {
   ENGINE_NOT_CONNECTED,
   engineNotConnectedDetails,
@@ -340,6 +340,9 @@ export interface PipelinePorts {
     requestedAccountId: string | null;
     /** Recovery chose this target automatically; recheck its capacity before reservation. */
     requireAccountCapacity?: boolean;
+    /** Delegatus, not the stage, picked `requestedAccountId` (a recovery or
+        runtime-switch target); absent means the account was named. */
+    accountChosenAutomatically?: boolean;
     /** Accounts proven unavailable by earlier attempts of this same activation. */
     unavailableAccountIds?: string[];
     title: string;
@@ -808,6 +811,13 @@ async function spawnPipelineAgent(
   const assertAdmissionCurrent = () => {
     if (performance.now() >= deadline) throw new SpawnAdmissionBudgetExhausted();
     if (workspace && !workspacePrincipalAllows(workspace, input.project)) throw new Error("workspace access denied");
+    /* A member's lane names an account only from the project's list, and the
+       list is read again here, after every await, because it can be removed
+       between the stage's creation, its start and its selection. */
+    if (workspace && input.requestedAccountId && !input.accountChosenAutomatically
+      && memberAccountChoice(input.project, input.role.engine, input.requestedAccountId).kind === "no_account_list") {
+      throw new MemberAccountRefusedError({ kind: "no_account_list" }, input.role.engine, input.requestedAccountId, input.project);
+    }
     if (workspace && workspaceAccountId) {
       const allowed = allowedAccountIdsForProject(input.project, input.role.engine);
       if (allowed && !allowed.includes(workspaceAccountId)) throw new Error("workspace account access denied");
@@ -879,8 +889,12 @@ async function spawnPipelineAgent(
     }
   }
   if (resolution.kind !== "available") {
+    /* A member's lane on a project with no account list chose among accounts
+       they are not shown: the refusal names none of them, nor a limit window. */
+    const concealed = !!workspace && resolution.kind !== "not_allowed" && (pool === null || accountsHiddenFromMember(input.project, input.role.engine));
     throw new ProjectAccountRefusedError(resolution, input.role.engine, input.project,
-      serviceTier ? `serviceTier ${serviceTier} offered by: ${candidates.filter(account => offers?.offering.includes(account.id)).map(account => account.label).join(", ")}` : undefined);
+      serviceTier ? `serviceTier ${serviceTier} offered by: ${candidates.filter(account => offers?.offering.includes(account.id)).map(account => account.label).join(", ")}` : undefined,
+      concealed);
   }
   const account = resolution.account;
   workspaceAccountId = account.accountId;
@@ -9064,7 +9078,8 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
         const composed = await composeStageInput(pipeline, bound, role, attempt.input ?? "", pipeline.worktreeDir, outside.exec);
         return { role, runtimeProfile: pipelineStageRuntimeProfile(bound), cwd: pipeline.worktreeDir!, project: pipeline.project,
           ...(memory.learnedRules ? { learnedRules: memory.learnedRules } : {}), ...(memory.cleanMemory ? { cleanMemory: true } : {}),
-          requestedAccountId: record.to.accountId, title: pipelineStageTitle(pipeline.task, stage.id), prompt: composed,
+          requestedAccountId: record.to.accountId, ...(record.to.accountPinned ? {} : { accountChosenAutomatically: true }),
+          title: pipelineStageTitle(pipeline.task, stage.id), prompt: composed,
           parentPath: record.from.agentPath, clientAttemptId: `switch_${record.seq}_${clientAttemptId(pipeline, stage, attempt)}`.slice(0,128),
           creatorConversationId: pipeline.srcConversationId, workspace: pipeline.workspace, supersedes: record.from.conversationId,
           membership: { kind: "pipeline", containerId: pipeline.id, role: role.roleId ?? "agent", slot: `${stage.id}:${attempt.n}`,
@@ -10226,6 +10241,7 @@ async function tickRunStage(
         project: pipeline.project,
         requestedAccountId: bound.account ?? providerTargetAccountOn(attempt, attempt.effectiveRole.engine) ?? null,
         requireAccountCapacity: Boolean(providerTargetAccountOn(attempt, attempt.effectiveRole.engine) || priorAttempt?.suspension),
+        ...(!bound.account && providerTargetAccountOn(attempt, attempt.effectiveRole.engine) ? { accountChosenAutomatically: true } : {}),
         unavailableAccountIds: [...new Set(usageLimitsOn(attempt, attempt.effectiveRole.engine)
           .filter((limited) => !providerAccountRecovered(pipeline, attempt, limited.accountId, limited.limitedAt ?? null, limited.resetsAt, ports))
           .map((limited) => limited.accountId).concat(((attempt.providerRecoveryBudget?.engine ?? attempt.effectiveRole.engine) === attempt.effectiveRole.engine

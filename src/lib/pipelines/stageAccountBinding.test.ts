@@ -565,6 +565,59 @@ describe("a lane bound to a member", () => {
     expect(loadPipelines().find(pipeline => pipeline.id === id)).toMatchObject({ workspace: principal, stages: [{ account: RESERVED }] });
   });
 
+  test("a member's lane that kept a named account after its project's list was removed is refused at launch before any account is read", async () => {
+    clearAccountFixture(BINDINGS_SOURCE);
+    const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => { throw new Error("ACCOUNT_RESOLVER_REACHED"); });
+    try {
+      const message = await defaultPipelinePorts().spawnAgent({ ...spawnInput(RESERVED), workspace: principal }, () => {}).then(() => "launched", (error: Error) => error.message);
+      expect(message).toContain("no claude account list");
+      expect(resolve).not.toHaveBeenCalled();
+    } finally { resolve.mockRestore(); }
+  });
+
+  test("a member's lane whose list is removed while its account is being selected is refused before a reservation", async () => {
+    const reservations: unknown[] = [];
+    seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "claude", accountId: RESERVED, project: ATLAS, createdAt: new Date().toISOString() }] });
+    const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => {
+      /* The list is removed while the account is being selected. */
+      clearAccountFixture(BINDINGS_SOURCE);
+      return { kind: "available", account: { accountId: RESERVED } } as never;
+    });
+    try {
+      const message = await defaultPipelinePorts().spawnAgent({ ...spawnInput(RESERVED), workspace: principal }, (reservation) => { reservations.push(reservation); })
+        .then(() => "launched", (error: Error) => error.message);
+      expect(resolve).toHaveBeenCalled();
+      expect(message).toContain("no claude account list");
+      expect(reservations).toEqual([]);
+    } finally { resolve.mockRestore(); }
+  });
+
+  test("a launch whose account Delegatus chose, and the owner's launch, still reach selection without a list", async () => {
+    clearAccountFixture(BINDINGS_SOURCE);
+    const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => { throw new Error("ACCOUNT_RESOLVER_REACHED"); });
+    try {
+      for (const input of [{ ...spawnInput(RESERVED), workspace: principal, accountChosenAutomatically: true }, spawnInput(RESERVED)]) {
+        const message = await defaultPipelinePorts().spawnAgent(input, () => {}).then(() => "launched", (error: Error) => error.message);
+        expect(message).toBe("ACCOUNT_RESOLVER_REACHED");
+      }
+    } finally { resolve.mockRestore(); }
+  });
+
+  test("a member's automatic launch refused for capacity names no account or reset time of the unlisted pool, and the owner's refusal does", async () => {
+    clearAccountFixture(BINDINGS_SOURCE);
+    for (const kind of ["exhausted", "unavailable"] as const) {
+      const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => (kind === "exhausted"
+        ? { kind, resetsAt: 1_900_000_000, allowedAccountIds: ["hidden-account-a", "hidden-account-b"] }
+        : { kind, allowedAccountIds: ["hidden-account-a", "hidden-account-b"] }));
+      try {
+        const member = await defaultPipelinePorts().spawnAgent({ ...spawnInput(null), workspace: principal }, () => {}).then(() => "launched", (error: Error) => error.message);
+        expect(member).toBe(`no claude account can take work for project ${ATLAS} right now`);
+        const owner = await defaultPipelinePorts().spawnAgent(spawnInput(null), () => {}).then(() => "launched", (error: Error) => error.message);
+        expect(owner).toContain("hidden-account-a");
+      } finally { resolve.mockRestore(); }
+    }
+  });
+
   test("a member's stage that cannot get its service tier is refused at launch without naming an account, and the owner's launch names them", async () => {
     const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
     const hidden = createManagedCodexAccount("Hidden Launch Label");

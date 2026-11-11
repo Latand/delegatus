@@ -532,6 +532,24 @@ export class MemberAccountRefusedError extends Error {
   }
 }
 
+/**
+ * True when a caller bound to a workspace chooses among accounts the project's
+ * pool does not show them: the project has no list for the engine. Every
+ * refusal of an automatic choice they receive then names no account.
+ */
+export function accountsHiddenFromMember(project: string | null | undefined, engine: BindingEngine): boolean {
+  return allowedAccountIdsForProject(project, engine) === null;
+}
+
+/**
+ * The refusal of an automatic account choice for a caller who may not see which
+ * accounts exist. Capacity and availability read the same: it carries no id,
+ * label, count, catalog or limit window, and none that tells the two apart.
+ */
+export function hiddenAccountsSelectionRefusal(engine: BindingEngine, project: string): string {
+  return `no ${engine} account can take work for project ${project} right now`;
+}
+
 /** Throws {@link MemberAccountRefusedError} unless the project's pool holds the account. */
 export function assertMemberAccountChoice(project: string | null | undefined, engine: BindingEngine, accountId: string): void {
   const choice = memberAccountChoice(project, engine, accountId);

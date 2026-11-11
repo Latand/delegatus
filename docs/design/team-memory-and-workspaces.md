@@ -841,7 +841,15 @@ running conversation checks live access to the project after it resolves it
 with no foreign account named), and a lane records the person first editing it
 before the account rule runs. A refusal for a service tier no account offers
 names the model and the tier only, never the accounts evaluated, where the
-project has no list and the pick is automatic. The member's read of a set pool
+project has no list and the pick is automatic. So does every other refusal of
+that automatic pick (no account with capacity, none signed in): the browser,
+a member-bound agent and a lane's launch answer one sentence naming the engine
+and the project, with no account id, label, count, catalog or reset time, and
+the same words for either cause; the owner's refusal keeps all of them. A lane
+that names an account is checked against the list again at launch and after
+the selection, so removing the list between a lane's creation and its start,
+or during the selection, refuses the launch; an account Delegatus itself chose
+(a recovery or a runtime switch) is not a member's naming. The member's read of a set pool
 selects the pool's ids before any account's credentials or quota are read, so
 accounts left out cost it nothing; only the branch with no pool lists every
 account, to say whether the engine has one signed in. The composer's chip, the

@@ -376,3 +376,97 @@ test("an automatic launch by a member with no account list reveals no account in
     expect(operator.body.error).toContain(hidden.id);
   } finally { resetTeamStoreForTests(); }
 });
+
+test("a member's automatic launch refused for capacity names no account and no limit window, and the owner's refusal keeps them", async () => {
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { claimInstall } = await import("@/lib/team/members");
+  const { createWorkspace } = await import("@/lib/team/workspaces");
+  const { mintSession } = await import("@/lib/team/sessions");
+  const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+  const team = teamStore();
+  const owner = claimInstall(team, "Owner", { surface: "desktop", browser: "chrome" }, Date.parse("2026-10-20T09:00:00Z")).member;
+  const id = `w_${"8".repeat(32)}`;
+  createWorkspace(team, owner, { id, name: "Alpha", projects: [projectForCwd(sandbox)!] });
+  const memberId = "m_tier_member";
+  team.insertMember({ id: memberId, name: "Member", role: "member", status: "active", color: "teal", telegram: null,
+    createdAt: "2026-10-20T09:00:00.000Z", createdBy: owner.id, revokedAt: null });
+  team.putWorkspaceMember(id, memberId, "member", owner.id, "2026-10-20T09:00:00.000Z");
+  const memberCookie = mintSession(team, memberId, "claim", { surface: "desktop", browser: "chrome" }).value;
+  const ownerCookie = mintSession(team, owner.id, "claim", { surface: "desktop", browser: "chrome" }).value;
+  const hidden = createManagedCodexAccount("Hidden Account Label");
+  fs.writeFileSync(path.join(hidden.home, "auth.json"), "{}");
+  fs.writeFileSync(path.join(hidden.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6.1-sol", service_tiers: [] }] }));
+  try {
+    const { routeDependencies } = harness();
+    /* The real resolver: its tier refusal is the one that lists accounts. */
+    routeDependencies.resolveHealthySpawnAccount = async () => { const { ProjectAccountRefusedError } = await import("@/lib/accounts/manager"); throw new ProjectAccountRefusedError({ kind: "exhausted", resetsAt: null, allowedAccountIds: [hidden.id] }, "codex", projectForCwd(sandbox)); };
+    const launch = async (clientAttemptId: string, cookie: string) => {
+      const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+        method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json", cookie: `llv_member=${cookie}` },
+        body: JSON.stringify({ ...args(), clientAttemptId, model: "gpt-6.1-sol", effort: "high", serviceTier: "ultrafast" }),
+      }), routeDependencies);
+      return { status: response.status, body: await response.json() as { error: string; code: string } };
+    };
+    const member = await launch("tier-member", memberCookie);
+    expect(member.status).toBe(409);
+    expect(JSON.stringify(member.body)).not.toContain(hidden.label);
+    expect(JSON.stringify(member.body)).not.toContain(hidden.id);
+    expect(registry.spawnReceiptForClientAttempt("tier-member")).toBeNull();
+    const operator = await launch("tier-owner", ownerCookie);
+    expect(operator.status).toBe(409);
+    expect(operator.body.error).toContain(hidden.id);
+    expect(member.body.error).not.toContain("resetsAt");
+    expect(member.body.error).not.toMatch(/allowed codex accounts/);
+  } finally { resetTeamStoreForTests(); }
+});
+
+test("a member's automatic launch refused by the real selection with every account at its limit names no account and no reset time, and no launch is created", async () => {
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { claimInstall } = await import("@/lib/team/members");
+  const { createWorkspace } = await import("@/lib/team/workspaces");
+  const { mintSession } = await import("@/lib/team/sessions");
+  const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+  const team = teamStore();
+  const owner = claimInstall(team, "Owner", { surface: "desktop", browser: "chrome" }, Date.parse("2026-10-20T09:00:00Z")).member;
+  const id = `w_${"8".repeat(32)}`;
+  createWorkspace(team, owner, { id, name: "Alpha", projects: [projectForCwd(sandbox)!] });
+  const memberId = "m_tier_member";
+  team.insertMember({ id: memberId, name: "Member", role: "member", status: "active", color: "teal", telegram: null,
+    createdAt: "2026-10-20T09:00:00.000Z", createdBy: owner.id, revokedAt: null });
+  team.putWorkspaceMember(id, memberId, "member", owner.id, "2026-10-20T09:00:00.000Z");
+  const memberCookie = mintSession(team, memberId, "claim", { surface: "desktop", browser: "chrome" }).value;
+  const ownerCookie = mintSession(team, owner.id, "claim", { surface: "desktop", browser: "chrome" }).value;
+  const hidden = createManagedCodexAccount("Hidden Account Label");
+  fs.writeFileSync(path.join(hidden.home, "auth.json"), "{}");
+  fs.writeFileSync(path.join(hidden.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6.1-sol", service_tiers: [] }] }));
+  try {
+    const { routeDependencies } = harness();
+    /* The real resolver: its tier refusal is the one that lists accounts. */
+    routeDependencies.resolveHealthySpawnAccount = (await import("@/lib/accounts/manager")).resolveHealthySpawnAccount;
+    const liveRegistry = (await import("@/lib/agent/registry")).agentRegistry();
+    const now = new Date().toISOString();
+    /* Every codex account this file created is at its limit, so no sibling's lack of an observation can win the selection. */
+    const { listCodexAccounts } = await import("@/lib/accounts/codex");
+    for (const account of listCodexAccounts()) liveRegistry.recordQuotaObservation({ engine: "codex", accountId: account.id, authenticated: true,
+      authCheckedAt: now, observedAt: now, bootId: "fixture-boot", provenance: { source: "live", reason: null, staleSince: null },
+      limits: { plan: "pro", session: { usedPercent: 100, resetsAt: Math.floor(Date.now()/1000)+3600 }, weekly: { usedPercent: 100, resetsAt: Math.floor(Date.now()/1000)+86400 }, tiers: [], capturedAt: Math.floor(Date.now()/1000) } });
+    const launch = async (clientAttemptId: string, cookie: string) => {
+      const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+        method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json", cookie: `llv_member=${cookie}` },
+        body: JSON.stringify({ ...args(), clientAttemptId, model: "gpt-6.1-sol", effort: "high" }),
+      }), routeDependencies);
+      return { status: response.status, body: await response.json() as { error: string; code: string } };
+    };
+    const member = await launch("tier-member", memberCookie);
+    expect(member).toMatchObject({ status: 409, body: { code: "project_account_refused" } });
+    expect(JSON.stringify(member.body)).not.toContain(hidden.label);
+    expect(JSON.stringify(member.body)).not.toContain(hidden.id);
+    expect(registry.spawnReceiptForClientAttempt("tier-member")).toBeNull();
+    const operator = await launch("tier-owner", ownerCookie);
+    expect(operator.status).toBe(409);
+    expect(operator.body.error).toContain(hidden.id);
+    expect(operator.body.error).toContain("resetsAt=");
+    expect(member.body.error).not.toContain("resetsAt");
+    expect(member.body.error).not.toMatch(/allowed codex accounts/);
+  } finally { resetTeamStoreForTests(); }
+});

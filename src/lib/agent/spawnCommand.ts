@@ -64,7 +64,7 @@ import { adoptPipelineAttemptFromSource, pipelineAttemptTargetForSource } from "
 import { loadPipelines } from "@/lib/pipelines/store";
 import { listFiles } from "@/lib/scanner";
 import { projectForCwd } from "@/lib/scanner/describe";
-import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject, MemberAccountRefusedError } from "@/lib/accounts/projectBindings";
+import { AccountProjectBindingsUnreadableError, accountsHiddenFromMember, allowedAccountIdsForProject, hiddenAccountsSelectionRefusal, MemberAccountRefusedError } from "@/lib/accounts/projectBindings";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, workspacePrincipalAllows, type WorkspacePrincipal } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
 import { TeamError } from "@/lib/team/members";
@@ -118,10 +118,15 @@ function prefersUkrainian(req: Pick<NextRequest, "headers">): boolean {
 /** The one body of a refused account choice. `reason` says whether the project
     has no account list or the named account is outside it; a refusal for lack
     of capacity carries none. */
-function projectAccountRefusedResponse(error: ProjectAccountRefusedError | MemberAccountRefusedError): NextResponse<ApiError> {
+function projectAccountRefusedResponse(error: ProjectAccountRefusedError | MemberAccountRefusedError, project: string | null, hidden = false): NextResponse<ApiError> {
   const reason = error instanceof MemberAccountRefusedError ? error.reason
     : error.resolution.kind === "not_allowed" ? "outside_account_list" : undefined;
-  const body: ApiError & { code: string; reason?: string } = { error: error.message, code: "project_account_refused", ...(reason ? { reason } : {}) };
+  /* A member's automatic pick on a project with no account list chose among
+     accounts they are not shown: a refusal of capacity or availability names
+     none of them and no limit window, whichever seam raised it. */
+  const concealed = hidden && error instanceof ProjectAccountRefusedError && error.resolution.kind !== "not_allowed";
+  const message = concealed ? hiddenAccountsSelectionRefusal(error.engine, project ?? "") : error.message;
+  const body: ApiError & { code: string; reason?: string } = { error: message, code: "project_account_refused", ...(reason ? { reason } : {}) };
   return NextResponse.json(body, { status: 409 });
 }
 
@@ -986,7 +991,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       if (error instanceof CodexServiceTierUnavailableError) {
         /* A member's automatic pick on a project with no account list chooses
            among accounts they are not shown, so the refusal names none. */
-        const hidden = workspacePrincipal && engine !== "copilot" && selectedModel.model && launchTier && allowedAccountIdsForProject(spawnProject, engine) === null;
+        const hidden = workspacePrincipal && engine !== "copilot" && selectedModel.model && launchTier && accountsHiddenFromMember(spawnProject, engine);
         return NextResponse.json({ error: hidden ? hiddenAccountsTierRefusal(selectedModel.model!, launchTier!) : error.message, code: error.code }, { status: 409 });
       }
       if (error instanceof AccountProjectBindingsUnreadableError) {
@@ -997,7 +1002,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
          before any receipt exists, so there is nothing for a retry to replay
          onto an account this project does not allow. */
       if (error instanceof ProjectAccountRefusedError || error instanceof MemberAccountRefusedError) {
-        return projectAccountRefusedResponse(error);
+        return projectAccountRefusedResponse(error, spawnProject, !!workspacePrincipal && engine !== "copilot" && accountsHiddenFromMember(spawnProject, engine));
       }
       /* A Copilot launch with no account set up, or naming one that is gone. */
       if (error instanceof NoCopilotAccountError || error instanceof UnknownCopilotAccountError) {
@@ -1532,7 +1537,10 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     if (error instanceof SpawnAdmissionFenceError) return NextResponse.json({ error: error.fence.error, code: "spawn_admission_refused" }, { status: error.fence.status });
     if (error instanceof CuratorSpawnAdmissionError) return NextResponse.json({ error: error.message, code: "curator_admission_refused" }, { status: 409 });
     if (error instanceof AccountProjectBindingsUnreadableError) return NextResponse.json({ error: error.message }, { status: 409 });
-    if (error instanceof ProjectAccountRefusedError || error instanceof MemberAccountRefusedError) return projectAccountRefusedResponse(error);
+    if (error instanceof ProjectAccountRefusedError || error instanceof MemberAccountRefusedError) {
+      const refusedProject = explicitProject ?? projectForCwd(cwd);
+      return projectAccountRefusedResponse(error, refusedProject, !!workspacePrincipal && engine !== "copilot" && accountsHiddenFromMember(refusedProject, engine));
+    }
     /* Typed terminal admission rejection (#393): the durable receipt already
        exists and no transcript or process was created. */
     if (error instanceof SpawnAdmissionError) return NextResponse.json(spawnRejectionResponse(error), { status: 403 });
