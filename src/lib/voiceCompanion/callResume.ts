@@ -37,8 +37,8 @@ const safeRows = (segment: CallSegment) => { const { rows, cut } = privateCut(se
 /** A reply can extend a row begun before the handoff, so its explicit receipts take precedence over row order. */
 export function handoffWasSaid(rows: readonly TranscriptEntry[], handoff: TranscriptEntry): boolean {
   return rows.some(row => row.kind === "reply" && textOf(row).trim()
-    && (Array.isArray(row.data.handoffIds) && row.data.handoffIds.includes(handoff.id)
-      || (row.order ?? -1) > (handoff.order ?? Infinity)));
+    && (Array.isArray(row.data.handoffIds) ? row.data.handoffIds.includes(handoff.id)
+      : (row.order ?? -1) > (handoff.order ?? Infinity)));
 }
 /** Rewind only report parts handed without an ensuing reply, including a crash before the queue acknowledgement. */
 export function recoverReportSpeech(entries: readonly ReportSpeech[], rows: readonly TranscriptEntry[]): ReportSpeech[] {
@@ -70,7 +70,8 @@ export function resumeWasSaid(segments: readonly CallSegment[], resumeOf: Resume
   const rows = segments.flatMap(segment => segment.entries);
   const handoff = rows.findIndex(row => row.kind === "handoff" && (row.data.resumeOf as ResumePoint["resumeOf"] | undefined)?.part === resumeOf.part
     && (row.data.resumeOf as ResumePoint["resumeOf"] | undefined)?.item === resumeOf.item);
-  return handoff >= 0 && (rows.slice(handoff + 1).some(row => row.kind === "reply" && textOf(row).trim())
+  return handoff >= 0 && (rows.slice(handoff + 1).some(row => row.kind === "reply" && textOf(row).trim()
+      && (!Array.isArray(row.data.handoffIds) || row.data.handoffIds.includes(rows[handoff].id)))
     || rows.some(row => row.kind === "reply" && Array.isArray(row.data.handoffIds) && row.data.handoffIds.includes(rows[handoff].id)));
 }
 /** These are announcements only. They carry no permission to replay an action or confirm an old proposal. */

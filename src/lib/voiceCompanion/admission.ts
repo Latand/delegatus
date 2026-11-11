@@ -826,12 +826,17 @@ export class CompanionAdmission {
     });
   }
   /** Called only after the output reply and its handoff receipts are durable. */
-  resumeReplied(id: string): void {
+  resumeReplied(id: string, handoffIds?: readonly string[]): void {
+    const receipts = handoffIds ? this.records.read(id).entries.filter(row => row.kind === "handoff" && handoffIds.includes(row.id)) : undefined;
     this.storage.change(document => {
       const session = document.sessions[id];
       if (session) {
-        session.reportSpeech = session.reportSpeech?.filter(row => !row.resumeOf || row.handed === 0);
-        delete session.speechInFlight;
+        session.reportSpeech = session.reportSpeech?.filter(row => !row.resumeOf || row.handed === 0 || receipts && !receipts.some(receipt => {
+          const point = receipt.data.resumeOf as ReportSpeech["resumeOf"];
+          return point?.part === row.resumeOf!.part && point.item === row.resumeOf!.item;
+        }));
+        session.speechInFlight = receipts ? session.speechInFlight?.filter(row => !receipts.some(receipt => receipt.data.reportId === row.reportId
+          && typeof receipt.data.reportPart === "number" && receipt.data.reportPart >= (row.parts?.length ?? Infinity) - 1)) : undefined;
       }
     });
   }

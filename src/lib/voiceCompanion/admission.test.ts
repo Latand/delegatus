@@ -983,3 +983,29 @@ test("slice 3: a report scanned on the dropped part is listed once there and owe
   expect(admission.pollReports(p.sessionId)).toEqual([]); expect(admission.reportSpeech(p.sessionId)).toEqual([]);
   await service.close(n.sessionId);
 });
+
+test("a reply settles only its receipted report and resume after admission restart", () => {
+  const storage = new CompanionStorage(() => Date.UTC(2026, 10, 11, 12));
+  const paths = { recipient: () => null, reports: () => [], send: async () => { throw new Error("unexpected send"); } };
+  let admission = new CompanionAdmission(storage, paths);
+  const p = admission.create({ project: "receipted-reports", locale: "en", authority: "live-model" });
+  const point = { part: "previous-part", item: "previous-item" };
+  const entries: import("./storage").ReportSpeech[] = [
+    { reportId: "resume-one", project: p.project, status: "resume", text: "Resume", kind: "resume", resumeOf: point, handed: 1 },
+    { reportId: "resume-two", project: p.project, status: "confirmation", text: "Confirmation", kind: "notice", resumeOf: { part: "previous-part", item: "confirmation" }, handed: 1 },
+  ];
+  storage.change(document => {
+    document.sessions[p.id].reportSpeech = entries;
+    document.sessions[p.id].speechInFlight = ["report-one", "report-two"].map(reportId => ({ reportId, project: p.project, status: "completed", text: reportId, parts: [reportId], handed: 1 }));
+  });
+  admission.record(p.id, { id: "handoff-one", kind: "handoff", atMs: 0, data: { reportId: "report-one", reportPart: 0 } });
+  admission.record(p.id, { id: "handoff-resume", kind: "handoff", atMs: 0, data: { resumeOf: point } });
+  admission.record(p.id, { id: "reply-one", kind: "reply", atMs: 100, data: { text: "First reply", handoffIds: ["handoff-one", "handoff-resume"] } });
+  admission = new CompanionAdmission(new CompanionStorage(), paths);
+  admission.resumeReplied(p.id, ["handoff-one", "handoff-resume"]);
+  expect(admission.reportSpeech(p.id).map(row => row.reportId)).toEqual(["resume-two"]);
+  expect(storage.read().sessions[p.id].speechInFlight?.map(row => row.reportId)).toEqual(["report-two"]);
+  admission.resumeReplied(p.id, ["unknown-handoff"]);
+  expect(admission.reportSpeech(p.id).map(row => row.reportId)).toEqual(["resume-two"]);
+  expect(storage.read().sessions[p.id].speechInFlight?.map(row => row.reportId)).toEqual(["report-two"]);
+});

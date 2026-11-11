@@ -652,3 +652,17 @@ test("slice 2: a mint key written before cursors still recovers its answer and t
   await expect(h.build(state, gate).start(input)).rejects.toThrow("SESSION_CLOSED");
   expect(h.provider.sessions).toHaveLength(2);
 });
+
+for (const explicit of [true, false]) test(`reconnect: ${explicit ? "explicit receipts" : "legacy row order"} bind recovery to the report and resume actually answered`, async () => {
+  const { recoverReportSpeech, resumeWasSaid } = await import("./callResume");
+  const h = harness();
+  const p = h.admission.create({ project: "receipt-recovery", locale: "en", authority: "live-model" });
+  const point = { part: "previous-part", item: "cut-item" };
+  h.admission.record(p.id, { id: "handoff-unheard", kind: "handoff", atMs: 0, data: { reportId: "unheard-report", reportPart: 0, resumeOf: point } });
+  h.admission.record(p.id, { id: "reply-other", kind: "reply", atMs: 1, data: { text: "An answer to other speech.", ...(explicit ? { handoffIds: ["handoff-other"] } : {}) } });
+  const entries = h.admission.transcriptRecord(p.id).entries;
+  const owed = recoverReportSpeech([{ reportId: "unheard-report", project: p.project, status: "completed", text: "Unheard", parts: ["Unheard"], handed: 1 }], entries);
+  expect(owed.map(row => row.reportId)).toEqual(explicit ? ["unheard-report"] : []);
+  if (explicit) expect(owed[0].handed).toBe(0);
+  expect(resumeWasSaid([{ id: p.id, createdAt: h.now(), entries }], point)).toBe(!explicit);
+});
