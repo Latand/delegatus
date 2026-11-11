@@ -2,7 +2,7 @@ import { PrivacyWorkError, privacyFailureOf } from "./memory/privacyFailure";
 import readline from "node:readline";
 import { TaskPageBuilder, type PageBuildRequest } from "./links/taskPageBuild";
 
-import { RoleMemoryRefusal, refreshLessonKnownValues, observeLessonPrivacyPhase, storedLessonPatternsIn, storedLessonRevision, hasStoredLesson, withoutStoredLessonsIn } from "./memory/roleStore";
+import { RoleMemoryRefusal, refreshLessonKnownValues, observeLessonPrivacyPhase, storedLessonPatternsIn, storedLessonRevision, withoutStoredLessonsIn } from "./memory/roleStore";
 import { renderReport } from "./bridge/reportRender";
 import { lessonPattern } from "./memory/roleConsolidate";
 import { EMPTY_DENY_LIST } from "./bridge/publicSafe";
@@ -58,19 +58,21 @@ for await (const line of lines) {
       if (request.kind === "filter") value = withoutStoredLessonsIn(request.value, { requireComplete: true });
       else {
         const deny = (request.kind === "report" ? request.input.deny : request.deny) ?? EMPTY_DENY_LIST;
-        // The worker always checks authoritative lessons. Explicit deny-list
-        // lessons supplement them and cannot disable the stored privacy fence.
-        withoutStoredLessonsIn(null, { requireComplete: true });
+        // An issue report goes to GitHub: the worker always checks it against
+        // the authoritative lessons, and explicit deny-list lessons supplement
+        // them. A manager report goes to the operator and the project's own
+        // chat: it keeps every other class of the deny list and no lesson check.
+        if (request.kind === "issue") withoutStoredLessonsIn(null, { requireComplete: true });
         const explicit = request.kind === "report" ? [] : (deny.lessons ?? []).flatMap(text => { const pattern = lessonPattern(text); return pattern ? [pattern] : []; });
         const localDeny = request.kind === "report"
-          ? { ...deny, hasLesson: hasStoredLesson }
+          ? deny
           : { ...deny, lessonPatternsIn: (text: string) => [...storedLessonPatternsIn(text), ...explicit] };
         process.stdout.write(`${JSON.stringify({ id, correlation, phase: "match" })}\n`);
         value = performanceSpans.sync("privacy.match", () => request.kind === "report"
           ? renderReport({ ...request.input, at: new Date(request.input.at), deny: localDeny })
           : scrubIssueReport(request.report, localDeny));
         // A lesson's pattern is compiled when it first comes up; one the engine refused is found here.
-        withoutStoredLessonsIn(null, { requireComplete: true });
+        if (request.kind === "issue") withoutStoredLessonsIn(null, { requireComplete: true });
       }
       if (storedLessonRevision() !== privacyRevision) throw new PrivacyWorkError("store-changed");
       process.stdout.write(`${JSON.stringify({ id, correlation, rssBytes: residentWorkerRssBytes(), result: { privacyRevision, value } })}\n`);
@@ -78,7 +80,7 @@ for await (const line of lines) {
     }
     const result = builder.build(frame.request as PageBuildRequest);
     const cpuUsed = process.cpuUsage(cpu);
-    process.stdout.write(`{"id":${JSON.stringify(id)},${correlation ? `"correlation":${JSON.stringify(correlation)},` : ""}"rssBytes":${residentWorkerRssBytes()},"result":{"page":${result.pageJson},"privacyRevision":${JSON.stringify(result.privacyRevision)},"builds":${result.builds},"startRevision":${result.startRevision},"cpu":${JSON.stringify(cpuUsed)}}}\n`);
+    process.stdout.write(`{"id":${JSON.stringify(id)},${correlation ? `"correlation":${JSON.stringify(correlation)},` : ""}"rssBytes":${residentWorkerRssBytes()},"result":{"page":${result.pageJson},"builds":${result.builds},"startRevision":${result.startRevision},"cpu":${JSON.stringify(cpuUsed)}}}\n`);
   } catch (error) {
     // Store errors may contain task text or paths. Carry only the error class.
     process.stdout.write(`${JSON.stringify({ id, correlation, rssBytes: residentWorkerRssBytes(), error: "LESSON_PRIVACY_UNAVAILABLE", failure: privacyFailureOf(error) })}\n`);

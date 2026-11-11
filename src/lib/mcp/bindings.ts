@@ -200,7 +200,7 @@ import { leaveCorrectionForRole, leaveLessonForOperator, leaveLessonForSeat, lea
 import { operatorMemoryEnabled, storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import { readMemoryProblem } from "@/lib/memory/roleProblems";
 import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
-import { withoutStoredLessonsAsync, renderReportAsync, scrubIssueReportAsync } from "@/lib/memory/privacy";
+import { renderReportAsync, scrubIssueReportAsync } from "@/lib/memory/privacy";
 import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, stageGuardShapeError, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt, latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
@@ -4457,9 +4457,10 @@ async function productionPublicDenyList(project: string | null, control: ViewerC
     if (requireComplete) throw error;
     // An unreadable catalog contributes nothing.
   }
-  /* Role memory is never optional here: a store that cannot be read throws
-     LESSON_PRIVACY_UNAVAILABLE, and nothing is sent unchecked. */
-  // The shared leased worker reads authoritative lessons at filtering time.
+  /* Learned rules are no part of this list. An issue report is checked
+     against them in the shared leased worker, which refuses with
+     LESSON_PRIVACY_UNAVAILABLE when the store cannot be read; a manager
+     report carries no lesson check. */
   return { accounts, people, local, projects };
 }
 
@@ -5974,7 +5975,7 @@ async function sendMessageToOrchestrator(
     if (link) {
       try {
         const message = bound?.sendPayload ? splitRelayMessageText(bound.sendPayload.text)?.body ?? bound.sendPayload.text
-          : await orchestratorRelayEgressText(requiredMessageText(args));
+          : requiredMessageText(args);
         const clientMessageId = bound?.downstreamKey ?? orchestratorSendDownstreamKey(key);
         const response = await dispatchControl(control)("/api/orchestrator/message", {
           project, machine: link.install, text: message,
@@ -8107,15 +8108,6 @@ function orchestratorSendDownstreamKey(key: string): string {
   return `mcp_orchestrator_${crypto.createHash("sha256").update(key).digest("hex")}`;
 }
 
-/** Only a send leaving this installation crosses the learned-rule boundary. */
-async function orchestratorRelayEgressText(message: string): Promise<string> {
-  try { return await withoutStoredLessonsAsync(message); }
-  catch (error) {
-    if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
-    throw error;
-  }
-}
-
 async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, forRecovery = false): Promise<McpRequestBindingInput> {
   requireOrchestratorRelayCaller(dependencies);
   const named = required(args, "project");
@@ -8137,7 +8129,8 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
     throw new McpToolRefusal("the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", { code: "owner_report_seat_unavailable", retryable: false });
   }
   const link = project && text(args.machine) ? resolveRemoteSeatMachine(text(args.machine), project, dependencies) : null;
-  const outgoing = link ? await orchestratorRelayEgressText(message) : message;
+  // A linked installation is the same operator's: the message leaves as written.
+  const outgoing = message;
   return {
     // Relay receipts belong to the exact sender, never its successor seat.
     caller: { kind: caller.kind, conversationId: caller.conversationId, project: caller.project },

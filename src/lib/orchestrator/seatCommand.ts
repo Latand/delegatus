@@ -37,6 +37,7 @@ import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { derivedSpawnTitle } from "@/lib/title";
 import { telegramSetUp } from "@/lib/telegram/launchReadiness";
+import { readOnboardingMarker } from "@/lib/onboarding/marker";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
 import { captureSeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
@@ -60,6 +61,7 @@ import {
   type HandoffParts,
 } from "./handoffDigest";
 import {
+  ORCHESTRATOR_FIRST_RUN_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_SYSTEM_PROMPT,
   orchestratorMandateForDelivery,
@@ -1102,6 +1104,12 @@ export function executeOrchestratorSeatRequest(
   });
 }
 
+/** An install that predates the guide has run Delegatus before: it is never on a first run. A marker that cannot be read grants nothing. */
+function firstRunMarkerAllows(): boolean {
+  try { return readOnboardingMarker()?.reason !== "existing-install"; }
+  catch { return false; }
+}
+
 /** Whether this key already owns the project's live pending intent or its
     active seat, so a retry under it replays instead of beginning anew. */
 function holdsSeatIntent(project: string, clientRequestId: string): boolean {
@@ -1334,6 +1342,13 @@ async function runOrchestratorSeatRequest(
      connection reads this minute: the launch repairs a connection that is down
      or starts without the tool, and the grant brings the tool back later. */
   const telegramGrant = telegramSetUp();
+  /* The first orchestrator of an installation is asked to read the project and
+     offer one form. Requested only for a new spawn, with no incumbent, not by an
+     agent, and not on an install that predates the guide; the seat store decides
+     under its own lock whether this really is the first, and the text must still
+     fit the delivery bound with the instruction on it. */
+  const firstRun = !existingConversationId && incumbent === null && triggeredBy?.kind !== "agent" && firstRunMarkerAllows()
+    && preflight.ok && preflight.bytes + preflight.overhead + Buffer.byteLength(`\n\n${ORCHESTRATOR_FIRST_RUN_DIRECTIVE}`) <= MAX_STRUCTURED_TEXT_BYTES;
   const begun = beginOrchestratorSeatIntent({
     project,
     mandate,
@@ -1344,6 +1359,7 @@ async function runOrchestratorSeatRequest(
     engine: resolvedRuntime.value.config.engine,
     model: resolvedRuntime.value.config.model,
     telegramGrant,
+    ...(firstRun ? { firstRun: true } : {}),
     automaticReplacement: admission?.automaticReplacement,
     promptVersion,
     triggeredBy,
@@ -1379,6 +1395,9 @@ async function runOrchestratorSeatRequest(
      recomposed retry, or one rendered from a registry edited since, would
      otherwise conflict with its own first attempt. */
   const spawnMandate = orchestratorMandateWithRoleTable(begun.seat.mandate, begun.seat.roleTable ?? null);
+  /* The first-run instruction rides on this spawn's text only: the stored
+     mandate, and everything rebuilt from it, never carries it. */
+  const spawnText = begun.seat.firstRun ? `${spawnMandate}\n\n${ORCHESTRATOR_FIRST_RUN_DIRECTIVE}` : spawnMandate;
 
   const spawnFields = ["cwd", "effort", "fast", "serviceTier", "inheritedServiceTier", "accountId", "images", "roleParams", "allowSubagents"] as const;
   const spawnRuntime = begun.kind === "replay"
@@ -1430,7 +1449,7 @@ async function runOrchestratorSeatRequest(
     roleParams: rawBody.roleParams ?? { mode: "standard" },
     project,
     cwd,
-    ["prompt"]: spawnMandate,
+    ["prompt"]: spawnText,
     title: derivedSpawnTitle("orchestrator", spawnMandate, project),
     clientAttemptId: clientRequestId,
   };
