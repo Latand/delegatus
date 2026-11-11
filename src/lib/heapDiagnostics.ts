@@ -7,17 +7,26 @@ import path from "node:path";
  * the event loop for their whole duration, so each runs only when the operator
  * asks for it.
  *
- * Cost model, measured on Bun 1.4.0 with fixture heaps of 110–220 MB
- * (2.7–5.5 million objects) and assumed linear in the object count:
+ * Snapshot cost, measured on Bun 1.4.0. It has two very different unit prices,
+ * and the census names only counts, so the estimate is an upper bound:
  *
- *   heapStats()                  27–34 ns per object
- *   generateHeapSnapshot("v8")   1.8–2.5 µs per object, 315–330 bytes of extra
- *                                resident memory per object at the peak, and
- *                                53–64 bytes of output per object
+ *   per non-string object   53–64 bytes of output, 300–330 bytes of extra
+ *                           resident memory at the peak, 1.8–2.5 µs
+ *   per string              the snapshot stores each string's first 1024
+ *                           characters, JSON-escaped: 65 bytes for a short
+ *                           string and up to 1.1 KB (ASCII), 1.7 KB (Cyrillic,
+ *                           emoji, quotes and newlines); 3.3–5 KB of memory
+ *                           and 8–11 µs for a long one
  *
- * The constants below round those up. The runtime builds the whole snapshot as
- * one in-memory buffer before a byte reaches the disk, so the estimated output
- * is capped well under the 2 GiB ceiling of a single JavaScriptCore string.
+ * The census (heapStats) costs 27–40 ns per object.
+ *
+ * A heap of short strings is overestimated about 30 times; that is the price
+ * of a bound that holds for a heap of long ones. Only a string made mostly of
+ * control characters (6 bytes of output each) can exceed it.
+ *
+ * The runtime serializes the whole snapshot into one contiguous buffer, and
+ * that buffer cannot exceed about 2 GiB, so the bound on the output stays
+ * well under it.
  */
 export const HEAP_STATS_CACHE_MS = 30_000;
 export const HEAP_SNAPSHOT_INTERVAL_MS = 60 * 60_000;
@@ -26,9 +35,14 @@ export const HEAP_SNAPSHOT_MAX_FILE_BYTES = 1.5 * 1024 ** 3;
 export const HEAP_SNAPSHOT_FILE_BYTES_PER_OBJECT = 80;
 export const HEAP_SNAPSHOT_MEMORY_BYTES_PER_OBJECT = 400;
 export const HEAP_SNAPSHOT_BLOCK_MS_PER_MILLION_OBJECTS = 3000;
+export const HEAP_SNAPSHOT_FILE_BYTES_PER_STRING = 2200;
+export const HEAP_SNAPSHOT_MEMORY_BYTES_PER_STRING = 7000;
+export const HEAP_SNAPSHOT_BLOCK_MS_PER_MILLION_STRINGS = 15_000;
 export const HEAP_SNAPSHOT_FORMAT = "v8-heapsnapshot";
 const SNAPSHOT_NAME = /^heap-\d{8}T\d{6}Z-\d+\.heapsnapshot$/;
 const PARTIAL_SUFFIX = ".partial";
+/** Written before the heap is serialized, so a process that dies there still spends the hour. */
+const ATTEMPT_MARKER = "last-attempt";
 
 export interface JscHeapStats {
   heapSize: number;
@@ -59,6 +73,8 @@ export interface HeapDiagnosticsDeps {
 
 export interface HeapSnapshotEstimate {
   objectCount: number;
+  stringCount: number;
+  /** Upper bounds, see the cost model above. */
   fileBytes: number;
   peakExtraMemoryBytes: number;
   blockMs: number;
@@ -71,8 +87,10 @@ export interface HeapDiagnosticsAnswer {
   body: Record<string, unknown>;
 }
 
+interface Census { at: number; heap: JscHeapStats; blockedMs: number }
+
 interface State {
-  stats: { at: number; body: Record<string, unknown> } | null;
+  census: Census | null;
   snapshotRunning: boolean;
   lastSnapshotAttemptAt: number | null;
 }
@@ -81,18 +99,21 @@ interface State {
    flag and the attempt time must be one per process. */
 const slot = globalThis as typeof globalThis & { __delegatusHeapDiagnostics?: State };
 function sharedState(): State {
-  return slot.__delegatusHeapDiagnostics ??= { stats: null, snapshotRunning: false, lastSnapshotAttemptAt: null };
+  return slot.__delegatusHeapDiagnostics ??= { census: null, snapshotRunning: false, lastSnapshotAttemptAt: null };
 }
 
 const sortedCounts = (counts: Record<string, number> | undefined) =>
   Object.fromEntries(Object.entries(counts ?? {}).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])));
 
-export function estimateHeapSnapshot(objectCount: number): HeapSnapshotEstimate {
+export function estimateHeapSnapshot(heap: Pick<JscHeapStats, "objectCount" | "objectTypeCounts">): HeapSnapshotEstimate {
+  const objectCount = Math.max(0, heap.objectCount);
+  const stringCount = Math.min(objectCount, Math.max(0, heap.objectTypeCounts?.string ?? 0));
+  const others = objectCount - stringCount;
   return {
-    objectCount,
-    fileBytes: objectCount * HEAP_SNAPSHOT_FILE_BYTES_PER_OBJECT,
-    peakExtraMemoryBytes: objectCount * HEAP_SNAPSHOT_MEMORY_BYTES_PER_OBJECT,
-    blockMs: Math.round(objectCount / 1e6 * HEAP_SNAPSHOT_BLOCK_MS_PER_MILLION_OBJECTS),
+    objectCount, stringCount,
+    fileBytes: others * HEAP_SNAPSHOT_FILE_BYTES_PER_OBJECT + stringCount * HEAP_SNAPSHOT_FILE_BYTES_PER_STRING,
+    peakExtraMemoryBytes: others * HEAP_SNAPSHOT_MEMORY_BYTES_PER_OBJECT + stringCount * HEAP_SNAPSHOT_MEMORY_BYTES_PER_STRING,
+    blockMs: Math.round(others / 1e6 * HEAP_SNAPSHOT_BLOCK_MS_PER_MILLION_OBJECTS + stringCount / 1e6 * HEAP_SNAPSHOT_BLOCK_MS_PER_MILLION_STRINGS),
   };
 }
 
@@ -117,20 +138,50 @@ function storedSnapshots(directory: string): StoredSnapshot[] {
   return found.sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
+const isPartial = (name: string) => name.endsWith(PARTIAL_SUFFIX) && SNAPSHOT_NAME.test(name.slice(0, -PARTIAL_SUFFIX.length));
+
+function markedAttemptAt(directory: string): number | null {
+  try { return fs.statSync(path.join(directory, ATTEMPT_MARKER)).mtimeMs; }
+  catch { return null; }
+}
+
 export function createHeapDiagnostics(deps: HeapDiagnosticsDeps, state: State = sharedState()) {
+  /** One heap walk per cache window, shared by both modes. */
+  function census(now: number): Census & { cached: boolean } {
+    if (state.census && now - state.census.at >= 0 && now - state.census.at < HEAP_STATS_CACHE_MS) return { ...state.census, cached: true };
+    const started = deps.monotonicMs();
+    const heap = deps.heapStats();
+    state.census = { at: now, heap, blockedMs: deps.monotonicMs() - started };
+    return { ...state.census, cached: false };
+  }
+
+  /** A partial file is a whole heap's strings left by a process that died
+      while writing; nothing reads it, so it goes the next time anyone asks. */
+  function sweepPartials(directory: string): number {
+    if (state.snapshotRunning) return 0;
+    let names: string[];
+    try { names = fs.readdirSync(directory); }
+    catch { return 0; }
+    let removed = 0;
+    for (const name of names) {
+      if (!isPartial(name)) continue;
+      try { fs.rmSync(path.join(directory, name), { force: true }); removed++; }
+      catch { /* stays for the operator to see */ }
+    }
+    return removed;
+  }
+
   /** Cheap mode: counters and the per-type object census. Writes no file. */
   function stats(): HeapDiagnosticsAnswer {
     const now = deps.now();
-    if (state.stats && now - state.stats.at >= 0 && now - state.stats.at < HEAP_STATS_CACHE_MS) {
-      return { status: 200, body: { ...state.stats.body, cached: true, ageMs: now - state.stats.at } };
-    }
-    const started = deps.monotonicMs();
-    const heap = deps.heapStats();
-    const blockedMs = deps.monotonicMs() - started;
+    sweepPartials(deps.directory());
+    const { heap, at, blockedMs, cached } = census(now);
     const { rss, heapUsed, heapTotal, external, arrayBuffers } = deps.memoryUsage();
-    const body: Record<string, unknown> = {
+    const estimate = estimateHeapSnapshot(heap);
+    return { status: 200, body: {
       mode: "stats",
-      at: new Date(now).toISOString(),
+      at: new Date(at).toISOString(),
+      cached, ageMs: now - at,
       blockedMs: Math.round(blockedMs * 10) / 10,
       memoryUsage: { rss, heapUsed, heapTotal, external, arrayBuffers },
       heap: {
@@ -142,14 +193,13 @@ export function createHeapDiagnostics(deps: HeapDiagnosticsDeps, state: State = 
       protectedObjectTypeCounts: sortedCounts(heap.protectedObjectTypeCounts),
       ...(heap.mimalloc && typeof heap.mimalloc === "object" ? { mimalloc: heap.mimalloc } : {}),
       snapshotEstimate: {
-        ...estimateHeapSnapshot(heap.objectCount),
+        ...estimate,
+        upperBound: true,
         maxFileBytes: HEAP_SNAPSHOT_MAX_FILE_BYTES,
-        fitsSizeBound: estimateHeapSnapshot(heap.objectCount).fileBytes <= HEAP_SNAPSHOT_MAX_FILE_BYTES,
+        fitsSizeBound: estimate.fileBytes <= HEAP_SNAPSHOT_MAX_FILE_BYTES,
         availableMemoryBytes: deps.availableMemoryBytes(),
       },
-    };
-    state.stats = { at: now, body };
-    return { status: 200, body: { ...body, cached: false, ageMs: 0 } };
+    } };
   }
 
   const refuse = (status: number, refusal: HeapSnapshotRefusal, detail: Record<string, unknown>): HeapDiagnosticsAnswer =>
@@ -160,18 +210,20 @@ export function createHeapDiagnostics(deps: HeapDiagnosticsDeps, state: State = 
     if (state.snapshotRunning) return refuse(409, "busy", {});
     const now = deps.now();
     const directory = deps.directory();
+    sweepPartials(directory);
     const stored = storedSnapshots(directory);
     /* A file dated ahead of this clock counts as written now: it holds the
        hour and never longer. */
-    const last = Math.min(now, Math.max(state.lastSnapshotAttemptAt ?? -Infinity, stored[0]?.mtimeMs ?? -Infinity));
+    const last = Math.min(now, Math.max(state.lastSnapshotAttemptAt ?? -Infinity, markedAttemptAt(directory) ?? -Infinity, stored[0]?.mtimeMs ?? -Infinity));
     if (now - last < HEAP_SNAPSHOT_INTERVAL_MS) {
       return refuse(429, "rate_limited", {
         retryAfterMs: Math.ceil(HEAP_SNAPSHOT_INTERVAL_MS - (now - last)),
         ...(stored[0] ? { existing: { path: stored[0].file, bytes: stored[0].bytes } } : {}),
       });
     }
-    /* The census costs about 1% of the snapshot and sizes it in advance. */
-    const estimate = estimateHeapSnapshot(deps.heapStats().objectCount);
+    /* The census costs about 1% of the snapshot and bounds it in advance. A
+       refused call inside the cache window walks nothing. */
+    const estimate = estimateHeapSnapshot(census(now).heap);
     if (estimate.fileBytes > HEAP_SNAPSHOT_MAX_FILE_BYTES) {
       return refuse(413, "too_large", { estimate, maxFileBytes: HEAP_SNAPSHOT_MAX_FILE_BYTES });
     }
@@ -180,13 +232,23 @@ export function createHeapDiagnostics(deps: HeapDiagnosticsDeps, state: State = 
     if (availableMemoryBytes === null || availableMemoryBytes < requiredMemoryBytes) {
       return refuse(507, "insufficient_memory", { estimate, availableMemoryBytes, requiredMemoryBytes });
     }
-    try { fs.mkdirSync(directory, { recursive: true, mode: 0o700 }); }
-    catch { return refuse(500, "failed", { stage: "directory" }); }
+    try {
+      fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+      // The mode above applies only to a directory this call created.
+      fs.chmodSync(directory, 0o700);
+    } catch { return refuse(500, "failed", { stage: "directory" }); }
     const freeDiskBytes = deps.freeDiskBytes(directory);
     const requiredDiskBytes = Math.max(HEAP_SNAPSHOT_MIN_FREE_DISK_BYTES, estimate.fileBytes * 2);
     if (freeDiskBytes === null || freeDiskBytes < requiredDiskBytes) {
       return refuse(507, "insufficient_disk", { estimate, freeDiskBytes, requiredDiskBytes });
     }
+    /* On disk before the heap is touched: a process killed mid-serialization
+       and restarted by its supervisor must find the hour already spent. */
+    try {
+      const marker = path.join(directory, ATTEMPT_MARKER);
+      fs.writeFileSync(marker, `${new Date(now).toISOString()}\n`, { mode: 0o600 });
+      fs.utimesSync(marker, new Date(now), new Date(now));
+    } catch { return refuse(500, "failed", { stage: "marker" }); }
 
     state.snapshotRunning = true;
     state.lastSnapshotAttemptAt = now;
@@ -202,6 +264,8 @@ export function createHeapDiagnostics(deps: HeapDiagnosticsDeps, state: State = 
       } catch {
         return refuse(500, "failed", { stage: "generate", estimate });
       }
+      // The runtime answers an empty buffer when the snapshot outgrew its own.
+      if (bytes.byteLength === 0) return refuse(500, "failed", { stage: "generate", estimate });
       const generateMs = deps.monotonicMs() - generateStarted;
       const size = bytes.byteLength;
       const writeStarted = deps.monotonicMs();
@@ -237,9 +301,7 @@ export function createHeapDiagnostics(deps: HeapDiagnosticsDeps, state: State = 
     let removed = 0;
     for (const name of names) {
       const target = path.join(directory, name);
-      if (target === keep) continue;
-      const partial = name.endsWith(PARTIAL_SUFFIX) && SNAPSHOT_NAME.test(name.slice(0, -PARTIAL_SUFFIX.length));
-      if (!SNAPSHOT_NAME.test(name) && !partial) continue;
+      if (target === keep || (!SNAPSHOT_NAME.test(name) && !isPartial(name))) continue;
       try { await fs.promises.rm(target, { force: true }); removed++; }
       catch { /* a snapshot that cannot be removed stays for the operator to see */ }
     }

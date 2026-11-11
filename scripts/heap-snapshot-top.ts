@@ -13,9 +13,15 @@
  * would be freed with the object, computed from the dominator tree over
  * non-weak edges. A type's retained size sums its instances that have no
  * instance of the same type above them in the dominator tree, so nested
- * instances are counted once. The last table lists the single objects that
+ * instances are counted once. A further table lists the single objects that
  * retain the most, each with the property its dominator holds it by, which is
  * what names the owning cache.
+ *
+ * Limit of the format: the runtime records no edge from a Map, Set, WeakMap or
+ * WeakSet to its entries. What only such a container holds is reported as
+ * having no recorded referrer, with its size and types, next to the largest
+ * containers by entry storage. Memory: about 150 bytes per node plus edges,
+ * near 3 GB for a snapshot of 20 million nodes.
  */
 import fs from "node:fs";
 
@@ -171,72 +177,136 @@ export function readHeapSnapshot(file: string): HeapSnapshotGraph {
 
 export interface TypeRow { type: string; count: number; selfSize: number; retainedSize: number }
 export interface ObjectRow { type: string; selfSize: number; retainedSize: number; heldBy: string }
+export interface ContainerRow { type: string; storageSize: number; heldBy: string }
 export interface HeapSnapshotSummary {
   nodeCount: number; edgeCount: number; totalSelfSize: number;
+  /** What the root reaches through the edges the runtime recorded. */
   reachableCount: number; reachableSelfSize: number;
+  /** The rest: live objects with no recorded path from the root. */
+  unattributedCount: number; unattributedSelfSize: number;
+  /** The unattributed objects nothing else refers to, grouped by type, with what each group retains. */
+  unattributedTypes: TypeRow[];
   types: TypeRow[];
   /** The single objects that retain the most, largest first. */
   objects: ObjectRow[];
+  /** Map, Set, WeakMap and WeakSet instances with the largest entry storage. */
+  containers: ContainerRow[];
 }
 
 /** A label still to be resolved against the string table. */
 type Label = { kind: string; nameId: number | null };
 const NAMED_KINDS = new Set(["object", "native"]);
+const NO_REFERRER = "no recorded referrer";
+const CONTAINER_TYPES = new Set(["Map", "Set", "WeakMap", "WeakSet"]);
 
+/** Keeps the `limit` largest items by `weight`, largest first. */
+function largestBy(limit: number, weight: (item: number) => number) {
+  const kept: number[] = [];
+  const order = (a: number, b: number) => weight(b) - weight(a);
+  return {
+    offer(item: number) {
+      if (limit <= 0) return;
+      if (kept.length < limit) { kept.push(item); if (kept.length === limit) kept.sort(order); return; }
+      if (weight(item) <= weight(kept[kept.length - 1]!)) return;
+      kept[kept.length - 1] = item;
+      kept.sort(order);
+    },
+    done() { return kept.sort(order); },
+  };
+}
+
+/*
+ * The runtime's snapshot records no edge from a Map, Set, WeakMap or WeakSet
+ * to its entries: the container points at its storage cell and the storage
+ * cell points at nothing. Everything held only through such a container is
+ * therefore live with no path from the root. Those objects hang here under one
+ * virtual holder, so their own subtrees are still measured, and the summary
+ * says how much of the heap that is. Which container holds which entry is not
+ * in the file.
+ */
 export function summarizeHeapSnapshot(graph: HeapSnapshotGraph, strings: (wanted: Set<number>) => Map<number, string>, topObjects = 30): HeapSnapshotSummary {
-  const { nodeCount, edgeCount, edgeTo, edgeType, selfSize } = graph;
+  const { nodeCount, edgeCount, edgeTo, edgeType } = graph;
   const weak = graph.edgeTypes.indexOf("weak");
   const firstEdge = new Uint32Array(nodeCount + 1);
   for (let node = 0; node < nodeCount; node++) firstEdge[node + 1] = firstEdge[node]! + graph.edgeCounts[node]!;
   if (firstEdge[nodeCount] !== edgeCount) throw new Error("edge counts do not add up to edge_count");
-
-  // Postorder from the root (node 0), iteratively.
+  if (nodeCount === 0) {
+    return { nodeCount, edgeCount, totalSelfSize: 0, reachableCount: 0, reachableSelfSize: 0, unattributedCount: 0, unattributedSelfSize: 0, unattributedTypes: [], types: [], objects: [], containers: [] };
+  }
   const NONE = 0xffffffff;
-  const postIndex = new Uint32Array(nodeCount).fill(NONE);
-  const postNode = new Uint32Array(nodeCount);
-  const visited = new Uint8Array(nodeCount);
-  const stackNode = new Uint32Array(nodeCount), stackEdge = new Uint32Array(nodeCount);
-  let depth = 0, reachableCount = 0;
-  if (nodeCount > 0) { stackNode[0] = 0; stackEdge[0] = firstEdge[0]!; visited[0] = 1; depth = 1; }
-  while (depth > 0) {
-    const node = stackNode[depth - 1]!;
-    const edge = stackEdge[depth - 1]!;
-    if (edge < firstEdge[node + 1]!) {
-      stackEdge[depth - 1] = edge + 1;
-      if (edgeType[edge] === weak) continue;
-      const to = edgeTo[edge]!;
-      if (visited[to]) continue;
-      visited[to] = 1;
-      stackNode[depth] = to; stackEdge[depth] = firstEdge[to]!; depth++;
-    } else {
-      postIndex[node] = reachableCount; postNode[reachableCount] = node; reachableCount++; depth--;
-    }
-  }
+  const virtual = nodeCount, total = nodeCount + 1;
+  const selfOf = (node: number) => node === virtual ? 0 : graph.selfSize[node]!;
 
-  // Predecessors of reachable nodes, as postorder indices.
-  const firstPredecessor = new Uint32Array(reachableCount + 1);
-  for (let node = 0; node < nodeCount; node++) {
-    if (!visited[node]) continue;
-    for (let edge = firstEdge[node]!; edge < firstEdge[node + 1]!; edge++) {
-      if (edgeType[edge] !== weak) firstPredecessor[postIndex[edgeTo[edge]!]! + 1]!++;
+  // What the root reaches, then the entry points of everything it does not.
+  const reached = new Uint8Array(nodeCount), referred = new Uint8Array(nodeCount);
+  const stackNode = new Uint32Array(total), stackEdge = new Uint32Array(total);
+  const mark = (start: number) => {
+    let depth = 0;
+    reached[start] = 1; stackNode[depth++] = start;
+    while (depth > 0) {
+      const node = stackNode[--depth]!;
+      for (let edge = firstEdge[node]!; edge < firstEdge[node + 1]!; edge++) {
+        const to = edgeTo[edge]!;
+        if (edgeType[edge] !== weak && !reached[to]) { reached[to] = 1; stackNode[depth++] = to; }
+      }
     }
-  }
-  for (let index = 0; index < reachableCount; index++) firstPredecessor[index + 1]! += firstPredecessor[index]!;
-  const predecessors = new Uint32Array(firstPredecessor[reachableCount]!);
-  const fill = firstPredecessor.slice(0, reachableCount);
+  };
+  mark(0);
+  let totalSelfSize = 0, reachableCount = 0, reachableSelfSize = 0;
   for (let node = 0; node < nodeCount; node++) {
-    if (!visited[node]) continue;
-    const from = postIndex[node]!;
-    for (let edge = firstEdge[node]!; edge < firstEdge[node + 1]!; edge++) {
-      if (edgeType[edge] !== weak) predecessors[fill[postIndex[edgeTo[edge]!]!]!++] = from;
-    }
+    totalSelfSize += selfOf(node);
+    if (reached[node]) { reachableCount++; reachableSelfSize += selfOf(node); }
+    for (let edge = firstEdge[node]!; edge < firstEdge[node + 1]!; edge++) if (edgeType[edge] !== weak) referred[edgeTo[edge]!] = 1;
   }
+  const seeds: number[] = [];
+  for (let node = 0; node < nodeCount; node++) if (!reached[node] && !referred[node]) { seeds.push(node); mark(node); }
+  // A cycle with no entry point of its own.
+  for (let node = 0; node < nodeCount; node++) if (!reached[node]) { seeds.push(node); mark(node); }
+
+  // Postorder from the root, with the virtual holder as its last child.
+  const postIndex = new Uint32Array(total).fill(NONE);
+  const postNode = new Uint32Array(total);
+  const visited = new Uint8Array(total);
+  let depth = 1, count = 0;
+  stackNode[0] = 0; stackEdge[0] = firstEdge[0]!; visited[0] = 1;
+  while (depth > 0) {
+    const node = stackNode[depth - 1]!, cursor = stackEdge[depth - 1]!;
+    let to = NONE, finished = false;
+    if (node === virtual) { if (cursor < seeds.length) to = seeds[cursor]!; else finished = true; }
+    else if (cursor < firstEdge[node + 1]!) { if (edgeType[cursor] !== weak) to = edgeTo[cursor]!; }
+    else if (node === 0 && cursor === firstEdge[1]! && seeds.length > 0) to = virtual;
+    else finished = true;
+    if (finished) { postIndex[node] = count; postNode[count] = node; count++; depth--; continue; }
+    stackEdge[depth - 1] = cursor + 1;
+    if (to === NONE || visited[to]) continue;
+    visited[to] = 1;
+    stackNode[depth] = to; stackEdge[depth] = to === virtual ? 0 : firstEdge[to]!; depth++;
+  }
+  const virtualIndex = seeds.length > 0 ? postIndex[virtual]! : NONE;
+
+  // Predecessors, as postorder indices.
+  const firstPredecessor = new Uint32Array(count + 1);
+  const eachEdge = (visit: (from: number, to: number) => void) => {
+    for (let node = 0; node < nodeCount; node++) {
+      const from = postIndex[node]!;
+      for (let edge = firstEdge[node]!; edge < firstEdge[node + 1]!; edge++) if (edgeType[edge] !== weak) visit(from, postIndex[edgeTo[edge]!]!);
+    }
+    if (virtualIndex !== NONE) {
+      visit(postIndex[0]!, virtualIndex);
+      for (const seed of seeds) visit(virtualIndex, postIndex[seed]!);
+    }
+  };
+  eachEdge((_, to) => { firstPredecessor[to + 1]!++; });
+  for (let index = 0; index < count; index++) firstPredecessor[index + 1]! += firstPredecessor[index]!;
+  const predecessors = new Uint32Array(firstPredecessor[count]!);
+  const fill = firstPredecessor.slice(0, count);
+  eachEdge((from, to) => { predecessors[fill[to]!++] = from; });
 
   // Immediate dominators (Cooper, Harvey, Kennedy), over postorder indices.
-  const dominator = new Uint32Array(reachableCount).fill(NONE);
-  const rootIndex = reachableCount - 1;
-  if (reachableCount > 0) dominator[rootIndex] = rootIndex;
-  for (let changed = reachableCount > 1; changed;) {
+  const dominator = new Uint32Array(count).fill(NONE);
+  const rootIndex = count - 1;
+  dominator[rootIndex] = rootIndex;
+  for (let changed = count > 1; changed;) {
     changed = false;
     for (let index = rootIndex - 1; index >= 0; index--) {
       let candidate = NONE;
@@ -254,14 +324,14 @@ export function summarizeHeapSnapshot(graph: HeapSnapshotGraph, strings: (wanted
   }
 
   // A dominator always has the higher postorder index, so one ascending pass sums subtrees.
-  const retained = new Float64Array(reachableCount);
-  for (let index = 0; index < reachableCount; index++) retained[index] = selfSize[postNode[index]!]!;
+  const retained = new Float64Array(count);
+  for (let index = 0; index < count; index++) retained[index] = selfOf(postNode[index]!);
   for (let index = 0; index < rootIndex; index++) retained[dominator[index]!]! += retained[index]!;
 
   // Named objects group by their class; everything else by its node kind.
   const classIds = new Map<number, number>();
-  const classLabels: Label[] = [];
-  const nodeClass = new Uint32Array(nodeCount);
+  const classLabels: Label[] = [{ kind: NO_REFERRER, nameId: null }];
+  const nodeClass = new Uint32Array(total);
   for (let node = 0; node < nodeCount; node++) {
     const kindId = graph.type[node]!;
     const named = NAMED_KINDS.has(graph.nodeTypes[kindId]!);
@@ -273,24 +343,20 @@ export function summarizeHeapSnapshot(graph: HeapSnapshotGraph, strings: (wanted
     }
     nodeClass[node] = id;
   }
-  const classNames = classLabels;
-  const rows: TypeRow[] = classNames.map(() => ({ type: "", count: 0, selfSize: 0, retainedSize: 0 }));
-  let totalSelfSize = 0, reachableSelfSize = 0;
+  const rows: TypeRow[] = classLabels.map(() => ({ type: "", count: 0, selfSize: 0, retainedSize: 0 }));
   for (let node = 0; node < nodeCount; node++) {
     const row = rows[nodeClass[node]!]!;
-    row.count++; row.selfSize += selfSize[node]!; totalSelfSize += selfSize[node]!;
-    if (visited[node]) reachableSelfSize += selfSize[node]!;
-    else row.retainedSize += selfSize[node]!; // unreachable from the root: it retains itself
+    row.count++; row.selfSize += selfOf(node);
   }
 
   // Walk the dominator tree; an instance counts toward its type when no ancestor shares the type.
-  const firstChild = new Uint32Array(reachableCount + 1);
+  const firstChild = new Uint32Array(count + 1);
   for (let index = 0; index < rootIndex; index++) firstChild[dominator[index]! + 1]!++;
-  for (let index = 0; index < reachableCount; index++) firstChild[index + 1]! += firstChild[index]!;
-  const children = new Uint32Array(Math.max(0, rootIndex));
-  const childFill = firstChild.slice(0, reachableCount);
+  for (let index = 0; index < count; index++) firstChild[index + 1]! += firstChild[index]!;
+  const children = new Uint32Array(rootIndex);
+  const childFill = firstChild.slice(0, count);
   for (let index = 0; index < rootIndex; index++) children[childFill[dominator[index]!]!++] = index;
-  const open = new Uint32Array(classNames.length);
+  const open = new Uint32Array(classLabels.length);
   const walkNode = stackNode, walkChild = stackEdge;
   depth = 0;
   const enter = (index: number) => {
@@ -299,7 +365,7 @@ export function summarizeHeapSnapshot(graph: HeapSnapshotGraph, strings: (wanted
     open[id]!++;
     walkNode[depth] = index; walkChild[depth] = firstChild[index]!; depth++;
   };
-  if (reachableCount > 0) enter(rootIndex);
+  enter(rootIndex);
   while (depth > 0) {
     const index = walkNode[depth - 1]!;
     const child = walkChild[depth - 1]!;
@@ -307,19 +373,45 @@ export function summarizeHeapSnapshot(graph: HeapSnapshotGraph, strings: (wanted
     else { open[nodeClass[postNode[index]!]!]!--; depth--; }
   }
 
-  // The largest single retainers below the root, and the edge their dominator holds each by.
-  const largest: number[] = [];
-  const byRetained = (a: number, b: number) => retained[b]! - retained[a]!;
-  for (let index = 0; index < rootIndex && topObjects > 0; index++) {
-    if (graph.nodeTypes[graph.type[postNode[index]!]!] === "synthetic") continue;
-    if (largest.length < topObjects) { largest.push(index); if (largest.length === topObjects) largest.sort(byRetained); continue; }
-    if (retained[index]! <= retained[largest[largest.length - 1]!]!) continue;
-    largest[largest.length - 1] = index;
-    largest.sort(byRetained);
+  // Class names first: they decide which nodes are containers.
+  const classStrings = new Set<number>();
+  for (const label of classLabels) if (label.nameId !== null) classStrings.add(label.nameId);
+  const classTable = strings(classStrings);
+  /* Two string-table entries may spell the same class; their rows merge. */
+  const merged = new Map<string, TypeRow>();
+  const rowOfClass = rows.map((row, id) => {
+    const label = classLabels[id]!;
+    const type = (label.nameId !== null && classTable.get(label.nameId)) || `(${label.kind})`;
+    const into = merged.get(type);
+    if (!into) { row.type = type; merged.set(type, row); return row; }
+    into.count += row.count; into.selfSize += row.selfSize; into.retainedSize += row.retainedSize;
+    return into;
+  });
+  const typeOf = (node: number) => rowOfClass[nodeClass[node]!]!.type;
+
+  // The largest single retainers below the root.
+  const largest = largestBy(topObjects, index => retained[index]!);
+  for (let index = 0; index < rootIndex; index++) {
+    const node = postNode[index]!;
+    if (node !== virtual && graph.nodeTypes[graph.type[node]!] !== "synthetic") largest.offer(index);
   }
-  largest.sort(byRetained);
+  // Containers by the size of their entry storage: the object plus its hidden storage cells.
+  const hidden = graph.nodeTypes.indexOf("hidden");
+  const storage = new Map<number, number>();
+  for (let node = 0; node < nodeCount; node++) {
+    if (!CONTAINER_TYPES.has(typeOf(node))) continue;
+    let bytes = selfOf(node);
+    for (let edge = firstEdge[node]!; edge < firstEdge[node + 1]!; edge++) {
+      if (edgeType[edge] !== weak && graph.type[edgeTo[edge]!] === hidden) bytes += selfOf(edgeTo[edge]!);
+    }
+    storage.set(postIndex[node]!, bytes);
+  }
+  const largestContainers = largestBy(topObjects, index => storage.get(index)!);
+  for (const index of storage.keys()) largestContainers.offer(index);
+
   const numbered = new Set(["element", "hidden"]);
   const edgesInto = (owner: number, node: number) => {
+    if (owner === virtual) return null;
     for (let edge = firstEdge[owner]!; edge < firstEdge[owner + 1]!; edge++) {
       if (edgeTo[edge] !== node || edgeType[edge] === weak) continue;
       const edgeKind = graph.edgeTypes[edgeType[edge]!]!;
@@ -329,7 +421,7 @@ export function summarizeHeapSnapshot(graph: HeapSnapshotGraph, strings: (wanted
   };
   /* The dominator's own reference when it has one; otherwise the object is
      reachable several ways, and up to three direct referrers are named. */
-  const held = largest.map(index => {
+  const holders = (index: number) => {
     const node = postNode[index]!;
     const direct = edgesInto(postNode[dominator[index]!]!, node);
     if (direct) return [direct];
@@ -339,33 +431,43 @@ export function summarizeHeapSnapshot(graph: HeapSnapshotGraph, strings: (wanted
       if (via && !referrers.some(known => known.owner === via.owner)) referrers.push(via);
     }
     return referrers;
-  });
-
-  const wanted = new Set<number>();
-  for (const label of classLabels) if (label.nameId !== null) wanted.add(label.nameId);
-  for (const via of held.flat()) if (via.nameId !== null) wanted.add(via.nameId);
-  const table = strings(wanted);
-  const labelOf = (label: Label) => (label.nameId !== null && table.get(label.nameId)) || `(${label.kind})`;
-  /* Two string-table entries may spell the same class; their rows merge. */
-  const merged = new Map<string, TypeRow>();
-  const rowOfClass = rows.map((row, id) => {
-    const type = labelOf(classLabels[id]!);
-    const into = merged.get(type);
-    if (!into) { row.type = type; merged.set(type, row); return row; }
-    into.count += row.count; into.selfSize += row.selfSize; into.retainedSize += row.retainedSize;
-    return into;
-  });
-  const objects: ObjectRow[] = largest.map((index, at) => {
-    const heldBy = held[at]!.map(via => {
-      const edge = via.index !== null ? `${via.edgeKind} [${via.index}]` : `${via.edgeKind} ${JSON.stringify((table.get(via.nameId!) ?? "").slice(0, 60))}`;
-      return `${rowOfClass[nodeClass[via.owner]!]!.type} via ${edge}`;
+  };
+  const objectIndices = largest.done(), containerIndices = largestContainers.done();
+  const held = new Map<number, ReturnType<typeof holders>>();
+  for (const index of [...objectIndices, ...containerIndices]) held.set(index, holders(index));
+  const edgeStrings = new Set<number>();
+  for (const list of held.values()) for (const via of list) if (via.nameId !== null) edgeStrings.add(via.nameId);
+  const edgeTable = strings(edgeStrings);
+  const heldBy = (index: number) => {
+    if (dominator[index] === virtualIndex) return NO_REFERRER;
+    return held.get(index)!.map(via => {
+      const edge = via.index !== null ? `${via.edgeKind} [${via.index}]` : `${via.edgeKind} ${JSON.stringify((edgeTable.get(via.nameId!) ?? "").slice(0, 60))}`;
+      return `${typeOf(via.owner)} via ${edge}`;
     }).join("; ") || "the root";
-    return { type: rowOfClass[nodeClass[postNode[index]!]!]!.type, selfSize: selfSize[postNode[index]!]!, retainedSize: retained[index]!, heldBy };
-  });
-  return { nodeCount, edgeCount, totalSelfSize, reachableCount, reachableSelfSize, types: [...merged.values()], objects };
+  };
+  const objects: ObjectRow[] = objectIndices.map(index => ({ type: typeOf(postNode[index]!), selfSize: selfOf(postNode[index]!), retainedSize: retained[index]!, heldBy: heldBy(index) }));
+  const containers: ContainerRow[] = containerIndices.map(index => ({ type: typeOf(postNode[index]!), storageSize: storage.get(index)!, heldBy: heldBy(index) }));
+
+  // What hangs directly under the virtual holder, by type.
+  const loose = new Map<string, TypeRow>();
+  if (virtualIndex !== NONE) {
+    for (let at = firstChild[virtualIndex]!; at < firstChild[virtualIndex + 1]!; at++) {
+      const index = children[at]!, type = typeOf(postNode[index]!);
+      let row = loose.get(type);
+      if (!row) { row = { type, count: 0, selfSize: 0, retainedSize: 0 }; loose.set(type, row); }
+      row.count++; row.selfSize += selfOf(postNode[index]!); row.retainedSize += retained[index]!;
+    }
+  }
+  return {
+    nodeCount, edgeCount, totalSelfSize, reachableCount, reachableSelfSize,
+    unattributedCount: nodeCount - reachableCount, unattributedSelfSize: totalSelfSize - reachableSelfSize,
+    unattributedTypes: [...loose.values()].sort((a, b) => b.retainedSize - a.retainedSize),
+    types: [...merged.values()].filter(row => row.type !== `(${NO_REFERRER})`),
+    objects, containers,
+  };
 }
 
-/** Reads the file twice: the graph, then only the strings the answer names. */
+/** Reads the graph once, then the string table twice for only the names the answer prints. */
 export function analyzeHeapSnapshot(file: string, topObjects = 30): HeapSnapshotSummary {
   return summarizeHeapSnapshot(readHeapSnapshot(file), wanted => readHeapSnapshotStrings(file, wanted), topObjects);
 }
@@ -402,13 +504,28 @@ if (import.meta.main) {
   if (args.includes("--json")) {
     console.log(JSON.stringify({ ...summary, types: undefined, byCount, byRetained }));
   } else {
+    const share = summary.totalSelfSize > 0 ? (100 * summary.unattributedSelfSize / summary.totalSelfSize).toFixed(1) : "0";
     console.log(`nodes ${summary.nodeCount}, edges ${summary.edgeCount}, self size ${human(summary.totalSelfSize)}`);
     console.log(`reachable from the root: ${summary.reachableCount} nodes, ${human(summary.reachableSelfSize)}`);
+    console.log(`no recorded path from the root: ${summary.unattributedCount} nodes, ${human(summary.unattributedSelfSize)} (${share}% of the self size)`);
+    if (summary.unattributedCount > 0) {
+      console.log("  The runtime records no edge from a Map, Set, WeakMap or WeakSet to its entries, so whatever");
+      console.log("  only such a container holds is listed with \"no recorded referrer\". The file does not say which");
+      console.log("  container holds which entry; compare the types below with the largest containers.");
+    }
     console.log(`\n${table(`Top ${byCount.length} types by count`, byCount)}`);
     console.log(`\n${table(`Top ${byRetained.length} types by retained size`, byRetained)}`);
     console.log(`\nTop ${summary.objects.length} single objects by retained size`);
     console.log(`${"self".padStart(12)} ${"retained".padStart(12)}  type, held by`);
     for (const row of summary.objects) console.log(`${human(row.selfSize).padStart(12)} ${human(row.retainedSize).padStart(12)}  ${row.type.slice(0, 60)}, held by ${row.heldBy}`);
+    if (summary.unattributedTypes.length > 0) {
+      console.log(`\n${table(`Objects with no recorded referrer, by type (top ${Math.min(top, summary.unattributedTypes.length)})`, summary.unattributedTypes.slice(0, top))}`);
+    }
+    if (summary.containers.length > 0) {
+      console.log(`\nLargest Map/Set/WeakMap/WeakSet by entry storage (a Map or Set spends roughly 40 to 130 bytes of it per entry)`);
+      console.log(`${"storage".padStart(12)}  type, held by`);
+      for (const row of summary.containers) console.log(`${human(row.storageSize).padStart(12)}  ${row.type}, held by ${row.heldBy}`);
+    }
     console.log(`\nanalysed in ${((performance.now() - started) / 1000).toFixed(1)} s`);
   }
 }

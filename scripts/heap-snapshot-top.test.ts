@@ -55,6 +55,36 @@ test("retained sizes follow the dominator tree, nested instances count once, wea
     { type: "Leaf", selfSize: 1000, retainedSize: 1000, heldBy: "Row via element [0]" },
   ]);
   expect(JSON.stringify(summary)).not.toContain("private");
+  // The weakly held object has no path from the root: it is counted, sized and named as unattributed.
+  expect(summary).toMatchObject({ unattributedCount: 1, unattributedSelfSize: 3 });
+  expect(summary.unattributedTypes).toEqual([{ type: "Ghost", count: 1, selfSize: 3, retainedSize: 3 }]);
+});
+
+test("what only a Map holds is reported as unattributed, with its size, its types and the Map that is large", () => {
+  const scope = globalThis as unknown as { heapTopFixtureCache?: Map<string, { payload: Uint8Array; rows: Array<{ row: number }> }> };
+  scope.heapTopFixtureCache = new Map();
+  const entries = 400, payload = 16 * 1024;
+  for (let index = 0; index < entries; index++) {
+    scope.heapTopFixtureCache.set(`entry-${index}`, { payload: new Uint8Array(payload).fill(1), rows: [{ row: index }] });
+  }
+  try {
+    const file = path.join(root, "map.heapsnapshot");
+    fs.writeFileSync(file, new Uint8Array((globalThis as unknown as { Bun: { generateHeapSnapshot(format: "v8", encoding: "arraybuffer"): ArrayBuffer } }).Bun.generateHeapSnapshot("v8", "arraybuffer")));
+    const summary = analyzeHeapSnapshot(file, 50);
+    // The runtime records no edge from the Map to its entries, so their bytes have no path from the root.
+    expect(summary.unattributedSelfSize).toBeGreaterThanOrEqual(entries * payload);
+    expect(summary.reachableSelfSize + summary.unattributedSelfSize).toBe(summary.totalSelfSize);
+    const loose = summary.unattributedTypes.find(row => row.type === "Object")!;
+    expect(loose.count).toBeGreaterThanOrEqual(entries);
+    expect(loose.retainedSize).toBeGreaterThanOrEqual(entries * payload);
+    // Their subtrees are still measured: the type totals include what the entries retain.
+    expect(summary.types.find(row => row.type === "Uint8Array")!.retainedSize).toBeGreaterThanOrEqual(entries * payload);
+    // The container itself is attributed, and its entry storage ranks it.
+    const container = summary.containers.find(row => row.heldBy.includes('"heapTopFixtureCache"'))!;
+    expect(container).toMatchObject({ type: "Map", heldBy: 'GlobalObject via property "heapTopFixtureCache"' });
+    expect(container.storageSize).toBeGreaterThan(entries * 16);
+    expect(summary.containers[0]!.storageSize).toBeGreaterThanOrEqual(container.storageSize);
+  } finally { delete scope.heapTopFixtureCache; }
 });
 
 test("an object reachable several ways names its direct referrers", () => {
