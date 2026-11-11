@@ -21,9 +21,9 @@ export const TASK_EXECUTOR_FRAME_BYTES = 32 * 1024 * 1024;
 export const TASK_EXECUTOR_HTTP_FRAME_BYTES = TASK_CHANNEL_REPLY_BYTES;
 export type ExecutorHttpResponse = { status: number; headers: [string, string][]; body: ReadableStream<Uint8Array> };
 type ExecutorResult = McpToolResult | { conversationId: string | null } | { http: ExecutorHttpResponse };
-type ExecutorReply = { id: number; result?: ExecutorResult; error?: string; http?: ExecutorHttpResponse; control?: { ready?: string | null; heartbeat?: boolean; retiring?: boolean } };
+type ExecutorReply = { id: number; result?: ExecutorResult; error?: string; http?: ExecutorHttpResponse; control?: { ready?: string | null; heartbeat?: boolean; retiring?: boolean; memory?: boolean } };
 type ExecutorWireReply = Omit<ExecutorReply, "http"> & { http?: Omit<ExecutorHttpResponse, "body"> };
-type Pending = { tool: string; claim: string; bytes: number; finish: (error?: Error, result?: ExecutorResult) => void; dispose: () => void };
+type Pending = { tool: string; claim: string; bytes: number; finish: (error?: Error, result?: ExecutorResult) => void; dispose: () => void; dispatch: () => void };
 export type TaskExecutorRequest = { id: number; name: string; args: McpToolArgs; caller: McpHttpCaller; deadlineAt: number; nativeWork?: McpToolCallContext["nativeWork"] };
 type ReplyFailureSource = "reply" | "output-ended" | "output-error";
 // Only real system codes may leave this boundary; error.code is caller data.
@@ -253,16 +253,19 @@ export class McpTaskExecutor {
           if (this.pending.get(id) !== pending) return;
           cancelDeadline(); context.signal?.removeEventListener("abort", cancel);
           this.pending.delete(id); this.inputBytes -= bytes;
+        }, dispatch: () => {
+          dispatched = undefined;
+          void this.closing.then(() => {
+            if (settled) { pending.dispose(); return; }
+            if (this.draining) throw new Error("task executor is draining before dispatch; retry the original key");
+            clearTimeout(this.idle);
+            const child = this.child ?? this.start();
+            dispatched = child;
+            leasedHelperInput(child).write(frame, error => { if (error) this.retire(child, `stopped (${streamFailureClass("input-write-failed", error)})`); });
+          }).catch(error => { finish(error); pending.dispose(); });
         } };
         this.pending.set(id, pending); this.inputBytes += bytes;
-        void this.closing.then(() => {
-          if (settled) { pending.dispose(); return; }
-          if (this.draining) throw new Error("task executor is draining before dispatch; retry the original key");
-          clearTimeout(this.idle);
-          const child = this.child ?? this.start();
-          dispatched = child;
-          leasedHelperInput(child).write(frame, error => { if (error) this.retire(child, `stopped (${streamFailureClass("input-write-failed", error)})`); });
-        }).catch(error => { finish(error); pending.dispose(); });
+        pending.dispatch();
       });
     });
   }
@@ -285,7 +288,10 @@ export class McpTaskExecutor {
       if (reply.id === 0) {
         withViewerOperation("mcp.tasks.executor", () => {
           if (!reply.control) throw new Error("invalid task executor control frame");
-          if (reply.control.retiring === true) { this.retire(child, "idle"); return; }
+          // The worker announces retirement only with no admitted call and
+          // every reply written, and it admits nothing afterwards. A call
+          // still waiting here was therefore never started: its successor runs it.
+          if (reply.control.retiring === true) { this.retire(child, reply.control.memory === true ? "memory limit" : "idle", true); return; }
           if (reply.control.ready !== undefined) {
             const description = reply.control.ready;
             if (description !== null && !decodeTaskChannel(description)) throw new Error("invalid task executor channel");
@@ -317,7 +323,7 @@ export class McpTaskExecutor {
     return child;
   }
 
-  private retire(child: ChildProcess, reason: string): void {
+  private retire(child: ChildProcess, reason: string, successorRunsPending = false): void {
     if (this.child !== child) return;
     logMcpLifecycle("task-executor-retire", { childPid: child.pid, childRole: "mcp-task-guardian",
       workerPid: this.channel ? decodeTaskChannel(this.channel)?.identity.pid : undefined,
@@ -329,7 +335,8 @@ export class McpTaskExecutor {
     this.closing = child.exitCode !== null || child.signalCode !== null ? Promise.resolve()
       : new Promise(resolve => child.once("close", () => resolve()));
     endLeasedHelper(child);
-    for (const job of this.pending.values()) {
+    for (const job of [...this.pending.values()]) {
+      if (successorRunsPending) { job.dispatch(); continue; }
       job.finish(new Error(`task executor ${reason} before its reply; look up the original request key`)); job.dispose();
     }
   }
