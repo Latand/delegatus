@@ -289,6 +289,20 @@ export interface MigrationIntent {
   requestIds: string[];
   evidence: MigrationEvidence | null;
   stoppedAt: string | null;
+  /** Present from the transaction that stopped the intent until the last
+      transaction of its sweep. The stop itself settles the conversations the
+      intent owns; the engine's other conversations are opted out of the
+      stopped target afterwards, a bounded number per transaction, so the
+      registry's write lock is never held for the whole engine. `stampedAt` is
+      the stop's own time, which every row the sweep writes carries. `optOut`
+      is the stop's decision: whether the engine was routed to this intent's
+      target when it stopped. */
+  stopSweep?: MigrationStopSweep | null;
+}
+
+export interface MigrationStopSweep {
+  stampedAt: string;
+  optOut: boolean;
 }
 
 export interface AutoBalancePolicy {
