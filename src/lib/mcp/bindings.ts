@@ -4466,9 +4466,10 @@ async function productionPublicDenyList(project: string | null, control: ViewerC
     if (requireComplete) throw error;
     // An unreadable catalog contributes nothing.
   }
-  /* Role memory is never optional here: a store that cannot be read throws
-     LESSON_PRIVACY_UNAVAILABLE, and nothing is sent unchecked. */
-  // The shared leased worker reads authoritative lessons at filtering time.
+  /* Learned rules are no part of this list. An issue report is checked
+     against them in the shared leased worker, which refuses with
+     LESSON_PRIVACY_UNAVAILABLE when the store cannot be read; a manager
+     report carries no lesson check. */
   return { accounts, people, local, projects };
 }
 

@@ -17,7 +17,7 @@ import { decodeLaneRow, isLaneKey, laneRowsFor, MAX_LANE_ROWS, type LaneRow } fr
 import { linkedContext, runsHere } from "./linked";
 
 export type AgentRow = { k: string; p: string; t: string; e: string; m: string; st: "working" | "waiting" | "done"; task?: string; ro?: string; seat?: 1; at: number; pl?: { id: string; state: string; stage: string; stageState: string } };
-// Keep the complete chosen title local until the outbound worker filters it.
+// The complete chosen title stays beside the row; the wire carries it cut to its length.
 const chosenTitle = Symbol.for("delegatus.agent-feed.chosen-title");
 const titleToFilter = (row: object) => (row as { [chosenTitle]?: string })[chosenTitle];
 type Change = AgentRow | LaneRow | { k: string; gone: true };
@@ -136,7 +136,7 @@ function rowFor(file: FileEntry, tasks: ReturnType<typeof taskLookup>, projects:
   const stage = pipeline?.stages.find((item) => item.id === stageId);
   const attempt = attemptMatch && attemptMatch.pipeline === pipeline && attemptMatch.stageId === stageId ? attemptMatch.attempt
     : pipeline?.runs.find((run) => run.stageId === stage?.id)?.attempts.find((item) => typeof conversationId === "string" && typeof item.conversationId === "string" && item.conversationId === conversationId || item.agentPath === file.path);
-  /* The whole first line is checked before it is cut, so a lesson it quotes is withheld whole. */
+  /* The whole first line is kept here and cut when the row is sent. */
   const title = seat ? "orchestrator" : boundTask?.chosen ? boundTask.text.split(/\r?\n|\r/, 1)[0]!
     : stage ? `${safeId(stage.id) ?? "Pipeline"} stage` : `${role ?? engine} agent`;
   const working = file.proc === "running" && (file.activity === "live" || file.activity === "recent");
