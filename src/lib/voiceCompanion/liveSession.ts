@@ -1,12 +1,12 @@
 import { askGist, spokenDecline } from "./liveGate";
 import { CALL_MEMORY_BUDGET, carriesAddedResult, privateCut, sameCallOwner, type CallMemory } from "./callMemory";
-import { callChain, CHAIN_LIMIT, chainRecord, continuationBlock, DROP_REASONS, RESUME_WINDOW_MS, spoke, STALE_BROWSER_MS, type CallSegment } from "./callResume";
+import { callChain, CHAIN_LIMIT, chainRecord, continuationBlock, resolveResume, resumeSpeech, resumeWasSaid, DROP_REASONS, RESUME_WINDOW_MS, spoke, STALE_BROWSER_MS, type CallSegment } from "./callResume";
 import type { OwnerHistoryRead } from "@/lib/externalRelay/ownerHistory";
 import { createHash, randomUUID } from "node:crypto";
 import { reportHeaderName } from "@/lib/projects/settings";
 import { projectHandle } from "./projectNames";
 import { hardenedRedact } from "@/lib/view/compactText";
-import type { CompanionCommand, CompanionEvent, CompanionPlan, ConnectionEpisode, DropCause, DropDiagnostic, Locale, Payload, ReconnectRecord } from "./contract";
+import { resumeCursorValid, type ResumeCursor, type CompanionCommand, type CompanionEvent, type CompanionPlan, type ConnectionEpisode, type DropCause, type DropDiagnostic, type Locale, type Payload, type ReconnectRecord } from "./contract";
 import { CompanionStorage, type SessionStarter, type StoredSession } from "./storage";
 import { CompanionAdmission, type OperatorAttempt } from "./admission";
 import { CompanionBoardReads, READ_TOOL_NAMES, VOICE_IMAGES, type SpeechReadResult } from "./boardReads";
@@ -117,6 +117,9 @@ interface ActiveSession {
   cause?: DropCause; episode?: ConnectionEpisode;
   providerClosed?: boolean; finalDuration?: boolean; hungUp?: boolean;
   lastSeen: number; polled?: boolean;
+  resumed?: boolean;
+  /** Independent of delegation handoffs: reports wait for the resume voice or its bounded deadline. */
+  resumeHold?: { at: number };
   createdAt: number; voiceAllowanceSeconds: number;
   /** The first part's start: a reconnect continues the call that began there. */
   callStartedAt: number;
@@ -176,11 +179,31 @@ interface Options {
 export interface MintedCompanionSession { sessionId: string; providerId: string; sdp: string }
 /** A call that dropped and can go on: the browser offers it in one tap. */
 export interface ResumableCall { sessionId: string; project: string; endedAt: number | null }
-type StartInput = { project: string; locale: Locale; sdp: string; requestId?: string; startedBy?: StoredSession["startedBy"]; resume?: string; drop?: DropDiagnostic; timeZone?: string; reconnect?: ReconnectRecord };
+type StartInput = { project: string; locale: Locale; sdp: string; requestId?: string; startedBy?: StoredSession["startedBy"]; resume?: string; cursor?: ResumeCursor; drop?: DropDiagnostic; timeZone?: string; reconnect?: ReconnectRecord };
 /** `session.commentary.append` takes at most 500 tokens. A token holds at
  * least one byte, so text of at most 500 UTF-8 bytes always fits, whatever
  * the language. */
 const SPOKEN_LIMIT_BYTES = 500;
+function boundedResumeInstruction(prefix: string, context: string, limit: number): string {
+  const render = (value: string) => `${prefix}${JSON.stringify(value)}`;
+  let value = context;
+  while (Buffer.byteLength(render(value), "utf8") > limit && value) {
+    const chars = Array.from(value);
+    value = `…${chars.slice(Math.max(1, Math.floor(chars.length / 8))).join("")}`;
+  }
+  return render(value);
+}
+function byteTail(text: string, limit: number): string {
+  const tail: string[] = [];
+  let bytes = 0;
+  for (const character of Array.from(text).reverse()) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (bytes + size > limit) break;
+    bytes += size;
+    tail.push(character);
+  }
+  return tail.reverse().join("");
+}
 /** With no request in flight, recognized input the voice never answered stops holding reports after this long. */
 const INPUT_HOLD_MS = 15_000;
 /** Opens every later append of one report. */
@@ -238,7 +261,8 @@ export class CompanionLiveSessions {
   async start(input: StartInput): Promise<MintedCompanionSession> {
     const requestId = input.requestId ?? randomUUID();
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId) || (input.resume !== undefined && !/^[A-Za-z0-9_-]{1,200}$/.test(input.resume))) throw new Error("INVALID_REQUEST");
-    const digest = createHash("sha256").update(JSON.stringify([input.project, input.locale, input.sdp, input.startedBy ?? null, ...(input.resume ? [input.resume] : []), input.drop ?? null])).digest("hex");
+    if (input.cursor !== undefined && (!input.resume || !resumeCursorValid(input.cursor))) throw new Error("INVALID_REQUEST");
+    const digest = createHash("sha256").update(JSON.stringify([input.project, input.locale, input.sdp, input.startedBy ?? null, ...(input.resume ? [input.resume] : []), input.drop ?? null, ...(input.cursor !== undefined ? [input.cursor] : [])])).digest("hex");
     const knownRequest = (): Promise<MintedCompanionSession> | null => {
       const previous = Object.values(this.storage.read().sessions).find(row => row.mintRequestId === requestId);
       if (!previous) return null;
@@ -273,11 +297,11 @@ export class CompanionLiveSessions {
     const open = this.orphans().filter(row => row.remoteOpen);
     if (open.some(row => row.mintUncertain && !row.providerId)) throw new Error("MINT_UNCERTAIN");
     if (open.length) throw new Error("PROVIDER_ERROR");
-    const promise = this.mint({ ...input, resume }, requestId, digest);
+    const promise = this.mint({ ...input, resume, cursorPart: input.resume }, requestId, digest);
     this.minting.set(requestId, promise);
     try { return await promise; } finally { this.minting.delete(requestId); }
   }
-  private async mint(input: StartInput, requestId: string, digest: string): Promise<MintedCompanionSession> {
+  private async mint(input: StartInput & { cursorPart?: string }, requestId: string, digest: string): Promise<MintedCompanionSession> {
     const settings = this.storage.settings();
     if (!settings.enabled) throw new Error("COMPANION_DISABLED");
     if (!input.project.trim() || input.project.length > 200 || !["en", "uk"].includes(input.locale)
@@ -286,6 +310,16 @@ export class CompanionLiveSessions {
     // Recheck after recovery/close awaited: another start may have leased this part.
     if (input.resume && this.storage.read().sessions[input.resume]?.resumedBy) throw new Error("PROVIDER_ERROR");
     const clock = resolveVoiceClock(input.timeZone);
+    const resolvedPosition = resumed ? resolveResume(resumed.segments, input.cursorPart ?? input.resume!, input.cursor,
+      this.storage.read().sessions[input.cursorPart ?? input.resume!]?.backend === "codex" ? "codex" : "api") : undefined;
+    // A part can drop before its first poll. Its resume point then exists only
+    // in the owed queue, and takes precedence over an older browser cursor.
+    const owedResume = input.resume ? this.admission.reportSpeech(input.resume).find(entry => entry.kind === "resume" && entry.resumePoint) : undefined;
+    const inheritedPoint = owedResume?.kind === "resume" && owedResume.resumePoint
+      && resolvedPosition?.point?.resumeOf.part !== input.resume ? owedResume.resumePoint : undefined;
+    const position = inheritedPoint
+      ? { ...(resolvedPosition ?? { adjusted: false }), point: inheritedPoint }
+      : resolvedPosition;
     const directoryProjects = this.reads.projectRows(input.project).map(({ name, handle }) => ({ name, handle }));
     const session = this.admission.create({ project: input.project, locale: input.locale, authority: "live-model", startedBy: input.startedBy });
     const id = session.id;
@@ -294,7 +328,7 @@ export class CompanionLiveSessions {
     // One rewrite of the start record carries the memory version, the call it resumes and the snapshot it took.
     if (this.options.memory || resumed || voiceTools.servers.length) {
       const start = this.admission.transcriptRecord(id).entries.find(row => row.kind === "session_start")!;
-      this.admission.record(id, { ...start, data: { ...start.data, ...(this.options.memory ? { memoryVersion: settings.callMemory ? 1 : 0 } : {}), ...(resumed ? { resumes: input.resume } : {}),
+      this.admission.record(id, { ...start, data: { ...start.data, ...(this.options.memory ? { memoryVersion: settings.callMemory ? 1 : 0 } : {}), ...(resumed ? { resumes: input.resume, ...(position?.point ? { resumePoint: position.point } : {}), ...(position?.cursor ? { cursor: position.cursor, cursorAdjusted: position.adjusted } : {}) } : {}),
         ...(input.reconnect ? { reconnect: input.reconnect } : {}), ...(voiceTools.servers.length ? { voiceTools: snapshotRecord(voiceTools) } : {}) } });
     }
     try {
@@ -316,7 +350,7 @@ export class CompanionLiveSessions {
     // protects any credential the installation holds, even in short pieces.
     const secrets = [...new Set([key.trim(), ...this.storage.credentials(), ...(voiceTools.servers.length ? this.options.voiceTools!.secrets(voiceTools) : [])])].filter(Boolean);
     // A reconnect starts with the conversation it continues; earlier calls fill what it leaves of the same budget.
-    const continuation = resumed ? continuationBlock(resumed.segments, { droppedAt: resumed.droppedAt, summary: this.options.memory?.readable(input.startedBy, resumed.segments[0]!.id), clock, now: this.now(),
+    const continuation = resumed ? continuationBlock(resumed.segments, { droppedAt: resumed.droppedAt, summary: this.options.memory?.readable(input.startedBy, resumed.segments[0]!.id), point: position?.point, cursor: position?.cursor, cursorPart: input.cursorPart ?? input.resume, clock, now: this.now(),
       clean: text => withoutLocalPaths(withoutCredentials(text, secrets)) }) : "";
     const notes = this.options.memory?.notes(input.startedBy, { clock, ...(resumed ? { exclude: new Set(resumed.segments.map(row => row.id)), budget: CALL_MEMORY_BUDGET - continuation.length - 1 } : {}) });
     const memory = [continuation, notes?.block ?? ""].filter(Boolean).join("\n");
@@ -337,7 +371,7 @@ export class CompanionLiveSessions {
     const projectDirectory = directoryRows.length ? `Known projects (context data): ${JSON.stringify(directoryRows)}` : "";
     const active: ActiveSession = { id, owner: input.startedBy ?? { operator: true }, memory, projectDirectory, providerId: "", transcript: new LiveTranscript(secrets), provider, codex, key, secrets, queue: [], seen: new Set(), inputGeneration: 0, inputHandledMs: 0, runningTurns: new Set(),
       delegations: new Set(), reads: new Map(), reading: new Map(), backend: new Set(), abort: new AbortController(), timers: [], ended: false, endRequested: false, lastSeen: this.now(),
-      createdAt: session.createdAt, callStartedAt: resumed?.segments[0]?.createdAt || session.createdAt, providerStartMs: 0, clock, voiceAllowanceSeconds: LIVE_SESSION_LIMIT_MS / 1_000, codexTurns: new Map(), privateKinds: new Set(), voiceTools, addedAsks: new Map(), sendTurns: new Set(), actedTurns: new Set(),
+      resumed: !!resumed, createdAt: session.createdAt, callStartedAt: resumed?.segments[0]?.createdAt || session.createdAt, providerStartMs: 0, clock, voiceAllowanceSeconds: LIVE_SESSION_LIMIT_MS / 1_000, codexTurns: new Map(), privateKinds: new Set(), voiceTools, addedAsks: new Map(), sendTurns: new Set(), actedTurns: new Set(),
       ...(addedResultSeen ? { addedResultSeen: true } : {}) };
     this.active.set(id, active);
     active.releaseState = this.storage.hold(id);
@@ -348,6 +382,17 @@ export class CompanionLiveSessions {
         const previous = document.sessions[input.resume];
         if (!previous || previous.resumedBy) throw new Error("PROVIDER_ERROR");
         previous.resumedBy = id;
+        const carried = (previous.reportSpeech ?? []).filter(entry => entry.kind !== "resume" || !entry.resumeOf || !resumeWasSaid(resumed!.segments, entry.resumeOf));
+        // Only already-owed speech moves here; receipts, scan positions and proposals stay for slice 3.
+        const queue = carried.map(entry => entry.kind === "resume" || previous.backend !== (codex ? "codex" : undefined)
+          ? { ...entry, parts: undefined, handed: 0 } : entry);
+        if (!queue.some(entry => entry.kind === "resume") && position?.point) {
+          const point = position.point;
+          queue.unshift({ reportId: `resume-${point.resumeOf.part}-${point.resumeOf.item}`, kind: "resume", resumeOf: point.resumeOf,
+            resumePoint: point, project: input.project, status: "resume", text: resumeSpeech(point, input.locale), handed: 0 });
+        }
+        document.sessions[id].reportSpeech = queue;
+        delete previous.reportSpeech;
       }
       Object.assign(document.sessions[id], { ...(codex ? { backend: "codex" } : {}), usage: { seconds: 0, responses: {} }, remoteOpen: true, mintUncertain: true });
     });
@@ -442,9 +487,9 @@ export class CompanionLiveSessions {
       try {
         let releasedInput = false;
         while (active.queue.length && !active.ended) {
-          const pending = !!active.inputPending || active.runningTurns.size > 0;
+          const pending = !!active.inputPending || active.runningTurns.size > 0 || !!active.resumeHold;
           await this.observe(active, active.queue.shift());
-          releasedInput ||= pending && !active.inputPending && !active.runningTurns.size;
+          releasedInput ||= pending && !active.inputPending && !active.runningTurns.size && !active.resumeHold;
         }
         if (releasedInput) this.speakReports(active);
         this.settleClosed(active);
@@ -526,15 +571,15 @@ export class CompanionLiveSessions {
     if (!callChain(latest.id, part => read(part)?.entries ?? null).some(part => spoke(read(part)?.entries ?? []))) return null;
     return { sessionId: latest.id, project: latest.currentProject ?? latest.project, endedAt };
   }
-  private transcript(active: ActiveSession, snapshots: ReturnType<LiveTranscript["finish"]>): void {
+  private transcript(active: ActiveSession, snapshots: ReturnType<LiveTranscript["finish"]>, settleCompanion = false): void {
     for (const event of snapshots) {
       // The voice's words written once an added tool answered may carry its text, even in a reply begun before the handoff.
       this.admission.record(active.id, { id: event.itemId, kind: event.speaker === "operator" ? "utterance" : "reply", atMs: event.startMs ?? 0,
-        data: { text: event.text, final: event.final, startMs: event.startMs, endMs: event.endMs, fragments: active.transcript.timingsOf(event.itemId),
-          ...(event.speaker !== "operator" && active.addedResultSeen ? { afterAddedResult: true } : {}) } }, event.final);
+        data: { text: event.text, final: event.final, startMs: event.startMs, endMs: event.endMs, fragments: active.transcript.timingsOf(event.itemId), fragmentEnds: active.transcript.fragmentEndsOf(event.itemId),
+          ...(event.speaker !== "operator" && active.addedResultSeen ? { afterAddedResult: true } : {}) } }, event.final || (settleCompanion && event.speaker === "companion"));
       if (event.speaker === "operator") this.admission.input(active.id, { itemId: event.itemId, text: event.text, final: event.final,
         ...(active.transcript.turnOf(event.itemId) !== undefined ? { turn: active.transcript.turnOf(event.itemId) } : {}) }, { startMs: event.startMs, endMs: event.endMs });
-      else this.admission.emit(active.id, event);
+      else this.admission.emit(active.id, { ...event, audioMs: active.codex ? event.text.length * 58 : Math.max(0, (event.endMs ?? 0) - (event.startMs ?? 0)) });
     }
   }
   private async observe(active: ActiveSession, value: unknown): Promise<void> {
@@ -567,15 +612,25 @@ export class CompanionLiveSessions {
         const input = event.type === "session.input_transcript.delta";
         if (timed && input && event.end_ms > active.inputHandledMs)
           active.inputPending = { generation: ++active.inputGeneration, endMs: Math.max(event.end_ms, active.inputPending?.endMs ?? 0), at: this.now() };
+        const resumeAnswered = !input && timed && !!active.resumeHold;
         if (!input && event.delta.trim() && active.lastHandoff) active.lastHandoff.replied = true;
         const snapshots = active.transcript.fragment(input ? "operator" : "companion", event.delta, event.start_ms, event.end_ms);
         // The voice's own words answer pending input only when no backend work is in flight and no answer to an earlier request may still be speaking.
         const answers = timed && !input && !this.answerNear(active);
         if (answers && !active.backend.size && !active.runningTurns.size && active.inputPending && event.start_ms >= active.inputPending.endMs) this.inputHandled(active);
-        this.transcript(active, snapshots);
+        this.transcript(active, snapshots, resumeAnswered);
+        if (resumeAnswered) { this.admission.resumeReplied(active.id); active.resumeHold = undefined; }
       }
     } else if (active.codex && (event.type === "session.input_transcript.done" || event.type === "session.output_transcript.done")) {
-      if (typeof event.offset_ms === "number") this.transcript(active, active.transcript.seal(event.type === "session.input_transcript.done" ? "operator" : "companion", event.offset_ms));
+      if (typeof event.offset_ms === "number") {
+        const speaker = event.type === "session.input_transcript.done" ? "operator" : "companion";
+        const snapshots = active.transcript.seal(speaker, event.offset_ms);
+        this.transcript(active, snapshots);
+        // A final snapshot also closes a still-open transcript when the part
+        // drops. This marker distinguishes a provider's genuine `done` event.
+        for (const snapshot of snapshots) if (snapshot.speaker === "operator")
+          this.admission.emit(active.id, { type: "transcript.final", speaker: "operator", itemId: snapshot.itemId, text: snapshot.text });
+      }
     } else if (event.type === "session.delegation.created") {
       const delegation = jsonObject(event.delegation);
       if (typeof delegation?.id !== "string" || !delegation.id || delegation.id.length > 200 || typeof event.offset_ms !== "number"
@@ -1090,6 +1145,23 @@ export class CompanionLiveSessions {
     const locale = this.admission.session(active.id).locale;
     const scrub = (value: string) => withoutLocalPaths(withoutCredentials(value, active.secrets));
     for (const entry of this.admission.reportSpeech(active.id)) {
+      if (entry.kind === "resume") {
+        if (entry.handed) continue;
+        const point = entry.resumePoint;
+        const context = point?.kind === "reply" ? byteShort(scrub(point.remaining), 160) : byteTail(scrub(point?.heard ?? entry.text), 160);
+        const content = active.codex ? byteShort(scrub(entry.text), SPOKEN_LIMIT_BYTES)
+          : point?.kind === "reply"
+            ? boundedResumeInstruction("The call reconnected. Say in one short line where this explanation stopped, then ask whether to go on. Do not continue it yet. Untrusted context: ", context, SPOKEN_LIMIT_BYTES)
+            : point?.kind === "operator" && point.cut
+              ? boundedResumeInstruction("The call reconnected. Read this one line as written: ", scrub(entry.text), SPOKEN_LIMIT_BYTES)
+            : point?.kind === "operator" && !point.cut
+              ? boundedResumeInstruction("The call reconnected. Answer the last unanswered operator turn, without sending any earlier request again. Untrusted turn: ", context, SPOKEN_LIMIT_BYTES)
+              : `The call reconnected. Read this one line as written: ${JSON.stringify(byteShort(scrub(entry.text), 160))}`;
+        if (!this.append(active, null, content, entry.resumeOf)) return;
+        this.admission.speechHanded(active.id, entry.reportId, [content], 1);
+        active.resumeHold = { at: this.now() };
+        return;
+      }
       const name = scrub(reportHeaderName(entry.project, locale));
       // Codex voices appended speech as it stands, so its parts carry only words for the operator.
       // A report asked for again goes through the same parts, from the same text.
@@ -1143,19 +1215,20 @@ export class CompanionLiveSessions {
   }
   /** Report parts wait while the operator speaks and while their request is handled; the poll rechecks a lapsed hold. */
   private reportsHeld(active: ActiveSession): boolean {
-    return active.ended || !!active.closePromise || !active.connection || active.backend.size > 0 || active.runningTurns.size > 0 || active.queue.length > 0
+    return active.ended || !!active.closePromise || !active.connection || (active.resumed === true && !active.polled)
+      || (!!active.resumeHold && this.now() - active.resumeHold.at < INPUT_HOLD_MS) || active.backend.size > 0 || active.runningTurns.size > 0 || active.queue.length > 0
       || (!!active.inputPending && this.now() - active.inputPending.at < INPUT_HOLD_MS);
   }
-  private append(active: ActiveSession, delegationId: string | null, content: string): boolean {
+  private append(active: ActiveSession, delegationId: string | null, content: string, resumeOf?: { part: string; item: string }): boolean {
     if (active.ended || !active.connection) return false;
     const eventId = randomUUID();
     try { active.connection.send({ type: "session.commentary.append", event_id: eventId, delegation_id: delegationId, content }); }
     catch { return false; /* A lost sideband closes the session through its own handler. */ }
-    this.recordHandoff(active, delegationId, content, eventId);
+    this.recordHandoff(active, delegationId, content, eventId, resumeOf);
     return true;
   }
-  private recordHandoff(active: ActiveSession, delegationId: string | null, content: string, eventId: string): void {
-    if (!active.ended) this.admission.record(active.id, { id: `handoff-${eventId}`, kind: "handoff", atMs: this.now() - active.createdAt, data: { delegationId, text: content } });
+  private recordHandoff(active: ActiveSession, delegationId: string | null, content: string, eventId: string, resumeOf?: { part: string; item: string }): void {
+    if (!active.ended) this.admission.record(active.id, { id: `handoff-${eventId}`, kind: "handoff", atMs: this.now() - active.createdAt, data: { delegationId, text: content, ...(resumeOf ? { resumeOf } : {}) } });
   }
   private capReached(active: ActiveSession, delegationId?: string): void {
     if (!active.capRefused) {
