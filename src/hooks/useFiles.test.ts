@@ -242,8 +242,8 @@ test("an older cached scope updates write health while keeping the newest rows",
 
 test("global client cache serves stale rows while revalidation patches changed files", async () => {
   const bodies = [
-    { files: [file("/a", "A"), file("/b", "B")], flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: { tmux: { status: "healthy" as const } } },
-    { files: [file("/a", "A"), file("/b", "B2"), file("/c", "C")], flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: { tmux: { status: "healthy" as const } } },
+    { files: [file("/a", "A"), file("/b", "B")], flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: {} },
+    { files: [file("/a", "A"), file("/b", "B2"), file("/c", "C")], flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: {} },
   ];
   let call = 0;
   let release!: () => void;

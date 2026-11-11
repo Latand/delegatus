@@ -180,10 +180,8 @@ for (const phase of ["committed", "rolled-back", "failed-recoverable"] as const)
 });
 
 test("a host reservation without a recorded PID stays unverified", () => {
-  for (const host of [{ structuredHost: { process: null } }, { host: { agent: null } }]) {
-    const f = fixture(); Object.assign(f.snapshot.entries, { reserved: { artifactPath: f.generation.path, ...host } });
-    refused(f.sources, "generation-hosted");
-  }
+  const f = fixture(); Object.assign(f.snapshot.entries, { reserved: { artifactPath: f.generation.path, structuredHost: { process: null } } });
+  refused(f.sources, "generation-hosted");
 });
 
 test("a valid caller-writable record never grants unattended admission", () => {

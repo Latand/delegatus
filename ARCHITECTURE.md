@@ -111,8 +111,8 @@ src/lib/agent/transcriptHost.ts canonical transcript→live-host observation,
                              decisions shared by resources and delivery
 src/lib/delivery.ts          conversation delivery and root relay over the
                              transcript-host seam + per-action guards;
-                             /api/conversation-host (legacy alias /api/tmux,
-                             which runs no tmux) is a thin adapter over it
+                             /api/conversation-host (also mounted at the old
+                             path /api/tmux) is a thin adapter over it
 src/lib/answer/menu.ts       pure screen→options parser for TUI dialogs
 src/lib/answer/driver.ts     dialog navigation over an injected PaneIo port
 src/lib/transcribe/*.ts      the three STT backends beside their selector
@@ -125,7 +125,7 @@ Item[]` parser (no JSX; the `Item` union is the contract), `markdown.tsx`
 renders prose, `cards/*` render one card each, `FeedItem.tsx` dispatches.
 
 Composers share `src/hooks/useComposer.ts` + `src/components/ComposerBar.tsx`;
-`TmuxComposer` and `DraftAgentPane` keep only their own concerns.
+`ConversationComposer` and `DraftAgentPane` keep only their own concerns.
 
 Keep components small and prop-driven; server logic stays in `src/lib`
 (pure functions + caches, no Next imports) so it is unit-testable — run the
@@ -200,11 +200,11 @@ on. `src/lib/scanner/questions.ts` normalizes the structured payload into
 scrape fallback for non-structured TUI prompts after a stable screen and a
 prompt-like tail.
 
-Answers go through `src/app/api/answer/route.ts`. The route trusts only scanner
-known live transcripts, resolves the tmux pane from the scanner pid, verifies a
-short normalized fragment of the question on screen, navigates with arrows, and
-checks the highlighted option label before pressing `Enter` or `Space`.
-Confirmation polls the single transcript for the matching `tool_result`.
+A question is answered through the structured host that asked it: the runtime
+attention card posts the answer to `/api/runtime/answer` (or the `answer`
+action of `/api/conversation-host`), and the host resolves the pending request.
+A conversation with no structured host has nothing to deliver an answer to, so
+it shows no answer controls; the question stays in the transcript.
 
 Question visibility rides on the normal `/api/files` poll. Feed cards live in
 `src/components/feed/QuestionCard.tsx`; overview promotion is handled by the

@@ -23,7 +23,6 @@ import {
 
 const CLAUDE_SESSION = ["019f4906", "3f67", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
 const CODEX_SESSION = ["029f4906", "3f67", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
-const PANE_SESSION = ["039f4906", "3f67", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
 const LANE_CONVERSATION = ["conversation", "9ec3b5ad1326be7f"].join("_");
 const SEAT_CONVERSATION = ["conversation", "9ec3b5ad1326bea1"].join("_");
 const BOOT_EPOCH = systemBootEpoch();
@@ -242,15 +241,11 @@ test("the inventory carries role, model, stage and ownership for every structure
   ]);
 });
 
-test("entries without a host process, and pane-hosted ones, stay out of the inventory", () => {
+test("entries without a host process stay out of the inventory", () => {
   const records = readStructuredHostRecords({
     snapshot: () => snapshot({
       entries: {
         "claude:unhosted": entry({ key: { engine: "claude", sessionId: "unhosted" }, structuredHost: null }),
-        [`claude:${PANE_SESSION}`]: entry({
-          key: { engine: "claude", sessionId: PANE_SESSION },
-          host: { kind: "tmux", endpoint: "socket", server: { pid: 900, startIdentity: null }, paneId: "%1", panePid: { pid: 100, startIdentity: null }, windowName: "agent", agent: { pid: 200, startIdentity: null }, argv: [] },
-        }),
       },
     }),
     owned: () => true,

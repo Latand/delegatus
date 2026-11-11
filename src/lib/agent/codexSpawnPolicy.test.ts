@@ -1,5 +1,4 @@
-import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
-import { ownFixtureTree, stopFixtureTree, stopFixtureProcess, stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
+import { ownFixtureTree, stopFixtureTree, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import zlib from "node:zlib";
@@ -10,8 +9,6 @@ import { createInterface } from "node:readline";
 import { CODEX_SINGLE_AGENT_FEATURES, codexSubagentArgs, codexSubagentConfig, parseCodexFeatures, readCodexFeatures, setCodexFeatureReaderForTest } from "./codexSpawnPolicy";
 import { reviewerCommand, prepareHeadlessPublication } from "./headless";
 import { buildEphemeralCommand } from "./ephemeral";
-import { prepareAgentPublicationSpec, resumeSpecForSession, freshSpecFor, withSpawnCapability, shellQuote } from "./cli";
-import { sendShellCommandToPane } from "@/lib/tmux";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 
@@ -260,8 +257,8 @@ test("host-namespace discovery keeps shim HOME and isolates config on the shared
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-for (const policy of ["old", "denied", "allowed", "headless", "ephemeral", "terminal-denied", "terminal-allowed", "resume-denied", "resume-allowed"] as const) {
-  test.skipIf((policy.startsWith("terminal-") || policy.startsWith("resume-")) && spawnSync("tmux", ["-V"]).status !== 0)(`installed v2 router checks ${policy} with product launch arguments`, async () => {
+for (const policy of ["old", "denied", "allowed", "headless", "ephemeral"] as const) {
+  test(`installed v2 router checks ${policy} with product launch arguments`, async () => {
   const binary = process.env.LLV_CODEX_BINARY ?? "codex";
   const prompt = "Return fixture complete.";
   // A synthetic model selects v2 just as the affected model catalog does.
@@ -332,7 +329,6 @@ for (const policy of ["old", "denied", "allowed", "headless", "ephemeral", "term
     // keep every permission/publication argument from the product unchanged.
     let childEnv = env;
     let stdin: string | null = null;
-    let terminalCommand: string | null = null;
     const previous = { ...process.env };
     try {
       Object.assign(process.env, env, { LLV_CODEX_BINARY: binary, LLV_CODEX_HOME: codexHome });
@@ -350,80 +346,10 @@ for (const policy of ["old", "denied", "allowed", "headless", "ephemeral", "term
         // answer catalog normally strips v2, which must not mask policy loss.
         fs.writeFileSync(path.join(root, "catalog.json"), JSON.stringify({ models: [model] }));
         command = built.command; argv = [...built.args, ...providerArgs]; childEnv = built.env; stdin = built.stdin;
-      } else if (policy.startsWith("resume-")) {
-        // Seed the recorded v2 selection without creating any native agents.
-        const seed = spawn(binary, ["exec", "--skip-git-repo-check", "--json", "Return fixture complete."],
-          { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
-        let output = ""; seed.stdout.on("data", (bytes) => { output += bytes; }); seed.stderr.resume();
-        const seedTimer = setTimeout(() => seed.kill("SIGKILL"), 10000);
-        let seedCode: number | null;
-        try { seedCode = await new Promise<number | null>((resolve, reject) => { seed.once("close", resolve); seed.once("error", reject); }); }
-        finally { clearTimeout(seedTimer); await stopFixtureProcess(seed); }
-        expect(seedCode).toBe(0);
-        const threadId = output.split("\n").filter(Boolean).map((line) => JSON.parse(line)).find((row) => row.type === "thread.started")?.thread_id;
-        expect(typeof threadId).toBe("string");
-        const rollout = fs.readdirSync(path.join(codexHome, "sessions"), { recursive: true })
-          .find((file) => String(file).endsWith(`${threadId}.jsonl`));
-        expect(rollout).toBeDefined();
-        const records = fs.readFileSync(path.join(codexHome, "sessions", String(rollout)), "utf8")
-          .trim().split("\n").map((line) => JSON.parse(line));
-        expect(records.some((row) => row.payload?.multi_agent_version === "v2")).toBe(true);
-        for (const name of collaboration) expect(tools.has(name)).toBe(true);
-        tools.clear(); requests = 0;
-        const spec = resumeSpecForSession("codex", threadId, root, codexHome,
-          { allowSubagents: policy === "resume-allowed", model: model.slug, effort: "high", permissionMode: "never", readOnly: true });
-        expect(spec).not.toBeNull();
-        const prepared = await prepareAgentPublicationSpec(spec!);
-        terminalCommand = withSpawnCapability({ ...prepared, command: prepared.command.replace(/ \)$/, ` ${shellQuote(prompt)} )`) }, "c".repeat(43), env).command;
-      } else if (policy.startsWith("terminal-")) {
-        const spec = freshSpecFor("codex", root, { allowSubagents: policy === "terminal-allowed",
-          model: model.slug, effort: "high", codexHome });
-        const prepared = await prepareAgentPublicationSpec(spec);
-        terminalCommand = withSpawnCapability({ ...prepared, command: prepared.command.replace(/ \)$/, ` ${shellQuote(prompt)} )`) }, "c".repeat(43), env).command;
       }
     } finally {
       for (const name of Object.keys(process.env)) if (!(name in previous)) delete process.env[name];
       Object.assign(process.env, previous);
-    }
-    if (terminalCommand !== null) {
-      // Keep the Unix socket below its path limit in nested gate sandboxes.
-      const socketRoot = fs.mkdtempSync("/tmp/llv-codex-tmux-");
-      const socket = path.join(socketRoot, "socket");
-      const ready = path.join(root, "shell-ready");
-      const rc = path.join(root, "bashrc");
-      fs.writeFileSync(rc, `HISTFILE=/dev/null\nPS1='fixture> '\nPROMPT_COMMAND='sleep 0.05; touch ${shellQuote(ready)}'\n`);
-      const run = async (args: string[]) => {
-        const result = spawnSync("tmux", ["-S", socket, "-f", "/dev/null", ...args], { env, encoding: "utf8" });
-        return { code: result.status, stdout: result.stdout, stderr: result.stderr };
-      };
-      const waitFor = async (predicate: () => boolean) => {
-        for (let i = 0; i < 500; i++) { if (predicate()) return; await Bun.sleep(20); }
-        throw new Error(`installed CLI did not reach the stub provider through the tmux pane: ${(await run(["capture-pane", "-p", "-t", "fixture:0.0"])).stdout.slice(-1500).replaceAll(root, "<sandbox>")}`);
-      };
-      let serverIdentity: ProcessIdentity | undefined;
-      try {
-        expect((await run(["new-session", "-d", "-x", "120", "-y", "40", "-s", "fixture",
-          `bash --noprofile --rcfile ${shellQuote(rc)} -i`])).code).toBe(0);
-        serverIdentity = captureProcessIdentity(Number((await run(["display-message", "-p", "#{pid}"])).stdout.trim()));
-        await waitFor(() => fs.existsSync(ready));
-        await Bun.sleep(30);
-        await sendShellCommandToPane("fixture:0.0", root, terminalCommand, run);
-        await waitFor(() => requests > 0);
-        const allowed = policy.endsWith("allowed");
-        for (const name of collaboration) expect(tools.has(name)).toBe(allowed);
-        expect(tools.has("exec_command")).toBe(true);
-      } finally {
-        // Reap the pane's CLI before stopping this one recorded tmux server.
-        if (serverIdentity) {
-          await run(["send-keys", "-t", "fixture:0.0", "C-c"]);
-          await Bun.sleep(100);
-          await run(["send-keys", "-t", "fixture:0.0", "C-d"]);
-          await Bun.sleep(100);
-          await stopFixtureIdentity(serverIdentity);
-        }
-        fs.rmSync(socketRoot, { recursive: true, force: true });
-      }
-      return;
     }
     const child = ownFixtureTree(spawn(command, argv, { cwd: root, env: childEnv, detached: true, stdio: ["pipe", "pipe", "pipe"] }));
     let terminalOutput = "";

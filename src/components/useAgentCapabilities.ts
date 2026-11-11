@@ -5,10 +5,8 @@ import { useRuntimeEnabled, useRuntimeSession, useRuntimeSessionByArtifact, type
 import type { FileEntry } from "@/lib/types";
 
 import {
-  attachModeFor,
   capabilitiesFor,
   rootHostFrom,
-  type AttachMode,
   type HostOptions,
   type StripCapabilities,
 } from "./agentCapabilities";
@@ -17,7 +15,7 @@ import {
     LLV_STRUCTURED_HOSTS rollback gate: with the flag off every conversation —
     including one with structured registry state — must take the legacy path. */
 function structuredSessionOf(rv: RuntimeSessionView | null): RuntimeSessionView | null {
-  if (!rv?.structuredControlsEnabled || rv.legacy) return null;
+  if (!rv?.structuredControlsEnabled) return null;
   return rv.session.hostKind === "codex-app-server" || rv.session.hostKind === "claude-broker" || rv.session.hostKind === "copilot-acp" ? rv : null;
 }
 
@@ -26,14 +24,13 @@ export interface AgentCapabilities {
   /** The conversation's own runtime session view (null when the bus doesn't
       carry it or the plane is off). */
   runtime: RuntimeSessionView | null;
-  /** The structured session Stop/Send must route through, or null for the legacy
-      tmux path: the conversation's own structured host, or — for a structured-root
+  /** The structured session Stop/Send must route through, or null when there
+      is none: the conversation's own structured host, or — for a structured-root
       subagent — its ROOT's structured host (so a claude-broker root's child never
-      hits /api/tmux or /api/proc, issue #241 finding 1). */
+      hits /api/conversation-host or /api/proc, issue #241 finding 1). */
   structuredSession: RuntimeSessionView | null;
   /** Whether the runtime plane is the authority for host capability. */
   runtimeEnabled: boolean;
-  attachMode: AttachMode;
 }
 
 export function agentCapabilitiesFromViews(
@@ -42,21 +39,10 @@ export function agentCapabilitiesFromViews(
   rootView: RuntimeSessionView | null,
   runtimeEnabled: boolean,
 ): AgentCapabilities {
-  // A registry-owned legacy host supersedes an older native journal. The
-  // action still sends the card identity to the server for fresh resolution.
-  if (file.controlHost?.conversationId === file.conversationId
-    && file.controlHost?.transport === "legacy") {
-    runtime = runtime ? { ...runtime, legacy: true } : null;
-    runtimeEnabled = false;
-  }
   const isClaudeSubagent = file.root === "claude-projects" && file.kind === "subagent";
-  const currentLegacyRoot = isClaudeSubagent
-    && file.rootControlHost?.parentPath === file.parent
-    && file.rootControlHost?.transport === "legacy";
   const opts: HostOptions = {
     runtimeEnabled,
-    ...(currentLegacyRoot ? { root: { liveness: "live" as const, structured: false } }
-      : runtimeEnabled && isClaudeSubagent ? { root: rootHostFrom(rootView) } : {}),
+    ...(runtimeEnabled && isClaudeSubagent ? { root: rootHostFrom(rootView) } : {}),
   };
   const caps = capabilitiesFor(file, runtime, opts);
   /* Every consumer gets the same card verdict. A contradictory stale runtime
@@ -72,7 +58,6 @@ export function agentCapabilitiesFromViews(
     runtime,
     structuredSession,
     runtimeEnabled,
-    attachMode: attachModeFor(file, runtime, opts),
   };
 }
 
@@ -83,7 +68,7 @@ export function agentCapabilitiesFromViews(
  * `file.proc`, finding 1), and — for a Claude subagent whose own proc/pid the
  * scanner leaves null — its canonical root host's liveness *and kind* (finding
  * 2). Structured-root children route their controls through the root's
- * structured session; legacy-root children keep canonical tmux routing. Every
+ * structured session. Every
  * strip/header/composer consumer reads through here so the matrix resolves
  * identically wherever a pane is mounted.
  */

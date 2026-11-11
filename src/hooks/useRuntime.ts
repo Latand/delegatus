@@ -130,7 +130,6 @@ export interface RuntimeSessionView {
   uiState: SessionUiState;
   attentions: RuntimeAttention[];
   receipts: RuntimeReceipt[];
-  legacy: boolean;
   structuredControlsEnabled: boolean;
 }
 
@@ -145,7 +144,6 @@ function sessionViewFor(
     uiState: deriveSessionState(session, hasBlockingAttention(store, session)),
     attentions: openAttentions(store, session),
     receipts: session.recentReceipts,
-    legacy: session.hostKind === "tmux-legacy",
     structuredControlsEnabled,
   };
 }

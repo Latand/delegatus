@@ -113,8 +113,8 @@ for a decision. See [the design](design/agent-memory-isolation.md).
 ## Agent CPU
 
 On Linux with a systemd user manager, hosts the operator talks to run in
-`delegatus-agents.slice` with `CPUWeight=1000`, tmux panes included. Pipeline
-and flow hosts, workflow stage and pane-reviewer tmux panes, headless reviews,
+`delegatus-agents.slice` with `CPUWeight=1000`. Pipeline
+and flow hosts, headless reviews,
 gates from `scripts/gate-slot.sh` (the merger's included), workflow setup,
 pipeline publication and release installs and builds run in
 `delegatus-agents-work.slice`: `CPUWeight=100`, 300% of a CPU per scope and 75%
