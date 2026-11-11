@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
-import { RoleHistoryDrainRefusal, roleHistoryRowsStatus, setRoleHistoryRowsEnabled } from "@/lib/memory/roleHistoryDrain";
+import { ROLE_HISTORY_RESTORE_NOTE, RoleHistoryDrainRefusal, roleHistoryRowsStatus, setRoleHistoryRowsEnabled } from "@/lib/memory/roleHistoryDrain";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,10 +22,11 @@ export async function PUT(request: NextRequest) {
   try { enabled = (await request.json() as { enabled?: unknown }).enabled; } catch { enabled = undefined; }
   if (typeof enabled !== "boolean") return Response.json({ error: "enabled must be true or false" }, { status: 400, headers });
   try {
-    setRoleHistoryRowsEnabled(enabled);
+    await setRoleHistoryRowsEnabled(enabled);
     return Response.json(roleHistoryRowsStatus(), { headers });
   } catch (error) {
-    if (error instanceof RoleHistoryDrainRefusal) return Response.json({ error: "backup_required", message: error.message }, { status: 409, headers });
+    // The refusal says which backup exists, if any; a backup restores the whole state database.
+    if (error instanceof RoleHistoryDrainRefusal) return Response.json({ error: "backup_required", message: error.message, restore: ROLE_HISTORY_RESTORE_NOTE, backup: roleHistoryRowsStatus().backup }, { status: 409, headers });
     return Response.json({ error: "write_failed" }, { status: 500, headers });
   }
 }

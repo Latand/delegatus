@@ -9,7 +9,7 @@ import type { RoleMemoryRow, RoleMemoryRule, RoleMemoryScopeRow, ScopeHistoryEnt
 import { yieldToRuntime } from "@/lib/cooperative";
 import { scopeChars } from "./roleConsolidate";
 import { performanceSpans } from "@/lib/performanceSpans";
-import { historyEntries, historyEntryKey, historyUndoKey, scopeWithEntries, type StoredHistoryEntry, type StoredHistoryUndo } from "./roleHistoryRows";
+import { historyEntries, historyEntryIdentity, historyEntryKey, historyUndoKey, scopeWithEntries, type StoredHistoryEntry, type StoredHistoryUndo } from "./roleHistoryRows";
 
 // One read-only connection across compiled Viewer bundles; changing state roots
 // closes it. openCurrentDatabase reopens it after a restore at the same path.
@@ -175,21 +175,52 @@ export function historyOfToken(token: string): ScopeHistoryEntry[] {
     .all(`${prefix}:${token}:`, `${prefix}:${token};`).map(stored => JSON.parse(stored.value_json) as T);
   return historyEntries(read<StoredHistoryEntry>("h"), new Map(read<StoredHistoryUndo>("u").map(held => [held.seq, held.prior] as const)));
 }
-/** Tokens with stored rows that no scope row names or records as released,
- * each with the scope its rows were written for. A writer that predates
- * history rows leaves them when it removes a scope row it joined into another. */
+/** Which tokens the scope rows name, and which they record as released. */
+export function historyTokenClaims(): { named: Set<string>; dropped: Set<string> } {
+  const db = reader("__llvCurationVersionReader");
+  const tokens = (sql: string) => new Set(db.query<{ token: string }, []>(sql).all().map(row => row.token));
+  return {
+    named: tokens(`SELECT json_extract(value_json, '$.historyRows.token') AS token FROM state_rows
+      WHERE collection='role_memory' AND row_key > 's:' AND row_key < 's;' AND json_type(value_json, '$.historyRows') IS NOT NULL`),
+    dropped: tokens(`SELECT json_extract(d.value, '$.token') AS token FROM state_rows s, json_each(s.value_json, '$.historyDropped') d
+      WHERE s.collection='role_memory' AND s.row_key > 's:' AND s.row_key < 's;'`),
+  };
+}
+/** The release records stored beside the rows. */
+export function releasedHistoryTokens(): { token: string; at: string }[] {
+  return reader("__llvCurationVersionReader").query<{ token: string; at: string }, []>(`
+    SELECT json_extract(value_json, '$.token') AS token, json_extract(value_json, '$.at') AS at FROM state_rows
+    WHERE collection='role_memory_history' AND row_key >= 'd:' AND row_key < 'd;' ORDER BY row_key
+  `).all();
+}
+/** Tokens with stored rows that no scope row names and nothing records as
+ * released, each with the scope its rows were written for. A writer that
+ * predates history rows leaves them when it removes a scope row it joined
+ * into another. */
 export function unclaimedHistoryTokens(): { token: string; scope: string }[] {
   const db = reader("__llvCurationVersionReader");
-  const claimed = new Set(db.query<{ token: string }, []>(`
-    SELECT json_extract(value_json, '$.historyRows.token') AS token FROM state_rows
-      WHERE collection='role_memory' AND row_key > 's:' AND row_key < 's;' AND json_type(value_json, '$.historyRows') IS NOT NULL
-    UNION ALL SELECT json_extract(d.value, '$.token') FROM state_rows s, json_each(s.value_json, '$.historyDropped') d
-      WHERE s.collection='role_memory' AND s.row_key > 's:' AND s.row_key < 's;'
-  `).all().map(row => row.token));
+  const { named, dropped } = historyTokenClaims();
+  const released = new Set(releasedHistoryTokens().map(row => row.token));
   const scope = db.query<{ scope: string }, [string, string]>(
     "SELECT json_extract(value_json, '$.scope') AS scope FROM state_rows WHERE collection='role_memory_history' AND row_key >= ? AND row_key < ? LIMIT 1");
-  return db.query<{ token: string }, []>("SELECT DISTINCT substr(row_key, 3, 16) AS token FROM state_rows WHERE collection='role_memory_history'")
-    .all().filter(row => !claimed.has(row.token)).map(row => ({ token: row.token, scope: scope.get(`h:${row.token}:`, `h:${row.token};`)?.scope ?? "" }));
+  return db.query<{ token: string }, []>(`SELECT DISTINCT substr(row_key, 3, 16) AS token FROM state_rows WHERE collection='role_memory_history'
+      AND (row_key >= 'h:' AND row_key < 'h;' OR row_key >= 'u:' AND row_key < 'u;')`)
+    .all().filter(row => !named.has(row.token) && !dropped.has(row.token) && !released.has(row.token))
+    .map(row => ({ token: row.token, scope: scope.get(`h:${row.token}:`, `h:${row.token};`)?.scope ?? "" }));
+}
+/** The identities of every entry a stored scope row holds, rows and tail. */
+export function scopeHistoryIdentities(row: RoleMemoryScopeRow): Set<string> {
+  const seen = new Set(row.history.map(entry => historyEntryIdentity(entry, row.scope)));
+  if (!row.historyRows) return seen;
+  const stored = reader("__llvCurationVersionReader").query<{ fields: string }, [string, string]>(
+    `SELECT json_extract(value_json, '$.entry.revisionScope', '$.entry.revision', '$.entry.at', '$.entry.by', '$.entry.pass') AS fields ${HISTORY_ROWS_SQL}`)
+    .all(...historyRange(row.historyRows));
+  if (stored.length !== row.historyRows.count) throw new Error(SCOPE_CHANGED);
+  for (const item of stored) {
+    const [revisionScope, revision, at, by, pass] = JSON.parse(item.fields) as [string | null, number, string, ScopeHistoryEntry["by"], string | null];
+    seen.add(historyEntryIdentity({ revision, at, by, ...(revisionScope === null ? {} : { revisionScope }), ...(pass === null ? {} : { pass }) }, row.scope));
+  }
+  return seen;
 }
 
 /** Validate a cooperative view after peer writes without decoding scope

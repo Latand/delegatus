@@ -2,17 +2,17 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { statePath } from "@/lib/configDir";
-import { BACKUP_DIRECTORY, listBackups } from "@/lib/state/durability";
+import { BACKUP_DIRECTORY, listBackups, runBackupPassInWorker, type BackupOutcome } from "@/lib/state/durability";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { historyEntryRows, historyUndoKey, roleHistoryCollection, type StoredHistoryRow } from "./roleHistoryRows";
+import { historyEntryIdentity, historyEntryRows, historyReleasedKey, historyUndoKey, roleHistoryCollection, type StoredHistoryRow } from "./roleHistoryRows";
 import { canonicalScope, roleMemoryCollection } from "./roleStore";
 import { ROLE_MEMORY_HISTORY_LIMIT, type RoleMemoryRow, type RoleMemoryScopeRow } from "./roleTypes";
-import { historyKeysOfToken, historyOfToken, oldestOrdinaryHistoryKeys, roleScopeRowKeys, scopeHistoryTail, scopeKeysWithDroppedHistory, scopeRowForRewrite, scopeRowRevision, unclaimedHistoryTokens } from "./roleViewSource";
+import { historyKeysOfToken, historyOfToken, historyTokenClaims, oldestOrdinaryHistoryKeys, releasedHistoryTokens, roleScopeRowKeys, scopeHistoryIdentities, scopeHistoryTail, scopeKeysWithDroppedHistory, scopeRowRevision, unclaimedHistoryTokens } from "./roleViewSource";
 
 /* Moves history entries out of scope rows into history rows. Writers append
    to the scope row; this drain is the only writer of history rows. Each step
@@ -29,11 +29,13 @@ import { historyKeysOfToken, historyOfToken, oldestOrdinaryHistoryKeys, roleScop
    rows it cannot see. Turning the drain on is therefore the point after which
    this store cannot go back to such a release.
 
-   Rows are removed only for a token a scope row records as released: the
-   writer that took the entries back into the scope row committed that record
-   with them. Rows no scope row names or releases hold the only copy of their
-   entries. They are joined into the scope their own scope moved to when the
-   stored aliases name one, and kept otherwise. */
+   Rows are removed only for a token recorded as released: the writer that
+   took the entries back into a scope row committed that record with them,
+   and the drain copies it beside the rows (`d:<token>`) when it next writes
+   that scope, so the record outlives a scope row an earlier release removes.
+   Rows nothing names or releases hold the only copy of their entries. They
+   are joined into the scope their own scope moved to when the stored aliases
+   name one, and kept otherwise. */
 
 export interface RoleHistoryDrainOptions {
   /** A scope row is drained once it holds this many entries, or this many bytes. */
@@ -54,17 +56,90 @@ export const ROLE_HISTORY_BACKUP_AGE_MS = 60 * 60 * 1000;
 const validEntry = (entry: unknown) => !!entry && typeof entry === "object" && typeof (entry as { at?: unknown }).at === "string";
 
 export class RoleHistoryDrainRefusal extends Error {}
-function newestStateBackupAt(): number | null {
-  return listBackups(path.join(path.dirname(statePath("state.sqlite")), BACKUP_DIRECTORY), "state.sqlite")[0]?.at ?? null;
+/** Why the last pass did not run or stopped, for the operator. */
+let idle: string | null = null;
+
+/* The operator's switch, and the backup that protects the move. Off unless
+   the operator turned it on for this store. */
+export interface RoleHistoryBackup { name: string; at: string; bytes: number }
+type Setting = { enabled: boolean; at: string; backup?: RoleHistoryBackup };
+/** How long the backup taken at turning on is kept out of backup retention. */
+export const ROLE_HISTORY_BACKUP_KEPT_MS = 30 * 24 * 60 * 60 * 1000;
+const RESTORE_NOTE = "restoring it returns the whole state database, every store in it, to that moment";
+const KEPT_PREFIX = "role-memory-history-";
+const settingFile = () => statePath("role-history-rows.json");
+const backupDirectory = () => path.join(path.dirname(statePath("state.sqlite")), BACKUP_DIRECTORY);
+function setting(): Setting | null {
+  try { const value = JSON.parse(fs.readFileSync(settingFile(), "utf8")) as Setting; return value && typeof value === "object" ? value : null; }
+  catch { return null; }
 }
-/** Before the first entry of a store moves, a backup taken within the hour
- * must exist: it is the way back to the scope rows as they are now. */
-export function assertRoleHistoryBackup(options: Pick<RoleHistoryDrainOptions, "now" | "newestBackupAt"> = {}): void {
+function writeSetting(value: Setting): void {
+  const file = settingFile();
+  withFileTransactionSync(file, "role memory history setting is busy", () => writeJsonDurably(file, value));
+}
+export function roleHistoryRowsEnabled(): boolean { return setting()?.enabled === true; }
+/** The kept copy: a second name for the backup's file, outside the names
+ * backup retention manages, so no retention pass removes it. */
+function keptBackup(): (RoleHistoryBackup & { file: string }) | null {
+  const backup = setting()?.backup;
+  if (!backup || path.basename(backup.name) !== backup.name || !backup.name.startsWith(KEPT_PREFIX)) return null;
+  const file = path.join(backupDirectory(), backup.name);
+  try { return fs.statSync(file).size > 0 ? { ...backup, file } : null; } catch { return null; }
+}
+function releaseKeptBackup(): void {
+  const kept = keptBackup();
+  if (kept) fs.rmSync(kept.file, { force: true });
+}
+
+type TakeBackup = () => Promise<Map<string, BackupOutcome>>;
+let takeBackup: TakeBackup = () => runBackupPassInWorker(path.dirname(statePath("state.sqlite")), new Map());
+const takeBackupInWorker = takeBackup;
+/** Tests only; `null` restores the backup pass in its worker. Seamed here
+    because a route module may export only route fields. */
+export function setRoleHistoryBackupPassForTests(pass: TakeBackup | null): void { takeBackup = pass ?? takeBackupInWorker; }
+/** Turning the drain on takes a state backup through the product's backup
+ * pass, which checks the copy's integrity before it keeps it, and keeps that
+ * copy under a name of its own until the drain is turned off or thirty days
+ * pass. A store that already has history rows is past the point a backup
+ * guards and needs none. */
+export async function setRoleHistoryRowsEnabled(enabled: boolean, options: { now?: number; takeBackup?: TakeBackup } = {}): Promise<void> {
+  const now = options.now ?? Date.now(), at = new Date(now).toISOString();
+  if (!enabled) { releaseKeptBackup(); writeSetting({ enabled: false, at }); idle = null; return; }
+  const held = setting();
+  if (storeHasHistoryRows()) { writeSetting({ enabled: true, at: held?.backup ? held.at : at, ...(held?.backup ? { backup: held.backup } : {}) }); return; }
+  let outcome: BackupOutcome | undefined;
+  try { outcome = (await (options.takeBackup ?? takeBackup)()).get("state.sqlite"); }
+  catch (error) { throw new RoleHistoryDrainRefusal(`the state backup did not run (${error instanceof Error ? error.name : "unknown"}); nothing was turned on`); }
+  // The pass answers "not-due" when it copied this database within the hour:
+  // that copy went through the same integrity check when it was taken.
+  const newest = listBackups(backupDirectory(), "state.sqlite")[0];
+  const fresh = !!newest && newest.bytes > 0 && now - newest.at <= ROLE_HISTORY_BACKUP_AGE_MS;
+  if (!newest || !fresh || outcome === undefined || !["taken", "not-due"].includes(outcome.state)) {
+    throw new RoleHistoryDrainRefusal(`no state backup from the last hour could be taken (${outcome?.state ?? "no answer"}); `
+      + (newest ? `the newest is ${newest.name} from ${new Date(newest.at).toISOString()}` : "there is none") + "; nothing was turned on");
+  }
+  releaseKeptBackup();
+  const name = `${KEPT_PREFIX}${newest.name}`, kept = path.join(backupDirectory(), name);
+  fs.rmSync(kept, { force: true });
+  try { fs.linkSync(newest.file, kept); } catch { fs.copyFileSync(newest.file, kept); }
+  writeSetting({ enabled: true, at, backup: { name, at: new Date(newest.at).toISOString(), bytes: newest.bytes } });
+  idle = null;
+}
+
+function storeHasHistoryRows(): boolean {
   const history = roleHistoryCollection();
-  if (history && history.keyPage("", 1).length) return;
-  const at = (options.newestBackupAt ?? newestStateBackupAt)();
+  return !!history && history.keyPage("", 1).length > 0;
+}
+/** Before the first entry of a store moves, the backup taken at turning on
+ * must still be there and be at most an hour old: it is the way back to the
+ * scope rows as they are now. */
+export function assertRoleHistoryBackup(options: Pick<RoleHistoryDrainOptions, "now" | "newestBackupAt"> = {}): void {
+  if (storeHasHistoryRows()) return;
+  const at = (options.newestBackupAt ?? (() => { const kept = keptBackup(); return kept ? Date.parse(kept.at) : null; }))();
   if (at === null || (options.now ?? Date.now()) - at > ROLE_HISTORY_BACKUP_AGE_MS) {
-    throw new RoleHistoryDrainRefusal("moving role memory history needs a state backup taken within the last hour; none was found");
+    throw new RoleHistoryDrainRefusal(at === null
+      ? "moving role memory history needs the state backup taken when it was turned on, and none is kept; turn it off and on again"
+      : "the state backup taken when this was turned on is older than one hour and no entry has moved yet; turn it off and on again to take a new one");
   }
 }
 
@@ -82,6 +157,9 @@ export function drainRoleHistoryStep(cursor: { after: string }, options: RoleHis
   const { minEntries, minBytes, maxEntries, maxBytes, graceMs } = { ...DEFAULTS, ...options };
   const now = options.now ?? Date.now();
   const due = (tail: { entries: number; bytes: number } | null) => !!tail && tail.entries > 0 && (tail.entries >= minEntries || tail.bytes >= minBytes);
+  // Rows without a scope row are placed first, so their entries sit ahead of
+  // whatever the target's scope row still holds when those move out.
+  if (roleHistoryCollection() && adoptUnclaimedHistory()) return true;
   for (const key of roleScopeRowKeys("s:")) {
     if (key <= cursor.after) continue;
     const revision = scopeRowRevision(key);
@@ -123,6 +201,8 @@ export function drainRoleHistoryStep(cursor: { after: string }, options: RoleHis
         removed.push(...oldest, ...oldest.map(entryKey => historyUndoKey(held.token, Number(entryKey.slice(entryKey.lastIndexOf(":") + 1)))));
         next.count -= oldest.length; next.ordinary -= oldest.length;
       }
+      // The record of each token this scope released goes beside the rows too.
+      for (const dropped of row.historyDropped ?? []) rows.push({ kind: "released", token: dropped.token, scope: row.scope, at: dropped.at });
       scopes.push({ ...row, history: rest, historyRows: next });
     } });
     if (!scopes.length) { refused.set(`${file}\0${key}`, revision); cursor.after = key; continue; }
@@ -149,39 +229,74 @@ export function drainRoleHistoryStep(cursor: { after: string }, options: RoleHis
       const next: RoleMemoryScopeRow = { ...row, historyDropped: left };
       if (!left.length) delete next.historyDropped;
       scopes.push(next);
+      removed.push(historyReleasedKey(due.token));
     } });
     if (scopes.length || removed.length) return true;
   }
-  return adoptUnclaimedHistory(new Date(now).toISOString());
-}
-
-/** Rows whose scope row is gone because a release before history rows joined
- * that scope into the one its project key moved to: the stored aliases name
- * the target, and the rows' entries go ahead of the target's own, as a join
- * by this release orders them. The entries the earlier join already carried
- * over stay where it put them, after the target's stored rows. */
-function adoptUnclaimedHistory(at: string): boolean {
-  const memory = roleMemoryCollection()!, history = roleHistoryCollection()!;
-  for (const { token, scope } of unclaimedHistoryTokens()) {
-    const into = scope ? canonicalScope(scope) : scope;
-    if (!scope || into === scope || memory.get(`s:${scope}`)) continue;
-    const scopes: RoleMemoryRow[] = [];
+  // A release record whose scope row is gone: its entries live on in the
+  // scope that took them, so its rows go the same way after the same wait.
+  const claims = historyTokenClaims();
+  for (const released of releasedHistoryTokens()) {
+    if (claims.named.has(released.token) || claims.dropped.has(released.token) || now - Date.parse(released.at) < graceMs) continue;
+    const removed: string[] = [];
     SqliteStateCollection.commitPatchesSync([
-      { collection: memory as SqliteStateCollection<unknown>, records: scopes },
-      { collection: history as SqliteStateCollection<unknown>, records: [] },
+      { collection: memory as SqliteStateCollection<unknown>, records: [] },
+      { collection: history as SqliteStateCollection<unknown>, records: [], deleteKeys: removed },
     ], { busyMessage: "role memory busy", beforeMerge: () => {
-      const target = memory.get(`s:${into}`);
-      if (target?.kind !== "scope" || memory.get(`s:${scope}`)) return;
-      const whole = scopeRowForRewrite(target, at);
-      const earlier = historyOfToken(token).map(entry => ({ ...entry, revisionScope: entry.revisionScope ?? scope }));
-      scopes.push({ ...whole, history: [...earlier, ...whole.history], historyDropped: [...(whole.historyDropped ?? []), { token, at }] });
+      const current = historyTokenClaims();
+      if (current.named.has(released.token) || current.dropped.has(released.token)) return;
+      removed.push(...historyKeysOfToken(released.token, PAGE));
+      if (!removed.length) removed.push(historyReleasedKey(released.token));
     } });
-    if (scopes.length) return true;
+    if (removed.length) return true;
   }
   return false;
 }
 
-/** Stored tokens that no scope row names or releases and no alias places. */
+/** Tokens whose rows could not be read whole (an undo payload is missing):
+ * left in place and counted. */
+const incomplete = new Set<string>();
+
+/** Rows whose scope row is gone because a release before history rows joined
+ * that scope into the one its project key moved to. The stored aliases name
+ * the target. The rows' entries go to the front of the entries the target's
+ * scope row holds, next to the ones the earlier join carried over, and the
+ * rows leave in the same commit; the drain then moves the entries out like
+ * any other. An entry the target already holds is not added again. One
+ * write the size of the adopted token: it reads the target's stored entries
+ * by identity only and never rewrites them. */
+function adoptUnclaimedHistory(): boolean {
+  const memory = roleMemoryCollection()!, history = roleHistoryCollection()!;
+  for (const { token, scope } of unclaimedHistoryTokens()) {
+    const into = scope ? canonicalScope(scope) : scope;
+    if (!scope || into === scope || incomplete.has(token) || memory.get(`s:${scope}`)) continue;
+    const scopes: RoleMemoryRow[] = [], removed: string[] = [];
+    try {
+      SqliteStateCollection.commitPatchesSync([
+        { collection: memory as SqliteStateCollection<unknown>, records: scopes },
+        { collection: history as SqliteStateCollection<unknown>, records: [], deleteKeys: removed },
+      ], { busyMessage: "role memory busy", beforeMerge: () => {
+        const target = memory.get(`s:${into}`);
+        if (target?.kind !== "scope" || memory.get(`s:${scope}`)) return;
+        const held = scopeHistoryIdentities(target);
+        const earlier = historyOfToken(token).map(entry => ({ ...entry, revisionScope: entry.revisionScope ?? scope }))
+          .filter(entry => !held.has(historyEntryIdentity(entry, target.scope)));
+        if (earlier.length) scopes.push({ ...target, history: [...earlier, ...target.history] });
+        removed.push(...historyKeysOfToken(token, Number.MAX_SAFE_INTEGER));
+      } });
+    } catch (error) {
+      // One unreadable token must not stop the tokens after it.
+      if (!(error instanceof Error) || error.message !== "memory scope changed while being read") throw error;
+      incomplete.add(token);
+      continue;
+    }
+    if (removed.length) return true;
+  }
+  return false;
+}
+
+/** Stored tokens that nothing names or releases: those an alias will place,
+ * those nothing places, and those whose rows are incomplete. */
 export function unclaimedRoleHistoryTokens(): number {
   return roleMemoryCollection() && roleHistoryCollection() ? unclaimedHistoryTokens().length : 0;
 }
@@ -200,30 +315,43 @@ export async function drainRoleHistory(options: RoleHistoryDrainOptions & { acti
   }
 }
 
-/* The operator's switch. Off unless the operator turned it on for this store. */
-const settingFile = () => statePath("role-history-rows.json");
-export function roleHistoryRowsEnabled(): boolean {
-  try { return (JSON.parse(fs.readFileSync(settingFile(), "utf8")) as { enabled?: unknown }).enabled === true; }
-  catch { return false; }
+export const ROLE_HISTORY_RESTORE_NOTE = RESTORE_NOTE;
+export function roleHistoryRowsStatus(): { enabled: boolean; backup: (RoleHistoryBackup & { present: boolean; restore: string; keptUntil: string }) | null; idle: string | null; unclaimed: number; incomplete: number } {
+  const held = setting();
+  const backup = held?.backup ?? null;
+  return {
+    enabled: held?.enabled === true,
+    backup: backup ? { ...backup, present: keptBackup() !== null, restore: RESTORE_NOTE, keptUntil: new Date(Date.parse(held!.at) + ROLE_HISTORY_BACKUP_KEPT_MS).toISOString() } : null,
+    idle: held?.enabled === true ? idle : null,
+    unclaimed: unclaimedRoleHistoryTokens(),
+    incomplete: incomplete.size,
+  };
 }
-/** Turning the drain on is refused without a recent backup while the store
- * has no history rows yet. */
-export function setRoleHistoryRowsEnabled(enabled: boolean, options: Pick<RoleHistoryDrainOptions, "now" | "newestBackupAt"> = {}): void {
-  if (enabled) assertRoleHistoryBackup(options);
-  const file = settingFile();
-  withFileTransactionSync(file, "role memory history setting is busy", () =>
-    writeJsonDurably(file, { enabled, at: new Date(options.now ?? Date.now()).toISOString() }));
-}
-export function roleHistoryRowsStatus(): { enabled: boolean; newestBackupAt: string | null; unclaimed: number } {
-  const at = newestStateBackupAt();
-  return { enabled: roleHistoryRowsEnabled(), newestBackupAt: at === null ? null : new Date(at).toISOString(), unclaimed: unclaimedRoleHistoryTokens() };
+
+/** One look of the clock: a pass while the operator's switch is on and this
+ * release serves traffic. The reason a pass did not run or stopped is kept
+ * for the status. */
+export async function roleHistoryDrainTick(active: () => Promise<boolean>, options: RoleHistoryDrainOptions & { pauseMs?: number } = {}): Promise<boolean> {
+  const held = setting();
+  if (held?.enabled !== true) { idle = null; return false; }
+  if (held.backup && (options.now ?? Date.now()) - Date.parse(held.at) > ROLE_HISTORY_BACKUP_KEPT_MS) { releaseKeptBackup(); writeSetting({ enabled: true, at: held.at }); }
+  if (!await active()) { idle = "this release does not serve traffic yet"; return false; }
+  try {
+    await drainRoleHistory({ ...options, active: roleHistoryRowsEnabled });
+    idle = null;
+  } catch (error) {
+    idle = error instanceof RoleHistoryDrainRefusal ? error.message : `the last pass failed (${error instanceof Error ? error.name : "unknown"})`;
+    throw error;
+  }
+  const unclaimed = unclaimedRoleHistoryTokens();
+  if (unclaimed) console.warn("[role-memory] history rows kept without a scope row", unclaimed);
+  return true;
 }
 
 const owner = globalThis as typeof globalThis & { __delegatusRoleHistoryDrain?: { stop(): void } };
 /** Only the Viewer startup path starts this clock. Every minute it looks at
- * the operator's switch; while that is on and this release serves traffic, a
- * pass runs every ten minutes with its steps spaced so the serving loop runs
- * between them. */
+ * the operator's switch; after a pass it waits ten minutes. Steps of a pass
+ * are spaced so the serving loop runs between them. */
 export function startRoleHistoryDrain(ports: { active?: () => Promise<boolean> } = {}): void {
   if (owner.__delegatusRoleHistoryDrain) return;
   let stopped = false, timer: ReturnType<typeof setTimeout> | undefined;
@@ -232,13 +360,8 @@ export function startRoleHistoryDrain(ports: { active?: () => Promise<boolean> }
     if (stopped) return;
     timer = setTimeout(() => {
       let ran = false;
-      void (async () => {
-        if (!roleHistoryRowsEnabled() || !await active()) return;
-        ran = true;
-        await drainRoleHistory({ active: () => !stopped && roleHistoryRowsEnabled(), pauseMs: 2_000 });
-        const unclaimed = unclaimedRoleHistoryTokens();
-        if (unclaimed) console.warn("[role-memory] history rows kept without a scope row", unclaimed);
-      })().catch(error => console.warn("[role-memory] history drain unavailable", error instanceof RoleHistoryDrainRefusal ? error.message : error instanceof Error ? error.name : "unknown"))
+      void roleHistoryDrainTick(async () => !stopped && await active(), { pauseMs: 2_000 }).then(worked => { ran = worked; })
+        .catch(error => console.warn("[role-memory] history drain unavailable", error instanceof RoleHistoryDrainRefusal ? error.message : error instanceof Error ? error.name : "unknown"))
         .finally(() => arm(ran ? 600_000 : 60_000));
     }, ms);
     timer.unref?.();

@@ -18,16 +18,21 @@ type UndoPayload = NonNullable<ScopeHistoryEntry["prior"]>;
  * entry is stored exactly as written, whatever its `prior` is. */
 export type StoredHistoryEntry = { kind: "entry"; token: string; seq: number; scope: string; entry: Omit<ScopeHistoryEntry, "prior"> & { prior?: unknown }; undo?: true };
 export type StoredHistoryUndo = { kind: "undo"; token: string; seq: number; scope: string; prior: UndoPayload };
-export type StoredHistoryRow = StoredHistoryEntry | StoredHistoryUndo;
+/** A token whose entries a scope row took back, recorded beside the rows so
+ * the record outlives a scope row that an earlier release removes. */
+export type StoredHistoryReleased = { kind: "released"; token: string; scope: string; at: string };
+export type StoredHistoryRow = StoredHistoryEntry | StoredHistoryUndo | StoredHistoryReleased;
 
 const sequence = (seq: number) => String(seq).padStart(10, "0");
 export const historyEntryKey = (token: string, seq: number) => `h:${token}:${sequence(seq)}`;
 export const historyUndoKey = (token: string, seq: number) => `u:${token}:${sequence(seq)}`;
-const key = (row: StoredHistoryRow) => row.kind === "entry" ? historyEntryKey(row.token, row.seq) : historyUndoKey(row.token, row.seq);
+export const historyReleasedKey = (token: string) => `d:${token}`;
+const key = (row: StoredHistoryRow) => row.kind === "released" ? historyReleasedKey(row.token) : row.kind === "entry" ? historyEntryKey(row.token, row.seq) : historyUndoKey(row.token, row.seq);
 function decode(value: unknown): StoredHistoryRow | null {
   const row = value as StoredHistoryRow | null;
-  if (!row || typeof row !== "object" || typeof row.token !== "string" || !/^[a-f0-9]{16}$/.test(row.token)
-    || !Number.isSafeInteger(row.seq) || row.seq < 0 || typeof row.scope !== "string") return null;
+  if (!row || typeof row !== "object" || typeof row.token !== "string" || !/^[a-f0-9]{16}$/.test(row.token) || typeof row.scope !== "string") return null;
+  if (row.kind === "released") return typeof row.at === "string" ? row : null;
+  if (!Number.isSafeInteger(row.seq) || row.seq < 0) return null;
   return row.kind === "entry" && !!row.entry && typeof row.entry === "object" && typeof row.entry.at === "string"
     || row.kind === "undo" && Array.isArray(row.prior) ? row : null;
 }
@@ -98,7 +103,7 @@ export function historyRowsByToken(rows: Iterable<unknown>): Map<string, { entri
   const tokens = new Map<string, { entries: StoredHistoryEntry[]; undo: Map<number, UndoPayload> }>();
   for (const value of rows) {
     const row = decode(value);
-    if (!row) continue;
+    if (!row || row.kind === "released") continue;
     let held = tokens.get(row.token);
     if (!held) tokens.set(row.token, held = { entries: [], undo: new Map() });
     if (row.kind === "entry") held.entries.push(row); else held.undo.set(row.seq, row.prior);
@@ -126,4 +131,10 @@ export function rowsWithCollectedHistory<T>(memory: readonly T[], history: () =>
     if (!row || typeof row !== "object" || row.kind !== "scope" || !row.historyRows) return value;
     return scopeFromCollectedRows(row, tokens ??= historyRowsByToken(history())) as T;
   });
+}
+
+/** What makes two stored entries the same change of one scope lineage,
+ * whatever was marked on the entry since. */
+export function historyEntryIdentity(entry: Pick<ScopeHistoryEntry, "revision" | "revisionScope" | "at" | "by" | "pass">, scope: string): string {
+  return JSON.stringify([entry.revisionScope ?? scope, entry.revision, entry.at, entry.by, entry.pass ?? null]);
 }
