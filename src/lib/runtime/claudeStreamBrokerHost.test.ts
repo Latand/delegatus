@@ -971,7 +971,7 @@ describe("ClaudeStreamBrokerHost", () => {
     expect(await nextEvent(owner)).toMatchObject({ kind: "item", turnId: "delivery-one", phase: "completed" });
     expect(await nextEvent(owner)).toEqual({ kind: "delta", turnId: "delivery-one", text: "done", seq: 4 });
     expect(await nextEvent(owner)).toMatchObject({ kind: "item", turnId: "delivery-one", phase: "completed" });
-    expect(await nextEvent(owner)).toEqual({ kind: "turn-ended", turnId: "delivery-one", status: "completed", seq: 6 });
+    expect(await nextEvent(owner)).toEqual({ kind: "turn-ended", turnId: "delivery-one", status: "completed", seq: 6, accountingAt: expect.any(String) });
     expect(await nextEvent(owner)).toEqual({ kind: "session-status", status: "idle", seq: 7 });
     expect(ledger.order).toContain("confirmed:delivery-one");
 
@@ -4755,7 +4755,7 @@ describe("meaningful background turns", () => {
       f.child.emitJson(result());
       const events = f.store.load(sessionId);
       expect(events.filter(e => e.kind === "turn-started")).toEqual([{ kind: "turn-started", turnId: active, seq: expect.any(Number), accountingAt: expect.any(String) }]);
-      expect(events.filter(e => e.kind === "turn-ended")).toEqual([{ kind: "turn-ended", turnId: active, status: "completed", seq: expect.any(Number) }]);
+      expect(events.filter(e => e.kind === "turn-ended")).toEqual([{ kind: "turn-ended", turnId: active, status: "completed", seq: expect.any(Number), accountingAt: expect.any(String) }]);
       for (const event of events) if (event.kind === "delta" || (event.kind === "item" && !event.deliveryEcho)) expect(event.turnId).toBe(active);
       expect((await f.host.health()).status).toBe("idle");
       if (!queued) expect(f.ledger.order).toEqual([]);
