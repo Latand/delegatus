@@ -1503,7 +1503,7 @@ export async function readCompactPipelineEvidence<T>(filename: string, prior: Co
     const incremental = prior?.identity === identity && prior.sourceRevision !== undefined && prior.sourceRevision <= sourceRevision;
     let slice = performance.now();
     const yieldIfNeeded = async () => {
-      await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
+      await performanceSpans.wait("pipeline.yield", () => yieldToRuntime());
       assertActive();
       slice = performance.now();
     };
@@ -1644,7 +1644,7 @@ export async function visitStateCollectionsRows(
       catch (error) { throw new Error(`corrupt ${row.collection} SQLite row: ${row.row_key}`, { cause: error }); }
       visit(value, row.collection);
       if (performance.now() - slice >= 4) {
-        await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
+        await performanceSpans.wait("pipeline.yield", () => yieldToRuntime());
         assertActive();
         slice = performance.now();
       }
