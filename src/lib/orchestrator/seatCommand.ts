@@ -1,4 +1,4 @@
-import { conversationWorkspacePrincipal, memberWorkspacePrincipal, type WorkspacePrincipal } from "@/lib/team/workspacePrincipal";
+import { conversationWorkspaceReach, memberWorkspacePrincipal, type WorkspacePrincipal, type WorkspaceReach } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
 import { resolveSeatProject } from "./seatProjectIdentity";
 import { ProjectNameRefusal } from "@/lib/projects/nameResolution";
@@ -79,6 +79,7 @@ import {
   orchestratorSeatFor,
   repairOrchestratorSeatRuntimeIdentity,
   prepareOrchestratorSeatAuthCredentialBaseline,
+  seatWorkspaceFromMessage,
   type OrchestratorSeat,
   type OrchestratorSeatTerminalization,
   type StillbornSeatRollback,
@@ -118,14 +119,30 @@ import {
  * duplicated.
  */
 
-/** Trusted in-process restrictions; request JSON cannot supply admission. */
-function seatWorkspace(project: string, admission: SeatLaunchAdmission | undefined, trigger: OrchestratorSeatTrigger | null, incumbent: OrchestratorSeat | null): WorkspacePrincipal | null {
+/**
+ * Trusted in-process restrictions; request JSON cannot supply admission.
+ *
+ * A person's designation binds the seat to that person. An agent's or an
+ * automatic designation inherits the reach of the conversation behind it and
+ * keeps its kind: a launch or designation binding stays a binding, while a
+ * fence that came from a member's message stays message authority
+ * (`fromMessage`), so one message never becomes a permanent binding.
+ */
+function seatWorkspace(project: string, admission: SeatLaunchAdmission | undefined, trigger: OrchestratorSeatTrigger | null, incumbent: OrchestratorSeat | null): WorkspaceReach {
   const store = existingTeamStore();
-  if (admission?.workspaceMemberId && store) return memberWorkspacePrincipal(store, admission.workspaceMemberId, project);
-  if (admission?.workspace) return admission.workspace;
-  if (trigger?.conversationId) return conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as `conversation_${string}`), trigger.conversationId);
-  return incumbent?.workspace ?? (incumbent?.conversationId
-    ? conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as `conversation_${string}`), incumbent.conversationId) : null);
+  const reach = (id: string) => conversationWorkspaceReach((id: string) => agentRegistry().conversation(id as `conversation_${string}`), id);
+  if (admission?.workspaceMemberId && store) return { principal: memberWorkspacePrincipal(store, admission.workspaceMemberId, project), fromMessage: false };
+  if (trigger?.conversationId) {
+    const triggered = reach(trigger.conversationId);
+    if (triggered.fromMessage) return { principal: admission?.workspace ?? triggered.principal, fromMessage: true };
+    if (!admission?.workspace) return triggered;
+  }
+  if (admission?.workspace) return { principal: admission.workspace, fromMessage: false };
+  if (incumbent?.workspace && !seatWorkspaceFromMessage(incumbent)) return { principal: incumbent.workspace, fromMessage: false };
+  return incumbent?.conversationId ? reach(incumbent.conversationId) : { principal: null, fromMessage: false };
+}
+function seatWorkspaceInput(reach: WorkspaceReach): { workspace?: WorkspacePrincipal; workspaceFromMessage?: boolean } {
+  return reach.principal ? { workspace: reach.principal, ...(reach.fromMessage ? { workspaceFromMessage: true } : {}) } : {};
 }
 
 export interface SeatLaunchAdmission {
@@ -307,7 +324,9 @@ async function postSpawnInProcess(body: Record<string, unknown>, autonomous = fa
     json: async () => body,
   } as unknown as NextRequest;
   const response = await executeSpawnRequest(request, { ...productionSpawnCommandDependencies,
-    ...(admission?.workspace ? { workspacePrincipal: admission.workspace } : {}),
+    /* The seat record is the launch's whole workspace decision, an unbound
+       seat included: the handover parent never binds the successor. */
+    workspacePrincipal: admission?.workspace ?? null,
     // Seat ticks have no Next request lifetime. Select the shared background
     // scheduler explicitly; operator requests keep response-close deferral.
     defer: autonomous ? startDeferredSpawnWork : productionSpawnCommandDependencies.defer,
@@ -1183,7 +1202,9 @@ async function runOrchestratorSeatRequest(
     const begun = beginOrchestratorSeatIntent({
       project,
       mandate,
-      ...(seatWorkspace(project, admission, triggeredBy, null) ? { workspace: seatWorkspace(project, admission, triggeredBy, null)! } : {}),
+      /* An adopted conversation may carry a launch binding of its own, so a
+         fence designated onto it stays a binding. */
+      ...seatWorkspaceInput({ ...seatWorkspace(project, admission, triggeredBy, null), fromMessage: false }),
       roleTable: orchestratorRoleTable(loadRoleDefinitionsOrDefaults()),
       clientRequestId,
       mode: "existing",
@@ -1305,7 +1326,7 @@ async function runOrchestratorSeatRequest(
   const begun = beginOrchestratorSeatIntent({
     project,
     mandate,
-    ...(seatWorkspace(project, admission, triggeredBy, incumbent) ? { workspace: seatWorkspace(project, admission, triggeredBy, incumbent)! } : {}),
+    ...seatWorkspaceInput(seatWorkspace(project, admission, triggeredBy, incumbent)),
     roleTable: orchestratorRoleTable(loadRoleDefinitionsOrDefaults()),
     clientRequestId,
     mode: "spawn",
@@ -1402,7 +1423,7 @@ async function runOrchestratorSeatRequest(
     title: derivedSpawnTitle("orchestrator", spawnMandate, project),
     clientAttemptId: clientRequestId,
   };
-  const spawnAdmission: SeatLaunchAdmission = { ...admission, ...(begun.seat.workspace ? { workspace: begun.seat.workspace } : {}), prepareAccount: async (accountId) => {
+  const spawnAdmission: SeatLaunchAdmission = { ...admission, workspace: begun.seat.workspace, prepareAccount: async (accountId) => {
     const commitCaller = await admission?.prepareAccount?.(accountId);
     const commitBaseline = prepareOrchestratorSeatAuthCredentialBaseline(project, clientRequestId, begun.seat.seatEpoch, launchEngine, accountId);
     return () => { commitCaller?.(); commitBaseline(); };
