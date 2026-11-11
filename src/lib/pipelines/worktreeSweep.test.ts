@@ -876,15 +876,13 @@ test("a failed migration's parked message releases its dead conversation's linke
   expect(reopened.readOnlySnapshot().heldDeliveries[delivery.id]?.state).toBe("held");
 });
 
-for (const owner of ["structured", "survivor", "claimant", "tmux-agent", "tmux-pane"] as const)
+for (const owner of ["structured", "survivor", "claimant"] as const)
   test.each(["alive", "unverified"] as const)(`a ${owner} owner that is %s protects a settled registry conversation`, (verdict) => {
     const { registry, filename, key } = finishedRegistryConversation(caseDir);
     const entry = registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
     const identity = (pid: number) => ({ pid, startIdentity: `owner-${pid}`, bootEpoch: "fixture-boot" });
-    registry.upsert({ ...entry, status: "dead", claimOwner: `structured-host:${JSON.stringify(identity(61005))}`,
-      host: { kind: "tmux", endpoint: "fixture", server: identity(61006), paneId: "%1", windowName: "fixture",
-        agent: identity(61003), panePid: identity(61004), argv: [] } });
-    const livePid = { structured: 61001, survivor: 61002, claimant: 61005, "tmux-agent": 61003, "tmux-pane": 61004 }[owner];
+    registry.upsert({ ...entry, status: "dead", claimOwner: `structured-host:${JSON.stringify(identity(61005))}` });
+    const livePid = { structured: 61001, survivor: 61002, claimant: 61005 }[owner];
     const reopened = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
     const cwds = liveOrWaitingConversationCwds(reopened.worktreeProtectionSnapshot(), Date.parse("2026-10-21T00:00:00Z"),
       current => processIdentityProvenDead(current, {
@@ -3835,6 +3833,30 @@ test.each(["process", "conversation", "running", "young", "unknown-ignored"])("b
   }
   expect((await sweepMergedWorktrees(f.options)).removed).toEqual([]);
   expect(fs.readFileSync(path.join(f.dir, "draft.txt"), "utf8")).toBe("must stay");
+});
+
+test("a process that appears after the backup's last verification keeps the checkout", async () => {
+  const f = await staleBackupFixture(); fs.writeFileSync(path.join(f.dir, "draft.txt"), "must stay");
+  const run = f.options.git, read = fs.readFileSync;
+  let armed = false, appeared = false;
+  f.options.git = async (args, cwd) => {
+    // The sweep's own status read after the manifest precedes its `verify`.
+    if (args[0] === "status" && fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree-backup.json"))) armed = true;
+    return run(args, cwd);
+  };
+  f.options.scan = () => ({ ownNamespace: null, processes: appeared ? [{ pid: 123, namespace: null, stamped: false, paths: [f.dir] }] : [] });
+  // `verify` reads the checkout's index after its own last guard. A process
+  // that starts there is seen only by the sweep's guard before removal.
+  const index = spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) => {
+    if (armed && path.basename(String(file)) === "index") appeared = true;
+    return (read as (file: fs.PathOrFileDescriptor, options?: unknown) => unknown)(file, options);
+  }) as typeof fs.readFileSync);
+  try {
+    const report = await sweepMergedWorktrees(f.options);
+    expect(appeared).toBeTrue();
+    expect(report.removed).toEqual([]);
+    expect(fs.readFileSync(path.join(f.dir, "draft.txt"), "utf8")).toBe("must stay");
+  } finally { index.mockRestore(); }
 });
 
 test("a backup ref changed before final dispatch retains the checkout", async () => {

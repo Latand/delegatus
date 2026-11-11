@@ -3,8 +3,8 @@
  * (`linux.ts`); Windows reads one `Win32_Process` snapshot plus two kernel
  * values through FFI (`windows.ts`); every other platform shells out to
  * `ps`/`lsof` (`portable.ts`).
- * Callers never depend on which backend is active — see `scanner/process.ts`
- * and `tmux.ts`, which hold the platform-independent logic (engine matching,
+ * Callers never depend on which backend is active — see `scanner/process.ts`,
+ * which holds the platform-independent logic (engine matching,
  * memoization, ppid-chain walks) on top of these primitives.
  */
 

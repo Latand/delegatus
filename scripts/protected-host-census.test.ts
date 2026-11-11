@@ -43,21 +43,16 @@ function fixture() {
   const probe = { now: () => Date.parse(NOW), pidAlive: (pid: number) => pid !== 4004,
     processIdentity: (pid: number) => pid === 4005 ? null : "fixture-start" };
   const rows = [];
-  for (const [index, kind] of ["structured", "tmux", "receipt", "dead", "unknown", "headless"].entries()) {
+  for (const [index, kind] of ["structured", "settled", "receipt", "dead", "unknown", "headless"].entries()) {
     const pid = 4001 + index;
     const pathname = path.join(path.dirname(f.worker.transcript), `owner-${kind}.jsonl`);
     fs.writeFileSync(pathname, [
       { type: "session_meta", timestamp: NOW, payload: { id: `owner-${kind}`, cwd: "/repo" } },
       { type: "event_msg", timestamp: NOW, payload: { type: "task_started", turn_id: `turn-${kind}` } },
-      ...(kind === "tmux" ? [{ type: "event_msg", timestamp: NOW, payload: { type: "task_complete", turn_id: `turn-${kind}` } }] : []),
+      ...(kind === "settled" ? [{ type: "event_msg", timestamp: NOW, payload: { type: "task_complete", turn_id: `turn-${kind}` } }] : []),
     ].map(row => JSON.stringify(row)).join("\n") + "\n");
     const entry: AgentRegistryEntry = { ...structuredClone(base), key: { engine: "codex", sessionId: `owner-${kind}` }, artifactPath: pathname,
       structuredHost: { ...base.structuredHost!, process: { pid, startIdentity: "fixture-start" } }, host: null };
-    if (kind === "tmux") {
-      entry.structuredHost = null;
-      entry.host = { kind: "tmux", endpoint: "/synthetic/socket", server: { pid: 4999, startIdentity: "fixture-start" },
-        paneId: "%1", panePid: { pid, startIdentity: "fixture-start" }, agent: { pid, startIdentity: "fixture-start" }, windowName: "fixture", argv: [] };
-    }
     const id = `conversation_owner-${kind}`;
     const generation = { ...conversation.generations[0]!, id: entry.key.sessionId, path: pathname };
     rows.push({ kind, pid, pathname, entry, id, conversation: { ...structuredClone(conversation), id, generations: [generation] } });
@@ -82,14 +77,14 @@ function fixture() {
   return { f, file, rows, sources, catalog, close: f.close };
 }
 
-test("B-1: native census equals the product over every live structured, tmux, receipt and headless owner", async () => {
+test("B-1: native census equals the product over every live structured, receipt and headless owner", async () => {
   const f = fixture();
   try {
     const answer = await censusSnapshot(f.sources, 1, TARGET, 30000);
     const baseline = await agentLivenessSnapshot({ liveOnly: true, limit: 200, evidenceDeadlineMs: 30000 }, { ...f.sources,
       describeTranscript: f.f.sources.describeTranscript, selectInventory: undefined, listFiles: async () => f.catalog });
     expect(fields(answer.conversations)).toEqual(fields(baseline.conversations));
-    expect(answer.conversations.filter(row => row.host.state === "alive").map(row => row.host.kind).sort()).toEqual(["headless", "structured", "structured", "structured", "tmux"]);
+    expect(answer.conversations.filter(row => row.host.state === "alive").map(row => row.host.kind).sort()).toEqual(["headless", "structured", "structured", "structured", "structured"]);
     expect(answer.conversations.filter(row => row.host.state === "alive").map(row => row.host.pid).sort()).toEqual([4001, 4002, 4003, 4005, 4006]);
     expect(answer.undescribedHostCount).toBe(0);
     expect(answer.selection.projected).toBe(0);
@@ -98,7 +93,7 @@ test("B-1: native census equals the product over every live structured, tmux, re
 });
 
 test("B-1: removing any census owner kind fails equivalence and marks missing protection", async () => {
-  for (const kind of ["structured", "tmux", "receipt", "headless"]) {
+  for (const kind of ["structured", "settled", "receipt", "headless"]) {
     const f = fixture();
     try {
       const baseline = await censusSnapshot(f.sources, 1, TARGET, 30000);
@@ -376,7 +371,7 @@ test("live census: readable older hosts remain selected beside their conversatio
   } finally { f.close(); }
 });
 
-test.each(["tmux", "receipt", "headless"])("live census: folded %s ownership keeps its own process", async kind => {
+test.each(["settled", "receipt", "headless"])("live census: folded %s ownership keeps its own process", async kind => {
   const f = fixture();
   try {
     const current = f.rows[0]!;
