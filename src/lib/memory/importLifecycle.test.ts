@@ -79,6 +79,43 @@ test.each(["configured", "manifest"] as const)("seatless folders join the instal
   expect(JSON.parse(output)).toEqual({ project: expected, curationProject: expected });
 });
 
+test.each(["fallback", "viewer", "explicit", "pending"] as const)("import host selection uses designated seats: %s", async mode => {
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const { viewerRepositoryProjects } = await import("@/lib/projects/viewerRepository");
+  const { default: metadata } = await import("../../../package.json");
+  const viewer = viewerRepositoryProjects(process.env.LLV_VIEWER_CANONICAL_REMOTE?.trim() || metadata.repository.url, process.cwd())[0];
+  function designate(project: string, active = true) {
+    const clientRequestId = `import-seat-${project}`;
+    const conversationId = `conversation_import_${project}`;
+    expect(beginOrchestratorSeatIntent({ project, clientRequestId, conversationId, mode: "existing", mandate: "Fixture mandate", now: AT }).kind).toBe("begun");
+    if (active) expect(completeOrchestratorSeatIntent({ project, clientRequestId, conversationId, path: null, now: AT }).kind).toBe("activated");
+  }
+  designate(PROJECT, mode !== "pending");
+  if (mode === "viewer") designate(viewer);
+  const otherMemory = path.join(roots.claudeHomes[0], "projects", "other", "memory");
+  await fs.mkdir(otherMemory, { recursive: true });
+  await fs.writeFile(path.join(memory, "topic.md"), "Keep project guidance in its original scope.\n");
+  await fs.writeFile(path.join(otherMemory, "topic.md"), "Check the current repository before changing shared defaults.\n");
+  const record = await runMemoryImportWork(request(), {
+    projectForSlug: slug => slug === "fixture" ? PROJECT : "seatless-fixture",
+    ...(mode === "explicit" ? { hostProject: "explicit-host" } : {}),
+  });
+  const host = mode === "fallback" ? PROJECT : mode === "explicit" ? "explicit-host" : viewer;
+  expect(record.hostProject).toBe(host);
+  const candidates = readImportCandidates(ID).candidates;
+  expect(candidates).toHaveLength(2);
+  for (const candidate of candidates) {
+    const origin = candidate.occurrences[0].project;
+    expect(candidate.curationProject).toBe(origin === PROJECT && mode !== "pending" ? PROJECT : host);
+  }
+  // The persisted writer output is also readable by a fresh curation process.
+  const code = `import {readImportRecord,readImportCandidates} from ${JSON.stringify(path.join(import.meta.dir, "importStore.ts"))}; console.log(JSON.stringify({host:readImportRecord(${JSON.stringify(ID)}).hostProject, projects:readImportCandidates(${JSON.stringify(ID)}).candidates.map(c=>c.curationProject).sort()}));`;
+  const child = Bun.spawn([process.execPath, "--eval", code], { env: process.env, stdout: "pipe", stderr: "pipe" });
+  const [output, errors, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(exit, errors).toBe(0);
+  expect(JSON.parse(output)).toEqual({ host, projects: candidates.map(c => c.curationProject).sort() });
+});
+
 test("the flip waits for every loaded part and happens once; active follows the committed final scan", async () => {
   await backup("x".repeat(16384) + "Decisive instruction in the final bytes.\n");
   const before = await fs.readFile(path.join(memory, "topic.md"));

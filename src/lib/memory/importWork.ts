@@ -422,13 +422,14 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
       for (const { file, entry, copied } of newFiles) {
         if (copied && await digest(file.source) !== entry.sha256 || await digest(path.join(record.backup, entry.copy)) !== entry.sha256) throw new MemoryImportError("integrity");
       }
-      const [{ default: manifestMetadata }, { viewerRepositoryProjects }, { orchestratorSeatFor }] = await Promise.all([
+      const [{ default: manifestMetadata }, { viewerRepositoryProjects }, { orchestratorSeatFor, activeOrchestratorSeats }] = await Promise.all([
         import("../../../package.json"), import("@/lib/projects/viewerRepository"), import("@/lib/orchestrator/seats"),
       ]);
       // Packaged releases have no checkout identity. Use the same durable
       // release remote as the Viewer's own-project authorization boundary.
       const projects = viewerRepositoryProjects(process.env.LLV_VIEWER_CANONICAL_REMOTE?.trim() || manifestMetadata.repository.url, process.cwd()).map(canonicalProject);
-      record.hostProject ??= ports.hostProject ?? projects.find(project => orchestratorSeatFor(project).active) ?? projects[0];
+      record.hostProject ??= ports.hostProject ?? projects.find(project => orchestratorSeatFor(project).active)
+        ?? activeOrchestratorSeats()[0]?.project ?? projects[0];
       if (!record.hostProject) throw new MemoryImportError("backup_refused");
       record.roots ??= roots;
       const { importHistoryKeys, inheritImportDispositions } = await import("./importHistory");
