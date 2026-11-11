@@ -2,6 +2,7 @@ import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
 import { CloudFailure, cloudEnvironment, cloudTransport, runCloudRelay, type CloudTransport } from "./cloud";
 import { scrubOwnerReply } from "./ownerOutput";
 import { cloudOwnerDirectory, CloudOwnerDirectoryError } from "./ownerRun";
+import { createOwnerRunDirectory } from "./runDirectory";
 import { hasInboundMedia, prepareInboundMedia, writeInboundAgentInput } from "./mediaInput";
 import { isInboundImage } from "./mediaInputValidation";
 import { validateAnswerComposition } from "./composition";
@@ -716,9 +717,8 @@ export async function runClaimedRequest(
       selection.kind === "exhausted" && selection.resetsAt ? Math.max(0, selection.resetsAt - Math.floor(Date.now() / 1000)) : null) : null;
     const earlyCapacityDecline = capacityDecline();
     if (earlyCapacityDecline) return await finish(earlyCapacityDecline);
-    runDir = recovery?.runDir ?? await fs.promises.mkdtemp(
-      path.join(externalRelayTempRoot(), "llv-external-relay-"),
-    );
+    runDir = recovery?.runDir ?? (owner && !prototype ? await createOwnerRunDirectory()
+      : await fs.promises.mkdtemp(path.join(externalRelayTempRoot(), "llv-external-relay-")));
     const ownerIdentity = procBackend.processIdentity(process.pid);
     if (!ownerIdentity) throw new Error("viewer process identity unavailable");
     const record = {

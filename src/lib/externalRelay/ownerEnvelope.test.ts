@@ -20,6 +20,7 @@ import { startTestRelay } from "./testRelay";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { resetProjectDirectoryCacheForTests } from "@/lib/scanner/projectDirectories";
 import { checkEnvironment } from "../../../scripts/gate-cache";
+import { ownerRunRoot } from "./runDirectory";
 
 function measuredCore(total: number, compose: () => ReturnType<typeof prepareOwnerPrompt>) {
   const realBudget = promptBudget.boundedRelayPrompt;
@@ -300,14 +301,22 @@ test(`${mode} ${shape} delivers full Cyrillic context and answers within the env
   expect(prepared.context).toBeDefined();
   expect(prepared.seen).toEqual([owner.messageId]);
   expect(prepared.context).not.toContain("OPTIONAL_SUFFIX");
-  const directory = path.join(root, `context-${mode}-${shape}${shape === "large-parent" ? "-$&" : ""}`);
-  fs.mkdirSync(directory);
+  // Keep the caller-owned path/replacement regression alongside default HOME delivery.
+  const suppliedDirectory = shape === "large-parent" ? path.join(root, `context-${mode}-${shape}-$&`) : undefined;
+  if (suppliedDirectory) fs.mkdirSync(suppliedDirectory, { mode: 0o700 });
+  let directory = "";
   let launches = 0, continues = 0, received = "";
   const receive = (prompt: string) => {
     assertStructuredTextEnvelope(prompt);
     expect(section(prompt, "owner_request")).toMatchObject({ text: owner.text, request_text: owner.requestText });
     const file = section(prompt, "relay_context_file") as string;
-    expect(path.dirname(file)).toBe(directory);
+    directory = path.dirname(file);
+    if (suppliedDirectory) expect(directory).toBe(suppliedDirectory);
+    else {
+      expect(path.dirname(directory)).toBe(ownerRunRoot());
+      if (process.platform !== "win32") expect(directory.startsWith(path.join(process.env.HOME!, ".cache") + path.sep)).toBe(true);
+    }
+    if (process.platform !== "win32") expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
     if (process.platform !== "win32") expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     received = fs.readFileSync(file, "utf8");
     expect(received).toBe(prepared.context!);
@@ -316,7 +325,8 @@ test(`${mode} ${shape} delivers full Cyrillic context and answers within the env
     console.info("Cyrillic context delivery", { mode, shape, envelopeBytes: Buffer.byteLength(prompt), contextBytes: Buffer.byteLength(received) });
   };
   const result = await runOwnerAgent({ request: r, owner, target: { ...target }, accountId: null,
-    hardCapMs: 2000, preparedPrompt: prepared, contextDirectory: directory,
+    hardCapMs: 2000, preparedPrompt: prepared,
+    ...(suppliedDirectory ? { contextDirectory: suppliedDirectory } : {}),
     ...(mode === "resumed" ? { continuation: { conversationId: "conversation_context", prompt: prepared.prompt } } : {}),
     onConversation: () => {}, ports: {
       launch: async body => { launches++; receive(String(body.prompt)); return { status: 202, body: { conversationId: "conversation_context", initialMessage: "delivered" } }; },
@@ -327,6 +337,7 @@ test(`${mode} ${shape} delivers full Cyrillic context and answers within the env
     } }).done;
   expect(result).toMatchObject({ status: "done", answer: { text: "Пояснення готове.", reply_to: "m1" } });
   expect(launches).toBe(mode === "fresh" ? 1 : 0); expect(continues).toBe(mode === "resumed" ? 1 : 0);
+  expect(fs.existsSync(directory)).toBe(!!suppliedDirectory);
   expect(JSON.stringify(r)).toBe(before);
 });
 
@@ -357,15 +368,15 @@ test(`${mode} context ${failure} failure prevents dispatch`, async () => {
   const owner = ownerTierFor(target, r)!;
   const prepared = prepareOwnerPrompt(r, owner, 1);
   const directory = path.join(root, `context-failure-${mode}-${failure}`);
-  if (failure === "authority") fs.mkdirSync(directory);
-  let dispatches = 0, revoked = false;
+  let dispatches = 0, revoked = false, createdDirectory = "";
   const write = failure === "authority" ? spyOn(fs.promises, "writeFile").mockImplementation(async (...args: Parameters<typeof fs.promises.writeFile>) => {
     // The real write completes, then the request loses authority at its await.
-    await originalWrite(...args); revoked = true;
+    await originalWrite(...args); createdDirectory = path.dirname(String(args[0])); revoked = true;
   }) : null;
   try {
     const result = await runOwnerAgent({ request: r, owner, target: { ...target }, accountId: null, hardCapMs: 2000,
-      preparedPrompt: prepared, contextDirectory: directory, authorize: () => { if (revoked) throw new Error("fixture revoked"); },
+      preparedPrompt: prepared, ...(failure === "write" ? { contextDirectory: directory } : {}),
+      authorize: () => { if (revoked) throw new Error("fixture revoked"); },
       ...(mode === "resumed" ? { continuation: { conversationId: "conversation_context_failure", prompt: prepared.prompt } } : {}),
       onConversation: () => {}, ports: {
         launch: async () => { dispatches++; return { status: 500, body: {} }; },
@@ -373,6 +384,10 @@ test(`${mode} context ${failure} failure prevents dispatch`, async () => {
         observe: async () => ({ state: "failed" }), stop: async () => {}, noExecution: async () => true,
       } }).done;
     expect(result.status).toBe("failed"); expect(dispatches).toBe(0);
+    if (failure === "authority") {
+      expect(path.dirname(createdDirectory)).toBe(ownerRunRoot());
+      expect(fs.existsSync(createdDirectory)).toBe(false);
+    }
   } finally { write?.mockRestore(); }
 });
 const originalWrite = fs.promises.writeFile.bind(fs.promises);
@@ -433,18 +448,22 @@ test(`Cloud overflow fallback answers with the prior ${status} action result wit
   r.input.conversation[1]!.text = "Write the requested note";
   r.input.tools = [{ name: "write_note", summary: "Write a note", mode: "direct", effect: "action",
     parameters: { type: "object", properties: {} } }];
+  let contextFile = "";
   try {
     const result = await runClaimedRequest(paired, r, undefined, { leaseWorker: false,
       cloudTransport: async () => { cloud++; return JSON.stringify({ action: "call", text: "", reply_to: null,
         calls: [{ tool: "write_note", arguments: "{}", cursor: null }] }); },
       ownerPorts: { launch: async body => {
         launches++; const prompt = String(body.prompt); assertStructuredTextEnvelope(prompt);
-        const context = fs.readFileSync(section(prompt, "relay_context_file") as string, "utf8");
+        contextFile = section(prompt, "relay_context_file") as string;
+        expect(path.dirname(path.dirname(contextFile))).toBe(ownerRunRoot());
+        const context = fs.readFileSync(contextFile, "utf8");
         expect(context).toContain("<tool_results>"); expect(context).toContain(status);
         return { status: 202, body: { conversationId: "conversation_cloud_context", initialMessage: "delivered" } };
       }, observe: async () => ({ state: "ended", finalText: `Prior action: ${status}.` }), stop: async () => {}, pollMs: 1 },
     });
     expect(result).toMatchObject({ outcome: "answered", answer: { text: `Prior action: ${status}.` } });
     expect({ posts, cloud, launches }).toEqual({ posts: 1, cloud: 1, launches: 1 });
+    expect(fs.existsSync(path.dirname(contextFile))).toBe(false);
   } finally { account.mockRestore(); resetProjectDirectoryCacheForTests(); await service.close(); }
 });

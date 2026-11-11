@@ -33,10 +33,16 @@ replaces their text.
 `runOwnerAgent` asynchronously writes the full context before either launch
 or continuation. Its filename is generated locally; exclusive creation and
 mode 600 protect it from replacement or accidental publication. Production
-uses the existing relay run directory, alongside inbound media. The same
+uses a private relay run directory under `$HOME/.cache/delegatus/relay-runs`,
+alongside inbound media. HOME is mounted at the same absolute path in the
+Viewer container and the native host namespace; container `/tmp` is private
+and cannot carry these files. State and cache environment overrides may also
+point outside the shared mount, so they do not select this root. The same
 custody and cleanup that retain that directory during execution and stop
 recovery retain this file. A standalone caller without run custody receives
-a private temporary relay directory. Context files never enter a worktree.
+a private directory under the same shared root, removed after its turn or
+confirmed stop. The orphan sweep accepts both the shared root and the older
+temporary run root for cleanup. Context files never enter a worktree.
 An I/O failure prevents dispatch. Authority is checked again after the write,
 and the normal synchronous launch/continuation guards still apply.
 

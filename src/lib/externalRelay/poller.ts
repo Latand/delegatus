@@ -1,4 +1,5 @@
 import { ownerTierFor } from "./profile";
+import { ownerRunRoot } from "./runDirectory";
 import { ownerTurnDiagnostic } from "./diagnostic";
 import { deliverOwnerLateAnswer, ownerRecoveryRequest } from "./ownerLateDelivery";
 import { ownerFailureAnswer, confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
@@ -310,7 +311,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
   await sweepConversationsAsync(readRelayStore().relays, Date.now(), Date.now() + 5_000);
 }
 function removeRunDirectory(directory: string): void {
-  if (path.dirname(path.resolve(directory)) === externalRelayTempRoot() && path.basename(directory).startsWith("llv-external-relay-"))
+  if ([externalRelayTempRoot(), ownerRunRoot()].includes(path.dirname(path.resolve(directory))) && path.basename(directory).startsWith("llv-external-relay-"))
     fs.rmSync(directory, { recursive: true, force: true });
 }
 /* A paired relay's targets come from endpoint 6 whenever the settings page

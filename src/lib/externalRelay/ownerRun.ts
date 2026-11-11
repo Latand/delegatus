@@ -45,6 +45,7 @@ import { confirmedSend } from "@/lib/runtime/confirmedSend";
 import { readEvidenceWithin } from "@/lib/runtime/evidence";
 import { RUNTIME_DELIVERY_DISCARDED_REASON } from "@/lib/runtime/contracts";
 import { MIGRATION_DELIVERY_CANCELLATION_PREFIX } from "@/lib/accounts/migration/intentLiveness";
+import { createOwnerRunDirectory } from "./runDirectory";
 
 export type OwnerSpawnedTurn = SpawnedTurn & { continuation?: { operationId: string } };
 export class CloudOwnerDirectoryError extends Error {
@@ -935,6 +936,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
   catch { throw new Error("owner launch custody unavailable"); }
   if (custody?.ownerTurn) turn.clientAttemptId = custody.ownerTurn.clientAttemptId;
   let settled = false, admitted = false, launchAttempted = false;
+  let standaloneDirectory: Promise<string> | undefined;
   let firstMessagePending = true;
   let diagnostic: OwnerTurnDiagnostic | undefined;
   let failureCustody: ReturnType<typeof ownerFailureCustody> | undefined;
@@ -1073,7 +1075,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
         ? ownerContinuationPrompt(input.request, input.owner, input.target.hardCapMinutes, { seen: [], staticDigest: null }, { mandatory: input.inboundContext })
         : prepareOwnerPrompt(input.request, input.owner, input.target.hardCapMinutes, { mandatory: input.inboundContext }));
       const directory = prepared?.context === undefined ? null : input.contextDirectory ?? custody?.runDir
-        ?? await fs.promises.mkdtemp(path.join(os.tmpdir(), "llv-external-relay-"));
+        ?? await (standaloneDirectory = createOwnerRunDirectory());
       const deliveredPrompt = prepared.context === undefined ? prepared.prompt : await ownerPromptWithContext(prepared, directory!);
       authorize();
       const initialPrompt = input.continuation ? null : deliveredPrompt!;
@@ -1184,5 +1186,13 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
       }
     }
   })();
-  return { pid: null, identity: null, done, cancel: () => cancel("cancelled"), diagnose: value => adopt(value, true) };
+  return { pid: null, identity: null, done: done.finally(async () => {
+    // Production directories belong to run custody. Only a standalone caller's
+    // own allocation can be removed here, after the turn or confirmed stop.
+    const directory = await standaloneDirectory?.catch(() => undefined);
+    if (directory) {
+      try { await fs.promises.rm(directory, { recursive: true, force: true }); }
+      catch { console.error("Owner relay standalone context cleanup failed"); }
+    }
+  }), cancel: () => cancel("cancelled"), diagnose: value => adopt(value, true) };
 }
