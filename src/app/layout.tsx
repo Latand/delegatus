@@ -38,6 +38,9 @@ export default function RootLayout({
         {/* This document is the app itself, served by a Viewer that has the stream route: over plain HTTP
             its live streams share one connection (src/lib/streamMux/protocol.ts). */}
         <meta name="llv-stream-mux" content="1" />
+        {/* The web app manifest (src/app/manifest.webmanifest/route.ts). Its request carries the page's
+            credentials, so it is reachable where the page is, with the access key on too. */}
+        <link rel="manifest" href="/manifest.webmanifest" crossOrigin="use-credentials" />
       </head>
       <body className="h-dvh overflow-hidden font-sans text-[15px]">
         {children}

@@ -150,7 +150,7 @@ function modelLabel(engine: "claude" | "codex" | "copilot", modelId: string): st
  * #390). One face — `⚡ 5.6-Sol · Light ▾` — opens a Codex-desktop-style popover
  * (desktop) or a stacked bottom sheet (390px). Every selection auto-applies:
  * structured persists the per-conversation profile that rides the next send,
- * resume persists the on-resume profile, and live-tmux drives the existing
+ * resume persists the on-resume profile, and a live host runs the
  * reconfigure lifecycle. There is no Apply, no draft-pending dot, and no Full
  * access control anywhere.
  */
@@ -180,7 +180,7 @@ export function RuntimePill({
     : surface === "live-root" ? "live-root"
     : null;
 
-  // ---- durable reconfigure lifecycle (live tmux and structured hosts) --------
+  // ---- durable reconfigure lifecycle ----------------------------------------
   // The initializer must not synthesize defaults for an engine outside the
   // catalog — the component renders null for those below, after the hooks.
   const [liveDraft, setLiveDraft] = useState<RuntimeDraft>(() =>
@@ -366,7 +366,7 @@ export function RuntimePill({
     setSpeedPending(null);
     setError("");
     try {
-      const response = await fetch("/api/tmux", {
+      const response = await fetch("/api/conversation-host", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -781,7 +781,7 @@ export function RuntimePill({
       : t("mobile2.composer.accountRunsOnNext", { account: nameOf(runsOnAccount), next: nameOf(accountId) }));
     const draft = liveDraftRef.current;
     try {
-      const response = await fetch("/api/tmux", {
+      const response = await fetch("/api/conversation-host", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({

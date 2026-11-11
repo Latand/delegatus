@@ -32,7 +32,7 @@ export function workspaceFiles(scope: Scope, source: FilesResponse): FilesRespon
     launchRoutes: Object.fromEntries(Object.entries(source.launchRoutes ?? {}).filter(([, to]) => ids.has(to))),
     prototypeReviewNotices: source.prototypeReviewNotices?.filter(row => row.taskId !== null && taskIds.has(row.taskId)),
     seatDecisions: source.seatDecisions?.filter(row => allowed(row.project)),
-    systemHealth: { tmux: source.systemHealth.tmux },
+    systemHealth: {},
     ...(source.readProjection ? { readProjection: source.readProjection } : {}),
   };
 }

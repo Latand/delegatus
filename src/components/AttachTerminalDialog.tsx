@@ -7,7 +7,6 @@ import { AlertTriangle } from "lucide-react";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 import type { AttachCommand } from "@/lib/agent/attachCommand";
-import type { AttachMode } from "./agentCapabilities";
 import { Z } from "@/components/layers";
 
 async function copyText(value: string): Promise<boolean> {
@@ -49,56 +48,24 @@ function CopyRow({ t, label, value }: { t: TFunction; label: string; value: stri
   );
 }
 
-/** The live-tmux attach payload (§6): the running pane's attach command plus a
-    read-only variant — no take-over warning, a read-only toggle instead. */
-export interface LiveAttachPayload {
-  command: string;
-  readOnlyCommand: string;
-}
-
 export interface AttachTerminalDialogViewProps {
   t: TFunction;
   loading: boolean;
   error: string | null;
-  /** Resume payload (structured / finished / dead hosts). */
+  /** The command that reopens the conversation in the operator's own terminal. */
   command: AttachCommand | null;
-  /** Live-tmux payload (a running pane) — takes precedence over `command`. */
-  live?: LiveAttachPayload | null;
   onClose: () => void;
-  onSecondary?: () => void;
-  secondaryBusy?: boolean;
-  /** Set when the last viewer-pane action returned a non-2xx / threw — surfaced
-      so the secondary recovery is never silently swallowed (finding 4). */
-  secondaryError?: string | null;
 }
 
 /** Presentational attach dialog — instant, copyable, no waiting (issue #247
-    item 2). Pure so its copy payloads and secondary action are DOM-tested. */
+    item 2). Pure so its copy payloads are DOM-tested. */
 export function AttachTerminalDialogView({
   t,
   loading,
   error,
   command,
-  live = null,
   onClose,
-  onSecondary,
-  secondaryBusy = false,
-  secondaryError = null,
 }: AttachTerminalDialogViewProps) {
-  const secondaryButton = onSecondary ? (
-    <button
-      type="button"
-      onClick={onSecondary}
-      disabled={secondaryBusy}
-      className="inline-flex min-h-11 items-center gap-1.5 rounded-control border border-border bg-canvas px-3 text-label font-semibold text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 sm:min-h-9"
-    >
-      {secondaryBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
-      {t("attach.secondaryViewer")}
-    </button>
-  ) : null;
-  const secondaryAlert = secondaryError ? (
-    <p role="alert" className="w-full text-caption font-semibold text-danger">{secondaryError}</p>
-  ) : null;
   return (
     <div
       className={`fixed inset-0 ${Z.overlay} flex items-center justify-center bg-black/40 p-3`}
@@ -115,9 +82,7 @@ export function AttachTerminalDialogView({
           <SquareTerminal className="mt-0.5 h-4 w-4 shrink-0 text-accent" aria-hidden />
           <div className="min-w-0 flex-1">
             <h2 className="text-body font-bold text-primary">{t("attach.dialogTitle")}</h2>
-            {live ? (
-              <p className="mt-0.5 text-label text-muted">{t("attach.hint")}</p>
-            ) : command ? (
+            {command ? (
               <p className="mt-0.5 text-label text-muted">
                 {t("attach.dialogIntro", { account: command.accountLabel })}
               </p>
@@ -141,28 +106,6 @@ export function AttachTerminalDialogView({
           <div role="alert" className="rounded-control border border-danger/45 bg-danger-soft px-3 py-2 text-label font-semibold text-danger">
             {error}
           </div>
-        ) : live ? (
-          <>
-            {/* Live pane: attach to the running conversation, or watch it
-                read-only — no take-over warning, a read-only toggle instead. */}
-            <CopyRow t={t} label={t("attach.copy")} value={live.command} />
-            <CopyRow t={t} label={t("attach.copyReadonly")} value={live.readOnlyCommand} />
-            <div className="flex items-start gap-1.5 text-caption font-semibold text-muted">
-              <SquareTerminal className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-              <span>{t("attach.readonlyHint")}</span>
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
-              <button
-                type="button"
-                onClick={() => void copyText(live.command)}
-                className="inline-flex min-h-11 items-center gap-1.5 rounded-control border border-brand bg-brand px-3 text-label font-bold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:min-h-9"
-              >
-                <Copy className="h-3.5 w-3.5" aria-hidden /> {t("attach.copyFull")}
-              </button>
-              {secondaryButton}
-              {secondaryAlert}
-            </div>
-          </>
         ) : command ? (
           <>
             <CopyRow t={t} label={t("attach.copyCwd")} value={command.cdCommand} />
@@ -182,8 +125,6 @@ export function AttachTerminalDialogView({
               >
                 <Copy className="h-3.5 w-3.5" aria-hidden /> {t("attach.copyFull")}
               </button>
-              {secondaryButton}
-              {secondaryAlert}
             </div>
           </>
         ) : null}
@@ -195,82 +136,32 @@ export function AttachTerminalDialogView({
 /**
  * Container: fetches the composed command from `/api/attach-command` the moment
  * it mounts (all data is already in the registry — no spawn, no wait) and drives
- * the presentational view. The legacy viewer-side pane survives as the explicit
- * secondary action.
+ * the presentational view.
  */
-export function AttachTerminalDialog({ file, onClose, mode = "resume" }: { file: FileEntry; onClose: () => void; mode?: AttachMode }) {
+export function AttachTerminalDialog({ file, onClose }: { file: FileEntry; onClose: () => void }) {
   const { t } = useLocale();
   const [command, setCommand] = useState<AttachCommand | null>(null);
-  const [live, setLive] = useState<LiveAttachPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [secondaryBusy, setSecondaryBusy] = useState(false);
-  const [secondaryError, setSecondaryError] = useState<string | null>(null);
 
   useEffect(() => {
     // The dialog mounts fresh each open, so `loading`/`error` already start at
     // their initial values — no synchronous reset needed in the effect body.
     let cancelled = false;
-    // A live tmux pane attaches to the running pane (subagents resolve to their
-    // root pane server-side via the transcript host); every other surface hands
-    // out a resume command (§6, finding 3).
-    const request = mode === "live"
-      ? fetch(`/api/tmux?attach=1&path=${encodeURIComponent(file.path)}`).then(async (response) => {
-          const body = (await response.json().catch(() => ({}))) as { attach?: LiveAttachPayload; error?: string };
-          if (cancelled) return;
-          if (!response.ok || !body.attach) setError(body.error ?? t("attach.unavailable"));
-          else setLive({ command: body.attach.command, readOnlyCommand: body.attach.readOnlyCommand });
-        })
-      : fetch(`/api/attach-command?path=${encodeURIComponent(file.path)}`).then(async (response) => {
-          const body = (await response.json().catch(() => ({}))) as AttachCommand & { error?: string };
-          if (cancelled) return;
-          if (!response.ok) setError(body.error ?? t("attach.unavailable"));
-          else setCommand(body);
-        });
-    request
+    fetch(`/api/attach-command?path=${encodeURIComponent(file.path)}`).then(async (response) => {
+      const body = (await response.json().catch(() => ({}))) as AttachCommand & { error?: string };
+      if (cancelled) return;
+      if (!response.ok) setError(body.error ?? t("attach.unavailable"));
+      else setCommand(body);
+    })
       .catch(() => { if (!cancelled) setError(t("attach.network")); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
     // `t` is intentionally excluded: it changes identity every render, and
     // re-running this effect on each render would re-fetch the command in a loop.
-    // The command depends only on the transcript path and the attach mode.
+    // The command depends only on the transcript path.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [file.path, mode]);
+  }, [file.path]);
 
-  const openViewerPane = async () => {
-    if (secondaryBusy) return;
-    setSecondaryBusy(true);
-    setSecondaryError(null);
-    // The copy path is the recommended one, but a failed viewer-pane action must
-    // still be surfaced rather than appear to complete (finding 4).
-    try {
-      const res = await fetch("/api/tmux", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "attach-terminal", path: file.path }),
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setSecondaryError(body.error ?? t("attach.secondaryFailed"));
-      }
-    } catch {
-      setSecondaryError(t("attach.secondaryFailed"));
-    } finally {
-      setSecondaryBusy(false);
-    }
-  };
-
-  return (
-    <AttachTerminalDialogView
-      t={t}
-      loading={loading}
-      error={error}
-      command={command}
-      live={live}
-      onClose={onClose}
-      onSecondary={() => void openViewerPane()}
-      secondaryBusy={secondaryBusy}
-      secondaryError={secondaryError}
-    />
-  );
+  return <AttachTerminalDialogView t={t} loading={loading} error={error} command={command} onClose={onClose} />;
 }

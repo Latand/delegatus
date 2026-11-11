@@ -290,6 +290,19 @@ export class RepositoryLinkInventory {
     return true;
   }
   private readonly lexicalTargets = new WeakMap<object, string[]>();
+  /** The signature lists what decides the answer: for each directory from the
+   * cwd upward its identity and birth time, and for its `.git` marker the
+   * identity, birth time and kind, plus the size and modification time of a
+   * marker file. A file system hands the inode of a removed directory to the
+   * next one made, so identity alone would match a directory that was removed
+   * and made again; the birth time tells the two apart. A marker file is
+   * rewritten in place when a worktree is moved or repaired, and it changes
+   * rarely. A directory's own change timestamps are left out. They move
+   * whenever any entry is made in it, and a cwd outside every checkout has
+   * ancestors that are written all the time (the state directory, a temp
+   * root), so a signature with them refused every fence on a busy machine. A
+   * new marker is read directly here, and the directories of a checkout found
+   * here are versioned by its link inventory. */
   private discoverRepository(cwd: string): RepositoryDiscovery {
     const cwdStat = fs.statSync(cwd);
     if (!cwdStat.isDirectory()) throw new Error(`process cwd is not a directory: ${cwd}`);
@@ -298,11 +311,12 @@ export class RepositoryLinkInventory {
     let current = path.resolve(cwd);
     for (let depth = 0; depth < 64; depth++) {
       const stat = fs.statSync(current);
-      versions.push(`${current}:${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}`);
+      versions.push(`${current}:${stat.dev}:${stat.ino}:${stat.birthtimeMs}`);
       try {
         const markerPath = path.join(current, ".git");
         const marker = fs.lstatSync(markerPath);
-        versions.push(`${markerPath}:${marker.dev}:${marker.ino}:${marker.mtimeMs}:${marker.ctimeMs}`);
+        versions.push(`${markerPath}:${marker.dev}:${marker.ino}:${marker.birthtimeMs}:${marker.isDirectory()
+          ? "directory" : `file:${marker.size}:${marker.mtimeMs}`}`);
         repository = current;
         break;
       } catch (error) {
@@ -315,6 +329,13 @@ export class RepositoryLinkInventory {
     }
     if (!repository) throw new Error("process checkout ancestry exceeded its limit");
     return { repository, signature: JSON.stringify(versions) };
+  }
+  /** Keeps the recorded discoveries of these cwds and forgets the others. A
+   * cwd that no process of the current scan holds belongs to a process that
+   * exited; its directory may be gone, and it can no longer reach any root. */
+  retainDiscoveries(cwds: readonly string[]) {
+    const current = new Set(cwds);
+    for (const cwd of this.repositoriesOf.keys()) if (!current.has(cwd)) this.repositoriesOf.delete(cwd);
   }
   /** The nearest enclosing checkout of a process cwd. */
   repositoryOf(cwd: string): string | null {
@@ -398,7 +419,12 @@ export async function attemptReferencesClear(original: string, current: string, 
   for (const process of scan.processes) {
     const cwd = process.paths[0];
     if (cwd?.startsWith(path.sep)) processCwds.push(cwd);
-    const repository = cwd?.startsWith(path.sep) ? inventory.repositoryOf(cwd) : null;
+  }
+  // The scan is the list of live processes. Discoveries recorded for an
+  // earlier root of this tick stay only for cwds a live process still holds.
+  inventory.retainDiscoveries(processCwds);
+  for (const cwd of processCwds) {
+    const repository = inventory.repositoryOf(cwd);
     if (repository) repositories.add(repository);
   }
   for (const repository of [...repositories].sort()) {

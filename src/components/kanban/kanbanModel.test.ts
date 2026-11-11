@@ -1033,7 +1033,7 @@ test("a conversation with no recorded task is a card of its own under Not on a t
 });
 
 test("a hidden group leaves its column for the hidden list, a resurfaced one comes back with its reason, and no task is lost", () => {
-  const files = [file(1, { pendingQuestion: { kind: "question", toolUseId: "tool", transcriptPath: "/fixture/conversation-1.jsonl", pid: 1, paneTarget: null, askedAt: "2026-09-14T12:30:00.000Z" } as never }), file(2), file(3), file(4), file(5)];
+  const files = [file(1, { pendingQuestion: { kind: "question", toolUseId: "tool", transcriptPath: "/fixture/conversation-1.jsonl", pid: 1, askedAt: "2026-09-14T12:30:00.000Z" } as never }), file(2), file(3), file(4), file(5)];
   const hiddenAt = "2026-09-14T12:00:00.000Z";
   const snapshot = (paths: readonly string[]) => paths.flatMap((path) => [path, `conversation_fixture_${path.match(/(\d+)/)![1]}`]).sort();
   const tasks = [
@@ -1172,7 +1172,7 @@ test("a launched card whose turn ended keeps its place under the agent being rea
 
 
 test("a launched card with its reader open stands first when no other card is read, above a card worked more recently", () => {
-  const asking = file(1, { pendingQuestion: { kind: "question", toolUseId: "tool", transcriptPath: "/fixture/conversation-1.jsonl", pid: 1, paneTarget: null, askedAt: "2026-09-14T12:30:00.000Z" } as never, mtime: NOW - 3_000, lastAgentWorkAt: (NOW - 100) * 1000 });
+  const asking = file(1, { pendingQuestion: { kind: "question", toolUseId: "tool", transcriptPath: "/fixture/conversation-1.jsonl", pid: 1, askedAt: "2026-09-14T12:30:00.000Z" } as never, mtime: NOW - 3_000, lastAgentWorkAt: (NOW - 100) * 1000 });
   const launchedFile = file(2, { mtime: NOW - 1 });
   const tasks = [task("asking", "assigned", [asking.path]), task("launched", "assigned", [launchedFile.path])];
   const files = [asking, launchedFile];
@@ -1482,7 +1482,7 @@ test("a needs_review lane's card needs the operator and says the last review fai
 /* docs/design/needs-attention.md §4: a card names why it needs the operator,
    and what someone cleared, from the same reason model the phone reads. */
 test("a card lists its reasons oldest first and keeps what was cleared, with who cleared it", () => {
-  const asked = (path: string, askedAt: string) => ({ kind: "question", toolUseId: `tool-${path}`, transcriptPath: path, pid: 1, paneTarget: null, askedAt }) as never;
+  const asked = (path: string, askedAt: string) => ({ kind: "question", toolUseId: `tool-${path}`, transcriptPath: path, pid: 1, askedAt }) as never;
   const questioner = file(301, { pendingQuestion: asked("/fixture/conversation-301.jsonl", "2026-09-14T12:30:00.000Z") });
   const cleared = file(302, {
     pendingQuestion: asked("/fixture/conversation-302.jsonl", "2026-09-14T12:00:00.000Z"),

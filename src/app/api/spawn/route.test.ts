@@ -1548,128 +1548,6 @@ test("a queued payload write failure terminalizes without publishing a deadline-
   }
 });
 
-test("a retry-at tmux pin survives restart and actuates exactly once after its deadline", async () => {
-  const cwd = fs.mkdtempSync(path.join(routeSandbox, "account-pin-tmux-retry-"));
-  const registryFile = path.join(cwd, "agent-registry.json");
-  let store = new AgentRegistry(registryFile);
-  const retryAt = new Date(Date.now() + 60_000).toISOString();
-  const previousTransport = process.env.LLV_SPAWN_TRANSPORT;
-  process.env.LLV_SPAWN_TRANSPORT = "tmux";
-  let tmuxStarts = 0;
-  let pinAdmissible = false;
-  try {
-    const account = {
-      engine: "claude" as const,
-      accountId: "account-a",
-      kind: "managed" as const,
-      home: path.join(cwd, "account-a"),
-      transcriptRoot: path.join(cwd, "account-a", "projects"),
-      env: { NODE_ENV: "test" as const },
-    };
-    const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
-      method: "POST",
-      headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "content-type": "application/json", "sec-fetch-site": "same-origin" },
-      body: JSON.stringify({
-        title: "Continue queued tmux work",
-        engine: "claude",
-        model: "sonnet",
-        cwd,
-        ["prompt"]: "continue",
-        accountId: "account-a",
-        clientAttemptId: "account_pin_tmux_retry_20260823",
-      }),
-    }), {
-      ...structuredRouteDependencies(cwd),
-      registry: () => store,
-      resolveHealthySpawnAccount: async () => ({
-        ...account,
-        requestedAdmission: {
-          kind: "retry-at" as const,
-          reason: "hard-limit" as const,
-          stale: false,
-          retryAt,
-        },
-      }),
-      resolveSpawnAccount: () => account,
-      resolvePinnedSpawnAdmission: async () => pinAdmissible
-        ? { kind: "admissible" as const, basis: "current" as const, stale: false, retryAt: null }
-        : { kind: "retry-at" as const, reason: "hard-limit" as const, stale: false, retryAt },
-      spawnTmuxAgent: async () => {
-        tmuxStarts += 1;
-        throw new Error("tmux must stay gated");
-      },
-    });
-
-    expect(response.status).toBe(202);
-    expect(await response.json()).toMatchObject({ state: "starting", initialMessage: "queued" });
-    expect(tmuxStarts).toBe(0);
-    expect(store.spawnReceiptForClientAttempt("account_pin_tmux_retry_20260823")).toMatchObject({
-      accountId: "account-a",
-      accountPin: true,
-      transport: "tmux",
-      state: "starting",
-      queuedPinnedSpawn: { retryAt, accountId: "account-a", prompt: "continue" },
-    });
-
-    store = new AgentRegistry(registryFile);
-    const recoveryClient = {
-      effectBatch: async () => [],
-      operationStatus: async () => null,
-      snapshot: async () => ({ revision: 0, sessions: [] }),
-      transitionOperation: async () => null,
-    } as unknown as RuntimeHostClient;
-    const recover = async (now: number) => await terminalizeStaleStructuredSpawns(store, recoveryClient, {
-      now: () => now,
-      resolveSpawnAccount: () => account,
-      resolvePinnedSpawnAdmission: async () => pinAdmissible
-        ? { kind: "admissible" as const, basis: "current" as const, stale: false, retryAt: null }
-        : { kind: "retry-at" as const, reason: "hard-limit" as const, stale: false, retryAt },
-      spawnTmuxAgent: async (_spec, payload, receipt) => {
-        tmuxStarts += 1;
-        expect(payload).toBe("continue");
-        if (!receipt) throw new Error("queued recovery must reuse its durable receipt");
-        const binding = {
-          endpoint: "/test-tmux",
-          server: { pid: 9, startIdentity: "9:server" },
-          paneId: "%9",
-          panePid: { pid: 99, startIdentity: "99:pane" },
-          target: "agents:9.0",
-        };
-        const host = {
-          kind: "tmux" as const,
-          ...binding,
-          windowName: "queued-pin",
-          agent: { pid: 100, startIdentity: "100:agent" },
-          argv: ["claude"],
-        };
-        store.bindSpawnPane(receipt.launchId, binding);
-        store.markSpawnHostVerified(receipt.launchId, host);
-        store.markSpawnPromptDelivered(receipt.launchId);
-        return { paneId: binding.paneId, display: binding.target, panePid: binding.panePid.pid, host, receipt };
-      },
-    });
-
-    await recover(Date.parse(retryAt) - 1);
-    expect(tmuxStarts).toBe(0);
-    pinAdmissible = true;
-    await Promise.all([recover(Date.parse(retryAt) + 1), recover(Date.parse(retryAt) + 1)]);
-    expect(tmuxStarts).toBe(1);
-    expect(store.spawnReceiptForClientAttempt("account_pin_tmux_retry_20260823")).toMatchObject({
-      accountId: "account-a",
-      accountPin: true,
-      transport: "tmux",
-      state: "path-pending",
-      queuedPinnedSpawn: null,
-      admissionOwner: null,
-    });
-    await recover(Date.parse(retryAt) + 2);
-    expect(tmuxStarts).toBe(1);
-  } finally {
-    if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT;
-    else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
-  }
-});
-
 test("a pinned account without a retry deadline falls back and records the degraded pin on the card", async () => {
   const cwd = fs.mkdtempSync(path.join(routeSandbox, "account-pin-fallback-"));
   const store = registry();
@@ -1792,7 +1670,7 @@ test("a pinned account without a retry deadline falls back and records the degra
   }
 });
 
-test("a pinned spawn still refuses when no account is admissible", async () => {
+test("a pinned spawn still refuses when no account is admissible", async () => withSandboxRuntimeSocket(async () => {
   const cwd = fs.mkdtempSync(path.join(routeSandbox, "account-pin-none-"));
   const store = registry();
   const dependencies = {
@@ -1834,7 +1712,7 @@ test("a pinned spawn still refuses when no account is admissible", async () => {
     accountPin: true,
     state: "failed",
   });
-});
+}));
 
 test("a legacy resolver mismatch also degrades the pin to a durable fallback", async () => {
   const cwd = fs.mkdtempSync(path.join(routeSandbox, "unusable-account-pin-"));
@@ -4002,39 +3880,6 @@ test("a clientAttemptId replay recovers the reserved card from runtime evidence"
   }
 });
 
-test("spawn route projects a launched path-pending receipt as a truthful success", () => {
-  const store = registry();
-  const begun = store.beginSpawnRequest({
-    engine: "codex",
-    cwd: "/repo",
-    accountId: "terra",
-    clientAttemptId: "attempt_path_pending",
-    requestDigest: "digest",
-    launchProfile: { title: "Project path-pending spawn response" },
-  });
-  if (begun.kind !== "created") throw new Error("expected a new receipt");
-  store.bindSpawnPane(begun.receipt.launchId, { endpoint: "/tmp", server: { pid: 9, startIdentity: "9:a" }, paneId: "%9", panePid: { pid: 99, startIdentity: "99:a" }, target: "agents:9.0" });
-  expect(spawnResponseForReceipt(store.snapshot().receipts[begun.receipt.launchId]!)).toMatchObject({ launched: false, target: "%9" });
-  store.markSpawnHostVerified(begun.receipt.launchId, {
-    kind: "tmux", endpoint: "/tmp", server: { pid: 9, startIdentity: "9:a" }, paneId: "%9",
-    panePid: { pid: 99, startIdentity: "99:a" }, windowName: "codex-new",
-    agent: { pid: 100, startIdentity: "100:a" }, argv: ["codex"],
-  });
-  store.markSpawnPromptDelivered(begun.receipt.launchId);
-  const pending = store.markSpawnPathPending(begun.receipt.launchId);
-
-  expect(spawnResponseForReceipt(pending, null)).toMatchObject({
-    ok: true,
-    launched: true,
-    retrySafe: false,
-    state: "path-pending",
-    path: null,
-    target: "%9",
-    launchId: begun.receipt.launchId,
-    conversationId: begun.receipt.conversationId,
-  });
-});
-
 test("a completed pane-less receipt replays as a launched structured conversation", () => {
   const store = registry();
   const pathname = `/sessions/${crypto.randomUUID()}.jsonl`;
@@ -4092,25 +3937,6 @@ test("a staged pane-less receipt replays with accepted status", () => {
 
   expect(spawnReplayStatus(response, true)).toBe(202);
   expect(spawnReplayStatus(response, false)).toBe(200);
-});
-
-test("a pane-bound launch verification failure returns launched false with its teaching error", () => {
-  const store = registry();
-  const begun = store.beginSpawnRequest({
-    engine: "claude",
-    cwd: "/repo",
-    accountId: "account-test",
-    launchProfile: { title: "Report pane verification failure" },
-  });
-  if (begun.kind !== "created") throw new Error("expected a new receipt");
-  store.bindSpawnPane(begun.receipt.launchId, { endpoint: "/tmp", server: { pid: 9, startIdentity: "9:a" }, paneId: "%9", panePid: { pid: 99, startIdentity: "99:a" }, target: "agents:9.0" });
-  store.failSpawn(begun.receipt.launchId, "test spawn failure");
-
-  expect(spawnResponseForReceipt(store.snapshot().receipts[begun.receipt.launchId]!)).toMatchObject({
-    launched: false,
-    state: "conflict",
-    error: "test spawn failure",
-  });
 });
 
 test("spawn route accepts an explicit stable parent conversation identity", () => {
@@ -4350,14 +4176,10 @@ test("spawn replay keeps its identity after parent alias adoption", () => {
   })).toMatchObject({ kind: "replay", receipt: { launchId: first.receipt.launchId } });
 });
 
-/* A rollback switch is reached for during an incident, so it must leave the
-   deployment able to spawn. `NEXT_PUBLIC_RUNTIME_UI=0` used to leave the
-   implicit choice on `structured` while still failing the capability gap, so
-   every spawn — tmux included — came back 409. The request below carries a
-   directory that does not exist: the cwd check sits *after* the transport
-   decision and the gap, so a 400 naming the directory proves the route got
-   past both, and the 409 gap proves it did not. */
-test("the runtime-UI rollback leaves a default spawn on a transport that can still spawn", async () => {
+/* Every agent runs on a structured host, so a rollback switch has no other
+   transport to move a spawn onto. `NEXT_PUBLIC_RUNTIME_UI=0` refuses the spawn
+   with the gap that names the switch, before the directory is even checked. */
+test("the runtime-UI rollback refuses a spawn and names the switch", async () => {
   const cwd = fs.mkdtempSync(path.join(routeSandbox, "runtime-ui-rollback-"));
   const missing = path.join(cwd, "no-such-directory");
   const previous = {
@@ -4384,8 +4206,8 @@ test("the runtime-UI rollback leaves a default spawn on a transport that can sti
       body: JSON.stringify({ title: "Test semantic spawn", engine: "codex", cwd: missing, prompt: "smoke" }),
     }));
 
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: `directory does not exist: ${missing}` });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toContain("NEXT_PUBLIC_RUNTIME_UI=0");
   } finally {
     if (previous.transport === undefined) delete process.env.LLV_SPAWN_TRANSPORT;
     else process.env.LLV_SPAWN_TRANSPORT = previous.transport;
@@ -4826,32 +4648,6 @@ for (const seam of ["launch", "host", "publication", "delivery"] as const) test(
   });
 });
 
-
-test("trusted owner launch uses the ordinary structured lane when the global transport is tmux", async () => {
-  await withSandboxRuntimeSocket(async () => {
-    const cwd = fs.mkdtempSync(path.join(routeSandbox, "owner-transport-"));
-    const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
-    const previous = process.env.LLV_SPAWN_TRANSPORT;
-    process.env.LLV_SPAWN_TRANSPORT = "tmux";
-    let structured = 0, tmux = 0;
-    const deps = structuredRouteDependencies(cwd);
-    let deferred: (() => Promise<void>) | null = null;
-    try {
-      const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
-        method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
-        body: JSON.stringify({ engine: "claude", cwd, title: "Owner fixture", prompt: "Owner request", clientAttemptId: "relay-owner-transport-fixture" }),
-      }), { ...deps, registry: () => store, autonomousStructured: true, defer: work => { deferred = work; },
-        spawnStructuredConversation: async (...args) => { structured++; return deps.spawnStructuredConversation!(...args); },
-        spawnTmuxAgent: async () => { tmux++; throw Error("unexpected tmux launch"); },
-      });
-      expect(response.status).toBe(202);
-      expect(deferred).not.toBeNull();
-      await (deferred as unknown as () => Promise<void>)();
-      expect(structured).toBe(1); expect(tmux).toBe(0);
-      expect(store.spawnReceiptForClientAttempt("relay-owner-transport-fixture")?.transport).toBe("structured");
-    } finally { store.close(); if (previous === undefined) delete process.env.LLV_SPAWN_TRANSPORT; else process.env.LLV_SPAWN_TRANSPORT = previous; }
-  });
-});
 
 
 test("structured spawn binds the launch tier as an inherited preference on a priority-only successor account", async () => {

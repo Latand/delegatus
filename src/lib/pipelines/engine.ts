@@ -86,7 +86,7 @@ import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/mi
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { effectiveRemaining } from "@/lib/accounts/migration/quotaPolicy";
 import { freshSpecFor } from "@/lib/agent/cli";
-import { agentRegistry, deliveryMayHaveArrived, identityMaterializationFence, resolveConversationAlias, RegistryWriterBusyError, REGISTRY_WRITER_BUSY, type AgentRegistryEntry, type DurableMembershipInput, type RegistryFile, type StructuredTerminationCapture, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { agentRegistry, deliveryMayHaveArrived, identityMaterializationFence, resolveConversationAlias, RegistryWriterBusyError, REGISTRY_WRITER_BUSY, type AgentRegistryEntry, type DurableMembershipInput, type RegistryFile, type StructuredTerminationCapture } from "@/lib/agent/registry";
 import { registryRowProjection, registryRowsMatching, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { transcriptAllowed } from "@/lib/agent/spawnParent";
@@ -129,9 +129,7 @@ import { projectForCwd } from "@/lib/scanner/describe";
 import { loadTasks, loadTasksByIds } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { claudeProjectRootFor, codexSessionRootFor } from "@/lib/scanner/roots";
-import { isShellCommand } from "@/lib/status";
 import { cleanTitle } from "@/lib/title";
-import { killTmuxHostIfMatches, paneInfo, panePidMap } from "@/lib/tmux";
 import type { FileEntry } from "@/lib/types";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
@@ -400,6 +398,8 @@ export interface PipelinePorts {
       a controller uses it instead of sleeping, so the wait falls due on its own
       schedule without a tick holding the pipelines phase (#1191). */
   scheduleTick?(delayMs: number): void;
+  /** Liveness of a pane an attempt stored by an older release names. No
+      release hosts a pane, so production answers false. */
   paneAgentAlive(paneId: string): Promise<boolean>;
   /** Terminates the host that owns a stage attempt's agent. `not-running` means
       no host was resident, so a close can tell an idle lane from one it stopped. */
@@ -409,9 +409,8 @@ export interface PipelinePorts {
     recordedSurvivors?: readonly ProcessIdentity[] }): Promise<PipelineStageStopResult>;
   /** Null means newer working-host evidence withdrew the automatic stop. */
   stopInterruptedStageAgent?(target: PipelineStageHostRef, options?: { allowIdle?: boolean }): Promise<PipelineStageStopResult | null>;
-  /** Identity-verified teardown of a stage attempt's tmux pane, for a
-      pane-hosted agent the registry can no longer address. `unknown` means the
-      pane could not be proven to be this stage's, so nothing was signalled. */
+  /** Teardown of a pane an attempt stored by an older release names. No
+      release hosts a pane, so production answers `not-running`. */
   stopStagePane(target: PipelineStageHostRef): Promise<
     | { outcome: "stopped" | "not-running" }
     | { outcome: "unknown"; detail: string }
@@ -1126,7 +1125,7 @@ export type StageStopProbes = {
 /**
  * Terminates the agent host a stage attempt owns, through the same control path
  * an operator's kill uses — structured hosts go over the runtime command
- * channel, legacy panes down the tmux ladder. Nothing on disk is touched: the
+ * channel. Nothing on disk is touched: the
  * worktree, including uncommitted stage work, is left exactly as the agent left
  * it. Residency is read from the durable registry first so a lane whose host is
  * already gone reports `not-running` instead of a manufactured kill.
@@ -1156,9 +1155,6 @@ type StageHostProbe = {
   /** Whether the engine is gone and every captured process that may still
       run is one of these. */
   onlyRecordedSurvivorsRun(recorded: readonly ProcessIdentity[]): boolean;
-  /** Durable tmux evidence recorded for this session, if any. It is the only
-      thing that can identify a stored pane id as still being this agent's. */
-  host(): TmuxHostEvidence | null;
 };
 
 const PRIOR_WRITER_WAIT_PREFIX = "waiting for an earlier stage agent to stop before a new attempt starts in its worktree: ";
@@ -1302,65 +1298,7 @@ async function stageHostProbe(target: PipelineStageHostRef): Promise<StageHostPr
       return (entry.structuredTerminationSurvivors ?? []).filter(identity => processIdentityMayRun(identity))
         .every(identity => known.has(`${identity.pid}:${identity.startIdentity}`));
     },
-    host: () => registry.readOnlySnapshot().entries[sessionKey]?.host ?? null,
   };
-}
-
-export type StagePaneProbes = {
-  killHostIfMatches?: (host: TmuxHostEvidence) => Promise<boolean>;
-  /** What the pane shows right now. Null when tmux has no such pane. */
-  paneSnapshot?: (paneId: string) => Promise<{ windowName: string; command: string } | null>;
-};
-
-/**
- * Last resort for a pane-hosted stage agent, gated on identity rather than
- * liveness. A tmux pane id is unique only within one server lifetime and
- * restarts at %0, while the attempt's stored id outlives that — and this path
- * runs exactly when the registry has no resident host, which is when a stale id
- * is most likely. "This pane runs something that is not a shell" would therefore
- * happily kill an unrelated agent, so the kill goes through
- * killTmuxHostIfMatches, which verifies the tmux server, the pane pid, the
- * window name and the agent's process start identity before signalling. Without
- * durable evidence to match, nothing is killed: the host is reported unknown so
- * the operator decides. A refused close is a nuisance; killing someone else's
- * agent is not recoverable.
- */
-export async function stopPipelineStagePane(
-  target: PipelineStageHostRef,
-  probes: StagePaneProbes = {},
-): Promise<{ outcome: "stopped" | "not-running" } | { outcome: "unknown"; detail: string } | { outcome: "failed"; error: string }> {
-  const paneId = target.paneId;
-  if (!paneId) return { outcome: "not-running" };
-  const snapshot = probes.paneSnapshot ?? paneInfo;
-  /* Name what the pane actually shows. An operator handed "pane %3 now runs
-     codex in window review" can find it in tmux and decide; "it could not be
-     identified" alone leaves them nothing to act on. */
-  const describe = (info: { windowName: string; command: string } | null): string =>
-    info ? `pane ${paneId} now runs ${info.command} in window ${info.windowName}` : `pane ${paneId}`;
-  try {
-    const probe = await stageHostProbe(target);
-    const host = probe?.host() ?? null;
-    if (!host || host.paneId !== paneId) {
-      /* No durable evidence ties this id to this agent. Report what is there,
-         but never signal it. */
-      const info = await snapshot(paneId);
-      if (!info || isShellCommand(info.command)) return { outcome: "not-running" };
-      return {
-        outcome: "unknown",
-        detail: `${describe(info)} and cannot be identified as this stage's agent; stop it yourself if it is the orphan, or close again with acknowledgeHosts to dismiss it`,
-      };
-    }
-    const killed = await (probes.killHostIfMatches ?? killTmuxHostIfMatches)(host);
-    if (killed) return { outcome: "stopped" };
-    const info = await snapshot(paneId);
-    if (!info || isShellCommand(info.command)) return { outcome: "not-running" };
-    return {
-      outcome: "unknown",
-      detail: `${describe(info)}; it changed or its agent did not exit, so it was left running`,
-    };
-  } catch (error) {
-    return { outcome: "failed", error: error instanceof Error ? error.message : String(error) };
-  }
 }
 
 export async function stopPipelineStageAgent(
@@ -1821,7 +1759,6 @@ function stageLaunchGenerationMatches(receipt: RegistryFile["receipts"][string] 
 
 export function defaultPipelinePorts(
   dependencies: { liveness?: TurnLivenessDependencies; termination?: StructuredHostTerminationDependencies;
-    panes?: { snapshot?: typeof paneInfo; observation?: typeof panePidMap };
     spawnRecoveryClient?: () => RuntimeHostClient | null;
     runtimeObservation?: Parameters<typeof pipelineRuntimeReads>[0]; providerRecoveryRandom?: () => number } = {},
 ): PipelinePorts {
@@ -2263,16 +2200,10 @@ export function defaultPipelinePorts(
       invalidateRegistryProjection();
       return result;
     },
-    paneAgentAlive: async (paneId) => {
-      const info = await (dependencies.panes?.snapshot ?? paneInfo)(paneId);
-      if (info) return !isShellCommand(info.command);
-      // display-message also returns null on a failed probe. Require positive
-      // absence evidence before letting automatic recovery replace the pane.
-      const observation = await (dependencies.panes?.observation ?? panePidMap)(true);
-      if (observation.kind === "no-server") return false;
-      if (observation.kind === "failure") return true;
-      return [...observation.panes.values()].some(pane => pane.paneId === paneId);
-    },
+    /* A stage attempt stored by a release that ran agents in terminal panes
+       still carries a pane id. No release hosts a pane, so such an agent is
+       reported as not running and there is nothing to stop. */
+    paneAgentAlive: async () => false,
     stopStageAgent: async (target, options) => options?.recordedIdentity
       ? withViewerOperation("pipelines.evidence", async () => {
         const receipt = target.launchId ? registry.spawnReceipt(target.launchId) : null;
@@ -2402,7 +2333,7 @@ export function defaultPipelinePorts(
       }
       return changed && stopped.outcome === "failed" ? null : stopped;
     },
-    stopStagePane: (target) => stopPipelineStagePane(target),
+    stopStagePane: async () => ({ outcome: "not-running" }),
     stopSettledStageWriter: (target, operationId) => withViewerOperation("pipelines.prior-writer-stop", () =>
       performanceSpans.wait("pipeline.prior-writer-stop", () =>
         stopSettledPipelineStageWriter(target, { operationId, termination: dependencies.termination }))),

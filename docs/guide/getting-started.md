@@ -59,7 +59,7 @@ unprivileged user and PID namespaces, and a systemd user manager that
 delegates the cpu, memory and pids cgroup controllers. Where any of these is missing, and on macOS and Windows,
 agents launch without the boundary and the launch reports it as off with the
 cause. A missing boundary never stops a launch. Known gaps: an agent can still
-reach the systemd user manager, Docker and the shared tmux server, which can
+reach the systemd user manager, Docker and a tmux server of the same user, which can
 act on other processes of the same user.
 
 macOS works through a backend that uses `ps` and `lsof` in place of `/proc`.
@@ -203,6 +203,32 @@ and in the start output. Turn it off in the sidebar's ⋯ menu under
 `DELEGATUS_TELEMETRY=0` or `DO_NOT_TRACK=1`.
 [What leaves your machine](security-and-privacy.md#what-leaves-your-machine)
 lists what it sends.
+
+## Open Delegatus as an app
+
+Delegatus serves a web app manifest, so a browser can give it its own window
+and icon instead of a tab.
+
+- **Chrome** on a computer: open Delegatus, then click the install icon in
+  the address bar, or open the ⋮ menu and choose **Cast, save, and share** →
+  **Install page as app** (some versions show **Install Delegatus** in the
+  menu directly). The app opens in its own window with the Delegatus icon,
+  from `127.0.0.1` as well.
+- **Edge** on a computer: click the install icon in the address bar, or open
+  the **Settings and more** (⋯) menu and choose **Apps** → **Install this site
+  as an app**, which reads **Install Delegatus** once Edge finds the
+  manifest. The window and icon are the same.
+- **Safari on macOS 14 or later**: **File** → **Add to Dock**. Safari adds any
+  site to the Dock this way, with or without a manifest, so this works today.
+- **Phone**: open the [phone address](phone.md#phone-access). Chrome on
+  Android offers **Install app** or **Add to Home screen** from its menu;
+  Safari on iPhone offers **Add to Home Screen** from the share sheet.
+
+This opens a window onto the page and nothing more. The app does not start
+Delegatus: if Delegatus is not running, the window shows the browser's "can't
+reach this site" page. Start it as above first. Delegatus caches nothing for
+offline use (its only service worker delivers push notifications), so the
+window needs the running Delegatus even to open.
 
 ## The setup guide
 
