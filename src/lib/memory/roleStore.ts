@@ -19,9 +19,10 @@ import { roleMemoryEnabled, roleMemorySelectorEnabled, swarmRulesEnabled } from 
 import { swarmRulesForRole, swarmScope, SWARM_ROLE_IDS, SWARM_ROLE_BOUND, publicSwarmTextMatcher } from "./swarmPack";
 import { engineMemoryOff } from "./source";
 import { curationRevision, curationView, machinePassAuthority, passIsLive } from "./curation/store";
-import { activeProfileBasis, privacyRuleRevision, profileScopeKeys, projectViewRows, projectViewRowsCooperatively, projectViewUnaffectedByChanges, roleScopeKeys, roleViewVersion } from "./roleViewSource";
+import { activeProfileBasis, privacyRuleRevision, profileScopeKeys, projectViewRows, projectViewRowsCooperatively, projectViewUnaffectedByChanges, roleScopeKeys, roleViewVersion, rowsWithScopeHistory, scopeRowForRewrite } from "./roleViewSource";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
 import type { ProfileRulesView } from "./profile";
+import { keepHistory, scopeRowWithEntry } from "./roleHistoryRows";
 import { renderLearnedRulesSelection } from "./roleRender";
 import { closestReadableRuleIds } from "./ruleIds";
 import { roleRowsWithPrefix, scopeMembershipRows, storedRuleTexts } from "./roleViewSource";
@@ -30,7 +31,7 @@ import {
   MAX_LESSONS_PER_ATTEMPT, ROLE_MEMORY_BOUND, ROLE_MEMORY_HISTORY_LIMIT,
   type LessonInput, type LessonRequestRow, type RoleMemoryProjectView, type RoleMemoryRow,
   type RoleMemoryRule, type RoleMemoryScopeRow, type RuleSource, type StageRuleSource, type SeatRuleSource, type OperatorRuleSource, type RuleView, type ScopeView, type StageLessonView,
-  type RewriteInput, type RuleRevision, type RuleRevisionView, type ScopeHistoryEntry, type RulePrivacyHint, type ProblemInput,
+  type RewriteInput, type RuleRevision, type RuleRevisionView, type RulePrivacyHint, type ProblemInput,
 } from "./roleTypes";
 
 /* One collection in state.sqlite, so role memory inherits the state store's
@@ -58,7 +59,8 @@ function retentionPolicy(project: string, scopes: readonly string[]) {
   // Settings may initialize their collection: read them before the memory write.
   const available = new Map([...new Set(scopes)].map(scope => [scope, curationAvailableForScope(scope, canonicalProject(project))]));
   const evidence = (active: readonly RoleMemoryRule[], pending?: LessonRequestRow | null) => {
-    const stored = roleMemoryCollection()?.snapshot() ?? [];
+    // Task lineage follows the merges recorded over each scope's whole history.
+    const stored = rowsWithScopeHistory(roleMemoryCollection()?.snapshot() ?? []);
     // The current answer's validated application marks are not committed yet.
     const all = pending ? stored.map(row => row.kind === "request" && key(row) === key(pending) ? pending : row) : stored;
     const byId = new Map(all.flatMap(row => row.kind === "rule" ? [[row.id, row] as const] : []));
@@ -81,13 +83,6 @@ function retentionPolicy(project: string, scopes: readonly string[]) {
 }
 const COLLECTION = "role_memory";
 export { ROLE_MEMORY_HISTORY_LIMIT };
-/** Keep 10,000 ordinary changes independently of every curator Undo record.
- * At 141 daily writes this covers over 70 days; delivery rows keep their own
- * ordered ids and content hashes, so reconstruction never depends on this window. */
-function keepHistory(entries: ScopeHistoryEntry[]): ScopeHistoryEntry[] {
-  const recent = new Set(entries.filter(entry => !entry.pass).slice(-ROLE_MEMORY_HISTORY_LIMIT));
-  return entries.filter(entry => !!entry.pass || recent.has(entry));
-}
 
 const requestKey = (pipelineId: string, stageId: string, attempt: number) => `q:${pipelineId}:${stageId}:${attempt}`;
 function key(row: RoleMemoryRow): string {
@@ -189,11 +184,15 @@ export function joinMovedScopes(now = new Date().toISOString(), scopeKeys: () =>
   held.boundedPatch(4096, (tx) => {
     const rulesOf = (ids: readonly string[]) => ids.flatMap((id) => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; });
     for (const from of moved) {
-      const source = tx.get(`s:${from}`);
-      if (source?.kind !== "scope") continue;
+      const moving = tx.get(`s:${from}`);
+      if (moving?.kind !== "scope") continue;
+      // The join rewrites both histories as one, so each scope is taken with
+      // every entry in its row. The joined scope is stored that way; the
+      // history rows either side had are left unnamed for the drain.
+      const source = scopeRowForRewrite(moving, now);
       const into = resolve(from);
       const target = tx.get(`s:${into}`);
-      const current: RoleMemoryScopeRow = target?.kind === "scope" ? target : { kind: "scope", scope: into, revision: 0, active: [], history: [] };
+      const current: RoleMemoryScopeRow = target?.kind === "scope" ? scopeRowForRewrite(target, now) : { kind: "scope", scope: into, revision: 0, active: [], history: [] };
       const joined: RoleMemoryRule[] = [];
       const merged: { from: string; into: string }[] = [];
       const candidates = [...rulesOf(current.active), ...rulesOf(source.active)];
@@ -226,6 +225,8 @@ export function joinMovedScopes(now = new Date().toISOString(), scopeKeys: () =>
       const sourceHistory = source.history.map(entry => ({ ...entry, revisionScope: entry.revisionScope ?? source.scope }));
       const currentHistory = current.history.map(entry => ({ ...entry, revisionScope: entry.revisionScope ?? current.scope }));
       tx.put({ ...current, ...(current.fourScopeTarget || source.fourScopeTarget ? { fourScopeTarget: current.fourScopeTarget ?? source.fourScopeTarget } : {}), revision, active: retained.active.map((rule) => rule.id),
+        // The removed scope's released rows stay recorded on the scope that holds its entries.
+        ...(current.historyDropped || source.historyDropped ? { historyDropped: [...(current.historyDropped ?? []), ...(source.historyDropped ?? [])] } : {}),
         revisionScope, history: keepHistory([...sourceHistory, ...currentHistory, { revision, revisionScope, at: now, by: "succession" as const, added: source.active, merged, archived }]) });
       tx.delete(`s:${from}`);
     }
@@ -412,7 +413,7 @@ function writeLessonAnswer(input: LessonWriteInput & { request?: Pick<LessonRequ
       const retained = retainWithPolicy(active, now, new Set([target.id]), ROLE_MEMORY_BOUND, policyFor(scope));
       for (const changed of retained.changed) tx.put(changed);
       const revision = held.revision + 1;
-      tx.put({ ...held, revision, active: retained.active.map(rule => rule.id), history: keepHistory([...held.history, { revision, revisionScope: held.revisionScope ?? scope, at: now, by: "agent" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: target.id, version }] }]) });
+      tx.put(scopeRowWithEntry(held, { revision, active: retained.active.map(rule => rule.id) }, { revision, revisionScope: held.revisionScope ?? scope, at: now, by: "agent" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: target.id, version }] }));
       if (request) tx.put({ ...request, rewrote: target.id });
       return { left: [{ action: "rewrite" as const, id: updated.id, version, scope, state: updated.state, scopeChars: scopeChars(retained.active), archived: retained.archived, hints: updated.hints }], none: null };
     }
@@ -430,10 +431,7 @@ function writeLessonAnswer(input: LessonWriteInput & { request?: Pick<LessonRequ
       const outcome = appendWithPolicy(active, incoming, now, ROLE_MEMORY_BOUND, policyFor(scope));
       for (const changed of outcome.changed) tx.put(changed);
       const revision = current.revision + 1;
-      tx.put({
-        ...current, revision, active: outcome.active.map((entry) => entry.id),
-        history: keepHistory([...current.history, { revision, revisionScope: current.revisionScope ?? scope, at: now, by: "agent" as const, added: outcome.added, merged: outcome.merged, archived: outcome.archived }]),
-      });
+      tx.put(scopeRowWithEntry(current, { revision, active: outcome.active.map((entry) => entry.id) }, { revision, revisionScope: current.revisionScope ?? scope, at: now, by: "agent" as const, added: outcome.added, merged: outcome.merged, archived: outcome.archived }));
       const stored = outcome.changed.find((entry) => entry.id === incoming.id)!;
       left.push({ action: "lesson", id: incoming.id, scope, state: stored.state, ...(stored.mergedInto ? { mergedInto: stored.mergedInto } : {}), scopeChars: scopeChars(outcome.active), archived: outcome.archived, hints });
     }
@@ -460,8 +458,7 @@ export function deleteRule(ruleId: string, now = new Date().toISOString()): Role
     const revision = held.revision + 1;
     const deleted = archivedRule(rule, now, "deleted");
     tx.put(deleted);
-    tx.put({ ...held, revision, active: held.active.filter((id) => id !== ruleId),
-      history: keepHistory([...held.history, { revision, revisionScope: held.revisionScope ?? held.scope, at: now, by: "operator" as const, added: [], merged: [], archived: [ruleId] }]) });
+    tx.put(scopeRowWithEntry(held, { revision, active: held.active.filter((id) => id !== ruleId) }, { revision, revisionScope: held.revisionScope ?? held.scope, at: now, by: "operator" as const, added: [], merged: [], archived: [ruleId] }));
     return deleted;
   });
 }
@@ -492,8 +489,7 @@ export function restoreRule(ruleId: string, now = new Date().toISOString()): Rol
     for (const changed of retained.changed) tx.put(changed);
     const archived = retained.archived;
     const revision = current.revision + 1;
-    tx.put({ ...current, revision, active: retained.active.map((entry) => entry.id),
-      history: keepHistory([...current.history, { revision, revisionScope: current.revisionScope ?? scope, at: now, by: "operator" as const, added: [], merged: [], archived, restored: [ruleId] }]) });
+    tx.put(scopeRowWithEntry(current, { revision, active: retained.active.map((entry) => entry.id) }, { revision, revisionScope: current.revisionScope ?? scope, at: now, by: "operator" as const, added: [], merged: [], archived, restored: [ruleId] }));
     return restored;
   });
 }
@@ -518,7 +514,7 @@ export function revertRule(versionId: string, now = new Date().toISOString()): R
     const retained = retainWithPolicy(active, now, new Set([current.id]), ROLE_MEMORY_BOUND, policy);
     for (const changed of retained.changed) tx.put(changed);
     const revision = held.revision + 1;
-    tx.put({ ...held, revision, active: retained.active.map(rule => rule.id), history: keepHistory([...held.history, { revision, revisionScope: held.revisionScope ?? scope, at: now, by: "operator" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: current.id, version: replaced }] }]) });
+    tx.put(scopeRowWithEntry(held, { revision, active: retained.active.map(rule => rule.id) }, { revision, revisionScope: held.revisionScope ?? scope, at: now, by: "operator" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: current.id, version: replaced }] }));
     return updated;
   });
   try { refreshLessonKnownValues(); } catch { /* egress fails closed */ }
