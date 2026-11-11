@@ -1494,7 +1494,7 @@ function buildRows({
           /* A move under way cannot be taken back, so the account it leaves is not a choice until it lands.
              A pool account that is not signed in is listed and cannot be chosen: a member has no sign-in. */
           enabled: option.signedIn !== false && !(accountChoice.applying && option.id === accountChoice.runsOn && accountChoice.next !== accountChoice.runsOn),
-          ...(option.signedIn === false ? { unavailable: true, note: t("mobile2.composer.accountNeedsSignIn") } : {}),
+          ...(option.signedIn === false ? { unavailable: true, note: t("draft.accountNotSignedIn") } : {}),
           role: "menuitemradio",
           activate: () => accountChoice.pick(option.id),
         };
@@ -2018,6 +2018,9 @@ function AccountSectionRows({ t, engine, account, nameOf, limit, choice, start =
                 {t("mobile2.composer.accountSignIn")}
                 <ChevronRight className="h-3.5 w-3.5" aria-hidden />
               </span>
+            ) : !authenticated && actions.signIn === null ? (
+              /* A member has no sign-in: the state is named and carries no action's weight (workspaces W1). */
+              <span className="shrink-0 text-label text-muted" data-runtime-account-not-signed-in>{t("draft.accountNotSignedIn")}</span>
             ) : !authenticated ? (
               <span className="shrink-0 text-label font-semibold text-muted">{t("mobile2.composer.accountNeedsSignIn")}</span>
             ) : next ? (

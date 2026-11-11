@@ -53,9 +53,10 @@ export function DraftRuntimePill({ launch, disabled = false, projectAccounts }: 
 
   const member = projectAccounts !== undefined;
   /* A member's engines are the ones their project's pool can start: Claude and Codex rows appear when the
-     pool holds an account of each, and only the draft's own engine shows until the pool has been read. */
-  const offered = useCallback((entry: LaunchEngine) => !member || entry === "copilot"
-    || (projectAccounts ? engineOffered(projectAccounts.engines[entry]) : entry === engine), [member, projectAccounts, engine]);
+     pool holds an account of each, and only the draft's own engine shows until the pool has been read.
+     Copilot has no pool, so a member is never offered it; a draft already on it keeps its own row until it moves. */
+  const offered = useCallback((entry: LaunchEngine) => !member
+    || (entry === "copilot" ? entry === engine : projectAccounts ? engineOffered(projectAccounts.engines[entry]) : entry === engine), [member, projectAccounts, engine]);
   const modelOptions = useMemo(() => AGENT_LAUNCH_ENGINES.filter(offered).flatMap((entry) => listedModels(entry, entry === engine ? launch.model : null).map((model) => ({
     ...model, id: entry === engine ? model.id : foreignModel(entry, model.id), label: `${launchEngineLabel(entry)} · ${model.label}`,
   }))), [engine, launch.model, offered]);
@@ -134,7 +135,7 @@ export function DraftRuntimePill({ launch, disabled = false, projectAccounts }: 
     t, engine, modelOptions, account: launch.launchAccountId, nameOf, accountChoice, ownAccounts, efforts,
     accountStart: launch.launchAccountId ? t("draft.accountStartsOn", { account: nameOf(launch.launchAccountId) })
       : !member || engine === "copilot" ? ""
-        : memberPool?.pool === "set" ? t("draft.accountFromList")
+        : memberPool?.pool === "set" ? t(memberPool.accounts.some((account) => account.signedIn) ? "draft.accountFromList" : "draft.accountNoneSignedIn")
           : memberPool?.pool === "none" ? t("draft.accountNoList") : "",
     menuLabel: t("draft.runtimePill"),
     face: { model: launch.model, effort, fast, serviceTier: ultrafast ? "ultrafast" : null },

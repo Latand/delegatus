@@ -470,12 +470,12 @@ export function DraftAgentPane({
     onEngineChange: (value) => setSpawnImageNegotiation({ status: "loading", requestKey: `${project}\n${src ?? ""}\n${value}` }),
   });
   const { engine, model, effort, speed } = launch;
-  /* A draft that stands on an engine the member's pool cannot start moves to the first one it can. */
-  const offeredByPool = projectAccounts ? offeredEngines(projectAccounts) : null;
+  /* A draft that stands on an engine the member's pool cannot start, Copilot included, moves to the first one it can. */
+  const offeredByPool: readonly string[] | null = projectAccounts ? offeredEngines(projectAccounts) : null;
   const { setEngine: moveEngine } = launch;
   useEffect(() => {
-    if (!offeredByPool || engine === "copilot" || !offeredByPool.length || offeredByPool.includes(engine)) return;
-    moveEngine(offeredByPool[0]!);
+    if (!offeredByPool || !offeredByPool.length || offeredByPool.includes(engine)) return;
+    moveEngine(offeredByPool[0] as "claude" | "codex");
   }, [offeredByPool, engine, moveEngine]);
   /* The account list refused the launch: say which way, in words, and drop the pick it named. */
   const refusalText = (outcome: { message: string | null; reason?: string }, accountId: string | null): string => {

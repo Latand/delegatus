@@ -7,6 +7,10 @@
     "found": [],
     "scrollWidth": true
   },
+  "claude-only-360-en-light-sheet": {
+    "found": [],
+    "scrollWidth": true
+  },
   "none-360-en-light-sheet": {
     "found": [],
     "scrollWidth": true
@@ -36,6 +40,10 @@
     "scrollWidth": true
   },
   "both-360-en-dark-picked": {
+    "found": [],
+    "scrollWidth": true
+  },
+  "claude-only-360-en-dark-sheet": {
     "found": [],
     "scrollWidth": true
   },
@@ -71,6 +79,10 @@
     "found": [],
     "scrollWidth": true
   },
+  "claude-only-360-uk-light-sheet": {
+    "found": [],
+    "scrollWidth": true
+  },
   "none-360-uk-light-sheet": {
     "found": [],
     "scrollWidth": true
@@ -100,6 +112,10 @@
     "scrollWidth": true
   },
   "both-360-uk-dark-picked": {
+    "found": [],
+    "scrollWidth": true
+  },
+  "claude-only-360-uk-dark-sheet": {
     "found": [],
     "scrollWidth": true
   },
@@ -135,6 +151,10 @@
     "found": [],
     "scrollWidth": true
   },
+  "claude-only-390-en-light-sheet": {
+    "found": [],
+    "scrollWidth": true
+  },
   "none-390-en-light-sheet": {
     "found": [],
     "scrollWidth": true
@@ -164,6 +184,10 @@
     "scrollWidth": true
   },
   "both-390-en-dark-picked": {
+    "found": [],
+    "scrollWidth": true
+  },
+  "claude-only-390-en-dark-sheet": {
     "found": [],
     "scrollWidth": true
   },
@@ -199,6 +223,10 @@
     "found": [],
     "scrollWidth": true
   },
+  "claude-only-390-uk-light-sheet": {
+    "found": [],
+    "scrollWidth": true
+  },
   "none-390-uk-light-sheet": {
     "found": [],
     "scrollWidth": true
@@ -228,6 +256,10 @@
     "scrollWidth": true
   },
   "both-390-uk-dark-picked": {
+    "found": [],
+    "scrollWidth": true
+  },
+  "claude-only-390-uk-dark-sheet": {
     "found": [],
     "scrollWidth": true
   },
@@ -263,6 +295,10 @@
     "found": [],
     "scrollWidth": true
   },
+  "claude-only-430-en-light-sheet": {
+    "found": [],
+    "scrollWidth": true
+  },
   "none-430-en-light-sheet": {
     "found": [],
     "scrollWidth": true
@@ -292,6 +328,10 @@
     "scrollWidth": true
   },
   "both-430-en-dark-picked": {
+    "found": [],
+    "scrollWidth": true
+  },
+  "claude-only-430-en-dark-sheet": {
     "found": [],
     "scrollWidth": true
   },
@@ -327,6 +367,10 @@
     "found": [],
     "scrollWidth": true
   },
+  "claude-only-430-uk-light-sheet": {
+    "found": [],
+    "scrollWidth": true
+  },
   "none-430-uk-light-sheet": {
     "found": [],
     "scrollWidth": true
@@ -356,6 +400,10 @@
     "scrollWidth": true
   },
   "both-430-uk-dark-picked": {
+    "found": [],
+    "scrollWidth": true
+  },
+  "claude-only-430-uk-dark-sheet": {
     "found": [],
     "scrollWidth": true
   },

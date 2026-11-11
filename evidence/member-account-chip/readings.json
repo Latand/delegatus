@@ -23,10 +23,16 @@
   "both-1440-en-light-picked-face": {
     "problems": []
   },
+  "claude-1440-en-light-root": {
+    "problems": []
+  },
   "claude-1440-en-light-models": {
     "problems": []
   },
   "none-1440-en-light-root": {
+    "problems": []
+  },
+  "signedout-1440-en-light-root": {
     "problems": []
   },
   "signedout-1440-en-light-account": {
@@ -68,10 +74,16 @@
   "both-1440-en-dark-picked-face": {
     "problems": []
   },
+  "claude-1440-en-dark-root": {
+    "problems": []
+  },
   "claude-1440-en-dark-models": {
     "problems": []
   },
   "none-1440-en-dark-root": {
+    "problems": []
+  },
+  "signedout-1440-en-dark-root": {
     "problems": []
   },
   "signedout-1440-en-dark-account": {
@@ -113,10 +125,16 @@
   "both-1440-uk-light-picked-face": {
     "problems": []
   },
+  "claude-1440-uk-light-root": {
+    "problems": []
+  },
   "claude-1440-uk-light-models": {
     "problems": []
   },
   "none-1440-uk-light-root": {
+    "problems": []
+  },
+  "signedout-1440-uk-light-root": {
     "problems": []
   },
   "signedout-1440-uk-light-account": {
@@ -158,10 +176,16 @@
   "both-1440-uk-dark-picked-face": {
     "problems": []
   },
+  "claude-1440-uk-dark-root": {
+    "problems": []
+  },
   "claude-1440-uk-dark-models": {
     "problems": []
   },
   "none-1440-uk-dark-root": {
+    "problems": []
+  },
+  "signedout-1440-uk-dark-root": {
     "problems": []
   },
   "signedout-1440-uk-dark-account": {
@@ -203,10 +227,16 @@
   "both-900-en-light-picked-face": {
     "problems": []
   },
+  "claude-900-en-light-root": {
+    "problems": []
+  },
   "claude-900-en-light-models": {
     "problems": []
   },
   "none-900-en-light-root": {
+    "problems": []
+  },
+  "signedout-900-en-light-root": {
     "problems": []
   },
   "signedout-900-en-light-account": {
@@ -248,10 +278,16 @@
   "both-900-en-dark-picked-face": {
     "problems": []
   },
+  "claude-900-en-dark-root": {
+    "problems": []
+  },
   "claude-900-en-dark-models": {
     "problems": []
   },
   "none-900-en-dark-root": {
+    "problems": []
+  },
+  "signedout-900-en-dark-root": {
     "problems": []
   },
   "signedout-900-en-dark-account": {
@@ -293,10 +329,16 @@
   "both-900-uk-light-picked-face": {
     "problems": []
   },
+  "claude-900-uk-light-root": {
+    "problems": []
+  },
   "claude-900-uk-light-models": {
     "problems": []
   },
   "none-900-uk-light-root": {
+    "problems": []
+  },
+  "signedout-900-uk-light-root": {
     "problems": []
   },
   "signedout-900-uk-light-account": {
@@ -338,10 +380,16 @@
   "both-900-uk-dark-picked-face": {
     "problems": []
   },
+  "claude-900-uk-dark-root": {
+    "problems": []
+  },
   "claude-900-uk-dark-models": {
     "problems": []
   },
   "none-900-uk-dark-root": {
+    "problems": []
+  },
+  "signedout-900-uk-dark-root": {
     "problems": []
   },
   "signedout-900-uk-dark-account": {

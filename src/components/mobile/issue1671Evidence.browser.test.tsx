@@ -9268,7 +9268,10 @@ describe("a member's account chip on the phone", () => {
             expect(await page.locator("[data-runtime-sheet-account-current]").innerText()).toBe(words(lang, "draft.accountFromList"));
             const signedOut = rows.nth(1);
             expect(await signedOut.getAttribute("data-runtime-account-state")).toBe("needs-sign-in");
-            expect(await signedOut.innerText()).toContain(words(lang, "mobile2.composer.accountNeedsSignIn"));
+            /* A member has no sign-in: the state is named in plain weight, and no word of an action is on the row. */
+            expect(await signedOut.innerText()).toContain(words(lang, "draft.accountNotSignedIn"));
+            expect(await signedOut.innerText()).not.toContain(words(lang, "mobile2.composer.accountNeedsSignIn"));
+            expect(await signedOut.locator("[data-runtime-account-not-signed-in]").evaluate((node) => getComputedStyle(node).fontWeight)).toBe("400");
             for (const row of await rows.all()) expect((await row.boundingBox())!.height).toBeGreaterThanOrEqual(44);
             await frame(page, key, "sheet");
             const before = (await page.evaluate(() => (window as unknown as { memberAccounts: { requests(): string[] } }).memberAccounts.requests())).length;
@@ -9281,7 +9284,17 @@ describe("a member's account chip on the phone", () => {
             await frame(page, key, "picked");
             /* Both engines are offered: the model list names Claude and Codex rows. */
             const models = await page.locator(`[data-runtime-sheet] [role="radiogroup"][aria-label="${words(lang, "composer.modelGroup")}"] [data-runtime-sheet-row]`).evaluateAll((rows) => rows.map((row) => row.textContent!.split(" · ")[0]));
-            expect([...new Set(models)]).toEqual(["Claude", "Codex", "Copilot"]);
+            expect([...new Set(models)]).toEqual(["Claude", "Codex"]);
+          } },
+          { name: "claude-only", query: "who=member&pool=claude", run: async (page, key) => {
+            await page.locator("[data-runtime-pill]").tap();
+            await page.locator("[data-runtime-sheet]").waitFor();
+            /* The same line as the desktop root, the pool's own rows, and no Codex or Copilot row in the model list. */
+            expect(await page.locator("[data-runtime-sheet-account-current]").innerText()).toBe(words(lang, "draft.accountFromList"));
+            expect(await page.locator("[data-runtime-sheet-account]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-runtime-sheet-account")))).toEqual(["acct-a", "acct-c"]);
+            const models = await page.locator(`[data-runtime-sheet] [role="radiogroup"][aria-label="${words(lang, "composer.modelGroup")}"] [data-runtime-sheet-row]`).evaluateAll((rows) => rows.map((row) => row.textContent!.split(" · ")[0]));
+            expect([...new Set(models)]).toEqual(["Claude"]);
+            await frame(page, key, "sheet");
           } },
           { name: "none", query: "who=member&pool=none", run: async (page, key) => {
             await page.locator("[data-runtime-pill]").tap();
@@ -9294,6 +9307,8 @@ describe("a member's account chip on the phone", () => {
             await page.locator("[data-runtime-pill]").tap();
             await page.locator("[data-runtime-sheet]").waitFor();
             expect(await page.locator("[data-runtime-sheet-account]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-runtime-account-state")))).toEqual(["needs-sign-in"]);
+            /* No account of the list can take a launch: the line says so and who can sign in, and promises no start. */
+            expect(await page.locator("[data-runtime-sheet-account-current]").innerText()).toBe(words(lang, "draft.accountNoneSignedIn"));
             await frame(page, key, "sheet");
           } },
           { name: "long", query: "who=member&pool=long", run: async (page, key) => {

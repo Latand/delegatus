@@ -458,7 +458,7 @@ test("a member whose pool holds both engines is offered both, and only the pool'
   const host = mount("member-both");
   await settle();
 
-  expect(engines(await openModels(host))).toEqual(["Claude", "Codex", "Copilot"]);
+  expect(engines(await openModels(host))).toEqual(["Claude", "Codex"]);
   click(popover('[data-runtime-row="back"]')!);
   click(popover('[data-runtime-value="account"]')!);
   await settle();
@@ -467,7 +467,7 @@ test("a member whose pool holds both engines is offered both, and only the pool'
   /* The account that is not signed in is listed and cannot be chosen; there is no sign-in to reach. */
   const signedOut = rows[1] as HTMLButtonElement;
   expect(signedOut.getAttribute("aria-disabled")).toBe("true");
-  expect(document.querySelector("[data-runtime-row-note]")!.textContent).toBe("needs sign-in");
+  expect(document.querySelector("[data-runtime-row-note]")!.textContent).toBe("not signed in");
   click(signedOut);
   expect(pill(host).querySelector("[data-runtime-pill-next-account]")).toBeNull();
   click(rows[0]!);
@@ -488,7 +488,7 @@ test("a member sees only the engines the pool can start, and a draft on another 
   await settle();
   await until(() => pill(host).textContent!.includes("Claude"));
   expect(pill(host).textContent).toContain("Claude");
-  expect(engines(await openModels(host))).toEqual(["Claude", "Copilot"]);
+  expect(engines(await openModels(host))).toEqual(["Claude"]);
 });
 
 test("without a pool a member's chip names the engine and says Delegatus picks the account; nothing is named at launch", async () => {
@@ -501,7 +501,7 @@ test("without a pool a member's chip names the engine and says Delegatus picks t
   expect(popover("[data-runtime-popover-account]")!.textContent).toBe("no account list for this project: Delegatus picks the account");
   expect(popover('[data-runtime-value="account"]')).toBeNull();
   click(pill(host));
-  expect(engines(await openModels(host))).toEqual(["Claude", "Codex", "Copilot"]);
+  expect(engines(await openModels(host))).toEqual(["Claude", "Codex"]);
   click(popover('[data-runtime-row="back"]')!);
   click(pill(host));
   await launch(host, "Let Delegatus choose");
@@ -572,7 +572,9 @@ for (const locale of ["en", "uk"] as const) {
       expect(rows.map((row) => row.getAttribute("data-runtime-sheet-account"))).toEqual(["acct-a", "acct-c"]);
       const signedOut = rows[1]!;
       expect(signedOut.getAttribute("data-runtime-account-state")).toBe("needs-sign-in");
-      expect(signedOut.textContent).toContain(locale === "en" ? "needs sign-in" : "потрібен вхід");
+      expect(signedOut.textContent).toContain(locale === "en" ? "not signed in" : "вхід не виконано");
+      expect(signedOut.textContent).not.toContain(locale === "en" ? "needs sign-in" : "потрібен вхід");
+      expect(signedOut.querySelector("[data-runtime-account-not-signed-in]")!.className).not.toContain("font-semibold");
       expect(signedOut.disabled).toBe(true);
       const before = urls.length;
       click(signedOut);
@@ -606,4 +608,29 @@ test("on the phone a member without a pool sees the account section as a heading
   } finally {
     (dom as unknown as { matchMedia: unknown }).matchMedia = desktop;
   }
+});
+
+const SIGNED_OUT: PoolView = { project: "proj", engines: {
+  claude: { pool: "set", accounts: [poolRow("acct-c", "Account C", false)] },
+  codex: { pool: "none", available: false },
+} };
+
+test("a pool with no signed-in account says so and who can sign in, instead of promising a start", async () => {
+  await asTeam("member");
+  installMember(SIGNED_OUT, [], []);
+  const host = mount("member-signed-out");
+  await settle();
+  click(pill(host));
+  await until(() => popover("[data-runtime-popover-account]")?.textContent === "No account on this project's list is signed in. The owner or a manager can sign one in.");
+  expect(popover("[data-runtime-popover-account]")!.textContent).not.toContain("starts on");
+});
+
+test("a member whose draft stands on Copilot moves to an engine the pool can start, and is never offered Copilot", async () => {
+  await asTeam("member");
+  sessionStorage.setItem("llvDraftPane:member-copilot:engine", "copilot");
+  installMember(BOTH, [], []);
+  const host = mount("member-copilot");
+  await settle();
+  await until(() => pill(host).textContent!.includes("Claude"));
+  expect(engines(await openModels(host))).toEqual(["Claude", "Codex"]);
 });

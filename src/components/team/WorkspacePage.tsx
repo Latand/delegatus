@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowLeft, Folder, Plus } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import { launchEngineLabel } from "@/components/draft/AgentLaunchControls";
 import { useLocale } from "@/lib/i18n";
@@ -263,21 +263,45 @@ function useProjectsWithoutAccountList(projects: readonly string[]): Record<"cla
   return answer?.key === key ? answer.missing : null;
 }
 
-/** One line per engine: members cannot choose an account of that engine in these projects until a list is set. */
+/** Members cannot choose an account in these projects until a list is set. One line when Claude and Codex
+ *  miss it in the same projects, one per engine when the projects differ. Each project name leads to its
+ *  own view, where the account switches of the project are. */
 function NoAccountListNotes({ projects, names }: { projects: readonly string[]; names: (project: string) => string }) {
   const { t } = useLocale();
   const missing = useProjectsWithoutAccountList(projects);
   if (!missing) return null;
+  const same = missing.claude.length > 0 && missing.claude.join("\n") === missing.codex.join("\n");
+  const lines = same
+    ? [{ key: "both", text: t("workspaces.page.noAccountListBoth", { projects: PROJECTS_SLOT }), projects: missing.claude }]
+    : POOL_ENGINES.filter((engine) => missing[engine].length).map((engine) => ({
+      key: engine,
+      text: t("workspaces.page.noAccountList", { engine: launchEngineLabel(engine), projects: PROJECTS_SLOT }),
+      projects: missing[engine],
+    }));
   return (
     <>
-      {POOL_ENGINES.filter((engine) => missing[engine].length).map((engine) => (
-        <p key={engine} className="px-1 text-label text-muted" data-workspace-account-list-note={engine}>
-          {t("workspaces.page.noAccountList", { engine: launchEngineLabel(engine), projects: missing[engine].map(names).join(", ") })}
-        </p>
-      ))}
+      {lines.map((line) => {
+        const [before = "", after = ""] = line.text.split(PROJECTS_SLOT);
+        return (
+          <p key={line.key} className="px-1 text-label text-muted" data-workspace-account-list-note={line.key}>
+            {before}
+            {line.projects.map((project, index) => (
+              <Fragment key={project}>
+                {index > 0 ? ", " : null}
+                {/* A plain link, like the Team page's: the board is a full page load from here. */}
+                <a href={`/#p=${encodeURIComponent(project)}`} className="font-semibold text-accent hover:underline" data-workspace-account-list-project={project}>{names(project)}</a>
+              </Fragment>
+            ))}
+            {after}
+          </p>
+        );
+      })}
     </>
   );
 }
+
+/** Stands where the project names go in the translated line, so the names can be links. */
+const PROJECTS_SLOT = "\u0001";
 
 type WorkspacePerson = { id: string; name: string; owner: boolean; role: "member" | "manager" | null };
 type MembershipView = { canManage: boolean; members: WorkspacePerson[]; candidates: WorkspacePerson[] };

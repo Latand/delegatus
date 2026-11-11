@@ -95,7 +95,7 @@ async function render(): Promise<HTMLElement> {
 
 const notes = (host: HTMLElement) => [...host.querySelectorAll("[data-workspace-account-list-note]")].map((note) => [note.getAttribute("data-workspace-account-list-note"), note.textContent]);
 
-test("the owner is told, per engine, which projects have no account list", async () => {
+test("the owner is told, per engine, which projects have no account list when the engines differ", async () => {
   setWorkspacesForTests(view({ canManage: true }));
   expect(notes(await render())).toEqual([
     ["claude", "Members can't choose a Claude account in Shop app, Shop backend until an account list is set there. Until then Delegatus picks the account."],
@@ -129,4 +129,24 @@ test("the line is worded in Ukrainian", async () => {
   const text = translate("uk", "workspaces.page.noAccountList" as never, { engine: "Claude", projects: "Shop app, Shop backend" } as never);
   expect(notes(await render())[0]).toEqual(["claude", text]);
   expect(text).toBe("Учасники не можуть обрати акаунт Claude у Shop app, Shop backend, доки там не задано списку акаунтів. До того акаунт обирає Delegatus.");
+});
+
+test("one line names both engines when the same projects lack a list, and each project leads to its own view", async () => {
+  pools = { "shop-app": { claude: NONE, codex: NONE }, "shop-backend": { claude: NONE, codex: NONE } };
+  setWorkspacesForTests(view({ canManage: true }));
+  const host = await render();
+  expect(notes(host)).toEqual([
+    ["both", "Members can't choose a Claude or Codex account in Shop app, Shop backend until an account list is set there. Until then Delegatus picks the account."],
+  ]);
+  const links = [...host.querySelectorAll("[data-workspace-account-list-note] a")].map((link) => [link.textContent, link.getAttribute("href")]);
+  expect(links).toEqual([["Shop app", "/#p=shop-app"], ["Shop backend", "/#p=shop-backend"]]);
+});
+
+test("the one line is worded in Ukrainian", async () => {
+  setLocale("uk");
+  pools = { "shop-app": { claude: NONE, codex: NONE }, "shop-backend": { claude: NONE, codex: NONE } };
+  setWorkspacesForTests(view({ canManage: true }));
+  expect(notes(await render())).toEqual([
+    ["both", "Учасники не можуть обрати акаунт Claude чи Codex у Shop app, Shop backend, доки там не задано списку акаунтів. До того акаунт обирає Delegatus."],
+  ]);
 });

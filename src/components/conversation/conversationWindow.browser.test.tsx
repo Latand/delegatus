@@ -3640,7 +3640,7 @@ describe("a member picks an account of the project's list in the new agent's com
             const rows = await popoverRows(page, "account").evaluateAll((nodes) => nodes.map((node) => [node.getAttribute("data-runtime-value"), node.getAttribute("aria-disabled"), node.textContent]));
             expect(rows.map((row) => row[0])).toEqual(["account-acct-a", "account-acct-c"]);
             expect(rows[1]![1]).toBe("true");
-            expect(await page.locator("[data-runtime-row-note]").innerText()).toBe(t(lang, "mobile2.composer.accountNeedsSignIn"));
+            expect(await page.locator("[data-runtime-row-note]").innerText()).toBe(t(lang, "draft.accountNotSignedIn"));
             readings[`${key}-account-rows`] = rows;
             await shot(page, key, "account");
             await whole(page, "[data-runtime-popover]", key, "account");
@@ -3650,7 +3650,7 @@ describe("a member picks an account of the project's list in the new agent's com
             await page.locator('[data-runtime-popover] [data-runtime-value="model"]').click();
             await popoverRows(page, "model").first().waitFor();
             const models = await popoverRows(page, "model").evaluateAll((nodes) => nodes.map((node) => node.textContent!.split(" · ")[0]));
-            expect([...new Set(models)]).toEqual(["Claude", "Codex", "Copilot"]);
+            expect([...new Set(models)]).toEqual(["Claude", "Codex"]);
             await shot(page, key, "models");
             await whole(page, "[data-runtime-popover]", key, "models");
             await popoverRows(page, "back").click();
@@ -3668,10 +3668,15 @@ describe("a member picks an account of the project's list in the new agent's com
           const { context, page, pageErrors, key } = await open("who=member&pool=claude", "claude");
           try {
             await pill(page).click();
+            const account = page.locator("[data-runtime-popover-account]");
+            await account.waitFor();
+            expect(await account.innerText()).toBe(t(lang, "draft.accountFromList"));
+            await shot(page, key, "root");
+            await whole(page, "[data-runtime-popover]", key, "root");
             await page.locator('[data-runtime-popover] [data-runtime-value="model"]').click();
             await popoverRows(page, "model").first().waitFor();
             const models = await popoverRows(page, "model").evaluateAll((nodes) => nodes.map((node) => node.textContent!.split(" · ")[0]));
-            expect([...new Set(models)]).toEqual(["Claude", "Copilot"]);
+            expect([...new Set(models)]).toEqual(["Claude"]);
             await shot(page, key, "models");
             await whole(page, "[data-runtime-popover]", key, "models");
             expect(pageErrors).toEqual([]);
@@ -3694,6 +3699,12 @@ describe("a member picks an account of the project's list in the new agent's com
           const { context, page, pageErrors, key } = await open("who=member&pool=signedout", "signedout");
           try {
             await pill(page).click();
+            /* No account of the list can take a launch: the root line says so and who can sign in, and promises no start. */
+            const account = page.locator("[data-runtime-popover-account]");
+            await account.waitFor();
+            expect(await account.innerText()).toBe(t(lang, "draft.accountNoneSignedIn"));
+            await shot(page, key, "root");
+            await whole(page, "[data-runtime-popover]", key, "root");
             await page.locator('[data-runtime-popover] [data-runtime-value="account"]').click();
             await popoverRows(page, "account").first().waitFor();
             expect(await popoverRows(page, "account").first().getAttribute("aria-disabled")).toBe("true");
