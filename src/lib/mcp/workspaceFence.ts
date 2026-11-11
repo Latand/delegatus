@@ -11,6 +11,7 @@ import { conversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
 import { readDeliveryProgress } from "@/lib/runtime/deliveryProgress";
 import { existingTeamStore } from "@/lib/team/store";
 import { conversationWorkspacePrincipal, workspacePrincipalAccess } from "@/lib/team/workspacePrincipal";
+import { seatHoldsTelegramGrant } from "@/lib/team/seatTelegram";
 import { workspaceDirectory } from "@/lib/team/workspaces";
 import { assertWorkspaceExecution, runWithWorkspaceExecution } from "@/lib/team/workspaceExecution";
 import { selectedContextArg } from "./selectedContextTarget";
@@ -33,6 +34,12 @@ const PROJECT_TOOLS = new Set([
   "conversation_action", "conversation_migration", "agent_fleet", "agent_activity", "lifecycle_events", "bridge_report", "bridge_directive",
   "get_orchestrator", "create_orchestrator", "send_message_to_orchestrator", "ask_orchestrator_in_parallel", "rotate_orchestrator", "seat_tick_settings",
 ]);
+// A project's seat keeps the Telegram grant on its record under member reach
+// (`seatHoldsTelegramGrant`), with the chats the agent route serves any caller.
+const SEAT_TELEGRAM_TOOLS = new Set(["telegram_bot_send", "telegram_bot_send_media", "telegram_bot_send_document", "telegram_bot_chats", "telegram_bot_messages"]);
+// These reach a Viewer route that applies the workspace fence itself to the
+// caller's forwarded capability, so the route judges their arguments.
+const ROUTE_FENCED_TOOLS = new Set(["publish_prototype_review", "read_prototype_review"]);
 const COLLECTIONS = new Set(["list_conversations", "search_transcripts", "search_memory", "board_snapshot", "list_flows", "list_pipelines", "list_tasks", "agent_fleet", "agent_activity", "lifecycle_events"]);
 const CONVERSATIONS = new Set(["conversationId", "expectedConversationId", "sourceConversationId", "srcConversationId", "seatConversationId", "parentConversationId", "launcherConversationId", "parent", "supersedes", "reviews", "src", "srcPath", "transcriptPath", "path", "paths", "voiceFor"]);
 const TASKS = new Set(["taskId", "taskIds", "parentTaskId", "sourceTaskId", "finishesTask"]);
@@ -69,7 +76,8 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       const principal = conversationWorkspacePrincipal(lookup, callerId, store);
       if (!principal) return service.callTool(tool, input, context);
       if (!store) denied();
-      if (!PROJECT_TOOLS.has(tool)) denied();
+      const seatTelegram = SEAT_TELEGRAM_TOOLS.has(tool);
+      if (!PROJECT_TOOLS.has(tool) && !seatTelegram && !ROUTE_FENCED_TOOLS.has(tool)) denied();
       if (tool === "leave_lesson" && (input.rewrite || (input.lesson as { scope?: string } | undefined)?.scope === "machine")) denied();
       const conversationProject = (id: string): string | null => {
         if (dependencies.workspaceProject) return dependencies.workspaceProject(id);
@@ -78,6 +86,11 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       };
       const project = conversationProject(callerId ?? "");
       let allowed = workspacePrincipalAccess(principal);
+      // Arguments of these tools name chats and files, never project identities,
+      // so the identity pass skips them. The result scan below still runs.
+      const delegated = !PROJECT_TOOLS.has(tool);
+      const granted = () => { if (seatTelegram && !seatHoldsTelegramGrant(callerId, store, lookup)) denied(); };
+      granted();
       const allowedProjects = workspaceDirectory(store).workspaces.find(workspace => workspace.id === principal.workspaceId)?.projects ?? [];
       const args = { ...input };
       if (typeof args.project === "string") {
@@ -131,7 +144,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
           checks.push(() => projectForCwd(lexical), () => { try { return projectForCwd(fs.realpathSync(lexical)); } catch { return null; } });
         }
       };
-      for (const [key, value] of Object.entries(args)) check(key, value);
+      if (!delegated) for (const [key, value] of Object.entries(args)) check(key, value);
       // Implicit selection, global operations and unkeyed receipt/report reads
       // cannot acquire project authority from a neighbouring permitted argument.
       if (["get_conversation", "conversation_messages", "conversation_deliverability", "send_message", "conversation_action", "conversation_migration"].includes(tool)
@@ -194,11 +207,14 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
             if (!value || typeof value !== "object" || seen.has(value)) return;
             seen.add(value);
             if (typeof (value as { project?: unknown }).project === "string" && !allowed((value as { project: string }).project)) denied();
-            for (const item of Object.values(value)) visit(item);
+            // A record's agent author names the sender's project as a label. It
+            // is no row of that project; the compact answer withholds it below.
+            for (const [key, item] of Object.entries(value)) if (key !== "author") visit(item);
           };
           visit(answer);
         } });
         assert();
+        granted();
         answerProjects = workspaceDirectory(store).workspaces.flatMap(workspace => workspace.projects);
         if (tool === "search_transcripts" && result.ok) {
           const scope = result.projectScope as { resolved?: string } | undefined;
