@@ -697,7 +697,7 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
     // replacement, ownership and link changes are never absorbed into proof.
     if (before.dev !== after.dev || before.ino !== after.ino || before.mtimeNs !== after.mtimeNs
       || before.uid !== after.uid || before.gid !== after.gid || before.nlink !== after.nlink
-      || after.mode !== (before.mode & ~0o7777n | BigInt(mode)))
+      || after.mode !== (before.mode & ~BigInt(0o7777) | BigInt(mode)))
       throw new AttemptTempBudgetDeferred("directory changed during permission repair");
     if (before.isDirectory()) directories.set(file, signature(after));
     if (!current()) throw new AttemptTempBudgetDeferred("protection changed during permission repair");
