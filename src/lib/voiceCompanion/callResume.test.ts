@@ -619,20 +619,20 @@ test("slice 2: forged ids are ignored, playback is clamped, and the mint key bin
     await expect(h.service.start({ ...input, requestId: "bad-cursor", cursor: cursor as import("./contract").ResumeCursor })).rejects.toThrow("INVALID_REQUEST");
 });
 
-test("slice 2: many open requests each keep their current status inside the continuation budget", async () => {
+test("A3: 32 open requests remain distinguishable beside a 600-character cut inside the continuation budget", async () => {
   const { continuationBlock } = await import("./callResume");
-  const requests: import("./transcriptRecord").TranscriptEntry[] = Array.from({ length: 8 }, (_, index) => ({
+  const requests: import("./transcriptRecord").TranscriptEntry[] = Array.from({ length: 32 }, (_, index) => ({
     id: `request-${index}`, kind: "request", atMs: index, order: index,
     data: { callId: `call-${index}`, status: index % 2 ? "delivered" : "queued", instruction: `PENDING_${index} ` + "details ".repeat(80) },
   }));
   requests.unshift({ id: "cut", kind: "reply", atMs: 0, order: -1, data: { text: "First. Second. Third.", final: true } });
   const block = continuationBlock([{ id: "part", createdAt: 0, entries: requests }], { now: 0,
-    point: { kind: "reply", resumeOf: { part: "part", item: "cut" }, offset: 7, heard: "First. ", remaining: "Second. Third." } });
+    point: { kind: "reply", resumeOf: { part: "part", item: "cut" }, offset: 7, heard: "Heard words. ".repeat(25), remaining: "Second. Third. ".repeat(22) } });
   expect(block.length).toBeLessThanOrEqual(CONTINUATION_BUDGET);
   expect(block).toContain("Second. Third.");
-  for (let index = 0; index < 8; index++) {
-    const line = block.split("\n").find(line => line.includes(`PENDING_${index}`));
-    expect(line).toBeDefined(); expect(line).toContain(index % 2 ? "delivered" : "queued");
+  for (let index = 0; index < 32; index++) {
+    const line = block.split("\n").find(line => line.startsWith(`r${index + 1} `));
+    expect(line).toBeDefined(); expect(line).toContain(`PENDING_${index}`); expect(line).toContain(index % 2 ? "delivered" : "queued");
   }
 });
 

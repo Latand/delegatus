@@ -2783,7 +2783,10 @@ test("more reports than the speech queue holds, filed while the hand-off is bloc
   const restarted = new CompanionAdmission(f.storage, { recipient: () => null, send: async () => ({ status: "failed", operationId: null }), reports: () => f.reports });
   expect(restarted.reportSpeech(s.sessionId).map(row => row.reportId)).toEqual(Array.from({ length: 64 }, (_, index) => `queued-${index + 1}`));
   blocked = false;
-  for (let poll = 0; poll < 3; poll += 1) await f.service.events(s.sessionId, 0);
+  for (let poll = 0; poll < 3; poll += 1) {
+    await f.service.events(s.sessionId, 0);
+    f.provider.replay(s.providerId, said(`Report batch ${poll}.`, 5000 + poll * 3000, "output")); await f.service.drain(s.sessionId);
+  }
   const voiced = spoken(f).map(row => String(row.content).match(/REPORT_(\d+)_FACT/)?.[1]);
   expect(voiced).toEqual(Array.from({ length: 70 }, (_, index) => String(index + 1)));
   expect(f.admission.reportSpeech(s.sessionId)).toEqual([]);
@@ -3301,7 +3304,9 @@ for (const backend of ["api", "codex"] as const) for (const release of ["delta",
     await service.close(n2.sessionId, "transport");
     const n3 = await service.start({ project: "fixture", locale: "uk", sdp: "v=3", resume: n2.sessionId, cursor: {} });
     await service.events(n3.sessionId, 0);
-    expect(spoken(f)).toHaveLength(release === "delta" ? 2 : 3);
+    // Slice 3 also keeps the report handed after the resume: no output followed that report.
+    expect(spoken(f)).toHaveLength(3);
+    if (release === "delta") expect(String(spoken(f).at(-1)?.content)).toContain("REPORT_FACT");
     await service.close(n3.sessionId);
   });
 
@@ -3330,20 +3335,29 @@ for (const backend of ["api", "codex"] as const) test(`slice 2: ${backend} prese
   await f.service.close(n2.sessionId);
 });
 
-test("slice 2: a genuine Codex input done emits completion before a later drop", async () => {
+for (const cut of [false, true]) test(`A4: Codex ${cut ? "keeps a real cut resume line" : "answers a completed unanswered turn"}`, async () => {
   const f = fixture();
   f.storage.updateSettings({ backend: "codex" }); Object.defineProperty(f.provider, "backend", { value: "codex" });
   const p = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
   f.provider.replay(p.providerId,
     { type: "session.input_transcript.delta", event_id: "operator-delta", delta: "Please check search.", start_ms: 0, end_ms: 900 },
-    { type: "session.input_transcript.done", event_id: "operator-done", offset_ms: 900 });
+    ...(cut ? [] : [{ type: "session.input_transcript.done", event_id: "operator-done", offset_ms: 900 }]));
   await f.service.drain(p.sessionId);
   const finalized = f.admission.events(p.sessionId, 0).filter(row => row.type === "transcript.final");
-  expect(finalized).toMatchObject([{ type: "transcript.final", speaker: "operator", text: "Please check search." }]);
+  expect(finalized).toHaveLength(cut ? 0 : 1);
   await f.service.close(p.sessionId, "transport");
-  const resumed = await f.service.start({ project: "fixture", locale: "en", sdp: "v=1", resume: p.sessionId });
+  const item = f.admission.transcriptRecord(p.sessionId).entries.find(row => row.kind === "utterance")!;
+  const resumed = await f.service.start({ project: "fixture", locale: "en", sdp: "v=1", resume: p.sessionId, cursor: cut ? { operatorOpen: item.id } : {} });
   expect(f.admission.transcriptRecord(resumed.sessionId).entries.find(row => row.kind === "session_start")?.data.resumePoint)
-    .toMatchObject({ kind: "operator", cut: false, heard: "Please check search." });
+    .toMatchObject({ kind: "operator", cut, heard: "Please check search." });
+  await f.service.events(resumed.sessionId, 0); await f.service.events(resumed.sessionId, 0);
+  if (cut) expect(spoken(f).map(row => row.content)).toEqual(["The connection dropped after «Please check search.». Go on."]);
+  else {
+    expect(spoken(f)).toEqual([]);
+    expect(f.provider.commands.filter(row => row.type === "session.instructions.append")).toHaveLength(1);
+    f.provider.replay(resumed.providerId, said("Search is healthy.", 1000, "output")); await f.service.drain(resumed.sessionId);
+    expect(f.admission.reportSpeech(resumed.sessionId)).toEqual([]);
+  }
   await f.service.close(resumed.sessionId);
 });
 
@@ -3365,10 +3379,36 @@ test("slice 2: API resume instruction retains the end of a long Ukrainian operat
   await f.service.close(resumed.sessionId);
 });
 
-for (const crash of [false, true]) test(`slice 2: real process restart preserves resume speech across ${crash ? "a crash before acknowledgement" : "an unpolled part"}`, async () => {
+for (const backend of ["api", "codex"] as const) test(`A1: ${backend} replaces an unheard inherited resume with the new operator cut and keeps reports`, async () => {
+  const f = fixture("synthetic-credential", undefined, () => Date.UTC(2026, 10, 11, 12));
+  if (backend === "codex") { f.storage.updateSettings({ backend }); Object.defineProperty(f.provider, "backend", { value: "codex" }); }
+  const p = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(p.providerId, said("First sentence. Second sentence.", 0, "output")); await f.service.drain(p.sessionId);
+  await f.service.close(p.sessionId, "transport");
+  const reply = f.admission.transcriptRecord(p.sessionId).entries.find(row => row.kind === "reply")!;
+  const n = await f.service.start({ project: "fixture", locale: "en", sdp: "v=1", resume: p.sessionId, cursor: { unplayed: [reply.id] } });
+  await f.service.events(n.sessionId, 0);
+  f.reports.push({ id: "behind-resume", seq: 1, project: "fixture", at: "2026-11-11T12:00:00Z", class: "completed", body: "KEPT_REPORT",
+    origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+  f.admission.pollReports(n.sessionId);
+  f.provider.replay(n.providerId, said("New operator ending", 1000)); await f.service.drain(n.sessionId);
+  const item = f.admission.transcriptRecord(n.sessionId).entries.find(row => row.kind === "utterance")!;
+  await f.service.close(n.sessionId, "transport");
+  const n2 = await f.service.start({ project: "fixture", locale: "en", sdp: "v=2", resume: n.sessionId, cursor: { operatorOpen: item.id } });
+  const point = { part: n.sessionId, item: item.id };
+  expect(f.admission.transcriptRecord(n2.sessionId).entries.find(row => row.kind === "session_start")?.data.resumePoint).toMatchObject({ resumeOf: point });
+  expect(f.admission.reportSpeech(n2.sessionId)).toMatchObject([{ kind: "resume", resumeOf: point }, { reportId: "behind-resume" }]);
+  await f.service.events(n2.sessionId, 0); await f.service.events(n2.sessionId, 0);
+  const handoffs = f.admission.transcriptRecord(n2.sessionId).entries.filter(row => row.kind === "handoff");
+  expect(handoffs).toHaveLength(1); expect(handoffs[0].data.resumeOf).toEqual(point);
+  expect(String(handoffs[0].data.text).split("New operator ending")).toHaveLength(2);
+  await f.service.close(n2.sessionId);
+});
+
+for (const backend of ["api", "codex"] as const) for (const crash of [false, true]) test(`A2: ${backend} real process restart preserves resume speech across ${crash ? "a crash before acknowledgement" : "an unpolled part"}`, async () => {
   const now = Date.UTC(2026, 10, 11, 12);
   const f = fixture("synthetic-credential", undefined, () => now);
-  f.storage.updateSettings({ backend: "codex" }); Object.defineProperty(f.provider, "backend", { value: "codex" });
+  if (backend === "codex") { f.storage.updateSettings({ backend }); Object.defineProperty(f.provider, "backend", { value: "codex" }); }
   const p = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
   f.provider.replay(p.providerId, said("Please check the", 0)); await f.service.drain(p.sessionId);
   await f.service.close(p.sessionId, "transport");
@@ -3381,10 +3421,10 @@ for (const crash of [false, true]) test(`slice 2: real process restart preserves
     const now = () => ${now};
     const storage = new CompanionStorage(now);
     const admission = new CompanionAdmission(storage, { recipient: () => null, reports: () => [], send: async () => { throw new Error("unexpected send"); } }, now);
-    const provider = new FakeLiveProvider(); Object.defineProperty(provider, "backend", { value: "codex" });
+    const provider = new FakeLiveProvider(); if (${JSON.stringify(backend)} === "codex") Object.defineProperty(provider, "backend", { value: "codex" });
     const reads = fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
-    const service = new CompanionLiveSessions(storage, admission, reads, provider, { now, timers: false });
-    const next = await service.start({ project: "fixture", locale: "en", sdp: "v=0", resume: process.env.SLICE_RESUME_ID });
+    const service = new CompanionLiveSessions(storage, admission, reads, provider, { now, timers: false, key: () => "synthetic-credential" });
+    const next = await service.start({ project: "fixture", locale: "en", sdp: "v=0", resume: process.env.SLICE_RESUME_ID, ...(process.env.SLICE_OPEN_ITEM ? { cursor: { operatorOpen: process.env.SLICE_OPEN_ITEM } } : {}), ...(process.env.SLICE_PLAYED === "yes" ? { cursor: {} } : {}) });
     const before = provider.commands.length;
     if (process.env.SLICE_CRASH === "yes") admission.resumeReplied = () => {
       console.log(JSON.stringify({ id: next.sessionId, before, lines: provider.commands.filter(row => row.type === "session.commentary.append").map(row => row.content), owed: admission.reportSpeech(next.sessionId).length }));
@@ -3399,13 +3439,264 @@ for (const crash of [false, true]) test(`slice 2: real process restart preserves
     await service.close(next.sessionId, "transport");
     console.log(JSON.stringify({ id: next.sessionId, before, lines, owed: admission.reportSpeech(next.sessionId).length }));
   `;
-  const run = async (id: string, poll: boolean, crash = false) => {
-    const child = Bun.spawn([process.execPath, "-e", script], { cwd: process.cwd(), env: { ...process.env, SLICE_RESUME_ID: id, SLICE_POLL: poll ? "yes" : "no", SLICE_CRASH: crash ? "yes" : "no" }, stdout: "pipe", stderr: "pipe" });
+  const run = async (id: string, poll: boolean, crash = false, played = false) => {
+    const child = Bun.spawn([process.execPath, "-e", script], { cwd: process.cwd(), env: { ...process.env, SLICE_RESUME_ID: id, SLICE_POLL: poll ? "yes" : "no", SLICE_CRASH: crash ? "yes" : "no", SLICE_PLAYED: played ? "yes" : "no", SLICE_OPEN_ITEM: id === p.sessionId ? f.admission.transcriptRecord(p.sessionId).entries.find(row => row.kind === "utterance")!.id : "" }, stdout: "pipe", stderr: "pipe" });
     const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect(code, err).toBe(0); return JSON.parse(out) as { id: string; before: number; lines: string[]; owed: number };
   };
   const n = await run(p.sessionId, false); expect(n).toMatchObject({ before: 0, lines: [], owed: 1 });
-  const n2 = await run(n.id, true, crash); expect(n2).toMatchObject({ before: 0, lines: ["The connection dropped after «Please check the». Go on."], owed: crash ? 1 : 0 });
-  const n3 = await run(n2.id, true); // Known playback cut is absent after reload: the newest voice may be unheard.
-  expect(n3.lines).toHaveLength(1); expect(n3.lines[0]).toBe("The connection dropped at «Go on.». Shall I go on?");
+  const n2 = await run(n.id, true, crash); expect(n2).toMatchObject({ before: 0, owed: crash ? 1 : 0 });
+  expect(n2.lines).toHaveLength(1); expect(n2.lines[0]).toContain("Please check the");
+  const n3 = await run(n2.id, true, false, true);
+  expect(n3.lines).toEqual([]); expect(n3.owed).toBe(0);
+});
+
+for (const backend of ["api", "codex"] as const) for (const delay of [0, 180_000])
+  test(`slice 3: ${backend} adopts an outage answer after ${delay}ms and two lost start answers exactly once`, async () => {
+    let now = Date.UTC(2026, 10, 11, 12);
+    const f = fixture("synthetic-credential", undefined, () => now);
+    if (backend === "codex") { f.storage.updateSettings({ backend }); Object.defineProperty(f.provider, "backend", { value: "codex" }); }
+    const p = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+    f.provider.replay(p.providerId, said("Please review the plan.", 0)); await f.service.drain(p.sessionId);
+    await f.admission.delegate(p.sessionId, "outage-call", "outage-turn", "Review the plan");
+    const request = Object.values(f.admission.session(p.sessionId).proposals)[0];
+    await f.service.close(p.sessionId, "transport"); now += delay;
+    f.reports.push({ id: "outage-answer", seq: 1, project: "fixture", at: new Date(now).toISOString(), class: "completed", body: "OUTAGE_ANSWER",
+      correlatesDirective: request.delivery!.clientMessageId, origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await f.service.events(p.sessionId, 0); now += 2000; await f.service.closeRequest(f.storage.read().sessions[p.sessionId].mintRequestId!); await f.service.events(p.sessionId, 0);
+    expect(f.admission.reportSpeech(p.sessionId).map(row => row.reportId)).toEqual(["outage-answer"]);
+    // The event ring may roll off while the page is away; the call journal still owns the cards.
+    f.storage.change(document => { document.sessions[p.sessionId].events = []; });
+    // These are the two minted attempts whose answers never reached the browser; both same-key retries recover them without side effects.
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const input = { project: "fixture", locale: "en" as const, sdp: `v=${attempt}`, resume: p.sessionId, requestId: `lost-${attempt}`, cursor: {} };
+      const lost = await f.service.start(input); expect(await f.service.start(input)).toEqual(lost);
+      expect(f.admission.reportSpeech(lost.sessionId).filter(row => row.reportId === "outage-answer")).toHaveLength(1);
+      expect(spoken(f)).toHaveLength(0);
+    }
+    const n = await f.service.start({ project: "fixture", locale: "en", sdp: "v=3", resume: p.sessionId, cursor: {} });
+    await f.service.events(n.sessionId, 0); now += 15_001; await f.service.events(n.sessionId, 0); await f.service.events(n.sessionId, 0);
+    expect(spoken(f).filter(row => String(row.content).includes("OUTAGE_ANSWER"))).toHaveLength(1);
+    expect(f.admission.events(n.sessionId, 0).filter(row => row.type === "orchestrator.answer" && row.reportId === "outage-answer")).toHaveLength(1);
+    const { INITIAL_COMPANION_STATE, reduceCompanion } = await import("./reducer");
+    const ui = f.admission.events(n.sessionId, 0).reduce(reduceCompanion, INITIAL_COMPANION_STATE);
+    expect(ui.delegation?.stage).toBe("answered");
+    // The original request was answered while closed. Its card and receipt must still reach the new browser.
+    expect(f.service.transcriptRecord(n.sessionId).entries.some(row => row.kind === "report" && row.data.text === "OUTAGE_ANSWER")).toBe(true);
+    const before = f.storage.read().sessions[p.sessionId];
+    f.reports.push({ ...f.reports[0], id: "later", seq: 2, body: "LATER" });
+    await f.service.events(p.sessionId, 0);
+    expect(f.storage.read().sessions[p.sessionId]).toEqual(before); expect(f.sends()).toBe(1);
+    await f.service.close(n.sessionId);
+  });
+
+for (const backend of ["api", "codex"] as const) for (const replied of [false, true])
+  test(`slice 3: ${backend} replays a report handed one second before the drop only when replied=${replied}`, async () => {
+    let now = Date.UTC(2026, 10, 11, 12);
+    const f = fixture("synthetic-credential", undefined, () => now);
+    if (backend === "codex") { f.storage.updateSettings({ backend }); Object.defineProperty(f.provider, "backend", { value: "codex" }); }
+    const p = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+    f.provider.replay(p.providerId, said("Ready.", 0, "output")); await f.service.drain(p.sessionId);
+    f.reports.push({ id: "handoff-report", seq: 1, project: "fixture", at: new Date(now).toISOString(), class: "completed", body: "HANDED_FACT",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await f.service.events(p.sessionId, 0);
+    if (replied) { f.provider.replay(p.providerId, said("HANDED_FACT", 1000, "output")); await f.service.drain(p.sessionId); }
+    now += 1000; await f.service.close(p.sessionId, "transport");
+    const before = spoken(f).length;
+    const n = await f.service.start({ project: "fixture", locale: "en", sdp: "v=1", resume: p.sessionId, cursor: {} });
+    await f.service.events(n.sessionId, 0); now += 15_001; await f.service.events(n.sessionId, 0); await f.service.events(n.sessionId, 0);
+    expect(spoken(f).slice(before).filter(row => String(row.content).includes("HANDED_FACT"))).toHaveLength(replied ? 0 : 1);
+    expect(f.admission.transcriptRecord(p.sessionId).entries.find(row => row.kind === "handoff")?.data).toMatchObject({ reportId: "handoff-report", reportPart: 0 });
+    f.provider.replay(n.providerId, said("HANDED_FACT", 1000, "output")); await f.service.drain(n.sessionId);
+    await f.service.close(n.sessionId, "transport");
+    const after = spoken(f).length;
+    const n2 = await f.service.start({ project: "fixture", locale: "en", sdp: "v=2", resume: n.sessionId, cursor: {} });
+    await f.service.events(n2.sessionId, 0); expect(spoken(f)).toHaveLength(after);
+    await f.service.close(n2.sessionId);
+  });
+
+for (const backend of ["api", "codex"] as const) test(`slice 3: ${backend} retries an unknown send with its original key after two lost attempts`, async () => {
+  const now = () => Date.UTC(2026, 10, 11, 12);
+  const f = fixture("synthetic-credential", undefined, now);
+  if (backend === "codex") { f.storage.updateSettings({ backend }); Object.defineProperty(f.provider, "backend", { value: "codex" }); }
+  const keys: string[] = [], messages = new Set<string>();
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  const admission = new CompanionAdmission(f.storage, { recipient: () => ({ project: "other", conversationId: "conversation_other", seatEpoch: 1, engine: "codex" }), reports: project => reports.filter(row => row.project === project),
+    send: async ({ delivery }) => { keys.push(delivery.clientMessageId); messages.add(delivery.clientMessageId);
+      return keys.length === 1 ? { status: "unknown", operationId: null } : { status: "delivered", operationId: "operation-recovered" }; } }, now);
+  const service = new CompanionLiveSessions(f.storage, admission, f.reads, f.provider, { now, key: () => "synthetic-credential", timers: false });
+  const p = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(p.providerId, said("Review the plan", 0)); await service.drain(p.sessionId);
+  await admission.delegate(p.sessionId, "unknown-call", "unknown-turn", "Review the plan", { project: "other" });
+  const original = Object.values(admission.session(p.sessionId).proposals)[0];
+  reports.push({ id: "pending-report", seq: 1, project: "fixture", at: new Date(now()).toISOString(), class: "completed", body: "PENDING_REPORT",
+    origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+  admission.pollReports(p.sessionId);
+  await service.close(p.sessionId, "transport");
+  for (let i = 0; i < 2; i++) await service.start({ project: "fixture", locale: "en", sdp: `lost-${i}`, requestId: `unknown-lost-${i}`, resume: p.sessionId, cursor: {} });
+  const n = await service.start({ project: "fixture", locale: "en", sdp: "v=3", resume: p.sessionId, cursor: {} });
+  expect(keys).toHaveLength(1);
+  expect(admission.reportSpeech(n.sessionId).filter(row => row.reportId === "pending-report")).toHaveLength(1);
+  await service.events(n.sessionId, 0); await service.events(n.sessionId, 0); await service.events(p.sessionId, 0);
+  expect(keys).toEqual([original.delivery!.clientMessageId, original.delivery!.clientMessageId]); expect(messages.size).toBe(1);
+  expect(admission.session(n.sessionId).proposals[original.proposal.proposalId]).toMatchObject({ status: "delivered", delivery: { operationId: "operation-recovered", recipient: original.delivery!.recipient } });
+  expect(admission.transcriptRecord(n.sessionId).entries.find(row => row.kind === "request")?.data).toMatchObject({ instruction: "Review the plan", status: "delivered" });
+  f.provider.replay(n.providerId, said("Restored.", 1000, "output")); await service.drain(n.sessionId);
+  await service.events(n.sessionId, 0);
+  expect(spoken(f).filter(row => String(row.content).includes("PENDING_REPORT"))).toHaveLength(1);
+  f.provider.replay(n.providerId, said("PENDING_REPORT", 4000, "output")); await service.drain(n.sessionId);
+  await service.close(n.sessionId, "transport");
+  const count = spoken(f).length;
+  const n2 = await service.start({ project: "fixture", locale: "en", sdp: "v=4", resume: n.sessionId, cursor: {} });
+  await service.events(n2.sessionId, 0); expect(spoken(f)).toHaveLength(count);
+  expect(messages.size).toBe(1); await service.close(n2.sessionId);
+});
+
+test("slice 3: a receipt poll held across adoption cannot mutate the frozen part", async () => {
+  let now = Date.UTC(2026, 10, 11, 12), calls = 0;
+  const f = fixture("synthetic-credential", undefined, () => now);
+  const entered = deferred(), release = deferred();
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  const admission = new CompanionAdmission(f.storage, { recipient: () => ({ project: "other", conversationId: "conversation_other", seatEpoch: 1, engine: "claude" }),
+    reports: project => reports.filter(row => row.project === project), send: async () => ({ status: "queued", operationId: "operation-held" }),
+    receipt: async () => { if (++calls === 1) { entered.resolve(); await release.promise; } return "delivered"; } }, () => now);
+  const service = new CompanionLiveSessions(f.storage, admission, f.reads, f.provider, { now: () => now, key: () => "synthetic-credential", timers: false });
+  const p = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(p.providerId, said("Review the plan", 0)); await service.drain(p.sessionId);
+  await admission.delegate(p.sessionId, "held-call", "held-turn", "Review the plan", { project: "other" });
+  const request = Object.values(admission.session(p.sessionId).proposals)[0];
+  const polling = service.events(p.sessionId, 0); await entered.promise;
+  await service.close(p.sessionId, "transport");
+  const n = await service.start({ project: "fixture", locale: "en", sdp: "v=1", resume: p.sessionId, cursor: {} });
+  const frozen = admission.session(p.sessionId);
+  reports.push({ id: "other-answer", seq: 1, project: "other", at: new Date(now).toISOString(), class: "completed", body: "OTHER_ANSWER",
+    correlatesDirective: request.delivery!.clientMessageId, origin: { kind: "manager", conversationId: "conversation_other", role: "orchestrator" } });
+  release.resolve(); await polling;
+  expect(admission.session(p.sessionId)).toEqual(frozen);
+  await service.events(n.sessionId, 0); now += 15_001; await service.events(n.sessionId, 0);
+  expect(admission.session(n.sessionId).proposals[request.proposal.proposalId]).toMatchObject({ status: "delivered", answered: "other-answer" });
+  expect(spoken(f).filter(row => String(row.content).includes("OTHER_ANSWER"))).toHaveLength(1);
+  await service.close(n.sessionId);
+});
+
+for (const backend of ["api", "codex"] as const) test(`slice 3: ${backend} asks a cancelled confirmation once and requires a new yes`, async () => {
+  const f = fixture("synthetic-credential", undefined, () => Date.UTC(2026, 10, 11, 12));
+  if (backend === "codex") { f.storage.updateSettings({ backend }); Object.defineProperty(f.provider, "backend", { value: "codex" }); }
+  const p = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(p.providerId, said("Review the plan", 0)); await f.service.drain(p.sessionId);
+  await f.admission.delegate(p.sessionId, "confirm-call", "confirm-turn", "Review the plan", { confirmation: "Which plan?" });
+  const old = Object.values(f.admission.session(p.sessionId).proposals)[0];
+  await f.service.close(p.sessionId, "transport");
+  expect(f.admission.session(p.sessionId).proposals[old.proposal.proposalId]).toMatchObject({ state: "cancelled", cancelCode: "connection_dropped" });
+  const n = await f.service.start({ project: "fixture", locale: "en", sdp: "v=1", resume: p.sessionId, cursor: {} });
+  await f.service.events(n.sessionId, 0);
+  const prompts = () => f.admission.transcriptRecord(n.sessionId).entries.filter(row => row.kind === "handoff" && (row.data.resumeOf as { item?: string })?.item === `request-${old.proposal.callId}`);
+  expect(prompts()).toHaveLength(1); expect(f.sends()).toBe(0);
+  await f.service.command(p.sessionId, { type: "confirmation", proposalId: old.proposal.proposalId, via: "tap", decision: "send" });
+  expect(f.sends()).toBe(0);
+  f.provider.replay(n.providerId, said("Shall I send the plan?", 0, "output")); await f.service.drain(n.sessionId);
+  await f.service.events(n.sessionId, 0); expect(prompts()).toHaveLength(1);
+  // Re-enter through the normal gate; even the new request waits for a new yes.
+  await f.admission.delegate(n.sessionId, "new-confirm-call", "new-confirm-turn", "Review the plan", { confirmation: "Send it?" });
+  const fresh = Object.values(f.admission.session(n.sessionId).proposals)[0];
+  expect(fresh.proposal.proposalId).not.toBe(old.proposal.proposalId); expect(f.sends()).toBe(0);
+  await f.service.command(n.sessionId, { type: "confirmation", proposalId: fresh.proposal.proposalId, via: "tap", decision: "send" });
+  expect(f.sends()).toBe(1);
+  await f.service.close(n.sessionId, "transport");
+  const n2 = await f.service.start({ project: "fixture", locale: "en", sdp: "v=2", resume: n.sessionId, cursor: {} });
+  await f.service.events(n2.sessionId, 0);
+  expect(f.admission.transcriptRecord(n2.sessionId).entries.filter(row => row.kind === "handoff" && (row.data.resumeOf as { item?: string })?.item === `request-${old.proposal.callId}`)).toEqual([]);
+  expect(f.sends()).toBe(1); await f.service.close(n2.sessionId);
+});
+
+for (const backend of ["api", "codex"] as const) for (const fault of ["handoff", "queue", "reply", "send", "confirmation"] as const)
+  test(`slice 3: ${backend} real process restart reconciles ${fault} without duplicate speech or effects`, async () => {
+    const directory = path.join(root, `restart-${backend}-${fault}`);
+    const run = async (fault: string, resume = "") => {
+      const child = Bun.spawn([process.execPath, "src/lib/voiceCompanion/reconnectRecovery.fixture.ts"], { cwd: process.cwd(), env: { ...process.env,
+        LLV_STATE_DIR: path.join(directory, "state"), XDG_CONFIG_HOME: path.join(directory, "config"), RECOVERY_BACKEND: backend, RECOVERY_FAULT: fault, RECOVERY_RESUME: resume }, stdout: "pipe", stderr: "pipe" });
+      const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(code, err).toBe(0); return JSON.parse(out) as { id: string; lines: string[]; ledger: { attempts: string[]; messages: string[] } };
+    };
+    const p = await run(fault);
+    const n = await run("none", p.id);
+    expect(n.lines.filter(line => line.includes("RESTART_FACT"))).toHaveLength(fault === "reply" || fault === "send" || fault === "confirmation" ? 0 : 1);
+    if (fault === "confirmation") { expect(n.lines).toHaveLength(1); expect(n.lines[0]).toContain("Review the plan"); expect(n.ledger.messages).toEqual([]); }
+    if (fault === "send") {
+      expect(n.ledger.attempts).toHaveLength(2); expect(new Set(n.ledger.attempts).size).toBe(1); expect(n.ledger.messages).toHaveLength(1);
+    }
+    const n2 = await run("none", n.id);
+    expect(n2.lines).toEqual([]); expect(n2.ledger).toEqual(n.ledger);
+  });
+
+for (const [from, to] of [["api", "codex"], ["codex", "api"]] as const)
+  test(`slice 3: ${from} report survives a refused mint and is recomposed for ${to}`, async () => {
+    const f = fixture("synthetic-credential", undefined, () => Date.UTC(2026, 10, 11, 12));
+    const other = new FakeLiveProvider();
+    const api = from === "api" ? f.provider : other, codex = from === "codex" ? f.provider : other;
+    Object.defineProperty(codex, "backend", { value: "codex" }); f.storage.updateSettings({ backend: from });
+    const service = new CompanionLiveSessions(f.storage, f.admission, f.reads, f.provider, { now: () => Date.UTC(2026, 10, 11, 12), key: () => "synthetic-credential", timers: false, apiProvider: api, codexProvider: codex });
+    const p = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+    f.provider.replay(p.providerId, said("Ready.", 0, "output")); await service.drain(p.sessionId);
+    f.reports.push({ id: "switch-report", seq: 1, project: "fixture", at: "2026-11-11T12:00:00Z", class: "completed", body: "SWITCH_FACT",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await service.events(p.sessionId, 0); await service.close(p.sessionId, "transport");
+    f.provider.createFailures.push("refused");
+    await expect(service.start({ project: "fixture", locale: "en", sdp: "v=failed", resume: p.sessionId, cursor: {} })).rejects.toThrow();
+    f.storage.updateSettings({ backend: to });
+    const n = await service.start({ project: "fixture", locale: "en", sdp: "v=next", resume: p.sessionId, cursor: {} });
+    expect(f.admission.reportSpeech(n.sessionId)).toMatchObject([{ reportId: "switch-report", handed: 0 }]);
+    expect(f.admission.reportSpeech(n.sessionId)[0].parts).toBeUndefined();
+    await service.events(n.sessionId, 0); await service.events(n.sessionId, 0);
+    const content = other.commands.filter(row => row.type === "session.commentary.append").map(row => String(row.content));
+    expect(content).toHaveLength(1); expect(content[0]).toContain("SWITCH_FACT");
+    if (to === "codex") expect(content[0]).toBe('The orchestrator for project "fixture" reports result.\nSWITCH_FACT');
+    await service.close(n.sessionId);
+  });
+
+test("slice 3: a send reply lost across adoption settles only the current owner with the same operation", async () => {
+  const now = () => Date.UTC(2026, 10, 11, 12);
+  const f = fixture("synthetic-credential", undefined, now), entered = deferred(), release = deferred();
+  const keys = new Set<string>();
+  const admission = new CompanionAdmission(f.storage, { recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" }), reports: () => [],
+    send: async ({ delivery }) => { keys.add(delivery.clientMessageId); entered.resolve(); await release.promise; return { status: "delivered", operationId: "operation-late" }; } }, now);
+  const service = new CompanionLiveSessions(f.storage, admission, f.reads, f.provider, { now, key: () => "synthetic-credential", timers: false });
+  const p = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(p.providerId, said("Review the plan", 0)); await service.drain(p.sessionId);
+  const sending = admission.delegate(p.sessionId, "late-call", "late-turn", "Review the plan"); await entered.promise;
+  await service.close(p.sessionId, "transport");
+  const n = await service.start({ project: "fixture", locale: "en", sdp: "v=1", resume: p.sessionId, cursor: {} });
+  const frozen = admission.session(p.sessionId);
+  release.resolve(); await sending;
+  expect(admission.session(p.sessionId)).toEqual(frozen);
+  expect(Object.values(admission.session(n.sessionId).proposals)[0]).toMatchObject({ status: "delivered", publishedReceipt: { operationId: "operation-late" } });
+  await service.events(n.sessionId, 0); expect(keys.size).toBe(1); await service.close(n.sessionId);
+});
+
+for (const committed of [false, true]) test(`slice 3: an adoption write failure ${committed ? "after commit" : "before commit"} keeps pending speech recoverable without a provider mint`, async () => {
+  const f = fixture("synthetic-credential", undefined, () => Date.UTC(2026, 10, 11, 12));
+  const p = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(p.providerId, said("Ready.", 0, "output")); await f.service.drain(p.sessionId);
+  f.reports.push({ id: "write-report", seq: 1, project: "fixture", at: "2026-11-11T12:00:00Z", class: "completed", body: "WRITE_FACT",
+    origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+  f.admission.pollReports(p.sessionId); await f.service.close(p.sessionId, "transport");
+  const change = f.storage.change.bind(f.storage); let injected = false;
+  const hook = spyOn(f.storage, "change").mockImplementation(operation => {
+    let adoption = false;
+    const value = change(document => {
+      const value = operation(document);
+      adoption = !injected && !!document.sessions[p.sessionId].resumedBy;
+      if (adoption && !committed) { injected = true; throw new Error("adoption write interrupted"); }
+      return value;
+    });
+    if (adoption) { injected = true; throw new Error("adoption write reply lost"); }
+    return value;
+  });
+  try { await expect(f.service.start({ project: "fixture", locale: "en", sdp: "v=1", resume: p.sessionId, cursor: {} })).rejects.toThrow(); }
+  finally { hook.mockRestore(); }
+  expect(f.provider.sessions).toHaveLength(1);
+  const n = await f.service.start({ project: "fixture", locale: "en", sdp: "v=2", resume: p.sessionId, cursor: {} });
+  await f.service.events(n.sessionId, 0); await f.service.events(n.sessionId, 0);
+  expect(spoken(f).filter(row => String(row.content).includes("WRITE_FACT"))).toHaveLength(1);
+  await f.service.close(n.sessionId);
 });
