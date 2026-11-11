@@ -594,3 +594,110 @@ for (const cut of ["after-host-target", "after-launch-target"] as const) test(`l
   await runChild(f, "reconcile");
   expect(f.store.events({ actions: ["member.revoked"], limit: 1 })[0]!.detail).toMatchObject({ stoppedHosts: 1, pending: false });
 });
+
+for (const restart of [false, true]) test(`failed native cleanup retains custody through Stop and restart ${restart}`, async () => {
+  const f = await fixture();
+  const begun = beginLegacySpawnFixture(f.registry, { engine: "claude", cwd: f.root, transport: "structured", ownStartingActuation: true,
+    launchProfile: { workspace: { memberId: f.person.member.id, workspaceId: "workspace-a" } } });
+  if (begun.kind !== "created") throw Error("admission failed");
+  const beforeInvalidProof = f.registry.spawnReceipt(begun.receipt.launchId);
+  expect(() => f.registry.recordStructuredHostSetup(begun.receipt.launchId, begun.receipt.admissionOwner!, { pid: 1, startIdentity: null }))
+    .toThrow("structured termination survivor identity is malformed");
+  expect(f.registry.spawnReceipt(begun.receipt.launchId)).toEqual(beforeInvalidProof);
+  const extra = Bun.spawn([process.execPath, "-e", "console.log('ready'); setInterval(() => {}, 1000)"], { stdout: "pipe", stderr: "ignore" });
+  cleanups.push(async () => { if (extra.exitCode === null) extra.kill("SIGKILL"); await extra.exited; });
+  const reader = extra.stdout.getReader(); await reader.read(); reader.releaseLock();
+  const extraIdentity = captureProcessIdentity(extra.pid);
+  const host = new FakeEngineHost(undefined, { status: "active", sessionKey: "unbound", endpoint: "fixture:unbound", pid: extra.pid,
+    processStartIdentity: extraIdentity.startIdentity, eventCursor: 0, protocolVersion: "fixture-v1", activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null });
+  host.release = async () => { throw Error("injected native cleanup refusal"); };
+  await expect(spawnStructuredConversation({ registry: f.registry, client: f.client, receipt: begun.receipt, engine: "claude", prompt: "",
+    account: { engine: "claude", accountId: "subscription-a", kind: "legacy", home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } },
+    spec: { engine: "claude", command: "claude", cwd: f.root, windowName: "cleanup-failure", launchProfile: begun.receipt.launchProfile },
+  }, { startHost: async () => {
+    expect((await f.revoke()).status).toBe(202);
+    return host as unknown as SpawnedStructuredHost;
+  } })).rejects.toThrow();
+  expect(f.registry.spawnReceipt(begun.receipt.launchId)?.admissionOwner).not.toBeNull();
+  expect(f.store.memberRevocationPending()).toBe(true);
+  expect(processIdentityStatus(extraIdentity)).toBe("alive");
+
+  // A recycled PID may belong to another person's process. Its old start
+  // token proves that our incarnation ended; it cannot block the live target.
+  const peer = Bun.spawn([process.execPath, "-e", "console.log('ready'); setInterval(() => {}, 1000)"], { stdout: "pipe", stderr: "ignore" });
+  cleanups.push(async () => { if (peer.exitCode === null) peer.kill("SIGKILL"); await peer.exited; });
+  const peerReader = peer.stdout.getReader(); await peerReader.read(); peerReader.releaseLock();
+  const peerIdentity = captureProcessIdentity(peer.pid);
+  f.registry.recordStructuredHostSetup(begun.receipt.launchId, begun.receipt.admissionOwner!, { ...peerIdentity, startIdentity: "previous-incarnation" });
+
+  if (restart) {
+    await runChild(f, "reconcile", "after-setup-release");
+    expect(f.store.memberRevocationPending()).toBe(true);
+    await runChild(f, "reconcile");
+  } else {
+    await reconcileMemberRevocations({ store: f.store, registry: f.registry, client: f.client, now: f.nextRecoveryAt, assertActive: () => {} });
+  }
+  await extra.exited;
+  expect(processIdentityStatus(extraIdentity)).toBe("dead");
+  expect(processIdentityStatus(peerIdentity)).toBe("alive");
+  expect((await f.revoke()).status).toBe(200);
+  expect(f.registry.spawnReceipt(begun.receipt.launchId)?.admissionOwner).toBeNull();
+  expect(f.store.memberRevocationPending()).toBe(false);
+  expect(f.store.events({ actions: ["member.revoked"], limit: 1 })[0]?.detail).toMatchObject({ stoppedHosts: 2, pending: false });
+});
+
+test("dead setup owner before exec converges after startup recovery", async () => {
+  const f=await fixture();
+  const child=Bun.spawn([process.execPath,path.join(import.meta.dir,"fixtures/memberRevocationChild.ts"),"setup-crash",f.person.member.id],{env:{...process.env,LLV_STATE_DIR:f.root},stdout:"pipe",stderr:"pipe"});
+  cleanups.push(async()=>{if(child.exitCode===null&&child.signalCode===null)child.kill("SIGKILL");await child.exited;});
+  const [exit,out,err]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);
+  expect({exit,err}).toEqual({exit:0,err:""});
+  const id=out.trim();
+  expect([200, 202]).toContain((await f.revoke()).status);
+  const {terminalizeStaleStructuredSpawns,recoverPendingStructuredSpawns}=await import("@/lib/runtime/structuredSpawn");
+  await terminalizeStaleStructuredSpawns(f.registry,f.client,{now:f.nextRecoveryAt,timeoutMs:0,assertActive:()=>{}});
+  await recoverPendingStructuredSpawns(f.registry,f.client,{now:f.nextRecoveryAt,timeoutMs:0,assertActive:()=>{}});
+  await runChild(f,"reconcile");
+  await runChild(f,"reconcile");
+  const receipt=f.registry.spawnReceipt(id)!;
+  const restoreResponse=await PATCH(new NextRequest(`http://127.0.0.1:8898/api/team/members/${f.person.member.id}`,{method:"PATCH",headers:{host:"127.0.0.1:8898",cookie:`llv_member=${f.owner.cookie}`,"content-type":"application/json"},body:JSON.stringify({status:"active"})}),{params:Promise.resolve({id:f.person.member.id})});
+  expect(receipt.admissionOwner).toBeNull();
+  expect(receipt.state).toBe("failed");
+  expect(restoreResponse.status).toBe(200);
+  expect(f.store.memberRevocationPending()).toBe(false);
+});
+
+
+
+test("dead setup owner after native exec is recovered by a fresh process before session staging", async () => {
+  const f = await fixture();
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures/memberRevocationChild.ts"), "setup-exec-crash", f.person.member.id], {
+    env: { ...process.env, LLV_STATE_DIR: f.root }, stdout: "pipe", stderr: "pipe",
+  });
+  cleanups.push(async () => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await child.exited; });
+  const [exit, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect({ exit, err: err.replace(/^.*signal-sandbox.*\n/gm, "") }).toEqual({ exit: 71, err: "" });
+  const saved = JSON.parse(out) as import("@/lib/agent/registry").SpawnReceipt;
+  expect(saved.key).toBeNull();
+  expect(saved.hostSetup?.phase).toBe("executing");
+  expect(saved.hostSetup?.processes.length).toBeGreaterThan(0);
+  expect(processIdentityStatus(saved.admissionOwner!)).toBe("dead");
+  cleanups.push(async () => {
+    for (const identity of saved.hostSetup!.processes) {
+      if (processIdentityStatus(identity) === "alive") await terminateStructuredHostTree({ kind: "structured", ...identity,
+        startIdentity: identity.startIdentity!, bootEpoch: identity.bootEpoch ?? null, engine: "claude", sessionId: null,
+        conversationId: saved.conversationId, owned: false, seat: false, turnBusy: null, lastActiveAt: null });
+    }
+  });
+  expect(saved.hostSetup!.processes.some(identity => processIdentityStatus(identity) === "alive")).toBe(true);
+  await runChild(f, "revoke");
+  for (let pass = 0; pass < 4 && f.store.memberRevocationPending(); pass++) {
+    await runChild(f, "reconcile");
+    await f.queue.drain();
+  }
+  expect(f.registry.spawnReceipt(saved.launchId)?.admissionOwner).toBeNull();
+  expect(saved.hostSetup!.processes.every(identity => processIdentityStatus(identity) === "dead")).toBe(true);
+  expect(f.store.memberRevocationPending()).toBe(false);
+  expect(f.store.events({ actions: ["member.revoked"], limit: 1 })[0]?.detail).toMatchObject({ stoppedHosts: 2, pending: false });
+  expect((await f.revoke()).status).toBe(200);
+});

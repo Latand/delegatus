@@ -1,4 +1,5 @@
 import { recordedAgentScope } from "./agentScope";
+import { withStructuredSetupCustody } from "./structuredSetupCustody";
 import { assertMemberLaunchAllowed } from "@/lib/team/memberLaunchAuthority";
 import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
@@ -2831,6 +2832,8 @@ export async function spawnStructuredConversation(
   let runtimeAdmitted = false;
   let hostStartRequested = false;
   let nativeSetupPending = false;
+  let setupCleanupConfirmed = false;
+  let setupCustodyActive = true;
   const binding: HostBinding = { stopPersistence: () => {}, unregister: async () => {} };
   let key: SessionKey | null = null;
   let forgetUnpublishedHost = () => {};
@@ -3004,11 +3007,31 @@ export async function spawnStructuredConversation(
     });
     hostStartRequested = true;
     nativeSetupPending = true;
-    const startingHost = startHost(input, capability);
+    const setupCustody = foregroundAdmissionOwner
+      ? { enabled: () => setupCustodyActive,
+        beforeExec: () => input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner),
+        record: (native: ProcessIdentity) => input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner, native) }
+      : null;
+    // Register cleanup evidence even if member authority was withdrawn while
+    // the engine awaited its protocol identity. Evidence grants no publication.
+    const retainHost = async (current: SpawnedStructuredHost) => {
+      if (!setupCustody) return;
+      const state = await current.health();
+      if (state.pid && state.pid > 1) setupCustody.record(captureProcessIdentity(state.pid, undefined, state.processStartIdentity));
+    };
+    const confirmSetupCleanup = async () => {
+      if (foregroundAdmissionOwner) await input.registry.deliveryWriteOrBusy({ label: "spawn.setup-cleanup", operationId }, () =>
+        input.registry.confirmStructuredHostSetupCleanup(operationId, foregroundAdmissionOwner));
+      setupCleanupConfirmed = true;
+      setupCustodyActive = false;
+    };
+    const startingHost = withStructuredSetupCustody(setupCustody, () => startHost(input, capability));
     void startingHost.then(async (lateHost) => {
       if (!durableSetupTimedOut) { nativeSetupPending = false; return; }
       try {
+        await retainHost(lateHost);
         await withHostStopOrigin({ path: "structured-spawn-late-cleanup", operationId: input.receipt.launchId }, () => lateHost.release());
+        await confirmSetupCleanup();
         nativeSetupPending = false;
         if (foregroundAdmissionOwner) await input.registry.deliveryWriteOrBusy({ label: "spawn.late-admission.release", operationId }, () =>
           input.registry.releaseStructuredSpawnAdmissionOwner(operationId, foregroundAdmissionOwner));
@@ -3023,12 +3046,14 @@ export async function spawnStructuredConversation(
       nativeSetupPending = false;
       if (durableSetupTimedOut && foregroundAdmissionOwner) {
         try {
+          await confirmSetupCleanup();
           await input.registry.deliveryWriteOrBusy({ label: "spawn.late-admission.release", operationId }, () =>
             input.registry.releaseStructuredSpawnAdmissionOwner(operationId, foregroundAdmissionOwner));
         } catch { /* Durable ownership keeps revocation pending for recovery. */ }
       }
     });
     host = await withinDurableSetup(startingHost);
+    await withinDurableSetup(retainHost(host));
     assertMemberCurrent();
     if (host.viewerMcpTransport) (await input.registry.deliveryWriteOrBusy({ label: "registry.setReceiptViewerMcpTransport" }, input.registry.setReceiptViewerMcpTransport.bind(input.registry, input.receipt.launchId, host.viewerMcpTransport)));
     const identity = hostIdentity(input.engine, host, input);
@@ -3067,6 +3092,9 @@ export async function spawnStructuredConversation(
     binding.stopPersistence = await withinDurableSetup(
       bindHost(input.registry, key, host, claimed.claimOwner, claimed.claimEpoch),
     );
+    // Host callbacks outlive startHost's async context. Native replacements
+    // now belong to the bound host's existing claim and persistence adapter.
+    setupCustodyActive = false;
     /* Still unpublished: a refusal here enters the failure path below, which
        retires the host this launch started and fails its receipt. */
     await input.authorize?.();
@@ -3320,6 +3348,12 @@ export async function spawnStructuredConversation(
         let cleanupError: unknown = null;
         try {
           await cleanupHost(host, binding, input.receipt.launchId);
+          if (foregroundAdmissionOwner && !nativeSetupPending) {
+            await input.registry.deliveryWriteOrBusy({ label: "spawn.setup-cleanup", operationId }, () =>
+              input.registry.confirmStructuredHostSetupCleanup(operationId, foregroundAdmissionOwner));
+            setupCleanupConfirmed = true;
+            setupCustodyActive = false;
+          }
         } catch (failure) {
           cleanupError = failure;
         }
@@ -3394,7 +3428,13 @@ export async function spawnStructuredConversation(
   } finally {
     // This call no longer advances setup, including when cleanup/projection
     // failed. Hand recovery back without releasing a newer admission owner.
-    if (foregroundAdmissionOwner && !admissionDeferred && !(durableSetupTimedOut && nativeSetupPending)) {
+    const { durableHost, neverExecuted } = withoutOperationLease(() => {
+      const bound = key ? input.registry.hostEntry(key) : null;
+      return { durableHost: bound?.structuredHostOperationId === operationId && bound.structuredHost?.process,
+        neverExecuted: !host && !nativeSetupPending && input.registry.spawnReceipt(operationId)?.hostSetup?.phase === "preparing" };
+    });
+    if (foregroundAdmissionOwner && !admissionDeferred
+      && (!hostStartRequested || neverExecuted || setupCleanupConfirmed || durableHost) && !(durableSetupTimedOut && nativeSetupPending)) {
       try {
         await withoutOperationLease(() => input.registry.deliveryWrite({ label: "spawn.admission.release", operationId },
           () => input.registry.releaseStructuredSpawnAdmissionOwner(operationId, foregroundAdmissionOwner)));

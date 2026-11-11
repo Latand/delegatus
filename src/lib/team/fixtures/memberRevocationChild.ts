@@ -9,7 +9,29 @@ import { assertMemberLaunchAllowed } from "../memberLaunchAuthority";
 
 const [mode, memberId, cut, now] = process.argv.slice(2);
 const store = teamStore();
-if (mode === "revoke") {
+if (mode === "setup-crash" || mode === "setup-exec-crash") {
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "agent-registry.json"));
+  const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd: process.env.LLV_STATE_DIR!, transport: "structured", ownStartingActuation: true,
+    launchProfile: { workspace: { memberId: memberId!, workspaceId: "workspace-a" } } });
+  if (begun.kind !== "created" || !begun.receipt.admissionOwner) throw Error("admission failed");
+  registry.beginStructuredHostSetup(begun.receipt.launchId, begun.receipt.admissionOwner, 1_900_000_000_000);
+  if (mode === "setup-exec-crash") {
+    const { withStructuredSetupCustody } = await import("@/lib/runtime/structuredSetupCustody");
+    const { spawnManagedEngine } = await import("@/lib/runtime/agentSignalSandbox");
+    const owner = begun.receipt.admissionOwner;
+    const child = await withStructuredSetupCustody({
+      beforeExec: () => registry.recordStructuredHostSetup(begun.receipt.launchId, owner),
+      record: native => registry.recordStructuredHostSetup(begun.receipt.launchId, owner, native),
+    }, () => spawnManagedEngine(process.execPath, ["--no-env-file", "-e", "console.log('ready'); setInterval(() => {}, 1000)"],
+      { cwd: process.env.LLV_STATE_DIR, env: process.env, detached: true }, null));
+    await new Promise<void>(resolve => child.stdout.once("data", () => resolve()));
+    console.log(JSON.stringify(registry.spawnReceipt(begun.receipt.launchId)));
+    process.exit(71);
+  }
+  console.log(begun.receipt.launchId);
+  registry.close();
+} else if (mode === "revoke") {
   revokeMember(store, store.owner()!, store.member(memberId!)!);
 } else if (mode === "authority") {
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "agent-registry.json"));
@@ -22,6 +44,12 @@ if (mode === "revoke") {
   const registry = new AgentRegistry(path.join(root, "agent-registry.json"));
   const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true });
   const client = runtimeJournalClient(journal);
+  const releaseSetup = registry.releaseStructuredSpawnAdmissionOwner.bind(registry);
+  registry.releaseStructuredSpawnAdmissionOwner = (...args) => {
+    const result = releaseSetup(...args);
+    if (cut === "after-setup-release" && result.released && result.receipt.hostSetup) process.exit(71);
+    return result;
+  };
   const save = store.saveRevocationTarget.bind(store);
   store.saveRevocationTarget = target => {
     save(target);
