@@ -19,17 +19,19 @@ import { roleMemoryEnabled, roleMemorySelectorEnabled, swarmRulesEnabled } from 
 import { swarmRulesForRole, swarmScope, SWARM_ROLE_IDS, SWARM_ROLE_BOUND, publicSwarmTextMatcher } from "./swarmPack";
 import { engineMemoryOff } from "./source";
 import { curationRevision, curationView, machinePassAuthority, passIsLive } from "./curation/store";
-import { activeProfileBasis, privacyRuleRevision, profileScopeKeys, projectViewRows, projectViewRowsCooperatively, projectViewUnaffectedByChanges, roleScopeKeys, roleViewVersion } from "./roleViewSource";
+import { activeProfileBasis, privacyRuleRevision, profileScopeKeys, projectViewRows, projectViewRowsCooperatively, projectViewUnaffectedByChanges, roleScopeKeys, roleViewVersion, rowsWithScopeHistory, scopeRowForRewrite } from "./roleViewSource";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
 import type { ProfileRulesView } from "./profile";
+import { keepHistory, scopeRowWithEntry } from "./roleHistoryRows";
 import { renderLearnedRulesSelection } from "./roleRender";
 import { closestReadableRuleIds } from "./ruleIds";
+import { roleRowsWithPrefix, scopeMembershipRows, storedRuleTexts } from "./roleViewSource";
 import { deliveredRuleIds } from "./deliveryLedger";
 import {
   MAX_LESSONS_PER_ATTEMPT, ROLE_MEMORY_BOUND, ROLE_MEMORY_HISTORY_LIMIT,
   type LessonInput, type LessonRequestRow, type RoleMemoryProjectView, type RoleMemoryRow,
   type RoleMemoryRule, type RoleMemoryScopeRow, type RuleSource, type StageRuleSource, type SeatRuleSource, type OperatorRuleSource, type RuleView, type ScopeView, type StageLessonView,
-  type RewriteInput, type RuleRevision, type RuleRevisionView, type ScopeHistoryEntry, type RulePrivacyHint, type ProblemInput,
+  type RewriteInput, type RuleRevision, type RuleRevisionView, type RulePrivacyHint, type ProblemInput,
 } from "./roleTypes";
 
 /* One collection in state.sqlite, so role memory inherits the state store's
@@ -57,7 +59,8 @@ function retentionPolicy(project: string, scopes: readonly string[]) {
   // Settings may initialize their collection: read them before the memory write.
   const available = new Map([...new Set(scopes)].map(scope => [scope, curationAvailableForScope(scope, canonicalProject(project))]));
   const evidence = (active: readonly RoleMemoryRule[], pending?: LessonRequestRow | null) => {
-    const stored = roleMemoryCollection()?.snapshot() ?? [];
+    // Task lineage follows the merges recorded over each scope's whole history.
+    const stored = rowsWithScopeHistory(roleMemoryCollection()?.snapshot() ?? []);
     // The current answer's validated application marks are not committed yet.
     const all = pending ? stored.map(row => row.kind === "request" && key(row) === key(pending) ? pending : row) : stored;
     const byId = new Map(all.flatMap(row => row.kind === "rule" ? [[row.id, row] as const] : []));
@@ -80,13 +83,6 @@ function retentionPolicy(project: string, scopes: readonly string[]) {
 }
 const COLLECTION = "role_memory";
 export { ROLE_MEMORY_HISTORY_LIMIT };
-/** Keep 10,000 ordinary changes independently of every curator Undo record.
- * At 141 daily writes this covers over 70 days; delivery rows keep their own
- * ordered ids and content hashes, so reconstruction never depends on this window. */
-function keepHistory(entries: ScopeHistoryEntry[]): ScopeHistoryEntry[] {
-  const recent = new Set(entries.filter(entry => !entry.pass).slice(-ROLE_MEMORY_HISTORY_LIMIT));
-  return entries.filter(entry => !!entry.pass || recent.has(entry));
-}
 
 const requestKey = (pipelineId: string, stageId: string, attempt: number) => `q:${pipelineId}:${stageId}:${attempt}`;
 function key(row: RoleMemoryRow): string {
@@ -104,7 +100,10 @@ function decode(value: unknown): RoleMemoryRow | null {
     || row.kind === "request" && typeof row.pipelineId === "string" && Array.isArray(row.ruleIds) ? row : null;
 }
 const seed = { collection: COLLECTION, schemaVersion: 1, migrationId: "role-memory-v1", key, loadRecords: (): RoleMemoryRow[] => [] };
-const cache = new Map<string, SqliteStateCollection<RoleMemoryRow>>();
+// One handle per database across compiled route bundles: each bundle's own
+// map held a connection and, after any whole read, its own decoded copy.
+const cache = ((globalThis as typeof globalThis & { __llvRoleMemoryCollections?: Map<string, SqliteStateCollection<RoleMemoryRow>> })
+  .__llvRoleMemoryCollections ??= new Map());
 export function roleMemoryCollection(create = false): SqliteStateCollection<RoleMemoryRow> | null {
   const file = statePath("state.sqlite");
   const held = cache.get(file);
@@ -114,9 +113,6 @@ export function roleMemoryCollection(create = false): SqliteStateCollection<Role
   const opened = new SqliteStateCollection<RoleMemoryRow>(file, { collection: COLLECTION, schemaVersion: 1, busyMessage: "role memory busy", key, decode, clone: structuredClone, strictDecode: true });
   cache.set(file, opened);
   return opened;
-}
-function rows(): RoleMemoryRow[] {
-  return roleMemoryCollection()?.snapshot() ?? [];
 }
 function rule(id: string): RoleMemoryRule | null {
   const row = roleMemoryCollection()?.get(`r:${id}`);
@@ -188,11 +184,15 @@ export function joinMovedScopes(now = new Date().toISOString(), scopeKeys: () =>
   held.boundedPatch(4096, (tx) => {
     const rulesOf = (ids: readonly string[]) => ids.flatMap((id) => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; });
     for (const from of moved) {
-      const source = tx.get(`s:${from}`);
-      if (source?.kind !== "scope") continue;
+      const moving = tx.get(`s:${from}`);
+      if (moving?.kind !== "scope") continue;
+      // The join rewrites both histories as one, so each scope is taken with
+      // every entry in its row. The joined scope is stored that way; the
+      // history rows either side had are left unnamed for the drain.
+      const source = scopeRowForRewrite(moving, now);
       const into = resolve(from);
       const target = tx.get(`s:${into}`);
-      const current: RoleMemoryScopeRow = target?.kind === "scope" ? target : { kind: "scope", scope: into, revision: 0, active: [], history: [] };
+      const current: RoleMemoryScopeRow = target?.kind === "scope" ? scopeRowForRewrite(target, now) : { kind: "scope", scope: into, revision: 0, active: [], history: [] };
       const joined: RoleMemoryRule[] = [];
       const merged: { from: string; into: string }[] = [];
       const candidates = [...rulesOf(current.active), ...rulesOf(source.active)];
@@ -225,6 +225,8 @@ export function joinMovedScopes(now = new Date().toISOString(), scopeKeys: () =>
       const sourceHistory = source.history.map(entry => ({ ...entry, revisionScope: entry.revisionScope ?? source.scope }));
       const currentHistory = current.history.map(entry => ({ ...entry, revisionScope: entry.revisionScope ?? current.scope }));
       tx.put({ ...current, ...(current.fourScopeTarget || source.fourScopeTarget ? { fourScopeTarget: current.fourScopeTarget ?? source.fourScopeTarget } : {}), revision, active: retained.active.map((rule) => rule.id),
+        // The removed scope's released rows stay recorded on the scope that holds its entries.
+        ...(current.historyDropped || source.historyDropped ? { historyDropped: [...(current.historyDropped ?? []), ...(source.historyDropped ?? [])] } : {}),
         revisionScope, history: keepHistory([...sourceHistory, ...currentHistory, { revision, revisionScope, at: now, by: "succession" as const, added: source.active, merged, archived }]) });
       tx.delete(`s:${from}`);
     }
@@ -247,16 +249,16 @@ export function activeRules(scope: string): RoleMemoryRule[] {
 /** The block a new stage of this role and project starts with. */
 export function learnedRulesSnapshot(project: string, roleId: string | null, maxBytes = Infinity, reader?: "operator") {
   // A process start resolves aliases in its snapshot; it never joins or migrates state.
-  const all = rows();
+  // Membership of every scope and the rules those scopes name: no history, no other rule.
+  const stored = scopeMembershipRows();
   const resolve = scopeResolver();
-  const byId = new Map(all.flatMap(row => row.kind === "rule" ? [[row.id, row] as const] : []));
   const scopes = readableScopes(project, roleId).map(scope => {
     if (scopeKind(scope) === "swarm") return { scope, revisions: [], rules: swarmRulesForRole(roleId!) };
-    const active = all.flatMap(row => row.kind === "scope" && resolve(row.scope) === scope ? row.active : [])
-      .flatMap(id => { const found = byId.get(id); return found?.state === "active" && !found.versionOf ? [found] : []; });
+    const active = stored.flatMap(row => resolve(row.scope) === scope ? row.active : [])
+      .flatMap(id => { const found = rule(id); return found?.state === "active" && !found.versionOf ? [found] : []; });
     // Two aliased rows can exceed one scope's bound before an owner joins them.
     // Preserve the active set until a writer or curator records a disposition.
-    const revisions = all.flatMap(row => row.kind === "scope" && resolve(row.scope) === scope
+    const revisions = stored.flatMap(row => resolve(row.scope) === scope
       ? [{ scope: row.scope, revision: row.revision, revisionScope: row.revisionScope ?? row.scope }] : []);
     return { scope, revisions, rules: leavingOrder(active).reverse() };
   });
@@ -411,7 +413,7 @@ function writeLessonAnswer(input: LessonWriteInput & { request?: Pick<LessonRequ
       const retained = retainWithPolicy(active, now, new Set([target.id]), ROLE_MEMORY_BOUND, policyFor(scope));
       for (const changed of retained.changed) tx.put(changed);
       const revision = held.revision + 1;
-      tx.put({ ...held, revision, active: retained.active.map(rule => rule.id), history: keepHistory([...held.history, { revision, revisionScope: held.revisionScope ?? scope, at: now, by: "agent" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: target.id, version }] }]) });
+      tx.put(scopeRowWithEntry(held, { revision, active: retained.active.map(rule => rule.id) }, { revision, revisionScope: held.revisionScope ?? scope, at: now, by: "agent" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: target.id, version }] }));
       if (request) tx.put({ ...request, rewrote: target.id });
       return { left: [{ action: "rewrite" as const, id: updated.id, version, scope, state: updated.state, scopeChars: scopeChars(retained.active), archived: retained.archived, hints: updated.hints }], none: null };
     }
@@ -429,10 +431,7 @@ function writeLessonAnswer(input: LessonWriteInput & { request?: Pick<LessonRequ
       const outcome = appendWithPolicy(active, incoming, now, ROLE_MEMORY_BOUND, policyFor(scope));
       for (const changed of outcome.changed) tx.put(changed);
       const revision = current.revision + 1;
-      tx.put({
-        ...current, revision, active: outcome.active.map((entry) => entry.id),
-        history: keepHistory([...current.history, { revision, revisionScope: current.revisionScope ?? scope, at: now, by: "agent" as const, added: outcome.added, merged: outcome.merged, archived: outcome.archived }]),
-      });
+      tx.put(scopeRowWithEntry(current, { revision, active: outcome.active.map((entry) => entry.id) }, { revision, revisionScope: current.revisionScope ?? scope, at: now, by: "agent" as const, added: outcome.added, merged: outcome.merged, archived: outcome.archived }));
       const stored = outcome.changed.find((entry) => entry.id === incoming.id)!;
       left.push({ action: "lesson", id: incoming.id, scope, state: stored.state, ...(stored.mergedInto ? { mergedInto: stored.mergedInto } : {}), scopeChars: scopeChars(outcome.active), archived: outcome.archived, hints });
     }
@@ -459,8 +458,7 @@ export function deleteRule(ruleId: string, now = new Date().toISOString()): Role
     const revision = held.revision + 1;
     const deleted = archivedRule(rule, now, "deleted");
     tx.put(deleted);
-    tx.put({ ...held, revision, active: held.active.filter((id) => id !== ruleId),
-      history: keepHistory([...held.history, { revision, revisionScope: held.revisionScope ?? held.scope, at: now, by: "operator" as const, added: [], merged: [], archived: [ruleId] }]) });
+    tx.put(scopeRowWithEntry(held, { revision, active: held.active.filter((id) => id !== ruleId) }, { revision, revisionScope: held.revisionScope ?? held.scope, at: now, by: "operator" as const, added: [], merged: [], archived: [ruleId] }));
     return deleted;
   });
 }
@@ -491,8 +489,7 @@ export function restoreRule(ruleId: string, now = new Date().toISOString()): Rol
     for (const changed of retained.changed) tx.put(changed);
     const archived = retained.archived;
     const revision = current.revision + 1;
-    tx.put({ ...current, revision, active: retained.active.map((entry) => entry.id),
-      history: keepHistory([...current.history, { revision, revisionScope: current.revisionScope ?? scope, at: now, by: "operator" as const, added: [], merged: [], archived, restored: [ruleId] }]) });
+    tx.put(scopeRowWithEntry(current, { revision, active: retained.active.map((entry) => entry.id) }, { revision, revisionScope: current.revisionScope ?? scope, at: now, by: "operator" as const, added: [], merged: [], archived, restored: [ruleId] }));
     return restored;
   });
 }
@@ -517,7 +514,7 @@ export function revertRule(versionId: string, now = new Date().toISOString()): R
     const retained = retainWithPolicy(active, now, new Set([current.id]), ROLE_MEMORY_BOUND, policy);
     for (const changed of retained.changed) tx.put(changed);
     const revision = held.revision + 1;
-    tx.put({ ...held, revision, active: retained.active.map(rule => rule.id), history: keepHistory([...held.history, { revision, revisionScope: held.revisionScope ?? scope, at: now, by: "operator" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: current.id, version: replaced }] }]) });
+    tx.put(scopeRowWithEntry(held, { revision, active: retained.active.map(rule => rule.id) }, { revision, revisionScope: held.revisionScope ?? scope, at: now, by: "operator" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: current.id, version: replaced }] }));
     return updated;
   });
   try { refreshLessonKnownValues(); } catch { /* egress fails closed */ }
@@ -803,14 +800,13 @@ export function stageLessons(project: string): StageLessonView[] {
   const canonical = canonicalProject(project);
   const resolved = new Map<string, string>();
   const projectOf = (key: string) => { let found = resolved.get(key); if (found === undefined) resolved.set(key, found = canonicalProject(key)); return found; };
-  const all = rows();
-  const rulesById = new Map(all.flatMap((row) => row.kind === "rule" ? [[row.id, row] as const] : []));
-  return all.flatMap((row) => row.kind === "request" && projectOf(row.project) === canonical ? [row] : [])
+  // Lesson requests alone, then only the rules the shown ones name.
+  return roleRowsWithPrefix("q:").flatMap((row) => row.kind === "request" && projectOf(row.project) === canonical ? [row] : [])
     .sort((a, b) => b.at.localeCompare(a.at)).slice(0, 400)
     .map((row) => ({
       pipelineId: row.pipelineId, stageId: row.stageId, attempt: row.attempt, none: row.none, ...(row.rewrote ? { rewrote: row.rewrote } : {}),
       rules: (row.rewrote ? [row.rewrote] : row.ruleIds).flatMap((id) => {
-        const found = rulesById.get(id);
+        const found = rule(id);
         return found ? [{ id, rule: found.rule, scope: scopeKind(found.scope), roleId: scopeRole(found.scope) }] : [];
       }),
     }));
@@ -839,29 +835,30 @@ function unreadableRoleMemory(error: unknown): RoleMemoryRefusal {
   return new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", `${UNREADABLE}; cause: ${failure}`, { cause: new PrivacyWorkError(failure) });
 }
 
-/** The stored rows, or a refusal that quotes nothing a row holds. */
-function readableRows(): { rows: RoleMemoryRow[]; signature: string } {
+/** The text of every stored rule, or a refusal that quotes nothing a row
+ * holds. Rule rows are the only rows that hold lesson text; scope rows and
+ * the history they retain are not read. */
+function readableRuleTexts(): ReturnType<typeof storedRuleTexts> {
   try {
-    const held = roleMemoryCollection();
-    return held ? { signature: held.signature(), rows: held.snapshot() as RoleMemoryRow[] } : { signature: "", rows: [] };
+    return roleMemoryCollection() ? storedRuleTexts() : [];
   } catch (error) {
     throw unreadableRoleMemory(error);
   }
 }
 
-function lessonTextsOf(all: readonly RoleMemoryRow[]): string[] {
+function lessonTextsOf(all: ReturnType<typeof storedRuleTexts>): string[] {
   const texts = new Set<string>();
   const publicText = publicSwarmTextMatcher();
-  for (const row of all) if (row.kind === "rule") {
+  for (const row of all) {
     if (!publicText(row.rule) && lessonPatternSource(row.rule)) texts.add(row.rule);
-    if (lessonPatternSource(row.why)) texts.add(row.why);
+    if (lessonPatternSource(row.why as string)) texts.add(row.why as string);
   }
   return [...texts].sort((a, b) => b.length - a.length);
 }
 
 /** Every stored rule and why, longest first. Throws LESSON_PRIVACY_UNAVAILABLE when the store cannot be read. */
 export function storedLessonTexts(): string[] {
-  return lessonTextsOf(readableRows().rows);
+  return lessonTextsOf(readableRuleTexts());
 }
 
 // Leave headroom under JSC's limit and keep compilation quick on a cache miss.
@@ -905,7 +902,7 @@ function storedLessonMatchers(): LessonMatcher[] {
   return privacyWork("compile", () => compileStoredLessonMatchers(signature));
 }
 function compileStoredLessonMatchers(signature: string): LessonMatcher[] {
-  const { rows: all } = readableRows();
+  const all = readableRuleTexts();
   if (matcherHost.__delegatusLessonMatcher?.key !== signature) {
     const matchers: LessonMatcher[] = [];
     let skipped = 0;
@@ -1068,8 +1065,7 @@ export function refreshLessonKnownValues(): string {
   const directory = path.dirname(file);
   try {
     roleMemoryCollection(true)!.patchSync(() => {
-      const { rows: all } = readableRows();
-      const texts = lessonTextsOf(all);
+      const texts = lessonTextsOf(readableRuleTexts());
       fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
       const temporary = path.join(directory, `.${crypto.randomUUID()}.tmp`);
       try {
