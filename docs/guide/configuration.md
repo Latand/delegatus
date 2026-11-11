@@ -61,6 +61,51 @@ still running, a record could not be read, or a record could not be checked
 from where the command runs: a sandbox with its own process namespace, or a
 system whose boot cannot be read.
 
+## For launcher authors
+
+Someone who builds a launcher, a menu-bar item or a desktop shortcut around
+Delegatus needs three things: start it, know when it is ready, stop it. This
+section names the pieces that exist today. It promises nothing beyond the
+flags and output documented on this page; anything else may change in a
+release.
+
+**Start.** Run `delegatus --no-open` (or `bunx delegatus-cli --no-open` for an
+install without the command) and keep the process. It listens on
+`127.0.0.1:8898`; `--port <n>` picks another port. `--no-open` keeps the
+browser closed, so the launcher opens its own window. If the port is busy the
+start output says so and suggests the next one.
+
+**Probe.** Read the `viewer.server` row of `delegatus doctor --json`, with the
+same `--port <n>` as the start. It is one loopback HEAD request that starts
+nothing and reads no credential. In the `capabilities` array, the row's `state`
+and `reason` say:
+
+| `state` | `reason` | Meaning |
+| --- | --- | --- |
+| `available` | `null` | This version of Delegatus answers. Ready. |
+| `degraded` | `VIEWER_AUTH_REQUIRED` | Something answers with a refusal, which is what Delegatus does when its access key is on. Treat it as running and open the page with the key. |
+| `unknown` | `VIEWER_UNRECOGNIZED` | Another program, or an older Delegatus, holds the port. Do not stop it; offer another port. |
+| `blocked` | `VIEWER_UNREACHABLE` | Nothing listens yet. Keep waiting until your own deadline. |
+
+Do not use `GET /` answering `200` as the test. Once the setup guide's Phone
+step has turned the access key on, the page answers `403` to a request without
+the key, and a launcher that waits for `200` reports a healthy Delegatus as a
+busy port. Read the row and ignore the exit status of `doctor`: it exits `1`
+whenever any row is `blocked`, an agent CLI that is not installed for one, so
+it says nothing about the server alone.
+
+**Stop.** To stop what you started, send the process `SIGINT` or `SIGTERM`, as
+Ctrl-C does. It stops the web app and the runtime host; agents that are
+running keep running, as under [Stopping everything](#stopping-everything).
+`delegatus stop --all` stops this install's launcher and also every recorded
+agent host with its processes, so offer it as a separate, confirmed action. Do
+not stop a process by its port: a listener on the port may belong to another
+program.
+
+**The window.** The page ships a web app manifest, so a launcher that wants
+the browser's own app window can use the browser's install feature (see
+[Open Delegatus as an app](getting-started.md#open-delegatus-as-an-app)).
+
 ## Files
 
 Delegatus keeps everything in `~/.config/delegatus/`, or under

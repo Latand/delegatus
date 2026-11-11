@@ -204,6 +204,27 @@ and in the start output. Turn it off in the sidebar's ⋯ menu under
 [What leaves your machine](security-and-privacy.md#what-leaves-your-machine)
 lists what it sends.
 
+## Open Delegatus as an app
+
+Delegatus serves a web app manifest, so a browser can give it its own window
+and icon instead of a tab.
+
+- **Chrome and Edge** on a computer: open Delegatus, then use the
+  browser's **Install** entry. In the address bar it is the install icon; in
+  the menu it reads **Install Delegatus** or **Cast, save, and share** →
+  **Install page as app**. The app opens in its own window with the Delegatus
+  icon, from `127.0.0.1` as well.
+- **Safari on macOS 14 or later**: **File** → **Add to Dock**. Safari adds any
+  site to the Dock this way, with or without a manifest, so this works today.
+- **Phone**: open the [phone address](phone.md#phone-access). Chrome on
+  Android offers **Install app** or **Add to Home screen** from its menu;
+  Safari on iPhone offers **Add to Home Screen** from the share sheet.
+
+This opens a window onto the page and nothing more. The app does not start
+Delegatus: if Delegatus is not running, the window shows the browser's "can't
+reach this site" page. Start it as above first. There is no service worker, so
+the window needs the running Delegatus even to open.
+
 ## The setup guide
 
 On a new install, the page opens the setup guide, titled **Set up
