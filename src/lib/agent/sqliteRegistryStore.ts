@@ -3176,7 +3176,22 @@ export class SqliteAgentRegistryStore {
     collection: RowCollection, key: string, id: number, identity: string | null,
     builtStamp: string, pinnedGrants: (string[] | undefined)[] | undefined,
   ): (this: object) => unknown {
-    const read = (view?: OwnerView) => {
+    const read = this.archivedRowRead(collection, key, id, identity, builtStamp, pinnedGrants);
+    return collection === "deliveryOperationOwners" ? this.ownerRowReader(read) : read as () => unknown;
+  }
+
+  /** The reader of an operation owner takes the view it is called through. */
+  private ownerRowReader(read: (view: OwnerView) => unknown): (this: object) => unknown {
+    return function (this: object) { return read(ownerViewOf(this)); };
+  }
+
+  /* The reader is returned as it is made: a local binding that a second
+     closure captured cost one more scope for every archived row. */
+  private archivedRowRead(
+    collection: RowCollection, key: string, id: number, identity: string | null,
+    builtStamp: string, pinnedGrants: (string[] | undefined)[] | undefined,
+  ): (view?: OwnerView) => unknown {
+    return (view?: OwnerView) => {
       const stamp = view?.stamp ?? builtStamp;
       const deliveries = view?.deliveries;
       // The immutable version id pins payload truth for an already-held view.
@@ -3256,18 +3271,15 @@ export class SqliteAgentRegistryStore {
       while (this.coldReaderRows.size > 128) this.coldReaderRows.delete(this.coldReaderRows.keys().next().value!);
       return row;
     };
-    if (collection !== "deliveryOperationOwners") return read as () => unknown;
-    return function (this: object) { return read(ownerViewOf(this)); };
   }
 
   private syntheticOwnerReader(operationId: string, deliveryId: string): (this: object) => unknown {
-    const read = (deliveries: OwnerView["deliveries"]) => {
-      const delivery = deliveries.read()[deliveryId];
+    return this.ownerRowReader((view) => {
+      const delivery = view.deliveries.read()[deliveryId];
       return deepFreeze(this.normalizePartial({ version: 2, entries: {}, receipts: {},
         heldDeliveries: delivery ? { [deliveryId]: delivery } : {},
       }).deliveryOperationOwners[operationId]);
-    };
-    return function (this: object) { return read(ownerViewOf(this).deliveries); };
+    });
   }
 
   /** Every snapshot the shared cache holds is the frozen reader view of it.
