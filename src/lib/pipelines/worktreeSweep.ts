@@ -23,7 +23,7 @@ import { pipelineActivitySettled, type Pipeline } from "./types";
 import { pipelineLiteralGitEnv } from "./git";
 import { readWorktreeProvenance } from "./worktreeProvenance";
 import { backupWorktree } from "./worktreeBackup";
-import { runnerOutputLinked, runnerOutputMentions, runnerOutputPath } from "./runnerOutputLinks";
+import { runnerOutputLinked, runnerOutputMentions, runnerOutputPath, type RunnerOutputMentions } from "./runnerOutputLinks";
 import { isPreservedMedia } from "@/lib/artifact/evidenceFormats";
 import { recordWorktreeDrilldown } from "./worktreeDrilldown";
 
@@ -1350,7 +1350,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         // this checkout and every board task, bridge report, done item and
         // lane record that contains one of those lanes' ids or this
         // checkout's path. When they cannot be read, every capture is linked.
-        let mentions: ReadonlySet<string> | null | undefined, recorded: string[] | undefined;
+        let mentions: RunnerOutputMentions | null | undefined, recorded: string[] | undefined;
         const regenerable = (relative: string) => {
           const output = runnerOutputPath(relative.split(path.sep).join("/"));
           if (!output) return false;

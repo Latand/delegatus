@@ -30,44 +30,59 @@ function percentDecoded(text: string): string {
   });
 }
 
+/** Where a written path may have been cut short: a bare space inside a name,
+    or the `#` or `?` that also begins a link's fragment or query. */
+const CUT = /[\s#?]/;
+
+/** What records write about runner output: whole paths, and beginnings of
+    paths that ended at a possible cut. */
+export type RunnerOutputMentions = { paths: ReadonlySet<string>; beginnings: ReadonlySet<string> };
+
 /** Every path inside a runner output directory that these records write,
     lowercased, starting at the runner directory. Records are stored JSON text.
     A path is read in the forms people and tools write it: plain, with URL
     encoding, with a backslash before a space or a punctuation mark, and with
-    backslashes as separators. A written path ends at a bare space and at a
-    `#` or `?`, where a link's fragment or query begins. */
-export function runnerOutputMentions(records: readonly string[]): Set<string> {
-  const mentions = new Set<string>();
+    backslashes as separators. A written path that stops at a space, a `#` or
+    a `?` may be the beginning of a longer name, so it is kept as a beginning
+    too. */
+export function runnerOutputMentions(records: readonly string[]): RunnerOutputMentions {
+  const paths = new Set<string>(), beginnings = new Set<string>();
   for (const record of records) {
     // One level of JSON string escaping: a line break ends a path, and a
     // doubled backslash is one backslash of the text.
     const text = record.toLowerCase().replace(/\\(.)/g, (_, next: string) =>
-      next === "n" || next === "r" || next === "t" ? " " : next === "\\" ? BACKSLASH : next);
+      next === "n" || next === "r" || next === "t" ? "\n" : next === "\\" ? BACKSLASH : next);
     const escaped = text.replaceAll(BACKSLASH + " ", SPACE).replaceAll(BACKSLASH, "");
     const separated = text.replaceAll(BACKSLASH, "/");
     for (const form of new Set([text, escaped, separated, percentDecoded(escaped), percentDecoded(separated)])) {
       for (const match of form.matchAll(RUNNER_OUTPUT_NAME)) {
         let end = match.index + match[0].length;
         while (end < form.length && !END_OF_MENTION.test(form[end]!)) end++;
+        const whole = form.slice(match.index, end).replace(/\/{2,}/g, "/");
         // A sentence or a directory mention may close with a dot, a colon or a slash.
-        const written = form.slice(match.index, end).replace(/[./:]+$/, "");
-        if (written.includes("/")) mentions.add(written.replace(/\/{2,}/g, "/"));
+        const written = whole.replace(/[./:]+$/, "");
+        if (!written.includes("/")) continue;
+        paths.add(written);
+        const stop = form[end];
+        if (stop !== undefined && stop !== "\n" && CUT.test(stop)) beginnings.add(whole.endsWith("/") ? whole : written);
       }
     }
   }
-  return mentions;
+  return { paths, beginnings };
 }
 
 /** Whether a record links this runner output file: it writes the file's path,
-    one of its parent directories inside the runner directory, or, for a file
-    of an HTML report, that report's entry page. */
-export function runnerOutputLinked(mentions: ReadonlySet<string>, output: string): boolean {
+    one of its parent directories inside the runner directory, the beginning
+    of its path up to a possible cut, or, for a file of an HTML report, that
+    report's entry page. */
+export function runnerOutputLinked(mentions: RunnerOutputMentions, output: string): boolean {
   const file = comparable(output);
-  if (mentions.has(file)) return true;
-  if (file.startsWith("playwright-report/") && mentions.has(REPORT_INDEX)) return true;
+  if (mentions.paths.has(file)) return true;
+  if (file.startsWith("playwright-report/") && mentions.paths.has(REPORT_INDEX)) return true;
   const segments = file.split("/");
   for (let depth = 2; depth < segments.length; depth++) {
-    if (mentions.has(segments.slice(0, depth).join("/"))) return true;
+    if (mentions.paths.has(segments.slice(0, depth).join("/"))) return true;
   }
+  for (const beginning of mentions.beginnings) if (file.startsWith(beginning)) return true;
   return false;
 }

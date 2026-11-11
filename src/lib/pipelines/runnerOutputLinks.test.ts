@@ -47,3 +47,15 @@ test("URL encoding, backslash escapes, backslash separators and case do not hide
   expect(links("Test-Results/Case/SHOT.PNG", "test-results/case/shot.png")).toBeTrue();
   expect(links("first line\ntest-results/case/shot.png\nlast line", "test-results/case/shot.png")).toBeTrue();
 });
+
+test("a name with a bare space, a `#` or a `?` is linked by the part written before it", () => {
+  expect(links("see test-results/my dir/shot.png", "test-results/my dir/shot.png")).toBeTrue();
+  expect(links("see test-results/case/shot one.png", "test-results/case/shot one.png")).toBeTrue();
+  expect(links("see test-results/case/shot#1.png", "test-results/case/shot#1.png")).toBeTrue();
+  expect(links("see test-results/case/what?.png", "test-results/case/what?.png")).toBeTrue();
+  // Every file that begins the same way is kept with it.
+  expect(links("see test-results/my dir/shot.png", "test-results/my other/shot.png")).toBeTrue();
+  expect(links("see test-results/my dir/shot.png", "test-results/your dir/shot.png")).toBeFalse();
+  // The runner directory followed by a space begins nothing in particular.
+  expect(links("output went to test-results/ and stayed", "test-results/case/shot.png")).toBeFalse();
+});
