@@ -3274,6 +3274,10 @@ for (const backend of ["api", "codex"] as const) for (const release of ["delta",
     f.admission.pollReports(p.sessionId);
     const item = f.admission.transcriptRecord(p.sessionId).entries.find(row => row.kind === "utterance")!;
     await f.service.close(p.sessionId, "transport");
+    // A second close still uses the journal when the bounded event ring no longer holds the end.
+    f.storage.change(doc => { doc.sessions[p.sessionId].events = []; });
+    await f.service.close(p.sessionId);
+    expect(f.admission.reportSpeech(p.sessionId).map(row => row.reportId)).toEqual(["owed"]);
     const n = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=1", resume: p.sessionId, cursor: { operatorOpen: item.id } });
     expect(spoken(f)).toHaveLength(0);
     await f.service.close(n.sessionId, "transport");

@@ -770,14 +770,16 @@ export class CompanionAdmission {
   /** Compatibility for callers that still consume only correlated answers. */
   pollReplies(id: string): CompanionEvent[] { return this.pollReports(id).filter(event => event.type === "orchestrator.answer"); }
   retire(id: string): void {
+    // The bounded event ring may have rolled its end off while closed cards were reconciled.
+    const end = this.records.read(id).entries.findLast(row => row.kind === "session_end");
+    const dropped = ["transport", "error"].includes(String(end?.data.reason));
     this.storage.change(document => {
       const session = document.sessions[id];
       if (!session) return;
       session.closed = true;
       session.endedAt ??= this.now();
       // Slice 2 carries speech already queued at a drop. New report discovery and watermarks belong to slice 3.
-      const end = session.events.findLast(event => event.type === "session.closed");
-      if (end?.type !== "session.closed" || !["transport", "error"].includes(end.reason)) delete session.reportSpeech;
+      if (!dropped) delete session.reportSpeech;
       for (const row of Object.values(session.proposals)) if (row.state === "pending") { row.state = "cancelled"; row.cancelCode = "session_closed"; }
     });
     for (const map of [this.shown, this.reread]) for (const key of map.keys()) if (key.startsWith(`${id}\0`)) map.delete(key);
