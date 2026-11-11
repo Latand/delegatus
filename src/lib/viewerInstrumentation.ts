@@ -85,6 +85,7 @@ export interface HotStateCutoverBoundary {
 }
 
 interface CurrentReleaseControllerLoaders {
+  loadMemberRevocations?: () => Promise<{ startMemberRevocationWorker: () => void }>;
   loadFlowPipelineController: () => Promise<{ startFlowPipelineController: () => void }>;
   /** Optional for the same reason as the loaders below. The stale role
       mapping pass (docs/design/model-sizing-tiers.md §5). */
@@ -411,6 +412,7 @@ export async function startCurrentReleaseControllers(
     loadDoneSweep: () => import("@/lib/done/sweep"),
     loadSeatChannel: () => import("@/lib/orchestrator/seatChannel"),
     loadPrototypeDelivery: () => import("@/lib/prototypeReview/deliveryWorker"),
+    loadMemberRevocations: () => import("@/lib/team/memberRevocation"),
     loadAppConnect: () => import("@/lib/forge/appConnect"),
     loadVoiceTimers: () => import("@/lib/voiceCompanion/voiceTimersServer"),
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
@@ -611,6 +613,8 @@ export async function startCurrentReleaseControllers(
   } catch (error) {
     console.error("[prototype delivery] start failed", error instanceof Error ? error.name : "unknown");
   }
+  try { (await loaders.loadMemberRevocations?.())?.startMemberRevocationWorker(); }
+  catch { console.error("[team revocation] recovery worker unavailable"); }
   try { (await loaders.loadAppConnect?.())?.startAppConnectPoller(); }
   catch (error) { console.error("[forge app connect] start failed", error instanceof Error ? error.name : "unknown"); }
   /* Voice timers fire whether or not a page is open, and one that came due during a restart fires now. */

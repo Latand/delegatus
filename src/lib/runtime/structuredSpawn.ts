@@ -1,4 +1,5 @@
 import { recordedAgentScope } from "./agentScope";
+import { assertMemberLaunchAllowed } from "@/lib/team/memberLaunchAuthority";
 import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { startupHostSnapshot } from "./startupSnapshot";
@@ -1408,6 +1409,7 @@ export interface StructuredSpawnInput {
 function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredSpawnInput {
   const receipt = input.registry.spawnReceipt(input.receipt.launchId);
   if (!receipt) throw new Error("structured spawn receipt is unavailable before launch");
+  assertMemberLaunchAllowed(receipt);
   if (!receipt.key && input.receipt.admissionOwner && (!receipt.admissionOwner
     || !sameRecordedProcessIdentity(input.receipt.admissionOwner, receipt.admissionOwner))) {
     throw new Error("structured spawn admission ownership changed");
@@ -2794,6 +2796,20 @@ export async function spawnStructuredConversation(
       ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)], undefined, () => proactiveConversationContext(input.receipt.conversationId, input.registry, { id: input.receipt.accountId, engine: input.receipt.engine as "claude" | "codex", model: input.receipt.launchProfile.model }));
   } };
   const startHost = dependencies.startHost ?? defaultStartHost;
+  const assertMemberCurrent = () => {
+    if (!input.receipt.launchProfile.workspace) return;
+    const current = input.registry.spawnReceipt(input.receipt.launchId);
+    if (!current) throw new Error("member launch receipt is unavailable");
+    assertMemberLaunchAllowed(current);
+  };
+  if (input.receipt.launchProfile.workspace) {
+    const authorize = input.authorize;
+    input = { ...input, authorize: async () => {
+      assertMemberCurrent();
+      await authorize?.();
+      assertMemberCurrent();
+    } };
+  }
   const bindHost = dependencies.bindHost ?? defaultBindHost;
   const publishHost = dependencies.publishHost
     ?? ((key, host, ownsOperation) => publishStructuredDeliveryHost({ key, host }, ownsOperation));
@@ -2835,6 +2851,7 @@ export async function spawnStructuredConversation(
   const assertAdmissionCurrent = () => {
     input.admissionActive?.();
     const current = input.registry.spawnRecoverySnapshot([operationId]).receipts[operationId];
+    if (current) assertMemberLaunchAllowed(current);
     if (!current || ["failed", "conflicted", "completed"].includes(current.state)
       || (foregroundAdmissionOwner && (!current.admissionOwner
         || !sameRecordedProcessIdentity(foregroundAdmissionOwner, current.admissionOwner)))) {
@@ -2993,6 +3010,7 @@ export async function spawnStructuredConversation(
       }
     }, () => {});
     host = await withinDurableSetup(startingHost);
+    assertMemberCurrent();
     if (host.viewerMcpTransport) (await input.registry.deliveryWriteOrBusy({ label: "registry.setReceiptViewerMcpTransport" }, input.registry.setReceiptViewerMcpTransport.bind(input.registry, input.receipt.launchId, host.viewerMcpTransport)));
     const identity = hostIdentity(input.engine, host, input);
     key = identity.key;

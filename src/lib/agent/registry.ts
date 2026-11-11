@@ -6971,6 +6971,13 @@ export class AgentRegistry {
     return this.readKeyed(file => clone(registryOpenSpawnReceipts(file)));
   }
 
+  /** Revocation inspects current hosted rows without loading cold history. */
+  memberHostEntries(memberId: string): AgentRegistryEntry[] {
+    return this.readKeyed(file => registryRowsMatching(file, "entries", "structuredHost.kind",
+      ["codex-app-server", "claude-broker", "copilot-acp"])
+      .filter(entry => !entry.launchProfile || entry.launchProfile.workspace?.memberId === memberId && !entry.launchProfile.workspace.fromMessage).map(entry => clone(entry)));
+  }
+
   /** Structured ownership rows, including released rows needed by recovery. */
   structuredHostEntries(prepared?: RegistryFile): AgentRegistryEntry[] {
     const file = prepared ?? this.readOnlySnapshot();

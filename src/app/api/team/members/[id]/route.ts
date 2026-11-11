@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { crossOrigin, readJson, requireMember, teamErrorResponse, teamJson } from "@/lib/team/http";
 import { memberSummary, recolorMember, renameMember, restoreMember, revokeMember } from "@/lib/team/members";
+import { reconcileMemberRevocations } from "@/lib/team/memberRevocation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,8 +33,17 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     }
     if (Object.hasOwn(body, "name")) target = renameMember(store, live.member, target, body.name);
     if (Object.hasOwn(body, "color")) target = recolorMember(store, live.member, target, body.color);
-    if (body.status === "revoked") target = revokeMember(store, live.member, target);
-    if (body.status === "active") target = restoreMember(store, live.member, target);
+    if (body.status === "revoked") {
+      target = revokeMember(store, live.member, target);
+      await reconcileMemberRevocations();
+      const complete = !store.memberRevocationPending(target.id);
+      return teamJson({ ok: true, member: memberSummary(target), revocationPending: !complete }, complete ? 200 : 202);
+    }
+    if (body.status === "active") {
+      if (store.memberRevocationPending(target.id))
+        return teamJson({ error: "agent shutdown is still pending; retry after revocation completes", code: "revocation_pending" }, 409);
+      target = restoreMember(store, live.member, target);
+    }
     return teamJson({ ok: true, member: memberSummary(target) });
   } catch (error) {
     return teamErrorResponse(error);

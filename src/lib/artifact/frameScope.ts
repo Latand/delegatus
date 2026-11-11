@@ -1,4 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { sessionIsLive } from "@/lib/team/sessions";
+import { existingTeamStore } from "@/lib/team/store";
 
 /*
  * Capability for the HTML report frame (/api/artifact/frame/<scope>/<file>).
@@ -14,6 +16,9 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
  *
  * The key lives only in this process: a restart invalidates every scope, and
  * the preview simply mints a new one on its next open.
+ * Team scopes also name the minting session. Every file read checks its live
+ * membership, revocation and expiry without extending that session's idle age.
+ * A solo scope stops working once the installation has an active team owner.
  */
 
 const KEY_SLOT = "__llvArtifactFrameKey";
@@ -30,22 +35,31 @@ function sign(payload: string): string {
   return createHmac("sha256", frameKey()).update(payload).digest("base64url");
 }
 
-/** `<base64url(dir)>.<expiry>.<signature>` for an absolute directory. */
-export function mintFrameScope(directory: string, now: number = Date.now()): string {
-  const payload = `${Buffer.from(directory, "utf8").toString("base64url")}.${(now + FRAME_SCOPE_TTL_MS).toString(36)}`;
+/** A signed directory, expiry and minting session (or `-` for a solo install). */
+export function mintFrameScope(directory: string, now: number = Date.now(), sessionId: string | null = null): string {
+  const payload = `${Buffer.from(directory, "utf8").toString("base64url")}.${(now + FRAME_SCOPE_TTL_MS).toString(36)}.${sessionId ?? "-"}`;
   return `${payload}.${sign(payload)}`;
 }
 
 /** The directory a scope grants, or null when it is forged, altered or expired. */
 export function verifyFrameScope(scope: string, now: number = Date.now()): string | null {
   const parts = scope.split(".");
-  if (parts.length !== 3) return null;
-  const [dir, expiry, signature] = parts as [string, string, string];
-  const expected = Buffer.from(sign(`${dir}.${expiry}`));
+  if (parts.length !== 4) return null;
+  const [dir, expiry, sessionId, signature] = parts as [string, string, string, string];
+  const expected = Buffer.from(sign(`${dir}.${expiry}.${sessionId}`));
   const given = Buffer.from(signature);
   if (expected.length !== given.length || !timingSafeEqual(expected, given)) return null;
   const expiresAt = parseInt(expiry, 36);
   if (!Number.isFinite(expiresAt) || expiresAt < now) return null;
+  try {
+    const store = existingTeamStore();
+    if (sessionId === "-") {
+      if (store?.hasActiveOwner()) return null;
+    } else {
+      const session = store?.session(sessionId);
+      if (!session || !sessionIsLive(session, now) || store!.member(session.memberId)?.status !== "active") return null;
+    }
+  } catch { return null; } // Unreadable authority grants no file access.
   const directory = Buffer.from(dir, "base64url").toString("utf8");
   return directory.startsWith("/") ? directory : null;
 }
