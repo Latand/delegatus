@@ -1,6 +1,6 @@
 import { projectSetupRecipe, reviewSetupRecipe } from "@/lib/projects/setupRecipe";
 import path from "node:path";
-import { redactBounded } from "@/lib/monitor/redact";
+import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { executeSetupRecipe, type SetupExecution } from "./setupExecution";
 import { isolateWorktreeDependencies } from "./worktreeDependencies";
 import { PIPELINE_MEMORY_DEFAULT_ROLE } from "@/lib/runtime/agentMemorySettings";
@@ -55,8 +55,8 @@ export async function preparePipelineSetup(pipeline: Pipeline, stage: PipelineSt
       });
     assertCurrent?.();
     attempt.setup.code = result.code;
-    attempt.setup.stdout = redactBounded(result.stdout, 16_000);
-    attempt.setup.stderr = redactBounded(result.stderr, 16_000);
+    attempt.setup.stdout = redactMonitorText(result.stdout).trim().slice(-16_000);
+    attempt.setup.stderr = redactMonitorText(result.stderr).trim().slice(-16_000);
     if (result.code !== 0) throw new Error(`project setup failed (exit ${result.code ?? "unavailable"}); inspect setup output and retry the stage`);
     if (signal?.aborted) throw new Error("project setup cancelled; inspect output before retrying");
     attempt.setup.state = "passed";
