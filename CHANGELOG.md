@@ -8,6 +8,11 @@ compatibility raises the major version.
 
 ## [Unreleased]
 
+### Added
+- **Start at login.** Opt-in `delegatus service install` and `service remove`
+  create and remove a per-user service on Linux and macOS. Doctor reports its
+  status, and the install prompt offers the command.
+
 ### Removed
 - **The tmux transport.** Every agent runs on a structured host, and
   Delegatus starts no `tmux` process. `LLV_SPAWN_TRANSPORT=tmux` is refused
@@ -4365,7 +4370,7 @@ They are summaries; the comparison links retain each release's complete history.
 ### Added
 - Docker runtime: a `Dockerfile` and `docker-compose.yml` build `.next` inside
   the image from a clean environment and run the viewer with host parity — host
-  network and PID namespace, the real `/home/latand` tree and tmux socket, and
+  network and PID namespace, the host home tree and tmux socket, and
   `nsenter` shims that exec the exact host `claude`/`codex`/`bun`/`uv`/`tmux`.
   Prod runs as the `viewer` service on `127.0.0.1:8898` with
   `restart: unless-stopped`; a `test` profile brings up a second instance on
