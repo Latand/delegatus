@@ -316,6 +316,10 @@ export class RecordedCheckStore {
         return run;
       });
   }
+  /** Every directory a recorded check names as a root. */
+  rootDirectories(): string[] {
+    return this.db.query<{ directory: string }, []>("SELECT DISTINCT directory FROM recorded_check_roots").all().map(row => row.directory);
+  }
   hasRoot(directory: string) { return !!this.db.query("SELECT 1 FROM recorded_check_roots WHERE directory=? LIMIT 1").get(directory); }
   rootRetirement(directory: string, identity: string): unknown {
     const row = this.db.query<{ retirement: string | null }, [string, string]>("SELECT retirement FROM recorded_check_roots WHERE directory=? AND identity=? ORDER BY id LIMIT 1").get(directory, identity);
@@ -357,6 +361,7 @@ export const recordedHostHeld = (conversation: string) => readRecorded(store => 
 export const recordedSessionHeld = (session: string, expected: ProcessIdentity) => readRecorded(store => store.sessionHeld(session, expected), false);
 export const recordedOwnerHeld = (expected: ProcessIdentity) => readRecorded(store => store.ownerHeld(expected), false);
 export const recordedLaunchHeld = (launch: string) => readRecorded(store => store.launchHeld(launch), false);
+export const recordedRootDirectories = () => readRecorded(store => store.rootDirectories(), [] as string[]);
 export const recordedRootHeld = (directory: string) => readRecorded(store => store.rootHeld(directory), false);
 /** Called under attempt-sweep admission, with short CAS writes only. The
  * caller's lane revision is checked inside each write after lock admission. */

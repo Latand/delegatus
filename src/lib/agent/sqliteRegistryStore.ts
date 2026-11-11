@@ -102,6 +102,26 @@ export function failedLaunchRepairQuery(legacy: boolean): string {
     ORDER BY row_order LIMIT ?`;
 }
 
+/** One attempt's original operation and its handshake retries, by client id.
+    A single predicate joining the equality and sixteen patterns with OR named
+    no index, so SQLite read every receipt body for each call: 19,882 receipts
+    and 158 MB on a long-lived registry, about 250 ms, once per closed lane
+    copy. The equality seeks the client-id index, and the patterns walk only
+    the index range of handshake retries. */
+export function pipelineSpawnHistorySelection(base: string): { sql: string; values: string[] } {
+  // Spawn keys are clipped at 128 characters. Account for each possible
+  // safe-integer width before choosing the surviving base suffix.
+  const prefix = "handshake_retry_";
+  const patterns = Array.from({ length: 16 }, (_, index) => prefix + "[0-9]".repeat(index + 1)
+    + `_${base}`.slice(0, 128 - prefix.length - index - 1));
+  const id = "json_extract(value_json,'$.clientAttemptId')";
+  // Every pattern starts with the prefix and a digit; ":" follows "9".
+  return { sql: `SELECT row_key FROM registry_rows WHERE collection='receipts' AND ${id}=?
+    UNION ALL SELECT row_key FROM registry_rows WHERE collection='receipts' AND ${id}>=? AND ${id}<?
+      AND (${patterns.map(() => `${id} GLOB ?`).join(" OR ")})
+    LIMIT 129`, values: [base, `${prefix}0`, `${prefix}:`, ...patterns] };
+}
+
 const ROW_COLLECTIONS = [
   "entries",
   "receipts",
@@ -3847,15 +3867,8 @@ export class SqliteAgentRegistryStore {
       identities from the client-id index before hydrating any receipt bodies.
       registry_rows also retains the current versions of archived receipts. */
   pipelineSpawnHistoryKeys(base: string): string[] {
-    // Spawn keys are clipped at 128 characters. Account for each possible
-    // safe-integer width before choosing the surviving base suffix.
-    const prefix = "handshake_retry_";
-    const patterns = Array.from({ length: 16 }, (_, index) => prefix + "[0-9]".repeat(index + 1)
-      + `_${base}`.slice(0, 128 - prefix.length - index - 1));
-    return this.db.query<{ row_key: string }, string[]>(`SELECT row_key FROM registry_rows
-      WHERE collection='receipts' AND (json_extract(value_json,'$.clientAttemptId')=?
-        ${patterns.map(() => "OR json_extract(value_json,'$.clientAttemptId') GLOB ?").join(" ")})
-      LIMIT 129`).all(base, ...patterns).map(row => row.row_key);
+    const { sql, values } = pipelineSpawnHistorySelection(base);
+    return this.db.query<{ row_key: string }, string[]>(sql).all(...values).map(row => row.row_key);
   }
 
   /** Diagnostic attribution needs one client id, including a conserving

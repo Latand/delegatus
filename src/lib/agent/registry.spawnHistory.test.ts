@@ -2,7 +2,9 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 import { AgentRegistry } from "./registry";
+import { pipelineSpawnHistorySelection } from "./sqliteRegistryStore";
 
 test.each([{ sqliteMode: "off" }, { sqliteMode: "sqlite" }, { sqliteMode: "sqlite", clipped: true }] as const)("pipeline history reads original operation keys after reopen (%j)", async options => {
   const { sqliteMode } = options;
@@ -52,4 +54,47 @@ test("pipeline history bounds receipt bodies before hydration, including archive
     registry.close();
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("pipeline history seeks the client-id index, and other lanes' receipts add nothing to its read", async () => {
+  const base = "pipeline_example_build_2";
+  const measure = async (otherLanes: number) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "registry-spawn-history-index-"));
+    const filename = path.join(root, "registry.json");
+    const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+    try {
+      const ids = [base, `handshake_retry_1_${base}`, `handshake_retry_2_${base}`,
+        ...Array.from({ length: otherLanes }, (_, lane) => `pipeline_other${lane}_build_1`)];
+      for (const clientAttemptId of ids) {
+        const reserved = registry.beginSpawnRequest({ engine: "codex", cwd: "/repo", transport: "structured",
+          clientAttemptId, launchProfile: { title: "Index the spawn history" } });
+        await registry.failStructuredSpawnOffLoop(reserved.receipt.launchId, "runtime host failed before dispatch");
+      }
+      expect(registry.pipelineSpawnHistory(base)).toHaveLength(3);
+      const db = new Database(filename.replace(/\.json$/, ".sqlite"), { readonly: true });
+      try {
+        const { sql, values } = pipelineSpawnHistorySelection(base);
+        const plan = db.query<{ detail: string }, string[]>(`EXPLAIN QUERY PLAN ${sql}`).all(...values).map(row => row.detail);
+        const searches = plan.filter(detail => detail.includes("registry_rows"));
+        // The rows each branch may read: its index range, counted directly.
+        const id = "json_extract(value_json,'$.clientAttemptId')";
+        const visited = db.query<{ rows: number }, string[]>(`SELECT count(*) AS rows FROM registry_rows
+          WHERE collection='receipts' AND (${id}=? OR (${id}>=? AND ${id}<?))`).get(values[0]!, values[1]!, values[2]!)!.rows;
+        const receipts = db.query<{ rows: number }, []>("SELECT count(*) AS rows FROM registry_rows WHERE collection='receipts'").get()!.rows;
+        return { searches, visited, receipts };
+      } finally { db.close(); }
+    } finally {
+      registry.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  };
+  const small = await measure(8);
+  const large = await measure(48);
+  for (const measured of [small, large]) {
+    expect(measured.searches).toHaveLength(2);
+    expect(measured.searches[0]).toContain("USING INDEX registry_lookup_clientAttemptId (collection=? AND <expr>=?)");
+    expect(measured.searches[1]).toContain("USING INDEX registry_lookup_clientAttemptId (collection=? AND <expr>>? AND <expr><?)");
+    expect(measured.visited).toBe(3);
+  }
+  expect(large.receipts - small.receipts).toBe(40);
 });
