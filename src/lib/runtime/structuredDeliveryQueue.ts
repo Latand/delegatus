@@ -27,7 +27,7 @@ import {
   type StructuredMessageContent,
 } from "./structuredContent";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
-import { StructuredRecoveryHeldForUpdateError, StructuredRecoverySynchronizingError, type StructuredRecoveryRequest } from "./structuredRecovery";
+import { StructuredStageHostGoneError, StructuredRecoveryHeldForUpdateError, StructuredRecoverySynchronizingError, type StructuredRecoveryRequest } from "./structuredRecovery";
 import type { DeliveryProgressNote, DeliveryProgressRecord, DeliveryProgressSink } from "./deliveryProgress";
 import { ACTIVE_DELIVERY_PHASES, type DeliveryWaitReason } from "./deliveryWaitReason";
 import { roleMemoryRevisionToken, ROLE_MEMORY_CHANGED_MESSAGE, RoleMemoryRefusal } from "@/lib/memory/roleStore";
@@ -3601,6 +3601,15 @@ export class StructuredDeliveryQueue {
         reason: "structured host recovery did not start; retry the operation",
       });
     } catch (error) {
+      if (error instanceof StructuredStageHostGoneError) {
+        if (status?.deliveryUnverified || status?.reason === "delivery-auto-retry") {
+          await this.terminalizeUnverified(effect.operationId, DELIVERY_UNVERIFIED_AFTER_ACTUATION);
+          return;
+        }
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: error.message },
+          { fromStatuses: ["pending", "queued"] });
+        return;
+      }
       if (error instanceof StructuredRecoverySynchronizingError && this.port.deferTarget?.(effect.conversationId)) {
         this.noteWait(effect, "startup", { wake: "retry" });
         this.retrySoon();

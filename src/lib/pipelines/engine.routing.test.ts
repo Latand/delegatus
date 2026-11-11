@@ -2697,3 +2697,66 @@ test("an idle host cut by a restart is still called a restart after the stop's o
   expect(lane.runs[0]!.attempts[0]!.error).toBe("interrupted by a Delegatus restart; replaced by a fresh stage attempt");
   expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "restart" });
 });
+
+
+test.each([false, true])("retry-stage is freed by dead-stage follow-up settlement, explicit stop=%s", async stopped => {
+  const { stageRecipient, stageFollowup } = await import("@/lib/runtime/deadStageDelivery.fixture");
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const { outstandingDeliverySince } = await import("@/lib/runtime/liveness");
+  const h = harness();
+  const pipeline = await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  const directory = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "dead-stage-retry-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const conversation = registry.ensureConversation("codex", attempt.agentPath!, null);
+  attempt.conversationId = conversation.id;
+  attempt.sessionId = conversation.generations.at(-1)!.id;
+  attempt.paneId = null;
+  const { key } = stageRecipient(registry, conversation, lane);
+  const f = stageFollowup(registry, conversation.id);
+  const ports: PipelinePorts = { ...h.ports,
+    conversationTurnInterrupted: async () => "stalled",
+    spawnReceipt: id => ({ launchId: id, conversationId: conversation.id, sessionId: key.sessionId,
+      "transcript": attempt.agentPath, paneId: null, state: "completed" }),
+    conversationDeliveryOutstanding: id => outstandingDeliverySince(registry.conversationDeliverySnapshot({ conversationId: id }), id) !== null };
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+  h.setStageHost(conversation.id, { outcome: "stopped" });
+  const retry = () => patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, ports);
+  try {
+    // A live process and an unreadable start token retain the pending guard.
+    const deadEntry = registry.hostEntry(key)!;
+    for (const identity of [captureProcessIdentity(process.pid), { ...captureProcessIdentity(process.pid), startIdentity: null }]) {
+      registry.upsert({ ...deadEntry, structuredHost: { ...deadEntry.structuredHost!, process: identity } });
+      await f.drain();
+      expect((await retry()).error).toContain("pending delivery");
+    }
+    registry.upsert(deadEntry);
+    if (stopped) {
+      // The real explicit control is journaled before the held reservation drains.
+      const { RuntimeJournal } = await import("@/runtime-host/journal");
+      const journal = new RuntimeJournal(path.join(directory, "explicit-stop.sqlite"), { structuredHosts: true });
+      const { StructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryQueue");
+      try {
+        journal.executeOperation({ kind: "kill", conversationId: conversation.id, sessionKey: key,
+          operationId: "explicit-stage-stop", idempotencyKey: "explicit-stage-stop" });
+        const queue = new StructuredDeliveryQueue({ effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+          status: async id => journal.operationResult(id)?.receipt ?? null,
+          transition: async (id, status, details, options) => { journal.transitionOperation(id, status, details, options); },
+        }, () => null, async () => registry.terminateStructuredHost(key, deadEntry.structuredHost!.process!));
+        try { await queue.drain(); } finally { queue.retire(); }
+        expect(journal.operationResult("explicit-stage-stop")!.receipt.status).toBe("delivered");
+      } finally { journal.close(); }
+    }
+    await f.drain();
+    expect(registry.snapshot().heldDeliveries[f.held.id]!.state).toBe("failed");
+    expect(outstandingDeliverySince(registry.conversationDeliverySnapshot({ conversationId: conversation.id }), conversation.id)).toBeNull();
+    const result = await retry();
+    expect(result.error).toBeUndefined();
+    expect(h.calls.filter(call => call.startsWith("stop-host:"))).toEqual([`stop-host:build:1:${conversation.id}`]);
+    await f.drain();
+    expect(f.commands()).toBe(0);
+  } finally { registry.close(); }
+});
