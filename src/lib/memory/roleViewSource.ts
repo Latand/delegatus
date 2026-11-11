@@ -835,3 +835,56 @@ export function activeProfileBasis(scopes: readonly string[]): Map<string, Array
   for (const row of rows) basis.get(row.scope)!.push({ id: row.id, changedAt: row.changedAt });
   return basis;
 }
+
+/* Reads that need rules, requests or scope membership take only those rows.
+   A whole-collection read decodes and clones every scope row with the
+   history it retains, hundreds of megabytes for a long-lived store, to
+   reach rule rows that are a few percent of it. */
+
+/** The text of every stored rule, from the rule rows alone and without
+ * decoding a row. A rule row that cannot be read fails the whole read: the
+ * privacy check it feeds refuses when it cannot name every lesson. */
+export function storedRuleTexts(): { rule: string; why: unknown }[] {
+  return reader("__llvCurationVersionReader").query<{ fields: string | null }, []>(`
+    SELECT json_extract(value_json, '$.kind', '$.id', '$.rule', '$.why') AS fields FROM state_rows
+    WHERE collection='role_memory' AND row_key > 'r:' AND row_key < 'r;'
+  `).all().map(row => {
+    const [kind, id, rule, why] = JSON.parse(row.fields ?? "[]") as unknown[];
+    // The same shape the collection's decoder requires of a rule row.
+    if (kind !== "rule" || typeof id !== "string" || typeof rule !== "string") throw new Error("role_memory SQLite row is malformed");
+    return { rule, why };
+  });
+}
+/** The decoded rows under one key prefix (`r:` rules, `q:` lesson requests), in key order. */
+export function roleRowsWithPrefix(prefix: "r:" | "q:"): RoleMemoryRow[] {
+  const held = roleMemoryCollection();
+  if (!held) return [];
+  const rows: RoleMemoryRow[] = [];
+  for (let after = prefix; ;) {
+    const page = held.keyRangeEntries(after, `${prefix}\uffff`, 512);
+    for (const entry of page) {
+      if (entry.value === null) throw new Error("role_memory SQLite row is malformed");
+      rows.push(entry.value);
+    }
+    if (page.length < 512) return rows;
+    after = page.at(-1)!.key as typeof prefix;
+  }
+}
+/** Every scope's membership and revision counters, in stored order, without its history. */
+export function scopeMembershipRows(): Pick<RoleMemoryScopeRow, "scope" | "revision" | "revisionScope" | "active">[] {
+  if (!roleMemoryCollection()) return [];
+  return reader("__llvCurationVersionReader").query<{ fields: string | null }, []>(`
+    SELECT json_extract(value_json, '$.kind', '$.scope', '$.revision', '$.revisionScope', '$.active') AS fields FROM state_rows
+    WHERE collection='role_memory' AND row_key > 's:' AND row_key < 's;' ORDER BY row_order, row_key
+  `).all().map(row => {
+    const [kind, scope, revision, revisionScope, active] = JSON.parse(row.fields ?? "[]") as [unknown, string, number, string | null, string[]];
+    if (kind !== "scope" || typeof scope !== "string" || !Array.isArray(active)) throw new Error("role_memory SQLite row is malformed");
+    return { scope, revision, ...(revisionScope === null ? {} : { revisionScope }), active };
+  });
+}
+/** Keys of the rule and request rows that carry a reported problem. */
+export function roleProblemRowKeys(): string[] {
+  if (!roleMemoryCollection()) return [];
+  const reported = "json_type(value_json, '$.problem') IS NOT NULL";
+  return [...keys("q:", reported, [], "__llvCurationVersionReader"), ...keys("r:", reported, [], "__llvCurationVersionReader")];
+}
