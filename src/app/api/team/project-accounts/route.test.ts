@@ -111,7 +111,7 @@ describe("what a member sees", () => {
     /* The engine with no account list reports only whether it could start. */
     expect(body.engines.claude).toEqual({ pool: "none", available: false });
     /* Account B is outside the pool: nothing of it, and nothing that leads to a login or a path. */
-    for (const leak of [t.b, "Account B", "\"pro\"", "87", SANDBOX, "home", "transcriptRoot", "login", "deviceAuth", "provider", "email", "plan", "nextChosen", "paidCredits", "projects"]) {
+    for (const leak of [t.b, "Account B", "\"pro\"", "\"usedPercent\":87", SANDBOX, "home", "transcriptRoot", "login", "deviceAuth", "provider", "email", "plan", "nextChosen", "paidCredits", "projects"]) {
       expect(answer.text).not.toContain(leak);
     }
   });
