@@ -17896,8 +17896,61 @@ export async function patchPipeline(
         state === "path-pending" && !explicitReceiptRetry && !settlementWasPending && attempt !== null && stage?.kind === "run"
         && attempt.launchId === retryLaunchId && !!attempt.agentPath && !!attempt.conversationId && !!attempt.completedAt
         && attempt.state === "needs_decision" && !attempt.report && !isStructuredSpawnPark(pipeline, attempt) && !stagedLaunchRecovery(receipt);
+      /* A native completed fail owns its verdict even if path publication
+         never closed the launch receipt (#2034). Pin that proof across the
+         cleanup awaits; neither the receipt nor the scanner projection proves
+         execution ended. The settled-writer stop below also fences live hosts. */
+      const completedRetryReceipt = receiptRetry && retryLaunchId ? ports.spawnReceipt(retryLaunchId) : null;
+      const completedRetry = stage?.kind === "run" && attempt?.state === "failed" && !attempt.paneId && !attempt.cloud && !attempt.historical
+        && !!attempt.completedAt && attempt.verdict?.status === "fail" && (!attempt.report || attempt.report.verdict.status === "fail")
+        && !!attempt.agentPath && !!attempt.conversationId && attempt.launchId === retryLaunchId
+        && completedRetryReceipt?.state === "path-pending" && !stagedLaunchRecovery(completedRetryReceipt);
+      const completedRetryFence = completedRetry ? remoteActionFence(pipeline) : null;
+      const completedReceiptProof = completedRetry ? JSON.stringify(completedRetryReceipt) : null;
+      let completedEvidence: StageTurnEvidence | null = null;
+      const completedTurnFinished = (evidence: StageTurnEvidence | null): boolean => {
+        if (attempt!.report) return reportTurnFinished(attempt!, evidence);
+        if (evidence?.turn !== "terminal" || !evidence.message
+          || evidence.message.ts <= unixMs(attemptEvidenceFloor(attempt!))) return false;
+        const parsed = parsePipelineStageVerdict(evidence.message.text);
+        return !!parsed && "verdict" in parsed && parsed.verdict.status === "fail";
+      };
+      const completedRetryRefusal = (checkTranscript = true): PipelinePatchResult | null => {
+        if (!completedRetry) return null;
+        assertAuthority?.();
+        const receipt = ports.spawnReceipt(retryLaunchId!);
+        const ownerError = pipeline.delivery && deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery.target, active: true }));
+        if (remoteActionFence(pipeline) !== completedRetryFence || ownerError
+          || JSON.stringify(receipt) !== completedReceiptProof || receipt?.launchId !== attempt!.launchId
+          || receipt?.conversationId !== attempt!.conversationId
+          || (ports.spawnReceiptState ? ports.spawnReceiptState(retryLaunchId!) : receipt?.state) !== "path-pending"
+          || ports.pathForConversation(attempt!.conversationId!) !== attempt!.agentPath
+          || ports.conversationIdForPath(attempt!.agentPath!) !== attempt!.conversationId
+          || !ports.sourcePathAllowed(attempt!.agentPath!) || pipelineSurvivorRefusal(pipeline)
+          || ports.conversationDeliveryOutstanding?.(attempt!.conversationId!) !== false) {
+          return { error: ownerError || "the completed attempt's retry ownership or delivery evidence changed; retry was cancelled", status: 409 };
+        }
+        if (checkTranscript && completedEvidence && (!completedTurnFinished(completedEvidence)
+          || stageTurnEvidenceCurrent(completedEvidence) !== true
+          || liveBackgroundTasks(completedEvidence.backgroundTasks ?? [], unixMs(ports.now())).length > 0)) {
+          return { error: "the failed attempt's completed transcript is no longer verified; retry was cancelled", status: 409 };
+        }
+        return null;
+      };
+      if (completedRetry) {
+        const before = completedRetryRefusal();
+        if (before) return before;
+        completedEvidence = await ports.durableTurnEvidence(attempt!.effectiveRole.engine, attempt!.agentPath!, attempt!.report?.at, attemptEvidenceFloor(attempt!));
+        const changed = completedRetryRefusal();
+        if (changed) return changed;
+        if (!completedEvidence || !completedTurnFinished(completedEvidence)) {
+          return { error: "the failed attempt has no verified completed transcript; retry was cancelled", status: 409 };
+        }
+      }
       const validateRetryReceipt = (settlementWasPending = false): { conflict: { error: string; status: number } | null; claimRequired: boolean } => {
         if (!receiptRetry) return { conflict: null, claimRequired: false };
+        const completedRefusal = completedRetryRefusal();
+        if (completedRefusal) return { conflict: { error: completedRefusal.error!, status: 409 }, claimRequired: false };
         const receipt = ports.spawnReceipt(retryLaunchId);
         const state = ports.spawnReceiptState ? ports.spawnReceiptState(retryLaunchId) : receipt?.state;
         if (!receipt || !state) return {
@@ -17919,6 +17972,7 @@ export async function patchPipeline(
         ) {
           return { conflict: null, claimRequired: false };
         }
+        if (completedRetry && completedEvidence && !settlementWasPending) return { conflict: null, claimRequired: false };
         /* A stage that ran and was then parked can still hold a launch
            receipt that never closed, when its transcript bound the attempt
            before the receipt completed (#3760). The stage is the one to
@@ -17961,9 +18015,13 @@ export async function patchPipeline(
         return { pipeline };
       }
       const orphan = await orphanAgentPane(attempt, ports);
+      const afterOrphan = completedRetryRefusal();
+      if (afterOrphan) return afterOrphan;
       if (orphan) return orphan;
       if (flow && flow.state !== "closed") {
         const closed = await ports.closeFlow(flow.id);
+        const afterFlow = completedRetryRefusal();
+        if (afterFlow) return afterFlow;
         if (closed?.error) {
           pipeline.stateDetail = closed.error;
           await persist();
@@ -17994,13 +18052,15 @@ export async function patchPipeline(
         && pipeline.lastPassedCommit && settledPublicationForHead(pipeline, pipeline.lastPassedCommit)
         && pipeline.publishedCommit === pipeline.lastPassedCommit
         ? await currentPipelineBranchHead(pipeline, ports.exec).catch(() => null) : null;
+      const afterHead = completedRetryRefusal();
+      if (afterHead) return afterHead;
       const keepPublication = head?.ok && head.sha === pipeline.lastPassedCommit
         && !pipelinePublicationHoldsHost(pipeline)
         && settledPublicationForHead(pipeline, head.sha) !== null
         && pipeline.publishedCommit === head.sha
         && deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery!.target, active: true }) ?? pipeline) === null
         && undispatchedRunAttempt(pipeline, stage, attempt);
-      if (pipeline.delivery?.operation?.state === "settled" && !keepPublication) {
+      if (!completedRetry && pipeline.delivery?.operation?.state === "settled" && !keepPublication) {
         recordSettledPublicationFailure(pipeline, attempt, ports);
         delete pipeline.delivery.operation;
         pipeline.publishedCommit = null;
@@ -18020,7 +18080,38 @@ export async function patchPipeline(
           return { error: "the parked attempt recorded a stage report while its host was stopping", status: 409 };
         }
       }
-      if (attempt) await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by operator retry");
+      if (attempt && !completedRetry) await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by operator retry");
+      const beforeStop = completedRetryRefusal();
+      if (beforeStop) return beforeStop;
+      if (completedRetry && stage && attempt) {
+        // This stop's runtime conditional kill and recorded-identity fallback
+        // both withdraw on newer work. An unknown stop grants no retry.
+        const stopped = await ports.stopSettledStageWriter?.({ stageId: stage.id, attempt: attempt.n,
+          launchId: attempt.launchId, conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: null },
+        `pipeline_retry_${pipeline.id}_${stage.id}_${attempt.n}`);
+        const changed = completedRetryRefusal(false);
+        if (changed) return changed;
+        if (stopped?.outcome === "unresolved") {
+          rememberUnresolvedTermination(attempt, stopped, ports.now());
+          await persist();
+        }
+        if (stopped?.outcome !== "stopped" && stopped?.outcome !== "not-running") {
+          return { error: "the host of the completed attempt has not confirmed termination; retry once it has stopped", status: 409 };
+        }
+        if (stopped.outcome === "stopped" && stageTurnEvidenceCurrent(completedEvidence) !== true) {
+          // Owned shutdown bookkeeping may append bytes. New work or a prompt
+          // never qualifies as that cleanup, even if its turn also ended.
+          const progress = (evidence: StageTurnEvidence | null) => JSON.stringify(evidence && [evidence.turnStartedAt,
+            evidence.promptCount, evidence.lastAgentEventAt, evidence.lastAgentOutputAt, evidence.message]);
+          const latest = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath!, attempt.report?.at, attemptEvidenceFloor(attempt));
+          if (!latest || progress(latest) !== progress(completedEvidence)) {
+            return { error: "the completed attempt made progress while its host was stopping; retry was cancelled", status: 409 };
+          }
+          completedEvidence = latest;
+        }
+        const afterStop = completedRetryRefusal();
+        if (afterStop) return afterStop;
+      }
       if (unreservedSpawnRetry) {
         const refusal = await unreservedStageRetryRefusal(pipeline, stage, attempt, ports, !!boundSpawnRetry, true);
         if (refusal) { attempt.error = refusal; pipeline.stateDetail = refusal; await persist(); return { error: refusal, status: 409 }; }
