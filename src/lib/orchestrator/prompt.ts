@@ -115,7 +115,8 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
 // v64 combines task progress estimates with terminal review, due dates and report handling.
 // v65 makes a quick scope check the default for a vague ask: the seat chooses direct work, a pipeline or research itself, and a form is for what stays materially ambiguous.
 // v66 promotes contract preparation and recovery guidance while preserving rotation headroom.
-export const ORCHESTRATOR_PROMPT_VERSION = 66;
+// Review scope and dependency-based evidence renewal ship with the shared working rules.
+export const ORCHESTRATOR_PROMPT_VERSION = 67;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
