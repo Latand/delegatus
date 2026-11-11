@@ -9,7 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { classifyArtifact } from "@/lib/artifact/classify";
 import { frameUrl, mintFrameScope } from "@/lib/artifact/frameScope";
 import { artifactEtag, artifactLimits, artifactResponseHeaders, parseByteRange, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
-import { admittedAs, lexicalAllowedRoots, openAdmitted, realAllowedRoots, realpathAdmitted, resolveLocal, streamWindow } from "@/lib/artifact/localFile";
+import { admittedAs, lexicalAllowedRoots, openAdmitted, readablePlace, realAllowedRoots, realpathAdmitted, resolveLocal, streamWindow } from "@/lib/artifact/localFile";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
@@ -74,7 +74,8 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
   const raw = req.nextUrl.searchParams.get("path") ?? "";
   if (!raw) return NextResponse.json({ error: "path is required" }, { status: 400 });
 
-  const abs = resolveLocal(raw);
+  /* A picture inside a retired lane checkout is read from its saved copy. */
+  const abs = readablePlace(resolveLocal(raw));
   const admission = admittedAs(abs, lexicalAllowedRoots());
   if (!admission) return fail("access-denied", "path is outside the allowed roots");
 

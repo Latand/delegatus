@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { NextRequest, NextResponse } from "next/server";
 
-import { admittedAs, lexicalAllowedRoots, openAdmitted, realAllowedRoots, realpathAdmitted, resolveLocal } from "@/lib/artifact/localFile";
+import { admittedAs, lexicalAllowedRoots, openAdmitted, readablePlace, realAllowedRoots, realpathAdmitted, resolveLocal } from "@/lib/artifact/localFile";
 import { SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
@@ -34,6 +34,7 @@ const MIME: Record<string, string> = {
  * Confined to files with an image extension under the roots the artifact
  * route reads (known projects, stage scratch and raster evidence roots) — a
  * localhost-only tool, but there is no reason to hand out arbitrary files.
+ * A path into a lane checkout that was retired answers with the saved copy.
  */
 async function workspaceGET(req: NextRequest): Promise<NextResponse<ApiError> | NextResponse> {
   // Same gate as the mutating routes: a drive-by page or DNS-rebind must not
@@ -51,7 +52,9 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<ApiError> | 
 
   const raw = req.nextUrl.searchParams.get("path") ?? "";
   if (!raw) return NextResponse.json({ error: "path is required" }, { status: 400 });
-  const abs = resolveLocal(raw);
+  /* A picture a report names inside a retired lane checkout is read from
+     the copy retirement saved. */
+  const abs = readablePlace(resolveLocal(raw));
 
   const admission = admittedAs(abs, lexicalAllowedRoots());
   if (!admission) {

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { admittedAs, lexicalAllowedRoots, realAllowedRootsSync, realpathAdmitted, resolveLocal, type AllowedRoots } from "@/lib/artifact/localFile";
+import { admittedAs, lexicalAllowedRoots, readablePlace, realAllowedRootsSync, realpathAdmitted, resolveLocal, type AllowedRoots } from "@/lib/artifact/localFile";
 
 import type { AlbumVia } from "./extract";
 import type { AlbumSeenStore } from "./seen";
@@ -13,7 +13,8 @@ import { indexTranscripts, readInlineImage, transcriptImages, type IndexedImage 
  * A task's album: every picture its agents looked at, were handed or named,
  * across all its conversations and pipeline stages, newest first. A picture
  * named by path is kept only while the file exists under a root the artifact
- * route serves; one whose bytes live in the transcript is always drawable.
+ * route serves, or while its retired lane checkout left a saved copy; one
+ * whose bytes live in the transcript is always drawable.
  */
 
 /** The newest pictures an album holds; older ones are left out. */
@@ -121,7 +122,7 @@ function drawable(taskId: string, collected: Collected[]): Array<Collected & { s
   const out: Array<Collected & { src: string; file: string | null }> = [];
   for (const entry of ordered) {
     if (out.length >= ALBUM_MAX_IMAGES) break;
-    const file = entry.image.path ? resolveLocal(entry.image.path) : null;
+    const file = entry.image.path ? readablePlace(resolveLocal(entry.image.path)) : null;
     if (file && drawableFile(file, lexical ??= lexicalAllowedRoots(), real)) {
       out.push({ ...entry, file, src: `/api/artifact?${new URLSearchParams({ path: file }).toString()}` });
     } else if (entry.image.inline) {

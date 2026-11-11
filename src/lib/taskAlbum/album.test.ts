@@ -135,6 +135,19 @@ test("a named file outside the served roots, or one that does not exist, is left
   expect(page.items.map((item) => item.name)).toEqual(["kept.png"]);
 });
 
+test("a picture named inside a retired lane checkout is drawn from the copy its retirement saved", async () => {
+  const state = process.env.LLV_STATE_DIR!;
+  process.env.LLV_EVIDENCE_ROOTS = path.join(state, "evidence");
+  const named = path.join(elsewhere, "repo-pipeline-ab12cd34", ".artifacts", "after.png");
+  const kept = png(path.join(state, "evidence", "ab12cd34", "worktree", ".artifacts", "versions"), "after.png");
+  fs.writeFileSync(path.join(state, "evidence", "ab12cd34", "worktree-backup.json"),
+    JSON.stringify({ files: [{ path: path.join(".artifacts", "after.png"), savedPath: path.relative(path.join(state, "evidence", "ab12cd34", "worktree"), kept) }] }));
+  const lost = path.join(elsewhere, "repo-pipeline-ab12cd34", ".artifacts", "lost.png");
+  const file = transcript("retired", [claudeSays(`![after](${named}) and ![lost](${lost})`, 1)]);
+  const album = await readTaskAlbum("task-a", {}, deps([task("task-a", [file])]));
+  expect(album.items.map((item) => item.src)).toEqual([`/api/artifact?${new URLSearchParams({ path: kept })}`]);
+});
+
 test("a symlink under an evidence root that leads out of the roots is left out", async () => {
   const target = png(elsewhere, "target.png");
   const link = path.join(evidence, "link.png");
