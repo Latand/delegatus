@@ -1,6 +1,7 @@
 import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "@/lib/runtime/engineHost";
 import { recordedAgentScope, recordedScopeProcess, normalizeAgentScope, sameAgentScope, type AgentScopeIdentity } from "@/lib/runtime/agentScope";
 import { registryWriterDetail } from "./registryWriter";
+import { assertMemberLaunchAllowed, memberLaunchRevocationId } from "@/lib/team/memberLaunchAuthority";
 import { worktreeProtection, type WorktreeProtection } from "./worktreeProtection";
 import { agentSignalDomainAlive, normalizeAgentSignalDomain, normalizeSignalBoundaryOff, type AgentSignalDomain, type SignalBoundaryOff } from "@/lib/runtime/agentSignalSandbox";
 import { liveRootSession } from "@/lib/root/adopt";
@@ -356,6 +357,11 @@ export interface SpawnReceipt {
   createdAt: string;
   /** Runtime admission acknowledged; the host's setup ceiling starts here. */
   hostSetupStartedAt?: string;
+  /** Pre-session custody. `preparing` proves no engine exec was admitted;
+      `executing` without process evidence remains an uncertain launch. */
+  hostSetup?: { phase: "preparing" | "executing"; processes: ProcessIdentity[]; cleanupConfirmed?: true; adoptionClaimEpoch?: number };
+  /** Revocation tombstone observed by the admission writer. Legacy means none. */
+  memberRevocationId?: string | null;
   state: "starting" | "pane-bound" | "host-verified" | "prompt-delivered" | "path-pending" | "completed" | "failed" | "conflicted";
   artifactPath: string | null;
   /** Tracks whether inventory has ever materialized the reserved artifact. */
@@ -3475,7 +3481,9 @@ function failInitialSpawnReceiptForDelivery(file: RegistryFile, delivery: HeldDe
   receipt.state = "failed";
   receipt.error = delivery.error ?? "initial prompt delivery failed";
   markFailedLaunchReporting(receipt);
-  receipt.admissionOwner = null;
+  const bound = receipt.key ? file.entries[sessionKeyId(receipt.key)] : null;
+  if (!receipt.hostSetup || receipt.hostSetup.cleanupConfirmed
+    || (bound?.structuredHost?.process && bound.structuredHostOperationId === receipt.launchId)) receipt.admissionOwner = null;
 }
 
 function markFailedLaunchReporting(receipt: SpawnReceipt, announce = true): void {
@@ -4690,6 +4698,10 @@ function normalizePendingOrchestratorSeatIdentity(value: unknown): IdentityWaveS
 }
 
 function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnReceipt {
+  if (value.hostSetup && (!["preparing", "executing"].includes(value.hostSetup.phase)
+    || !Array.isArray(value.hostSetup.processes)
+    || value.hostSetup.adoptionClaimEpoch !== undefined && (!Number.isSafeInteger(value.hostSetup.adoptionClaimEpoch)
+      || value.hostSetup.adoptionClaimEpoch < 1))) throw new Error("structured setup custody is malformed");
   if (value.proactiveTaskIds !== undefined && (!Array.isArray(value.proactiveTaskIds)
     || value.proactiveTaskIds.length > 128 || value.proactiveTaskIds.some(id => typeof id !== "string" || !id))) {
     throw new Error("retained proactive task authority is unreadable");
@@ -4703,6 +4715,10 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     : null;
   return {
     ...value,
+    hostSetup: value.hostSetup ? { phase: value.hostSetup.phase,
+      processes: normalizeStructuredTerminationSurvivors(value.hostSetup.processes)!,
+      ...(value.hostSetup.adoptionClaimEpoch === undefined ? {} : { adoptionClaimEpoch: value.hostSetup.adoptionClaimEpoch }),
+      ...(value.hostSetup.cleanupConfirmed === true ? { cleanupConfirmed: true } : {}) } : undefined,
     memoryCap: memoryCap ?? undefined,
     clientAttemptId: typeof value.clientAttemptId === "string" ? value.clientAttemptId : null,
     requestDigest: typeof value.requestDigest === "string" ? value.requestDigest : null,
@@ -6971,6 +6987,33 @@ export class AgentRegistry {
     return this.readKeyed(file => clone(registryOpenSpawnReceipts(file)));
   }
 
+  /** Includes terminal setup that still owns cleanup; the liveness index
+      excludes retained history before loading any receipt payloads. */
+  memberLaunchReceipts(memberId: string): SpawnReceipt[] {
+    return this.readKeyed(file => registryLivenessRows(file).receipts
+      .filter(receipt => !receipt.key && receipt.launchProfile.workspace?.memberId === memberId
+        && !receipt.launchProfile.workspace.fromMessage).map(receipt => clone(receipt)));
+  }
+
+  /** The host operation is authoritative. Older settlement writers omitted
+      it; their latest receipt for this exact native generation is indexed. */
+  spawnReceiptForHost(key: SessionKey): SpawnReceipt | null {
+    return this.readKeyed(file => {
+      const entry = file.entries[sessionKeyId(key)];
+      const receipt = entry?.structuredHostOperationId ? file.receipts[entry.structuredHostOperationId]
+        : registryRowsMatching(file, "receipts", "key.sessionId", key.sessionId)
+          .findLast(row => row.key?.engine === key.engine && row.artifactPath === entry?.artifactPath);
+      return receipt ? clone(receipt) : null;
+    });
+  }
+
+  /** Revocation inspects current hosted rows without loading cold history. */
+  memberHostEntries(memberId: string): AgentRegistryEntry[] {
+    return this.readKeyed(file => registryRowsMatching(file, "entries", "structuredHost.kind",
+      ["codex-app-server", "claude-broker", "copilot-acp"])
+      .filter(entry => !entry.launchProfile || entry.launchProfile.workspace?.memberId === memberId && !entry.launchProfile.workspace.fromMessage).map(entry => clone(entry)));
+  }
+
   /** Structured ownership rows, including released rows needed by recovery. */
   structuredHostEntries(prepared?: RegistryFile): AgentRegistryEntry[] {
     const file = prepared ?? this.readOnlySnapshot();
@@ -7722,6 +7765,8 @@ export class AgentRegistry {
           : null,
         telegramSeatGrant,
         createdAt,
+        ...(profile.workspace && !profile.workspace.fromMessage
+          ? { memberRevocationId: memberLaunchRevocationId(profile.workspace.memberId) } : {}),
         state: rejection ? "failed" : "starting",
         artifactPath: rejection ? null : input.expectedArtifactPath ?? null,
         artifactLifecycle: "pending",
@@ -7802,7 +7847,7 @@ export class AgentRegistry {
       const receipt = file.receipts[launchId];
       if (!receipt) throw new Error("unknown spawn receipt");
       const unbound = receipt.state === "starting" && !receipt.key && !receipt.pane;
-      if (receipt.transport !== "structured" || !unbound) {
+      if (receipt.transport !== "structured" || !unbound || receipt.hostSetupStartedAt) {
         return { claimed: false, receipt: clone(receipt) };
       }
       if (receipt.admissionOwner && this.ownerAlive(receipt.admissionOwner)) {
@@ -7866,7 +7911,8 @@ export class AgentRegistry {
     this.mutate(file => {
       const receipt = file.receipts[launchId];
       if (!receipt || receipt.state !== "starting" || receipt.key || receipt.pane
-        || !receipt.admissionOwner || !sameRecordedProcessIdentity(receipt.admissionOwner, owner)) {
+        || !receipt.admissionOwner || !sameRecordedProcessIdentity(receipt.admissionOwner, owner)
+        || receipt.hostSetup?.phase === "executing" && !receipt.hostSetup.cleanupConfirmed) {
         throw new Error("structured spawn admission ownership changed");
       }
       if (receipt.queuedPinnedSpawn?.admissionDeadlineAt) {
@@ -7874,9 +7920,80 @@ export class AgentRegistry {
           ...receipt.launchProfile,
           title: receipt.queuedPinnedSpawn.spec.launchProfile?.title,
         }, this.mcpGrantPolicy);
-        receipt.hostSetupStartedAt = new Date(startedAt).toISOString();
         receipt.queuedPinnedSpawn = null;
       }
+      receipt.hostSetupStartedAt = new Date(startedAt).toISOString();
+      receipt.hostSetup = { phase: "preparing", processes: [] };
+    });
+  }
+
+  /** Boot adoption owns native setup until its first durable host checkpoint.
+      The old generation's process is not evidence of the replacement's exit. */
+  beginStructuredHostAdoption(launchId: string, key: SessionKey, owner: ProcessIdentity, claimEpoch: number): void {
+    this.mutate(file => {
+      const receipt = file.receipts[launchId];
+      const entry = file.entries[sessionKeyId(key)];
+      if (!receipt || !receipt.key || sessionKeyId(receipt.key) !== sessionKeyId(key)
+        || entry?.claimOwner !== structuredClaimOwner(owner) || entry.claimEpoch !== claimEpoch
+        || entry.structuredHost?.writerClaimEpoch !== claimEpoch
+        || receipt.hostSetup?.adoptionClaimEpoch !== undefined && !receipt.hostSetup.cleanupConfirmed)
+        throw new Error("structured adoption custody changed");
+      assertMemberLaunchAllowed(receipt);
+      receipt.admissionOwner = clone(owner);
+      receipt.hostSetupStartedAt = now();
+      receipt.hostSetup = { phase: "preparing", processes: [], adoptionClaimEpoch: claimEpoch };
+    });
+  }
+
+  completeStructuredHostAdoption(launchId: string, owner: ProcessIdentity): void {
+    this.mutate(file => {
+      const receipt = file.receipts[launchId];
+      const entry = receipt?.key ? file.entries[sessionKeyId(receipt.key)] : null;
+      if (!receipt?.admissionOwner || !sameRecordedProcessIdentity(receipt.admissionOwner, owner)
+        || receipt.hostSetup?.adoptionClaimEpoch !== entry?.claimEpoch
+        || entry?.claimOwner !== structuredClaimOwner(owner) || !entry.structuredHost?.process)
+        throw new Error("structured adoption checkpoint is unavailable");
+      delete receipt.hostSetup;
+      receipt.admissionOwner = null;
+    });
+  }
+
+  /** Synchronous, non-waiting writers at the native exec boundary. An
+      unavailable writer refuses exec; no lock wait may hide a new child. */
+  recordStructuredHostSetup(launchId: string, owner: ProcessIdentity, native?: ProcessIdentity): void {
+    if (native) normalizeStructuredTerminationSurvivors([native]);
+    const written = this.deliveryWriteNow({ label: "spawn.setup-custody", operationId: launchId }, () => this.mutate(file => {
+      const receipt = file.receipts[launchId];
+      if (!receipt?.hostSetup || !receipt.admissionOwner
+        || !sameRecordedProcessIdentity(receipt.admissionOwner, owner)) throw new Error("structured setup custody changed");
+      if (!native) {
+        assertMemberLaunchAllowed(receipt);
+        if (receipt.hostSetup.adoptionClaimEpoch !== undefined) {
+          const entry = receipt.key ? file.entries[sessionKeyId(receipt.key)] : null;
+          if (entry?.claimOwner !== structuredClaimOwner(owner) || entry.claimEpoch !== receipt.hostSetup.adoptionClaimEpoch)
+            throw new Error("structured adoption custody changed");
+        } else if (receipt.state !== "starting") throw new Error("structured setup is no longer admitted");
+        return;
+      }
+      receipt.hostSetup.phase = "executing";
+      delete receipt.hostSetup.cleanupConfirmed;
+      if (native && !receipt.hostSetup.processes.some(process => sameRecordedProcessIdentity(process, native))) {
+        receipt.hostSetup.processes.push(clone(native));
+      }
+    }));
+    if (!written.acquired) throw new RegistryWriterBusyError("spawn.setup-custody");
+  }
+
+  confirmStructuredHostSetupCleanup(launchId: string, owner: ProcessIdentity): void {
+    this.mutate(file => {
+      const receipt = file.receipts[launchId];
+      if (!receipt?.admissionOwner || !sameRecordedProcessIdentity(receipt.admissionOwner, owner))
+        throw new Error("structured setup custody changed");
+      if (receipt.hostSetup?.phase === "executing" && !receipt.hostSetup.processes.length)
+        throw new Error("structured setup native evidence is unavailable");
+      if (receipt.hostSetup?.processes.some(process => processIdentityStatus(process) !== "dead"))
+        throw new Error("structured setup process cleanup is not confirmed");
+      if (receipt.hostSetup) receipt.hostSetup.cleanupConfirmed = true;
     });
   }
 
@@ -7909,6 +8026,7 @@ export class AgentRegistry {
       const unbound = receipt.state === "starting" && !receipt.key && !receipt.pane;
       if ((receipt.transport !== "structured" && receipt.transport !== "tmux")
         || !unbound
+        || receipt.hostSetup?.phase === "executing" && !receipt.hostSetup.cleanupConfirmed
         || !receipt.admissionOwner
         || !sameRecordedProcessIdentity(receipt.admissionOwner, owner)) {
         return { released: false, receipt: clone(receipt) };
@@ -7927,6 +8045,7 @@ export class AgentRegistry {
       const receipt = file.receipts[launchId];
       if (!receipt) throw new Error("unknown spawn receipt");
       if (receipt.transport !== "structured" || receipt.state !== "starting" || receipt.key || receipt.pane
+        || receipt.hostSetup?.phase === "executing" && !receipt.hostSetup.cleanupConfirmed
         || !receipt.admissionOwner
         || !sameRecordedProcessIdentity(receipt.admissionOwner, owner)) {
         return { released: false, receipt: clone(receipt) };
@@ -7942,7 +8061,10 @@ export class AgentRegistry {
     return this.mutate((file) => {
       const receipt = file.receipts[launchId];
       if (!receipt) throw new Error("unknown spawn receipt");
+      const bound = receipt.key ? file.entries[sessionKeyId(receipt.key)] : null;
       if (receipt.transport !== "structured"
+        || ((!bound?.structuredHost?.process || bound.structuredHostOperationId !== launchId)
+          && receipt.hostSetup?.phase === "executing" && !receipt.hostSetup.cleanupConfirmed)
         || !receipt.admissionOwner
         || !sameRecordedProcessIdentity(receipt.admissionOwner, owner)) {
         return { released: false, receipt: clone(receipt) };
