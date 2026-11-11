@@ -57,7 +57,7 @@ Read these Delegatus surfaces before changing anything:
 - `GET /api/files?project=<project>` for canonical path, conversation identity, title revision,
   activity, process state, durable lineage, role, memberships, and review outcome;
 - `GET /api/board?project=<project>` for the revision fence and hidden/manual/expanded state;
-- `GET /api/pipelines`, `GET /api/tasks` and, for retired flows kept as history, `GET /api/flows` for durable associations, rounds,
+- `GET /api/pipelines`, `GET /api/tasks` and, for retired flows kept as history, `GET /api/review-history?project=<project>` for durable associations, rounds,
   exact reviewed heads, assignments, and current container state;
 - GitHub pull-request state only when transcript and Delegatus metadata identify a repository and PR.
 
@@ -237,7 +237,7 @@ flow, pipeline, or transcript stores directly.
 
 After all intended mutations:
 
-1. Re-read `/api/files`, `/api/board`, `/api/flows`, `/api/pipelines`, and `/api/tasks` for each
+1. Re-read `/api/files`, `/api/board`, `/api/pipelines`, and `/api/tasks` for each
    affected project.
 2. Re-run a pinned `viewer.snapshot` for the maintained visible paths.
 3. Confirm every active conversation remains present and no mutation endpoint outside this

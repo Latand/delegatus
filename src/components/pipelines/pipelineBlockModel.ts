@@ -201,7 +201,7 @@ export interface ReviewStop {
 }
 
 /** What a legacy review flow stores as its first finding when it ends at its
-    round limit (`flows/engine.ts` `markNeedsDecision`). */
+    round limit; the engine that wrote it is removed, stored records keep it. */
 const LEGACY_ROUND_LIMIT = /^(flow review )?round limit reached$/;
 /** The engine's park detail for a spent fail edge (`routeFailedAttempt`). */
 const BUDGET_EXHAUSTED = "fail-edge budget exhausted";

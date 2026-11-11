@@ -1,3 +1,4 @@
+import * as roleViewSource from "@/lib/memory/roleViewSource";
 import { afterAll, afterEach, expect, spyOn, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -114,14 +115,17 @@ test("an unacknowledged export retry observes recovery-only project succession",
   expect(retry.push?.rows).toHaveLength(1);
 });
 
-test("matcher reads revision before cloning and refreshes after a rule write", () => {
-  const f = fixture(); const snapshot = spyOn(f.collection, "snapshot");
+test("matcher reads the rule texts once per revision and refreshes after a rule write", () => {
+  const f = fixture(); const snapshot = spyOn(f.collection, "snapshot"), texts = spyOn(roleViewSource, "storedRuleTexts");
   try {
     for (let index = 0; index < 10; index++) expect(withoutStoredLessonsIn({ text: lesson }).text).toBe("[learned rule].");
-    expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(texts).toHaveBeenCalledTimes(1);
     f.collection.boundedPatch(2, tx => tx.put({ ...tx.get("r:fixture")!, rule: "Another fixture rule covers the silver orchard." } as RoleMemoryRule));
     expect(withoutStoredLessonsIn({ text: "Another fixture rule covers the silver orchard." }).text).toBe("[learned rule].");
-  } finally { snapshot.mockRestore(); }
+    expect(texts).toHaveBeenCalledTimes(2);
+    // The matcher takes rule rows alone: no whole read of the collection.
+    expect(snapshot).not.toHaveBeenCalled();
+  } finally { snapshot.mockRestore(); texts.mockRestore(); }
 });
 
 test("a replaced privacy database with unchanged size and mtime cannot reuse its old matcher", () => {

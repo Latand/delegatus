@@ -5,7 +5,7 @@ import path from "node:path";
 
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { CODEX_LUNA_MODEL } from "@/lib/agent/models";
-import type { HeadlessCodexRunRequest, HeadlessRunResult } from "@/lib/flows/exec";
+import type { HeadlessCodexRunRequest, HeadlessRunResult } from "@/lib/agent/headless";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { OPERATOR_CORRECTION_RULE } from "@/lib/roles/defaults";
 import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";

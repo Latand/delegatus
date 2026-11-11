@@ -89,3 +89,14 @@ test("a credential said in pieces with a space, a tab or a line break before eac
   const plain = new LiveTranscript([key]);
   expect(plain.fragment("operator", "Ask the orchestrator to review the plan", 0, 400).at(-1)!.text).toBe("Ask the orchestrator to review the plan");
 });
+
+test("fragment text offsets follow credential masking while preserving the audio fragment order", () => {
+  const transcript = new LiveTranscript(["synthetic-credential"]);
+  transcript.fragment("companion", "First. ", 0, 1000);
+  transcript.fragment("companion", "synthetic-", 1000, 2000);
+  transcript.fragment("companion", "credential", 2000, 3000);
+  const [snapshot] = transcript.fragment("companion", " Next.", 3000, 4000);
+  expect(snapshot.text).toBe("First. [redacted] Next.");
+  expect(transcript.timingsOf(snapshot.itemId)).toEqual([[0, 1000], [1000, 2000], [2000, 3000], [3000, 4000]]);
+  expect(transcript.fragmentEndsOf(snapshot.itemId)).toEqual([7, 17, 17, 23]);
+});
