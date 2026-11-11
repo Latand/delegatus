@@ -610,7 +610,7 @@ describe("a form with no Telegram channel and questions that cannot be skipped",
     const data = reviewRead(); data.rounds[0]!.variants = [];
     data.rounds[0]!.questions = withSkippable ? formQuestions : formQuestions.map(({ skippable: _skippable, ...q }) => q);
     if (post) data.rounds[0]!.telegramPost = { key: "automatic", at: "2026-10-13T00:00:00Z", ...post };
-    globalThis.fetch = (async () => new Response(JSON.stringify(data), { status: 200 })) as typeof fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify(data), { status: 200 })) as unknown as typeof fetch;
     const host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host);
     await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="First form" onClose={() => {}} />); await new Promise(r => setTimeout(r, 20)); });
   }

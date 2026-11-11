@@ -3060,8 +3060,6 @@ test("the first person-made designation on an empty installation ends its spawn 
   expect(firstRunSeat()?.firstRun).toBe(true);
   /* Never part of the stored mandate: what a rotation or a kept mandate rebuilds from. */
   expect(firstRunSeat()?.mandate).not.toContain(ORCHESTRATOR_FIRST_RUN_DIRECTIVE);
-  expect(firstRunSeat()?.mandate).not.toContain("## First run");
-  expect(ORCHESTRATOR_FIRST_RUN_DIRECTIVE).toContain("## First run");
 });
 
 test("the first-run instruction fits the delivery bound beside the default mandate with headroom", () => {

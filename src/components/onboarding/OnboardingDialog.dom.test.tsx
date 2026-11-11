@@ -443,7 +443,7 @@ test("the relay service step left without pairing is done, never skipped, when a
   const root = createRoot(host);
   requests.length = 0;
   try {
-    const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: null, telegram: null, orchestrator: null, agents: null, phone: null, voice: null, check: null, relay: null } } as const;
+    const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: null, telegram: null, orchestrator: null, agents: null, memory: null, phone: null, voice: null, check: null, relay: null } } as const;
     flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="relay" marker={marker} onClose={() => {}} />));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(host.querySelector("[data-external-relay=relay-1]")).not.toBeNull();
@@ -462,7 +462,7 @@ test("#2166: a six-step marker with Engines done lands on Project; the Tour is g
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: null, telegram: null, orchestrator: null, agents: "done", phone: null, voice: null, check: null, relay: null } } as const;
+  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: null, telegram: null, orchestrator: null, agents: "done", memory: null, phone: null, voice: null, check: null, relay: null } } as const;
   flushSync(() => root.render(<OnboardingDialog mode="guide" marker={marker} onClose={() => {}} />));
   expect(host.querySelector("[data-onboarding-step=project]")?.getAttribute("aria-current")).toBe("step");
   expect(host.textContent).toContain("Step 2 of 3");
@@ -1013,7 +1013,7 @@ test("a skipped Telegram step is settled: the guide never reopens on it", () => 
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: "done", telegram: "skipped", orchestrator: null, agents: null, phone: null, voice: null, check: null, relay: null } } as const;
+  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { engines: "done", project: "done", telegram: "skipped", orchestrator: null, agents: null, memory: null, phone: null, voice: null, check: null, relay: null } } as const;
   flushSync(() => root.render(<OnboardingDialog mode="guide" marker={marker} onClose={() => {}} />));
   expect(host.querySelector("[data-onboarding-step=orchestrator]")?.getAttribute("aria-current")).toBe("step");
   flushSync(() => root.unmount());
@@ -1299,7 +1299,7 @@ test("a new install can choose the cheaper orchestrator without changing saved r
   host.remove();
 });
 
-const noSteps = { engines: null, project: null, telegram: null, orchestrator: null, agents: null, phone: null, voice: null, check: null, relay: null } as const;
+const noSteps = { engines: null, project: null, telegram: null, orchestrator: null, agents: null, memory: null, phone: null, voice: null, check: null, relay: null } as const;
 const finishedMarkers = [
   ["an existing installation", { schemaVersion: 1, completedAt: null, dismissedAt: "2026-10-01T00:00:00.000Z", reason: "existing-install", lastHealth: null, walk: null, steps: noSteps }],
   ["a new install that completed the guide", { schemaVersion: 1, completedAt: "2026-10-01T00:00:00.000Z", dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { ...noSteps, engines: "done", project: "done", orchestrator: "done" } }],
