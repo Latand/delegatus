@@ -233,14 +233,31 @@ function imageSrc(raw: string, scope: MdDocumentScope | null): string {
   return `/api/image?path=${encodeURIComponent(local)}`;
 }
 
+/* What stands where a picture's bytes never loaded: a frame that says so and
+   names the picture, so a report with a lost screenshot reads as one. The
+   name stays a link to the place the text gave. */
+function MissingPicture({ alt, src }: { alt: string; src: string }) {
+  return (
+    <span
+      role="img"
+      aria-label={`${tr("feed.pictureMissing")}: ${alt || src}`}
+      data-picture-missing=""
+      className="my-1 inline-flex max-w-full flex-col gap-0.5 rounded-[10px] border border-dashed border-border px-2.5 py-1.5 align-top text-[12px] text-muted"
+    >
+      <span>{tr("feed.pictureMissing")}</span>
+      <span className="break-all"><Anchor href={src} label={alt || src} /></span>
+    </span>
+  );
+}
+
 /* Inline embedded image: a capped thumbnail that opens the full-size lightbox
-   on click, and quietly degrades to a plain link if the bytes never load.
-   `at` is its place among the pictures its feed row draws. */
+   on click. When the bytes never load it becomes a frame that says the picture
+   is not available. `at` is its place among the pictures its feed row draws. */
 function MdImage({ alt, src, at }: { alt: string; src: string; at?: number }) {
   const [full, setFull] = useState(false);
   const [failed, setFailed] = useState(false);
   const resolved = imageSrc(src, useContext(MdDocumentContext));
-  if (failed) return <Anchor href={src} label={alt || src} />;
+  if (failed) return <MissingPicture alt={alt} src={src} />;
   return (
     <>
       {/* eslint-disable-next-line @next/next/no-img-element -- arbitrary local/remote src, next/image cannot serve it */}
