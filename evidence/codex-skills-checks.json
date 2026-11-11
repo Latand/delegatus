@@ -1662,9 +1662,10 @@
   "publicationRepair": {
     "refusedPhase": "touched tests",
     "cause": "Head selection exhausted its 900-second aggregate budget before the baseline phase. Late file runs were incomplete.",
-    "selectedFiles": 843,
+    "selectedFiles": 138,
     "changedFiles": 33,
     "mainMerged": "1037130eed9d990edcdd3053150af7ba44592cf9",
-    "verificationProtocol": "Run the existing hook with unchanged selection, limits and isolation. Completed head files may be reused only by the existing certified checkpoint reader; failures and incomplete files remain fresh. Repair receipts are retained separately so verification does not change its own inputs."
+    "verificationProtocol": "Run the existing hook with unchanged selection, limits and isolation. Completed head files may be reused only by the existing certified checkpoint reader; failures and incomplete files remain fresh. Repair receipts are retained separately so verification does not change its own inputs.",
+    "cataloguedSiblingTests": 843
   }
 }
