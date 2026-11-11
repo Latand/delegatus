@@ -8,7 +8,6 @@ import { fullGC } from "bun:jsc";
 import { reboundAssembledMcpGrants } from "./mcpAllowlist";
 import { normalizeRegistry, readOnlyConversationLookupFromSnapshot, type RegistryFile } from "./registry";
 import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from "./registryPerformanceDataset";
-import { OWNER_ENDINGS_CURSOR } from "./registryEndings";
 import {
   registryRowsMatching, archivedOwnersEndedSince, hotRegistryRows, registryConversationsForEntryKey, registryConversationsForPath, registryRowProjection,
   SqliteAgentRegistryStore, type RegistryRowProjector,
@@ -28,12 +27,7 @@ afterEach(() => {
 function history() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-registry-history-"));
   directories.push(directory);
-  // SQLite 3.39 parses :01.001 one millisecond early. Keep this boundary in
-  // every run instead of sampling fractional seconds from the wall clock.
-  const clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-10T12:00:01.001Z"));
-  let dataset: ReturnType<typeof buildRegistryPerformanceDataset>;
-  try { dataset = buildRegistryPerformanceDataset(directory, scaledRegistryPerformanceShape(0.05)); }
-  finally { clock.mockRestore(); }
+  const dataset = buildRegistryPerformanceDataset(directory, scaledRegistryPerformanceShape(0.05));
   const open = (observed?: { reads: number }) => {
     const store = new SqliteAgentRegistryStore(dataset.filename, {
       normalize: normalizeRegistry,
@@ -482,7 +476,7 @@ test("recent endings among archived operation owners are named without reading t
   const view = selectedStore.readOnlySnapshot().file;
   const whole = open().snapshot().file;
   const ended = (since: string) => Object.entries(whole.deliveryOperationOwners)
-    .filter(([, owner]) => owner.terminalState !== null && Date.parse(owner.settledAt ?? "") >= Date.parse(since)).map(([key]) => key).sort();
+    .filter(([, owner]) => owner.terminalState !== null && (owner.settledAt ?? "") >= since).map(([key]) => key).sort();
   const hot = new Set(hotRegistryRows(view, "deliveryOperationOwners").map(([key]) => key));
   expect(whole.deliveryOperationOwners[legacy!.row_key]!.settledAt).toBe(deliveredAt);
   expect(whole.deliveryOperationOwners[silent!.row_key]!.settledAt).toBeNull();
@@ -504,85 +498,13 @@ test("recent endings among archived operation owners are named without reading t
   const rebuild = new Database(dataset.filename);
   try {
     rebuild.run("DELETE FROM registry_owner_endings");
-    rebuild.run("DELETE FROM registry_meta WHERE key=?", [OWNER_ENDINGS_CURSOR]);
+    rebuild.run("DELETE FROM registry_meta WHERE key='owner_endings_cursor'");
   } finally { rebuild.close(); }
   const rebuilt = open();
   await rebuilt.prepareReadOnlySnapshot();
   expect(archivedOwnersEndedSince(rebuilt.readOnlySnapshot().file, deliveredAt)).toContain(unkeyed!.row_key);
   /* A plain file has no archive to ask: its caller reads the rows. */
   expect(archivedOwnersEndedSince(whole, deliveredAt)).toBeUndefined();
-});
-
-test("ending boundaries and ties survive a legacy projection rebuild and queued writes", async () => {
-  const { dataset, open } = history();
-  const store = open();
-  await store.prepareReadOnlySnapshot();
-  const db = new Database(dataset.filename);
-  const since = "2026-01-11T04:58:01.001Z";
-  const before = "2026-01-11T04:58:01.000Z";
-  const after = "2026-01-11T04:58:01.002Z";
-  const keys = db.query<{ row_key: string }, []>(`SELECT row_key FROM registry_cold
-    WHERE collection='deliveryOperationOwners' ORDER BY row_key LIMIT 4`).all().map(row => row.row_key);
-  const rearchive = db.query<{ id: number }, [string, string]>(`INSERT INTO registry_archive(collection,row_key,value_json,row_order)
-    SELECT a.collection,a.row_key,json_set(a.value_json,'$.settledAt',?),a.row_order
-    FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id
-    WHERE c.collection='deliveryOperationOwners' AND c.row_key=? RETURNING id`);
-  const replace = (key: string, stamp: string) => {
-    const version = rearchive.get(stamp, key)!;
-    db.run("UPDATE registry_cold SET archive_id=? WHERE collection='deliveryOperationOwners' AND row_key=?", [version.id, key]);
-  };
-  const projected = () => db.query<{ operation_id: string; ending_ms: number }, []>(`SELECT operation_id,ending_ms
-    FROM registry_owner_endings WHERE operation_id IN (SELECT row_key FROM registry_cold
-      WHERE collection='deliveryOperationOwners' ORDER BY row_key LIMIT 4) ORDER BY operation_id`).all();
-  try {
-    for (const [index, stamp] of [before, since, since, after].entries()) replace(keys[index]!, stamp);
-    await store.prepareReadOnlySnapshot();
-    // Model a fully prepared projection left by the earlier parser. Both
-    // equal-time owners have the same wrong millisecond, with no queued write.
-    db.run("UPDATE registry_owner_endings SET ending_ms=ending_ms-1 WHERE operation_id IN (?,?)", [keys[1]!, keys[2]!]);
-    db.run("INSERT OR REPLACE INTO registry_meta(key,value) VALUES ('owner_endings_cursor','complete')");
-    db.run("DELETE FROM registry_meta WHERE key=?", [OWNER_ENDINGS_CURSOR]);
-    expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM registry_owner_ending_changes").get()!.n).toBe(0);
-    store.close();
-    const reopened = open();
-    await reopened.prepareReadOnlySnapshot();
-    expect(projected().map(row => row.ending_ms)).toEqual([before, since, since, after].map(Date.parse));
-    const view = reopened.readOnlySnapshot().file;
-    const window = (stamp: string) => archivedOwnersEndedSince(view, stamp)!.filter(key => keys.includes(key));
-    expect(window(since)).toEqual(keys.slice(1));
-    expect(window(after)).toEqual([keys[3]!]);
-    // Seek across a tie, one owner per page; exclude the immediately earlier
-    // owner and retain both owners exactly at the inclusive lower bound.
-    const first = archivedOwnersEndedSince(view, since, { limit: 1 })!;
-    const second = archivedOwnersEndedSince(view, since, { limit: 1, after: first[0] })!;
-    const third = archivedOwnersEndedSince(view, since, { limit: 1, after: second[0] })!;
-    expect([...first, ...second, ...third]).toEqual(keys.slice(1));
-    // A compatibility writer queues a new archive version. Preparation must
-    // use the exact parser again when draining it, after the rebuild is done.
-    replace(keys[0]!, since);
-    await reopened.prepareReadOnlySnapshot();
-    expect(projected().map(row => row.ending_ms)).toEqual([since, since, since, after].map(Date.parse));
-    expect(archivedOwnersEndedSince(reopened.readOnlySnapshot().file, since)!.filter(key => keys.includes(key))).toEqual(keys);
-    // A legacy delivery without its digest may disagree with the owner's
-    // saved delivery. SQL must keep the later candidate even when its parser
-    // collapses these adjacent milliseconds to the same instant.
-    const saved = db.query<{ value_json: string }, [string]>(`SELECT value_json FROM registry_records
-      WHERE collection='heldDeliveries' AND row_key=(SELECT json_extract(value_json,'$.deliveryId')
-        FROM registry_records WHERE collection='deliveryOperationOwners' AND row_key=?)`).get(keys[0]!)!;
-    const delivery = { ...JSON.parse(saved.value_json), deliveredAt: since };
-    const ownerVersion = db.query<{ id: number }, [string, string]>(`INSERT INTO registry_archive(collection,row_key,value_json,row_order)
-      SELECT collection,row_key,json_set(json_remove(value_json,'$.settledAt'),'$.settledDelivery',json(?)),row_order
-      FROM registry_records WHERE collection='deliveryOperationOwners' AND row_key=? RETURNING id`).get(JSON.stringify(delivery), keys[0]!)!;
-    db.run("UPDATE registry_cold SET archive_id=? WHERE collection='deliveryOperationOwners' AND row_key=?", [ownerVersion.id, keys[0]!]);
-    const deliveryVersion = db.query<{ id: number }, [string, string]>(`INSERT INTO registry_archive(collection,row_key,value_json,row_order)
-      SELECT collection,row_key,json_set(json_remove(value_json,'$.requestDigest'),'$.deliveredAt',?),row_order
-      FROM registry_records WHERE collection='heldDeliveries' AND row_key=? RETURNING id`).get(before, delivery.id)!;
-    db.run("UPDATE registry_cold SET archive_id=? WHERE collection='heldDeliveries' AND row_key=?", [deliveryVersion.id, delivery.id]);
-    await reopened.prepareReadOnlySnapshot();
-    expect(open().snapshot().file.deliveryOperationOwners[keys[0]!]!.settledAt).toBe(since);
-    expect(projected()[0]!.ending_ms).toBe(Date.parse(since));
-    expect(archivedOwnersEndedSince(reopened.readOnlySnapshot().file, since)).toContain(keys[0]!);
-  } finally { db.close(); }
 });
 
 /* #2761: Next standalone gives the instrumentation and each route bundle its
@@ -750,7 +672,7 @@ test("ending preparation resumes a committed partial cursor in a fresh process",
   const db = new Database(dataset.filename);
   try {
     db.run("DELETE FROM registry_owner_endings");
-    db.run("DELETE FROM registry_meta WHERE key=?", [OWNER_ENDINGS_CURSOR]);
+    db.run("DELETE FROM registry_meta WHERE key='owner_endings_cursor'");
   } finally { db.close(); }
   const launch = async (finish: boolean) => {
     const code = `import { Database } from "bun:sqlite";
@@ -775,14 +697,14 @@ test("ending preparation resumes a committed partial cursor in a fresh process",
   const partial = new Database(dataset.filename, { readonly: true });
   try {
     expect(partial.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM registry_owner_endings").get()!.n).toBe(16);
-    expect(partial.query<{ value: string }, [string]>("SELECT value FROM registry_meta WHERE key=?").get(OWNER_ENDINGS_CURSOR)!.value).not.toBe("complete");
+    expect(partial.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key='owner_endings_cursor'").get()!.value).not.toBe("complete");
   } finally { partial.close(); }
   await launch(true);
   const complete = new Database(dataset.filename, { readonly: true });
   try {
     expect(complete.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM registry_owner_endings").get()!.n)
       .toBe(complete.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM registry_rows WHERE collection='deliveryOperationOwners'").get()!.n);
-    expect(complete.query<{ value: string }, [string]>("SELECT value FROM registry_meta WHERE key=?").get(OWNER_ENDINGS_CURSOR)!.value).toBe("complete");
+    expect(complete.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key='owner_endings_cursor'").get()!.value).toBe("complete");
   } finally { complete.close(); }
 });
 

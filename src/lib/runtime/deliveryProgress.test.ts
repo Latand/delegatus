@@ -1,4 +1,3 @@
-import { OWNER_ENDINGS_CURSOR } from "@/lib/agent/registryEndings";
 import { withoutWriterWait } from "@/lib/agent/registryLockHolderFixture";
 import fs from "node:fs";
 import os from "node:os";
@@ -966,7 +965,7 @@ test("an archived legacy send with mixed-format candidate endings is restored be
         const rebuild = new Database(options.sqliteFilename);
         try {
           rebuild.run("DELETE FROM registry_owner_endings");
-          rebuild.run("DELETE FROM registry_meta WHERE key=?", [OWNER_ENDINGS_CURSOR]);
+          rebuild.run("DELETE FROM registry_meta WHERE key='owner_endings_cursor'");
         } finally { rebuild.close(); }
       }
       const progressFile = path.join(directory, `delivery-progress-${pass}.sqlite`);

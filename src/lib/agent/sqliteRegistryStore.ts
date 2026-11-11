@@ -24,7 +24,7 @@ import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantP
 import { identityMaterializationFence } from "./identityMaterialization";
 import type { AgentRegistryEntry, ConversationAuthorityFacts, RegistryFile, SeatChildrenAnchor, SeatChildrenPage, SnapshotSpawnProjection, SnapshotTitleConversationProjection } from "./registry";
 import { sessionKeyId } from "./sessionKey";
-import { drainRegistryEndingChanges, endingInstant, OWNER_ENDINGS_CURSOR, prepareRegistryEndingsBatch, registryEndingChangesPending, registryEndingsPrepared, RETIRED_ENDING_TRIGGERS } from "./registryEndings";
+import { drainRegistryEndingChanges, endingInstant, prepareRegistryEndingsBatch, registryEndingChangesPending, registryEndingsPrepared, RETIRED_ENDING_TRIGGERS } from "./registryEndings";
 import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
 import { protectionConversation, protectionDelivery, protectionEntry, type WorktreeProtection } from "./worktreeProtection";
 
@@ -3739,7 +3739,7 @@ export class SqliteAgentRegistryStore {
     if (this.changesReady) endedOwnerReaders.set(file,(since, page) => {
       if (page && (!Number.isSafeInteger(page.limit) || page.limit < 1 || page.limit > 5000)) throw new RangeError("invalid ending page limit");
       // A queued change not yet refreshed leaves the projection behind its rows.
-      const ready = this.db.query<{ value: string }, [string]>("SELECT value FROM registry_meta WHERE key=?").get(OWNER_ENDINGS_CURSOR)?.value === "complete"
+      const ready = this.db.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key='owner_endings_cursor'").get()?.value === "complete"
         && !registryEndingChangesPending(this.db);
       if (ready) {
         const ms = Date.parse(since);
