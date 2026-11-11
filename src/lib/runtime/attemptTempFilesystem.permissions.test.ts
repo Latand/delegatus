@@ -41,6 +41,18 @@ test.skipIf(process.platform !== "linux")("expired native removal repairs an own
   finally { process.env.PATH = previous; }
 });
 
+test.skipIf(process.platform !== "linux").each([0o000, 0o444, 0o555])(
+  "permission repair preserves regular file mode %i", async mode => {
+    const f = fixture(), payload = path.join(f.cache, "payload");
+    fs.chmodSync(payload, mode);
+    const rm = spyOn(fs.promises, "rm").mockRejectedValue(new Error("fixture stops after repair"));
+    try {
+      await expect(repair(f.directory)).rejects.toThrow("fixture stops after repair");
+      expect(fs.statSync(f.cache).mode & 0o777).toBe(0o755);
+      expect(fs.statSync(payload).mode & 0o777).toBe(mode);
+    } finally { rm.mockRestore(); fs.chmodSync(payload, 0o600); }
+  });
+
 test.skipIf(process.platform !== "linux").each(["owner", "device", "symlink", "hardlink"] as const)(
   "permission repair respects the %s boundary", async boundary => {
     const f = fixture(), outside = path.join(f.parent, "outside");

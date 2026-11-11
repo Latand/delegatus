@@ -721,8 +721,8 @@ const descriptorMount = (fd: number) => {
   return id;
 };
 
-/** Repair only an admitted, expired tree. Pin each entry without following a
- * symlink, then chmod its descriptor. On Linux O_PATH also opens mode 000;
+/** Repair only directories in an admitted, expired tree. Pin each entry without
+ * following a symlink, then chmod directory descriptors. O_PATH opens mode 000;
  * the proc descriptor names that inode even if its directory entry changes.
  * All child paths are relative to a held parent, on the root's device. */
 function repairAttemptPermissions(directory: string, authority: () => boolean, budgetMs: number, permissionChange?: AttemptProtection["permissionChange"]) {
@@ -756,12 +756,11 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
     let retained = false;
     try {
       const stat = fs.fstatSync(fd);
-      if (stat.isSymbolicLink() || stat.dev !== initial.dev || stat.uid !== uid || !stat.isDirectory() && !stat.isFile()) return;
+      // File modes do not prevent unlink from a writable parent. A file can
+      // gain an external hardlink after fstat, so never chmod regular files.
+      if (stat.isSymbolicLink() || stat.dev !== initial.dev || stat.uid !== uid || !stat.isDirectory()) return;
       if (root && `${stat.dev}:${stat.ino}` !== `${initial.dev}:${initial.ino}`) throw new Error("attempt permission repair root changed");
-      // A linked file may also belong to an entry outside this root. Its
-      // permissions do not prevent unlink, so leave that shared inode alone.
-      if (stat.isFile() && stat.nlink !== 1) return;
-      const mode = stat.mode | (stat.isDirectory() || stat.mode & 0o111 ? 0o700 : 0o600);
+      const mode = stat.mode | 0o700;
       const pinned = `/proc/self/fd/${fd}`;
       if (root) rootMount = descriptorMount(fd);
       const entry = { fd, pinned, expected, identity: `${stat.dev}:${stat.ino}` };
@@ -769,7 +768,7 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
         check();
         for (const parent of stack) bound(parent);
         bound(entry);
-        if (stat.isDirectory() || mode !== stat.mode) assertAttemptMountsClear(physicalRoot);
+        assertAttemptMountsClear(physicalRoot);
       };
       validate();
       if (mode !== stat.mode) {
@@ -777,11 +776,9 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
         if (permissionChange) permissionChange(path.join(directory, path.relative(physicalRoot, expected)), mode & 0o7777, apply);
         else apply();
       }
-      if (stat.isDirectory()) {
-        validate();
-        stack.push({ ...entry, entries: fs.opendirSync(pinned) });
-        retained = true;
-      }
+      validate();
+      stack.push({ ...entry, entries: fs.opendirSync(pinned) });
+      retained = true;
     } finally { if (!retained) fs.closeSync(fd); }
   };
   const close = () => {

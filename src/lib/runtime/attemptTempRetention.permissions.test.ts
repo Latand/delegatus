@@ -71,6 +71,39 @@ test.skipIf(process.platform !== "linux")("an expired root with a read-only modu
   } finally { process.env.PATH = previousPath; f.store.close(); }
 });
 
+test.skipIf(process.platform !== "linux")("an external hardlink made after fstat keeps its permissions through retention", async () => {
+  const f = fixture(), outside = path.join(f.parent, "retained-link"), previousPath = process.env.PATH;
+  const payload = path.join(f.cache, "payload");
+  fs.chmodSync(payload, 0o444);
+  const identity = fs.statSync(payload);
+  const bin = path.join(f.parent, "bin"); fs.mkdirSync(bin);
+  for (const command of ["find", "du"]) fs.symlinkSync(`/usr/bin/${command}`, path.join(bin, command));
+  process.env.PATH = bin;
+  const nativeStat = fs.fstatSync.bind(fs);
+  let linked = false;
+  const stat = spyOn(fs, "fstatSync").mockImplementation(((fd: number, options?: { bigint?: boolean }) => {
+    const value = nativeStat(fd, options as { bigint: false });
+    if (!linked && value.dev === identity.dev && value.ino === identity.ino) {
+      // Create a real external alias after the repair has read nlink=1.
+      // The directory has already been repaired, so link creation is allowed.
+      fs.linkSync(fs.realpathSync(`/proc/self/fd/${fd}`), outside);
+      linked = true;
+    }
+    return value;
+  }) as typeof fs.fstatSync);
+  try {
+    const report = await sweepAttemptTemps(f.store, { now: () => NOW, maxRoots: 1, state: async () => "expired", scan: emptyScan, references: async () => true });
+    expect(linked).toBeTrue();
+    expect(report).toMatchObject({ checked: 1, removed: 1, errors: 0 });
+    expect(fs.readFileSync(outside, "utf8")).toBe("cache");
+    expect(fs.statSync(outside).ino).toBe(identity.ino);
+    expect(fs.statSync(outside).mode & 0o777).toBe(0o444);
+    expect(fs.existsSync(f.directory)).toBeFalse(); expect(f.store.has(f.directory)).toBeFalse();
+    expect(fs.existsSync(attemptTempJournalPath(f.directory))).toBeFalse();
+    expect(fs.readdirSync(f.parent).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+  } finally { stat.mockRestore(); process.env.PATH = previousPath; f.store.close(); }
+});
+
 test.skipIf(process.platform === "win32").each(["live", "unknown", "settled", "orphan", "keep", "git", "references", "dry-run", "revision", "expiry"] as const)(
   "an ineligible root is never permission-repaired (%s)", async reason => {
     const f = fixture();
