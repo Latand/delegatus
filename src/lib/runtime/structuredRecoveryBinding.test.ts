@@ -69,7 +69,7 @@ async function resumeAsking(recordedAccountId: string | null): Promise<Array<[st
   }, {
     registry: state.registry,
     client: {} as RuntimeHostClient,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: (engine, accountId, project) => {
       asked.push([engine, accountId, project]);
       return {

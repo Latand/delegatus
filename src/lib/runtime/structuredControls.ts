@@ -294,21 +294,16 @@ export async function dispatchStructuredControl(
   const snapshot = registry.readOnlySnapshot();
   const entry = snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
   if (!entry) return null;
-  // Current legacy ownership wins over retained structured adapter metadata.
-  // The legacy executor revalidates its process fence immediately before acting.
-  if (entry.host) return null;
   /* Host teardown clears the structuredHost column before terminal kill
      projection or reconfigure recovery finishes. Durable conversation state
      keeps those controls on the structured channel throughout that gap. */
-  const structuredKill = request.action === "kill" && !entry.host;
+  const structuredKill = request.action === "kill";
   const completedStructuredOwnership = request.action === "reconfigure"
-    && !entry.host
     && registryReceiptsForConversation(snapshot, conversation.id).some((receipt) =>
       receipt.transport === "structured"
         && receipt.state === "completed"
         && registry.canonicalConversationId(receipt.conversationId) === conversation.id);
   const structuredReconfigureRestart = request.action === "reconfigure"
-    && !entry.host
     && (conversation.reconfigure?.status === "applying" || completedStructuredOwnership);
   if (!entry.structuredHost && !structuredKill && !structuredReconfigureRestart) return null;
 

@@ -1043,9 +1043,7 @@ interface RetirementReaders {
 function retirementCandidates(file: RegistryFile) {
   return registryLivenessRows(file).entries
     .filter((entry) => Boolean(recordedScopeProcess(entry.structuredHost))
-      && (entry.key.engine === "claude" || entry.key.engine === "codex")
-      /* A pane-hosted entry belongs to the tmux lifecycle, not to this one. */
-      && entry.host === null)
+      && (entry.key.engine === "claude" || entry.key.engine === "codex"))
     .sort((left, right) => {
       const a = sessionKeyId(left.key), b = sessionKeyId(right.key);
       return a < b ? -1 : a > b ? 1 : 0;

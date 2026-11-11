@@ -39,7 +39,7 @@ test("account removal checks retained delivery history once while preserving liv
     host: { tmuxHost: { agent: { pid: 123, startIdentity: "fixture" } } } }];
   (conversations["conversation_50"] as { generations: unknown[] }).generations = [{ accountId: "other", path: "/session/50", host: null }];
   const entries = { live: { key: { engine: "claude" }, status: "live", artifactPath: "/session/49",
-    host: { agent: { pid: 123, startIdentity: "fixture" } } } };
+    host: null, structuredHost: { process: { pid: 123, startIdentity: "fixture" } } } };
   let receiptReads = 0;
   const receipts = new Proxy({ live: { engine: "claude", conversationId: "alias-receipt", state: "starting", key: null,
     createdAt: new Date(NOW).toISOString() } }, { ownKeys(target) { receiptReads++; return Reflect.ownKeys(target); } });

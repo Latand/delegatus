@@ -45,10 +45,7 @@ export function readStructuredHostRecords(dependencies: {
   // conversation payloads, including when the inventory is empty.
   const entries = hotRegistryRows(file, "entries").map(([, entry]) => entry)
     .filter((entry) => Boolean(entry.structuredHost?.process)
-      && (entry.key.engine === "claude" || entry.key.engine === "codex" || entry.key.engine === "copilot")
-      /* A pane-hosted entry is already a tmux row; listing it twice would
-         offer two kills for one process tree. */
-      && entry.host === null)
+      && (entry.key.engine === "claude" || entry.key.engine === "codex" || entry.key.engine === "copilot"))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .slice(0, RESOURCE_STRUCTURED_HOST_LIMIT);
   if (!entries.length) return [];

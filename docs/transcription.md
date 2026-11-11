@@ -15,7 +15,7 @@ language codes receive an allowed tag while their text is retained. See the
 ## What it does in the UI
 
 A microphone button sits next to the send button in the composers that talk to
-agents — the tmux composer (`TmuxComposer`) and the draft-agent pane
+agents — the conversation composer (`ConversationComposer`) and the draft-agent pane
 (`DraftAgentPane`). The control has three states:
 
 - **idle** — a mic icon. Click it to start recording (the browser asks for

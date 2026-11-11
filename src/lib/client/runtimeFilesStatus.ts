@@ -52,7 +52,7 @@ export function createRuntimeFilesStatusProjection() {
     const sessions = runtime.enabled && runtime.connection === "live" && runtime.store
       ? Object.values(runtime.store.sessions).filter((session) =>
         session.provenance === "structured"
-        && session.hostKind !== "tmux-legacy" && session.hostKind !== "unhosted")
+        && session.hostKind !== "unhosted")
       : [];
     const currentIdentities = new Set(sessions.map(identity));
     for (const key of observedTurns) if (!currentIdentities.has(key)) observedTurns.delete(key);

@@ -24,7 +24,7 @@ export type RuntimeScopeString = `${RuntimeScopeKind}:${string}`;
 export type RuntimeScopeInput = RuntimeScope | RuntimeScopeString;
 
 export type RuntimeEngine = "codex" | "claude" | "copilot";
-export type RuntimeHostKind = "codex-app-server" | "claude-broker" | "copilot-acp" | "tmux-legacy" | "unhosted";
+export type RuntimeHostKind = "codex-app-server" | "claude-broker" | "copilot-acp" | "unhosted";
 
 /** The structured host kind each engine runs under. */
 export function runtimeHostKindForEngine(engine: RuntimeEngine): Extract<RuntimeHostKind, "codex-app-server" | "claude-broker" | "copilot-acp"> {

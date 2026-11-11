@@ -96,5 +96,5 @@ export function staleWorkingResponse(directory: string, now: number) {
     assignments: files.map(file => ({ path: file.path, conversationId: file.conversationId, engine: file.engine,
       panePid: null, state: "delivered", error: null, at })) };
   return { quiet, dead, live, sessions, events, project, body: { files, tasks: [task], projectCatalog: [{ project: "atlas", conversations: 3, smt: now / 1000 }],
-    workflows: [], flows: [], pipelines: [], systemHealth: { tmux: { status: "healthy" } } } };
+    workflows: [], flows: [], pipelines: [], systemHealth: {} } };
 }

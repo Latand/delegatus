@@ -1005,3 +1005,35 @@ test("temp cleanup protects a live owner without loading full registry history",
     expect(full).not.toHaveBeenCalled();
   } finally {full.mockRestore();fs.rmSync(root,{recursive:true,force:true});}
 });
+
+test("a root owned by the attempt ledger is kept without a walk of its tree", async () => {
+  const root = tempRoot();
+  const owned = aged(root, "llv-stage-ledger", 2 * DAY), plain = aged(root, "llv-stage-plain", 2 * DAY);
+  fs.writeFileSync(path.join(owned, ".delegatus-attempt-owner"), "attempt-temp.sqlite\n");
+  fs.writeFileSync(path.join(owned, "payload"), "kept");
+  const inspected: string[] = [], measured: string[] = [];
+  const report = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: root, via: "" }],
+    scan: { ownNamespace: null, processes: [] }, attemptLedger: directory => directory === owned,
+    inspect: (directory, settings) => {
+      inspected.push(directory);
+      return inspectTree(directory, { ...settings, threshold: Infinity, stat: file => { const stat = fs.lstatSync(file); stat.ctimeMs = stat.mtimeMs; return stat; } });
+    },
+    measure: async directory => { measured.push(directory); return 1; } });
+  expect(report.removed.map(removal => removal.path)).toEqual([plain]);
+  expect(fs.existsSync(plain)).toBeFalse();
+  expect(fs.readFileSync(path.join(owned, "payload"), "utf8")).toBe("kept");
+  expect(report.kept.inUse).toBe(1); expect(report.held).toEqual([]);
+  expect(inspected).not.toContain(owned); expect(measured).not.toContain(owned);
+});
+
+test("a marked root the attempt ledger does not list stays and is reported as held", async () => {
+  const root = tempRoot();
+  const listed = aged(root, "llv-stage-listed", 2 * DAY), unlisted = aged(root, "llv-stage-unlisted", 2 * DAY);
+  for (const directory of [listed, unlisted]) fs.writeFileSync(path.join(directory, ".delegatus-attempt-owner"), "attempt-temp.sqlite\n");
+  const report = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: root, via: "" }],
+    scan: { ownNamespace: null, processes: [] }, attemptLedger: directory => directory === listed });
+  expect(report.removed).toEqual([]); expect(fs.existsSync(unlisted)).toBeTrue();
+  expect(report.kept.inUse).toBe(2);
+  expect(report.held).toEqual([{ path: unlisted, via: "", reason: "attempt-owner-unlisted", bytes: 0 }]);
+  expect(tempSweepStatus(report)?.heldCounts).toEqual({ "attempt-owner-unlisted": 1 });
+});

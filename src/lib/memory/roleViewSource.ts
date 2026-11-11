@@ -599,19 +599,22 @@ function scopeHistoryDigest(scope: string, slot: ReaderSlot = "__llvRoleViewRead
   if (held) { cache.rows.delete(rowKey); cache.bytes -= held.bytes; }
   const digest: ScopeHistoryDigest = { revision: 0, curatedAt: null, stored: false, kind: null, active: [], passAt: new Map(), curatorAt: new Map(), unnamed: null };
   if (version === undefined) return digest;
-  const entries = db.query<{ revision: number | null; curatedAt: string | null; kind: unknown; active: string | null; entry: number | null; pass: unknown; by: unknown; at: unknown }, [string]>(`
-    SELECT json_extract(s.value_json, '$.revision') AS revision,
-      json_extract(s.value_json, '$.curatedAt') AS curatedAt, json_extract(s.value_json, '$.kind') AS kind,
-      CASE WHEN h.key IS NULL OR h.key=0 THEN json_extract(s.value_json, '$.active') END AS active, h.key AS entry,
+  // Each stored value is selected by an uncorrelated subquery, which SQLite
+  // evaluates once per statement. A column of the scope row named beside
+  // json_each is loaded again for every history entry, and a row larger than
+  // the page cache then costs entries times its size in file reads.
+  const entries = db.query<{ header: string | null; entry: number | null; pass: unknown; by: unknown; at: unknown }, [string, string]>(`
+    SELECT CASE WHEN h.key IS NULL OR h.key=0 THEN (SELECT json_extract(value_json, '$.revision', '$.curatedAt', '$.kind', '$.active')
+        FROM state_rows WHERE collection='role_memory' AND row_key=?) END AS header, h.key AS entry,
       json_extract(h.value, '$.pass') AS pass, json_extract(h.value, '$.by') AS by, json_extract(h.value, '$.at') AS at
-    FROM state_rows s LEFT JOIN json_each(s.value_json, '$.history') h
-    WHERE s.collection='role_memory' AND s.row_key=?
-  `).all(rowKey);
+    FROM (SELECT 1) LEFT JOIN json_each((SELECT value_json FROM state_rows WHERE collection='role_memory' AND row_key=?), '$.history') h
+  `).all(rowKey, rowKey);
   let bytes = rowKey.length * 2 + 128;
   for (const entry of entries) {
-    digest.stored = true; digest.revision = entry.revision ?? 0; digest.curatedAt = entry.curatedAt; digest.kind = entry.kind;
-    if (typeof entry.active === "string" && entry.active.startsWith("[")) {
-      digest.active = JSON.parse(entry.active) as unknown[]; bytes += entry.active.length * 2;
+    if (entry.header !== null) {
+      const [revision, curatedAt, kind, active] = JSON.parse(entry.header) as [number | null, string | null, unknown, unknown];
+      digest.stored = true; digest.revision = revision ?? 0; digest.curatedAt = curatedAt; digest.kind = kind;
+      if (Array.isArray(active)) { digest.active = active; bytes += JSON.stringify(active).length * 2; }
     }
     if (entry.entry === null) continue;
     const pass = typeof entry.pass === "string" ? entry.pass : null;

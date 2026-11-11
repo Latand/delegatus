@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import * as authCredentials from "@/lib/accounts/seatAuthCredentials";
 import { AgentRegistry, normalizeRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
-import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import { deliverConversationMessage } from "@/lib/delivery";
 import fs from "node:fs";
 import os from "node:os";
@@ -84,14 +83,14 @@ test.each((["initial-stat", "file-stat", "index-stat", "final-stat"] as const)
     fs.copyFileSync(seatsPath, seatsPath + ".replacement");
     fs.renameSync(seatsPath + ".replacement", seatsPath);
   }
-  const typed: string[] = [];
+  let recoveries = 0;
   const asyncStat = fs.promises.stat;
   const statSync = fs.statSync;
   let rotated = false;
   let stats = 0;
   const rotate = () => {
     rotated = true;
-    expect(typed).toEqual([]);
+    expect(recoveries).toBe(0);
     expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toEqual([]);
     designate("successor", successor.id);
   };
@@ -111,29 +110,24 @@ test.each((["initial-stat", "file-stat", "index-stat", "final-stat"] as const)
     pid: 1, path: "", conversationId: recipient === "successor" ? successor.id : predecessor.id,
     text: "owner relay request", images: [], clientMessageId: "rotation-delivery",
   }, {
-    recover: async () => null,
-    targetForKnownPid: async () => "%1",
-    sendText: async (_target, payload, guard) => { guard?.(); typed.push(payload); },
+    recover: async () => { recoveries += 1; return null; },
   });
   try {
     const outcome = await send();
     expect(rotated).toBe(true);
     if (recipient === "predecessor") {
       expect(outcome).toMatchObject({ ok: false, status: 409, admission: "refused", successorConversationId: successor.id });
-      expect(typed).toEqual([]);
+      expect(recoveries).toBe(0);
       expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toEqual([]);
       return;
     }
-    expect(outcome).toMatchObject({ ok: true });
+    /* The successor passes the seat check and reaches recovery; with no host
+       to raise, the send is refused there and nothing is reserved. */
+    expect(outcome).toMatchObject({ ok: false, status: 409, code: "no_delivery_host" });
+    expect(recoveries).toBe(1);
     expect(orchestratorSeatFor("rotation-project").active?.conversationId).toBe(successor.id);
-    expect(typed).toEqual(["owner relay request"]);
     expect(await orchestratorRecipientRefusalAsync([predecessor.id])).toMatchObject({ status: 409, successorConversationId: successor.id });
-    expect(await conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), { conversationId: successor.id }))
-      .toMatchObject({ condition: "reclaimed", resumeRequired: true });
-    expect(await send()).toMatchObject({ ok: true });
-    expect(typed).toEqual(["owner relay request"]);
-    expect(Object.values(registry.readOnlySnapshot().heldDeliveries).map(item => [item.clientMessageId, item.state]))
-      .toEqual([["rotation-delivery", "delivered"]]);
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toEqual([]);
   } finally {
     asyncStats.mockRestore();
     stat.mockRestore();
