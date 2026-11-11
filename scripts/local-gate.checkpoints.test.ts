@@ -124,20 +124,24 @@ serviceTest("an aggregate deadline preserves completed files without certifying 
   f.git("add", "."); f.git("commit", "-m", "Aggregate deadline fixture");
   const base = f.git("rev-parse", "origin/main"), marker = path.join(f.root, "samples.txt");
   const driver = path.join(f.root, "deadline-driver.ts");
-  writeFileSync(driver, `import { touchedTests } from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
+  writeFileSync(driver, `import * as comparator from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
 import { existsSync, readFileSync } from "node:fs";
 const expires = process.argv.at(-1) === "expire";
 // A deterministic parent clock expires only after the first eight owned
 // children have started. Child checks retain their real clocks and budgets.
 Object.defineProperty(performance, "now", { value: () => expires && existsSync(${JSON.stringify(marker)})
   && readFileSync(${JSON.stringify(marker)}, "utf8").trim().split("\\n").length >= 8 ? 1000000 : 0 });
-try { await touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ${JSON.stringify(files)},
-  { budgets: { fileMs: 300000, runMs: 15000 } }); } catch (error) { console.error(String(error)); process.exitCode = 1; }
+try { await comparator.touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ${JSON.stringify(files)},
+  { budgets: { fileMs: 300000, runMs: 15000 } }); } catch (error) {
+  const ending = comparator.comparatorEnding?.(error);
+  console.error(ending?.line ?? String(error)); process.exitCode = ending?.code ?? 1;
+}
 `);
   const run = (mode: string) => spawnSync(process.execPath, [driver, mode],
     { cwd: f.repo, env: process.env, encoding: "utf8", timeout: 30_000 });
   const stopped = run("expire");
-  expect(stopped.status, stopped.stdout + stopped.stderr).toBe(1);
+  expect(stopped.status, stopped.stdout + stopped.stderr).toBe(75);
+  expect(stopped.stderr).toContain("touched-tests: no verdict: head: test run exceeded");
   expect(stopped.stderr).toContain("test run exceeded");
   expect(Object.keys(f.samples())).toHaveLength(8);
   const resumed = run("continue");

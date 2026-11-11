@@ -46,6 +46,14 @@ const FILE_BUDGET_MS = 5 * 60 * 1000;
 const HEAD_FILE_WORKERS = 8;
 export const FLAKY_RERUNS = 3;
 export const FLAKY_BUDGET_MS = 5 * 60 * 1000;
+export class BudgetExhausted extends Error {}
+
+export function comparatorEnding(error: unknown): { line: string; code: number } {
+  const message = error instanceof Error ? error.message : String(error);
+  return error instanceof BudgetExhausted
+    ? { line: `touched-tests: no verdict: ${message}; nothing was judged`, code: 75 }
+    : { line: `touched-tests: ${message}; gate error (blocking)`, code: 1 };
+}
 const RUNNER_ERROR = "<runner error> ";
 interface Counts { pass: number; fail: number }
 interface FlakySite extends TestSite { base: Counts; head: Counts }
@@ -272,7 +280,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     const fileStarted = performance.now();
     const failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
     const remaining = Math.floor(Math.min(budgets.runMs - (now() - budgetStart), (options.deadline ?? Infinity) - now()));
-    if (remaining <= 0) throw new Error(`${label}: test run exceeded its ${options.deadline ? "flaky rerun" : "15 minute"} budget`);
+    if (remaining <= 0) throw new BudgetExhausted(`${label}: test run exceeded its ${options.deadline ? "flaky rerun" : "15 minute"} budget; ${results.filter(run => run?.completed.length).length} of ${files.length} files completed`);
     const sites = options.sites?.filter(site => site.file === file);
     const filtered = !!sites && !sites.some(site => site.kind === "error");
     const filter = filtered ? testNameFilter(sites) : [];
@@ -325,7 +333,11 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       if (parsed.failures.length) options.onFailure?.();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (filtered) throw new Error(`${label}: ${file}: ${message}; elapsed ${(performance.now() - started).toFixed(0)}ms`);
+      if (filtered) {
+        const detail = `${label}: ${file}: ${message}; elapsed ${(performance.now() - started).toFixed(0)}ms`;
+        if (message === "runner did not finish (124)") throw new BudgetExhausted(detail);
+        throw new Error(detail);
+      }
       failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.split(root).join("<checkout>")}`, kind: "error" });
     } finally { rmSync(privateRoot, { recursive: true, force: true }); }
     const elapsedMs = performance.now() - fileStarted;
@@ -502,7 +514,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
       const target = path.join(sandbox, "baseline");
       const execute = (args: string[], cwd = root) => {
         const remaining = Math.floor(Math.min(budgets.fileMs, deadline - now()));
-        if (remaining <= 0) throw new Error("baseline: flaky rerun budget exhausted during setup");
+        if (remaining <= 0) throw new BudgetExhausted("baseline: flaky rerun budget exhausted during setup");
         return command(args, cwd, env, remaining);
       };
       // A detached clone retains Git metadata without changing the pushing
@@ -631,7 +643,8 @@ if (import.meta.main) {
       if ((await touchedTests(process.cwd(), base, files)).introduced.length) process.exitCode = 1;
     }
   } catch (error) {
-    console.error(`touched-tests: ${error instanceof Error ? error.message : error}; gate error (blocking)`);
-    process.exitCode = 1;
+    const ending = comparatorEnding(error);
+    console.error(ending.line);
+    process.exitCode = ending.code;
   }
 }

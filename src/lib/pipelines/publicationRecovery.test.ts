@@ -59,7 +59,7 @@ test.each(["takeover", "explicit publish"])("%s records an unconsumed native rem
 
 test.each(["remote-ref", "remote-unchanged", "remote-long", "privacy-fail", "privacy-configuration",
   "privacy-configuration-long", "privacy-configuration-mixed", "privacy-configuration-input", "privacy-configuration-unreadable", "privacy-configuration-check",
-  "check-fail", "success"] as const)(
+  "comparator-budget", "comparator-budget-legacy", "check-fail", "success"] as const)(
   "remote-after-PASS consumer seam: %s", async shape => {
     const f = await fixture();
     try {
@@ -83,15 +83,20 @@ test.each(["remote-ref", "remote-unchanged", "remote-long", "privacy-fail", "pri
         accepted = await f.git(f.lane(), "rev-parse", "HEAD");
       }
       const configuration = shape.startsWith("privacy-configuration");
-      const retryable = shape === "privacy-configuration" || shape === "privacy-configuration-long";
-      const localOutput = configuration
+      const capacity = shape.startsWith("comparator-budget");
+      const retryable = capacity || shape === "privacy-configuration" || shape === "privacy-configuration-long";
+      const localOutput = capacity
+        ? `pre-push: privacy\nPRIVACY GATE: PASS\npre-push: touched tests\n${shape === "comparator-budget-legacy"
+          ? "touched-tests: head: test run exceeded its 15 minute budget; gate error (blocking)"
+          : "touched-tests: no verdict: head: test run exceeded its 15 minute budget; 58 of 70 files completed; nothing was judged"}\npre-push: touched tests: failed (${shape === "comparator-budget-legacy" ? 1 : 75})`
+        : configuration
         ? `pre-push: privacy\nPRIVACY GATE: FAIL\nconfiguration_error: 1\n${shape === "privacy-configuration-mixed" ? "credential: 1\n" : ""}${shape === "privacy-configuration-check" ? "NEW file.test.ts: failing assertion\npre-push: touched tests: failed (1)\n" : ""}${shape === "privacy-configuration-long" ? "diagnostic ".repeat(500) + "\n" : ""}pre-push: bun failed (1); gate failed`
         : shape === "privacy-fail"
         ? "pre-push: privacy\nPRIVACY GATE: FAIL\npre-push: privacy: failed (1)"
         : shape === "check-fail"
           ? "pre-push: privacy\nPRIVACY GATE: PASS\npre-push: types\npre-push: types: failed (1)"
           : "pre-push: privacy\nPRIVACY GATE: PASS\npre-push: verified completed checks for this publication; transport admitted";
-      const localFailure = configuration || shape === "privacy-fail" || shape === "check-fail";
+      const localFailure = capacity || configuration || shape === "privacy-fail" || shape === "check-fail";
       fs.writeFileSync(path.join(f.hooks, "pre-push"), `#!/bin/sh\ncat >&2 <<'OUTPUT'\n${localOutput}\nOUTPUT\nexit ${localFailure ? 1 : 0}\n`, { mode: 0o700 });
       if (shape.startsWith("remote-")) fs.writeFileSync(path.join(f.remote, "hooks", "pre-receive"),
         `#!/bin/sh\n${shape === "remote-long" ? `echo '${"diagnostic ".repeat(500)}' >&2\n` : ""}echo 'fatal error in commit_refs_rules' >&2\nexit 1\n`, { mode: 0o700 });
@@ -110,11 +115,12 @@ test.each(["remote-ref", "remote-unchanged", "remote-long", "privacy-fail", "pri
         expect(history).toHaveLength(0);
         expect(await f.git(f.remote, "rev-parse", lane.delivery!.target.branch)).toBe(accepted);
       } else if (retryable) {
-        expect(publicationFailurePhase(failure!)).toBe("privacy");
+        expect(publicationFailurePhase(failure!)).toBe(capacity ? "touched tests" : "privacy");
         expect(history).toHaveLength(1);
-        expect(history[0]).toMatchObject({ cause: "interrupted", retryAt: "2026-11-06T10:01:00.000Z" });
-        expect(failure?.privacyConfigurationFault).toBe(true);
-        expect(history[0]!.detail).toContain("privacy gate could not read its own configuration");
+        expect(history[0]).toMatchObject({ cause: capacity ? "infrastructure-deadline" : "interrupted", retryAt: "2026-11-06T10:01:00.000Z" });
+        if (capacity) expect(failure?.retryableDeadline).toBe(true);
+        else expect(failure?.privacyConfigurationFault).toBe(true);
+        expect(history[0]!.detail).toContain(capacity ? "execution deadline without a verdict" : "privacy gate could not read its own configuration");
         expect(lane.runs[0]!.attempts[0]!.publicationRepair).toBeUndefined();
         expect(repairs).toBe(0);
         expect(lane.state).toBe("running");

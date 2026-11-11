@@ -1,4 +1,5 @@
 import { betweenTests, cliAt, confirmFailures, expect, fixture, FLAKY_BUDGET_MS, FLAKY_RERUNS, path, readFileSync, root, SAME_WAY, scheduledFixture, scheduledSource, source, spawnSync, spyOn, test, type TestRun, type TestSite, touchedTests, writeFileSync } from "./local-gate-tests.fixture";
+import { BudgetExhausted } from "./local-gate-tests";
 
 
 test("a base-only scheduled failure is FLAKY with both counts and no unrelated reruns", async () => {
@@ -370,3 +371,12 @@ test("the shared retry deadline blocks before another child starts", async () =>
     } })).rejects.toThrow("flaky rerun budget");
   } finally { clock?.mockRestore(); }
 });
+
+test("a filtered retry that executes past its file budget returns no verdict", async () => {
+  const f = scheduledFixture([], [1, 2, 3, 4]);
+  writeFileSync(path.join(f.dir, "example.test.ts"), `${scheduledSource(f.marker, [], [1, 2, 3, 4])}
+if (side === "head" && run > 1) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20000);`);
+  await expect(touchedTests(f.dir, f.git("rev-parse", "HEAD"), ["./example.test.ts"], {
+    env: f.env, log: () => {}, budgets: { fileMs: 5000, runMs: 60000 },
+  })).rejects.toBeInstanceOf(BudgetExhausted);
+}, 30000);

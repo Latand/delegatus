@@ -66,6 +66,10 @@ export function publicationDeadlineKind(output: string): "execution" | "admissio
       // The gate runner lost a started run: nothing was judged, and the
       // retries after 1, 5 and 15 minutes run here (scripts/gate-runner).
       || /^gate-runner: no verdict:/.test(line)
+      || /^touched-tests: no verdict: /.test(line)
+      // Accepted heads can still carry the comparator's older diagnostic.
+      || /^touched-tests: (?:head|baseline|head rerun|base rerun): test run exceeded its (?:15 minute|flaky rerun) budget; gate error \(blocking\)$/.test(line)
+      || /^touched-tests: baseline: flaky rerun budget exhausted during setup; gate error \(blocking\)$/.test(line)
       || RUNNER_DEADLINE.test(line)) deadline = true;
   }
   if (admission && admissionExpired && !checksStarted) return "admission";

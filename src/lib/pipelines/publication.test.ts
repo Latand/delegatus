@@ -137,6 +137,12 @@ test.each([
   "NEW src/work.test.ts: <runner error> runner did not finish (124)",
   "command timed out after 900000ms",
   "pre-push: Viewer runtime: failed (124)\nowned runner: deadline expired",
+  "pre-push: touched tests\ntouched-tests: no verdict: head: test run exceeded its 15 minute budget; 58 of 70 files completed; nothing was judged\npre-push: touched tests: failed (75)",
+  "touched-tests: head: test run exceeded its 15 minute budget; gate error (blocking)",
+  "touched-tests: baseline: test run exceeded its 15 minute budget; gate error (blocking)",
+  "touched-tests: head rerun: test run exceeded its flaky rerun budget; gate error (blocking)",
+  "touched-tests: base rerun: test run exceeded its flaky rerun budget; gate error (blocking)",
+  "touched-tests: baseline: flaky rerun budget exhausted during setup; gate error (blocking)",
 ])("a deadline without a refusal is retryable: %s", output => {
   expect(publicationDeadlineOnly(output)).toBe(true);
 });
@@ -160,6 +166,25 @@ test.each([
 
 test("an ordinary touched-test exit has no capacity evidence", () => {
   expect(publicationDeadlineOnly("pre-push: touched tests: failed (1)")).toBe(false);
+});
+
+test.each([
+  "NEW src/work.test.ts: named assertion", "PRIVACY GATE: FAIL", "pre-push: types: failed (1)",
+  "owned runner: budget cleanup failed: child tree could not be stopped",
+])("a comparator budget cannot erase a decisive refusal: %s", refusal => {
+  for (const budget of ["touched-tests: no verdict: head: test run exceeded its 15 minute budget; nothing was judged",
+    "touched-tests: head: test run exceeded its 15 minute budget; gate error (blocking)"]) {
+    expect(publicationDeadlineOnly(`${budget}\n${refusal}`)).toBe(false);
+    expect(publicationDeadlineOnly(`${refusal}\n${budget}`)).toBe(false);
+  }
+});
+
+test.each([
+  "touched-tests: baseline: dependency setup failed; gate error (blocking)",
+  "touched-tests: head: test run exceeded its unknown budget; gate error (blocking)",
+  "(pass) touched-tests: no verdict: quoted diagnostic",
+])("a comparator fault keeps its refusal: %s", output => {
+  expect(publicationDeadlineOnly(output)).toBe(false);
 });
 
 // The remote gate runner lost a started run (scripts/gate-runner/client.ts).
