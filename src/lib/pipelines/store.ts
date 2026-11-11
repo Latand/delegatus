@@ -1891,6 +1891,12 @@ export function pipelineStateCollectionSeeds(): [StateCollectionSeed<unknown>, S
   ];
 }
 
+/** The archive list keeps every lane's structure, ids, states and short
+    values in memory. Role scaffolds, prompts, stage inputs, outputs and report
+    texts are nine tenths of an archived lane and are read from its row when a
+    reader asks for one. */
+const ARCHIVED_PIPELINE_INLINE_TEXT = 512;
+
 function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteStateCollection<Pipeline> } {
   const filename = stateDatabaseFile();
   const held = pipelineStores.get(filename);
@@ -1928,6 +1934,7 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
     collection: "pipelines_archive",
     decode: (value) => decodePipeline(value, "pipelines_archive"),
     strictDecode: true,
+    deferTextLongerThan: ARCHIVED_PIPELINE_INLINE_TEXT,
   });
   const created = { active, archive };
   pipelineStores.set(filename, created);
