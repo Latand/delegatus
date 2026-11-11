@@ -1229,12 +1229,9 @@ export function recordStateImportMirror(filename: string, collection: string, mi
 export function stateDatabaseSignature(filename: string): string {
   const parts = [filename];
   for (const candidate of [filename, `${filename}-wal`]) {
-    try {
-      const stat = fs.statSync(candidate, { bigint: true });
-      parts.push(`${path.basename(candidate)}:${stat.mtimeNs}:${stat.size}`);
-    } catch {
-      parts.push(`${path.basename(candidate)}:missing`);
-    }
+    let stat: fs.BigIntStats | undefined;
+    try { stat = fs.statSync(candidate, { bigint: true, throwIfNoEntry: false }); } catch { /* unreadable reads as missing */ }
+    parts.push(stat ? `${path.basename(candidate)}:${stat.mtimeNs}:${stat.size}` : `${path.basename(candidate)}:missing`);
   }
   return parts.join("|");
 }
