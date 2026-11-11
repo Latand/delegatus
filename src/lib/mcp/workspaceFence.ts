@@ -33,8 +33,9 @@ const PROJECT_TOOLS = new Set([
   "conversation_action", "conversation_migration", "agent_fleet", "agent_activity", "lifecycle_events", "bridge_report", "bridge_directive",
   "get_orchestrator", "create_orchestrator", "send_message_to_orchestrator", "ask_orchestrator_in_parallel", "rotate_orchestrator", "seat_tick_settings",
 ]);
-// A seat's own grant (`telegramGrant` on its record) stays usable under member
-// reach, limited to the chats `seatTelegramChatAccess` admits.
+// The agent route judges these for the fenced caller (`telegramAgentAccess`):
+// a project's seat keeps its Telegram grant within its workspace's chats. The
+// fence asks the same question first, so a refusal never reaches the route.
 const SEAT_TELEGRAM_TOOLS = new Set(["telegram_bot_send", "telegram_bot_send_media", "telegram_bot_send_document", "telegram_bot_chats", "telegram_bot_messages"]);
 // These reach a Viewer route that applies the workspace fence itself to the
 // caller's forwarded capability, so the route judges their arguments.
@@ -85,28 +86,16 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       };
       const project = conversationProject(callerId ?? "");
       let allowed = workspacePrincipalAccess(principal);
-      if (!PROJECT_TOOLS.has(tool)) {
-        const admitted = async () => {
-          if (!workspacePrincipalAccess(principal)(project)) denied();
-          if (!seatTelegram) return null;
-          const chats = await (dependencies.seatTelegramChats ?? (async (id, key) => {
-            const { telegramBotService } = await import("@/lib/telegram/bot/service");
-            const { seatTelegramChatAccess } = await import("@/lib/team/seatTelegram");
-            return seatTelegramChatAccess(id, key, store, telegramBotService().listChats({ includeInactive: true }).chats);
-          }))(callerId, project);
-          if (!chats || (tool !== "telegram_bot_chats" && !chats(input.chat))) denied();
-          return chats;
-        };
-        await admitted();
-        return await runWithWorkspaceExecution(target => {
-          if (!workspacePrincipalAccess(principal)(project) || (target !== undefined && !workspacePrincipalAccess(principal)(target))) denied();
-        }, async () => {
-          const result = await service.callTool(tool, input, context);
-          const chats = await admitted();
-          return tool === "telegram_bot_chats" && result.ok && chats && Array.isArray(result.chats)
-            ? { ...result, chats: (result.chats as { chatId?: unknown }[]).filter(chat => chats(chat.chatId)) } : result;
-        });
-      }
+      // Arguments of a delegated tool name files and chats, never project
+      // identities; its route judges them. The result scan below still runs.
+      const delegated = !PROJECT_TOOLS.has(tool);
+      const telegram = seatTelegram ? async () => {
+        const access = await (dependencies.telegramAgentAccess
+          ?? (async (id: string | null) => (await import("@/lib/team/seatTelegram")).productionTelegramAgentAccess(id)))(callerId);
+        if (access.kind !== "seat") denied();
+        if (tool === "telegram_bot_messages" ? !access.read(input.chat) : tool !== "telegram_bot_chats" && !access.send(input.chat)) denied();
+      } : null;
+      await telegram?.();
       const allowedProjects = workspaceDirectory(store).workspaces.find(workspace => workspace.id === principal.workspaceId)?.projects ?? [];
       const args = { ...input };
       if (typeof args.project === "string") {
@@ -160,7 +149,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
           checks.push(() => projectForCwd(lexical), () => { try { return projectForCwd(fs.realpathSync(lexical)); } catch { return null; } });
         }
       };
-      for (const [key, value] of Object.entries(args)) check(key, value);
+      if (!delegated) for (const [key, value] of Object.entries(args)) check(key, value);
       // Implicit selection, global operations and unkeyed receipt/report reads
       // cannot acquire project authority from a neighbouring permitted argument.
       if (["get_conversation", "conversation_messages", "conversation_deliverability", "send_message", "conversation_action", "conversation_migration"].includes(tool)
@@ -230,6 +219,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
           visit(answer);
         } });
         assert();
+        await telegram?.();
         answerProjects = workspaceDirectory(store).workspaces.flatMap(workspace => workspace.projects);
         if (tool === "search_transcripts" && result.ok) {
           const scope = result.projectScope as { resolved?: string } | undefined;
