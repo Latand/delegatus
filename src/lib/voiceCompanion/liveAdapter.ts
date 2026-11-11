@@ -271,7 +271,6 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
             else if (typeof value.startMs === "number" && typeof value.endMs === "number") this.durations.set(value.itemId, { ms: Math.max(0, value.endMs - value.startMs), final: value.final });
             this.arrived(value.itemId);
           } else if (!value.final) this.operatorOpen = value.itemId;
-          else if (this.operatorOpen === value.itemId) this.operatorOpen = undefined;
         }
         if (value.type === "transcript.final" && value.speaker === "operator" && this.operatorOpen === value.itemId) this.operatorOpen = undefined;
         if (value.type === "session.closed") {

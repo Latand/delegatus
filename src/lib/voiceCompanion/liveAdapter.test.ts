@@ -1015,3 +1015,21 @@ for (const connected of [true, false]) test(`slice 2: resume poll waits for ${co
   expect(events.filter(event => event.type === "session.ready")).toHaveLength(2);
   await f.adapter.dispose();
 });
+
+for (const serverFinalizes of [true, false]) test(`slice 2: ${serverFinalizes ? "server final snapshot" : "ordinary final transcript"} preserves operator cut semantics`, async () => {
+  const f = fixture();
+  await f.adapter.start({ project: "fixture", locale: "en" });
+  f.push(f.event({ type: "transcript.snapshot", speaker: "operator", itemId: "live-operator-1", text: "Please finish this", final: false }));
+  await f.adapter.refresh();
+  if (serverFinalizes) {
+    f.push(f.event({ type: "transcript.snapshot", speaker: "operator", itemId: "live-operator-1", text: "Please finish this", final: true }));
+  } else {
+    f.push(f.event({ type: "transcript.final", speaker: "operator", itemId: "live-operator-1", text: "Please finish this" }));
+  }
+  f.push(f.event({ type: "session.closed", reason: "transport", incomplete: true }));
+  await f.adapter.refresh();
+  await f.adapter.start({ project: "fixture", locale: "en", resume: "fixture-session" });
+  const request = f.requests.filter(row => row.action === "start").at(-1)!;
+  expect(request.cursor).toEqual(serverFinalizes ? { unplayed: [], operatorOpen: "live-operator-1" } : { unplayed: [] });
+  await f.adapter.dispose();
+});

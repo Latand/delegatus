@@ -3305,6 +3305,47 @@ for (const backend of ["api", "codex"] as const) for (const release of ["delta",
     await service.close(n3.sessionId);
   });
 
+for (const backend of ["api", "codex"] as const) test(`slice 2: ${backend} preserves the inherited cut after two unpolled drops`, async () => {
+  const f = fixture();
+  if (backend === "codex") { f.storage.updateSettings({ backend }); Object.defineProperty(f.provider, "backend", { value: "codex" }); }
+  const p = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=0" });
+  f.provider.replay(p.providerId, said("Перше речення. ", 0, "output"), said("Друге речення триває тут. ", 1000, "output"), said("Третє речення.", 2000, "output"));
+  await f.service.drain(p.sessionId);
+  await f.service.close(p.sessionId, "transport");
+  const reply = f.admission.transcriptRecord(p.sessionId).entries.find(row => row.kind === "reply")!;
+  const n = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=1", resume: p.sessionId,
+    cursor: { heard: { itemId: reply.id, playedMs: 1200 } } });
+  expect(spoken(f)).toHaveLength(0);
+  await f.service.close(n.sessionId, "transport");
+  const n2 = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=2", resume: n.sessionId });
+  const start = f.admission.transcriptRecord(n2.sessionId).entries.find(row => row.kind === "session_start")!;
+  expect(start.data.resumePoint).toMatchObject({ kind: "reply", resumeOf: { part: p.sessionId, item: reply.id } });
+  expect(start.data.resumePoint).not.toMatchObject({ remaining: expect.stringContaining("Перше речення") });
+  const memory = f.provider.sessions.at(-1)!.memory!;
+  expect(memory).toContain("voice (cut;");
+  expect(memory).not.toContain("Перше речення. Друге речення");
+  expect(memory).toContain("Друге речення триває тут.");
+  await f.service.close(n2.sessionId);
+});
+
+test("slice 2: API resume instruction retains the end of a long Ukrainian operator turn", async () => {
+  const f = fixture();
+  const p = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=0" });
+  f.provider.replay(p.providerId, said(`Перевірте ${"довгий опис ".repeat(15)}КІНЦЕВІ_СЛОВА`, 0));
+  await f.service.drain(p.sessionId);
+  const item = f.admission.transcriptRecord(p.sessionId).entries.find(row => row.kind === "utterance")!;
+  await f.service.close(p.sessionId, "transport");
+  const resumed = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=1", resume: p.sessionId, cursor: { operatorOpen: item.id } });
+  await f.service.events(resumed.sessionId, 0);
+  const command = spoken(f)[0]?.content;
+  if (typeof command !== "string") throw new Error("expected the resume command to be text");
+  expect(Buffer.byteLength(command, "utf8")).toBeLessThanOrEqual(500);
+  expect(command).toContain("КІНЦЕВІ_СЛОВА");
+  expect(command).toContain("Зʼєднання обірвалося після");
+  expect(command.trimEnd().endsWith("Продовжуйте.\"")).toBe(true);
+  await f.service.close(resumed.sessionId);
+});
+
 for (const crash of [false, true]) test(`slice 2: real process restart preserves resume speech across ${crash ? "a crash before acknowledgement" : "an unpolled part"}`, async () => {
   const now = Date.UTC(2026, 10, 11, 12);
   const f = fixture("synthetic-credential", undefined, () => now);

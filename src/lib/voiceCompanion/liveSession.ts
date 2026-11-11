@@ -184,6 +184,26 @@ type StartInput = { project: string; locale: Locale; sdp: string; requestId?: st
  * least one byte, so text of at most 500 UTF-8 bytes always fits, whatever
  * the language. */
 const SPOKEN_LIMIT_BYTES = 500;
+function boundedResumeInstruction(prefix: string, context: string, limit: number): string {
+  const render = (value: string) => `${prefix}${JSON.stringify(value)}`;
+  let value = context;
+  while (Buffer.byteLength(render(value), "utf8") > limit && value) {
+    const chars = Array.from(value);
+    value = `…${chars.slice(Math.max(1, Math.floor(chars.length / 8))).join("")}`;
+  }
+  return render(value);
+}
+function byteTail(text: string, limit: number): string {
+  const tail: string[] = [];
+  let bytes = 0;
+  for (const character of Array.from(text).reverse()) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (bytes + size > limit) break;
+    bytes += size;
+    tail.push(character);
+  }
+  return tail.reverse().join("");
+}
 /** With no request in flight, recognized input the voice never answered stops holding reports after this long. */
 const INPUT_HOLD_MS = 15_000;
 /** Opens every later append of one report. */
@@ -290,8 +310,16 @@ export class CompanionLiveSessions {
     // Recheck after recovery/close awaited: another start may have leased this part.
     if (input.resume && this.storage.read().sessions[input.resume]?.resumedBy) throw new Error("PROVIDER_ERROR");
     const clock = resolveVoiceClock(input.timeZone);
-    const position = resumed ? resolveResume(resumed.segments, input.cursorPart ?? input.resume!, input.cursor,
+    const resolvedPosition = resumed ? resolveResume(resumed.segments, input.cursorPart ?? input.resume!, input.cursor,
       this.storage.read().sessions[input.cursorPart ?? input.resume!]?.backend === "codex" ? "codex" : "api") : undefined;
+    // A part can drop before its first poll. Its resume point then exists only
+    // in the owed queue, and takes precedence over an older browser cursor.
+    const owedResume = input.resume ? this.admission.reportSpeech(input.resume).find(entry => entry.kind === "resume" && entry.resumePoint && entry.handed === 0) : undefined;
+    const inheritedPoint = owedResume?.kind === "resume" && owedResume.resumePoint
+      && resolvedPosition?.point?.resumeOf.part !== input.resume ? owedResume.resumePoint : undefined;
+    const position = inheritedPoint
+      ? { ...(resolvedPosition ?? { adjusted: false }), point: inheritedPoint }
+      : resolvedPosition;
     const directoryProjects = this.reads.projectRows(input.project).map(({ name, handle }) => ({ name, handle }));
     const session = this.admission.create({ project: input.project, locale: input.locale, authority: "live-model", startedBy: input.startedBy });
     const id = session.id;
@@ -1112,12 +1140,14 @@ export class CompanionLiveSessions {
       if (entry.kind === "resume") {
         if (entry.handed) continue;
         const point = entry.resumePoint;
-        const context = point?.kind === "reply" ? byteShort(scrub(point.remaining), 160) : byteShort(scrub(point?.heard ?? entry.text), 160);
+        const context = point?.kind === "reply" ? byteShort(scrub(point.remaining), 160) : byteTail(scrub(point?.heard ?? entry.text), 160);
         const content = active.codex ? byteShort(scrub(entry.text), SPOKEN_LIMIT_BYTES)
           : point?.kind === "reply"
-            ? `The call reconnected. Say in one short line where this explanation stopped, then ask whether to go on. Do not continue it yet. Untrusted context: ${JSON.stringify(context)}`
+            ? boundedResumeInstruction("The call reconnected. Say in one short line where this explanation stopped, then ask whether to go on. Do not continue it yet. Untrusted context: ", context, SPOKEN_LIMIT_BYTES)
+            : point?.kind === "operator" && point.cut
+              ? boundedResumeInstruction("The call reconnected. Read this one line as written: ", scrub(entry.text), SPOKEN_LIMIT_BYTES)
             : point?.kind === "operator" && !point.cut
-              ? `The call reconnected. Answer the last unanswered operator turn, without sending any earlier request again. Untrusted turn: ${JSON.stringify(context)}`
+              ? boundedResumeInstruction("The call reconnected. Answer the last unanswered operator turn, without sending any earlier request again. Untrusted turn: ", context, SPOKEN_LIMIT_BYTES)
               : `The call reconnected. Read this one line as written: ${JSON.stringify(byteShort(scrub(entry.text), 160))}`;
         if (!this.append(active, null, content, entry.resumeOf)) return;
         this.admission.speechHanded(active.id, entry.reportId, [content], 1);
