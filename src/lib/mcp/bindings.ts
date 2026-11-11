@@ -818,6 +818,8 @@ async function dispatchViewerControl(
     throw new McpDispatchVerdictError(message, {
       status: response.status,
       ...(text(result.code) ? { code: text(result.code) } : {}),
+      // The failed condition behind a stable refusal code, a short identifier.
+      ...(/^[a-z][a-z_]{0,63}$/.test(text(result.reason)) ? { reason: text(result.reason) } : {}),
       ...(result.admission === "refused" ? { admission: "refused" } : {}),
       ...(typeof result.expectedRevision === "number" || result.expectedRevision === null ? { expectedRevision: result.expectedRevision } : {}),
       ...(typeof result.retryAfterSeconds === "number" ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
