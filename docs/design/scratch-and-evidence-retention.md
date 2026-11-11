@@ -1,6 +1,7 @@
 # Seven-day retention for finished lanes' scratch and evidence copies
 
-Status: design, 2026-11-11, read-only architect stage. Nothing here is built.
+Status: implemented, 2026-11-11. Validation and deployment checks are in §15.
+Historical observations below describe the design-stage read.
 Code citations are on `origin/main` at `ec82e477` (#3835 merged at 00:51Z on
 2026-11-11, after this lane's base `2449d4c3`). #3835 changed only
 `tempSweep.ts` and `attemptTempFilesystem.ts`, so those two files are cited at
@@ -228,8 +229,8 @@ No new process, timer or sweep. Five changes.
 branch and changes only the completed/closed branch at `:20`: it calls
 `laneFinish`; a finished lane answers `"expired"` when `now ≥ expiresAt`,
 otherwise `"closed"` with `expiresAt`; a completed or closed lane that is not
-finished answers `"closed"` with `expiresAt: null` (today's prompt retirement
-of unheld roots is unchanged). `AttemptTempState` gains `"expired"`;
+finished answers `"live"`. This also protects unheld roots while a launch,
+teardown or merge remains unresolved. `AttemptTempState` gains `"expired"`;
 `AttemptTempAuthority` gains `expiresAt`. `isCurrent()` additionally requires
 `now() ≥ expiresAt` for `"expired"`, so a clock moved backwards between the
 read and dispatch refuses.
@@ -342,8 +343,10 @@ holds the release fence opens and closes `AttemptTempStore` once before it
 arms the sweeps (`viewerInstrumentation.ts:537`, beside `startTempSweep`),
 which installs the indexes under its authority. Rows are removed with what
 they describe: `root_retention` when its root row is forgotten, `copies` when
-its directory is gone. A previous release reading this file ignores the new
-tables; rollback needs nothing.
+its directory is gone. The ledger tables are additive. Recorded-check rows
+also gain the `expired-with-lane` acknowledgement value: a rollback reader
+must understand that value before it reads the new history or pending
+notification rows. An older strict acknowledgement schema cannot do so.
 
 ## 6. The first run after upgrade
 
@@ -378,7 +381,9 @@ step and no one-shot cleanup.
   state write lock (`waitForStateLock`), a collection lease or the registry
   write lock: the hold settlement and the retirement records are each one
   synchronous transaction that completes before removal starts. The copies
-  page runs after the admission is released. The lock order of
+  page reacquires the existing attempt-sweep admission after the root page
+  releases it, so overlapping serving generations cannot retire a copy
+  concurrently. No new lock namespace is introduced. The lock order of
   `recorded-check-handoff.md` (line 86) is unchanged. All of it runs in the
   sweep helper, never on the Viewer's main thread.
 - **Re-proved before removal.** Roots: the existing dispatch fences
@@ -526,3 +531,46 @@ path is re-proved at dispatch, and one failing path neither stops the others
 nor repeats in the log (T4). The card names what retention will free and when
 on the one surface that already carried the count (T16). Nothing outside the
 ledger and the new `copies` table can be removed (T14).
+
+## 15. Implementation and verification
+
+The period is `FINISHED_LANE_RETENTION_DAYS` in
+`src/lib/pipelines/laneFinish.ts`. The root sweep and
+`src/lib/runtime/attemptEvidenceCopies.ts` use the same period. The Viewer
+installs the new ledger indexes before starting its sweep timers; the tool
+helper requires those indexes to be present.
+
+The copy producer is `preserveAttemptEvidence` in
+`src/lib/runtime/attemptTempEvidence.ts`, called on each root-retirement
+eligibility check. If preservation succeeds but a later reference or removal
+check refuses retirement, a later attempt copies the same source again.
+Removing only the destination can therefore create a new directory generation
+on the next retry. Expired lanes skip preservation, including during quarantine
+replay and permission-denied cleanup, so the retention consumer cannot fight
+this producer. A regression test removes a test-owned copy namespace, observes
+its recreation through the real producer before expiry, then verifies three
+expired retries never recreate it. No other production writer of these copies
+exists in this tree.
+
+Missing-root reconciliation uses real persisted recorded-check rows: expiry
+acknowledges their holds through the ordinary CAS writer even when the source
+directory is absent, then forgets the root ledger row. A cleanup observation
+alone never substitutes for the lane-finish and binding checks.
+
+Run the explicit test files with isolated state through `scripts/gate-slot.sh`:
+`laneFinish.test.ts`, `attemptTempProduction.test.ts`,
+`attemptTempRetention.test.ts`, `attemptTempFilesystem.test.ts`,
+`prototypeReview/fences.test.ts`, `recordedChecks/wire.test.ts`,
+`state/diskPressure.test.ts`, `viewerInstrumentation.test.ts` and
+`pipelines/worktreeSweep.test.ts`, each under its source directory. Also run
+the typecheck and privacy publication gate. Hosted checks, including
+`bun-runtime`, run on the published commit.
+
+After deployment, read successive `attempt-temp-report.json` files. Check
+`retention.periodDays`, due/upcoming bytes and the copies page's counts; verify
+that expired missing-root holds have `expired-with-lane` acknowledgements, and
+that the bounded pages reduce the attributable backlog. Check repeated root
+retries do not recreate expired copies. Unattributed legacy copies remain
+counted and retained. Read the protected-path outcomes before attributing a
+remaining root to a retention defect. No manual cleanup or deployment is part
+of this implementation stage.

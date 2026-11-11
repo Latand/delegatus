@@ -10,6 +10,12 @@ import * as filesystem from "./attemptTempFilesystem";
 import type { ProcessScan } from "@/lib/tempSweep";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempState, type AttemptTempOwner } from "./attemptTempRetention";
 import { attemptTempAuthority, attemptTempState } from "./attemptTempProduction";
+import { holdFinishedRoot } from "./attemptTempRetention.testSupport";
+import { recordedRootHeld, RecordedCheckStore } from "@/lib/recordedChecks/store";
+import { Database } from "bun:sqlite";
+import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
+import { digest } from "@/lib/recordedChecks/wire";
+import { preserveAttemptEvidence } from "./attemptTempEvidence";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -31,6 +37,256 @@ function fixture() {
   return { root, filename, store, make, sweep };
 }
 
+test("expired linked evidence retires without following its target; recent failures are logged once", async () => {
+  const f = fixture(), directory = f.make("linked", 30 * 86400000), target = path.join(f.root, "outside");
+  fs.mkdirSync(target); fs.writeFileSync(path.join(target, "frame.png"), "keep target");
+  fs.symlinkSync(target, path.join(directory, ".artifacts"));
+  const lines: unknown[][] = [], log = spyOn(console, "error").mockImplementation((...args) => { lines.push(args); });
+  try {
+    for (let n = 0; n < 3; n++) { f.store.defer(directory, 0); expect((await f.sweep("closed")).errors).toBe(1); }
+    expect(lines).toHaveLength(1);
+    f.store.defer(directory, 0);
+    expect((await f.sweep("expired")).removed).toBe(1);
+    expect(fs.readFileSync(path.join(target, "frame.png"), "utf8")).toBe("keep target");
+  } finally { log.mockRestore(); f.store.close(); }
+});
+
+test.each(["keep", "outside-git", "cwd", "checkout-link"])("retention preserves an expired root protected by %s", async kind => {
+  const f = fixture(), directory = f.make(kind, 30 * 86400000), checkout = path.join(f.root, "checkout");
+  fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
+  if (kind === "keep") fs.writeFileSync(path.join(directory, ".delegatus-keep"), "operator pin");
+  if (kind === "outside-git") fs.writeFileSync(path.join(directory, ".git"), `gitdir: ${path.join(checkout, ".git")}\n`);
+  if (kind === "checkout-link") fs.symlinkSync(directory, path.join(checkout, "scratch"));
+  const scan = () => ({ ownNamespace: null, processes: kind === "cwd" || kind === "checkout-link"
+    ? [{ pid: 123, namespace: null, stamped: false, paths: [kind === "cwd" ? directory : checkout] }] : [] });
+  try {
+    expect((await f.sweep("expired", { scan })).removed).toBe(0);
+    expect(fs.existsSync(directory)).toBeTrue();
+  } finally { f.store.close(); }
+});
+
+test.each(["absent", "quarantine"])("expired recorded hold is settled for a previously %s root", async kind => {
+  const f = fixture(), directory = f.make(kind, 30 * 86400000);
+  try {
+    const ids = [await holdFinishedRoot(directory, "lane", "first"), await holdFinishedRoot(directory, "lane", "second")];
+    if (kind === "absent") fs.rmSync(directory, { recursive: true });
+    else {
+      const stat = fs.lstatSync(directory), trash = path.join(f.root, ".delegatus-trash-llv-stage-quarantine-fixture");
+      fs.renameSync(directory, trash);
+      fs.writeFileSync(attemptTempJournalPath(directory), JSON.stringify({ directory, trash, uid: stat.uid, identity: `${stat.dev}:${stat.ino}`, disposable: true }));
+    }
+    const result = await f.sweep("expired");
+    expect(result.errors).toBe(0); expect(result.removed).toBe(kind === "absent" ? 0 : 1);
+    expect(recordedRootHeld(directory)).toBeFalse(); expect(f.store.has(directory)).toBeFalse();
+    expect(fs.existsSync(attemptTempJournalPath(directory))).toBeFalse();
+    const checks = new RecordedCheckStore(undefined, false);
+    try { for (const id of ids) expect(checks.get(id)?.acknowledgement?.disposition).toBe("expired-with-lane"); }
+    finally { checks.close(); }
+  } finally { f.store.close(); }
+});
+
+test("retention removal holds no state transaction or collection lease", async () => {
+  const f = fixture(), directory = f.make("lock-free", 30 * 86400000);
+  try {
+    await holdFinishedRoot(directory, "lane");
+    let removals = 0;
+    const result = await f.sweep("expired", { remove: async (trash: string, guard: () => Promise<boolean>, dispatch: () => boolean) => {
+      expect(await guard()).toBeTrue(); expect(dispatch()).toBeTrue();
+      const db = new Database(statePath("state.sqlite"));
+      try {
+        db.exec("PRAGMA busy_timeout=0"); db.exec("BEGIN IMMEDIATE");
+        if (db.query("SELECT 1 FROM sqlite_master WHERE name='state_leases'").get())
+          expect(db.query("SELECT 1 FROM state_leases LIMIT 1").get()).toBeNull();
+        db.exec("ROLLBACK");
+      } finally { db.close(); }
+      removals++; await fs.promises.rm(trash, { recursive: true });
+    } });
+    expect(result.errors).toBe(0); expect(removals).toBe(1);
+  } finally { f.store.close(); }
+});
+
+test.each(["before-quarantine", "after-quarantine"])("a new process resumes expired retirement %s", async where => {
+  const f = fixture(), directory = f.make(where, 30 * 86400000);
+  await holdFinishedRoot(directory, "lane");
+  let interrupted = false;
+  try {
+    const report = await f.sweep("expired", where === "before-quarantine" ? { references: async () => { interrupted = true; throw new Error("fixture stop before quarantine"); } }
+      : { remove: async () => { interrupted = true; throw new Error("fixture stop after quarantine"); } });
+    expect(interrupted).toBeTrue(); expect(report.errors).toBeGreaterThan(0);
+    expect(recordedRootHeld(directory)).toBeFalse();
+  } finally { f.store.close(); }
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), f.filename, String(NOW + 60001), "expired"],
+    { stdout: "pipe", stderr: "pipe", env: { ...process.env } });
+  const output = await new Response(child.stdout).text(), errors = await new Response(child.stderr).text();
+  expect(await child.exited, errors).toBe(0); expect(JSON.parse(output).removed).toBe(1);
+  const reopened = new AttemptTempStore(f.filename);
+  try { expect(reopened.has(directory)).toBeFalse(); expect(fs.existsSync(directory)).toBeFalse(); }
+  finally { reopened.close(); }
+});
+
+test("a mismatched recorded-check binding refuses expiry and leaves independent work runnable", async () => {
+  const f = fixture(), directory = f.make("binding-mismatch", 30 * 86400000), independent = f.make("independent", 30 * 86400000);
+  try {
+    await holdFinishedRoot(directory, "another-lane");
+    const report = await f.sweep("expired");
+    expect(report.errors).toBe(1); expect(report.removed).toBe(1);
+    expect(recordedRootHeld(directory)).toBeTrue(); expect(fs.existsSync(directory)).toBeTrue(); expect(fs.existsSync(independent)).toBeFalse();
+  } finally { f.store.close(); }
+});
+
+test("copies retain unfinished, recent and unattributed data and never touch durable evidence stores", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "copy-state");
+  const parent = statePath("evidence", "attempt-temp"); fs.mkdirSync(parent, { recursive: true });
+  const candidates = ["expired", "recent", "open", "agent", "legacy"];
+  const destinations = candidates.map(name => {
+    const destination = path.join(parent, digest(name)); fs.mkdirSync(destination, { recursive: true });
+    fs.writeFileSync(path.join(destination, "capture.png"), name);
+    if (name !== "legacy") f.store.registerCopy({ destination, pipelineId: name === "agent" ? null : name, launchId: name,
+      kind: name === "agent" ? "agent" : "lane", createdAt: NOW - 8 * 86400000, expiresAt: name === "agent" ? NOW - 1000 : null, checkedAt: 0, bytes: 4096 });
+    else fs.writeFileSync(path.join(destination, "manifest.json"), JSON.stringify({ original: "/srv/missing-root", files: [] }));
+    return destination;
+  });
+  const durable = [statePath("evidence", "lane", "frame.png"), statePath("evidence", "recorded-checks", "capture.png"),
+    statePath("prototype-reviews", "frame.png"), path.join(f.root, "cleanup-ledger.jsonl")];
+  for (const filename of durable) { fs.mkdirSync(path.dirname(filename), { recursive: true }); fs.writeFileSync(filename, "durable"); }
+  try {
+    const report = await sweepEvidenceCopies(f.store, { now: () => NOW, state: async () => "unknown",
+      authority: async owner => ({ state: owner.pipelineId === "expired" ? "expired" : owner.pipelineId === "recent" ? "closed" : "live",
+        expiresAt: owner.pipelineId === "recent" ? NOW + 86400000 : null, revision: "fixture", isCurrent: () => true }),
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
+    expect(report.errors).toBe(0); expect(report.removed).toBe(2); expect(report.unattributed.count).toBe(1);
+    expect(destinations.map(destination => fs.existsSync(destination))).toEqual([false, true, true, false, true]);
+    for (const filename of durable) expect(fs.readFileSync(filename, "utf8")).toBe("durable");
+  } finally { process.env.LLV_STATE_DIR = priorState; f.store.close(); }
+});
+
+async function retentionProcess(filename: string, now: number, mode: string) {
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), filename, String(now), mode],
+    { stdout: "pipe", stderr: "pipe", env: { ...process.env } });
+  const output = await new Response(child.stdout).text(), errors = await new Response(child.stderr).text();
+  expect(await child.exited, errors).toBe(0);
+  return JSON.parse(output);
+}
+
+test("forty expired held roots drain in pages of four or thirty-two across process restarts", async () => {
+  const f = fixture();
+  const directories: string[] = [];
+  try {
+    for (let n = 0; n < 40; n++) {
+      const directory = f.make(`bounded-${String(n).padStart(2, "0")}`, 30 * 86400000); directories.push(directory);
+      await holdFinishedRoot(directory, "lane"); f.store.measure(directory, 4096);
+    }
+    expect((await f.sweep("expired")).removed).toBe(4);
+  } finally { f.store.close(); }
+  expect((await retentionProcess(f.filename, NOW + 60001, "expired-pressure")).removed).toBe(32);
+  expect((await retentionProcess(f.filename, NOW + 120002, "expired-pressure")).removed).toBe(4);
+  expect(directories.every(directory => !fs.existsSync(directory) && !recordedRootHeld(directory))).toBeTrue();
+}, 60000);
+
+test("twenty expired copies drain eight per process and recover a journaled rename", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "copy-state");
+  const parent = statePath("evidence", "attempt-temp"); fs.mkdirSync(parent, { recursive: true });
+  const destinations: string[] = [];
+  try {
+    for (let n = 0; n < 20; n++) {
+      const destination = path.join(parent, digest(n)); fs.mkdirSync(destination);
+      fs.writeFileSync(path.join(destination, "frame.png"), "fixture"); destinations.push(destination);
+      f.store.registerCopy({ destination, pipelineId: "lane", launchId: String(n), kind: "lane", createdAt: 1,
+        expiresAt: NOW - 1000, checkedAt: 0, bytes: 4096 });
+    }
+    const destination = destinations[0], stat = fs.lstatSync(destination), trash = path.join(parent, `.delegatus-trash-${path.basename(destination)}-fixture`);
+    fs.renameSync(destination, trash);
+    fs.writeFileSync(attemptTempJournalPath(destination), JSON.stringify({ directory: destination, trash, uid: stat.uid, identity: `${stat.dev}:${stat.ino}`, disposable: true }));
+    f.store.close();
+    for (const expected of [8, 8, 4]) expect((await retentionProcess(f.filename, NOW, "copies")).removed).toBe(expected);
+    expect(destinations.every(directory => !fs.existsSync(directory))).toBeTrue(); expect(fs.existsSync(trash)).toBeFalse();
+    expect(fs.existsSync(attemptTempJournalPath(destination))).toBeFalse();
+  } finally { process.env.LLV_STATE_DIR = priorState; }
+});
+
+test("legacy adoption resumes its cursor in another process without losing the interrupted name", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "copy-state");
+  const parent = statePath("evidence", "attempt-temp"); fs.mkdirSync(parent, { recursive: true });
+  try {
+    const names = Array.from({ length: 65 }, (_, n) => digest(n)).sort();
+    for (const name of names) {
+      const destination = path.join(parent, name); fs.mkdirSync(destination);
+      fs.writeFileSync(path.join(destination, "manifest.json"), JSON.stringify({ original: "/srv/absent", files: [] }));
+    }
+    // The first page was recorded; the helper stopped just after checkpointing
+    // its next name and before registering it.
+    for (const name of names.slice(0, 32)) f.store.registerCopy({ destination: path.join(parent, name), pipelineId: null,
+      launchId: "legacy", kind: "unattributed", createdAt: 1, expiresAt: null, checkedAt: 0, bytes: 4096 });
+    f.store.checkpointCopies(names[32]); f.store.close();
+    expect((await retentionProcess(f.filename, NOW, "copies")).adopted).toBe(32);
+    const last = await retentionProcess(f.filename, NOW, "copies");
+    expect(last.adopted).toBe(1); expect(last.unattributed.count).toBe(65);
+    expect(fs.readdirSync(parent)).toHaveLength(65);
+  } finally { process.env.LLV_STATE_DIR = priorState; }
+});
+
+test("legacy adoption attributes a real producer manifest through its still-recorded owner", async () => {
+  const f = fixture(), directory = f.make("legacy-owner"), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "copy-state");
+  try {
+    fs.writeFileSync(path.join(directory, "frame.png"), "legacy capture");
+    const evidence = await preserveAttemptEvidence(directory, directory, f.store.owner(directory)!.identity);
+    expect(evidence.destination).toBeDefined();
+    const report = await sweepEvidenceCopies(f.store, { now: () => NOW, state: async () => "expired",
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
+    expect(report.adopted).toBe(1); expect(report.removed).toBe(1); expect(report.unattributed.count).toBe(0);
+    expect(fs.existsSync(evidence.destination!)).toBeFalse(); expect(fs.existsSync(directory)).toBeTrue();
+  } finally { process.env.LLV_STATE_DIR = priorState; f.store.close(); }
+});
+
+test("a changed copy authority after an awaited consumer observation preserves its directory", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "copy-state");
+  const destination = statePath("evidence", "attempt-temp", digest("copy-race"));
+  fs.mkdirSync(destination, { recursive: true }); fs.writeFileSync(path.join(destination, "frame.png"), "preserve");
+  f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane", createdAt: 1, expiresAt: 1, checkedAt: 0, bytes: 4096 });
+  let current = true;
+  try {
+    const report = await sweepEvidenceCopies(f.store, { now: () => NOW, state: async () => "expired",
+      authority: async () => ({ state: current ? "expired" : "live", revision: "fixture", isCurrent: () => current }),
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => { current = false; return true; } });
+    expect(report.removed).toBe(0); expect(report.errors).toBe(0);
+    expect(fs.readFileSync(path.join(destination, "frame.png"), "utf8")).toBe("preserve");
+    expect(f.store.copy(destination)).not.toBeNull();
+  } finally { process.env.LLV_STATE_DIR = priorState; f.store.close(); }
+});
+
+test("one failing evidence copy preserves its journal, logs once and allows an independent copy through", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "copy-state");
+  const parent = statePath("evidence", "attempt-temp"); fs.mkdirSync(parent, { recursive: true });
+  const failed = path.join(parent, digest("failed-copy")), independent = path.join(parent, digest("independent-copy"));
+  for (const destination of [failed, independent]) {
+    fs.mkdirSync(destination); fs.writeFileSync(path.join(destination, "frame.png"), "capture");
+    f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane", createdAt: 1, expiresAt: 1, checkedAt: 0, bytes: 4096 });
+  }
+  const remove = fs.promises.rm.bind(fs.promises), lines: unknown[][] = [];
+  const log = spyOn(console, "error").mockImplementation((...args) => { lines.push(args); });
+  const rm = spyOn(fs.promises, "rm").mockImplementation(async (target, settings) => {
+    if (String(target).includes(path.basename(failed))) throw new Error("fixture copy removal refused");
+    return remove(target, settings);
+  });
+  let now = NOW;
+  const options = { now: () => now, state: async () => "expired" as const,
+    scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true };
+  try {
+    expect((await sweepEvidenceCopies(f.store, options)).removed).toBe(1);
+    for (let n = 0; n < 2; n++) { now += 60001; expect((await sweepEvidenceCopies(f.store, options)).errors).toBe(1); }
+    expect(lines).toHaveLength(1); expect(fs.existsSync(independent)).toBeFalse();
+    expect(fs.existsSync(attemptTempJournalPath(failed))).toBeTrue();
+    rm.mockRestore(); now += 60001;
+    expect((await sweepEvidenceCopies(f.store, options)).removed).toBe(1);
+  } finally { rm.mockRestore(); log.mockRestore(); process.env.LLV_STATE_DIR = priorState; f.store.close(); }
+});
+
 test("a settled attempt removes its scratch without waiting for host release", async () => {
   const f = fixture(); const directory = f.make("settled");
   try { expect((await f.sweep()).removed).toBe(1); expect(fs.existsSync(directory)).toBeFalse(); }
@@ -39,12 +295,13 @@ test("a settled attempt removes its scratch without waiting for host release", a
 
 type NamespacePath = "namespace-only" | "permission-fallback";
 type NamespaceChange = "control" | "producer-changed" | "checkout-unreadable" | "root-replaced";
-async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceChange = "control") {
+async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceChange = "control", expired = false) {
   const f = fixture(), directory = f.make(`namespace-${kind}`), bin = path.join(f.root, "bin");
   const checkout = path.join(f.root, "checkout"), completion = path.join(f.root, "cleanup-complete");
   fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
   fs.mkdirSync(path.join(directory, "private")); fs.mkdirSync(bin);
   fs.writeFileSync(path.join(directory, "private", "payload"), "reclaim me");
+  if (expired) fs.writeFileSync(path.join(directory, "frame.png"), "expired evidence");
   f.store.measure(directory, 8192); f.store.release(directory);
   fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}
 import fs from "node:fs";
@@ -55,6 +312,7 @@ const source = /source=([^,]+)/.exec(args[args.indexOf("--mount") + 1])?.[1];
 if (!source || !source.startsWith(${JSON.stringify(f.root + path.sep)})) process.exit(62);
 const script = args[args.indexOf("-c") + 1];
 if (script.includes("-delete")) {
+  if (script.includes("found=$(find") && fs.existsSync(source + "/frame.png")) process.exit(75);
   for (const entry of fs.readdirSync(source)) fs.rmSync(source + "/" + entry, { recursive: true, force: true });
   if (${JSON.stringify(change)} === "checkout-unreadable") fs.chmodSync(${JSON.stringify(checkout)}, 0);
   if (${JSON.stringify(change)} === "root-replaced") {
@@ -83,9 +341,9 @@ if (script.includes("-delete")) {
     const report = await f.sweep("closed", { maxRoots: 1, capBytes: 0, references: async () => true,
       state: async (owner: AttemptTempOwner, inventory: filesystem.RepositoryLinkInventory) => {
         await filesystem.repositoryReferencesAttemptTemp(checkout, owner.directory, owner.directory, inventory);
-        return "closed";
+        return expired ? "expired" : "closed";
       },
-      authority: async () => ({ state: "closed", revision: "unchanged",
+      authority: async () => ({ state: expired ? "expired" : "closed", revision: "unchanged",
         isCurrent: () => change !== "producer-changed" || !fs.existsSync(completion) }) });
     expect(fs.existsSync(completion)).toBeTrue();
     if (change !== "control") {
@@ -115,12 +373,16 @@ if (script.includes("-delete")) {
   }
 }
 
+test.skipIf(process.platform !== "linux")("expired evidence also retires through the permission-denied namespace fallback", async () => {
+  await integratedNamespaceSweep("permission-fallback", "control", true);
+});
+
 test.skipIf(process.platform !== "linux").each(["namespace-only", "permission-fallback"] as const)(
   "an unchanged integrated sweep finishes namespace cleanup in one pass (%s)", kind => integratedNamespaceSweep(kind));
 test.skipIf(process.platform !== "linux").each([
   ["namespace-only", "producer-changed"], ["namespace-only", "checkout-unreadable"], ["namespace-only", "root-replaced"],
   ["permission-fallback", "producer-changed"], ["permission-fallback", "checkout-unreadable"], ["permission-fallback", "root-replaced"],
-] as const)("an integrated sweep refuses post-delete drift (%s, %s)", integratedNamespaceSweep);
+] as const)("an integrated sweep refuses post-delete drift (%s, %s)", (kind, change) => integratedNamespaceSweep(kind, change));
 
 test.each(["absent", "unreadable", "restored-with-link"] as const)(
   "the final producer read revalidates a changed consumer checkout (%s)", async change => {

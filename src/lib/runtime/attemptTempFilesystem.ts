@@ -602,7 +602,7 @@ export async function attemptTreeHasNoEvidence(directory: string, original: stri
 }
 
 export async function removeAttemptTree(directory: string, original = directory, guard?: () => Promise<boolean>, requireNoEvidence = false,
-  dispatchGuard?: () => boolean, postDeleteGuard = dispatchGuard): Promise<void> {
+  dispatchGuard?: () => boolean, postDeleteGuard = dispatchGuard, discardExpiredEvidence = false): Promise<void> {
   if (requireNoEvidence) {
     const { identity } = await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
     removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
@@ -612,7 +612,7 @@ export async function removeAttemptTree(directory: string, original = directory,
   try { await fs.promises.rm(directory, { recursive: true, force: true }); }
   catch (error) {
     if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
-    const { identity } = await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
+    const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard);
     removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
   }
 }

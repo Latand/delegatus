@@ -1,23 +1,30 @@
 import { statePath } from "@/lib/configDir";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempAuthority, type AttemptTempOwner, type AttemptTempState, type AttemptTempSweepOptions } from "./attemptTempRetention";
 import { pipelineRecordReader } from "@/lib/pipelines/store";
+import { laneFinish, FINISHED_LANE_RETENTION_MS } from "@/lib/pipelines/laneFinish";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { tempSweepMode } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import path from "node:path";
 import fs from "node:fs";
 import { repositoryReferencesAttemptTemp, RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
 
 /** The sweep helper serves every minute tick from one process. */
 const checkoutReads: RetainedCheckoutReads = new Map();
 
-export async function attemptTempAuthority(owner: AttemptTempOwner, inventory = new RepositoryLinkInventory()): Promise<Exclude<AttemptTempAuthority, AttemptTempState>> {
+export async function attemptTempAuthority(owner: AttemptTempOwner, inventory = new RepositoryLinkInventory(), now = Date.now, retentionMs = FINISHED_LANE_RETENTION_MS): Promise<AttemptTempAuthority> {
   if (!owner.pipelineId) return { state: "orphan", revision: "", isCurrent: () => true };
   const reader = pipelineRecordReader(owner.pipelineId), version = reader.version();
-  const observed = (state: AttemptTempState) => ({ state, revision: version, isCurrent: () => reader.version() === version });
+  const observed = (state: AttemptTempState, expiresAt: number | null = null): AttemptTempAuthority => ({ state, expiresAt, revision: version,
+    isCurrent: () => reader.version() === version && (state !== "expired" || expiresAt !== null && now() >= expiresAt) });
   const pipeline = reader.read();
   if (!pipeline) return observed("orphan");
-  if (pipeline.state === "closed" || pipeline.state === "completed") return observed("closed");
+  if (pipeline.state === "closed" || pipeline.state === "completed") {
+    const finish = laneFinish(pipeline, retentionMs);
+    if (!finish.finished) return observed("live");
+    return observed(now() >= finish.expiresAt ? "expired" : "closed", finish.expiresAt);
+  }
   const matches = (attempt: PipelineStageAttempt) => attempt.launchId === owner.launchId
     || attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId);
   const run = pipeline.runs.find(run => run.attempts.some(matches));
@@ -72,7 +79,7 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
   if (!mode) return null;
   const store = new AttemptTempStore();
   try {
-    const report = await sweepAttemptTemps(store, {
+    const options: AttemptTempSweepOptions = {
       state: attemptTempState, authority: attemptTempAuthority, mode, scan: ports.scan, checkoutReads,
       maxRoots: (() => {
         try { return JSON.parse(fs.readFileSync(statePath("disk-pressure-report.json"), "utf8")).episode ? 32 : undefined; }
@@ -81,21 +88,27 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
       onRetired: (count, bytes) => console.log(`[attempt temp] retired ${count} directories, ${bytes} attributed bytes`),
       capBytes: setting(env.LLV_ATTEMPT_TEMP_CAP_BYTES, 100 * 1024 ** 3),
       maxAgeMs: setting(env.LLV_ATTEMPT_TEMP_MAX_AGE_DAYS, 1) * 86400000,
-    });
+      retentionMs: FINISHED_LANE_RETENTION_MS,
+    };
+    const roots = await sweepAttemptTemps(store, options);
+    const copies = await sweepEvidenceCopies(store, options);
+    const report = { ...roots, copies, retention: store.retention(Date.now(), options.retentionMs) };
     const file = statePath("attempt-temp-report.json");
-    const condition: TickCondition = { mode, overCap: report.overCapBytes > 0, failing: report.errors > 0 };
+    const condition: TickCondition = { mode, overCap: report.overCapBytes > 0, failing: report.errors > 0 || copies.errors > 0 };
     const changed = JSON.stringify(recordedCondition(file, mode)) !== JSON.stringify(condition);
-    if (report.removed || report.errors || report.deferred || report.overCapBytes || changed) {
+    if (report.removed || copies.removed || report.errors || copies.errors || report.deferred || report.overCapBytes || changed || report.retention.dueBytes || report.retention.upcomingBytes) {
       const gb = (bytes: number) => `${(bytes / 1e9).toFixed(2)} GB`;
       const summary = `Measured ${gb(report.bytes)}; cap ${gb(report.capBytes)}; ${mode === "dry-run" ? "would reclaim" : "reclaimed"} ${gb(report.removedBytes)}; `
         + `budget deferred ${gb(report.deferredBytes)}; held live ${gb(report.liveHeldBytes)}; held by evidence ${gb(report.evidenceHeldBytes)}; `
         + `other holds ${gb(report.otherHeldBytes)}; failed ${gb(report.failedBytes)}; outside this page ${gb(report.unexaminedBytes)}. `
+        + `automatic copies reclaimed ${gb(copies.removedBytes)}; unattributed copies retained ${gb(copies.unattributed.bytes)}. `
         + "Hold categories describe this page; unexamined allocation still needs classification.";
       writeJsonDurably(file, { at: new Date().toISOString(), condition, summary, ...report });
       console.log(`[attempt temp] ${mode === "dry-run" ? "would remove" : "removed"} ${report.removed} directories, ${report.removedBytes} bytes; `
         + `${report.deferred} budget deferred (${report.deferredBytes} bytes); ${report.liveHeld} held live (${report.liveHeldBytes} bytes); `
         + `${report.evidenceHeld} held by evidence (${report.evidenceHeldBytes} bytes); ${report.held - report.liveHeld - report.evidenceHeld} other holds (${report.otherHeldBytes} bytes); `
-        + `${report.errors} errors (${report.failedBytes} bytes); ${report.unexaminedBytes} bytes outside this page; ${report.overCapBytes} measured bytes over cap`);
+        + `${report.errors + copies.errors} errors (${report.failedBytes} root bytes); ${report.unexaminedBytes} bytes outside this page; ${report.overCapBytes} measured bytes over cap; `
+        + `${copies.removed} automatic copies removed, ${copies.unattributed.count} unattributed copies retained`);
     }
     return report;
   } finally { store.close(); }

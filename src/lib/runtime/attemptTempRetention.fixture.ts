@@ -14,14 +14,23 @@ if (process.argv[2] === "--load") {
   }
 }
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
+import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
 
 if (process.argv[2] === "--hold") {
   process.stdout.write("ready\n");
-  for await (const _chunk of process.stdin) { /* The parent owns this hold. */ }
+  for await (const chunk of process.stdin) { void chunk; /* The parent owns this hold. */ }
   process.exit(0);
 }
 
 const store = new AttemptTempStore(process.argv[2]!);
+if (process.argv[4] === "copies") {
+  try {
+    const report = await sweepEvidenceCopies(store, { now: () => Number(process.argv[3]), state: async () => "expired",
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
+    process.stdout.write(JSON.stringify(report));
+  } finally { store.close(); }
+  process.exit(0);
+}
 try {
   const budgetMode = process.argv[4] === "budget-run" || process.argv[4] === "budget-inventory" || process.argv[4] === "budget-read";
   if (process.argv[4] === "budget-read") {
@@ -45,8 +54,8 @@ try {
   const repository = path.join(path.dirname(process.argv[2]!), "budget-repository");
   const report = await sweepAttemptTemps(store, {
     now: () => now, runBudgetMs: budgetMode && process.argv[4] === "budget-run" ? 40_000 : undefined,
-    maxRoots: process.argv[4] === "pressure" ? 4 : budgetMode ? 2 : process.argv.includes("--default-budget") ? undefined : 1,
-    capBytes: process.argv[4] === "pressure" || budgetMode ? 0 : undefined,
+    maxRoots: process.argv[4] === "expired-pressure" ? 32 : process.argv[4] === "pressure" ? 4 : budgetMode ? 2 : process.argv.includes("--default-budget") ? undefined : 1,
+    capBytes: process.argv[4] === "expired-pressure" || process.argv[4] === "pressure" || budgetMode ? 0 : undefined,
     state: async (owner, inventory) => {
       if (process.argv[4] === "budget-inventory" || process.argv[4] === "budget-read") {
         await inventory.targets(repository);
@@ -57,9 +66,9 @@ try {
       }
       if (process.argv[4] === "hold-state") {
         process.stdout.write("ready\n");
-        for await (const _chunk of process.stdin) { /* The parent releases this observation. */ }
+        for await (const chunk of process.stdin) { void chunk; /* The parent releases this observation. */ }
       }
-      return process.argv[4] === "live" ? "live" : process.argv[4] === "orphan" ? "orphan" : "settled";
+      return process.argv[4]?.startsWith("expired") ? "expired" : process.argv[4] === "live" ? "live" : process.argv[4] === "orphan" ? "orphan" : "settled";
     }, scan: () => ({ ownNamespace: null, processes: [] }),
     references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true),
     onRetired: retired,

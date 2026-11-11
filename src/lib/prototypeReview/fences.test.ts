@@ -19,6 +19,7 @@ import { mediaFilename, roundDirectory, roundMedia } from "./store";
 import type { PrototypeReviewRead, PublishPrototypeInput } from "./types";
 
 import { criticLane } from "./criticGate.fixture";
+import { AttemptTempStore, sweepAttemptTemps } from "@/lib/runtime/attemptTempRetention";
 const publishPOST: typeof gatedPublishPOST = async (request, world) => {
   const body = await request.clone().json();
   return gatedPublishPOST(request, world ?? {
@@ -54,6 +55,23 @@ async function input(key: string): Promise<PublishPrototypeInput & { variants: N
 }
 async function publish(body: PublishPrototypeInput) { const response = await publishPOST(request("/api/prototype-reviews",body)); expect(response.status).toBe(200); return (await response.json()).reviewId as string; }
 async function read() { return (await (await reviewGET(request(`/api/tasks/${TASK}/prototypes`),TASK)).json()) as PrototypeReviewRead; }
+
+test("a waiting prototype review serves its stored frame after the source attempt expires", async () => {
+  const root = await directory(process.env.HOME!, "llv-stage-retention-");
+  const image = path.join(root, "frame.png"), bytes = Buffer.concat([PNG, Buffer.from("retained review")]);
+  await fs.writeFile(image, bytes);
+  const body = await input("retention-copy"); body.variants[0]!.frames = [{ path: image, caption: "Review" }];
+  const id = await publish(body), frame = (await read()).rounds[0]!.variants[0]!.frames[0]!;
+  const store = new AttemptTempStore(path.join(await directory(os.tmpdir(), "retention-ledger-"), "owners.sqlite"));
+  try {
+    store.register({ directory: root, pipelineId: "expired-lane", launchId: "expired-launch", retainUntilClose: true, createdAt: 1 });
+    const result = await sweepAttemptTemps(store, { now: () => Date.parse("2026-11-01T00:00:00Z"), state: async () => "expired",
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
+    expect(result.errors).toBe(0); expect(result.removed).toBe(1);
+    const response = await prototypeMediaGET(request("/media"), TASK, id, frame.image.id, "image");
+    expect(response.status).toBe(200); expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+  } finally { store.close(); }
+});
 
 /**
  * A directory above the file is a link to `outside` from the first touch of
