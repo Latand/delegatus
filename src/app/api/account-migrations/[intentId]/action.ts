@@ -26,8 +26,7 @@ export async function updateMigrationAction(
     if (body.action === "stop") {
       /* Off the loop (docs/design/delivery-progress-and-drain.md, C2); a
          refusal changes nothing and the intent keeps draining. */
-      const stopped = await registry.deliveryWrite({ label: "migration.stop" },
-        () => registry.setMigrationIntentState(intentId, "stopped", body.expectedRevision as number | undefined));
+      const stopped = await registry.stopMigrationIntent(intentId, { expectedRevision: body.expectedRevision as number | undefined });
       if (!stopped.acquired) return busy("the stop could not be recorded; nothing changed");
       return NextResponse.json(stopped.value);
     }
