@@ -296,13 +296,21 @@ export interface MigrationIntent {
       registry's write lock is never held for the whole engine. `stampedAt` is
       the stop's own time, which every row the sweep writes carries. `optOut`
       is the stop's decision: whether the engine was routed to this intent's
-      target when it stopped. */
+      target when it stopped. While it is present, every conversation whose
+      migration the intent still owns is rolled back as far as any reader or
+      writer is concerned, whether or not the sweep has reached it. */
   stopSweep?: MigrationStopSweep | null;
 }
 
 export interface MigrationStopSweep {
   stampedAt: string;
   optOut: boolean;
+  /** The stop's place among the opt-out decisions of its engine: a number the
+      registry hands out in the transaction that decides, each larger than the
+      one before, so two decisions of one millisecond are still ordered. */
+  order?: number;
+  /** What the stop tells the senders of the input it cancels. */
+  reason?: string;
 }
 
 export interface AutoBalancePolicy {

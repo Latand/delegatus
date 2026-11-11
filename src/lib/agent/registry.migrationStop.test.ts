@@ -4,6 +4,8 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 import { afterAll, afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 
+import { emptyLaunchProfile, type HeldDelivery, type ProviderReceipt, type SuccessorProviderPort } from "@/lib/accounts/migration/contracts";
+import { advanceConversationMigration } from "@/lib/accounts/migration/coordinator";
 import { MIGRATION_INTENT_PROGRESS_TIMEOUT_MS } from "@/lib/accounts/migration/intentLiveness";
 import { terminalizeStaleUndeliverableHeldDeliveries } from "@/lib/reaperRuntime";
 
@@ -100,7 +102,7 @@ test("a stop writes what one transaction over the engine wrote, and nothing else
     const stamp = intent.updatedAt;
     /* Every conversation of the engine that is not on the target is opted out, with the stop's own time. */
     for (const id of [...fixture.sourceConversationIds, ...fixture.requested.map(owned => owned.conversationId)]) {
-      expect(after.conversations[id]!.migrationOptOut).toEqual({ targetId: MIGRATION_STOP_TARGET, updatedAt: stamp });
+      expect(after.conversations[id]!.migrationOptOut).toMatchObject({ targetId: MIGRATION_STOP_TARGET, updatedAt: stamp });
       expect(after.conversations[id]!.updatedAt).toBe(stamp);
     }
     /* Conversations on the target and another engine's conversations are the rows they were. */
@@ -190,7 +192,7 @@ test("a refused stop changes nothing, and a refused sweep keeps the stop's decis
     expect(stopped.acquired).toBe(true);
     const interrupted = registry.readOnlySnapshot();
     const marker = interrupted.migrationIntents[fixture.intentId]!.stopSweep;
-    expect(marker).toEqual({ stampedAt: interrupted.migrationIntents[fixture.intentId]!.updatedAt, optOut: true });
+    expect(marker).toMatchObject({ stampedAt: interrupted.migrationIntents[fixture.intentId]!.updatedAt, optOut: true });
     expect(optedOut(interrupted, fixture.sourceConversationIds)).toHaveLength(0);
     /* The intent's own conversations were settled by the stop itself. */
     for (const owned of fixture.requested) {
@@ -292,7 +294,7 @@ test("a stop interrupted before its sweep is finished by the hygiene pass of the
   /* The marker is durable: a registry opened afterwards resumes from it. */
   const second = open(interrupted);
   try {
-    expect(second.readOnlySnapshot().migrationIntents[interrupted.intentId]!.stopSweep).toEqual({ stampedAt, optOut: true });
+    expect(second.readOnlySnapshot().migrationIntents[interrupted.intentId]!.stopSweep).toMatchObject({ stampedAt, optOut: true });
     await terminalizeStaleUndeliverableHeldDeliveries(second, Date.parse(stampedAt) + 1_000);
     const finished = second.readOnlySnapshot();
     expect(finished.migrationIntents[interrupted.intentId]!.stopSweep).toBeUndefined();
@@ -425,7 +427,7 @@ test("a stop resumed after a later stop of another target leaves the later opt-o
       expect(finished.migrationIntents[fixture.intentId]!.stopSweep).toBeUndefined();
       expect(finished.migrationIntents[later.id]!.stopSweep).toBeUndefined();
       for (const source of fixture.sourceConversationIds) {
-        expect(finished.conversations[source]!.migrationOptOut).toEqual({ targetId: LATER_TARGET, updatedAt: stamp(2) });
+        expect(finished.conversations[source]!.migrationOptOut).toMatchObject({ targetId: LATER_TARGET, updatedAt: stamp(2) });
       }
       /* A send does not follow routing onto the target that was just stopped. */
       step(5);
@@ -573,17 +575,17 @@ test("a decision made while the sweep is between two transactions stands", async
     const finished = registry.readOnlySnapshot();
     expect(finished.migrationIntents[fixture.intentId]!.stopSweep).toBeUndefined();
     /* The reseat withdrew the opt-out and the rollback opted out again, each after the stop. */
-    expect(finished.conversations[withdrawn]!.migrationOptOut).toEqual({ targetId: null, updatedAt: at(1) });
-    expect(finished.conversations[optedOutLater]!.migrationOptOut).toEqual({ targetId: MIGRATION_STOP_TARGET, updatedAt: at(1) });
+    expect(finished.conversations[withdrawn]!.migrationOptOut).toMatchObject({ targetId: null, updatedAt: at(1) });
+    expect(finished.conversations[optedOutLater]!.migrationOptOut).toMatchObject({ targetId: MIGRATION_STOP_TARGET, updatedAt: at(1) });
     const others = fixture.sourceConversationIds.slice(0, -2);
-    for (const id of others) expect(finished.conversations[id]!.migrationOptOut).toEqual({ targetId: MIGRATION_STOP_TARGET, updatedAt: at(0) });
+    for (const id of others) expect(finished.conversations[id]!.migrationOptOut).toMatchObject({ targetId: MIGRATION_STOP_TARGET, updatedAt: at(0) });
   } finally {
     registry.close();
   }
   /* A registry opened afterwards reads the withdrawal as it was stored. */
   const reopened = open(fixture);
   try {
-    expect(reopened.conversation(withdrawn)!.migrationOptOut).toEqual({ targetId: null, updatedAt: at(1) });
+    expect(reopened.conversation(withdrawn)!.migrationOptOut).toMatchObject({ targetId: null, updatedAt: at(1) });
   } finally {
     reopened.close();
   }
@@ -615,7 +617,7 @@ test("a stop repeated while its sweep is between two transactions restarts the s
     const finished = registry.readOnlySnapshot();
     expect(finished.migrationIntents[fixture.intentId]!.stopSweep).toBeUndefined();
     for (const id of fixture.sourceConversationIds) {
-      expect(finished.conversations[id]!.migrationOptOut).toEqual({ targetId: MIGRATION_STOP_TARGET, updatedAt: at(1) });
+      expect(finished.conversations[id]!.migrationOptOut).toMatchObject({ targetId: MIGRATION_STOP_TARGET, updatedAt: at(1) });
     }
   } finally {
     registry.close();
@@ -693,7 +695,7 @@ test("a view prepared before the stop committed is not read as the sweep's own",
     /* A caller that keeps being handed the earlier view writes nothing and keeps the marker. */
     const stale = spyOn(registry, "prepareReadOnlySnapshot").mockResolvedValue(earlier);
     expect(await registry.continueMigrationStop(fixture.intentId)).toBe(false);
-    expect(registry.readOnlySnapshot().migrationIntents[fixture.intentId]!.stopSweep).toEqual({ stampedAt, optOut: true });
+    expect(registry.readOnlySnapshot().migrationIntents[fixture.intentId]!.stopSweep).toMatchObject({ stampedAt, optOut: true });
     expect(optedOut(registry.readOnlySnapshot(), fixture.sourceConversationIds)).toHaveLength(0);
 
     /* One earlier view, then the current one: the sweep reads from the current one and finishes. */
@@ -799,6 +801,493 @@ test("the hygiene pass leaves an intent that still makes progress alone", async 
     await terminalizeStaleUndeliverableHeldDeliveries(registry, Date.parse(fixture.intentUpdatedAt) + MIGRATION_INTENT_PROGRESS_TIMEOUT_MS - 1_000);
     expect(registry.readOnlySnapshot().migrationIntents[fixture.intentId]!.state).toBe("draining");
     expect(optedOut(registry.readOnlySnapshot(), fixture.sourceConversationIds)).toHaveLength(0);
+  } finally {
+    registry.close();
+  }
+});
+
+/*
+ * A stop is decided in one transaction and written onto the conversations in
+ * many. The cases below hold that the decision is in force for every
+ * conversation the intent owns from that first transaction on, wherever the
+ * sweep has got to, and that decisions made in one instant keep the order they
+ * were made in.
+ */
+
+/** The fixture's intent, enrolled over the whole engine: it owns more conversations than a stop settles in its own transaction. */
+function enrollEngine(registry: AgentRegistry, fixture: MigrationStopFixture): void {
+  const intent = manualMigration(registry, MIGRATION_STOP_TARGET);
+  expect(intent.id).toBe(fixture.intentId);
+}
+
+/** Stops the intent with its sweep never run: every write of the sweep refused, or the process gone. */
+async function stopIntentWithoutSweep(registry: AgentRegistry, intentId: string): Promise<void> {
+  const sweep = spyOn(registry, "continueMigrationStop").mockResolvedValueOnce(false);
+  try {
+    expect((await registry.stopMigrationIntent(intentId)).acquired).toBe(true);
+  } finally {
+    sweep.mockRestore();
+  }
+}
+
+/** Conversations whose stored migration the stop's own transaction did not reach. */
+function unsweptOwned(registry: AgentRegistry, fixture: MigrationStopFixture): ConversationId[] {
+  const file = registry.readOnlySnapshot();
+  return fixture.sourceConversationIds.filter(id => file.conversations[id]!.migration?.phase !== "rolled-back") as ConversationId[];
+}
+
+/** Conversation rows each committed transaction wrote, in order. */
+function conversationRowsPerTransaction(registry: AgentRegistry): number[] {
+  type Changes = { rows: Map<string, Set<string>> };
+  const store = (registry as unknown as { sqliteStore: { persistChanges: (file: unknown, changes: Changes, revision: number) => void } }).sqliteStore;
+  const persistChanges = store.persistChanges.bind(store);
+  const written: number[] = [];
+  store.persistChanges = (file, changes, revision) => {
+    written.push(changes.rows.get("conversations")?.size ?? 0);
+    persistChanges(file, changes, revision);
+  };
+  return written;
+}
+
+/** What the stop left for every conversation and every delivery, without the identities a run mints. */
+function stoppedOutcome(registry: AgentRegistry, only?: string): string {
+  const file = registry.snapshot();
+  const conversations = Object.keys(file.conversations).filter(id => !only || id === only).sort().map((id) => {
+    const conversation = file.conversations[id]!;
+    return [id, conversation.generations.length, conversation.generations.at(-1)!.accountId,
+      conversation.migration?.targetId ?? null, conversation.migration?.phase ?? null, conversation.migrationOptOut?.targetId ?? null];
+  });
+  const deliveries = Object.values(file.heldDeliveries).filter(delivery => delivery.state !== "delivered" && (!only || delivery.conversationId === only))
+    .map(delivery => [delivery.conversationId, delivery.clientMessageId, delivery.state, delivery.error])
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  return JSON.stringify({ conversations, deliveries }, null, 1);
+}
+
+const successorReceipt = (operationId: string, name: string): ProviderReceipt => ({
+  operationId, nativeId: name, path: `/sessions/${name}.jsonl`, continuityPaths: [], historyHash: `${name}-history`,
+  host: { kind: "codex-app-server", identity: `${name}-host`, epoch: 1, verifiedAt: "2030-01-01T00:00:00.000Z" },
+});
+
+test("a stop is in force for every conversation its intent owns before the sweep reaches them", async () => {
+  const fixture = fixtureCopy();
+  let registry = open(fixture);
+  try {
+    enrollEngine(registry, fixture);
+    const owned = fixture.sourceConversationIds.length + fixture.requested.length;
+    expect(owned).toBeGreaterThan(MIGRATION_STOP_SLICE_ROWS * 2);
+    clock(0);
+    await stopIntentWithoutSweep(registry, fixture.intentId);
+
+    /* The fence is the stored marker: the process that takes over finds it. */
+    registry.close();
+    registry = open(fixture);
+    const unswept = unsweptOwned(registry, fixture);
+    expect(unswept).toHaveLength(owned - MIGRATION_STOP_SLICE_ROWS);
+    const stored = structuredClone(registry.readOnlySnapshot().conversations[unswept.at(-1)!]!);
+    expect(stored.migration).toMatchObject({ intentId: fixture.intentId, phase: "requested" });
+
+    /* A reader is told what the stop decided: rolled back at the stop's time, opted out of its target. */
+    for (const read of [registry.conversation(stored.id)!, registry.conversationForPath(stored.generations.at(-1)!.path)!]) {
+      expect(read.migration).toMatchObject({ intentId: fixture.intentId, phase: "rolled-back", updatedAt: at(0), revision: stored.migration!.revision });
+      expect(read.migrationOptOut).toMatchObject({ targetId: MIGRATION_STOP_TARGET, updatedAt: at(0) });
+    }
+    /* A conversation the stop does not own is read as it is stored. */
+    expect(registry.conversation(fixture.committedConversationId as ConversationId)!.migration?.phase).toBe("committed");
+
+    /* No step of the migration is admitted, and a refused step writes nothing. */
+    const revision = stored.migration!.revision;
+    const receipt = successorReceipt(stored.migration!.operationId, "after-stop");
+    clock(1);
+    expect(() => registry.transitionConversationMigration(stored.id, revision, ["requested"], { phase: "preparing" })).toThrow("migration transition is stale");
+    expect(() => registry.transitionConversationMigration(stored.id, revision, ["requested", "preparing", "successor-starting", "verifying"], { phase: "failed-recoverable" }))
+      .toThrow("migration transition is stale");
+    expect(() => registry.persistMigrationProviderReceipt(stored.id, revision, receipt.operationId, receipt)).toThrow("conflicts with durable state");
+    expect(() => registry.commitSuccessor(stored.id, { id: receipt.nativeId, path: receipt.path, accountId: MIGRATION_STOP_TARGET }, revision, receipt.operationId, receipt))
+      .toThrow("migration succession ownership is stale");
+    expect(() => registry.retryConversationMigration(stored.id, revision)).toThrow("migration intent is inactive");
+    expect(registry.readOnlySnapshot().conversations[stored.id]).toEqual(stored);
+    expect(unsweptOwned(registry, fixture)).toHaveLength(unswept.length);
+
+    /* The sweep then writes what the readers were already told. */
+    clock(2);
+    expect(await registry.continueMigrationStop(fixture.intentId)).toBe(true);
+    const finished = registry.readOnlySnapshot();
+    expect(finished.migrationIntents[fixture.intentId]!.stopSweep).toBeUndefined();
+    expect(unsweptOwned(registry, fixture)).toHaveLength(0);
+    expect(finished.conversations[stored.id]!.migration).toMatchObject({ phase: "rolled-back", updatedAt: at(0) });
+    expect(registry.conversation(stored.id)).toEqual(finished.conversations[stored.id]!);
+  } finally {
+    registry.close();
+  }
+});
+
+for (const reached of ["successor-starting", "verifying"] as const) {
+  test(`a successor ${reached === "verifying" ? "ready to commit" : "being created"} when its intent stops is refused, and the rows are those of an uninterrupted stop`, async () => {
+    const outcome: string[] = [];
+    for (const interrupted of [true, false]) {
+      const fixture = fixtureCopy();
+      const registry = open(fixture);
+      try {
+        enrollEngine(registry, fixture);
+        /* The last source conversation is far outside the stop's own transaction. */
+        const id = fixture.sourceConversationIds.at(-1)! as ConversationId;
+        const migration = registry.conversation(id)!.migration!;
+        const receipt = successorReceipt(migration.operationId, "ready-successor");
+        registry.transitionConversationMigration(id, migration.revision, ["requested"], { phase: "successor-starting" });
+        if (reached === "verifying") registry.persistMigrationProviderReceipt(id, migration.revision, migration.operationId, receipt);
+
+        if (interrupted) await stopIntentWithoutSweep(registry, fixture.intentId);
+        else expect((await registry.stopMigrationIntent(fixture.intentId)).acquired).toBe(true);
+        expect(unsweptOwned(registry, fixture).includes(id)).toBe(interrupted);
+
+        const successor = { id: receipt.nativeId, path: receipt.path, accountId: MIGRATION_STOP_TARGET, historyHash: receipt.historyHash, host: receipt.host };
+        if (reached === "successor-starting") {
+          expect(() => registry.persistMigrationProviderReceipt(id, migration.revision, migration.operationId, receipt)).toThrow("conflicts with durable state");
+        }
+        expect(() => registry.commitSuccessor(id, successor, migration.revision, migration.operationId, receipt)).toThrow();
+        expect(registry.conversation(id)).toMatchObject({ migration: { phase: "rolled-back" }, migrationOptOut: { targetId: MIGRATION_STOP_TARGET } });
+        expect(registry.conversation(id)!.generations.map(generation => generation.accountId)).toEqual([MIGRATION_STOP_SOURCE]);
+
+        /* The artifact a provider reports late belongs to no migration. */
+        registry.recordMigrationContinuityPath(id, "/sessions/late-artifact.jsonl", { operationId: migration.operationId, revision: migration.revision });
+        const late = registry.readOnlySnapshot().conversations[id]!;
+        expect(late.migration?.phase).toBe("rolled-back");
+        expect(late.abandonedContinuityPaths).toContain("/sessions/late-artifact.jsonl");
+        expect(late.migration?.pendingContinuityPaths).not.toContain("/sessions/late-artifact.jsonl");
+
+        expect(await registry.continueMigrationStop(fixture.intentId)).toBe(true);
+        expect(() => registry.commitSuccessor(id, successor, migration.revision, migration.operationId, receipt)).toThrow();
+        outcome.push(stoppedOutcome(registry));
+      } finally {
+        registry.close();
+      }
+    }
+    expect(outcome[0]).toBe(outcome[1]!);
+  });
+}
+
+test("a send after a stop is not held behind a migration the sweep has not reached, and what that migration held is cancelled", async () => {
+  const outcome: string[] = [];
+  for (const interrupted of [true, false]) {
+    const fixture = fixtureCopy();
+    const registry = open(fixture);
+    try {
+      enrollEngine(registry, fixture);
+      const id = fixture.sourceConversationIds.at(-1)! as ConversationId;
+      const generation = registry.conversation(id)!.generations.at(-1)!.id;
+      const before = registry.holdDelivery(id, "sent while migrating", "sent-before-stop");
+      expect(before.state).toBe("held");
+
+      if (interrupted) await stopIntentWithoutSweep(registry, fixture.intentId);
+      else expect((await registry.stopMigrationIntent(fixture.intentId)).acquired).toBe(true);
+      expect(unsweptOwned(registry, fixture).includes(id)).toBe(interrupted);
+
+      /* Whoever reaches the conversation first writes the stop onto it: one conversation, in that writer's own transaction. */
+      const written = conversationRowsPerTransaction(registry);
+      const after = registry.holdDelivery(id, "sent after the stop", "sent-after-stop");
+      expect(written).toEqual([interrupted ? 1 : 0]);
+      expect(after).toMatchObject({ state: "assigned", generationId: generation });
+      const file = registry.readOnlySnapshot();
+      /* Rows of a read-only snapshot are shared with the store, so each field is compared on its own and no matcher object reaches them. */
+      expect(file.heldDeliveries[before.id]).toMatchObject({ state: "failed", attempts: 0 });
+      expect(file.heldDeliveries[before.id]!.error).toContain("migration was stopped");
+      expect(file.conversations[id]).toMatchObject({ migration: { phase: "rolled-back" }, migrationOptOut: { targetId: MIGRATION_STOP_TARGET } });
+      /* The cancelled input is never claimed, and the send follows routing nowhere. */
+      expect(registry.beginDeliveryAttempt(before.id, generation)).toBeNull();
+      expect(registry.requestConversationMigrationToActiveAccount(id).migration?.phase).toBe("rolled-back");
+
+      expect(await registry.continueMigrationStop(fixture.intentId)).toBe(true);
+      expect(registry.readOnlySnapshot().heldDeliveries[after.id]).toMatchObject({ state: "assigned", generationId: generation });
+      outcome.push(stoppedOutcome(registry));
+    } finally {
+      registry.close();
+    }
+  }
+  expect(outcome[0]).toBe(outcome[1]!);
+});
+
+test("input held by a migration is not handed out by any path before the sweep cancels it", async () => {
+  const fixture = fixtureCopy();
+  const registry = open(fixture);
+  try {
+    enrollEngine(registry, fixture);
+    const [rolledBack, cancelled, cleared] = fixture.sourceConversationIds.slice(-3) as ConversationId[];
+    const held = [rolledBack!, cancelled!, cleared!].map((id, index) => registry.holdDelivery(id, `held ${index}`, `held-before-stop-${index}`));
+    const revision = registry.conversation(rolledBack!)!.migration!.revision;
+    await stopIntentWithoutSweep(registry, fixture.intentId);
+    for (const id of [rolledBack!, cancelled!, cleared!]) expect(unsweptOwned(registry, fixture)).toContain(id);
+
+    /* A rollback and a cancellation re-arm what a live migration held; a stopped one has nothing left to re-arm. */
+    registry.rollbackConversationMigration(rolledBack!, revision);
+    expect(() => registry.cancelConversationSwitch(cancelled!, revision)).toThrow("switch is no longer pending");
+    /* The hygiene pass clears a rolled-back migration only once nothing is pending on it. */
+    expect(registry.clearRolledBackConversationMigration(cleared!, fixture.intentId)).toBe(true);
+
+    expect(await registry.continueMigrationStop(fixture.intentId)).toBe(true);
+    const finished = registry.readOnlySnapshot();
+    for (const delivery of held) {
+      expect(finished.heldDeliveries[delivery.id]).toMatchObject({ state: "failed", attempts: 0, generationId: null });
+    }
+    expect(finished.conversations[cleared!]!.migration).toBeNull();
+    for (const id of [rolledBack!, cancelled!, cleared!]) {
+      expect(finished.conversations[id]!.migrationOptOut?.targetId).toBe(MIGRATION_STOP_TARGET);
+      expect(finished.conversations[id]!.generations.at(-1)!.accountId).toBe(MIGRATION_STOP_SOURCE);
+    }
+  } finally {
+    registry.close();
+  }
+});
+
+/** What a first writer finds on a conversation whose intent was stopped: input in each state a migration can leave it in. */
+interface FirstWriterScene {
+  id: ConversationId;
+  generation: string;
+  intentId: string;
+  operationId: string;
+  /** Claimed before the migration: its outcome is unknown. */
+  uncertain: HeldDelivery;
+  /** Assigned to the source generation before the migration, never claimed. */
+  assigned: HeldDelivery;
+  /** Sent while the migration was under way and held behind it. */
+  held: HeldDelivery;
+}
+
+/* Every write that decides from a conversation's migration. Each is the first
+   to reach a conversation after a stop whose sweep never ran, and has to leave
+   what it leaves after a stop whose sweep had finished. */
+const firstWriters: Array<[string, (registry: AgentRegistry, scene: FirstWriterScene) => unknown, { successorStarting?: true }?]> = [
+  ["a reseat to another account", (registry, scene) => {
+    const migration = registry.requestConversationReseat(scene.id, LATER_TARGET).migration;
+    return [migration?.targetId, migration?.phase];
+  }],
+  ["an engine-wide migration to another target", (registry) => manualMigration(registry, LATER_TARGET).state],
+  ["a send that follows routing", (registry, scene) => registry.requestConversationMigrationToActiveAccount(scene.id).migration?.phase],
+  ["the claim of input assigned before the migration", (registry, scene) => registry.beginDeliveryAttempt(scene.assigned.id, scene.generation)?.state ?? null],
+  ["the requeue of input whose outcome is unknown", (registry, scene) => registry.requeueUnactuatedDelivery(scene.uncertain.id).state],
+  ["the hand-over of undispatched claims", (registry, scene) =>
+    registry.holdUndispatchedClaimsForSwitch(scene.id, [scene.uncertain.command.operationId], "switch-after-stop")],
+  ["the cancellation of rolled-back input", (registry, scene) =>
+    registry.terminalizeRolledBackMigrationDelivery(scene.held.id, scene.intentId, "cancelled after the stop")?.state ?? null],
+  ["a spawn capability for the successor", (registry, scene) => registry.stageSpawnCapabilityForConversation(scene.id, scene.operationId) === null],
+  ["a reconfigure claim", (registry, scene) => registry.claimConversationReconfigure(scene.id, {
+    operationId: "reconfigure-after-stop", revision: 1, profile: { model: null, effort: null, fast: null },
+  }).kind],
+  ["a reconfigure settlement", (registry, scene) => registry.settleConversationReconfigure(scene.id, "no-such-reconfigure", 1, "failed").kind],
+  /* A migration whose successor is being created refuses a resume; a stopped one no longer does. */
+  ["a resumed launch", (registry, scene) => registry.beginSpawnRequest({
+    engine: "codex", cwd: "/repo", accountId: MIGRATION_STOP_SOURCE, transport: "structured", conversationId: scene.id,
+    purpose: "resume-successor", expectedArtifactPath: `/sessions/codex-${scene.generation}.jsonl`, launchProfile: emptyLaunchProfile({ cwd: "/repo" }),
+  }).kind, { successorStarting: true }],
+  ["a rollback", (registry, scene) => registry.rollbackConversationMigration(scene.id).migration?.phase],
+  ["the clearing of a rolled-back migration", (registry, scene) => registry.clearRolledBackConversationMigration(scene.id, scene.intentId)],
+];
+
+for (const [name, write, before] of firstWriters) {
+  test(`reaching a conversation before the sweep, ${name} leaves what it leaves after a finished stop`, async () => {
+    const outcome: string[] = [];
+    for (const interrupted of [true, false]) {
+      const fixture = fixtureCopy();
+      const registry = open(fixture);
+      try {
+        const id = fixture.sourceConversationIds.at(-1)! as ConversationId;
+        const generation = registry.conversation(id)!.generations.at(-1)!.id;
+        const first = registry.holdDelivery(id, "claimed before the migration", "claimed-before-migration");
+        const uncertain = registry.beginDeliveryAttempt(first.id, generation);
+        const assigned = registry.holdDelivery(id, "assigned before the migration", "assigned-before-migration");
+        if (uncertain?.state !== "delivery-uncertain" || assigned.state !== "assigned") throw new Error("the scene needs a claimed and an assigned delivery");
+        enrollEngine(registry, fixture);
+        const held = registry.holdDelivery(id, "sent during the migration", "held-during-migration");
+        expect(held.state).toBe("held");
+        const migration = registry.conversation(id)!.migration!;
+        if (before?.successorStarting) {
+          registry.transitionConversationMigration(id, migration.revision, ["requested", "waiting-turn"], { phase: "successor-starting" });
+        }
+        const scene: FirstWriterScene = { id, generation, intentId: fixture.intentId, operationId: migration.operationId, uncertain, assigned, held };
+
+        if (interrupted) await stopIntentWithoutSweep(registry, fixture.intentId);
+        else expect((await registry.stopMigrationIntent(fixture.intentId)).acquired).toBe(true);
+        expect(unsweptOwned(registry, fixture).includes(id)).toBe(interrupted);
+
+        let result: unknown;
+        let refused = false;
+        try {
+          result = await write(registry, scene);
+        } catch (error) {
+          refused = true;
+          result = error instanceof Error ? error.message : String(error);
+        }
+        /* A refused write wrote nothing; any other wrote the stop onto the conversation it reached. */
+        const reached = refused ? null : stoppedOutcome(registry, id);
+        expect(await registry.continueMigrationStop(fixture.intentId)).toBe(true);
+        outcome.push(JSON.stringify({ refused, result, reached, finished: stoppedOutcome(registry) }, null, 1));
+      } finally {
+        registry.close();
+      }
+    }
+    expect(outcome[0]).toBe(outcome[1]!);
+  });
+}
+
+for (const during of ["create", "verify", "publish"] as const) {
+  test(`a stop decided while the coordinator awaits the provider's ${during} ends that migration without a commit`, async () => {
+    const fixture = fixtureCopy();
+    const registry = open(fixture);
+    try {
+      enrollEngine(registry, fixture);
+      const id = fixture.sourceConversationIds.at(-1)! as ConversationId;
+      const calls: string[] = [];
+      const cleaned: string[] = [];
+      /* The stop lands inside the named await: the coordinator's next check is its first after it. */
+      const stopDuring = async (step: typeof during) => {
+        calls.push(step);
+        if (step === during) await stopIntentWithoutSweep(registry, fixture.intentId);
+      };
+      const provider: SuccessorProviderPort = {
+        virtualSource: true,
+        async create(input) {
+          await stopDuring("create");
+          return successorReceipt(input.operationId, "raced-successor");
+        },
+        async verify() { await stopDuring("verify"); },
+        async publishHost() { await stopDuring("publish"); },
+        async cleanup(receipt) { cleaned.push(receipt.nativeId); },
+      };
+
+      const advanced = await advanceConversationMigration(id, registry, provider, { deferBoardRepair: true });
+
+      expect(calls.at(-1)).toBe(during);
+      expect(unsweptOwned(registry, fixture)).toContain(id);
+      expect(advanced.migration?.phase).toBe("rolled-back");
+      expect(advanced.generations.map(generation => generation.accountId)).toEqual([MIGRATION_STOP_SOURCE]);
+      /* The successor the provider made is discarded, once. */
+      expect(cleaned).toEqual(["raced-successor"]);
+      expect(Object.keys(registry.readOnlySnapshot().pendingSuccessorCleanups)).toEqual([]);
+
+      /* A later pass of the coordinator finds nothing to advance. */
+      const again = await advanceConversationMigration(id, registry, provider, { deferBoardRepair: true });
+      expect(again.migration?.phase).toBe("rolled-back");
+      expect(calls.filter(step => step === "create")).toHaveLength(1);
+
+      expect(await registry.continueMigrationStop(fixture.intentId)).toBe(true);
+      const finished = registry.readOnlySnapshot().conversations[id]!;
+      expect(finished.migration?.phase).toBe("rolled-back");
+      expect(finished.generations.map(generation => generation.accountId)).toEqual([MIGRATION_STOP_SOURCE]);
+      expect(finished.migrationOptOut?.targetId).toBe(MIGRATION_STOP_TARGET);
+    } finally {
+      registry.close();
+    }
+  });
+}
+
+test("stops decided in one instant keep the order they were made in, across a restart", async () => {
+  const fixture = fixtureCopy();
+  let registry = open(fixture);
+  try {
+    /* Every step below runs under one frozen instant. */
+    clock(0);
+    expect((await registry.stopMigrationIntent(fixture.intentId, { expectedRevision: fixture.intentRevision })).acquired).toBe(true);
+    const first = registry.readOnlySnapshot();
+    expect(first.migrationIntents[fixture.intentId]!.stopSweep).toBeUndefined();
+    expect(optedOut(first, fixture.sourceConversationIds)).toHaveLength(SHAPE.sourceConversations);
+    const firstOrder = first.conversations[fixture.sourceConversationIds[0]!]!.migrationOptOut!.order!;
+
+    /* The order is stored with the rows it orders: another process continues it. */
+    registry.close();
+    registry = open(fixture);
+    const later = manualMigration(registry, LATER_TARGET);
+    expect((await registry.stopMigrationIntent(later.id)).acquired).toBe(true);
+
+    const finished = registry.readOnlySnapshot();
+    expect(finished.migrationIntents[later.id]!.stopSweep).toBeUndefined();
+    /* The later stop stands on every conversation, the ones outside its own transaction included. */
+    for (const id of fixture.sourceConversationIds) {
+      expect(finished.conversations[id]!.migrationOptOut).toMatchObject({ targetId: LATER_TARGET, updatedAt: at(0) });
+    }
+    /* The next send does not restart the migration that was just stopped. */
+    for (const id of [fixture.sourceConversationIds[0]!, fixture.sourceConversationIds.at(-1)!] as ConversationId[]) {
+      registry.clearRolledBackConversationMigration(id, later.id);
+      expect(registry.requestConversationMigrationToActiveAccount(id).migration).toBeNull();
+    }
+    /* Same time on both stops; the place each took is what tells them apart. */
+    for (const id of fixture.sourceConversationIds) {
+      expect(finished.conversations[id]!.migrationOptOut!.order!).toBeGreaterThan(firstOrder);
+    }
+  } finally {
+    registry.close();
+  }
+});
+
+test("an older stop's unfinished sweep, resumed in the instant of a newer stop, leaves the newer opt-out standing", async () => {
+  const fixture = fixtureCopy();
+  const registry = open(fixture);
+  try {
+    clock(0);
+    await stopWithoutSweep(registry, fixture);
+    const later = manualMigration(registry, LATER_TARGET);
+    await stopIntentWithoutSweep(registry, later.id);
+    /* Both sweeps are owed, the older one runs last, and both carry the same time. */
+    expect(await registry.continueMigrationStop(later.id)).toBe(true);
+    expect(await registry.continueMigrationStop(fixture.intentId)).toBe(true);
+
+    const finished = registry.readOnlySnapshot();
+    for (const intent of Object.values(finished.migrationIntents)) expect(intent.stopSweep).toBeUndefined();
+    for (const id of fixture.sourceConversationIds) {
+      expect(finished.conversations[id]!.migrationOptOut).toMatchObject({ targetId: LATER_TARGET, updatedAt: at(0) });
+    }
+  } finally {
+    registry.close();
+  }
+});
+
+test("a withdrawal and a stop made in one instant are told apart in both orders", async () => {
+  const fixture = fixtureCopy();
+  const registry = open(fixture);
+  const [withdrawnAfter, withdrawnBefore] = fixture.sourceConversationIds.slice(-2) as ConversationId[];
+  try {
+    clock(0);
+    await stopWithoutSweep(registry, fixture);
+    /* Withdrawn before a second stop of the same intent: the second stop is the newer decision. */
+    registry.requestConversationReseat(withdrawnBefore!, MIGRATION_STOP_TARGET);
+    registry.rollbackConversationMigration(withdrawnBefore!);
+    registry.clearRolledBackConversationMigration(withdrawnBefore!, registry.conversation(withdrawnBefore!)!.migration!.intentId);
+    registry.requestConversationReseat(withdrawnBefore!, MIGRATION_STOP_TARGET);
+    await stopIntentWithoutSweep(registry, fixture.intentId);
+    /* Withdrawn after it: the withdrawal is the newer decision. */
+    registry.requestConversationReseat(withdrawnAfter!, MIGRATION_STOP_TARGET);
+
+    expect(await registry.continueMigrationStop(fixture.intentId)).toBe(true);
+    const finished = registry.readOnlySnapshot();
+    expect(finished.conversations[withdrawnAfter!]!.migrationOptOut).toMatchObject({ targetId: null, updatedAt: at(0) });
+    expect(finished.conversations[withdrawnBefore!]!.migrationOptOut).toMatchObject({ targetId: MIGRATION_STOP_TARGET, updatedAt: at(0) });
+  } finally {
+    registry.close();
+  }
+});
+
+test("an opt-out stored by a release from before the order is read as stored and ordered by its time", async () => {
+  const fixture = fixtureCopy();
+  const [older, sameInstant] = fixture.sourceConversationIds.slice(-2) as ConversationId[];
+  const legacy = { [older!]: { targetId: LATER_TARGET, updatedAt: at(0) }, [sameInstant!]: { targetId: LATER_TARGET, updatedAt: at(1) } };
+  const stored = new Database(fixture.sqliteFilename);
+  try {
+    for (const [id, optOut] of Object.entries(legacy)) {
+      const changed = stored.query("UPDATE registry_rows SET value_json = json_set(value_json, '$.migrationOptOut', json(?)) WHERE collection = 'conversations' AND row_key = ?")
+        .run(JSON.stringify(optOut), id);
+      expect(changed.changes).toBeGreaterThan(0);
+    }
+  } finally {
+    stored.close();
+  }
+  const registry = open(fixture);
+  try {
+    expect(registry.conversation(older!)!.migrationOptOut).toEqual(legacy[older!]!);
+    clock(1);
+    expect((await registry.stopMigrationIntent(fixture.intentId, { expectedRevision: fixture.intentRevision })).acquired).toBe(true);
+    const finished = registry.readOnlySnapshot();
+    /* Decided a second before the stop: the stop is the newer decision. */
+    expect(finished.conversations[older!]!.migrationOptOut).toMatchObject({ targetId: MIGRATION_STOP_TARGET, updatedAt: at(1) });
+    /* Stamped in the stop's own millisecond with no order to tell them apart: the sweep's late write leaves it. */
+    expect(finished.conversations[sameInstant!]!.migrationOptOut).toEqual(legacy[sameInstant!]!);
   } finally {
     registry.close();
   }
