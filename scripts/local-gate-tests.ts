@@ -1,4 +1,5 @@
 import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
+import { gateTaskDiagnostics } from "./gate-tasks";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -288,6 +289,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     let result: Bun.Subprocess;
     let exitCode: number;
     let cleanupConfirmed = false;
+    let taskPeak: string | null = null;
     try {
       result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(Math.min(budgets.fileMs, remaining) + 5_000), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--timeout=60000", "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
         // Keep the independent five-second cleanup allowance, measured as
@@ -300,8 +302,11 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     // The owned runner ends the service cgroup. A group number after the root
     // exits is neither a bound handle nor proof against PID reuse.
     try {
-      if (result.signalCode || ![0, 1].includes(exitCode)) throw new Error(`runner did not finish (${result.signalCode ?? exitCode})`);
       const output = readFileSync(log, "utf8");
+      const task = gateTaskDiagnostics(output);
+      taskPeak = task.peak;
+      if (exitCode !== 0 && task.failure) throw new Error(task.failure);
+      if (result.signalCode || ![0, 1].includes(exitCode)) throw new Error(`runner did not finish (${result.signalCode ?? exitCode})`);
       const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, filtered);
       const survivors = output.split("\n").find(line => line.startsWith("owned runner: surviving owned processes:"));
       // A complete report still needs the service's ownership verdict.
@@ -326,7 +331,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     const elapsedMs = performance.now() - fileStarted;
     const hint = label === "head" && elapsedMs > budgets.fileMs / 2
       ? `; over half the ${budgets.fileMs / 1000} s file budget; split it` : "";
-    options.log?.(`touched-tests: ${label} file ${file}: ${elapsedMs.toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}${hint}`);
+    options.log?.(`touched-tests: ${label} file ${file}: ${elapsedMs.toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}${hint}${taskPeak ? `; ${taskPeak}` : ""}`);
     results[index] = { failures, passed, completed, elapsedMs: 0 };
     options.onFile?.(results[index]!, cleanupConfirmed);
   }
