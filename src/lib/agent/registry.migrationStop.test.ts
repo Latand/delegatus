@@ -1292,3 +1292,183 @@ test("an opt-out stored by a release from before the order is read as stored and
     registry.close();
   }
 });
+
+/*
+ * What a stop covers is fixed when the intent stops and written afterwards.
+ * The clock cannot say what that was: set back between the two, it puts the
+ * stop's time before the creation of conversations the stop was decided over,
+ * and after the creation of ones that started later. The cases below move the
+ * clock behind the stop and hold the rows to those of a stop written at once.
+ */
+
+test("a clock set back across the creation of its conversations leaves a stop's opt-out on every one of them", async () => {
+  /* The conversations and their enrolment at second 1, the stop at second 0. */
+  clock(1);
+  const setBack = buildMigrationStopFixture(path.join(root, "clock-set-back"), SHAPE);
+  for (const interrupted of [false, true]) {
+    const fixture = fixtureCopy(setBack);
+    let registry = open(fixture);
+    try {
+      clock(1);
+      enrollEngine(registry, fixture);
+      /* Far outside the stop's own transaction. */
+      const last = fixture.sourceConversationIds.at(-1)! as ConversationId;
+      expect(registry.conversation(last)!.createdAt).toBe(at(1));
+      clock(0);
+      if (interrupted) {
+        await stopIntentWithoutSweep(registry, fixture.intentId);
+        /* The decision is in force before the sweep writes it, and for the process that takes over. */
+        registry.close();
+        registry = open(fixture);
+        expect(registry.conversation(last)!.migrationOptOut).toMatchObject({ targetId: MIGRATION_STOP_TARGET, updatedAt: at(0) });
+        expect(await registry.continueMigrationStop(fixture.intentId)).toBe(true);
+      } else {
+        expect((await registry.stopMigrationIntent(fixture.intentId)).acquired).toBe(true);
+      }
+      const stopped = registry.readOnlySnapshot();
+      expect(stopped.migrationIntents[fixture.intentId]).toMatchObject({ state: "stopped", stoppedAt: at(0) });
+      expect(stopped.migrationIntents[fixture.intentId]!.stopSweep).toBeUndefined();
+      expect(optedOut(stopped, fixture.sourceConversationIds)).toHaveLength(SHAPE.sourceConversations);
+      expect(optedOut(stopped, fixture.targetConversationIds)).toHaveLength(0);
+      /* The rolled-back migration is spent and the hygiene pass clears it: the next send starts no migration. */
+      for (const id of [fixture.sourceConversationIds[0]! as ConversationId, last]) {
+        expect(registry.clearRolledBackConversationMigration(id, fixture.intentId)).toBe(true);
+        expect(registry.requestConversationMigrationToActiveAccount(id).migration).toBeNull();
+      }
+    } finally {
+      registry.close();
+    }
+  }
+});
+
+const observed = (pathname: string, accountId: string) => ({
+  engine: "codex" as const, path: pathname, accountId, launchProfile: emptyLaunchProfile({ cwd: "/repo" }),
+  turn: { state: "idle" as const, source: "empty" as const, terminalAt: null }, observedAt: at(1),
+});
+const currentPath = (registry: AgentRegistry, id: string) => registry.conversation(id as ConversationId)!.generations.at(-1)!.path;
+
+/* What happens to one conversation after a stop, while the clock runs behind
+   the stop's own time: the path it is found under afterwards, and what the
+   stop leaves on it. Each runs once after a finished stop and once before the
+   sweep has started. */
+const changesBehindTheClock: Array<[
+  string,
+  (registry: AgentRegistry, fixture: MigrationStopFixture) => string,
+  { accounts: string[]; optOut: string | null; sent: string | null },
+]> = [
+  ["a conversation that starts", (registry) => {
+    return registry.ensureConversation("codex", "/sessions/started-after-the-stop.jsonl", MIGRATION_STOP_SOURCE).generations[0]!.path;
+  }, { accounts: [MIGRATION_STOP_SOURCE], optOut: null, sent: MIGRATION_STOP_TARGET }],
+  ["a conversation the scanner finds", (registry) => {
+    registry.reconcileConversations([observed("/sessions/found-after-the-stop.jsonl", MIGRATION_STOP_SOURCE)], { snapshot: false });
+    return "/sessions/found-after-the-stop.jsonl";
+  }, { accounts: [MIGRATION_STOP_SOURCE], optOut: null, sent: MIGRATION_STOP_TARGET }],
+  ["a conversation on the stopped target that moves to another account", (registry, fixture) => {
+    const id = fixture.targetConversationIds[0]! as ConversationId;
+    const migration = registry.requestConversationReseat(id, LATER_TARGET).migration!;
+    const receipt = successorReceipt(migration.operationId, "moved-after-the-stop");
+    registry.transitionConversationMigration(id, migration.revision, [migration.phase], { phase: "successor-starting" });
+    registry.persistMigrationProviderReceipt(id, migration.revision, migration.operationId, receipt);
+    registry.commitSuccessor(id, { id: receipt.nativeId, path: receipt.path, accountId: LATER_TARGET, historyHash: receipt.historyHash, host: receipt.host },
+      migration.revision, migration.operationId, receipt);
+    return receipt.path;
+  }, { accounts: [MIGRATION_STOP_TARGET, LATER_TARGET], optOut: null, sent: MIGRATION_STOP_TARGET }],
+  ["a conversation whose account the scanner corrects to the stopped target", (registry, fixture) => {
+    const pathname = currentPath(registry, fixture.sourceConversationIds.at(-1)!);
+    registry.reconcileConversations([observed(pathname, MIGRATION_STOP_TARGET)], { snapshot: false });
+    return pathname;
+  }, { accounts: [MIGRATION_STOP_TARGET], optOut: MIGRATION_STOP_TARGET, sent: null }],
+  ["a conversation whose account the scanner corrects away from the stopped target", (registry, fixture) => {
+    const pathname = currentPath(registry, fixture.targetConversationIds.at(-1)!);
+    registry.reconcileConversations([observed(pathname, MIGRATION_STOP_SOURCE)], { snapshot: false });
+    return pathname;
+  }, { accounts: [MIGRATION_STOP_SOURCE], optOut: null, sent: MIGRATION_STOP_TARGET }],
+];
+
+for (const [name, change, expected] of changesBehindTheClock) {
+  test(`with the clock set back behind a stop, ${name} is left as a stop written at once leaves it`, async () => {
+    for (const deferred of [false, true]) {
+      const fixture = fixtureCopy();
+      let registry = open(fixture);
+      try {
+        clock(5);
+        if (deferred) await stopWithoutSweep(registry, fixture);
+        else expect((await registry.stopMigrationIntent(fixture.intentId, { expectedRevision: fixture.intentRevision })).acquired).toBe(true);
+        expect(Boolean(registry.readOnlySnapshot().migrationIntents[fixture.intentId]!.stopSweep)).toBe(deferred);
+
+        clock(1);
+        const pathname = change(registry, fixture);
+
+        /* The sweep is resumed by another process: what places the conversation against the stop is read back from the store. */
+        registry.close();
+        registry = open(fixture);
+        clock(2);
+        expect(await registry.continueMigrationStop(fixture.intentId)).toBe(true);
+        expect(registry.readOnlySnapshot().migrationIntents[fixture.intentId]!.stopSweep).toBeUndefined();
+        const swept = registry.conversationForPath(pathname)!;
+        clock(3);
+        const sent = registry.requestConversationMigrationToActiveAccount(swept.id).migration;
+        expect({
+          deferred,
+          accounts: swept.generations.map(generation => generation.accountId),
+          optOut: swept.migrationOptOut?.targetId ?? null,
+          sent: sent && sent.phase !== "committed" && sent.phase !== "rolled-back" ? sent.targetId : null,
+        }).toEqual({ deferred, ...expected });
+        /* The stop's opt-out carries the stop's own time, whoever wrote it. */
+        if (expected.optOut) expect(swept.migrationOptOut!.updatedAt).toBe(at(5));
+        /* The rest of the engine is swept as before. */
+        const others = fixture.sourceConversationIds.slice(0, -1);
+        expect(optedOut(registry.readOnlySnapshot(), others)).toHaveLength(others.length);
+      } finally {
+        registry.close();
+      }
+    }
+  });
+}
+
+test("a conversation that takes over one the scanner found before a stop keeps the opt-out the sweep had not written", async () => {
+  const fixture = fixtureCopy();
+  let registry = open(fixture);
+  try {
+    /* A launch whose transcript the scanner finds before the launch is settled. */
+    clock(0);
+    const begun = registry.beginSpawnRequest({
+      engine: "codex", cwd: "/repo", accountId: MIGRATION_STOP_SOURCE, launchProfile: emptyLaunchProfile({ cwd: "/repo", title: "Found before the stop" }),
+    });
+    if (begun.kind !== "created") throw new Error("the launch must be admitted");
+    registry.close();
+    const stored = new Database(fixture.sqliteFilename);
+    try {
+      const pending = stored.query("UPDATE registry_rows SET value_json = json_set(value_json, '$.state', 'path-pending', '$.pathCorrelation', json(?)) WHERE collection = 'receipts' AND row_key = ?")
+        .run(JSON.stringify({ cwd: "/repo", startedAt: at(0) }), begun.receipt.launchId);
+      expect(pending.changes).toBeGreaterThan(0);
+    } finally {
+      stored.close();
+    }
+    registry = open(fixture);
+    const childPath = "/sessions/child-019f4906-3f67-\x37b72-9fbc-9ec3b5ad1326.jsonl";
+    registry.reconcileConversations([observed(childPath, MIGRATION_STOP_SOURCE)], { snapshot: false });
+    const found = registry.conversationForPath(childPath)!;
+    expect(found.id).not.toBe(begun.receipt.conversationId);
+
+    clock(5);
+    await stopWithoutSweep(registry, fixture);
+    expect(registry.readOnlySnapshot().conversations[found.id]!.migrationOptOut).toBeNull();
+
+    /* The scanner pairs the transcript with its launch: the launch's conversation, which starts now, takes the found one over. */
+    clock(6);
+    registry.reconcileConversations([{ ...observed(childPath, MIGRATION_STOP_SOURCE), startedAt: at(0) }], { snapshot: false });
+    expect(registry.conversationForPath(childPath)!.id).toBe(begun.receipt.conversationId);
+    expect(registry.readOnlySnapshot().conversations[found.id]).toBeUndefined();
+
+    expect(registry.conversation(begun.receipt.conversationId)!.migrationOptOut).toMatchObject({ targetId: MIGRATION_STOP_TARGET, updatedAt: at(5) });
+
+    clock(7);
+    expect(await registry.continueMigrationStop(fixture.intentId)).toBe(true);
+    expect(registry.conversation(begun.receipt.conversationId)!.migrationOptOut).toMatchObject({ targetId: MIGRATION_STOP_TARGET, updatedAt: at(5) });
+    clock(8);
+    expect(registry.requestConversationMigrationToActiveAccount(begun.receipt.conversationId).migration).toBeNull();
+  } finally {
+    registry.close();
+  }
+});

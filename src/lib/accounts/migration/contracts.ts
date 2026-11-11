@@ -307,7 +307,10 @@ export interface MigrationStopSweep {
   optOut: boolean;
   /** The stop's place among the opt-out decisions of its engine: a number the
       registry hands out in the transaction that decides, each larger than the
-      one before, so two decisions of one millisecond are still ordered. */
+      one before, so two decisions of one millisecond are still ordered. A
+      conversation that starts or changes account while the stop's sweep is
+      still writing is placed against the same number, so what the stop
+      covered is never read from the clock. */
   order?: number;
   /** What the stop tells the senders of the input it cancels. */
   reason?: string;

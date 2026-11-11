@@ -763,6 +763,15 @@ export interface RegistryConversation {
       opt-out decisions of the engine ({@link migrationDecidedBefore}); a
       record from before the number existed has none. */
   migrationOptOut: MigrationOptOut | null;
+  /** The place ({@link MigrationStopSweep.order}) through which every stop of
+      the engine is settled for this conversation: a stop at or below it has
+      nothing left to decide here, whatever the conversation looks like when
+      the stop's sweep arrives. Written when the conversation starts, or
+      before its account changes, while a stop still has opt-outs to write
+      ({@link stopsPassedAtBirth}, {@link settleStopOptOuts}). Absent on a
+      conversation no such stop was writing over: it stood as it stands now
+      when every stop still writing was decided. */
+  stopsSettledThrough?: number;
   /** Set when a successor conversation terminally retired this one (issue
       #383). Null for every non-superseded conversation, including all legacy
       records. Cleared only by an explicit operator "resume here" fork. */
@@ -1464,27 +1473,31 @@ async function conversationIdsWhere(
   return ids;
 }
 
-/** The account a conversation ran on at `at`: its newest generation created
-    by then. A stop decides about that account, and the conversation may have
-    moved since. */
-function accountAt(conversation: RegistryConversation, at: string): string | null | undefined {
-  const generations = conversation.generations;
-  for (let index = generations.length - 1; index > 0; index -= 1) {
-    if (!(generations[index]!.createdAt > at)) return generations[index]!.accountId;
-  }
-  return generations[0]?.accountId;
-}
-
-/** Whether a stop decided an opt-out for this conversation: it existed when
-    the intent stopped and it was not on the stopped target then. */
+/**
+ * Whether a stop decided an opt-out for this conversation: it existed when
+ * the intent stopped and it was not on the stopped target then.
+ *
+ * The sweep asks this after the stop, sometimes long after, and the clock
+ * cannot answer it: a clock set back between the two puts the stop's time
+ * before the creation of conversations it was decided over. The answer is
+ * read from what the registry stores in order instead. A conversation that
+ * starts while a stop still has opt-outs to write is placed behind that stop
+ * ({@link stopsPassedAtBirth}), and a conversation whose account is about to
+ * change is first given what such a stop owes it and placed behind it too
+ * ({@link settleStopOptOuts}). So a conversation not placed behind the stop
+ * existed when it was decided and is on the account it was on then. A stop
+ * with no place, which no release writes, has no conversation placed behind
+ * it and covers by the account alone.
+ */
 function stopSweepCovers(
   conversation: RegistryConversation,
   intent: MigrationIntent,
   sweep: MigrationStopSweep,
 ): boolean {
   if (!sweep.optOut || conversation.engine !== intent.engine) return false;
-  if (conversation.createdAt > sweep.stampedAt) return false;
-  return accountAt(conversation, sweep.stampedAt) !== intent.targetId;
+  const settled = conversation.stopsSettledThrough;
+  if (settled !== undefined && sweep.order !== undefined && settled >= sweep.order) return false;
+  return conversation.generations.at(-1)?.accountId !== intent.targetId;
 }
 
 /**
@@ -1579,6 +1592,33 @@ function standingMigrationOptOut(
     standing = decision;
   }
   return standing;
+}
+
+/**
+ * The place a conversation takes when it starts while a stop of its engine
+ * still has opt-outs to write: behind every such stop, none of which was
+ * decided over it. With no stop writing there is nothing to be placed behind,
+ * and the conversation is stored without a place.
+ */
+function stopsPassedAtBirth(file: RegistryFile, engine: AgentEngine): Pick<RegistryConversation, "stopsSettledThrough"> {
+  return pendingStopSweeps(file, engine).length ? { stopsSettledThrough: file.conversationRevision[engine] } : {};
+}
+
+/**
+ * Settles, for one conversation, the opt-out of every stop whose sweep has
+ * not finished, in the transaction of a writer about to change the account
+ * the conversation runs on. A stop decides from the account a conversation
+ * was on when the intent stopped; once the account changes, the sweep could
+ * no longer read that from the row. So the newest of those decisions is
+ * written here, as the sweep would have written it, and the conversation is
+ * placed behind every stop there is ({@link stopSweepCovers}). One
+ * conversation, read by key.
+ */
+function settleStopOptOuts(file: RegistryFile, conversation: RegistryConversation): void {
+  const sweeps = pendingStopSweeps(file, conversation.engine);
+  if (!sweeps.length) return;
+  conversation.migrationOptOut = standingMigrationOptOut(conversation, sweeps);
+  conversation.stopsSettledThrough = file.conversationRevision[conversation.engine];
 }
 
 /**
@@ -4346,9 +4386,11 @@ function adoptProvisionalOwner(
   pathname: string,
 ): boolean {
   if (!scannerAllocatedProvisionalOwner(owner, pathname)) return false;
-  if (owner.migrationOptOut
-    && (!target.migrationOptOut || migrationDecidedBefore(target.migrationOptOut, owner.migrationOptOut))) {
-    target.migrationOptOut = { ...owner.migrationOptOut };
+  /* The owner's opt-out can still be on its way from a stop's sweep, and the
+     sweep will not find the owner once it is adopted. */
+  const ownerOptOut = standingMigrationOptOut(owner, pendingStopSweeps(file, owner.engine));
+  if (ownerOptOut && (!target.migrationOptOut || migrationDecidedBefore(target.migrationOptOut, ownerOptOut))) {
+    target.migrationOptOut = { ...ownerOptOut };
   }
   target.agentRole ??= owner.agentRole;
   target.delegationDepth ??= owner.delegationDepth;
@@ -8264,6 +8306,7 @@ export class AgentRegistry {
       delegationDepth: null,
       turn: { state: "unknown" as const, source: "empty" as const, terminalAt: null, observedAt: null },
       deliveryEvidenceTracked: true,
+      ...stopsPassedAtBirth(file, receipt.engine),
       createdAt,
       updatedAt: createdAt,
     };
@@ -8281,6 +8324,8 @@ export class AgentRegistry {
     }
     if (conversation.engine !== receipt.engine) return conflict("spawn_identity_conflict");
     settleStoppedMigration(file, conversation);
+    /* A settlement can add a generation or move one to another account. */
+    if (existingConversation) settleStopOptOuts(file, conversation);
     if (receipt.purpose === "resume-successor" && !resumeCanRebaseMigration(conversation.migration)) {
       return conflict("spawn_identity_conflict");
     }
@@ -9787,6 +9832,7 @@ export class AgentRegistry {
         delegationDepth: null,
         turn: { state: "unknown", source: "empty", terminalAt: null, observedAt: null },
         deliveryEvidenceTracked: true,
+        ...stopsPassedAtBirth(file, engine),
         createdAt,
         updatedAt: createdAt,
       };
@@ -10017,6 +10063,7 @@ export class AgentRegistry {
             delegationDepth: null,
             turn: { ...observation.turn, observedAt: observation.observedAt },
             deliveryEvidenceTracked: true,
+            ...stopsPassedAtBirth(file, observation.engine),
             createdAt,
             updatedAt: createdAt,
           };
@@ -10040,6 +10087,7 @@ export class AgentRegistry {
           // this whole custody interval, even if inventory later returns to it.
           generation.quotaCustody = { ...generation.quotaCustody, endedAt: observation.observedAt };
         }
+        if (observedAccountId !== generation.accountId) settleStopOptOuts(file, conversation);
         generation.accountId = observedAccountId;
         generation.launchProfile = {
           ...generation.launchProfile,
@@ -11377,6 +11425,7 @@ export class AgentRegistry {
         createdAt: committedAt,
         archivedAt: null,
       };
+      settleStopOptOuts(file, conversation);
       conversation.generations.push(generation);
       conversation.continuityPaths = conversation.continuityPaths.filter((pathname) => pathname !== generation.path);
       const committedContinuityPaths = new Set(migration.pendingContinuityPaths);
