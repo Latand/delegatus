@@ -25,6 +25,7 @@ const { capabilityConversationResolver } = await import("./mcp/bindings");
 const { mcpHttpRefusal } = await import("./mcp/httpResponse");
 const { startTaskChannel } = await import("./mcp/taskChannelServer");
 const { TASK_CHANNEL_CALLS, TASK_CHANNEL_INPUT_BYTES, encodeTaskChannel } = await import("./mcp/taskChannel");
+const { residentWorkerOverLimit } = await import("./residentWorkerMemory");
 // initialize and tools/list need only caller identity. Opening task receipts
 // here used to kill this worker before it could identify anyone on an older
 // installation whose serving Viewer had not prepared those receipts yet.
@@ -46,20 +47,28 @@ const configuredIdle = Number(process.env.LLV_MCP_TASK_IDLE_MS);
 const idleMs = Number.isFinite(configuredIdle) && configuredIdle >= 1 ? Math.min(60_000, configuredIdle) : 60_000;
 let privateChannel: Awaited<ReturnType<typeof startTaskChannel>> = null;
 const awake = () => { clearTimeout(idle); idle = undefined; };
+/* Measured on a loaded installation this worker settles between 0.7 and
+   1.1 GiB; twice that leaves room for a burst and still bounds a leak. */
+const MEMORY_LIMIT_BYTES = 2 * 1024 ** 3;
+let served = 0;
+const retire = (reason: "idle-retirement" | "memory-retirement") => {
+  logMcpLifecycle(reason);
+  retiring = true; privateChannel?.close();
+  write(() => `{"id":0,"control":{"retiring":true${reason === "memory-retirement" ? ',"memory":true' : ""}}}\n`, 4096, false);
+  // The parent closes its guardian before admitting a successor. Remain
+  // present until that signal arrives, with a bounded fallback on lost IPC.
+  void writing.finally(() => { setTimeout(() => process.exit(0), 1_000); });
+};
 const maybeIdle = () => {
   if (shuttingDown) {
     if (!calls.size && !outputs) void writing.then(() => process.exit(0));
     return;
   }
-  if (retiring || calls.size || outputs || idle) return;
-  idle = setTimeout(() => {
-    logMcpLifecycle("idle-retirement");
-    retiring = true; privateChannel?.close();
-    write(() => '{"id":0,"control":{"retiring":true}}\n', 4096, false);
-    // The parent closes its guardian before admitting a successor. Remain
-    // present until that signal arrives, with a bounded fallback on lost IPC.
-    void writing.finally(() => { setTimeout(() => process.exit(0), 1_000); });
-  }, idleMs);
+  if (retiring || calls.size || outputs) return;
+  // Between requests: every admitted call has closed and every reply is written.
+  if (residentWorkerOverLimit("mcp-task-worker", { defaultLimitBytes: MEMORY_LIMIT_BYTES, served })) { awake(); retire("memory-retirement"); return; }
+  if (idle) return;
+  idle = setTimeout(() => retire("idle-retirement"), idleMs);
 };
 function admit(id: number, bytes: number, deadlineAt: number): TaskChannelAdmission | null {
   if (retiring || calls.has(id) || calls.size >= TASK_CHANNEL_CALLS || pendingBytes + bytes > TASK_CHANNEL_INPUT_BYTES
@@ -70,7 +79,7 @@ function admit(id: number, bytes: number, deadlineAt: number): TaskChannelAdmiss
   let closed = false;
   return { signal: controller.signal, cancel: () => controller.abort(), close: () => {
     if (closed) return;
-    closed = true; clearTimeout(timer); calls.delete(id); pendingBytes -= bytes; maybeIdle();
+    closed = true; clearTimeout(timer); calls.delete(id); pendingBytes -= bytes; served++; maybeIdle();
   } };
 }
 let writing = Promise.resolve();

@@ -110,6 +110,50 @@ hours. A fatal stage OOM retries once after memory recovers, retaining its
 worktree. A second consecutive OOM, or a 30-minute wait without recovery, stops
 for a decision. See [the design](design/agent-memory-isolation.md).
 
+### The service's own ceiling
+
+Agents run in scopes under `delegatus-agents.slice`. The service cgroup holds
+the Viewer, the runtime host, their workers, and also the pipe relays and
+guardians of every running agent. A hard `MemoryMax` on the service could
+therefore end agent sessions, and no installer writes one.
+
+A soft ceiling is available and off by default. Above `MemoryHigh` the kernel
+reclaims the service's page cache, swaps, and pauses the allocations of every
+process in the cgroup together, the agents' pipe relays included; it kills
+nothing. Choose the value from the service's own working set, and try it on
+the running service before writing a file:
+
+```sh
+unit=delegatus.service
+group=/sys/fs/cgroup$(systemctl --user show "$unit" -p ControlGroup --value)
+grep -E '^(anon|file|kernel) ' "$group/memory.stat"      # what the service holds now
+systemctl --user set-property --runtime "$unit" MemoryHigh=64G
+grep -E '^high ' "$group/memory.events"                  # times the ceiling was hit
+cat "$group/memory.pressure"                             # `full avg10` near 0 means no stall
+systemctl --user set-property --runtime "$unit" MemoryHigh=infinity   # undo
+```
+
+`--runtime` keeps the trial out of the unit files: it ends with the undo line
+or the next reboot. A value that holds through a busy period with
+`memory.pressure` near zero becomes permanent with
+`node bin/install-cpu-placement.mjs --memory-high 64G`, which writes
+`delegatus.service.d/memory.conf`. The value is `infinity`, or at least 1 GiB
+given as bytes, with a K/M/G/T suffix, or as 1% to 100% of memory. A run
+without `--memory-high` writes no memory file and leaves an existing one alone;
+a run with it replaces that one file without `--force`.
+
+Resident workers have a ceiling of their own (`src/lib/residentWorkerMemory.ts`).
+A worker whose resident set passed its limit retires between two requests
+through its ordinary path, the next request starts a fresh process, and the
+journal gets one `[resident worker] retired: memory limit` line with the
+worker's name, pid, resident bytes, limit and age. A request that reaches the
+task worker while it retires is run by its successor. The task worker's limit
+is 2 GiB. A process younger than five minutes is never retired for memory, so
+a worker whose steady size is above its limit restarts at most once in five
+minutes. `LLV_RESIDENT_WORKER_RSS_LIMIT_MB` overrides the limit of every
+resident worker (`0` turns the ceiling off) and
+`LLV_RESIDENT_WORKER_MEMORY_MIN_AGE_SEC` the age floor.
+
 ## Agent CPU
 
 On Linux with a systemd user manager, hosts the operator talks to run in
