@@ -16,8 +16,10 @@ import { codePoints, LESSON_MATCH_MIN_CHARS, lessonPatternSource } from "./roleC
    every lesson whose pattern matches the text, and possibly some whose
    pattern then finds nothing. Only the offered lessons get their pattern
    compiled and run. Patterns that are never offered cannot match, so the
-   matches found are those the patterns of all lessons would find, apart from
-   lessons the engine refuses to compile, which `skipped` counts. */
+   matches found are those the patterns of every lesson with a pattern would
+   find. A lesson whose pattern is too long, or that the engine refuses to
+   compile, has none: `skipped` counts it, and a caller that needs every
+   lesson refuses. */
 
 // Leave headroom under JSC's limit for one pattern.
 export const LESSON_MATCHER_SOURCE_LIMIT = 32_000;
