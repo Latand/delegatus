@@ -30,6 +30,7 @@ afterEach(() => {
   sessionStorage.clear();
   setLocale("en");
   globalThis.fetch = realFetch;
+  poolReadsPending = 0;
 });
 
 const imageCapability = { supported: true, reason: null, formats: ["image/png"], maxImages: 2, maxRawBytesPerImage: 3, maxEncodedBytesPerRequest: 8 };
@@ -68,10 +69,21 @@ function installFetch(posts: Record<string, unknown>[]): void {
   }) as typeof fetch;
 }
 
+/** Reads of the member's route that were asked and not yet handed to the pane. */
+let poolReadsPending = 0;
+
 const settle = async () => {
+  /* A reply to the member's route arrives on its own schedule under load, so
+     settling waits for every read that was asked, not for a fixed number of ticks. */
+  for (let guard = 0; poolReadsPending > 0 && guard < 2000; guard++) await new Promise((resolve) => setTimeout(resolve, 1));
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
 };
+
+/** Waits until a condition holds, for a result that follows the reply by a render or two. */
+async function until(condition: () => boolean): Promise<void> {
+  for (let guard = 0; !condition() && guard < 2000; guard++) await new Promise((resolve) => setTimeout(resolve, 1));
+}
 
 function mount(draftId: string): HTMLElement {
   setDraftCwd(draftId, "/repo");
@@ -420,7 +432,11 @@ function installMember(view: PoolView | null, posts: Record<string, unknown>[], 
     const url = String(input);
     urls.push(url);
     if (url === "/api/accounts") return { ok: false, status: 403, json: async () => ({ error: "owner only" }) } as Response;
-    if (url.startsWith("/api/team/project-accounts?")) return view ? { ok: true, status: 200, json: async () => view } as Response : { ok: false, status: 403, json: async () => ({}) } as Response;
+    if (url.startsWith("/api/team/project-accounts?")) {
+      if (!view) return { ok: false, status: 403, json: async () => ({}) } as Response;
+      poolReadsPending++;
+      return { ok: true, status: 200, json: async () => { poolReadsPending--; return view; } } as Response;
+    }
     if (url === "/api/spawn" && init?.method === "POST" && spawn) return spawn();
     return serve(input, init);
   }) as typeof fetch;
@@ -470,6 +486,7 @@ test("a member sees only the engines the pool can start, and a draft on another 
   installMember(CLAUDE_ONLY, [], []);
   const host = mount("member-one-engine");
   await settle();
+  await until(() => pill(host).textContent!.includes("Claude"));
   expect(pill(host).textContent).toContain("Claude");
   expect(engines(await openModels(host))).toEqual(["Claude", "Copilot"]);
 });
