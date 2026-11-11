@@ -388,3 +388,205 @@ for (const locale of ["en", "uk"] as const) {
     }
   });
 }
+
+/* ---- a member's pool (workspaces W1) ------------------------------------- */
+
+const window1 = { usedPercent: 31, resetsAt: Math.floor(Date.now() / 1000) + 86_400 };
+const poolRow = (id: string, label: string, signedIn = true) => ({
+  id, label, signedIn,
+  limits: signedIn
+    ? { state: "fresh", session: { usedPercent: 12, resetsAt: Math.floor(Date.now() / 1000) + 3_600 }, weekly: window1, tiers: [], checkedAt: new Date().toISOString() }
+    : { state: "unavailable", session: null, weekly: null, tiers: [], checkedAt: null },
+});
+type PoolView = { project: string; engines: Record<"claude" | "codex", unknown> };
+const BOTH: PoolView = { project: "proj", engines: {
+  claude: { pool: "set", accounts: [poolRow("acct-a", "Account A"), poolRow("acct-c", "Account C", false)] },
+  codex: { pool: "set", accounts: [poolRow("acct-d", "Account D")] },
+} };
+const CLAUDE_ONLY: PoolView = { project: "proj", engines: { claude: BOTH.engines.claude, codex: { pool: "none", available: false } } };
+const NO_POOL: PoolView = { project: "proj", engines: { claude: { pool: "none", available: true }, codex: { pool: "none", available: true } } };
+
+async function asTeam(role: "owner" | "member" | null): Promise<void> {
+  const { setTeamViewForTests } = await import("@/components/team/teamClient");
+  setTeamViewForTests(role ? { mode: "team", me: { id: "m_1", name: "Person", color: "teal", initials: "P", role, status: "active", telegram: null }, members: [], methods: {} } as never : null);
+}
+afterEach(async () => { await asTeam(null); });
+
+/** A member's browser: the owner's account list is refused, the pool answers, and every request is kept. */
+function installMember(view: PoolView | null, posts: Record<string, unknown>[], urls: string[], spawn?: () => Response): void {
+  installFetch(posts);
+  const serve = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    urls.push(url);
+    if (url === "/api/accounts") return { ok: false, status: 403, json: async () => ({ error: "owner only" }) } as Response;
+    if (url.startsWith("/api/team/project-accounts?")) return view ? { ok: true, status: 200, json: async () => view } as Response : { ok: false, status: 403, json: async () => ({}) } as Response;
+    if (url === "/api/spawn" && init?.method === "POST" && spawn) return spawn();
+    return serve(input, init);
+  }) as typeof fetch;
+}
+
+const modelRows = () => [...document.querySelectorAll('[data-runtime-popover] [data-runtime-row="model"]')].map((row) => row.querySelector("[data-runtime-row-label]")!.textContent!);
+async function openModels(host: HTMLElement): Promise<string[]> {
+  click(pill(host));
+  click(popover('[data-runtime-value="model"]')!);
+  await settle();
+  return modelRows();
+}
+const engines = (rows: string[]) => [...new Set(rows.map((row) => row.split(" · ")[0]))];
+
+test("a member whose pool holds both engines is offered both, and only the pool's accounts", async () => {
+  await asTeam("member");
+  const posts: Record<string, unknown>[] = [], urls: string[] = [];
+  installMember(BOTH, posts, urls);
+  const host = mount("member-both");
+  await settle();
+
+  expect(engines(await openModels(host))).toEqual(["Claude", "Codex", "Copilot"]);
+  click(popover('[data-runtime-row="back"]')!);
+  click(popover('[data-runtime-value="account"]')!);
+  await settle();
+  const rows = [...document.querySelectorAll('[data-runtime-popover] [data-runtime-row="account"]')];
+  expect(rows.map((row) => row.getAttribute("data-runtime-value"))).toEqual(["account-acct-a", "account-acct-c"]);
+  /* The account that is not signed in is listed and cannot be chosen; there is no sign-in to reach. */
+  const signedOut = rows[1] as HTMLButtonElement;
+  expect(signedOut.getAttribute("aria-disabled")).toBe("true");
+  expect(document.querySelector("[data-runtime-row-note]")!.textContent).toBe("needs sign-in");
+  click(signedOut);
+  expect(pill(host).querySelector("[data-runtime-pill-next-account]")).toBeNull();
+  click(rows[0]!);
+  expect(pill(host).querySelector("[data-runtime-pill-next-account]")!.textContent).toBe("→ Account A");
+  await launch(host, "Run on the pool's account");
+  expect(posts).toHaveLength(1);
+  expect(posts[0]).toMatchObject({ engine: "claude", accountId: "acct-a" });
+  /* Nothing of the owner's list or sign-in was asked for. */
+  expect(urls.filter((url) => url.startsWith("/api/accounts/") && url !== "/api/accounts")).toEqual([]);
+  expect(urls).toContain("/api/team/project-accounts?project=proj");
+});
+
+test("a member sees only the engines the pool can start, and a draft on another engine moves to one of them", async () => {
+  await asTeam("member");
+  sessionStorage.setItem("llvDraftPane:member-one-engine:engine", "codex");
+  installMember(CLAUDE_ONLY, [], []);
+  const host = mount("member-one-engine");
+  await settle();
+  expect(pill(host).textContent).toContain("Claude");
+  expect(engines(await openModels(host))).toEqual(["Claude", "Copilot"]);
+});
+
+test("without a pool a member's chip names the engine and says Delegatus picks the account; nothing is named at launch", async () => {
+  await asTeam("member");
+  const posts: Record<string, unknown>[] = [];
+  installMember(NO_POOL, posts, []);
+  const host = mount("member-no-pool");
+  await settle();
+  click(pill(host));
+  expect(popover("[data-runtime-popover-account]")!.textContent).toBe("no account list for this project: Delegatus picks the account");
+  expect(popover('[data-runtime-value="account"]')).toBeNull();
+  click(pill(host));
+  expect(engines(await openModels(host))).toEqual(["Claude", "Codex", "Copilot"]);
+  click(popover('[data-runtime-row="back"]')!);
+  click(pill(host));
+  await launch(host, "Let Delegatus choose");
+  expect(posts).toHaveLength(1);
+  expect(posts[0]!.accountId).toBeUndefined();
+});
+
+test("the owner keeps the full account list and never reads the member's route; solo is unchanged", async () => {
+  for (const role of ["owner", null] as const) {
+    await asTeam(role);
+    const posts: Record<string, unknown>[] = [], urls: string[] = [];
+    installFetch(posts);
+    const serve = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => { urls.push(String(input)); return serve(input, init); }) as typeof fetch;
+    const host = mount(`owner-${role ?? "solo"}`);
+    await settle();
+    expect(await openAccounts(host)).toEqual(["account-anna", "account-bob"]);
+    expect(urls.some((url) => url.includes("/api/team/project-accounts"))).toBe(false);
+    click(popover('[data-runtime-value="account-bob"]')!);
+    await launch(host, "Owner names any account");
+    expect(posts[0]).toMatchObject({ accountId: "bob" });
+    root && flushSync(() => root!.unmount()); root = null; document.body.replaceChildren(); sessionStorage.clear();
+  }
+});
+
+for (const [locale, reason, expected] of [
+  ["en", "no_account_list", "This project has no account list, so an account can't be chosen for it. Send again and Delegatus picks one."],
+  ["uk", "no_account_list", "Для цього проєкту немає списку акаунтів, тож обрати акаунт не можна. Надішліть ще раз, і акаунт обере Delegatus."],
+  ["en", "outside_account_list", "Account A is no longer on this project's account list. Choose another account and send again."],
+  ["uk", "outside_account_list", "Account A більше немає у списку акаунтів проєкту. Оберіть інший акаунт і надішліть ще раз."],
+] as const) {
+  test(`a launch the project's list refuses says so in words, gives the text back and drops the pick (${locale}, ${reason})`, async () => {
+    setLocale(locale);
+    await asTeam("member");
+    const posts: Record<string, unknown>[] = [];
+    installMember(BOTH, posts, [], () => ({ ok: false, status: 409, json: async () => ({ error: "server words", code: "project_account_refused", reason }) }) as Response);
+    const host = mount(`member-refused-${locale}-${reason}`);
+    await settle();
+    click(pill(host));
+    click(popover('[data-runtime-value="account"]')!);
+    await settle();
+    click(popover('[data-runtime-value="account-acct-a"]')!);
+    expect(pill(host).querySelector("[data-runtime-pill-next-account]")).not.toBeNull();
+    await launch(host, "Refused launch text");
+    expect(host.querySelector('[data-testid="composer-status"]')!.textContent).toBe(expected);
+    expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Refused launch text");
+    expect(pill(host).querySelector("[data-runtime-pill-next-account]")).toBeNull();
+  });
+}
+
+for (const locale of ["en", "uk"] as const) {
+  test(`on the phone a member's sheet lists the pool, an account without sign-in is inert and reaches no sign-in (${locale})`, async () => {
+    setLocale(locale);
+    await asTeam("member");
+    const urls: string[] = [], posts: Record<string, unknown>[] = [];
+    installMember(BOTH, posts, urls);
+    const desktop = dom.matchMedia;
+    (dom as unknown as { matchMedia(query: string): unknown }).matchMedia = (query: string) => ({
+      matches: true, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    });
+    try {
+      const host = mount(`member-sheet-${locale}`);
+      await settle();
+      click(pill(host));
+      await settle();
+      const sheet = document.querySelector("[data-runtime-sheet]")!;
+      const rows = [...sheet.querySelectorAll<HTMLButtonElement>("[data-runtime-sheet-account]")];
+      expect(rows.map((row) => row.getAttribute("data-runtime-sheet-account"))).toEqual(["acct-a", "acct-c"]);
+      const signedOut = rows[1]!;
+      expect(signedOut.getAttribute("data-runtime-account-state")).toBe("needs-sign-in");
+      expect(signedOut.textContent).toContain(locale === "en" ? "needs sign-in" : "потрібен вхід");
+      expect(signedOut.disabled).toBe(true);
+      const before = urls.length;
+      click(signedOut);
+      await settle();
+      expect(urls.slice(before).filter((url) => url.startsWith("/api/accounts"))).toEqual([]);
+      expect(pill(host).querySelector("[data-runtime-pill-next-account]")).toBeNull();
+      /* The line under the title says where the agent starts: from this project's list. */
+      expect(sheet.querySelector("[data-runtime-sheet-account-current]")!.textContent).toBe(locale === "en" ? "starts on an account from this project's list" : "стартує на акаунті зі списку проєкту");
+      click(rows[0]!);
+      expect(rows[0]!.getAttribute("data-runtime-account-next")).toBe("true");
+    } finally {
+      (dom as unknown as { matchMedia: unknown }).matchMedia = desktop;
+    }
+  });
+}
+
+test("on the phone a member without a pool sees the account section as a heading and one line, and no row", async () => {
+  await asTeam("member");
+  installMember(NO_POOL, [], []);
+  const desktop = dom.matchMedia;
+  (dom as unknown as { matchMedia(query: string): unknown }).matchMedia = (query: string) => ({
+    matches: true, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+  });
+  try {
+    const host = mount("member-sheet-no-pool");
+    await settle();
+    click(pill(host));
+    await settle();
+    expect(document.querySelectorAll("[data-runtime-sheet] [data-runtime-sheet-account]")).toHaveLength(0);
+    expect(document.querySelector("[data-runtime-sheet] [data-runtime-sheet-account-current]")!.textContent).toBe("no account list for this project: Delegatus picks the account");
+  } finally {
+    (dom as unknown as { matchMedia: unknown }).matchMedia = desktop;
+  }
+});

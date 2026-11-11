@@ -11,6 +11,8 @@ import {
   useLaunchReadiness,
 } from "@/components/draft/AgentLaunchControls";
 import { DraftRuntimePill } from "@/components/draft/DraftRuntimePill";
+import { CATALOG_REFRESH_EVENT } from "@/components/draft/AgentLaunchControls";
+import { offeredEngines, useIsMember, useMemberLaunchCatalog, useProjectAccounts } from "@/components/team/projectAccountsClient";
 import { FeedMessageRow } from "@/components/conversation/OutboxBubbles";
 import { FeedSkeleton, SKELETON_BAR } from "@/components/skeletons";
 import { Select } from "@/components/ui/Select";
@@ -453,7 +455,13 @@ export function DraftAgentPane({
      launch parameters (PRD #976 slice A): the state and its invariants live in
      one module, this pane keeps only its own persistence, and the runtime pill
      reads and writes this same object, so what it shows is what Send launches. */
+  /* A member reads the pool of their project instead of the owner's full account list (workspaces W1); the
+     owner's draft is exactly what it was, and no member route is read for it. */
+  const member = useIsMember();
+  const projectAccounts = useProjectAccounts(project, member);
+  const memberCatalog = useMemberLaunchCatalog(projectAccounts, member);
   const launch = useAgentLaunchDraft({
+    ...(memberCatalog !== undefined ? { catalog: memberCatalog } : {}),
     storage: {
       read: (name) => readField(draftId, name),
       write: (name, value) => writeField(draftId, name, value),
@@ -462,6 +470,30 @@ export function DraftAgentPane({
     onEngineChange: (value) => setSpawnImageNegotiation({ status: "loading", requestKey: `${project}\n${src ?? ""}\n${value}` }),
   });
   const { engine, model, effort, speed } = launch;
+  /* A draft that stands on an engine the member's pool cannot start moves to the first one it can. */
+  const offeredByPool = projectAccounts ? offeredEngines(projectAccounts) : null;
+  const { setEngine: moveEngine } = launch;
+  useEffect(() => {
+    if (!offeredByPool || engine === "copilot" || !offeredByPool.length || offeredByPool.includes(engine)) return;
+    moveEngine(offeredByPool[0]!);
+  }, [offeredByPool, engine, moveEngine]);
+  /* The account list refused the launch: say which way, in words, and drop the pick it named. */
+  const refusalText = (outcome: { message: string | null; reason?: string }, accountId: string | null): string => {
+    if (outcome.reason === "no_account_list") return t("draft.accountRefusedNoList");
+    if (outcome.reason === "outside_account_list") {
+      return t("draft.accountRefusedOutsideList", { account: launch.accounts.find((account) => account.id === accountId)?.label ?? accountId ?? "" });
+    }
+    return outcome.message ?? t("draft.launchFailed");
+  };
+  const refusalRef = useRef(refusalText);
+  const resetPickRef = useRef(() => {});
+  useEffect(() => {
+    refusalRef.current = refusalText;
+    resetPickRef.current = () => {
+      launch.setAccountId("");
+      window.dispatchEvent(new Event(CATALOG_REFRESH_EVENT));
+    };
+  });
   /* The engine readiness preflight (#2170): a launch on a signed-out account
      would only fail, so the action becomes that account's sign-in. */
   const readiness = useLaunchReadiness(launch);
@@ -703,7 +735,8 @@ export function DraftAgentPane({
           ...image,
           preview: `data:${image.mime};base64,${image.base64}`,
         })));
-        if (restored) setStatus({ kind: "err", text: outcome.message ?? t("draft.launchFailed") });
+        if (outcome.reason === "no_account_list" || outcome.reason === "outside_account_list") resetPickRef.current();
+        if (restored) setStatus({ kind: "err", text: refusalRef.current(outcome, candidate.request.accountId ?? null) });
       }
       /* Ambiguous outcomes keep the persisted request and frozen card. A
          future reload can re-POST the identical idempotency key. */
@@ -929,7 +962,7 @@ export function DraftAgentPane({
           sendDisabledReason={blockedReason}
           onSendBlockedRecover={signInFirst && !attempt ? () => openLaunchSignIn(signInFirst) : undefined}
           sendBlockedRecoverLabel={signInFirst ? t("launch.signInFirst", { engine: launchEngineLabel(signInFirst.engine) }) : undefined}
-          leftSlot={<DraftRuntimePill launch={launch} disabled={fieldsDisabled} />}
+          leftSlot={<DraftRuntimePill launch={launch} disabled={fieldsDisabled} {...(member ? { projectAccounts } : {})} />}
         />
       </form>
       </div>

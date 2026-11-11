@@ -9,6 +9,8 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { effortScale } from "@/lib/agent/efforts";
 import { ENGINE_MODELS, listedModels } from "@/lib/agent/models";
 import { useLocale } from "@/lib/i18n";
+import type { ProjectAccountsView } from "@/lib/team/contract";
+import { engineOffered, memberPoolRows } from "@/components/team/projectAccountsClient";
 
 import { AGENT_LAUNCH_ENGINES, launchEngineLabel, type AgentLaunchDraft, type LaunchEngine } from "./AgentLaunchControls";
 
@@ -27,7 +29,13 @@ const foreignModel = (engine: LaunchEngine, model: string) => `${engine}/${model
  * pill never offers another, a draft has to pick it, so the model list names
  * every engine's models and a model of another engine moves the draft there.
  */
-export function DraftRuntimePill({ launch, disabled = false }: { launch: AgentLaunchDraft; disabled?: boolean }) {
+export function DraftRuntimePill({ launch, disabled = false, projectAccounts }: {
+  launch: AgentLaunchDraft;
+  disabled?: boolean;
+  /** A member's pool of the project (workspaces W1). Absent: the owner's, which lists every account the
+      accounts store holds. `null`: a member whose pool has not been read yet. */
+  projectAccounts?: ProjectAccountsView | null;
+}) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const { engine } = launch;
@@ -43,9 +51,14 @@ export function DraftRuntimePill({ launch, disabled = false }: { launch: AgentLa
   const { accounts } = launch;
   const nameOf = useCallback((id: string) => accounts.find((account) => account.id === id)?.label ?? storeName(id), [accounts, storeName]);
 
-  const modelOptions = useMemo(() => AGENT_LAUNCH_ENGINES.flatMap((entry) => listedModels(entry, entry === engine ? launch.model : null).map((model) => ({
+  const member = projectAccounts !== undefined;
+  /* A member's engines are the ones their project's pool can start: Claude and Codex rows appear when the
+     pool holds an account of each, and only the draft's own engine shows until the pool has been read. */
+  const offered = useCallback((entry: LaunchEngine) => !member || entry === "copilot"
+    || (projectAccounts ? engineOffered(projectAccounts.engines[entry]) : entry === engine), [member, projectAccounts, engine]);
+  const modelOptions = useMemo(() => AGENT_LAUNCH_ENGINES.filter(offered).flatMap((entry) => listedModels(entry, entry === engine ? launch.model : null).map((model) => ({
     ...model, id: entry === engine ? model.id : foreignModel(entry, model.id), label: `${launchEngineLabel(entry)} · ${model.label}`,
-  }))), [engine, launch.model]);
+  }))), [engine, launch.model, offered]);
   const efforts = effortScale(engine, launch.model) ?? [];
   /* Speed is Codex's, and only a Codex launch carries it: the choice is kept for a return to Codex and
      said nowhere while another engine is chosen. */
@@ -93,8 +106,12 @@ export function DraftRuntimePill({ launch, disabled = false }: { launch: AgentLa
      there is nothing to choose and the launch runs on the CLI's own profile. */
   const ownAccounts = useMemo(() => (engine === "copilot"
     ? accounts.filter((account) => account.authPresent && !account.signedOut).map(({ id, label }) => ({ id, label }))
-    : null), [engine, accounts]);
-  const accountChoice: AccountChoice | null = engine === "copilot" && !ownAccounts?.length ? null : {
+    : member ? memberPoolRows(projectAccounts, engine) : null), [engine, accounts, member, projectAccounts]);
+  /* A member picks among the accounts the pool lists. With no pool, or before it is read, there is nothing to
+     pick and the account chip is not offered. */
+  const memberPool = member && engine !== "copilot" ? projectAccounts?.engines[engine] : undefined;
+  const noChoice = engine === "copilot" ? !ownAccounts?.length : member && memberPool?.pool !== "set";
+  const accountChoice: AccountChoice | null = noChoice ? null : {
     runsOn: launch.launchAccountId,
     next: launch.launchAccountId,
     applying: false,
@@ -105,7 +122,10 @@ export function DraftRuntimePill({ launch, disabled = false }: { launch: AgentLa
   };
   const panelProps = {
     t, engine, modelOptions, account: launch.launchAccountId, nameOf, accountChoice, ownAccounts, efforts,
-    accountStart: launch.launchAccountId ? t("draft.accountStartsOn", { account: nameOf(launch.launchAccountId) }) : "",
+    accountStart: launch.launchAccountId ? t("draft.accountStartsOn", { account: nameOf(launch.launchAccountId) })
+      : !member || engine === "copilot" ? ""
+        : memberPool?.pool === "set" ? t("draft.accountFromList")
+          : memberPool?.pool === "none" ? t("draft.accountNoList") : "",
     menuLabel: t("draft.runtimePill"),
     face: { model: launch.model, effort, fast, serviceTier: ultrafast ? "ultrafast" : null },
     speedShown: engine === "codex",
