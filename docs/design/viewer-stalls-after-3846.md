@@ -12,6 +12,15 @@ This document supplies parts 1 to 5 of the follow-up specification. Part 5
 is the ordered plan of fixes. Its section 5.1 checks parts 1 to 4 against their
 own commands and records three corrections.
 
+Revised on 2026-11-11 between 14:19 and 14:40 UTC after a plan review.
+Section 5.7 lists what changed. In short: the plan no longer gives any repair
+item an expected share of gap time removed, because co-occurrence with a
+context or a reader name does not establish one; the collector-thread CPU
+field left plan item 1 and is observed from outside the process instead; and
+the 152,700 registry reads of one gap are now counted as `registry.get` calls
+in the render context, recorded while 20 render spans overlapped that gap, and
+no longer as the rows of one render.
+
 The originating board requirements are “Delegatus став частіше підвисати з
 28.10” and “Runtime host гальмує на перебудові знімка сесій”. Both full task
 records were read on 2026-11-11. The first task records the increase observed
@@ -149,7 +158,10 @@ sections 1 and 2. Retain ten-minute slices, sequence coverage, truncated
 records, execution bounds and checksums. Record session observations with
 their collection times, running lanes across all projects and this
 project, event rate and retention coverage, load average, and main-thread
-scheduler counters. Preserve event intervals while they still exist.
+scheduler counters. Record the CPU time of the Viewer's main thread and its
+`HeapHelper` threads once a second from outside the process, by the
+read-only procedure of section 5.3 ("Collector-thread CPU, observed from
+outside the process"). Preserve event intervals while they still exist.
 Record the history-drain switch and its stored progress without changing
 either; installation alone does not establish that history has moved.
 
@@ -2426,7 +2438,7 @@ specific algorithm, collection or call site that caused it.
 | Other readers: 2.9464% | Newly separated observation: scanner IPC and miscellaneous readers | scanner.ipc-frame 1.3926%. This is serving-thread frame processing, distinct from worker CPU. A generic scanner label does not establish which caller or payload shape caused it. |
 | Named tail: 1.3164% | Telemetry capacity limitation | Duration is measured; family and exact caller were omitted. Do not redistribute it across visible families. |
 | Runtime host: 0.2869% of its own wall time | Section 10: snapshot rebuild, idle liveTurn and retirement policy | Measured separately from Viewer gaps. Existing snapshot work and any retirement decision retain their owners; this is no share of the Viewer residual. |
-| Startup adoption block: 7.91 % floor, 17.63 % ceiling (added by section 5.2) | Cause not yet written down; plan item 2 | Six 13.5–16.1 s gaps each hold the stale-claim refusal of a retried structured startup pass. Named readers explain 1.0–1.5 s of each. |
+| Startup adoption block: 7.91 % (the six gaps that hold the refusal line) to 17.63 % (35 gaps from each refusal to 45 s after it), co-occurrence only (added by section 5.2, revised in 5.7) | Cause not yet written down; plan item 2 | Six 13.5–16.1 s gaps each hold the stale-claim refusal of a retried structured startup pass. Named readers explain 1.0–1.5 s of each; 79.0 s of the six gaps' 86.7 s is unattributed. These shares say where the gaps occurred, not what a repair would remove. |
 | No numerical share assigned | Section 10: direct yields, migration start, opt-out reads, key retry, auto_vacuum and stopped-state presentation | The current records do not isolate these mechanisms. Few cooperative resumes exclude many resumed queue slices in those records, and say nothing about unsliced work or first slices. No speculative savings are assigned. |
 
 <!-- mapping:end -->
@@ -2468,7 +2480,7 @@ operation tables use the same frozen window,
 | Footprint in the existing attribution | Seconds | Share of attributed gap time | Interpretation after the release change |
 | --- | --- | --- | --- |
 | Directly labelled `memory.view.*` readers | 30.032 | 10.01% | These readers belong to `src/lib/memory/roleViewSource.ts`, which both PRs changed. This identifies occupancy in the changed module; records do not name the SQL statement or every changed function. |
-| `memory.import.curation` context | 31.739 | 10.58% | PR 3841 changes scope-history access and appending in curator apply. This context also contains other work, so its full duration is a ceiling for a repair of that context. |
+| `memory.import.curation` context | 31.739 | 10.58% | PR 3841 changes scope-history access and appending in curator apply. This context also contains other work. Its full duration is the time that co-occurs with the context, not a bound on what a repair would remove (section 5.7). |
 | `role-memory.view` context | 18.540 | 6.18% | PR 3841 changes the project-view history inputs. Generic state readers inside this context belong to its footprint even when their reader label is `state.*`. |
 | The two operation contexts combined | 50.279 | 16.77% | The contexts are disjoint in the exclusive operation accounting. They overlap the reader-family row above; their percentages must not be added to its 10.01%. |
 
@@ -3130,7 +3142,9 @@ commits past this worktree's base `1a2e577f`: PRs 3841, 3857, 3849 and two
 gate and test fixes. Among the files this plan names, those commits change
 `sqliteRegistryStore.ts`, `viewerLoopMonitor.ts` and role-memory files. They
 change none of the files that items 1 to 4 edit. Every number below comes from a
-command in section 5.6, with its time bounds.
+command in section 5.6, with its time bounds. The revision of 14:19 to 14:40 UTC
+(section 5.7) adds figures from the commands in section 5.8. Main was still
+`1037130e` at 14:19:28.
 
 ### 5.1 Checks of parts 1 to 4, and corrections
 
@@ -3224,18 +3238,35 @@ named readers explain 1.0 to 1.5 s. The `scheduler.readBytes` sample window
 around each block shows 0.99 to 1.20 GB read by the serving thread. One or two
 more gaps of 5.3 to 8.3 s, topped by `registry.read/registry.keyed`, follow
 within 25 s, near the `adopting Claude hosts` line (rows of the section-2
-ledger). Three measures of this
-signature, over the 1,095.605 s of Viewer gap time:
+ledger). Three measures of where this signature occurs, over the 1,095.605 s
+of Viewer gap time. Each counts whole gaps, including their unattributed time.
+None of them is a bound on what a repair would remove (section 5.7):
 
-| Measure | Gaps | Seconds | Share of gap time | Share of the residual |
-| --- | --- | --- | --- | --- |
-| The six gaps that hold a refusal line (floor) | 6 | 86.668 | 7.91 % | 9.92 % |
-| Gaps of 5 s or more topped by `registry.keyed`, up to 45 s after each refusal (core) | 17 | 160.639 | 14.66 % | 18.59 % |
-| All gaps of 1 s or more, from the one that holds each refusal to 45 s after it (ceiling) | 35 | 193.160 | 17.63 % | 21.56 % |
+| Measure (co-occurrence) | Gaps | Seconds | Share of gap time | Unattributed s | Share of the residual |
+| --- | --- | --- | --- | --- | --- |
+| The six gaps that hold a refusal line | 6 | 86.668 | 7.91 % | 79.0 | 9.92 % |
+| Gaps of 5 s or more topped by `registry.keyed`, up to 45 s after each refusal | 17 | 160.639 | 14.66 % | 147.9 | 18.59 % |
+| All gaps of 1 s or more, from the one that holds each refusal to 45 s after it | 35 | 193.160 | 17.63 % | 171.5 | 21.56 % |
 
-Without the 35 gaps of the ceiling, the passes were in gaps 18.48 % of their wall
-time, less than the 23.66 % outside them. Inference: the retried passes add
-stall through this block only.
+In the six gaps that hold the refusal, named readers explain 7.707 s and
+78.961 s is unattributed (section 5.8). The serving thread was on CPU for nearly
+all of each of them: its scheduler run time over each gap's sample window (which
+the monitor widens by 200 ms) was 13.5 to 16.2 s against gaps of 13.5 to 16.1 s,
+and no cooperative slice resumed in any of them. So the block is computation on
+the serving thread, not a wait. Which code it runs is not recorded.
+`registry.keyed` time also cannot be split by mechanism: the reader's exclusive
+time covers the store's cold-key refresh, the construction of the lazy view and
+the caller's own reader callback (`sqliteRegistryStore.ts:4022-4031`), minus
+the nested reads that are measured on their own. The dirty-overlay walk of the
+earlier design is one part of that time, and the records do not separate it.
+
+Observation, not a conclusion: without these 35 gaps, the passes were in gaps
+18.48 % of their wall time, against 23.66 % outside them. The two periods are
+different stretches of the window. Of the 2,447.9 s outside the passes, 1,872.9 s
+lie after the eighth pass reached `ready` at 12:06:10.901, and the load changed
+over the window (section 1). Taking a chosen set of gaps out of one period and
+comparing it with another period does not isolate what the passes add. Whether
+the retried passes stall the loop outside this block is not established.
 
 The code between the `refreshing transcripts` progress line and the candidate
 filter is `startup.ts:2739-2860`. It covers the end of
@@ -3280,25 +3311,52 @@ stays open until item 1 runs.
 
 Visible exclusive time outside the adoption block, capped as in section 2, is
 57.080 s for `registry.read` (5.21 %), 21.781 s for `seat-tick.check` (1.99 %)
-and 23.352 s for `http.render` (2.13 %).
+and 23.352 s for `http.render` (2.13 %). This is the measured time of the readers
+that ran in each context. It is not time that a repair of the context would
+remove: the context label does not say which call sites issued the reads, and a
+repair keeps some reading.
 
-#### Whole-store reads inside two contexts
+#### Reader volumes inside two contexts
 
-- `http.render` ran 687,687 `registry.get` calls and 686,363 `registry.json`
-  parses of 2,209.5 MB across 15 and 12 gaps. The largest, the gap that ended at
-  12:30:12.201 (10,526 ms), prepared, read and parsed 152,700 registry rows one
-  at a time inside a page render: 629.0 MB of JSON, 1,538 ms of parsing, 1,499 ms
-  of `get` and 138 ms of `prepare`. `http.render` wraps Next render spans only
-  (`src/lib/nextRenderMonitor.ts:11-29`), so this was a page or a server
-  component render; API route handlers run outside these spans. The record does not name the page.
-- `seat-tick.check` parsed 3,380.6 MB of state JSON in 5,681 `state.json` calls
-  across 93 gaps. It reads whole pipeline and task lists through
-  `loadPipelinesForList*` and `loadTasks*` (`src/lib/monitor/seatTickSources.ts:69,93`)
-  before it prepares its projection (`seatTickSources.ts:2911-2935`).
-  The record names no collection.
+The read counters aggregate by context and reader name only
+(`src/lib/readAttribution.ts:176`, `:217`, `:228`). A row carries no request,
+render or row key. `calls` counts invocations: one `registry.get` is one call of
+a prepared statement's `get()`, which returns at most one row and can return
+none; one `registry.prepare` is one `query()` or `prepare()` call; one
+`registry.json` is one JSON parse (`src/lib/sqliteReadAttribution.ts:65`, `:96`,
+`:108`). The context is carried across awaits, so every render that overlaps a
+gap adds to the same `http.render` rows. A Next render span names no route
+(`src/lib/nextRenderMonitor.ts:11-29`).
 
-Both are whole-store reads on a per-request or per-tick path. The named time of
-each is small beside the gaps it dominates.
+- Observed: `http.render` recorded 687,687 `registry.get` calls in 15 gaps and
+  686,363 `registry.json` parses of 2,209.5 MB in 12 gaps. In the gap that ended
+  at 12:30:12.201 (10,526 ms), the context recorded 152,700 `registry.get`
+  calls, 152,700 `registry.prepare` calls and 152,700 `registry.json` parses
+  (629.0 MB decoded), all on one registry connection identity: 1,499, 138 and
+  1,538 ms. The same record lists 20 `http.render` operations that overlapped the
+  gap, at least one still pending. Each operation is one Next render span of the
+  types the monitor wraps, and one request can open several nested spans, so
+  the count bounds neither renders nor requests. In each of the 15 gaps with
+  this reader, 9 to 21 `http.render` operations overlapped it; none had only one
+  (section 5.8). The monitor keeps at most 128 completed operations per gap, so
+  these counts can be low.
+  The serving thread was on CPU for nearly all of the gap (run time 10,595 ms
+  over the widened sample window).
+- Not established: how many renders or requests issued these calls, how many
+  distinct rows they read, whether any render walked the whole registry, and
+  which page it was. These are hypotheses until item 1's frames place the calls.
+- Observed: `seat-tick.check` parsed 3,380.6 MB of state JSON in 5,681
+  `state.json` calls across 93 gaps. The record names no collection.
+- Hypothesis: the check's refresh calls `sources.pipelines()` and
+  `sources.tasks()` once before its loop and up to twice in each of at most
+  three attempts (`src/lib/monitor/seatTickSources.ts:2919-2931`). In production these are
+  `deepFreeze(loadPipelinesForList())` and `loadTasksForList()`
+  (`seatTickSources.ts:825`, `:828`). Whether those loaders parse the lists on
+  each call or serve a cached list, and whether they produce the 3.4 GB, the
+  records do not show.
+
+Both contexts read large volumes on a per-request or a per-tick path. The named
+time of each is small beside the gaps it dominates.
 
 #### Memory and the collector threads
 
@@ -3310,7 +3368,8 @@ gaps' sample windows is 147.4 GB. GC time on the serving thread is not measured:
 Viewer (PID 946855) at 13:47:09.365 found its main thread at 3,492.6 CPU-seconds
 and its seven `HeapHelper` threads at 621.9 CPU-seconds since the start at
 12:37:44. Inference: collection work is large. How much of it stops the serving
-thread is not established.
+thread is not established. The follow-up window records the helper threads' CPU
+once a second from outside the process (section 5.3, after item 1).
 
 #### The installed release so far
 
@@ -3324,24 +3383,48 @@ that gaps persist on the release that contains PRs 3841 and 3857.
 
 ### 5.3 The plan
 
-Each item is a separate lane. Shares are fractions of the Viewer gap time of the
-section-1 cohort. A floor counts the item's visible exclusive time. A ceiling
-counts the whole gaps the item dominates, which include their residual. The
-residual cannot be assigned until item 1 runs, so every repair item states both.
-Lane sizes: S is one module and its tests, under about 200 changed lines. M is up
-to five files, under about 600 lines. L must be split before it is built.
+Each item is a separate lane. Lane sizes: S is one module and its tests, under
+about 200 changed lines. M is up to five files, under about 600 lines. L must be
+split before it is built.
 
-| Order | Item | Expected share removed | Waits for | Risk | Review rounds | Size |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | The deploy recorder names the residual, per gap | 0 (diagnosis; it names the 72.63 % residual) | Section 1's 90-minute follow-up before activation | Medium-low | 2 | S-M |
-| 2 | Startup adoption selection yields the loop | 7.91-17.63 % in a window with retried passes; about 28.5 s of gaps per Viewer start | Item 1's capture of one start, or the fallback sites | High | 3 | M |
-| 3 | A page render reads only the registry rows it shows | 2.13-9.13 % | Item 1 names the page | Medium | 2 | S-M |
-| 4 | A seat-tick check reads what changed since its last check | 1.99-12.34 % | Item 1 names the parsing callers | Medium | 2 | M |
-| 5 | Registry reads outside startup stop rebuilding whole views | 5.21-13.58 % | Item 1 names the callers; the diffs of PRs 3710, 2926 and 3861 | High | 3 | L, split per caller |
+**No repair item has an established expected share of gap time removed.** The
+"Observed" column gives fractions of the Viewer gap time of the section-1 cohort.
+Each is either the measured time of the readers in the item's context, or the
+whole gaps that the item's signature or context dominates, with their
+unattributed time. They say where gap time co-occurs with the code an item would
+change. They are neither lower nor upper bounds of what a repair removes. A
+repair can leave the unattributed time in place, and a change to a shared reader
+can also shorten gaps that another context dominates. An item's expected share
+is set in two steps, both inside its lane:
 
-The ceilings overlap neither each other nor the adoption block, because each gap
-has one dominant class. The floors overlap nothing. A ceiling still counts
-residual time whose cause item 1 may place elsewhere.
+1. **An estimate from the profile.** Item 1's per-gap frames give the clipped
+   sample share of each gap that resolves to the functions the item changes. That
+   share, summed over the cohort's gaps, is the gap time spent in those functions
+   while the profile ran. It is an estimate of what is at stake, not a gain.
+2. **A measured gain.** The lane measures its fix against the base on identical
+   data and load, repeated, by the paired run its acceptance names. Only that
+   pair supports a claim of time removed. A production window after the deploy
+   has different load. It checks the fix's own signature and claims no gain.
+
+| Order | Item | Observed in the section-1 cohort (co-occurrence) | Expected share removed | Waits for | Risk | Review rounds | Size |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | The deploy recorder names the residual, per gap | 795.7 s (72.63 %) unattributed | 0 by design (diagnosis) | Section 1's 90-minute follow-up before activation | Medium-low | 2 | S-M |
+| 2 | Startup adoption selection yields the loop | 6 gaps that hold the refusal line: 86.7 s (7.91 %), 79.0 s of it unattributed; 35 gaps of 1 s or more within 45 s of each refusal: 193.2 s (17.63 %); on `662a6012`, 31.7 s of such gaps in one start | Not established | Item 1's capture of one start, or the fallback sites | High | 3 | M |
+| 3 | A page render reads only the registry rows it shows | `http.render` readers 23.4 s (2.13 %); 36 gaps it dominates, 100.0 s (9.13 %) | Not established | Item 1 places the `registry.get` calls on one page's read path | Medium | 2 | S-M |
+| 4 | A seat-tick check reads what changed since its last check | `seat-tick.check` readers 21.8 s (1.99 %); 113 gaps it dominates, 135.2 s (12.34 %) | Not established | Item 1 names the parsing callers | Medium | 2 | M |
+| 5 | Registry reads outside startup stop rebuilding whole views | `registry.read` readers 57.1 s (5.21 %); 153 gaps it dominates, 148.7 s (13.58 %) | Not established | Item 1 names the callers; the diffs of PRs 3710, 2926 and 3861 | High | 3 | L, split per caller |
+
+The whole-gap figures do not overlap between rows, because each gap is classed
+once. They are not additive estimates of removal.
+
+**Order.** With no gain established, the order follows dependency and the
+strength of the evidence. Item 1 comes first, because every expected share
+depends on its frames. Item 2 is next. Its signature is the most specific in the
+records: a line from one startup function inside six of the eight longest gaps,
+recurring once per Viewer start. Its mechanism is not established and its risk
+is high, so it waits for item 1's capture of one start. Items 3 to 5 each wait
+for item 1 to name their callers. After item 1 they are ranked again by the
+profiled gap time in their functions ("After item 1" below).
 
 #### Item 1. The deploy recorder names the residual, per gap
 
@@ -3383,13 +3466,7 @@ follow-up is taken with the switch off.
    the summary says `correlation: "window"` and assigns no per-gap weight.
 4. Same file: report `expectedSamples` (gap ms × 1000 / interval µs) beside the
    samples taken, as the share of the gap that the sampler could not see.
-5. `src/lib/loopWatchdog.ts`: while the recorder is armed, the watchdog worker
-   also reads the `utime + stime` of the process's `HeapHelper` threads, at most
-   sixteen `/proc/<pid>/task/<tid>/stat` reads per sample. It adds
-   `gcHelperCpuMs` over the interval that already yields `scheduler.runMs`. No
-   procfs read moves to the serving thread. The thread name was confirmed on the
-   live process (section 5.2).
-6. `scripts/probe-loop-profiler.ts`: add a `--map <release-directory>` mode. It
+5. `scripts/probe-loop-profiler.ts`: add a `--map <release-directory>` mode. It
    reads `[viewer loop-gap]` lines on standard input and prints, for each
    position, the source location from a source map when the release has one, and
    otherwise a fixed 160-byte excerpt of the emitted chunk around the position.
@@ -3397,12 +3474,24 @@ follow-up is taken with the switch off.
    rebuild of the same revision in a scratch export can be used when its chunks
    are byte-identical to the served ones apart from the map comment. The tool
    checks that before it uses the map.
-7. Tests in `src/lib/loopProfiler.test.ts`, `src/lib/loopWatchdog.test.ts` and
-   the compiled fixture `src/lib/loopProfiler.fixture.ts`.
+6. Tests in `src/lib/loopProfiler.test.ts` and the compiled fixture
+   `src/lib/loopProfiler.fixture.ts`.
 
-`viewerLoopMonitor.ts` and `viewerInstrumentation.ts` are not edited. Open
-PRs 3710 and 3861 change them, and the existing call sites suffice. Neither the
-runtime host nor the Bun pin is touched.
+Every field above travels inside `jsProfile`. The monitor already embeds the
+profiler's result object whole into the gap record
+(`src/lib/viewerLoopMonitor.ts:232-235`), and `correlate()` already receives each
+gap's bounds. So `viewerLoopMonitor.ts` and `viewerInstrumentation.ts` are not
+edited. (Read at 14:19: open PR 3710 changes only the operation type union of
+`viewerLoopMonitor.ts`, line 11; open PR 3861 changes `viewerInstrumentation.ts`.)
+Neither the runtime host nor the Bun pin is touched.
+
+The collector-thread CPU field that this item carried before the revision is
+removed (section 5.7). The scheduler block of the gap record is built from a
+fixed list of fields (`viewerLoopMonitor.ts:186-231`), and the watchdog does not
+know when the recorder is armed, so a counter added to the watchdog alone would
+never reach the journal. The follow-up window measures that CPU from outside the
+process instead (below). The in-process field, with its full path, is deferred
+in section 5.5.
 
 **Bounds kept:** five-second windows, a 10 ms interval, at most 4,096 inspected
 samples per summary, depth 32, 128 candidate frames, 16 output rows, 8,192 bytes
@@ -3416,8 +3505,14 @@ the revised contract accepted.
   chunk over 1 MiB is kept, and the base drops it. A ninth source file is kept,
   and the base drops it. A computed function name never reaches the summary. A
   native leaf is credited to its first accepted caller. Synthetic timestamps clip
-  the samples to their gap. `gcHelperCpuMs` is read from an injected procfs
-  reader.
+  the samples to their gap.
+- One test covers the path to the journal. It drives the real
+  `createViewerLoopMonitor` with a log sink it reads, sets a real
+  `createLoopProfiler` whose `collect` port returns synthetic timestamped traces,
+  induces a block of at least two seconds, and parses the emitted
+  `[viewer loop-gap]` line. Its `jsProfile` carries the per-gap clipped counts,
+  `expectedSamples` and `unresolvedSamples` for that gap. On the base the line
+  lacks them.
 - A rehearsal on this machine: the production build of the branch under Bun
   1.4.0, with a private HOME, TMPDIR and `LLV_STATE_DIR` and the control URL on a
   closed port, through `scripts/gate-slot.sh`. Paired runs add less than 2 % to
@@ -3450,15 +3545,66 @@ bodies of the steps listed in section 5.2 in new static performance sites
 (`runtime.startup.<step>`). The watchdog then reports them per gap in
 `scheduler.sites`. This names steps without naming functions.
 
+#### Collector-thread CPU, observed from outside the process
+
+This is part of section 1's follow-up window and needs no product change.
+
+- **What is recorded.** Once a second, the `utime + stime` clock ticks of the
+  Viewer's main thread and the sum over its `HeapHelper` threads, read from
+  `/proc/<pid>/task/<tid>/stat`, with the wall-clock time of the read. The
+  helper threads are found by name once a minute from `/proc/<pid>/task/*/comm`,
+  at most 16 of them. The script is `thread_cpu.py` in section 5.8. It writes one
+  JSON line per second to a new file in the follow-up's private evidence
+  directory.
+- **How long.** The follow-up window plus its startup exclusion, at most
+  6,000 one-second rows (100 minutes), a file of about 0.5 MB.
+- **What it costs.** Nothing runs inside the Viewer. The reads are procfs reads
+  from a separate process; they send no signal and attach no tracer. On the
+  serving `662a6012` Viewer at 14:22:34 (59 threads, 7 `HeapHelper`), one pass
+  over the main thread and the helpers took 167 µs, and the name listing took
+  1.4 ms (section 5.8).
+- **Bounds and switch-off.** The row cap ends it. It also ends when the start
+  identity in `/proc/<pid>/stat` changes or the process disappears, and it writes
+  that reason as its last line. The observer that starts it records the
+  sampler's own PID and stops only that PID. A five-second dry run against the
+  serving Viewer at 14:24:43 to 14:24:48 wrote five rows and exited (section 5.8).
+- **Join.** For each Viewer gap record, the gap interval is `[utc − gapMs, utc]`.
+  Helper CPU inside it is the sum, over the one-second sample intervals, of each
+  interval's tick difference divided by the clock rate, times the fraction of
+  that interval that lies inside the gap. Report per gap the helper CPU against
+  the gap length, and over the window the helper CPU-seconds per wall-second
+  inside gaps against outside gaps. Main-thread ticks give the same pair as a
+  check against the record's `scheduler.runMs`.
+- **What it can show.** JavaScriptCore's helper threads mark the heap in
+  parallel, and much of that work runs while the serving thread runs too. Their
+  CPU in a gap therefore shows whether collection work concentrates in gaps. It
+  does not show that collection stopped the serving thread, or for how long.
+  One-second resolution is enough for gaps of one second or more and too coarse
+  for shorter ones.
+
 #### Item 2. Startup adoption selection yields the loop
 
-**Share removed:** 7.91 % (floor), 14.66 % (core) and up to 17.63 % (ceiling) of
-gap time in a window where the startup pass retries as it did on `692e5338`. In
-any window, the item removes about 28.5 s of gaps of five seconds or more per
-Viewer start (31.7 s of gaps of one second or more). On `662a6012` the three
-gaps of 14.9, 6.8 and 6.8 s appeared once per start. In a
-window that begins after a first-pass `ready` it removes close to nothing. The
-reasoning is in section 5.2: the passes add stall through this block only.
+**Observed (section 5.2).** In the section-1 cohort, the six gaps that hold the
+stale-claim refusal sum to 86.668 s (7.91 % of gap time). Named readers explain
+7.707 s of them and 78.961 s is unattributed. The 17 gaps of 5 s or more topped
+by `registry.keyed` within 45 s of a refusal sum to 160.639 s (14.66 %), and all
+35 gaps of 1 s or more from each refusal to 45 s after it sum to 193.160 s
+(17.63 %). On `662a6012` one start produced five gaps of 1 s or more, 31.657 s,
+between the `refreshing transcripts` line and 30 s after `adopting Claude hosts`
+(three of them 14.9, 6.8 and 6.8 s).
+
+**Mechanism hypothesis.** The steps between the `refreshing transcripts` line and
+the candidate filter (`startup.ts:2739-2860`) run as one unbroken turn on the
+serving thread: the thread was on CPU through each block and no cooperative
+slice resumed. Which step holds the time is not recorded. Whether the
+`registry.keyed` gaps that follow are the same pass's work, and which part of
+that reader's time they hold, is not recorded either.
+
+**Expected share removed: not established.** The lane sets it in the two steps
+of section 5.3: the clipped sample share of the block's gaps that item 1's
+capture of one start resolves to the functions this item changes, then the
+paired candidate-gate run in the acceptance below. How much a window gains also
+depends on how many Viewer starts and retried passes it holds.
 
 **Files:** `src/lib/runtime/startup.ts` (`adoptStructuredHostsPass` from line
 2539, `refreshStructuredTranscriptState`, `structuredStartupAdoptionFilter` at
@@ -3487,14 +3633,19 @@ claims and the same order of claims.
 - The candidate gate on this machine (`bun scripts/verify-viewer-runtime.ts
   --performance`, isolated as in item 1). In the successor's startup, the
   longest Viewer gap between the same two progress lines is under 250 ms. The
-  builder records the base value first.
+  builder runs base and head three times each on the same synthetic registry and
+  records, for each run, the gap time from the `refreshing transcripts` line to
+  30 s after `adopting Claude hosts`. The difference of the two medians is the
+  item's measured gain on that data. It is the only gain figure this item
+  reports.
 - Production, by the section-11 collector on the first start after the deploy:
   no Viewer gap of one second or more holds the stale-claim refusal or the
   `adopting Codex hosts` or `adopting Claude hosts` line. From the
   `refreshing transcripts` line to 30 s after the `adopting Claude hosts` line,
   gaps of one second or more sum to under 2 s. On `662a6012` the same
   interval, from 12:38:35.014 to 12:39:56.097, holds five such gaps summing to
-  31.657 s.
+  31.657 s. This checks the fix's signature on a start with different load; it
+  claims no gain for the window.
 
 **Risk:** high. Startup adoption decides which agents are hosted again after a
 restart. A reordering can leave an agent unhosted or host it twice, and the
@@ -3503,25 +3654,47 @@ rounds, the depth the project gives the runtime host. **Size:** M.
 
 #### Item 3. A page render reads only the registry rows it shows
 
-**Share removed:** 2.13 % (floor, visible `http.render` time outside the block)
-to 9.13 % (ceiling, the 36 gaps it dominates).
+**Observed (section 5.2).** Readers in the `http.render` context ran 23.352 s
+(2.13 % of gap time) outside the startup block. The 36 gaps where `http.render`
+has the most visible reader time sum to 100.0 s (9.13 %), 73.7 s of it
+unattributed. `http.render` recorded 687,687 `registry.get` calls in 15 gaps.
+The gap that ended at 12:30:12.201 (10,526 ms) holds 152,700 `registry.get`
+calls in that context, with 152,700 `registry.prepare` calls and 152,700
+`registry.json` parses of 629.0 MB, while 20 `http.render` operations (render
+spans, which can nest within one request) overlapped it. Every one of the 15
+gaps had 9 to 21 overlapping `http.render` operations.
 
-**Evidence:** one render read 152,700 registry rows one at a time, each with its
-own `prepare`, `get` and JSON parse (section 5.2). The records do not name the
-page. Item 1's frames from `.next/server/app/**` will name it.
+**Mechanism hypothesis.** Some server render reads registry rows one statement
+call at a time, each with its own `prepare`, `get` and parse, and reads far
+more of them than it shows. The records establish neither one render, nor one
+request, nor the number of distinct rows, nor a walk of the whole registry, nor
+the page.
 
-**Files:** the page or server component that item 1 names, and the registry
-accessor it uses (`src/lib/agent/registry.ts`, `readOnlySnapshot` and the lazy
-row readers). The change belongs in the page's read: a keyed or projected read
-of the rows it displays. Registry internals are edited only after the diffs of
-PRs 3710, 2926 and 3861 have been read.
+**Expected share removed: not established.** Set in the two steps of section 5.3.
 
-**Acceptance:** a test that renders the page's data path over a fixture registry
-of at least 50,000 rows and counts `registry.get` calls. On the head the count is
-at most the number of rows the page shows plus a constant. On the base it equals
-the registry's row count. In the 90-minute window after deploy, by the
-section-11 collector: no Viewer gap of one second or more whose largest visible
-operation is `http.render` with `registry.get` among its readers.
+**Before building: confirm the read path.** The builder takes item 1's frames
+for gaps with this signature, maps the positions under `.next/server/app/**`
+with item 1's `--map` tool, and names the page or server component and the call
+path that issues the `registry.get` calls. If the frames do not place the calls
+on one page's read path, or place most of them elsewhere, the item stops and
+goes back to the plan with what the frames show. Everything below assumes a
+confirmed path.
+
+**Files:** the confirmed page or server component, and the registry accessor it
+uses (`src/lib/agent/registry.ts`, `readOnlySnapshot` and the lazy row readers).
+The change belongs in the page's read: a keyed or projected read of the rows it
+displays. Registry internals are edited only after the diffs of PRs 3710, 2926
+and 3861 have been read.
+
+**Acceptance:** a test that renders the confirmed page's data path once over a
+fixture registry of at least 50,000 rows and counts `registry.get` calls for
+that one render. The base count is measured on the base for that path and
+recorded in the test. On the head the count is at most the number of rows the
+page shows plus a constant. The paired base/head render time on that fixture,
+repeated three times, is the item's measured gain. In the 90-minute window after
+deploy, by the section-11 collector: no Viewer gap of one second or more whose
+largest visible operation is `http.render` with `registry.get` among its
+readers. That window checks the signature and claims no gain.
 
 **Risk:** medium, since the page's content must stay identical. That needs
 rendered evidence through the existing kanban or phone driver, in en and uk,
@@ -3530,7 +3703,18 @@ light and dark, if the page is a board surface. **Review:** two rounds.
 
 #### Item 4. A seat-tick check reads what changed since its last check
 
-**Share removed:** 1.99 % (floor) to 12.34 % (ceiling).
+**Observed (section 5.2).** Readers in the `seat-tick.check` context ran
+21.781 s (1.99 % of gap time) outside the startup block. The 113 gaps it
+dominates sum to 135.2 s (12.34 %), 106.4 s of it unattributed. The context
+parsed 3,380.6 MB of state JSON in 5,681 `state.json` calls across 93 gaps.
+
+**Mechanism hypothesis.** The refresh takes the whole pipeline and task lists
+through `sources.pipelines()` and `sources.tasks()` several times per check
+(`seatTickSources.ts:2919-2931`, `:825`, `:828`), and those loaders parse the
+lists. The records name no collection, so which reads parse the 3.4 GB is not
+established.
+
+**Expected share removed: not established.** Set in the two steps of section 5.3.
 
 **Files:** `src/lib/monitor/seatTickSources.ts` (the refresh at lines 2911-2935
 and its `loadPipelinesForList*` and `loadTasks*` reads),
@@ -3544,28 +3728,39 @@ place to make the work scale with what changed.
 
 **Acceptance:** a fixture test, red on the base: after one check, a second check
 with one changed task parses a bounded amount of JSON (a constant plus the
-changed rows). On the base it parses the whole list again. Alarm records stay
-identical on a recorded fixture. In the 90-minute window after deploy:
+changed rows). The base's amount for the same second check is measured and
+recorded in the test. Alarm records stay identical on a recorded fixture. The
+paired base/head time of that second check, repeated three times, is the item's
+measured gain. In the 90-minute window after deploy:
 `seat-tick.check/state.json` decoded bytes inside gaps are under 10 % of the
 cohort's 3,380.6 MB per 70 minutes, scaled to the window and at a comparable
 seat count. No Viewer gap of one second or more is dominated by
-`seat-tick.check`.
+`seat-tick.check`. That window checks the signature and claims no gain.
 
 **Risk:** medium. A stale projection could miss an alarm. **Review:** two rounds.
 **Size:** M.
 
 #### Item 5. Registry reads outside startup stop rebuilding whole views
 
-**Share removed:** 5.21 % (floor, visible `registry.read` time outside the block)
-to 13.58 % (ceiling, 153 gaps).
+**Observed (section 5.2).** Readers in the `registry.read` context ran 57.080 s
+(5.21 % of gap time) outside the startup block. The 153 gaps it dominates sum to
+148.7 s (13.58 %), 92.4 s of it unattributed. By the retained collector's
+`readersMs`, `registry.keyed` (29.297 s) is the largest named reader after the
+operation bodies, and `registry.snapshot` (21.048 s) is the fourth, after
+`state.json`. These totals include their time inside the startup block.
 
-**Evidence and mapping:** by the retained collector's `readersMs`,
-`registry.keyed` (29.297 s) is the largest named reader after the operation
-bodies, and `registry.snapshot` (21.048 s) is the fourth, after `state.json`. These totals include
-their time inside the startup block.
-They map to two deferred items of section 10 of the earlier design: the plain
-snapshot that brings its view up to date in one synchronous step, and the keyed
-readers that walk every row a transaction has changed.
+**Mechanism hypothesis.** The two readers may correspond to two deferred items
+of section 10 of the earlier design: the plain snapshot that brings its view up
+to date in one synchronous step, and the keyed readers that walk every row a
+transaction has changed. The records do not establish either. `registry.keyed`
+time covers the cold-key refresh, the lazy view's construction and each
+caller's reader callback (`sqliteRegistryStore.ts:4022-4031`), and the
+dirty-overlay walk is not separated from them.
+
+**Expected share removed: not established.** Set in the two steps of section 5.3.
+If item 1's frames for these gaps do not resolve inside the snapshot or the
+keyed readers of `loadLazyInTransaction`, the item is rescoped to the callers the
+frames name.
 
 **Files:** `src/lib/agent/registry.ts` (`readKeyed` near line 6448) and
 `src/lib/agent/sqliteRegistryStore.ts` (the measured snapshot near line 1807).
@@ -3573,9 +3768,12 @@ Open PRs 3710, 2926 and 3861 change these files. Item 1 names the callers. The
 lane splits per caller and reads those diffs before it starts.
 
 **Acceptance:** for each caller, a test that counts the rows a call reads and
-holds it to the rows the caller needs. By the section-11 collector, the
+holds it to the rows the caller needs, with the base count measured and recorded
+in the test. The paired base/head time of that call on the same fixture,
+repeated three times, is the measured gain. By the section-11 collector, the
 `registry.read` visible time per hour in gaps falls below a tenth of the
-cohort's 57.080 s per 70 minutes at a comparable session count.
+cohort's 57.080 s per 70 minutes at a comparable session count. That window
+checks the signature and claims no gain.
 
 **Risk:** high. The registry is the shared store of every agent and every
 delivery. **Review:** three rounds. **Size:** L, split per caller.
@@ -3583,13 +3781,14 @@ delivery. **Review:** three rounds. **Size:** L, split per caller.
 #### After item 1
 
 When item 1 has run for one armed hour, its per-gap frames are joined to the
-classes of section 5.2 by the same collector. Items 3 to 5 are then re-ranked by
-the seconds their named functions hold. `pipelines.mutation` (6.80 %),
-`registry.write` (4.35 %) and `pipelines.controller-schedule` (3.99 %) get an
-item when their frames show a repairable call site. If the GC helper CPU and the
-unseen-sample share account for a large part of the residual, the heap growth
-of section 5.2 becomes the next item. Its owner is the existing memory work
-(PRs 3851 and 3856).
+classes of section 5.2 by the same collector. Each of items 2 to 5 then gets the
+profile estimate of section 5.3, step 1, and items 3 to 5 are ranked again by
+it. `pipelines.mutation` (6.80 % of gap time as a class), `registry.write`
+(4.35 %) and `pipelines.controller-schedule` (3.99 %) get an item when their
+frames show a repairable call site. If the follow-up's collector-thread CPU
+concentrates in gaps, or item 1 leaves a large unseen or unresolved share, the
+heap growth of section 5.2 becomes the next item. Its owner is the existing
+memory work (PRs 3851 and 3856).
 
 ### 5.4 Covered by other work
 
@@ -3598,7 +3797,7 @@ of section 5.2 becomes the next item. Its owner is the existing memory work
 | Role-memory readers 30.032 s (2.74 %); `role-memory.view` context 18.540 s (1.69 %) | PRs 3841 and 3857 (merged at 12:07:04 and 12:29:01, in `662a6012`) | Their history move waits for the operator's drain switch (`role-history-rows.json`, absent at 13:46). Measure after activation. No plan item edits `roleViewSource.ts`, `roleStore.ts`, `roleProblems.ts` or `curation/*`. |
 | Curator apply: `memory.import.curation` 2.90 % visible, 3.68 % as a class; a 4.364 s hold on `692e5338` | Deferred fix 4 of the earlier design, on top of PR 3841 | PR 3841 changed `curation/apply.ts` and its drain is still off. Size fix 4 after activation, as section 3 says. |
 | Runtime host 0.29 % of its own time | Section 10 of the earlier design; lane `d2a17781` | Outside the Viewer's share. |
-| Heap growth and heap diagnostics | PR 3851 (heap diagnostics), PR 3856 (memory ceiling) | Item 1 adds only a GC helper CPU field. It changes no heap code. |
+| Heap growth and heap diagnostics | PR 3851 (heap diagnostics), PR 3856 (memory ceiling) | No plan item changes heap code. The follow-up window observes collector-thread CPU from outside the process (section 5.3). |
 
 ### 5.5 Deferred — not currently justified
 
@@ -3609,15 +3808,56 @@ of section 5.2 becomes the next item. Its owner is the existing memory work
 - **An external native sampler** (section 4's escalation). Reconsider only if
   item 1 leaves more than 20 % of clipped samples unresolved in its armed hour.
 - **Resuming a startup pass from the phase where its deadline ran out.**
-  The retries delayed `ready` by 48 minutes on `692e5338`. Without the
-  adoption-block gaps, though, the passes stalled the loop less than the time
-  outside them (18.48 % against 23.66 %). The stall requirement does not justify
-  it after item 2. A late `ready` has functional effects, and those belong in a
-  separate task if the operator wants one.
+  The retries delayed `ready` by 48 minutes on `692e5338`. Whether the retried
+  passes stall the loop outside the adoption block is not established
+  (section 5.2): the comparison of 18.48 % against 23.66 % sets one stretch of
+  the window against a later one with different load. The records give no stall
+  share to this change, so the stall requirement does not justify it now.
+  Reconsider when item 1's frames for a retried pass resolve gaps outside the
+  block to startup functions. A late `ready` has functional effects, and those
+  belong in a separate task if the operator wants one.
 - **Startup step marks as a permanent log.** They are needed only if item 1
   cannot be activated; that case is item 1's fallback.
+- **A collector-thread CPU field in each gap record.** Removed from item 1 at
+  revision. The follow-up window measures the same quantity from outside the
+  process with no product change (section 5.3). Reconsider when that
+  measurement shows helper CPU per wall-second inside gaps at least twice that
+  outside them, or when item 1 leaves more than 20 % of the clipped samples of
+  long gaps unresolved. The in-process path then needs all four of these
+  links, in three files:
+  1. Arming, `src/lib/loopProfilerServing.ts`: after `monitor.setProfiler`, call
+     a new monitor method (in `viewerLoopMonitor.ts`) that sets the watchdog's
+     control cell; after `recorder.start()` resolves (expiry, kill switch or
+     stop), clear it.
+  2. Worker control, `src/lib/loopWatchdog.ts`: one new control cell in the
+     shared buffer. The worker reads it every sample and does no thread read
+     while it is zero.
+  3. Worker reads, same file: while armed, list `HeapHelper` threads from
+     `/proc/<pid>/task/*/comm` once a minute (at most 16), read their
+     `utime + stime` once a second, and store the cumulative CPU in a new ring
+     field, or −1 when unarmed or unreadable. The procfs root comes from
+     `workerData`, so a test can point it at a fixture directory.
+  4. Interval and output, `src/lib/viewerLoopMonitor.ts`, in the scheduler
+     block (`:186-231`): `gcHelperCpuMs` is the difference between the last and
+     first armed samples of the gap's existing sample window, in milliseconds
+     of CPU summed over the helper threads, with a resolution of one clock tick
+     (10 ms here). When any sample in the window is −1 it is `null`, with
+     `gcHelperCpu: "not-armed"` or `"unavailable"`. Open PR 3710 changes only
+     the operation type union of that file (line 11), read at 14:19.
+
+  Acceptance: an isolated test runs the real monitor with the real watchdog
+  worker and a fixture procfs root whose helper `stat` files gain a known
+  number of ticks during an induced block of at least one second. The emitted
+  `[viewer loop-gap]` JSON of that gap carries `gcHelperCpuMs` within one tick
+  of the known increase. With the recorder not armed, or after the kill switch
+  stops it, the worker opens no file under the fixture's task directory.
 
 ### 5.6 Commands and bounds for part 5
+
+The script below is kept exactly as it ran, so its SHA-256 still matches. Its
+key names `holding`, `core`, `ceiling` and `contextFloorsOutsideBlock` predate
+the revision. The figures under them are co-occurrence measures, not bounds on
+a repair (section 5.7).
 
 <details>
 <summary>Analysis script, its output, and the auxiliary reads</summary>
@@ -3887,5 +4127,379 @@ profiler, signal, restart, setting change or load generator was used. One
 `search_memory` and one `search_transcripts` call looked for earlier answers
 about the kill switch. Either may have written a receipt or started a leased
 helper.
+
+</details>
+
+### 5.7 Revision after review, 2026-11-11
+
+A review of this plan handed over three findings. Each was checked against the
+stored records and the code, read-only, between 14:19 and 14:40 UTC. The
+commands are in section 5.8. The cohort digest `de4ef66e…` matched, so the
+recomputed figures come from the same record set as sections 1, 2 and 5.6.
+
+**1. Co-occurrence had been presented as an expected gain.** The plan's column
+"Expected share removed" gave positive lower bounds of 7.91 %, 2.13 %, 1.99 % and
+5.21 %. Recomputed: the six gaps behind 7.91 % hold 86.668 s, of which named
+readers explain 7.707 s and 78.961 s is unattributed. The other three figures are
+the measured time of readers in a context. They do not say which call sites a
+repair would change, or how much of their time it would remove. `registry.keyed`
+time includes the cold-key refresh, the lazy view's construction and the
+callers' reader callbacks (`sqliteRegistryStore.ts:4022-4031`), so its mapping to
+the deferred dirty-overlay item is a hypothesis. The statement that the retried
+passes add stall through the adoption block only compared one stretch of the
+window with a later one: 1,872.9 s of the 2,447.9 s outside the passes lie after
+`ready`. Changed:
+
+- Section 5.2: the three measures are labelled as co-occurrence and carry their
+  unattributed seconds; the six gaps' named and unattributed time and the
+  serving thread's run time are added; the inference about the passes is
+  replaced by the observation and what it does not establish.
+- Section 3: the mapping row of the adoption block, to match.
+- Section 5.3: a new introduction says that no repair item has an established
+  expected share and how a lane sets one (a profile estimate, then a paired
+  base/head measurement on identical data and load). The table's "Observed"
+  column holds the co-occurrence figures; "Expected share removed" reads "not
+  established" for items 2 to 5. The order is now argued from dependency and
+  evidence; it is unchanged.
+- Items 2 to 5: each has "Observed", "Mechanism hypothesis" and "Expected share
+  removed: not established". Each acceptance names the paired base/head run that
+  is its only gain figure, and calls its production window a signature check
+  that claims no gain. Item 5 is rescoped if item 1's frames fall outside the
+  snapshot and keyed readers.
+- Section 5.5: the reason for deferring the resumption of a startup pass no
+  longer rests on the 18.48 % against 23.66 % comparison.
+
+**2. The collector-thread CPU field had no path to the journal.** The code
+confirms it. The gap record's scheduler block is built from a fixed list of
+fields (`viewerLoopMonitor.ts:186-231`). The watchdog worker receives only its
+buffer, the process id, a time origin and a start delay
+(`loopWatchdog.ts`, `startLoopWatchdog`), so it cannot know when the recorder is
+armed. Arming lives in `loopProfilerServing.ts`. A counter added to the watchdog
+alone would never be emitted, and a test with an injected procfs reader would not
+notice. Changed:
+
+- Item 1 no longer carries the field, its `loopWatchdog.ts` edit or its test.
+  Its fields all travel inside `jsProfile`, which the monitor already emits
+  whole (`viewerLoopMonitor.ts:232-235`).
+- Section 1's follow-up records the main thread's and the `HeapHelper` threads'
+  CPU once a second from outside the process, by a read-only script (section 5.3,
+  script in 5.8). A five-second dry run against the serving Viewer worked.
+- Section 5.5 defers the in-process field, with the whole path: arming, the
+  worker's control cell, the worker's reads, the interval and output fields,
+  units and null reasons, and the acceptance the review asked for.
+- PR 3710's change to `viewerLoopMonitor.ts` was read at 14:19: only the
+  operation type union on line 11. The earlier reason for not touching that
+  file was therefore broader than its diff.
+
+**3. Calls had been called the rows of one render.** The code confirms that the
+counters aggregate by context and reader only (`readAttribution.ts:217`, `:228`),
+that one `registry.get` is one statement `get()` call
+(`sqliteReadAttribution.ts:65`), and that a render span carries no route
+(`nextRenderMonitor.ts:11-29`). Recomputed from the stored record of the gap that
+ended at 12:30:12.201 (SHA-256 `2fcd4757…`): 20 `http.render` operations
+overlapped it, and in each of the 15 gaps with that reader 9 to 21 did; all
+152,700 calls used one connection identity. Render spans can nest within one
+request, so these counts bound neither renders nor requests. Changed:
+
+- Section 5.2: the bullet is renamed "Reader volumes inside two contexts"; its
+  unit is calls; one render, one request, distinct rows, a whole-registry walk
+  and the page are listed as not established.
+- Item 3: a "confirm the read path" step comes before building, from item 1's
+  frames. The test's base count is measured for that confirmed path and recorded,
+  in place of the assertion that it equals the registry's row count.
+
+**Consistency edits not raised by the review.** Item 4 cited
+`seatTickSources.ts:69,93`, which are import lines; the calls are at `:825`,
+`:828` and `:2919-2931`. Its base amount of parsing is now measured and recorded
+in the test, not asserted. Section 3 called the curator context's duration "a
+ceiling for a repair"; it now says the duration is co-occurrence and no bound.
+Item 1 gained one test of the path from the profiler to the emitted gap line,
+so that its new fields cannot fail the way the removed field would have. The
+memory paragraph of 5.2 and the heap row of 5.4 point to the external
+observation.
+
+**Unchanged:** the figures of sections 1, 2 and 4; item 1's switch, bounds,
+rehearsal and production acceptance apart from the removed field; the order of
+items; their files apart from item 1's; risks, review depths and sizes.
+
+### 5.8 Commands and bounds for the revision
+
+<details>
+<summary>Recomputation scripts, outputs, the live thread read and the source reads</summary>
+
+**One gap record**, read from 14:29:02.643 to 14:29:02.659 UTC (an earlier
+identical run read at 14:21:10.902 to 14:21:10.946). `render_gap.py`, SHA-256
+`d9eb511da70c1863af4e9469da5ce1f6b2569863813c01f34c7dec8249875210`:
+
+```python
+import json, subprocess, sys, time, datetime, collections, hashlib
+def iso(t): return datetime.datetime.fromtimestamp(t/1000, datetime.timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z')
+began = iso(time.time()*1000)
+REV = '692e5338ea3fffa1d3e4110876387063bb7f3da9'
+cmd = ['journalctl','--user','-u','delegatus.service','--since','2026-11-11 12:29:58 UTC','--until','2026-11-11 12:30:14 UTC',
+       '--utc','-o','json','--all','--no-pager','-n','5000','--grep',r'^\[viewer loop-gap\] ']
+q = subprocess.run(cmd, capture_output=True, text=True, timeout=18)
+rows = q.stdout.splitlines(); assert q.returncode == 0 and len(rows) < 5000, (q.returncode, len(rows))
+hit = None
+for line in rows:
+    m = json.loads(line).get('MESSAGE') or ''
+    v = json.loads(m[m.index('{'):])
+    if v.get('revision') == REV and v.get('utc') == '2026-11-11T12:30:12.201Z' and v.get('role') == 'viewer': hit = v
+assert hit, 'record not found'
+v = hit; r = v['reads']
+out = {'readStart': began, 'journalRows': len(rows), 'recordSha256': hashlib.sha256(json.dumps(v, sort_keys=True, separators=(',',':')).encode()).hexdigest(),
+  'utc': v['utc'], 'pid': v['pid'], 'sequence': v['sequence'], 'gapMs': v['gapMs'], 'intervalMs': round(v['tick'] - v['lastTick'], 1),
+  'pendingOperations': v.get('pendingOperations'), 'activeDropped': v.get('activeDropped'), 'completedDropped': v.get('completedDropped'),
+  'operations': [[o['name'], o['count'], o['durationMs'], o['completed']] for o in v['operations']],
+  'requests': v.get('requests'),
+  'reads': {k: r.get(k) for k in ['windowMs','namedSyncMs','dropped','droppedMs','omitted','sampledCalls','unsampledCalls','unavailableCalls']},
+  'renderReaders': [[x['reader'], x['calls'], round(x['syncMs']), x.get('decodedJsonBytes',0), x.get('connection'), x.get('connections')] for x in r['top'] if x['operation'] == 'http.render'],
+  'otherTop': [[x['operation'], x['reader'], x['calls'], round(x['syncMs'])] for x in r['top'] if x['operation'] != 'http.render'],
+  'renderSlices': [[s['site'], s['kind'], s.get('count'), round(s.get('maxMs',0)), round(s.get('totalMs',0)), round(s.get('overlapMs',0))] for s in v['attribution']['slices'] if 'render' in str(s.get('site'))],
+  'schedulerRunMs': v['scheduler'].get('runMs'), 'cooperative': v.get('cooperative'), 'jsProfile': v.get('jsProfile')}
+out['readEnd'] = iso(time.time()*1000)
+for k, x in out.items(): print(json.dumps({k: x}))
+```
+
+The keys cited above, verbatim. The `requests`, `otherTop`, `renderSlices`
+(empty), `activeDropped` (0) and `jsProfile` (`not-armed`) lines are omitted:
+`requests` holds request identifiers.
+
+```json
+{"readStart": "2026-11-11T14:29:02.643Z"}
+{"journalRows": 3}
+{"recordSha256": "2fcd4757be28966cacb48dbec62dc51cdaf0adf565c8040fd41652b6bfac6e21"}
+{"utc": "2026-11-11T12:30:12.201Z"}
+{"pid": 3875509}
+{"sequence": 799}
+{"gapMs": 10526}
+{"intervalMs": 10536.3}
+{"pendingOperations": 93}
+{"completedDropped": 174}
+{"operations": [["http.render", 20, 4364949, false], ["temp.sweep", 3, 266128, false], ["pipelines.controller-job", 2, 245883, false], ["transcript.index", 1, 229255, false], ["mcp.page-cursors", 3, 169763, false], ["role-memory.view", 3, 168703, false], ["runtime.delivery-wake", 22, 91844, false], ["telegram.review-polls", 2, 30401, true], ["controller.pipelines", 1, 25280, false], ["pipelines.controller-schedule", 1, 25279, false], ["pipelines.controller-mutation", 1, 25213, false], ["pipelines.controller-lane", 1, 25210, false], ["delivery-progress.restore", 1, 13040, false], ["registry.prepare", 2, 13040, false], ["seat-tick.check", 15, 12381, false], ["orchestrator.seat-channel", 1, 10539, true]]}
+{"reads": {"windowMs": 10536.329293999821, "namedSyncMs": 3296.1685373589626, "dropped": 0, "droppedMs": 0, "omitted": 68, "sampledCalls": 0, "unsampledCalls": 449514, "unavailableCalls": 32282}}
+{"renderReaders": [["registry.json", 152700, 1538, 628972772, 76567, [76567]], ["registry.get", 152700, 1499, 0, 76567, [76567]], ["registry.prepare", 152700, 138, 0, 76567, [76567]], ["cache.accounting", 172222, 50, 0, 0, []]]}
+{"schedulerRunMs": 10594.874911}
+{"cooperative": {"resumed": 1, "turns": 1, "depth": 20, "maxDepth": 20, "longestWaitMs": 1062}}
+{"readEnd": "2026-11-11T14:29:02.659Z"}
+```
+
+An `operations` row is `[name, count, longest duration ms, completed]`; its
+count is the number of operations of that name that overlapped the gap, among at
+most 128 active and 128 completed ones kept by the monitor. A `renderReaders` row
+is `[reader, calls, sync ms, decoded JSON bytes, connection, connections]`.
+
+**The cohort again**, read from 14:24:38.883 to 14:24:42.692 UTC (an earlier run
+with two more unpublished keys read from 14:22:08.454 to 14:22:12.590 and gave
+the same values for these keys). The collector of section 4 is cut from this
+document and its definitions kept:
+
+```bash
+awk '/^Exact collector and allocation command/{s=1} s && /^python3 - <<.PY.$/{f=1;next} f&&/^PY$/{exit} f{print}' \
+  docs/design/viewer-stalls-after-3846.md > collector.py
+awk '/^lo=ms\(/{exit} {print}' collector.py > defs.py   # SHA-256 66905f81ed6d327b6b65c270aa75dd35e1cb9d477d27cac6df015eebcdcdfbe1
+python3 -I revision_analysis.py defs.py
+```
+
+The run selected the collector with `NR>2991` in place of the first pattern, on
+the document as committed at `cb9208cc`. The command above gives byte-identical
+output on the revised document (checked with `cmp` at 14:30). These `defs.py` bytes differ from
+the copy section 5.6 used, which was not kept. Both reproduce the cohort digest,
+which fixes the record set. `revision_analysis.py`,
+SHA-256 `6532da8a1adfec134a71a548c026bd92b0fec13ff246c8ba954c8a031c3c75f8`:
+
+```python
+import collections, json, sys, time
+ns = {}
+exec(open(sys.argv[1]).read(), ns)
+ms, iso, collect = ns['ms'], ns['iso'], ns['collect']
+began = iso(time.time() * 1000)
+REV = '692e5338ea3fffa1d3e4110876387063bb7f3da9'
+LO, HI = ms('2026-11-11T11:27:27.000Z'), ms('2026-11-11T12:37:23.816Z')
+a = collect(LO, HI, REV)
+A = sorted([v for v in a['gaps'] if v['role'] == 'viewer'], key=lambda v: v['utc'])
+TOT = sum(v['gapMs'] for v in A)
+def named(v): return v['reads'].get('namedSyncMs', 0) if v.get('reads') else None
+out = {'readStart': began, 'digest': a['digest'], 'n': len(A), 'gapMs': TOT}
+
+# 1. Six gaps that hold a stale-claim refusal: named, residual and main-thread CPU.
+six = ['11:31:24.157', '11:34:32.798', '11:40:46.547', '11:47:12.330', '11:53:31.080', '12:03:36.799']
+S = [v for v in A if v['utc'][11:23] in six]
+out['refusalGaps'] = [[v['utc'][11:23], v['gapMs'], round(min(v['gapMs'], named(v))), round(max(0, v['gapMs'] - named(v))),
+                       round(v['scheduler']['runMs']) if v['scheduler'].get('runMs') is not None else None, v['cooperative'].get('resumed')] for v in S]
+out['refusalTotals'] = {'gapMs': sum(v['gapMs'] for v in S), 'namedMs': round(sum(min(v['gapMs'], named(v)) for v in S)),
+                        'residualMs': round(sum(max(0, v['gapMs'] - named(v)) for v in S))}
+
+# 2. Gaps with http.render/registry.get: calls, overlapping http.render operations, connections.
+rows = []
+for v in A:
+    if not v.get('reads'): continue
+    g = next((x for x in v['reads']['top'] if x['operation'] == 'http.render' and x['reader'] == 'registry.get'), None)
+    if not g: continue
+    op = next((o for o in v['operations'] if o['name'] == 'http.render'), None)
+    rows.append([v['utc'][11:23], v['gapMs'], g['calls'], op['count'] if op else 0, len(g.get('connections', [])),
+                 v.get('completedDropped', 0), v.get('pendingOperations', 0)])
+out['renderGetGaps'] = rows
+out['renderGetTotals'] = {'gaps': len(rows), 'calls': sum(r[2] for r in rows), 'minRenderOps': min(r[3] for r in rows), 'maxRenderOps': max(r[3] for r in rows),
+                          'gapsWithOneRenderOp': sum(r[3] == 1 for r in rows)}
+out['readEnd'] = iso(time.time() * 1000)
+for k, x in out.items(): print(json.dumps({k: x}))
+```
+
+Output. A `refusalGaps` row is `[gap end, gap ms, named ms, unattributed ms,
+scheduler run ms, cooperative slices resumed]`. A `renderGetGaps` row is `[gap
+end, gap ms, registry.get calls, http.render operations, connections, completed
+operations dropped, pending operations]`.
+
+```json
+{"readStart": "2026-11-11T14:24:38.883Z"}
+{"digest": "de4ef66e8ea0c7afc3cd2658b79c22acec0a2168a755525d35895f58cdd35094"}
+{"n": 801}
+{"gapMs": 1095605}
+{"refusalGaps": [["11:31:24.157", 13799, 1426, 12373, 13884, 0], ["11:34:32.798", 14956, 1334, 13622, 14962, 0], ["11:40:46.547", 16078, 1518, 14560, 16177, 0], ["11:47:12.330", 14728, 1345, 13383, 14717, 0], ["11:53:31.080", 13605, 1007, 12598, 13565, 0], ["12:03:36.799", 13502, 1077, 12425, 13476, 0]]}
+{"refusalTotals": {"gapMs": 86668, "namedMs": 7707, "residualMs": 78961}}
+{"renderGetGaps": [["11:36:43.063", 517, 320, 11, 1, 356, 41], ["11:37:01.910", 624, 321, 11, 1, 747, 38], ["11:46:43.178", 2254, 31140, 9, 2, 1202, 37], ["11:59:17.474", 4364, 31935, 9, 2, 1198, 28], ["12:01:01.547", 800, 330, 12, 1, 367, 45], ["12:08:37.007", 585, 27093, 12, 1, 0, 26], ["12:19:42.935", 1661, 36954, 13, 2, 1210, 25], ["12:22:45.267", 1052, 28188, 15, 1, 0, 70], ["12:24:48.703", 1843, 36889, 14, 2, 1205, 29], ["12:30:12.201", 10526, 152700, 20, 1, 174, 93], ["12:30:43.890", 8268, 133649, 21, 1, 58, 112], ["12:31:33.632", 14866, 133645, 19, 1, 118, 82], ["12:34:43.751", 587, 343, 17, 1, 415, 40], ["12:35:27.985", 4098, 37262, 18, 2, 1654, 108], ["12:36:18.482", 2530, 36918, 15, 2, 1217, 36]]}
+{"renderGetTotals": {"gaps": 15, "calls": 687687, "minRenderOps": 9, "maxRenderOps": 21, "gapsWithOneRenderOp": 0}}
+{"readEnd": "2026-11-11T14:24:42.692Z"}
+```
+
+The window outside the passes, from section 5.6's output: 4,196.816 s of window
+minus 1,748.9 s inside passes is 2,447.9 s; from `ready` at 12:06:10.901 to the
+window's end at 12:37:23.816 is 1,872.9 s.
+
+**Thread layout of the serving Viewer**, procfs only, read from 14:22:34.729 to
+14:22:34.929 UTC. `threads.py`, SHA-256
+`7b1a7b55c5dabaa107d90e59c9c67d23f6aeb8cf9a6487242f58ccc2bcd2921b`:
+
+```python
+import json, subprocess, time, datetime, pathlib, collections, os
+def iso(t): return datetime.datetime.fromtimestamp(t, datetime.timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z')
+began = iso(time.time())
+q = subprocess.run(['journalctl','--user','-u','delegatus.service','--since','-3min','--utc','-o','json','--all','--no-pager','-n','3000',
+                    '--grep',r'^\[viewer loop-gap\] '], capture_output=True, text=True, timeout=18)
+rows = q.stdout.splitlines(); assert q.returncode == 0 and len(rows) < 3000
+recs = []
+for line in rows:
+    m = json.loads(line)['MESSAGE']
+    try: v = json.loads(m[m.index('{'):])
+    except ValueError: continue
+    if v.get('role') == 'viewer': recs.append((v['utc'], v['pid'], v.get('revision')))
+utc, pid, rev = sorted(recs)[-1]
+p = pathlib.Path(f'/proc/{pid}')
+s = (p/'stat').read_text(); start = s[s.rfind(')')+2:].split()[19]
+names = collections.Counter(); heap = []
+tids = sorted(os.listdir(p/'task'), key=int)[:4000]
+t0 = time.perf_counter()
+for t in tids:
+    try:
+        n = (p/'task'/t/'comm').read_text().strip(); names[n] += 1
+        if n == 'HeapHelper': heap.append(t)
+    except FileNotFoundError: pass
+list_ms = (time.perf_counter() - t0) * 1000
+t1 = time.perf_counter(); reps = 100
+for _ in range(reps):
+    for t in [str(pid)] + heap:
+        try: (p/'task'/t/'stat').read_text()
+        except FileNotFoundError: pass
+pass_us = (time.perf_counter() - t1) / reps * 1e6
+print(json.dumps({'readStart': began, 'lastRecordUtc': utc, 'pid': pid, 'revision': rev, 'startIdentity': start, 'threads': len(tids),
+  'heapHelpers': len(heap), 'topNames': names.most_common(8), 'commListingMs': round(list_ms, 1), 'statPassUs': round(pass_us, 1), 'readEnd': iso(time.time())}))
+```
+
+```json
+{"readStart": "2026-11-11T14:22:34.729Z", "lastRecordUtc": "2026-11-11T14:22:34.401Z", "pid": 946855, "revision": "662a6012b39f051669da557d828c13b9e82aa27d", "startIdentity": "56471738", "threads": 59, "heapHelpers": 7, "topNames": [["tokio-rt-worker", 24], ["HeapHelper", 7], ["JITWorker", 3], ["Worker", 3], ["bun", 1], ["mi-scavenger", 1], ["Bun Pool 0", 1], ["Bun Pool 1", 1]], "commListingMs": 1.4, "statPassUs": 166.9, "readEnd": "2026-11-11T14:22:34.929Z"}
+```
+
+`statPassUs` is the mean time of one read of the main thread's and the seven
+helpers' `stat` files over 100 passes, in the reading process.
+
+**The follow-up's thread sampler.** `thread_cpu.py`, SHA-256
+`85b31ad49a4a45a7b53442e2089844ed3bc455fc01ced04997514638aee4645c`:
+
+```python
+# Read-only: CPU ticks of a process's main thread and HeapHelper threads, once a second.
+# Usage: python3 -I thread_cpu.py PID START_IDENTITY OUTPUT_FILE SECONDS (at most 6000)
+import json, os, pathlib, sys, time
+pid, start, out, seconds = int(sys.argv[1]), sys.argv[2], sys.argv[3], min(int(sys.argv[4]), 6000)
+task = pathlib.Path(f'/proc/{pid}/task'); hz = os.sysconf('SC_CLK_TCK')
+def fields(path): s = path.read_text(); return s[s.rfind(')') + 2:].split()
+def ticks(tid): f = fields(task / tid / 'stat'); return int(f[11]) + int(f[12])
+helpers, listed = [], -60.0
+with open(out, 'x') as w:
+    for _ in range(seconds):
+        at = time.time()
+        try:
+            if fields(pathlib.Path(f'/proc/{pid}/stat'))[19] != start: w.write(json.dumps({'utc': round(at, 3), 'end': 'identity-changed'}) + '\n'); break
+            if at - listed >= 60:
+                helpers, listed = [], at
+                for tid in sorted(os.listdir(task), key=int)[:4000]:
+                    try:
+                        if (task / tid / 'comm').read_text().strip() == 'HeapHelper': helpers.append(tid)
+                    except FileNotFoundError: pass
+                helpers = helpers[:16]
+            main, helper = ticks(str(pid)), 0
+            for tid in helpers:
+                try: helper += ticks(tid)
+                except FileNotFoundError: pass
+        except FileNotFoundError: w.write(json.dumps({'utc': round(at, 3), 'end': 'process-gone'}) + '\n'); break
+        w.write(json.dumps({'utc': round(at, 3), 'mainTicks': main, 'helperTicks': helper, 'helpers': len(helpers), 'hz': hz}) + '\n'); w.flush()
+        time.sleep(max(0.0, 1 - (time.time() - at)))
+```
+
+Dry run against the serving Viewer, from 14:24:43.098 to 14:24:48.163 UTC:
+`timeout 20 python3 -I thread_cpu.py 946855 56471738 <scratch>/thread-cpu-dryrun.jsonl 5`.
+It wrote five rows and exited:
+
+```json
+{"utc": 1794407083.138, "mainTicks": 556382, "helperTicks": 103538, "helpers": 7, "hz": 100}
+{"utc": 1794407084.139, "mainTicks": 556476, "helperTicks": 103542, "helpers": 7, "hz": 100}
+{"utc": 1794407085.139, "mainTicks": 556573, "helperTicks": 103544, "helpers": 7, "hz": 100}
+{"utc": 1794407086.139, "mainTicks": 556670, "helperTicks": 103547, "helpers": 7, "hz": 100}
+{"utc": 1794407087.139, "mainTicks": 556767, "helperTicks": 103547, "helpers": 7, "hz": 100}
+```
+
+These five seconds are a check that the script runs. They measure nothing that
+this document uses.
+
+**Main and open pull requests**, read from 14:19:28.227 to 14:19:40.173 UTC,
+and two more compare reads from 14:30:44.891 to 14:30:50.682 UTC:
+
+```bash
+git ls-remote origin refs/heads/main
+gh pr list --state open --limit 100 --json number,files --jq '.[] | select([.files[].path] | any(test("src/lib/(viewerLoopMonitor|loopWatchdog|loopProfiler|loopProfilerServing|readAttribution|nextRenderMonitor|viewerInstrumentation)"))) | {n:.number, f:[.files[].path | select(test("src/lib/(viewerLoopMonitor|loopWatchdog|loopProfiler|loopProfilerServing|readAttribution|nextRenderMonitor|viewerInstrumentation)"))]}'
+C=repos/latand/delegatus/compare/1a2e577f2a9f1357ffe9822edb00665c81d93cb5...1037130eed9d990edcdd3053150af7ba44592cf9
+gh api "$C" --jq '.files[] | select(.filename|test("viewerLoopMonitor|loopWatchdog|loopProfiler|readAttribution")) | {f:.filename, s:.status, a:.additions, d:.deletions, p:.patch}'
+gh pr view 3710 --json title,headRefOid,baseRefName,updatedAt,state --jq '{t:.title,h:.headRefOid,u:.updatedAt,s:.state}'
+gh api repos/latand/delegatus/pulls/3710/files --paginate --jq '.[] | select(.filename|test("viewerLoopMonitor")) | .patch'
+gh api "$C" --jq '[.files[].filename] | map(select(test("viewerLoopMonitor|loopWatchdog|loopProfiler|eadAttribution|nextRenderMonitor|sqliteRegistryStore|seatTickSources|agent/registry.ts")))'
+gh api "$C" --jq '.files[] | select(.filename=="src/lib/agent/sqliteRegistryStore.ts") | .patch' | grep '^@@'
+```
+
+Main was `1037130e`. Two open PRs touch the monitor files: 3861
+(`viewerInstrumentation.ts` and its test) and 3710 (`viewerInstrumentation.ts`
+and `viewerLoopMonitor.ts`). PR 3710's head was `edb2bf06`, last updated
+2026-11-06; its `viewerLoopMonitor.ts` hunk changes only the operation type
+union. Between the base `1a2e577f` and main, among the files this revision
+cites, only `viewerLoopMonitor.ts` (one operation label, `memory.history-drain`,
+one line replaced) and `sqliteRegistryStore.ts` (two one-line replacements, at
+lines 27 and 3742) changed. Neither moves a cited line.
+
+**Source lines cited by the revision**, read in this worktree at `cb9208cc`
+(the same line numbers on main `1037130e`, as above):
+`src/lib/viewerLoopMonitor.ts:156-164, 186-235, 283-293`;
+`src/lib/loopWatchdog.ts` (`startLoopWatchdog`);
+`src/lib/loopProfiler.ts` (`createLoopProfiler`);
+`src/lib/loopProfilerServing.ts` (`startServingLoopProfiler`);
+`src/lib/readAttribution.ts:176, 217, 228`;
+`src/lib/sqliteReadAttribution.ts:65, 96, 108`;
+`src/lib/nextRenderMonitor.ts:11-29`;
+`src/lib/agent/sqliteRegistryStore.ts:4022-4031`;
+`src/lib/monitor/seatTickSources.ts:825, 828, 2919-2931`.
+
+Every read in this revision was read-only: `journalctl` with row caps and
+subprocess timeouts, procfs files of the serving Viewer, and GitHub reads. No
+database was opened, and no route, profiler, signal, restart, setting change or
+load generator was used. The only process started against the serving Viewer
+was the five-second sampler dry run, which reads procfs and exited on its own.
 
 </details>
