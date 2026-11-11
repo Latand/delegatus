@@ -59,12 +59,13 @@ test("stage text, nested records, bridge reports and issue hints retain exact by
     roleId: "builder", conversationId: "conversation_fixture", at: "2026-11-06T00:00:00Z" });
   expect(storedLessonRevision()).toBe(revision);
   const input = report();
-  const expected = renderReport({ ...input, deny: { ...deny, lessons: storedLessonTexts() } });
-  expect(JSON.stringify(await renderReportAsync(input))).toBe(JSON.stringify(expected));
+  // A manager report keeps a quoted lesson: it goes to the operator and the project's own chat.
+  const rendered = await renderReportAsync(input);
+  expect(JSON.stringify(rendered)).toBe(JSON.stringify(renderReport({ ...input, deny })));
+  expect(rendered.dropped.lesson).toBeUndefined();
   expect(compileCount()).toBe(count);
-  expect((await renderReportAsync({ ...input, deny: { ...deny, lessons: [] } })).dropped.lesson).toBe(1);
   const markerReport = { ...input, summary: "[learned rule]" };
-  expect(JSON.stringify(await renderReportAsync(markerReport))).toBe(JSON.stringify(renderReport({ ...markerReport, deny: { ...deny, lessons: storedLessonTexts() } })));
+  expect(JSON.stringify(await renderReportAsync(markerReport))).toBe(JSON.stringify(renderReport({ ...markerReport, deny })));
   const issue = { title: "Verification finding", body: `${lesson}\nfixtureword receipts` };
   expect(await scrubIssueReportAsync(issue, deny)).toEqual(scrubIssueReport(issue, { ...deny, lessons: storedLessonTexts() }));
   const exactCount = compileCount();
@@ -86,7 +87,7 @@ test("the caller never compiles or executes the stored patterns, including cold 
   try {
     for (let restart = 0; restart < 2; restart++) {
       expect(await withoutStoredLessonsAsync(input)).toBe(input.slice(0, -lesson.length) + "[learned rule]");
-      expect((await renderReportAsync(report())).dropped.lesson).toBe(1);
+      expect((await renderReportAsync(report())).dropped.lesson).toBeUndefined();
       expect(await withoutStoredLessonsAsync(input + " " + restart)).toBe(input.slice(0, -lesson.length) + "[learned rule] " + restart);
       await shutdownTaskPageWorker();
     }
@@ -101,16 +102,18 @@ test("revision changes replace the shared matcher for every operation", async ()
   store([lesson, added]);
   expect(await withoutStoredLessonsAsync(added)).toBe("[learned rule]");
   expect(compileCount()).toBeGreaterThan(count);
-  expect((await renderReportAsync({ ...report(), summary: added })).dropped.lesson).toBe(2);
+  expect((await renderReportAsync({ ...report(), summary: added })).dropped.lesson).toBeUndefined();
 }, 30_000);
 
-test("unreadable memory refuses launches, reports and issue hints without returning input", async () => {
+test("unreadable memory refuses launches and issue hints without returning input, and a manager report is still rendered", async () => {
   const state = process.env.LLV_STATE_DIR!;
   store([lesson]);
   const database = new Database(path.join(state, "state.sqlite"));
   database.query("UPDATE state_rows SET value_json = ? WHERE collection = 'role_memory' AND row_key LIKE 'r:%'").run(JSON.stringify({ kind: "rule", id: 7, rule: lesson }));
   database.close();
-  for (const call of [() => withoutStoredLessonsAsync(lesson), () => renderReportAsync(report()), () => scrubIssueReportAsync({ title: lesson, body: lesson }, deny)]) {
+  // A manager report carries no lesson check, so it does not depend on reading the lessons.
+  expect((await renderReportAsync(report())).dropped.lesson).toBeUndefined();
+  for (const call of [() => withoutStoredLessonsAsync(lesson), () => scrubIssueReportAsync({ title: lesson, body: lesson }, deny)]) {
     await expect(call()).rejects.toMatchObject({ code: "LESSON_PRIVACY_UNAVAILABLE" });
   }
 }, 30_000);

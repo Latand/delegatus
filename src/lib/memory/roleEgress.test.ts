@@ -5,10 +5,11 @@ import os from "node:os";
 import path from "node:path";
 
 /* Where a stored lesson is kept from leaving. Public output withholds or
-   refuses its text: issue reports, the manager report whose copy goes to the
-   project's Telegram chat, and the publication privacy gate. What stays with
-   the operator carries it as written: a linked installation's board and agent
-   feed, a relay to it, and prompts to the operator's own agents. The lesson's
+   refuses its text: issue reports for GitHub and the publication privacy
+   gate. What stays with the operator carries it as written: a linked
+   installation's board and agent feed, a relay to it, and the manager report
+   with its copy to the project's own chat (privacy.test.ts covers that one
+   through the worker). The lesson's
    own record is untouched. The state directory and the scratch repository are
    private to this file. */
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-role-memory-egress-"));
@@ -71,7 +72,7 @@ test("a task leaves for a linked installation as written, and its page never bui
   } finally { globalThis.RegExp = NativeRegExp; }
 });
 
-test("the manager report copied to the project's Telegram chat and an issue report for GitHub drop a quoted lesson as private text", () => {
+test("an issue report for GitHub drops a quoted lesson as private text, and so does a report rendered with an explicit lesson list", () => {
   const deny = { ...EMPTY_DENY_LIST, lessons: storedLessonTexts() };
   const { cut, warnings, dropped } = renderReport({ class: "status", name: "Delegatus", at: new Date("2026-10-07T12:00:00Z"), locale: "en", timeZone: "Europe/Kyiv",
     summary: QUOTED, sections: { inProgress: ["the parser fix", `follow ${RULE}`] }, deny });

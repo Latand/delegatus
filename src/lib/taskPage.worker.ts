@@ -2,7 +2,7 @@ import { PrivacyWorkError, privacyFailureOf } from "./memory/privacyFailure";
 import readline from "node:readline";
 import { TaskPageBuilder, type PageBuildRequest } from "./links/taskPageBuild";
 
-import { RoleMemoryRefusal, refreshLessonKnownValues, observeLessonPrivacyPhase, storedLessonPatterns, storedLessonRevision, hasStoredLesson, withoutStoredLessonsIn } from "./memory/roleStore";
+import { RoleMemoryRefusal, refreshLessonKnownValues, observeLessonPrivacyPhase, storedLessonPatterns, storedLessonRevision, withoutStoredLessonsIn } from "./memory/roleStore";
 import { renderReport } from "./bridge/reportRender";
 import { lessonPattern } from "./memory/roleConsolidate";
 import { EMPTY_DENY_LIST } from "./bridge/publicSafe";
@@ -57,11 +57,13 @@ for await (const line of lines) {
       if (request.kind === "filter") value = withoutStoredLessonsIn(request.value, { requireComplete: true });
       else {
         const deny = (request.kind === "report" ? request.input.deny : request.deny) ?? EMPTY_DENY_LIST;
-        // The worker always checks authoritative lessons. Explicit deny-list
-        // lessons supplement them and cannot disable the stored privacy fence.
-        withoutStoredLessonsIn(null, { requireComplete: true });
+        // An issue report goes to GitHub: the worker always checks it against
+        // the authoritative lessons, and explicit deny-list lessons supplement
+        // them. A manager report goes to the operator and the project's own
+        // chat: it keeps every other class of the deny list and no lesson check.
+        if (request.kind === "issue") withoutStoredLessonsIn(null, { requireComplete: true });
         const localDeny = request.kind === "report"
-          ? { ...deny, hasLesson: hasStoredLesson }
+          ? deny
           : { ...deny, lessonPatterns: [...storedLessonPatterns(), ...(deny.lessons ?? []).flatMap(text => {
             const pattern = lessonPattern(text); return pattern ? [pattern] : [];
           })] };
