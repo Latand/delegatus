@@ -10,6 +10,7 @@ import { ownerTierFor } from "./profile";
 import { ownerContinuationPrompt, ownerFailureAnswer, ownerRunPrompt, runOwnerAgent } from "./ownerRun";
 import { json } from "./prompt";
 import { RelayMandatoryPromptTooLargeError } from "./promptBudget";
+import * as promptBudget from "./promptBudget";
 import { richRequest } from "./rich.fixture";
 import { prepareOwnerPrompt } from "./ownerRun";
 import { ownerTurnDiagnostic } from "./diagnostic";
@@ -19,6 +20,23 @@ import { startTestRelay } from "./testRelay";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { resetProjectDirectoryCacheForTests } from "@/lib/scanner/projectDirectories";
 import { checkEnvironment } from "../../../scripts/gate-cache";
+
+function measuredCore(total: number, compose: () => ReturnType<typeof prepareOwnerPrompt>) {
+  const realBudget = promptBudget.boundedRelayPrompt;
+  let mandatoryBytes = 0;
+  const observed = spyOn(promptBudget, "boundedRelayPrompt").mockImplementation(((...args: Parameters<typeof realBudget>) => {
+    try { return realBudget(...args); }
+    catch (error) {
+      if (error instanceof RelayMandatoryPromptTooLargeError) mandatoryBytes = error.mandatoryBytes;
+      throw error;
+    }
+  }) as typeof realBudget);
+  try {
+    const prepared = compose();
+    expect(mandatoryBytes).toBe(total);
+    return prepared;
+  } finally { observed.mockRestore(); }
+}
 
 const at = "2026-11-05T12:00:00.000Z";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-envelope-"));
@@ -265,7 +283,9 @@ test(`${mode} ${shape} delivers full Cyrillic context and answers within the env
     r.input.conversation = r.input.conversation.slice(-2);
     r.input.conversation[0]!.reply_to = null;
     r.input.conversation[0]!.text = "я".repeat(1178) + ".";
-    r.input.instructions = "s".repeat(3025);
+    // Synthetic filler accounts for absent historical hydration/framing while
+    // matching the two measured mandatory totals through the real renderer.
+    r.input.instructions = "s".repeat(mode === "fresh" ? 3192 : 4690);
     r.input.owner_instructions = "я".repeat(7400) + "<".repeat(100) + "o".repeat(92);
     r.features = richRequest().features;
     r.input.format = richRequest().input.format;
@@ -274,8 +294,9 @@ test(`${mode} ${shape} delivers full Cyrillic context and answers within the env
   }
   const owner = ownerTierFor(target, r)!;
   const before = JSON.stringify(r);
-  const prepared = mode === "fresh" ? prepareOwnerPrompt(r, owner, 1, "OPTIONAL_SUFFIX".repeat(5000))
+  const compose = () => mode === "fresh" ? prepareOwnerPrompt(r, owner, 1, "OPTIONAL_SUFFIX".repeat(5000))
     : ownerContinuationPrompt(r, owner, 1, { seen: [], staticDigest: null }, "OPTIONAL_SUFFIX".repeat(5000));
+  const prepared = shape === "measured-core" ? measuredCore(mode === "fresh" ? 33474 : 34090, compose) : compose();
   expect(prepared.context).toBeDefined();
   expect(prepared.seen).toEqual([owner.messageId]);
   expect(prepared.context).not.toContain("OPTIONAL_SUFFIX");
@@ -329,12 +350,13 @@ test(`${mode} instruction alone over the byte bound refuses before dispatch`, as
   expect(dispatches).toBe(0);
 });
 
+for (const mode of ["fresh", "resumed"] as const)
 for (const failure of ["write", "authority"] as const)
-test(`context ${failure} failure prevents dispatch`, async () => {
+test(`${mode} context ${failure} failure prevents dispatch`, async () => {
   const r = request("я".repeat(16000));
   const owner = ownerTierFor(target, r)!;
   const prepared = prepareOwnerPrompt(r, owner, 1);
-  const directory = path.join(root, `context-failure-${failure}`);
+  const directory = path.join(root, `context-failure-${mode}-${failure}`);
   if (failure === "authority") fs.mkdirSync(directory);
   let dispatches = 0, revoked = false;
   const write = failure === "authority" ? spyOn(fs.promises, "writeFile").mockImplementation(async (...args: Parameters<typeof fs.promises.writeFile>) => {
@@ -344,8 +366,10 @@ test(`context ${failure} failure prevents dispatch`, async () => {
   try {
     const result = await runOwnerAgent({ request: r, owner, target: { ...target }, accountId: null, hardCapMs: 2000,
       preparedPrompt: prepared, contextDirectory: directory, authorize: () => { if (revoked) throw new Error("fixture revoked"); },
+      ...(mode === "resumed" ? { continuation: { conversationId: "conversation_context_failure", prompt: prepared.prompt } } : {}),
       onConversation: () => {}, ports: {
         launch: async () => { dispatches++; return { status: 500, body: {} }; },
+        continue: async () => { dispatches++; return null; },
         observe: async () => ({ state: "failed" }), stop: async () => {}, noExecution: async () => true,
       } }).done;
     expect(result.status).toBe("failed"); expect(dispatches).toBe(0);
