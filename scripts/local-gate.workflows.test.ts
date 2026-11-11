@@ -32,7 +32,7 @@ test("OS-specific CI jobs are bounded and keep cancellation", () => {
   for (const [file, limits] of [
     ["platform-tests.yml", { scope: 3, "windows-platform": 10 }],
     ["macos-identity.yml", { scope: 3, "darwin-identity": 20 }],
-    ["macos-newcomer.yml", { newcomer: 30 }],
+    ["macos-newcomer.yml", { newcomer: 15 }],
   ] as const) {
     const workflow = read(file);
     for (const [job, timeout] of Object.entries(limits)) expect(workflow.jobs[job]!["timeout-minutes"]).toBe(timeout);
