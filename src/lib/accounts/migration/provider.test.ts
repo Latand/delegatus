@@ -28,14 +28,13 @@ import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_UNAVAILABLE_THIS_RUN_NOT
 import { setTelegramLaunchRepairForTests } from "@/lib/telegram/launchReadiness";
 import { clearTelegramConnection, deleteTelegramSession, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 import * as structuredSpawn from "@/lib/runtime/structuredSpawn";
-import * as tmux from "@/lib/tmux";
 import { advanceConversationMigration } from "./coordinator";
 import type { EngineHost, HostState } from "@/lib/runtime/engineHost";
 import { StructuredDeliveryControllerUnavailableError } from "@/lib/runtime/structuredDeliveryController";
 
 const roots: string[] = [];
 
-for (const retireAt of ["cancel", "forget", "allowed"] as const) {
+for (const retireAt of ["cancel", "allowed"] as const) {
   test(`a reused legacy Claude receipt checks target authorization after retirement: ${retireAt}`, async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-retirement-fence-"));
     roots.push(base);
@@ -71,10 +70,6 @@ for (const retireAt of ["cancel", "forget", "allowed"] as const) {
     let launches = 0;
     let registrations = 0;
     let releases = 0;
-    const forget = spyOn(tmux, "forgetResumePaneIfMatches").mockImplementation(async () => {
-      await Promise.resolve();
-      if (retireAt === "forget") allowed = false;
-    });
     const adopt = spyOn(ClaudeStreamBrokerHost, "adopt").mockImplementation(async () => {
       launches += 1;
       return {
@@ -126,7 +121,6 @@ for (const retireAt of ["cancel", "forget", "allowed"] as const) {
       expect(releases).toBe(launches);
       controller.registerActiveHost = originalRegister;
       adopt.mockRestore();
-      forget.mockRestore();
       if (structuredFlag === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
       else process.env.LLV_STRUCTURED_HOSTS = structuredFlag;
     }

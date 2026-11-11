@@ -31,7 +31,7 @@ test("Docker publishing stays on main and tags; PR scope admits image inputs and
 test("OS-specific CI jobs are bounded and keep cancellation", () => {
   for (const [file, limits] of [
     ["platform-tests.yml", { scope: 3, "windows-platform": 10 }],
-    ["macos-identity.yml", { scope: 3, "darwin-identity": 10 }],
+    ["macos-identity.yml", { scope: 3, "darwin-identity": 20 }],
     ["macos-newcomer.yml", { newcomer: 15 }],
   ] as const) {
     const workflow = read(file);

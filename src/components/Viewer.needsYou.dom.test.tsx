@@ -174,7 +174,7 @@ function stubFetch(): void {
         files: [...FILES, ...laterFiles],
         projectCatalog: [LEDGER, ATLAS].map((project) => ({ project, conversations: project === LEDGER ? 2 : 1, smt: NOW - 30 })),
         projectDisplayNames: NAMES,
-        flows: [], pipelines: [lane(laneDismissed)], workflows: [], tasks: TASKS, systemHealth: { tmux: { status: "healthy" } },
+        flows: [], pipelines: [lane(laneDismissed)], workflows: [], tasks: TASKS, systemHealth: {},
       });
     }
     if (url.startsWith("/api/board")) {
@@ -440,7 +440,7 @@ test("desktop: a conversation that starts waiting lights its own card under the 
   const asking = "/sessions/ledger-asking.jsonl";
   laterFiles = [conversation(asking, LEDGER, "Planner of the ledger cutover", {
     activity: "idle", proc: null, lastTurn: { startedAt: (NOW - 900) * 1000, endedAt: (NOW - 600) * 1000 },
-    pendingQuestion: { kind: "question", toolUseId: "tool-ledger", transcriptPath: asking, pid: 1, paneTarget: null, askedAt: iso(540), questions: [{ question: "Which cutover date?", header: "Cutover", multiSelect: false, options: [] }] },
+    pendingQuestion: { kind: "question", toolUseId: "tool-ledger", transcriptPath: asking, pid: 1, askedAt: iso(540), questions: [{ question: "Which cutover date?", header: "Cutover", multiSelect: false, options: [] }] },
   } as Partial<FileEntry>)];
   await rescan();
   await until(() => islandCount(host) === 2);

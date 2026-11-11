@@ -1720,6 +1720,24 @@ export function resetStateReadonlyReaderForTests(): void {
  * held over a yield, so all compiled consumers can share this one connection.
  * Switching directories closes the previous handle; replacement is guarded by
  * openCurrentDatabase. Row versions remain the authority across awaits. */
+/** The stored text of every row of these collections that contains one of
+    the needles. SQLite does the matching; no row is decoded here. A result
+    over the byte bound throws, so a caller never works from a partial read. */
+export function stateRowsContaining(filename: string, collections: readonly string[], needles: readonly string[], maxBytes = 64 * 1024 * 1024): string[] {
+  if (!collections.length || !needles.length || !fs.existsSync(filename)) return [];
+  const rows: string[] = [];
+  let bytes = 0;
+  for (const row of sharedStateReadonlyDatabase(filename).query<{ value_json: string }, SQLQueryBindings[]>(
+    `SELECT value_json FROM state_rows WHERE collection IN (${collections.map(() => "?").join(", ")})
+      AND (${needles.map(() => "instr(value_json, ?) > 0").join(" OR ")})`,
+  ).iterate(...collections, ...needles)) {
+    bytes += row.value_json.length;
+    if (bytes > maxBytes) throw new Error("state rows matching the search exceed the read bound");
+    rows.push(row.value_json);
+  }
+  return rows;
+}
+
 function sharedStateReadonlyDatabase(filename: string): Database {
   const current = stateReadonlyReaderOwner.__llvStateReadonlyReader;
   if (current?.filename === filename) return current.db;

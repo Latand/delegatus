@@ -35,7 +35,7 @@ Object.assign(globalThis, {
 });
 
 function rv(hostKind: HostKind, host: HostAxis, artifactPath?: string): RuntimeSessionView {
-  return { session: { hostKind, host, artifactPath, conversationId: "conversation_root" } as RuntimeSessionView["session"], uiState: {} as RuntimeSessionView["uiState"], attentions: [], receipts: [], legacy: hostKind === "tmux-legacy", structuredControlsEnabled: true };
+  return { session: { hostKind, host, artifactPath, conversationId: "conversation_root" } as RuntimeSessionView["session"], uiState: {} as RuntimeSessionView["uiState"], attentions: [], receipts: [], structuredControlsEnabled: true };
 }
 
 function file(over: Partial<FileEntry> = {}): FileEntry {
@@ -93,31 +93,6 @@ test("a live tmux root shows an enabled Kill that confirms then posts to /api/co
   const confirm = Array.from(host.querySelectorAll("button")).find((b) => (b.textContent ?? "").includes(translate("en", "task.confirmKillYes")))!;
   await clickButton(confirm as HTMLButtonElement);
   expect(calls.filter((u) => u.includes("/api/conversation-host")).length).toBe(1);
-  await act(async () => root.unmount());
-});
-
-test("a scanner-shaped subagent under a live TMUX root shows an enabled Kill that posts its own path for server validation", async () => {
-  // The runtime plane is authoritative and carries the live tmux root keyed by
-  // the subagent's artifact path — the production shape (finding 2).
-  planeEnabled = true;
-  rootByArtifact = (path) => (path === "/root.jsonl" ? rv("tmux-legacy", "hosted", "/root.jsonl") : null);
-  const calls: { url: string; body: unknown }[] = [];
-  globalThis.fetch = ((url: string, init?: RequestInit) => {
-    calls.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
-    return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, pid: 5 }) } as unknown as Response);
-  }) as typeof fetch;
-
-  const child = file({ path: "/child.jsonl", kind: "subagent", parent: "/root.jsonl", proc: null, pid: null });
-  const { host, root } = await mount(child);
-  const kill = killBtns(host)[0]!;
-  expect(kill.disabled).toBe(false);
-  await clickButton(kill);
-  const confirm = Array.from(host.querySelectorAll("button")).find((b) => (b.textContent ?? "").includes(translate("en", "task.confirmKillYes")))!;
-  await clickButton(confirm as HTMLButtonElement);
-  const procCalls = calls.filter((c) => c.url.includes("/api/conversation-host"));
-  expect(procCalls.length).toBe(1);
-  // The server owns the branch refusal; the client cannot replace the target with the root.
-  expect(procCalls[0]!.body).toMatchObject({ path: "/child.jsonl" });
   await act(async () => root.unmount());
 });
 
@@ -208,27 +183,4 @@ test("an unresolved host (plane on, no session yet) omits the Kill — no /api/c
   const { host, root } = await mount(file());
   expect(killBtns(host).length).toBe(0);
   await act(async () => root.unmount());
-});
-
-test("stale native journal cannot hide stop for the current legacy conversation owner", async () => {
-  planeEnabled = true;
-  currentRv = rv("codex-app-server", "dead");
-  const calls: { url: string; body: unknown }[] = [];
-  globalThis.fetch = (async (url: string, init?: RequestInit) => {
-    calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
-    return { ok: true, status: 200, json: async () => ({ ok: true, target: "%owned" }) } as Response;
-  }) as typeof fetch;
-  const { host, root } = await mount(file({
-    conversationId: "conversation_root",
-    controlHost: { conversationId: "conversation_root", transport: "legacy" },
-  }));
-  try {
-    expect(killBtns(host).length).toBe(1);
-    await clickButton(killBtns(host)[0]!);
-    const confirm = Array.from(host.querySelectorAll("button")).find((b) => b.textContent === translate("en", "task.confirmKillYes"))!;
-    await clickButton(confirm);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe("/api/conversation-host");
-    expect(calls[0]!.body).toMatchObject({ conversationId: "conversation_root", path: "/c.jsonl", action: "kill", operationId: expect.any(String) });
-  } finally { await act(async () => root.unmount()); }
 });

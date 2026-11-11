@@ -353,7 +353,7 @@ test("fresh processes repair indexes only with startup authority", () => {
   try {
     for (const [kind, missing] of [
       ["state", "pipeline_tick_due"], ["state", "history_path"], ["state", "pipeline_attempt_current"],
-      ["state", "state_rows_task_project"], ["registry", "registry_caller_agent_pid"],
+      ["state", "state_rows_task_project"], ["registry", "registry_caller_structured_pid"],
       ["registry", "registry_generation_identities_entry"], ["journal", "session_host_activity"],
       ["journal", "operations_retry_parent"],
     ]) {

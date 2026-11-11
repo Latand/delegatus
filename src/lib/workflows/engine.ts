@@ -3,12 +3,10 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { freshSpecFor } from "@/lib/agent/cli";
 import { agentRegistry } from "@/lib/agent/registry";
 import type { ProjectSpawnResolution } from "@/lib/accounts/contracts";
 import { accountManager } from "@/lib/accounts/manager";
 import { projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
-import { resolveSpawnedTranscriptPath } from "@/lib/agent/spawnedTranscript";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { headCwd } from "@/lib/agent/transcript";
 import { closeFlow, createFlowFromRequest, patchFlow as patchReviewFlow } from "@/lib/flows/commands";
@@ -19,8 +17,6 @@ import { persistHandoffLineage, rememberHandoffChild } from "@/lib/handoffLineag
 import { OPERATOR_PAUSE_RESUME_ACTOR, pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
 import { isNativeCodexSubagentTranscript } from "@/lib/scanner/codexNative";
 import { projectForCwd } from "@/lib/scanner/describe";
-import { isShellCommand } from "@/lib/status";
-import { paneInfo, spawnAgentWithPrompt } from "@/lib/tmux";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
@@ -83,6 +79,8 @@ export interface WorkflowPorts {
   now(): string;
 }
 
+const WORKFLOWS_RETIRED_SPAWN_ERROR = "workflow stages ran in terminal panes, which were removed; use pipelines";
+
 export function defaultPorts(): WorkflowPorts {
   return {
     exec: realExec,
@@ -91,26 +89,10 @@ export function defaultPorts(): WorkflowPorts {
     cpuAdmissionReconcile: reconcileCpuAdmission,
     cpuAdmissionSuspend: (key) => instanceCpuAdmissionQueue().suspend(key),
     setupStatus,
-    spawnAgent: async (role, cwd, prompt, accountId, title) => {
-      const account = accountManager.resolveSpawn(role.engine, accountId);
-      const spec = freshSpecFor(role.engine, cwd, { title, model: role.model, effort: role.effort, codexHome: account.engine === "codex" ? account.home : null, claudeConfigDir: account.engine === "claude" ? account.home : null, claudeProjectsDir: account.engine === "claude" ? account.transcriptRoot : null });
-      const startedAtMs = Date.now();
-      // Workflow stages are pipeline work: their pane runs in a CPU work scope.
-      const pane = await spawnAgentWithPrompt(spec, prompt, undefined, { workload: "work" });
-      const transcript = await resolveSpawnedTranscriptPath({
-        engine: role.engine,
-        knownTranscript: spec.transcript ?? null,
-        panePid: pane.panePid ?? null,
-        cwd,
-        startedAtMs,
-        codexSessionsDir: account.engine === "codex" ? account.transcriptRoot : null,
-      });
-      return { paneId: pane.paneId, transcript, panePid: pane.panePid ?? null };
-    },
-    paneAgentAlive: async (paneId) => {
-      const info = await paneInfo(paneId);
-      return info !== null && !isShellCommand(info.command);
-    },
+    /* Workflow stages ran in terminal panes. Workflows are retired and no
+       release hosts a pane, so a stage launch is refused. */
+    spawnAgent: async () => { throw new Error(WORKFLOWS_RETIRED_SPAWN_ERROR); },
+    paneAgentAlive: async () => false,
     headCwd: (transcriptPath) => headCwd(transcriptPath),
     lastMessage: lastAssistantMessage,
     createFlow: createFlowFromRequest,
