@@ -89,6 +89,7 @@ import { conversationRuntime } from "./conversationRuntime";
 import { AGENT_SPAWN_LINEAGE_ERROR, agentSpawnLineageError, authenticatedAgentSpawnCaller, isAgentInitiatedSpawn, mandatoryReviewsError, spawnLineageSelectorForCaller, type AuthenticatedSpawnCaller } from "@/app/api/spawn/admission";
 import { internalServiceClaim } from "@/lib/agent/callerClaims";
 import { spawnAccountErrorResponse } from "@/app/api/spawn/accountError";
+import { NoHealthyClaudeAccountError } from "@/lib/accounts/spawnHealth";
 import { attributeNamedAccountChoice } from "@/lib/accounts/accountOverrides";
 import { machinePassAuthority } from "@/lib/memory/curation/store";
 import { canonicalProject } from "@/lib/projects/aliases";
@@ -128,6 +129,16 @@ function projectAccountRefusedResponse(error: ProjectAccountRefusedError | Membe
   const message = concealed ? hiddenAccountsSelectionRefusal(error.engine, project ?? "") : error.message;
   const body: ApiError & { code: string; reason?: string } = { error: message, code: "project_account_refused", ...(reason ? { reason } : {}) };
   return NextResponse.json(body, { status: 409 });
+}
+
+/** The health pass found no Claude account that can launch. Its message names
+    labels, counts and the sign-in repair, which a member who is not shown the
+    project's accounts may not learn: they get the refusal every other
+    automatic choice gives them, with the same status and code. The owner keeps
+    the diagnostic. */
+function hiddenNoHealthyAccountResponse(error: unknown, project: string | null, hidden: boolean): NextResponse<ApiError> | null {
+  if (!hidden || !(error instanceof NoHealthyClaudeAccountError)) return null;
+  return NextResponse.json({ error: hiddenAccountsSelectionRefusal("claude", project ?? ""), code: "project_account_refused" }, { status: 409 });
 }
 
 function isSqliteBusy(error: unknown): boolean {
@@ -1008,6 +1019,8 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       if (error instanceof NoCopilotAccountError || error instanceof UnknownCopilotAccountError) {
         return NextResponse.json({ error: error.message }, { status: 409 });
       }
+      const concealedHealth = hiddenNoHealthyAccountResponse(error, spawnProject, !!workspacePrincipal && engine === "claude" && accountsHiddenFromMember(spawnProject, engine));
+      if (concealedHealth) return concealedHealth;
       if (requestedAccount === undefined) throw error;
       if (engine === "claude" && requestedAccountId) {
         try {

@@ -14,6 +14,7 @@ import { projectForCwd } from "@/lib/scanner/describe";
 import { viewerMcpBindings, type ViewerMcpDomainDependencies } from "./bindings";
 import { createMcpToolService, createViewerMcpServer, McpToolRefusal, MemoryMcpReceiptStore } from "./server";
 
+const fixture = () => crypto.randomUUID();
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-spawn-account-"));
 let testNumber = 0;
 let previousState: string | undefined;
@@ -468,5 +469,60 @@ test("a member's automatic launch refused by the real selection with every accou
     expect(operator.body.error).toContain("resetsAt=");
     expect(member.body.error).not.toContain("resetsAt");
     expect(member.body.error).not.toMatch(/allowed codex accounts/);
+  } finally { resetTeamStoreForTests(); }
+});
+
+test("a member's automatic Claude launch refused by the real health pass names no account, count or sign-in step, for the browser and for a member-bound agent, and the owner's refusal keeps them", async () => {
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { claimInstall } = await import("@/lib/team/members");
+  const { createWorkspace } = await import("@/lib/team/workspaces");
+  const { mintSession } = await import("@/lib/team/sessions");
+  const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+  const team = teamStore();
+  const owner = claimInstall(team, "Owner", { surface: "desktop", browser: "chrome" }, Date.parse("2026-10-20T09:00:00Z")).member;
+  const id = `w_${"9".repeat(32)}`;
+  createWorkspace(team, owner, { id, name: "Alpha", projects: [projectForCwd(sandbox)!] });
+  const memberId = "m_health_member";
+  team.insertMember({ id: memberId, name: "Member", role: "member", status: "active", color: "teal", telegram: null,
+    createdAt: "2026-10-20T09:00:00.000Z", createdBy: owner.id, revokedAt: null });
+  team.putWorkspaceMember(id, memberId, "member", owner.id, "2026-10-20T09:00:00.000Z");
+  const memberCookie = mintSession(team, memberId, "claim", { surface: "desktop", browser: "chrome" }).value;
+  const ownerCookie = mintSession(team, owner.id, "claim", { surface: "desktop", browser: "chrome" }).value;
+  /* A signed-in account whose access token ran out and that holds no refresh token: the health pass finds nothing to launch on. */
+  const hidden = createManagedClaudeAccount("Hidden Health Label");
+  fs.writeFileSync(path.join(hidden.home, ".credentials.json"), JSON.stringify({
+    claudeAiOauth: { accessToken: fixture(), expiresAt: Date.now() - 3_600_000, scopes: ["user:inference"], subscriptionType: "max" },
+  }), { mode: 0o600 });
+  try {
+    await withClient(async (client, { routeDependencies }) => {
+      /* The real resolver: its health refusal is the one that lists accounts and says where to sign in. */
+      routeDependencies.resolveHealthySpawnAccount = (await import("@/lib/accounts/manager")).resolveHealthySpawnAccount;
+      const body = (clientAttemptId: string) => JSON.stringify({ ...args(), engine: "claude", model: "opus", clientAttemptId });
+      const launch = async (clientAttemptId: string, cookie: string) => {
+        const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+          method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json", cookie: `llv_member=${cookie}` },
+          body: body(clientAttemptId),
+        }), routeDependencies);
+        return { status: response.status, body: await response.json() as { error: string; code?: string } };
+      };
+      /* Positive control: the owner receives the diagnostic that names the account and the repair. */
+      const operator = await launch("health-owner", ownerCookie);
+      expect({ status: operator.status, error: operator.body.error }).toMatchObject({ status: 503 });
+      expect(operator.body.error).toContain(hidden.label);
+      expect(operator.body.error).toMatch(/Re-login/);
+      /* The member's browser call. */
+      const member = await launch("health-member", memberCookie);
+      expect(member).toMatchObject({ status: 409, body: { code: "project_account_refused" } });
+      const leaks = [hidden.label, hidden.id, "Re-login", "Accounts", "healthy", "Main", " or "];
+      for (const fragment of leaks) expect(JSON.stringify(member.body)).not.toContain(fragment);
+      expect(registry.spawnReceiptForClientAttempt("health-member")).toBeNull();
+      /* A member-bound agent reaches the same route and gets the same words. */
+      routeDependencies.workspacePrincipal = { memberId, workspaceId: id };
+      const agent = await client.callTool({ name: "spawn_agent", arguments: { ...args(), engine: "claude", model: "opus", clientRequestId: `${requestId()}-health-agent` } });
+      expect(agent.structuredContent).toMatchObject({ ok: false, details: { status: 409, code: "project_account_refused" } });
+      for (const fragment of leaks) expect(JSON.stringify(agent.structuredContent)).not.toContain(fragment);
+      expect((agent.structuredContent as { error: string }).error).toStartWith("no claude account can take work for project ");
+      expect(registry.spawnReceiptForClientAttempt(`${requestId()}-health-agent`)).toBeNull();
+    });
   } finally { resetTeamStoreForTests(); }
 });
