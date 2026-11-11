@@ -1,6 +1,22 @@
 import { attemptReferencesClear } from "./attemptTempFilesystem";
 import fs from "node:fs";
 import path from "node:path";
+import { discoverAttemptCopies } from "./attemptCopyDiscovery";
+import { claimAttemptRetirement } from "@/lib/pipelines/store";
+
+if (process.argv[2] === "--claim-hold") {
+  await claimAttemptRetirement(process.argv[3]!, process.argv[4]!);
+  process.stdout.write("ready\n");
+  for await (const chunk of process.stdin) { void chunk; }
+  // Model a process that exits without releasing its durable retirement claim.
+  process.exit(0);
+}
+
+if (process.argv[2] === "--copy-page") {
+  const result = discoverAttemptCopies(process.argv[3]!, process.argv[4]!, Date.now, Date.now() + 10000);
+  process.stdout.write(JSON.stringify(result));
+  process.exit(0);
+}
 
 if (process.argv[2] === "--load") {
   process.stdout.write("ready\n");

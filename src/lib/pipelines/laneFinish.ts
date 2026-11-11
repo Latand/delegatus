@@ -25,7 +25,12 @@ export function laneFinish(pipeline: Pipeline, retentionMs = FINISHED_LANE_RETEN
     || pipeline.merge && (PIPELINE_MERGE_LIVE_STATES.has(pipeline.merge.state) || pipeline.merge.state === "refreshing"))
     return { finished: false };
   const mergeTime = pipeline.merge ? Date.parse(pipeline.merge.updatedAt) : 0;
-  if (!Number.isFinite(mergeTime)) return { finished: false };
+  // Every terminal event is part of the proof. Discarding an unknown clock
+  // would silently move expiry back to an older close or release.
+  if (!Number.isFinite(mergeTime)
+    || pipeline.runs.some(run => run.attempts.some(attempt => !attempt.completedAt || !Number.isFinite(Date.parse(attempt.completedAt))))
+    || pipeline.delivery?.journal.some(entry => entry.kind === "release" && (!entry.at || !Number.isFinite(Date.parse(entry.at)))))
+    return { finished: false };
   const finishedAt = Math.max(latestTerminalTime([pipeline]), mergeTime);
   return { finished: true, finishedAt, expiresAt: finishedAt + retentionMs };
 }

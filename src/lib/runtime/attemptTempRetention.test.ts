@@ -37,6 +37,94 @@ function fixture() {
   return { root, filename, store, make, sweep };
 }
 
+test.each([1, 2, 3, 4])("expired root keeps a nested human marker added at reference boundary %i", async boundary => {
+  const f = fixture(), directory = f.make("late-marker");
+  fs.mkdirSync(path.join(directory, "nested"));
+  let reads = 0, injected = false;
+  try {
+    const report = await f.sweep("expired", { references: async (_original: string, current: string) => {
+      if (++reads === boundary) { fs.writeFileSync(path.join(current, "nested", ".delegatus-keep"), "operator pin"); injected = true; }
+      return true;
+    } });
+    expect(injected).toBeTrue(); expect(report.removed).toBe(0);
+    expect(fs.existsSync(path.join(directory, "nested", ".delegatus-keep"))).toBeTrue();
+    expect(f.store.has(directory)).toBeTrue();
+  } finally { f.store.close(); }
+});
+
+test.each([
+  { replay: false, boundary: "references" }, { replay: true, boundary: "references" },
+  { replay: false, boundary: "authority" }, { replay: true, boundary: "authority" },
+])("copy protection survives a late marker (%j)", async ({ replay, boundary }) => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "copy-state");
+  const destination = statePath("evidence", "attempt-temp", digest("late-copy-marker"));
+  fs.mkdirSync(path.join(destination, "nested"), { recursive: true });
+  f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane", createdAt: 1, expiresAt: 1, checkedAt: 0, bytes: 4096 });
+  const options = { now: () => NOW, state: async () => "expired" as const,
+    scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true };
+  try {
+    if (replay) {
+      const original = fs.promises.rm.bind(fs.promises);
+      const rm = spyOn(fs.promises, "rm").mockImplementation((target, settings) =>
+        path.basename(String(target)).startsWith(".delegatus-trash-") ? Promise.reject(new Error("fixture interrupted copy retirement")) : original(target, settings));
+      try { expect((await sweepEvidenceCopies(f.store, options)).errors).toBe(1); } finally { rm.mockRestore(); }
+      f.store.registerCopy({ ...f.store.copy(destination)!, checkedAt: 0 });
+    }
+    let injected = false, target = "", observedDirectory = destination;
+    const pin = (current: string) => {
+      if (current !== destination && !injected) {
+        target = path.join(current, "nested", ".delegatus-keep"); fs.writeFileSync(target, "operator pin"); injected = true;
+      }
+    };
+    const report = await sweepEvidenceCopies(f.store, { ...options, authority: async () => {
+      if (boundary === "authority") pin(observedDirectory);
+      return { state: "expired", expiresAt: 1, revision: "fixture", isCurrent: () => true };
+    }, references: async (_original, current) => {
+      observedDirectory = current;
+      if (boundary === "references") pin(current);
+      return true;
+    } });
+    expect(injected).toBeTrue(); expect(report.removed).toBe(0); expect(f.store.copy(destination)).not.toBeNull();
+    expect(fs.existsSync(replay ? target : path.join(destination, "nested", ".delegatus-keep"))).toBeTrue();
+  } finally { f.store.close(); process.env.LLV_STATE_DIR = priorState; }
+});
+
+test.each([false, true])("a human marker added in the final root authority read survives (replay=%s)", async replay => {
+  const f = fixture(), directory = f.make("authority-marker"), trash = path.join(f.root, ".delegatus-trash-llv-stage-authority-marker-replay");
+  fs.mkdirSync(path.join(directory, "nested"));
+  if (replay) {
+    const stat = fs.lstatSync(directory); fs.renameSync(directory, trash);
+    fs.writeFileSync(attemptTempJournalPath(directory), JSON.stringify({ directory, trash, uid: stat.uid,
+      identity: `${stat.dev}:${stat.ino}`, disposable: true }));
+  }
+  let currentDirectory = directory, injected = false;
+  try {
+    const report = await f.sweep("expired", { references: async (_original: string, current: string) => { currentDirectory = current; return true; },
+      authority: async () => {
+        if (currentDirectory !== directory && !injected) { fs.writeFileSync(path.join(currentDirectory, "nested", ".delegatus-keep"), "operator pin"); injected = true; }
+        return { state: "expired", expiresAt: 1, revision: "fixture", isCurrent: () => true };
+      } });
+    expect(injected).toBeTrue(); expect(report.removed).toBe(0); expect(f.store.has(directory)).toBeTrue();
+    expect(fs.existsSync(path.join(replay ? trash : directory, "nested", ".delegatus-keep"))).toBeTrue();
+  } finally { f.store.close(); }
+});
+
+test("an existing nested human marker keeps an expired automatic copy", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "copy-state");
+  const destination = statePath("evidence", "attempt-temp", digest("existing-copy-marker"));
+  fs.mkdirSync(path.join(destination, "nested"), { recursive: true });
+  fs.writeFileSync(path.join(destination, "nested", ".delegatus-keep"), "operator pin");
+  f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane", createdAt: 1, expiresAt: 1, checkedAt: 0, bytes: 4096 });
+  try {
+    expect((await sweepEvidenceCopies(f.store, { now: () => NOW, state: async () => "expired",
+      references: async () => true, scan: () => ({ ownNamespace: null, processes: [] }) })).removed).toBe(0);
+    expect(fs.existsSync(path.join(destination, "nested", ".delegatus-keep"))).toBeTrue();
+    expect(f.store.copy(destination)).not.toBeNull();
+  } finally { f.store.close(); process.env.LLV_STATE_DIR = priorState; }
+});
+
 test("expired linked evidence retires without following its target; recent failures are logged once", async () => {
   const f = fixture(), directory = f.make("linked", 30 * 86400000), target = path.join(f.root, "outside");
   fs.mkdirSync(target); fs.writeFileSync(path.join(target, "frame.png"), "keep target");
@@ -221,9 +309,14 @@ test("legacy adoption resumes its cursor in another process without losing the i
     for (const name of names.slice(0, 32)) f.store.registerCopy({ destination: path.join(parent, name), pipelineId: null,
       launchId: "legacy", kind: "unattributed", createdAt: 1, expiresAt: null, checkedAt: 0, bytes: 4096 });
     f.store.checkpointCopies(names[32]); f.store.close();
-    expect((await retentionProcess(f.filename, NOW, "copies")).adopted).toBe(32);
+    let total = 32;
+    for (let page = 0; page < 3; page++) {
+      const result = await retentionProcess(f.filename, NOW, "copies");
+      expect(result.adopted).toBeLessThanOrEqual(32); total += result.adopted;
+    }
+    expect(total).toBe(65);
     const last = await retentionProcess(f.filename, NOW, "copies");
-    expect(last.adopted).toBe(1); expect(last.unattributed.count).toBe(65);
+    expect(last.adopted).toBe(0); expect(last.unattributed.count).toBe(65);
     expect(fs.readdirSync(parent)).toHaveLength(65);
   } finally { process.env.LLV_STATE_DIR = priorState; }
 });
@@ -505,7 +598,7 @@ test.each([false, true])("producer record revision drift preserves native remova
     }
     pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "revision-launch",
       effectiveRole: role, conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
-      startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null,
+      startedAt: "2026-10-22T12:00:00Z", completedAt: "2026-10-22T12:00:00Z", input: null, activatedBy: null, output: null,
       verdict: null, error: null }] }];
     if (transition !== "closed-lane-running") fs.mkdirSync(path.join(producer, ".git"), { recursive: true });
     savePipelines([pipeline]);
@@ -525,8 +618,9 @@ test.each([false, true])("producer record revision drift preserves native remova
     }
     const now = NOW;
     let quarantineReferenceReads = 0, injected = false;
+    const authority = (owner: AttemptTempOwner, inventory: filesystem.RepositoryLinkInventory) => attemptTempAuthority(owner, inventory, () => now);
     const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 0,
-      state: attemptTempState, authority: attemptTempAuthority, scan: () => ({ ownNamespace: null, processes: [] }),
+      state: async (owner, inventory) => (await authority(owner, inventory)).state, authority, scan: () => ({ ownNamespace: null, processes: [] }),
       references: async (_original, current) => {
         await Promise.resolve();
         if (path.basename(current).startsWith(".delegatus-trash-")

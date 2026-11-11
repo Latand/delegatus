@@ -1,5 +1,11 @@
 # Seven-day retention for finished lanes' scratch and evidence copies
 
+Install administrators read `FINISHED_LANE_RETENTION_DAYS` in
+`src/lib/pipelines/laneFinish.ts` for the period. After an ordinary release,
+the existing sweep drains due roots and copies in bounded pages; inspect
+`attempt-temp-report.json` for retained paths, reclaimed bytes and errors.
+No new interface control or manual cleanup command is required.
+
 Status: implemented, 2026-11-11. Validation and deployment checks are in §15.
 Historical observations below describe the design-stage read.
 Code citations are on `origin/main` at `ec82e477` (#3835 merged at 00:51Z on
@@ -165,6 +171,9 @@ A lane is **finished** only when all hold:
 4. No attempt with `activation`, `unresolvedTermination`, or a state among
    `spawning`, `running`, `reviewing`, `committing`.
 5. No `merge` in `PIPELINE_MERGE_LIVE_STATES` (`types.ts:1377`) or `refreshing`.
+6. Every attempt has a nonempty, parseable `completedAt`; every release has
+   a parseable `at`; close and merge clocks are also valid. An unknown clock
+   preserves the hold, root and automatic copy until it can be proved.
 
 `finishedAt` is the latest of `closedAt`, every attempt's `completedAt`, every
 delivery `release` journal time, and `merge.updatedAt` when a merge record
@@ -180,7 +189,9 @@ merge retry (`engine.ts:18575-18625`): it makes the merge live (not finished),
 and its settlement moves `merge.updatedAt` (the clock restarts). Because the
 rule is evaluated from the record at every visit and again at dispatch, any
 future reopen path is covered without listing it: the lane stops being finished
-the moment its state, attempts or merge say so.
+the moment its state, attempts or merge say so. A durable retirement claim
+also fences all pipeline writers throughout asynchronous expired-data
+removal (§7), closing the interval after the last revision check.
 
 "Merged" therefore starts the clock only through `merge.updatedAt` of a
 completed lane; a merge is never a reason to start it earlier.
@@ -245,7 +256,11 @@ read and dispatch refuses.
   row is not re-read every page cycle and the card can count it.
 - In `eligible()` (`:261-326`): `"expired"` counts as settled at `:272`; for
   `"expired"`, `preserveAttemptEvidence` is skipped and the evidence fence is
-  the root identity alone, so symlinked or irregular evidence no longer throws.
+  an independent directory snapshot, so symlinked or irregular evidence no
+  longer throws. Directory identity, mode, mtime and ctime are checked
+  synchronously after the last await and at dispatch. A nested keep marker
+  added during reference or authority observations invalidates that snapshot.
+  The ordinary marker inspector still protects markers already present.
   In every other state that copies evidence, the copy is registered first with
   the `expiresAt` the authority answered, or none (§5.4).
 - The absent-root path (`:207-212`, `:363-366`) runs after the hold
@@ -307,20 +322,29 @@ New table `copies` in `attempt-temp.sqlite` (§5.5).
   `runAttemptTempSweep` calls `sweepEvidenceCopies` with its own 10 s budget:
   1. replay journals of copies being removed (a copy row whose directory is
      gone and whose journal exists) through `finishTreeTrash`;
-  2. legacy adoption, while unfinished: up to 32 names after a persisted cursor
+  2. legacy adoption, while unfinished: up to 32 directory records after a persisted cursor
      in `statePath("evidence","attempt-temp")`, only names matching
      `^[0-9a-f]{64}$` that are real directories (no symlink) directly in that
      real directory. A name with no row is attributed from its manifest's
      `pipelineId` (new format) or from a ledger row for its `original`;
      otherwise it is registered as `kind = "unattributed"`, which is never
-     removed and is counted in the report. The cursor is checkpointed before
-     each name, as root adoption does (`attemptTempRetention.ts:80-81`);
+     removed and is counted in the report. `attemptCopyDiscovery.ts` reads
+     at most 4 KiB of native directory records, without a whole-directory
+     list or sort. The kernel position and unconsumed bounded tail survive
+     restart; libc `telldir` tokens are deliberately avoided because they
+     belong to one stream. The position is bound to the directory's device, inode and
+     timestamps. A changed parent restarts one bounded page. The page commits
+     its cookie after registration; interruption replays at most that page,
+     and the destination primary key makes replay idempotent. Legacy lexical
+     checkpoints restart safely. Unsupported native discovery retains legacy
+     data with a reported error; registered rows still retire independently;
   3. up to 8 due rows (`checkedAt ≤ now`, not `unattributed`): read authority
      for the lane; `"expired"` (or an `"agent"` copy past `expiresAt`) →
      `removeTreeViaTrash` (`tempSweep.ts:410-446`) with a journal beside it,
-     `disposable: true`, `held` = a process scan names the trash path,
-     `validate` = authority still current and expired and the directory
-     identity unchanged; then delete the row. Finished but not expired →
+     `disposable: true`, `held` checks markers and references,
+     `validate` checks current expired authority, directory identity and the
+     independent protection snapshot after the last await, including replay;
+     then delete the row. Finished but not expired →
      `checkedAt = expiresAt`. Open → `checkedAt = now + 1 h`.
 
 ### 5.5 Schema and where it is installed
@@ -368,9 +392,13 @@ step and no one-shot cleanup.
 - **Per pass.** Roots: unchanged page (4, or 32 under pressure) and 40 s
   budget; expiry adds one authority read (already done per row) and at most a
   few short state transactions per expired held root. Copies: ≤ 32 adoption
-  names, ≤ 8 removals, 10 s. Every query is a key or index seek; nothing reads
-  a whole store per tick. Legacy adoption lists one directory per tick until
-  it completes, as root adoption does today (`attemptTempRetention.ts:73`).
+  directory records, ≤ 8 removals, 10 s. Every query is a key or index seek.
+  Copy discovery reads at most 32 records, including dot entries, per page;
+  at most one native 4 KiB chunk is read and its tail is persisted. Its work
+  and memory do not grow with the first backlog. Directory protection
+  snapshots stream entries, stop at 10,000 directories or 30 s, and retain
+  an unreadable or over-budget tree. Root legacy adoption retains its existing
+  implementation; this change bounds automatic-copy discovery.
 - **Restart.** Root progress is persisted before the first await
   (`attemptTempRetention.ts:204`); a settled hold is durable and idempotent
   (an acknowledged row is skipped); a quarantine is finished from its journal;
@@ -386,10 +414,28 @@ step and no one-shot cleanup.
   concurrently. No new lock namespace is introduced. The lock order of
   `recorded-check-handoff.md` (line 86) is unchanged. All of it runs in the
   sweep helper, never on the Viewer's main thread.
+- **Retry admission.** `claimAttemptRetirement` in `pipelines/store.ts`
+  creates a durable lane claim under a short bounded pipeline transaction
+  holding both active and archive collection leases in their existing order.
+  Every pipeline writer checks it in the common validator, allowing an
+  unchanged row and independent lanes while refusing changes to the claimed
+  lane. The sweep's existing admission owns claims across root/copy awaits.
+  No collection lease or registry lock is held during removal. The claim
+  lists pending journal namespaces, so one failed path does not prevent
+  independent paths in the same lane from retiring. Success releases its
+  namespace; an interrupted journal retains the fence across process death.
+  A later sweep reclaims it under the same admission and replays the journal.
+  A claim left before journal creation is safely reacquired on the next visit.
+  Claims also record the helper's boot-aware process identity. If it dies
+  after forgetting its ledger row, a pipeline mutation can release a claim
+  with no pending journal after proving that owner dead; a live or unknown
+  owner continues to fence admission.
 - **Re-proved before removal.** Roots: the existing dispatch fences
   (`attemptTempRetention.ts:284-325`, `:227-235`) now include `"expired"` in
   the authority revision and the time check of §5.1. Copies: the `validate`
   callback re-reads authority and identity after the rename.
+  Both paths also validate their independent directory snapshots. Expired
+  paths skip evidence preservation, so validation cannot recreate old copies.
 - **One failure stops nothing.** Each root and copy is in its own `try`, as
   today (`:367-376`). The failure text is stored in `root_retention.failure` or
   `copy_retention_failures`; the log line is written only when the text
@@ -432,7 +478,7 @@ rows through the real `RecordedCheckStore` (the precedent in
 | T4 | Root with a symlinked `.artifacts` pointing outside, finished 7 d + 1 s / 6 d | Removed, link target intact / kept, one log line across three ticks | `attemptTempRetention.test.ts` |
 | T5 | Keep marker, outside Git link, live process cwd, checkout link from a live process's checkout, at 30 d | Each stays | same |
 | T6 | Open lane (running, paused, needs_decision), completed with teardown pending, with a queued merge, with a running attempt or an unconfirmed host; each with a 30-day-old hold | Each stays | `attemptTempProduction.test.ts` |
-| T7 | Clock: attempt `completedAt` after `closedAt`; merge settled after close; merge retried on day 6 | Clock from the latest; a live merge is not finished; the retry restarts it | `src/lib/pipelines/laneFinish.test.ts` (new) |
+| T7 | Clock: later attempt, release and merge clocks; absent or invalid terminal clocks | Clock from the latest valid proof; unknown clocks and live merges keep data | `src/lib/pipelines/laneFinish.test.ts`, `src/lib/runtime/attemptTempProduction.test.ts` |
 | T8 | Absent root with a hold (manual pass removed it), lane expired | Hold settled and row forgotten in one visit, nothing removed | `attemptTempRetention.test.ts` |
 | T9 | Held quarantine (trash plus journal), lane expired | Trash removed, journal gone, row forgotten | same |
 | T10 | Copies: lane expired / finished 6 d / open / `agent` copy at 7 d + 1 s / legacy without attribution | Removed / kept / kept / removed / kept and counted | same |
@@ -459,17 +505,17 @@ rows through the real `RecordedCheckStore` (the precedent in
 
 ## 11. Open work on the same files
 
-- Lane 6d26bde0 (Viewer stalls) is still in its diagnosis stage; its branch has
-  no commits beyond `2449d4c3` and its draft design (uncommitted, read at
-  about 01:00Z) proposes fixes to `migration.stop`, MCP lock waits, curator applies
-  and main-thread slices. None touch the attempt-sweep admission, the attempt
-  ledger or `tempSweep.ts`. This design adds no lock and does not lengthen
-  the admission. The builder rereads that lane's branch and report before
-  building, as the specification asks.
+- Lane 6d26bde0 (Viewer stalls) has published its diagnosis in
+  `docs/design/viewer-stalls-root-cause.md` on its branch. Its proposed fixes
+  concern `migration.stop`, MCP lock waits, curator applies and main-thread
+  slices. The report and overlapping diffs were reread for this fix. Retirement
+  uses only short pipeline admissions; content removal holds no state lease
+  or registry write lock.
 - PRs #3710, #3802, #3801 (launch recovery) change `engine.ts`, `store.ts`,
   `types.ts`, and #3802 `structuredSpawn.ts` (other functions). This design
-  changes none of those lines; it reads pipeline records only and adds
-  `laneFinish.ts`.
+  keeps their lifecycle transitions in place. The fix adds the common
+  pipeline-write validator fence and a bounded claim admission in `store.ts`;
+  additive imports are the shared integration point.
 - #3835 is on main; the builder starts from a base that contains it.
 
 ## 12. Could not confirm, and where I looked
@@ -562,8 +608,11 @@ Run the explicit test files with isolated state through `scripts/gate-slot.sh`:
 `attemptTempRetention.test.ts`, `attemptTempFilesystem.test.ts`,
 `prototypeReview/fences.test.ts`, `recordedChecks/wire.test.ts`,
 `state/diskPressure.test.ts`, `viewerInstrumentation.test.ts` and
-`pipelines/worktreeSweep.test.ts`, each under its source directory. Also run
-the typecheck and privacy publication gate. Hosted checks, including
+`pipelines/worktreeSweep.test.ts`, each under its source directory. Add
+`runtime/attemptCopyDiscovery.test.ts` for 65/513-directory restart pages,
+late marker tests at root/copy reference and authority boundaries, and live,
+dead and journaled claim recovery in the retention and production files.
+Run the typecheck and privacy publication gate. Hosted checks, including
 `bun-runtime`, run on the published commit.
 
 After deployment, read successive `attempt-temp-report.json` files. Check

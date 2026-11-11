@@ -4,10 +4,12 @@ import { createHash } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { readEnvelope } from "@/lib/recordedChecks/wire";
 import { attemptTempJournalPath, finishTreeTrash, removeTreeViaTrash } from "@/lib/tempSweep";
-import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, RepositoryLinkInventory } from "./attemptTempFilesystem";
+import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, snapshotAttemptProtection, RepositoryLinkInventory } from "./attemptTempFilesystem";
 import { AttemptTempStore, type AttemptTempSweepOptions, type AttemptTempAuthority, type EvidenceCopy } from "./attemptTempRetention";
 import { attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
+import { claimAttemptRetirement } from "@/lib/pipelines/store";
+import { discoverAttemptCopies } from "./attemptCopyDiscovery";
 
 const HOUR = 3600000;
 function copyParent() {
@@ -26,11 +28,10 @@ function copyPath(destination: string, parent: string) {
 async function adoptCopies(store: AttemptTempStore, now: () => number, deadline: number) {
   const parent = copyParent(), cursor = store.copyCursor();
   if (!parent || cursor.done) return 0;
-  const names = fs.readdirSync(parent).sort().filter(name => name >= cursor.cursor), selected = names.slice(0, 32);
+  const page = discoverAttemptCopies(parent, cursor.cursor, now, deadline);
   let adopted = 0;
-  for (const name of selected) {
+  for (const name of page.names) {
     if (now() >= deadline) return adopted;
-    store.checkpointCopies(name);
     if (!/^[a-f0-9]{64}$/.test(name)) continue;
     const destination = path.join(parent, name);
     if (store.copy(destination)) continue;
@@ -61,7 +62,9 @@ async function adoptCopies(store: AttemptTempStore, now: () => number, deadline:
       if (store.copyFailure(destination, detail)) console.error("[attempt evidence] adoption retained", detail);
     }
   }
-  if (selected.length < 32) store.checkpointCopies(selected.at(-1) ?? cursor.cursor, true);
+  // Commit only after the entire bounded page is registered. A crash replays
+  // at most this page and the primary key makes that replay idempotent.
+  store.checkpointCopies(page.cursor, page.done);
   return adopted;
 }
 
@@ -74,7 +77,14 @@ export async function sweepEvidenceCopies(store: AttemptTempStore, options: Atte
 async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSweepOptions) {
   const now = options.now ?? Date.now, deadline = now() + 10000;
   const report = { adopted: 0, checked: 0, removed: 0, removedBytes: 0, errors: 0, unattributed: { count: 0, bytes: 0 } };
-  if (options.mode !== "dry-run") report.adopted = await adoptCopies(store, now, deadline);
+  if (options.mode !== "dry-run") {
+    try { report.adopted = await adoptCopies(store, now, deadline); }
+    catch (error) {
+      report.errors++;
+      const detail = attemptTempFailureDetail(error), parent = statePath("evidence", "attempt-temp");
+      if (store.copyFailure(parent, detail)) console.error("[attempt evidence] discovery retained", detail);
+    }
+  }
   const inventory = new RepositoryLinkInventory({ now, budgetMs: 10000 });
   const observe = async (row: EvidenceCopy): Promise<AttemptTempAuthority> => {
     if (row.kind === "agent") return { state: row.expiresAt !== null && now() >= row.expiresAt ? "expired" : "closed",
@@ -87,6 +97,7 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
     if (now() >= deadline) break;
     report.checked++;
     store.registerCopy({ ...row, checkedAt: now() + 60000 });
+    let releaseClaim: (() => void) | null = null;
     try {
       const parent = copyParent();
       if (!parent) throw new Error("attempt evidence parent missing");
@@ -95,6 +106,9 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
       const expiresAt = row.kind === "agent" ? row.expiresAt : authority.expiresAt ?? null;
       store.registerCopy({ ...row, expiresAt, checkedAt: expiresAt && expiresAt > now() ? expiresAt : now() + (authority.state === "expired" ? 60000 : HOUR) });
       if (authority.state !== "expired" || !authority.isCurrent()) continue;
+      if (row.pipelineId && options.mode !== "dry-run") {
+        releaseClaim = await claimAttemptRetirement(row.pipelineId, row.destination);
+      }
       const journal = attemptTempJournalPath(row.destination), pending = fs.existsSync(journal);
       let target = row.destination;
       if (pending) {
@@ -108,12 +122,15 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
       if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || process.getuid && stat.uid !== process.getuid())) throw new Error("attempt evidence identity changed");
       const identity = stat ? `${stat.dev}:${stat.ino}` : null;
       let dispatchAuthority = authority;
+      let protection: { current: () => boolean } | undefined;
       const validate = (directory: string) => {
         if (!copyParent() || !dispatchAuthority.isCurrent() || dispatchAuthority.state !== "expired" || now() >= deadline) return false;
         const current = fs.lstatSync(directory, { throwIfNoEntry: false });
-        return !!current?.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === identity && inventory.unchangedAll();
+        return !!current?.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === identity
+          && protection?.current() === true && inventory.unchangedAll();
       };
       const held = async (directory: string) => {
+        protection = await snapshotAttemptProtection(directory, deadline - now());
         if (!await inspectAttemptTree(directory, row.destination)) return true;
         const scan = options.scan([row.destination, directory]);
         const clear = options.references ? await options.references(row.destination, directory, scan)
@@ -122,6 +139,8 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
         return !clear || !validate(directory);
       };
       if (options.mode === "dry-run") continue;
+      // The initial quarantine validation also needs a protection snapshot.
+      if (!pending && await held(row.destination)) continue;
       const removed = pending ? await finishTreeTrash(journal, held, undefined, validate, true)
         : await removeTreeViaTrash(row.destination, { journal, held, validate, disposable: true });
       if (removed || !fs.existsSync(row.destination) && !fs.existsSync(journal)) {
@@ -133,6 +152,13 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
       report.errors++;
       const detail = attemptTempFailureDetail(error);
       if (store.copyFailure(row.destination, detail)) console.error("[attempt evidence] copy retained", detail);
+    } finally {
+      try { releaseClaim?.(); }
+      catch (error) {
+        report.errors++;
+        const detail = attemptTempFailureDetail(error);
+        if (store.copyFailure(row.destination, detail)) console.error("[attempt evidence] retirement claim retained", detail);
+      }
     }
   }
   report.unattributed = store.unattributedCopies();

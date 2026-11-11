@@ -41,3 +41,12 @@ test("open lanes, missing close clocks and unfinished obligations never expire",
     const p = lane(); change(p); expect(laneFinish(p, DAY)).toEqual({ finished: false });
   }
 });
+
+test.each([null, "", "invalid-clock"])("unknown terminal clocks keep the lane unfinished (%s)", clock => {
+  const p = lane();
+  p.runs = [{ stageId: "build", attempts: [{ state: "passed", completedAt: clock } as PipelineStageAttempt] }];
+  expect(laneFinish(p)).toEqual({ finished: false });
+  p.runs = [];
+  p.delivery = { journal: [{ kind: "release", at: clock }] } as NonNullable<typeof p.delivery>;
+  expect(laneFinish(p)).toEqual({ finished: false });
+});

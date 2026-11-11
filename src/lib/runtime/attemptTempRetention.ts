@@ -5,11 +5,12 @@ import { statePath } from "@/lib/configDir";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { attemptTempJournalPath, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
-import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, removeAttemptTree, RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, snapshotAttemptProtection, removeAttemptTree, RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
 import { recordedRootHeld, recordRootRetirement, expireRecordedRootHolds } from "@/lib/recordedChecks/store";
 import { FINISHED_LANE_RETENTION_MS } from "@/lib/pipelines/laneFinish";
+import { claimAttemptRetirement } from "@/lib/pipelines/store";
 
 export type AttemptTempState = "live" | "settled" | "closed" | "expired" | "orphan" | "unknown";
 export type AttemptTempAuthority = { state: AttemptTempState; expiresAt?: number | null; revision: string; isCurrent: () => boolean };
@@ -268,6 +269,11 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     let reason = "identity changed";
     // Persist fairness before the first await; a killed helper resumes elsewhere.
     store.defer(owner.directory, now() + 60_000);
+    const retirement: { release?: () => void } = {};
+    const claim = async () => {
+      if (!retirement.release && owner.pipelineId && options.mode !== "dry-run")
+        retirement.release = await claimAttemptRetirement(owner.pipelineId, owner.directory);
+    };
     try {
       const stat = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
       if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || `${stat.dev}:${stat.ino}` !== owner.identity)) { outcome(owner.directory, disposition, bytes, reason); continue; }
@@ -289,11 +295,13 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         const initialAuthority = await observeOwner(owner);
         retentionExpiry = initialAuthority.expiresAt ?? null;
         checkBudget();
+        if (initialAuthority.state === "expired") await claim();
+        const protection = stat && initialAuthority.state === "expired" ? await snapshotAttemptProtection(owner.directory, deadline - now()) : { current: () => true };
         const unpinned = !stat || await inspectAttemptTree(owner.directory, owner.directory);
         checkBudget();
         store.retainRoot(owner.directory, unpinned ? retentionExpiry : null);
-        if (initialAuthority.state === "expired" && owner.pipelineId && initialAuthority.isCurrent() && options.mode !== "dry-run")
-          await expireRecordedRootHolds(owner.directory, owner.pipelineId, now(), initialAuthority.isCurrent);
+        if (unpinned && initialAuthority.state === "expired" && owner.pipelineId && initialAuthority.isCurrent() && options.mode !== "dry-run")
+          await expireRecordedRootHolds(owner.directory, owner.pipelineId, now(), () => initialAuthority.isCurrent() && protection.current());
         if (recordedRootHeld(owner.directory) && !(options.mode === "dry-run" && initialAuthority.state === "expired")) {
           if (initialAuthority.expiresAt && initialAuthority.expiresAt > now()) store.defer(owner.directory, initialAuthority.expiresAt);
           outcome(owner.directory, "evidence", bytes, "recorded check evidence hold"); continue;
@@ -352,14 +360,13 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         const settled = state === "closed" || state === "expired" || state === "settled" && !owner.retainUntilClose
           || state === "orphan" && now() - owner.createdAt >= (options.maxAgeMs ?? 86400000);
         if (!settled) return false;
+        if (state === "expired") await claim();
+        const protection = state === "expired" || options.mode === "dry-run" ? await snapshotAttemptProtection(directory, deadline - now()) : { current: () => true };
         if (!await inspectAttemptTree(directory, owner.directory)) { store.retainRoot(owner.directory, null); disposition = "evidence"; reason = "tree evidence, mount or Git boundary"; return false; }
         checkBudget();
         if (!await observeReferences(directory)) return false;
         checkBudget();
-        const evidence = options.mode === "dry-run" || state === "expired" ? { current: () => {
-          const current = fs.lstatSync(directory, { throwIfNoEntry: false });
-          return !!current?.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === owner.identity;
-        }, namespaceOnly: false, destination: undefined }
+        const evidence = options.mode === "dry-run" || state === "expired" ? { current: protection.current, namespaceOnly: false, destination: undefined }
           : await preserveAttemptEvidence(directory, owner.directory, owner.identity, {
             pipelineId: owner.pipelineId, launchId: owner.launchId, register: destination => {
               const prior = store.copy(destination);
@@ -392,7 +399,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         if (recordedRootHeld(owner.directory) && !(options.mode === "dry-run" && state === "expired")) { disposition = "evidence"; reason = "recorded check evidence hold"; return false; }
         if (authority !== state) { reason = `authority changed from ${state} to ${authority}`; return false; }
         if (!final?.isDirectory() || final.isSymbolicLink() || `${final.dev}:${final.ino}` !== owner.identity) { reason = "identity changed after observations"; return false; }
-        if (!evidence.current()) { disposition = "evidence"; reason = "evidence changed after preservation"; return false; }
+        if (!protection.current() || !evidence.current()) { disposition = "evidence"; reason = "evidence changed after preservation"; return false; }
         // Checkout state can change while evidence and producer authority are
         // awaited. Repeat every process/socket/container reference observation
         // at the last eligibility boundary before quarantine or removal.
@@ -413,7 +420,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           reason = "identity changed before dispatch";
           return false;
         }
-        if (!evidence.current()) { disposition = "evidence"; reason = "evidence changed before dispatch"; return false; }
+        if (!protection.current() || !evidence.current()) { disposition = "evidence"; reason = "evidence changed before dispatch"; return false; }
         // The final synchronous validation includes negative checkout
         // discoveries and physical symlink destinations from the inventory.
         if (!inventory.unchangedAll()) {
@@ -423,7 +430,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         }
         dispatchAuthority = typeof authorityObservation === "string" ? undefined : authorityObservation;
         dispatchState = authority;
-        dispatchEvidence = evidence;
+        dispatchEvidence = { current: () => protection.current() && evidence.current() };
         return true;
       };
       if (stat && !await eligible()) { outcome(owner.directory, disposition, bytes, reason); continue; }
@@ -480,6 +487,13 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       const detail = attemptTempFailureDetail(error);
       outcome(owner.directory, "failed", bytes, detail);
       if (store.rootFailure(owner.directory, detail)) console.error("[attempt temp] root retained", detail);
+    } finally {
+      try { retirement.release?.(); }
+      catch (error) {
+        report.errors++;
+        const detail = attemptTempFailureDetail(error);
+        if (store.rootFailure(owner.directory, detail)) console.error("[attempt temp] retirement claim retained", detail);
+      }
     }
   }
   report.inventoryWalks = inventory.walks.length;
