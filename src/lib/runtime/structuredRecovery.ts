@@ -6,7 +6,8 @@ import { resolveContinuityAccount } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { ResumeSpec } from "@/lib/agent/cli";
-import { conversationIdsResolvingTo, agentRegistry, type AgentRegistry, type ProcessIdentity, type RegistryFile, type SpawnBeginResult } from "@/lib/agent/registry";
+import { conversationIdsResolvingTo, agentRegistry, storedPaneAgentRuns, type AgentRegistry, type ProcessIdentity, type RegistryFile, type SpawnBeginResult } from "@/lib/agent/registry";
+import { procBackend } from "@/lib/proc";
 import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { cachedLimitsProvenance } from "@/lib/limits";
@@ -31,8 +32,8 @@ import {
   spawnStructuredConversation,
   structuredHostCell,
 } from "./structuredSpawn";
-import { spawnTransport } from "./spawnTransport";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
+import { structuredTransportAvailable } from "./spawnTransport";
 import { statePath } from "@/lib/configDir";
 import { recipientPipelineEvidenceRevision } from "@/lib/state/sqliteStateStore";
 import { loadPipelineOwnershipForStartupAsync, pipelineStartupAttemptMatches, findPipelineRecord, withPipelineStartupAdmission } from "@/lib/pipelines/store";
@@ -124,9 +125,11 @@ const defaultParkResolver: StructuredHostParkResolver = (engine, accountId, snap
 });
 
 export interface StructuredRecoveryDependencies {
+  /** Whether this deployment can host the recovered conversation. Without a
+      structured transport there is nothing to start, and recovery answers null. */
+  transportAvailable?: () => boolean;
   registry?: AgentRegistry;
   client?: RuntimeHostClient | null;
-  transport?: () => "tmux" | "structured";
   resolveAccount?: (engine: "claude" | "codex" | "copilot", accountId: string | null, project: string | null) => AccountContext;
   spawn?: typeof spawnStructuredConversation;
   processIdentity?: () => ProcessIdentity;
@@ -307,11 +310,11 @@ function candidateFor(
      old root is already dead. Only a successful termination retry can verify
      and clear this evidence. */
   if ((entry?.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
-  if (entry?.host) return null;
-  /* Structured cutover covers every registered transcript. Historical Codex
-     and Claude sessions reach their pane-less host through this recovery path,
-     including conversations that predate registry entries. A verified live
-     tmux owner returned above keeps ownership until that process exits. */
+  /* A stored row can name a pane agent that still runs after the upgrade. It
+     may write this transcript, so no second writer is started beside it. */
+  if (storedPaneAgentRuns(entry, procBackend)) return null;
+  /* Every registered transcript reaches its host through this recovery path,
+     including conversations that predate registry entries. */
   const terminal = entry?.status === "dead" || entry?.status === "unhosted";
   const hostProcessLive = Boolean(!terminal
     && structuredHostProcessAlive(entry?.structuredHost?.process ?? null));
@@ -774,7 +777,7 @@ export async function recoverDeadStructuredConversation(
   request: StructuredRecoveryRequest,
   dependencies: StructuredRecoveryDependencies = {},
 ): Promise<StructuredRecoveryResult | null> {
-  if ((dependencies.transport ?? spawnTransport)() !== "structured") return null;
+  if (!(dependencies.transportAvailable ?? structuredTransportAvailable)()) return null;
   const registry = dependencies.registry ?? agentRegistry();
   if (dependencies.ownership && !await dependencies.ownership.owns()) {
     throw new StructuredRecoverySupersededError();

@@ -1,3 +1,7 @@
+import { engineReadiness, type EngineName } from "@/lib/accounts/engineConnection";
+import { defaultModelFor } from "@/lib/agent/models";
+import { loadRoleDefinitions } from "@/lib/roles/store";
+import type { RoleConfig } from "@/lib/roles/types";
 import { launchAutonomousConversation, observeSpawnedTurn, type SpawnedTurnObservation } from "@/lib/agent/autonomousConversation";
 import { repoDirForProject, type SeatTickSources } from "@/lib/monitor/seatTickSources";
 import type { SeatTickCheckInput } from "@/lib/monitor/types";
@@ -23,6 +27,7 @@ export interface CurationController {
 }
 export interface CurationPorts extends CurationAdmissionPorts {
   sources: SeatTickSources;
+  engineReadiness?: typeof engineReadiness;
   launch?: (body: Record<string, unknown>, authorize: () => void) => Promise<ReportSpawnResult>;
   observe?: (pass: CuratorPass) => Promise<SpawnedTurnObservation>;
   launchTimeoutMs?: number;
@@ -74,7 +79,19 @@ async function launch(pass: CuratorPass, ports: CurationPorts, sweepIsCurrent: (
   if (host.held !== null) return settle(pass, ports, `abandoned: ${host.held}`);
   const held = admissionHeld(pass.project, ports, pass); if (held) return held;
   if (!pass.repoDir) return settle(pass, ports, "no-repository");
-  if (!pass.launchBody) pass = patchPass(pass.id, { state: "launching", admittedHost: host.custody, launchBody: { role: "curator", roleParams: {}, project: pass.project, cwd: pass.repoDir, prompt: curatorBrief(pass.project), title: "Role memory curation", clientAttemptId: pass.id, mcpServers: ["viewer"], notifyLauncher: false } })!;
+  if (!pass.launchBody) {
+    const readiness = ports.engineReadiness ?? engineReadiness;
+    const connected = (["claude", "codex"] as const).filter(engine => readiness(engine, pass.project) === "connected");
+    const engine: EngineName | undefined = connected.length === 1 ? connected[0] : undefined;
+    const runtime: Partial<RoleConfig> = engine && loadRoleDefinitions().find(role => role.id === "curator")?.config.engine !== engine
+      ? { engine, model: defaultModelFor(engine), effort: "high" } : {};
+    // Freeze the fallback with the attempt so recovery keeps its launch identity.
+    pass = patchPass(pass.id, { state: "launching", admittedHost: host.custody, launchBody: {
+      role: "curator", roleParams: {}, ...runtime, prompt: curatorBrief(pass.project),
+      project: pass.project, cwd: pass.repoDir, title: "Role memory curation", clientAttemptId: pass.id,
+      mcpServers: ["viewer"], notifyLauncher: false,
+    } })!;
+  }
   const fresh = readPassAuthority(pass.id);
   if (!fresh || !passIsLive(fresh)) return null;
   const launchBody = await withSystemRunTask(pass.launchBody!, new Date(ports.sources.now()).toISOString());

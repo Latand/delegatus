@@ -2471,7 +2471,7 @@ test("direct recovery leaves a row held for its restart cut evidence untouched u
     const recovery = recoverDeadStructuredConversation({ path: cut.artifactPath, conversationId: cut.conversationId }, {
       registry,
       client: journalClient(journal),
-      transport: () => "structured",
+      transportAvailable: () => true,
       resolveAccount: () => ({ engine: "claude", accountId: "default", kind: "managed", home: path.join(directory, "account"), transcriptRoot: directory, env: { NODE_ENV: "test" } }),
       spawn: async () => {
         spawns += 1;

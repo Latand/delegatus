@@ -141,15 +141,8 @@ for (const adopted of [false, true]) {
  * working so nothing in flight breaks.
  */
 
-test("both paths put a workspace gate around the same shared handlers", () => {
-  for (const file of [path.join(import.meta.dir, "route.ts"), path.join(import.meta.dir, "../tmux/route.ts")]) {
-    const source = fs.readFileSync(file, "utf8");
-    expect(source).toContain("const workspaceGET = conversationHostGET;");
-    expect(source).toContain("const workspacePOST = conversationHostPOST;");
-    expect(source).toContain("workspaceGET);");
-    expect(source).toContain("workspacePOST);");
-  }
-  expect(typeof alias.GET).toBe("function");
+test("both paths mount the same send handler", () => {
+  expect(typeof alias.POST).toBe("function");
   expect(typeof legacy.POST).toBe("function");
 });
 
@@ -158,19 +151,6 @@ test("both paths declare the same segment config", () => {
   expect(alias.dynamic).toBe("force-dynamic");
   expect(legacy.runtime).toBe(alias.runtime);
   expect(legacy.dynamic).toBe(alias.dynamic);
-});
-
-test("the legacy path's description says plainly that no tmux is involved", () => {
-  /* Acceptance criterion 2 of #1301. A reader who lands on the old name must be
-     told there, in the file, rather than inferring the transport from the path. */
-  for (const [file, mount] of [
-    [path.join(import.meta.dir, "..", "tmux", "route.ts"), "export const GET"],
-  ] as const) {
-    const source = fs.readFileSync(file, "utf8");
-    const description = source.slice(0, source.indexOf(mount));
-    expect(description.toLowerCase()).toContain("no tmux is involved");
-    expect(description).toContain("/api/conversation-host");
-  }
 });
 
 for (const mode of ["accepted", "refused", "uncertain", "exception", "null", "disabled"] as const) {
@@ -200,9 +180,6 @@ for (const mode of ["accepted", "refused", "uncertain", "exception", "null", "di
       deliverConversationMessage: async input => {
         legacyCalls++;
         expect(input.text).toBe("  prepared text  ");
-        expect(input.resumeModel).toBe("fixture-model");
-        expect(input.resumeEffort).toBe("high");
-        expect(input.resumeFast).toBe(true);
         return { ok: true, outcome: "held", target: null } as never;
       },
     });

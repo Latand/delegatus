@@ -8,12 +8,9 @@ import { SERVICE_TIER_PATTERN } from "@/lib/accounts/codexServiceTiers";
 import { validateLaunchModel } from "@/lib/agent/models";
 import { agentRegistry } from "@/lib/agent/registry";
 import { headCwd } from "@/lib/agent/transcript";
-import { livePaneTarget } from "@/lib/delivery";
 import { OPERATOR_PAUSE_RESUME_ACTOR, pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
 import { launchSizingRefusal } from "@/lib/roles/sizing";
 import { projectForCwd } from "@/lib/scanner/describe";
-import { isShellCommand } from "@/lib/status";
-import { killPane, paneInfo } from "@/lib/tmux";
 import type { FileEntry } from "@/lib/types";
 
 import { isoNow, lastRound, newRound, relayJournalSettlement, sendToImplementer } from "./engine";
@@ -341,32 +338,11 @@ function noteFieldFromRequest(req: PatchFlowRequest): string | null | undefined 
 
 /**
  * Kills whatever executes the round's review right now: the headless child
- * through its run registry, a pane reviewer through its tmux pane. Best
- * effort — the pane may already be gone. The pane handle captured at spawn
- * is authoritative (it exists before the scanner attributes a transcript);
- * the window-name check guards against pane-id reuse after a tmux server
- * restart. The transcript lookup is the fallback for rounds persisted before
- * the handle existed.
+ * through its run registry. A stored flow whose reviewer ran in a terminal
+ * pane has nothing left to stop, because no release hosts a reviewer in one.
  */
 async function stopReviewer(flow: Flow, round: Round): Promise<boolean> {
   if (flow.reviewerMode !== "pane") return await stopHeadlessReviewAndWait(flow.id, round.n, round);
-  try {
-    const pane = round.reviewerPane;
-    if (pane) {
-      const info = await paneInfo(pane.paneId);
-      if (info && info.windowName === pane.windowName && !isShellCommand(info.command)) {
-        await killPane(pane.paneId);
-      }
-    } else if (round.reviewerPath) {
-      const currentPath = round.reviewerConversationId?.startsWith("conversation_")
-        ? agentRegistry().conversation(round.reviewerConversationId as `conversation_${string}`)?.generations.at(-1)?.path ?? round.reviewerPath
-        : agentRegistry().canonicalPath(round.reviewerPath);
-      const target = await livePaneTarget(currentPath);
-      if (target !== null) await killPane(target);
-    }
-  } catch {
-    /* pane already closed */
-  }
   return true;
 }
 

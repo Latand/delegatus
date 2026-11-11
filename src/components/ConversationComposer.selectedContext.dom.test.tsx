@@ -1,0 +1,212 @@
+/**
+ * The composer half of #844, after the operator's decision of 2026-10-11:
+ * the «eye» chip and the reference it attached are gone, driven through the
+ * REAL composer and read off the bytes that go on the wire.
+ *
+ * The card the operator has open or selected on the board no longer rides
+ * with a message, in any composer: no badge before Send, no reference on the
+ * request. A task is named through the card's own button (#2420), and those
+ * chips still travel — on the record the seat already reads.
+ */
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { act } from "react";
+import { installActEnv } from "@/test-helpers/actEnv";
+import { Window } from "happy-dom";
+import { createRoot, type Root } from "react-dom/client";
+
+import type { RuntimeSessionView } from "@/hooks/useRuntime";
+import type { SelectedContextRef } from "@/lib/selection/selectedContext";
+import type { FileEntry } from "@/lib/types";
+import { installConversationComposerRuntimeForTests, resetConversationComposerRuntimeForTests } from "@/test-helpers/conversationComposerRuntime";
+
+const dom = new Window();
+installActEnv();
+Object.assign(globalThis, {
+  window: dom,
+  document: dom.document,
+  navigator: dom.navigator,
+  Node: dom.Node,
+  HTMLElement: dom.HTMLElement,
+  HTMLButtonElement: dom.HTMLButtonElement,
+  HTMLTextAreaElement: dom.HTMLTextAreaElement,
+  Event: dom.Event,
+  CustomEvent: dom.CustomEvent,
+  MouseEvent: dom.MouseEvent,
+  KeyboardEvent: dom.KeyboardEvent,
+  File: dom.File,
+  requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+  cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
+  localStorage: dom.localStorage,
+  sessionStorage: dom.sessionStorage,
+});
+(dom as unknown as { matchMedia: (query: string) => unknown }).matchMedia = (query: string) => ({
+  matches: false,
+  media: query,
+  addEventListener() {},
+  removeEventListener() {},
+});
+
+const COMPOSING = "conversation_composing_selected";
+const SELECTED_A = "conversation_selected_a";
+const SELECTED_B = "conversation_selected_b";
+const PATH_A = "fixtures/projects/atlas/worker-a.jsonl";
+const PATH_B = "fixtures/projects/atlas/worker-b.jsonl";
+
+function structuredView(conversationId: string): RuntimeSessionView {
+  return {
+    session: {
+      conversationId,
+      hostKind: "codex-app-server",
+      host: "hosted",
+      capabilities: { imageInput: { supported: true }, runtimeSettings: { perTurnEffort: false, perTurnModel: false } },
+      recentReceipts: [],
+    },
+    uiState: {},
+    attentions: [],
+    receipts: [],
+    legacy: false,
+    structuredControlsEnabled: true,
+  } as unknown as RuntimeSessionView;
+}
+
+import { appendComposerDraft, ConversationComposer } from "./ConversationComposer";
+const { resetOutboxForTests } = await import("./conversation/outbox");
+const { resetManagerIdentityForTest } = await import("./voice/managerIdentity");
+const { viewBus } = await import("@/hooks/viewPresenceBus");
+
+const realFetch = globalThis.fetch;
+let roots: Root[] = [];
+let sent: { text: string; selectedContext?: SelectedContextRef }[] = [];
+/** Runs while the send request is in flight, so a selection change lands
+    between capture and admission — the exact race criterion 3 describes. */
+let duringSend: (() => void) | null = null;
+
+function fileFor(conversationId: string, name: string): FileEntry {
+  return {
+    path: `/${name}.jsonl`, root: "codex-sessions", name: `${name}.jsonl`, project: "atlas",
+    title: "Codex", engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: 1,
+    size: 1, activity: "idle", proc: "running", pid: null, conversationId,
+    pendingQuestion: null, waitingInput: null,
+  } as FileEntry;
+}
+
+function stubFetch(): void {
+  globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+    const url = String(input);
+    const json = (value: unknown) =>
+      new Response(JSON.stringify(value), { status: 200, headers: { "content-type": "application/json" } });
+    if (url === "/api/orchestrator/seat?project=atlas") {
+      return json({ seat: null, pending: null, exists: false });
+    }
+    if (url === "/api/runtime/send") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { text?: string; selectedContext?: SelectedContextRef; conversationId: string; idempotencyKey: string };
+      sent.push({ text: body.text ?? "", selectedContext: body.selectedContext });
+      duringSend?.();
+      const operationId = `op-${sent.length}`;
+      return json({ operationId, receipt: { status: "delivered", operationId,
+        conversationId: body.conversationId, idempotencyKey: body.idempotencyKey,
+        kind: "send", text: body.text, at: new Date().toISOString(), revision: 1 } });
+    }
+    return json({});
+  }) as unknown as typeof fetch;
+}
+
+function selectCard(path: string): void {
+  viewBus.reportSlice({ mode: "list", focusedPath: path, selectedPaths: [path], visiblePaths: [], camera: null });
+}
+
+beforeEach(() => {
+  installConversationComposerRuntimeForTests({
+    useRuntimeView: (file) => file.conversationId === COMPOSING ? structuredView(COMPOSING) : null,
+  });
+  sent = [];
+  duringSend = null;
+  resetManagerIdentityForTest();
+  stubFetch();
+  viewBus.reportIdentity({ viewSessionId: "vs-synthetic-1", deviceId: "dev-synthetic-1" });
+  viewBus.reportContext({ project: "atlas", board: { renderedRevision: null, durableRevision: null, sync: "unavailable" } });
+  viewBus.reportCards([
+    { path: PATH_A, conversationId: SELECTED_A, project: "atlas", label: "Worker A" },
+    { path: PATH_B, conversationId: SELECTED_B, project: "atlas", label: "Worker B" },
+  ]);
+  selectCard(PATH_A);
+});
+
+afterEach(async () => {
+  resetConversationComposerRuntimeForTests();
+  for (const root of roots) await act(async () => root.unmount());
+  roots = [];
+  globalThis.fetch = realFetch;
+  document.body.replaceChildren();
+  localStorage.clear();
+  sessionStorage.clear();
+  resetOutboxForTests();
+  resetManagerIdentityForTest();
+  viewBus.reportIdentity(null);
+  viewBus.reportCards([]);
+});
+
+async function mountComposer(): Promise<HTMLElement> {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  roots.push(root);
+  await act(async () => {
+    root.render(<ConversationComposer file={fileFor(COMPOSING, "composing_selected")} />);
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  return host as unknown as HTMLElement;
+}
+
+async function sendThrough(host: HTMLElement, text: string): Promise<void> {
+  await act(async () => {
+    appendComposerDraft(COMPOSING, text);
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await act(async () => {
+    (host.querySelector("form") as HTMLFormElement)
+      .dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event);
+    for (let tick = 0; tick < 12; tick += 1) await new Promise((r) => setTimeout(r, 0));
+  });
+}
+
+test("the card the operator has selected is not attached to the turn", async () => {
+  const host = await mountComposer();
+  await sendThrough(host, "look at that one");
+
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.text).toBe("look at that one");
+  /* No reference at all: the wire names no card, and carries no empty one either. */
+  expect(sent[0]!.selectedContext).toBeUndefined();
+});
+
+test("moving the selection while the send is in flight changes nothing the turn carries", async () => {
+  const host = await mountComposer();
+  duringSend = () => selectCard(PATH_B);
+  await sendThrough(host, "look at that one");
+  await sendThrough(host, "and now that one");
+
+  expect(sent).toHaveLength(2);
+  expect(sent.map((request) => request.selectedContext)).toEqual([undefined, undefined]);
+});
+
+test("an empty selection submits no reference either", async () => {
+  viewBus.reportSlice({ mode: "list", focusedPath: null, selectedPaths: [], visiblePaths: [], camera: null });
+  const host = await mountComposer();
+  await sendThrough(host, "anything running?");
+
+  expect(sent[0]!.selectedContext).toBeUndefined();
+});
+
+test("the composer shows no eye chip, with a card selected or not", async () => {
+  const host = await mountComposer();
+  expect(host.querySelector("[data-selected-context]")).toBeNull();
+  expect(host.textContent).not.toContain("Worker A");
+
+  await act(async () => {
+    selectCard(PATH_B);
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(host.querySelector("[data-selected-context]")).toBeNull();
+  expect(host.textContent).not.toContain("Worker B");
+});

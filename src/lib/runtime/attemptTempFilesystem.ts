@@ -290,6 +290,19 @@ export class RepositoryLinkInventory {
     return true;
   }
   private readonly lexicalTargets = new WeakMap<object, string[]>();
+  /** The signature lists what decides the answer: for each directory from the
+   * cwd upward its identity and birth time, and for its `.git` marker the
+   * identity, birth time and kind, plus the size and modification time of a
+   * marker file. A file system hands the inode of a removed directory to the
+   * next one made, so identity alone would match a directory that was removed
+   * and made again; the birth time tells the two apart. A marker file is
+   * rewritten in place when a worktree is moved or repaired, and it changes
+   * rarely. A directory's own change timestamps are left out. They move
+   * whenever any entry is made in it, and a cwd outside every checkout has
+   * ancestors that are written all the time (the state directory, a temp
+   * root), so a signature with them refused every fence on a busy machine. A
+   * new marker is read directly here, and the directories of a checkout found
+   * here are versioned by its link inventory. */
   private discoverRepository(cwd: string): RepositoryDiscovery {
     const cwdStat = fs.statSync(cwd);
     if (!cwdStat.isDirectory()) throw new Error(`process cwd is not a directory: ${cwd}`);
@@ -298,11 +311,12 @@ export class RepositoryLinkInventory {
     let current = path.resolve(cwd);
     for (let depth = 0; depth < 64; depth++) {
       const stat = fs.statSync(current);
-      versions.push(`${current}:${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}`);
+      versions.push(`${current}:${stat.dev}:${stat.ino}:${stat.birthtimeMs}`);
       try {
         const markerPath = path.join(current, ".git");
         const marker = fs.lstatSync(markerPath);
-        versions.push(`${markerPath}:${marker.dev}:${marker.ino}:${marker.mtimeMs}:${marker.ctimeMs}`);
+        versions.push(`${markerPath}:${marker.dev}:${marker.ino}:${marker.birthtimeMs}:${marker.isDirectory()
+          ? "directory" : `file:${marker.size}:${marker.mtimeMs}`}`);
         repository = current;
         break;
       } catch (error) {
@@ -315,6 +329,13 @@ export class RepositoryLinkInventory {
     }
     if (!repository) throw new Error("process checkout ancestry exceeded its limit");
     return { repository, signature: JSON.stringify(versions) };
+  }
+  /** Keeps the recorded discoveries of these cwds and forgets the others. A
+   * cwd that no process of the current scan holds belongs to a process that
+   * exited; its directory may be gone, and it can no longer reach any root. */
+  retainDiscoveries(cwds: readonly string[]) {
+    const current = new Set(cwds);
+    for (const cwd of this.repositoriesOf.keys()) if (!current.has(cwd)) this.repositoriesOf.delete(cwd);
   }
   /** The nearest enclosing checkout of a process cwd. */
   repositoryOf(cwd: string): string | null {
@@ -398,7 +419,12 @@ export async function attemptReferencesClear(original: string, current: string, 
   for (const process of scan.processes) {
     const cwd = process.paths[0];
     if (cwd?.startsWith(path.sep)) processCwds.push(cwd);
-    const repository = cwd?.startsWith(path.sep) ? inventory.repositoryOf(cwd) : null;
+  }
+  // The scan is the list of live processes. Discoveries recorded for an
+  // earlier root of this tick stay only for cwds a live process still holds.
+  inventory.retainDiscoveries(processCwds);
+  for (const cwd of processCwds) {
+    const repository = inventory.repositoryOf(cwd);
     if (repository) repositories.add(repository);
   }
   for (const repository of [...repositories].sort()) {
@@ -569,6 +595,36 @@ export async function inspectAttemptTree(directory: string, original = directory
   }
 }
 
+/** An independent directory snapshot protects new markers even when expired
+ * evidence is deliberately discarded. Check it synchronously after every
+ * awaited observation and again at removal dispatch. Never follow links. */
+export async function snapshotAttemptProtection(directory: string, budgetMs = 30_000): Promise<{ current: () => boolean }> {
+  const until = performance.now() + Math.max(0, Math.min(30_000, budgetMs));
+  const directories = new Map<string, string>();
+  const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.mtimeNs, stat.ctimeNs].join(":");
+  const pending = [directory];
+  while (pending.length) {
+    if (performance.now() >= until || directories.size >= 10000) throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
+    const current = pending.pop()!, stat = fs.lstatSync(current, { bigint: true });
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("attempt protection directory changed");
+    directories.set(current, signature(stat));
+    const entries = fs.opendirSync(current);
+    try {
+      for (let entry; (entry = entries.readSync());) {
+        if (performance.now() >= until || pending.length + directories.size >= 10000)
+          throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
+        if (entry.isDirectory()) pending.push(path.join(current, entry.name));
+      }
+    } finally { entries.closeSync(); }
+  }
+  return { current: () => {
+    try {
+      for (const [file, before] of directories) if (signature(fs.lstatSync(file, { bigint: true })) !== before) return false;
+      return true;
+    } catch { return false; }
+  } };
+}
+
 /** An unreadable tree can retire only when the readonly namespace proves it
  * has no captures. The deletion namespace repeats that proof at dispatch. */
 export async function attemptTreeHasNoEvidence(directory: string, original: string): Promise<void> {
@@ -576,7 +632,7 @@ export async function attemptTreeHasNoEvidence(directory: string, original: stri
 }
 
 export async function removeAttemptTree(directory: string, original = directory, guard?: () => Promise<boolean>, requireNoEvidence = false,
-  dispatchGuard?: () => boolean, postDeleteGuard = dispatchGuard): Promise<void> {
+  dispatchGuard?: () => boolean, postDeleteGuard = dispatchGuard, discardExpiredEvidence = false): Promise<void> {
   if (requireNoEvidence) {
     const { identity } = await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
     removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
@@ -586,7 +642,7 @@ export async function removeAttemptTree(directory: string, original = directory,
   try { await fs.promises.rm(directory, { recursive: true, force: true }); }
   catch (error) {
     if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
-    const { identity } = await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
+    const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard);
     removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
   }
 }

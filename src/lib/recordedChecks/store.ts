@@ -37,7 +37,7 @@ export const rowSchema = z.object({ id: z.string().regex(/^[a-f0-9]{64}$/), requ
   // independently of the aggregate close, which can omit an outer command.
   terminalOwners: z.array(identitySchema).max(8).optional(),
   acknowledgement: z.object({ actor: z.string(), resultRevision: z.number(), resultDigest: z.string(), evidenceDigest: z.string(),
-    disposition: z.literal("adopt-retained"), at: z.number() }).strict().nullable(),
+    disposition: z.enum(["adopt-retained", "expired-with-lane"]), at: z.number() }).strict().nullable(),
 }).strict();
 export type CheckRow = z.infer<typeof rowSchema>;
 /** Releasing admission capacity never acknowledges or retires evidence. Unknown
@@ -308,6 +308,18 @@ export class RecordedCheckStore {
   rootHeld(directory: string): boolean {
     return !!this.db.query("SELECT 1 FROM recorded_check_roots WHERE directory=? AND held=1 LIMIT 1").get(directory);
   }
+  heldRootRuns(directory: string): CheckRow[] {
+    return this.db.query<{ id: string }, [string]>("SELECT id FROM recorded_check_roots WHERE directory=? AND held=1 ORDER BY id LIMIT 8")
+      .all(directory).map(row => {
+        const run = this.get(row.id);
+        if (!run) throw new Error("recorded root has no custody row");
+        return run;
+      });
+  }
+  /** Every directory a recorded check names as a root. */
+  rootDirectories(): string[] {
+    return this.db.query<{ directory: string }, []>("SELECT DISTINCT directory FROM recorded_check_roots").all().map(row => row.directory);
+  }
   hasRoot(directory: string) { return !!this.db.query("SELECT 1 FROM recorded_check_roots WHERE directory=? LIMIT 1").get(directory); }
   rootRetirement(directory: string, identity: string): unknown {
     const row = this.db.query<{ retirement: string | null }, [string, string]>("SELECT retirement FROM recorded_check_roots WHERE directory=? AND identity=? ORDER BY id LIMIT 1").get(directory, identity);
@@ -349,7 +361,31 @@ export const recordedHostHeld = (conversation: string) => readRecorded(store => 
 export const recordedSessionHeld = (session: string, expected: ProcessIdentity) => readRecorded(store => store.sessionHeld(session, expected), false);
 export const recordedOwnerHeld = (expected: ProcessIdentity) => readRecorded(store => store.ownerHeld(expected), false);
 export const recordedLaunchHeld = (launch: string) => readRecorded(store => store.launchHeld(launch), false);
+export const recordedRootDirectories = () => readRecorded(store => store.rootDirectories(), [] as string[]);
 export const recordedRootHeld = (directory: string) => readRecorded(store => store.rootHeld(directory), false);
+/** Called under attempt-sweep admission, with short CAS writes only. The
+ * caller's lane revision is checked inside each write after lock admission. */
+export async function expireRecordedRootHolds(directory: string, pipelineId: string, now: number, current: () => boolean,
+  prepareRoots: (row: CheckRow) => () => boolean) {
+  if (!recordedRootHeld(directory)) return;
+  const store = await openRecordedChecks();
+  try {
+    const rows = store.heldRootRuns(directory);
+    if (rows.some(row => row.binding.pipeline !== pipelineId)) throw new Error("recorded root lane binding mismatch");
+    for (const row of rows) {
+      if (row.acknowledgement) continue;
+      // Acknowledgement releases every manifest root. Persist their retention
+      // prerequisites outside the state transaction, then recheck after admission.
+      const rootsCurrent = prepareRoots(row);
+      await store.write({ ...row, revision: row.revision + 1, acknowledgement: {
+        actor: "retention", disposition: "expired-with-lane", at: now,
+        resultRevision: row.result?.revision ?? 0, resultDigest: row.result?.digest ?? "", evidenceDigest: row.result?.evidenceDigest ?? "",
+      } }, row.revision, () => {
+        if (!current() || !rootsCurrent()) throw new Error("lane or root binding changed before retention acknowledgement");
+      });
+    }
+  } finally { store.close(); }
+}
 export async function recordRootRetirement(directory: string, identity: string, journal: string, state: "admitted" | "completed" | "missing-unexplained", reason: string) {
   if (!readRecorded(store => store.hasRoot(directory), false)) return;
   const store = await openRecordedChecks();
