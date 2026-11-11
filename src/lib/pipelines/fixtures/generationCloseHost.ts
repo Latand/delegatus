@@ -206,6 +206,8 @@ if (mode === "pending") {
     },
     { schedule: (_callback, delayMs) => { retryScheduledMs = delayMs; return { unref() {} }; } },
   );
+  // The timeout control holds a real adopted child before readiness is sent.
+  await pauseAt("report");
   const reportPass = () => report({
     deferred: structuredStartupDeferral()?.message ?? failure,
     adopted,

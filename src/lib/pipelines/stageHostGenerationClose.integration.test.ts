@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { spawn, type ChildProcess } from "node:child_process";
-import { fixtureReport } from "@/lib/testing/fixtureProcess";
+import { fixtureReport, ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -213,16 +213,24 @@ type AdoptReport = {
     line, so a generation that completes a later pass is read the same way. */
 type Generation<Report> = Tracked & { report: Report; reports: Report[] };
 
+function startGeneration(
+  mode: "spawn" | "adopt" | "pending",
+  lane: { registryPath: string; directory: string },
+  hostShape: "single" | "tree" = "single",
+): ChildProcess {
+  return ownFixtureTree(spawn(process.execPath, ["run", generationFixture, mode, lane.registryPath, lane.directory, hostShape], {
+    cwd: repoRoot,
+    env: { ...generationEnvironment, NODE_ENV: "test", LLV_FIXTURE_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) },
+    stdio: ["ignore", "pipe", "pipe"],
+  }));
+}
+
 function generation<Report extends { generation: ProcessIdentity }>(
   mode: "spawn" | "adopt" | "pending",
   lane: { registryPath: string; directory: string },
   hostShape: "single" | "tree" = "single",
 ): Promise<Generation<Report>> {
-  const child: ChildProcess = spawn(process.execPath, ["run", generationFixture, mode, lane.registryPath, lane.directory, hostShape], {
-    cwd: repoRoot,
-    env: { ...generationEnvironment, NODE_ENV: "test", LLV_FIXTURE_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const child = startGeneration(mode, lane, hostShape);
   if (child.pid === undefined) throw new Error("generation did not start");
   const pid = child.pid;
   const created = track(pid);
@@ -1405,7 +1413,31 @@ test("ticks defer worktree provisioning until an earlier partial tree is positiv
   expect(commands.filter(command => !ownershipReads.has(command)).length).toBeGreaterThan(0);
 });
 
-test.each(["invalid-json", "invalid-runs"])("malformed archive %s defers startup and recovers on a successful reread (#1501)", async (shape) => {
+test("readiness timeout reaps an adopted host before its first report", async () => {
+  const current = await lane();
+  await loseIncumbent(current);
+  holdWork(current);
+  const other = bystander();
+  const barrier = path.join(current.directory, "startup-pause-report");
+  fs.writeFileSync(barrier, "pause");
+  const child = startGeneration("adopt", current);
+  const root = track(child.pid!);
+  try {
+    await settles(() => fs.existsSync(`${barrier}.reached`), "adopted host before first report", 6000);
+    const identity = current.hostedBy()!;
+    expect(identity.pid).not.toBe(current.hostA.pid);
+    const host = track(identity.pid, identity);
+    expect(host.alive()).toBeTrue();
+    await expect(fixtureReport(child, "stalled adoption report", [], 100)).rejects.toThrow("stalled adoption report did not report within 100ms");
+    expect(root.alive()).toBeFalse();
+    expect(host.alive() && !procBackend.processExited(host.pid)).toBeFalse();
+    expect(other.alive()).toBeTrue();
+  } finally {
+    await stopFixtureTree(child);
+  }
+}, 40_000);
+
+test.each(["{broken", JSON.stringify({ runs: [] }), "invalid-runs"])("malformed archive %s defers startup and recovers on a successful reread (#1501)", async (shape) => {
   const current = await lane();
   const pipeline = pipelineFor(current);
   pipeline.state = "closed";
@@ -1422,7 +1454,8 @@ test.each(["invalid-json", "invalid-runs"])("malformed archive %s defers startup
   const db = new Database(path.join(isolatedEnvironment.LLV_STATE_DIR, "state.sqlite"));
   const row = db.query("SELECT value_json FROM state_rows WHERE collection='pipelines_archive' AND row_key=?").get(pipeline.id) as { value_json: string };
   expect(row).not.toBeNull();
-  const corrupt = shape === "invalid-json" ? "{broken" : JSON.stringify({ ...pipeline, runs: "unreadable" });
+  // Preserve both original payloads, including the row whose id is missing.
+  const corrupt = shape === "invalid-runs" ? JSON.stringify({ ...pipeline, runs: "unreadable" }) : shape;
   db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines_archive' AND row_key=?").run(corrupt, pipeline.id);
   try {
     for (const pending of [false, true]) {
