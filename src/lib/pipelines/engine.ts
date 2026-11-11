@@ -15507,7 +15507,7 @@ export async function createPipelineFromRequest(
      it is stored at the checkout's current origin/<baseBranch>, unpinned, and
      Start resolves the branch again. A draft delivering to a PR therefore
      starts from the PR head as it is at Start. */
-  const followsBaseBranch = req.autoStart === false && !!requestedBaseBranch && !explicitBaseRef;
+  let followsBaseBranch = req.autoStart === false && !!requestedBaseBranch && !explicitBaseRef;
   if (violations.length || !normalized.stages || !creator.lineage) {
     return { error: pipelineValidationError(violations), violations, status: 400 };
   }
@@ -15548,13 +15548,37 @@ export async function createPipelineFromRequest(
      lease every other writer waits on. */
   /* Local reads only: a followed branch is read from its remote-tracking ref,
      or the local branch in a checkout with no origin, never fetched. */
-  let followedRef = `refs/remotes/origin/${requestedBaseBranch}`;
-  if (followsBaseBranch && (await ports.exec("git", ["remote", "get-url", "origin"], repoDir)).code === 2) followedRef = `refs/heads/${requestedBaseBranch}`;
+  let localBaseBranch = requestedBaseBranch || DEFAULT_PIPELINE_BASE_BRANCH;
+  let localOnly = false;
+  if (!explicitBaseRef) {
+    const remotes = await ports.exec("git", ["remote"], repoDir);
+    /* The checked-out branch is the default only for a genuinely local
+       pipeline. A named delivery remote or any configured Git remote keeps
+       the established main/origin base resolution. */
+    localOnly = !req.delivery?.remote && remotes.code === 0 && remotes.stdout.trim() === "";
+    if (localOnly) {
+      if (!requestedBaseBranch) {
+        const current = await ports.exec("git", ["symbolic-ref", "--quiet", "HEAD"], repoDir);
+        const branch = current.stdout.trim().replace(/^refs\/heads\//, "");
+        if (current.code === 0 && current.stdout.trim().startsWith("refs/heads/") && !pipelineBaseBranchError(branch)) localBaseBranch = branch;
+      }
+      const commit = await ports.exec("git", ["rev-parse", "--verify", "--end-of-options", `refs/heads/${localBaseBranch}^{commit}`], repoDir);
+      if (commit.code !== 0) {
+        const head = await ports.exec("git", ["rev-parse", "--verify", "HEAD^{commit}"], repoDir);
+        if (head.code !== 0) return { error: "The repository has no commit yet. Create the first commit with git add . and git commit, then retry.", status: 409 };
+        return { error: `The local base branch ${localBaseBranch} has no commit; choose an existing branch and retry.`, status: 409 };
+      }
+    }
+  }
+  if (localOnly && req.autoStart === false) followsBaseBranch = true;
+  const followsLocalBranch = localOnly || (followsBaseBranch
+    && (await ports.exec("git", ["remote", "get-url", "origin"], repoDir)).code === 2);
+  const followedRef = followsLocalBranch ? `refs/heads/${localBaseBranch}` : `refs/remotes/origin/${requestedBaseBranch}`;
   const base = explicitBaseRef || followsBaseBranch
-    ? (await resolvePipelineBase(repoDir, { baseBranch: req.baseBranch, baseRef: explicitBaseRef || followedRef }, ports.exec))
+    ? (await resolvePipelineBase(repoDir, { baseBranch: localOnly ? localBaseBranch : req.baseBranch, baseRef: explicitBaseRef || followedRef }, ports.exec))
     : null;
   if (base && !base.ok) {
-    return { error: followsBaseBranch ? `${base.error}; fetch origin ${requestedBaseBranch} in this checkout and create the draft again` : base.error, status: 409 };
+    return { error: followsBaseBranch && !followsLocalBranch ? `${base.error}; fetch origin ${requestedBaseBranch} in this checkout and create the draft again` : base.error, status: 409 };
   }
   const inventedTasks = loadTasksByIds(new Set(taskIds)).filter(task => task.proactive && !proactiveCandidateDecision(task).adopted);
   if (inventedTasks.length && !options.creationRequest) {
@@ -15597,7 +15621,7 @@ export async function createPipelineFromRequest(
        the provisioning tick would fall back to `main` and resolve a base the
        caller never asked for. `baseRef` and `lastPassedCommit` stay empty,
        which is what "unresolved" means to every reader. */
-    pipeline.baseBranch = requestedBaseBranch || DEFAULT_PIPELINE_BASE_BRANCH;
+    pipeline.baseBranch = localBaseBranch;
     pipeline.stateDetail = PIPELINE_BASE_UNRESOLVED_DETAIL;
   }
   const targetInput = req.delivery;
