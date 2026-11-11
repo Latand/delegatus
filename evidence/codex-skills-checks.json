@@ -1679,6 +1679,19 @@
       "src/lib/pipelines/spawnRestartRecovery.test.ts"
     ],
     "verification": "Run the unmodified pre-push plan with per-file isolation and baseline comparisons; retain final receipts separately so verification cannot change its own inputs.",
-    "previousRepair": "The previous accepted head passed the full pre-push using existing completed-green-file checkpoints. Its publication was subsequently refused at the aggregate touched-test deadline. No test selection, deadline or privacy bypass is introduced here."
+    "previousRepair": "The previous accepted head passed the full pre-push using existing completed-green-file checkpoints. Its publication was subsequently refused at the aggregate touched-test deadline. No test selection, deadline or privacy bypass is introduced here.",
+    "fileBudgetRepair": {
+      "file": "src/lib/pipelines/engine.rolePrivacy.test.ts",
+      "observedHeadTimeoutMs": 300459,
+      "observedBaseCompleteMs": 295239,
+      "preservedEffectScenarios": 79,
+      "parts": [
+        27,
+        26,
+        26
+      ],
+      "sharedFixture": "src/lib/pipelines/engine.rolePrivacyEffects.fixture.ts",
+      "rule": "Every existing effect scenario runs in exactly one explicit test file. Assertions, inputs, per-test timeouts and process isolation are preserved; the recursive child receives its wrapper path."
+    }
   }
 }
