@@ -17,7 +17,6 @@ mock.module("./useAgentCapabilities", () => ({
     runtime: null,
     structuredSession: null,
     runtimeEnabled: false,
-    attachMode: "tmux",
   }),
 }));
 

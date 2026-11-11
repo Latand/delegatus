@@ -26,7 +26,7 @@ import { awaitFixtureFile } from "./fixtureBarrier";
  * service — real bindings, the real per-call policy, the SQLite receipt store —
  * and the production identity resolution: the capability each client presents
  * is looked up in a real registry. The only stand-in is the Viewer's
- * `/api/tmux` delivery route, served on the same listener, which records what
+ * `/api/conversation-host` delivery route, served on the same listener, which records what
  * the bindings forwarded and delivers nothing.
  *
  * Everything runs in a private sandbox: state, config, home and temp all point
@@ -132,7 +132,7 @@ function serveViewer(listenPort: number): ReturnType<typeof Bun.serve> {
     port: listenPort,
     fetch: async (request) => {
       const url = new URL(request.url);
-      if (url.pathname === "/api/tmux" && request.method === "POST" && holdDelivery) {
+      if (url.pathname === "/api/conversation-host" && request.method === "POST" && holdDelivery) {
         const settle = holdDelivery;
         holdDelivery = null;
         const started = Date.now();
@@ -140,7 +140,7 @@ function serveViewer(listenPort: number): ReturnType<typeof Bun.serve> {
         settle(Date.now() - started);
         return new Response(null, { status: 499 });
       }
-      if (url.pathname === "/api/tmux" && request.method === "POST") {
+      if (url.pathname === "/api/conversation-host" && request.method === "POST") {
         const body = await request.json() as { clientMessageId: string };
         deliveries.push({ capability: request.headers.get("x-llv-spawn-capability"), clientMessageId: body.clientMessageId });
         if (loseNextDeliveryAnswer) {

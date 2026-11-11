@@ -5,7 +5,6 @@ import type { SpawnReceipt } from "./registry";
 import { RegistryWriterBusyError } from "./registry";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { recordActualSpawnAccountOffLoop } from "./spawnAccountSettlement";
-import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { withSpawnDiagnostics, bindSpawnDiagnostics, spawnDiagnosticError } from "./spawnDiagnostics";
 import fs from "node:fs";
 import os from "node:os";
@@ -19,7 +18,7 @@ import { deferSpawnWork } from "./spawnDeferral";
 import { operatorLocale } from "@/lib/operator/settings";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 import { UnknownAccountError } from "@/lib/accounts/codex";
-import { claudeProviderForHome, claudeSettingsPath, isManagedClaudeHome, UnknownClaudeAccountError } from "@/lib/accounts/claude";
+import { UnknownClaudeAccountError } from "@/lib/accounts/claude";
 import { accountProbeIdentity, accountProbeSnapshot, AccountAdmissionChangedError, AccountMutationBusyError, isAccountAdmissionRetryable, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { accountManager, ProjectAccountRefusedError, resolveHealthySpawnAccount, type HealthySpawnAccountResolution } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, validExplicitProject } from "@/lib/accounts/migration/contracts";
@@ -37,7 +36,6 @@ import { resolveSpawnRole, roleSpawnPrompt } from "@/lib/roles/registry";
 import { ENGINE_NOT_CONNECTED, engineNotConnectedDetails, engineNotConnectedMessage, engineReadiness, type EngineReadiness } from "@/lib/accounts/engineConnection";
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
 import { spawnAdmissionBodyDigest, spawnContentDigest, spawnParentSelector, spawnRequestDigests } from "@/lib/agent/spawnIdentity";
-import { sessionKeyFromTranscript } from "@/lib/agent/sessionKey";
 import { resolveSpawnLineageOffLoop, SpawnParentError } from "@/lib/agent/spawnParent";
 import { LaunchMembershipError } from "@/lib/tasks/launchMembership";
 import {
@@ -51,21 +49,17 @@ import {
   type SpawnAdmissionFenceResult,
 } from "@/lib/agent/spawnAdmission";
 import { spawnRejectionResponse, spawnReplayStatus, spawnResponseForReceipt, type SpawnResponse } from "@/lib/agent/spawnResponse";
-import { applyClaudeSpawnPolicy, prepareManagedClaudeSpawnHome } from "@/lib/agent/spawnPolicy";
-import { resolveSpawnedTranscriptPath } from "@/lib/agent/spawnedTranscript";
 import { headCwd } from "@/lib/agent/transcript";
 import { persistHandoffLineage, rememberHandoffChild } from "@/lib/handoffLineage";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { runtimeHostClient, isRuntimeHostTransportFailure } from "@/lib/runtime/client";
 import { DEPLOY_ADMISSION_BUDGET_MS } from "@/lib/runtime/admissionBudget";
-import { runtimeScope } from "@/lib/runtime/contracts";
 import { publishFilesRevision } from "@/lib/runtime/filesRevision";
-import { runtimeEventsEnabled } from "@/lib/runtime/flags";
 import { runtimeImageCapability, runtimeImageStore, type RuntimeImageUpload } from "@/lib/runtime/runtimeImageStore";
 import { assertStructuredTextEnvelope, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { composeStructuredFirstMessage } from "@/lib/runtime/structuredFirstMessage";
 import { withRuntimeAdmissionRetry, queuedPinnedSpawnTitle, reconcileStructuredSpawnReplay, resolvePinnedSpawnAdmission, spawnStructuredConversation, structuredClaudePermissionMode } from "@/lib/runtime/structuredSpawn";
-import { structuredSpawnGap, spawnTransport } from "@/lib/runtime/spawnTransport";
+import { structuredSpawnGap, spawnTransport, type SpawnTransport } from "@/lib/runtime/spawnTransport";
 import { adoptPipelineAttemptFromSource, pipelineAttemptTargetForSource } from "@/lib/pipelines/engine";
 import { loadPipelines } from "@/lib/pipelines/store";
 import { listFiles } from "@/lib/scanner";
@@ -76,7 +70,7 @@ import { existingTeamStore } from "@/lib/team/store";
 import { TeamError } from "@/lib/team/members";
 import { projectDirectoryCandidates } from "@/lib/scanner/projectDirectories";
 import { derivedSpawnTitle, durableSemanticTitle, firstMeaningfulPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
-import { buildImagePayload, collectImagePayloads, deleteInboxImages, spawnAgentWithPrompt, verifyTmuxHostEvidence } from "@/lib/tmux";
+import { admitRuntimeImagePayload as collectImagePayloads } from "@/lib/runtime/runtimeImageAdmission";
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
 import type { ApiError } from "@/lib/types";
@@ -134,8 +128,10 @@ function pinFallbackTitle(req: Pick<NextRequest, "headers">): string {
 }
 
 export interface SpawnCommandDependencies {
-  /** Trusted in-process service authority; never read from the request body. */
-  workspacePrincipal?: WorkspacePrincipal;
+  /** Trusted in-process service authority; never read from the request body.
+      `null` launches unbound, and absent leaves the launch to inherit its
+      actor's or its parent's reach. */
+  workspacePrincipal?: WorkspacePrincipal | null;
   registry: typeof agentRegistry;
   resolveHealthySpawnAccount: typeof resolveHealthySpawnAccount;
   resolveSpawnAccount: typeof accountManager.resolveSpawn;
@@ -149,7 +145,6 @@ export interface SpawnCommandDependencies {
   assertStructuredRuntime: typeof assertDarwinStructuredRuntime;
   defer(work: () => Promise<void>): void;
   storeImages(images: readonly RuntimeImageUpload[]): StructuredImageRef[];
-  spawnTmuxAgent?: typeof spawnAgentWithPrompt;
   adoptPipelineAttemptFromSource?: typeof adoptPipelineAttemptFromSource;
   pipelineAttemptTargetForSource?: typeof pipelineAttemptTargetForSource;
   /** Task context of a server-attributed stage caller; historical lineage
@@ -258,7 +253,7 @@ interface SuggestResponse {
   cwd: string | null;
   /** Whether the recorded source directory currently exists. */
   cwdExists: boolean;
-  spawnTransport: "tmux" | "structured";
+  spawnTransport: "structured";
   imageInput: {
     claude: ReturnType<typeof runtimeImageCapability>;
     codex: ReturnType<typeof runtimeImageCapability>;
@@ -308,10 +303,10 @@ export async function spawnSuggestions(req: NextRequest): Promise<NextResponse<S
     cwdExists,
     spawnTransport: transport,
     imageInput: {
-      claude: runtimeImageCapability("claude", transport === "structured"),
-      codex: runtimeImageCapability("codex", transport === "structured" && codexModelSupportsImages(null)),
+      claude: runtimeImageCapability("claude", true),
+      codex: runtimeImageCapability("codex", codexModelSupportsImages(null)),
       /* ACP advertises `promptCapabilities.image` (CLI 1.0.87). */
-      copilot: runtimeImageCapability("copilot", transport === "structured"),
+      copilot: runtimeImageCapability("copilot", true),
     },
   });
 }
@@ -504,29 +499,23 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
   const derivedTitle = firstMeaningfulPromptLine(userPrompt, 60)
     ? derivedSpawnTitle(role.value?.role ?? engine, userPrompt)
     : null;
-  let transport;
+  let transport: SpawnTransport;
   try {
     transport = dependencies.autonomousStructured ? "structured" : spawnTransport();
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
-  /* Copilot has no tmux path (docs/design/copilot-engine.md 3.3). */
-  if (engine === "copilot" && transport !== "structured") {
-    return NextResponse.json({ error: "GitHub Copilot launches need the structured transport (a runtime host); it has no tmux path" }, { status: 409 });
+  try {
+    dependencies.assertStructuredRuntime();
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 503 });
   }
-  if (transport === "structured") {
-    try {
-      dependencies.assertStructuredRuntime();
-    } catch (error) {
-      return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 503 });
-    }
-    const gap = structuredSpawnGap({
-      engine,
-      model: selectedModel.model,
-      hasImages: images.length > 0,
-    }) ?? (engine === "copilot" ? (dependencies.copilotBinaryGap ?? copilotBinaryGap)() : null);
-    if (gap) return NextResponse.json({ error: gap }, { status: 409 });
-  }
+  const gap = structuredSpawnGap({
+    engine,
+    model: selectedModel.model,
+    hasImages: images.length > 0,
+  }) ?? (engine === "copilot" ? (dependencies.copilotBinaryGap ?? copilotBinaryGap)() : null);
+  if (gap) return NextResponse.json({ error: gap }, { status: 409 });
 
   const registry = registryForCaller ?? await prepareAgentRegistry(req.signal, () => dependencies.registry());
   const clientAttemptId = typeof body.clientAttemptId === "string" ? body.clientAttemptId : null;
@@ -641,20 +630,15 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     }
     dependencies.recordOperatorRequest?.(req, { kind: "spawn", idempotencyKey: `spawn:${clientAttemptId!}`, project });
   }
-  if (transport === "structured") {
-    try {
-      /* Materialization changes files and the index, so admit the caller and
-         task first. Compose before receipts, digests, or deferred delivery. */
-      prompt = await composeStructuredFirstMessage(prompt, cwd);
-      assertStructuredTextEnvelope(prompt);
-    } catch (error) {
-      return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 413 });
-    }
+  try {
+    /* Materialization changes files and the index, so admit the caller and
+       task first. Compose before receipts, digests, or deferred delivery. */
+    prompt = await composeStructuredFirstMessage(prompt, cwd);
+    assertStructuredTextEnvelope(prompt);
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 413 });
   }
 
-  /* Saved paths stay visible to the catch. A pane-bound receipt keeps them:
-     the agent may already have accepted the prompt despite a later failure. */
-  let imagePaths: string[] = [];
   let launchId: string | null = null;
   let queuedPinnedAttempt = false;
   try {
@@ -704,8 +688,8 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       : null;
     const parentProfile = parentRecord?.generations.at(-1)?.launchProfile;
     const team = existingTeamStore();
-    workspacePrincipal = existingAttempt?.launchProfile.workspace ?? dependencies.workspacePrincipal
-      ?? (spawnActor.kind === "member" && team
+    workspacePrincipal = existingAttempt?.launchProfile.workspace ?? (dependencies.workspacePrincipal !== undefined ? dependencies.workspacePrincipal
+      : spawnActor.kind === "member" && team
         ? memberWorkspacePrincipal(team, spawnActor.memberId, explicitProject ?? projectForCwd(cwd))
         : conversationWorkspacePrincipal((id: string) => registry.conversation(id as `conversation_${string}`), authenticatedCaller?.kind === "agent"
           ? authenticatedCaller.conversationId : launcher.value?.conversationId ?? pipelineSourceConversationId ?? parentConversationId));
@@ -783,7 +767,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       ? grantedMcpServers(requestedMcpServers ?? [])
       : existingAttempt && implicitRootTelegram && !reportClassGrant
       ? existingAttempt.launchProfile.mcpServers
-      : implicitRootTelegram && (!telegramAvailable || engine === "copilot" || transport === "tmux")
+      : implicitRootTelegram && (!telegramAvailable || engine === "copilot")
       ? ["viewer"]
       : reportClassGrant
       ? grantedMcpServers(reportClassGrant.mcpServers)
@@ -791,9 +775,6 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         ? grantedMcpServers(requestedMcpServers)
       : mcpServersForSession({ origin: sessionOrigin, requested: requestedMcpServers });
     const grantedServers = telegramLeftOut ? requestedServers.filter((name) => name !== "telegram") : requestedServers;
-    if (transport === "tmux" && grantedServers.includes("telegram")) {
-      return refuse("telegram MCP requires structured spawn transport");
-    }
     const requestDigestForAccount = (accountId: string, preserveOperationalTitleReplay = false) => {
       const digests = spawnRequestDigests({
         engine,
@@ -944,12 +925,11 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
       }
       if (begun.kind === "created") {
-        if (transport === "structured") await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, reason, { announce: false });
-        else await registry.failSpawnOffLoop(begun.receipt.launchId, reason);
+        await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, reason, { announce: false });
       }
       const receipt = registry.readOnlySnapshot().receipts[begun.receipt.launchId] ?? begun.receipt;
       return NextResponse.json(spawnResponseForReceipt(receipt, receipt.artifactPath, {
-        structured: transport === "structured",
+        structured: true,
       }));
     };
     if (existingAttempt
@@ -1058,11 +1038,10 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         claudeConfigDir: engine === "claude" ? launchAccount.home : null,
         claudeProjectsDir: engine === "claude" ? launchAccount.transcriptRoot : null,
         allowSubagents: body.allowSubagents === true,
-        operatorDecisionForms: transport === "tmux" && operatorDecisionFormsRequired(role.value?.role, existingAttempt?.artifactPath),
         mcpServers: grantedServers,
         deferClaudeSpawnPolicy: true,
       });
-      const permissionMode = (engine === "claude" || engine === "copilot") && transport === "structured"
+      const permissionMode = engine === "claude" || engine === "copilot"
         ? structuredClaudePermissionMode(specBase.launchProfile?.permissionMode, {
           agentInitiated,
           operatorAuthenticated: authenticatedCaller?.kind === "operator",
@@ -1092,22 +1071,6 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     const pinTitle = pinFallback ? pinFallbackTitle(req) : null;
     const spec = specForAccount(account, pinTitle);
     workspaceAccountId = account.accountId;
-    const prepareTmuxSpawn = (): void => {
-      if (engine !== "claude" || transport !== "tmux") return;
-      const profileId = path.basename(spec.transcript ?? "", ".jsonl");
-      if (isManagedClaudeHome(account.home)) prepareManagedClaudeSpawnHome(account.home, cwd);
-      applyClaudeSpawnPolicy(account.home, {
-        providerAccount: Boolean(claudeProviderForHome(account.home)),
-        allowSubagents: body.allowSubagents === true,
-        baseSettingsPath: isManagedClaudeHome(account.home) ? claudeSettingsPath() : null,
-        profileId,
-        cwd,
-        mcpServers: grantedServers,
-        mcpStatePath: account.kind === "managed"
-          ? path.join(account.home, ".claude.json")
-          : path.join(path.dirname(account.home), ".claude.json"),
-      });
-    };
     /* The receipt keeps the caller's requested account as durable routing
        authority. The separate account context below owns this generation's
        actual launch, so a degraded fallback cannot silently rebind the pin. */
@@ -1118,7 +1081,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       () => dependencies.resolveSpawnAccount(engine, account.accountId),
       { holder: "spawn catalog snapshot", caller: "spawn" },
     );
-    if (!existingAttempt && transport === "structured") {
+    if (!existingAttempt) {
       try { await dependencies.preflightProtocol?.(account); }
       catch (error) {
         const reason = hardenedRedact(error instanceof Error ? error.message : "protocol validation failed")
@@ -1181,15 +1144,13 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     if (begun.kind === "conflict") return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
     if (begun.kind === "created" && requestedTelegram && !telegramLeftOut && !begun.receipt.launchProfile.mcpServers.includes("telegram")) {
       const reason = "telegram MCP grant was revoked during spawn admission";
-      if (transport === "structured") await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, reason, { announce: false });
-      else await registry.failSpawnOffLoop(begun.receipt.launchId, reason);
+      await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, reason, { announce: false });
       return refuse(reason);
     }
     if (begun.kind === "created" && requestedTelegram && begun.receipt.telegramSeatGrant
       && !isCurrentOperatorSeat(begun.receipt.parentConversationId ?? "", registry)) {
       const reason = TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH;
-      if (transport === "structured") await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, reason, { announce: false });
-      else await registry.failSpawnOffLoop(begun.receipt.launchId, reason);
+      await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, reason, { announce: false });
       return refuse(reason);
     }
     if (begun.kind === "created") launchId = begun.receipt.launchId;
@@ -1505,116 +1466,27 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       return NextResponse.json(response, { status: spawnReplayStatus(response, structured) });
     }
     if (queuedUntil) {
-      prepareTmuxSpawn();
       const releasedQueuedReceipt = queuedReceipt.admissionOwner
         ? (await registry.deliveryWriteOrBusy({ label: "registry.releaseSpawnActuation" }, registry.releaseSpawnActuation.bind(registry, queuedReceipt.launchId, queuedReceipt.admissionOwner))).receipt
         : queuedReceipt;
       return NextResponse.json(
         withAccountOverride(spawnResponseForReceipt(releasedQueuedReceipt, releasedQueuedReceipt.artifactPath, {
-          structured: transport === "structured",
+          structured: true,
           initialMessage: "queued",
         })),
         { status: 202 },
       );
     }
-    prepareTmuxSpawn();
-    if (transport === "structured") {
-      const runtimeClient = dependencies.runtimeHostClient();
-      if (!runtimeClient) throw new Error("structured spawn runtime host is unavailable");
-      const receipt = await persistStructuredPayload(begun.receipt);
-      deferStructuredSpawn({ ...receipt, admissionOwner: begun.receipt.admissionOwner }, runtimeClient, receipt.queuedPinnedSpawn!.imageRefs);
-      return NextResponse.json(
-        withAccountOverride(spawnResponseForReceipt(begun.receipt, begun.receipt.artifactPath, {
-          structured: true,
-        })),
-        { status: 202 },
-      );
-    }
-    /* Pasted images land in the inbox and reach the fresh agent as file paths
-       appended to its first prompt — the same contract the pane composer uses. */
-    const bundle = buildImagePayload(prompt, images);
-    imagePaths = bundle.imagePaths;
-    let runtimeClient = runtimeEventsEnabled() ? dependencies.runtimeHostClient() : null;
-    /* The durable launch receipt owns the runtime idempotency key too. A
-       recovered route cannot create a second logical lineage edge. */
-    const operationId = runtimeClient ? begun.receipt.launchId : null;
-    if (runtimeClient && operationId) {
-      try {
-        await runtimeClient.operation({
-          scope: runtimeScope("operation", operationId),
-          kind: "spawn.intent",
-          operationId,
-          producerKey: `viewer-spawn:${operationId}`,
-          payload: { engine, cwd, accountId: account.accountId, parentConversationId },
-        });
-      } catch {
-        console.warn("[runtime] spawn bookkeeping unavailable; continuing through the legacy spawn path");
-        runtimeClient = null;
-      }
-    }
-    const startedAtMs = Date.now();
-    authorizeLaunch(begun.receipt);
-    const pane = await (dependencies.spawnTmuxAgent ?? spawnAgentWithPrompt)(spec, bundle.payload, begun.receipt,
-      { authorize: () => authorizeLaunch(begun.receipt) });
-    const childPath = await resolveSpawnedTranscriptPath({
-      engine,
-      knownTranscript: spec.transcript ?? null,
-      panePid: pane.panePid ?? null,
-      cwd,
-      startedAtMs,
-      codexSessionsDir: engine === "codex" ? account.transcriptRoot : null,
-    });
-    const key = childPath ? sessionKeyFromTranscript(engine, childPath) : null;
-    if (!pane.host || !await verifyTmuxHostEvidence(pane.host)) {
-      (await agentRegistry().deliveryWriteOrBusy({ label: "registry.invalidateSpawnHost" }, agentRegistry().invalidateSpawnHost.bind(agentRegistry(), begun.receipt.launchId, "spawn host disappeared before API confirmation")));
-      const lost = agentRegistry().readOnlySnapshot().receipts[begun.receipt.launchId]!;
-      return NextResponse.json(withAccountOverride(spawnResponseForReceipt(lost, childPath)));
-    }
-    if (!childPath || !key || !pane.receipt) {
-      const pending = (await agentRegistry().deliveryWriteOrBusy({ label: "registry.markSpawnPathPending" }, agentRegistry().markSpawnPathPending.bind(agentRegistry(), begun.receipt.launchId)));
-      return NextResponse.json(withAccountOverride(spawnResponseForReceipt(pending, null)));
-    }
-    const settled = (await agentRegistry().deliveryWriteOrBusy({ label: "registry.settleSpawn" }, agentRegistry().settleSpawn.bind(agentRegistry(), pane.receipt.launchId, {
-      key,
-      artifactPath: childPath,
-      cwd,
-      accountId: account.accountId,
-      status: "starting",
-      host: pane.host,
-      claimEpoch: 0,
-      claimOwner: null,
-      pendingAction: "spawn",
-    })));
-    if (settled.kind === "conflict") return NextResponse.json(withAccountOverride(spawnResponseForReceipt(settled.receipt)));
-    await recordActualSpawnAccountOffLoop(registry, settled.receipt, account.accountId, childPath);
-    await adoptMaterializedAttempt(settled.receipt, childPath);
-    if (runtimeClient && operationId) {
-      try {
-        await runtimeClient.append({
-          scope: runtimeScope("edge", operationId),
-          kind: "edge.created",
-          producerKey: `viewer-spawn-edge:${operationId}`,
-          payload: {
-            edge: "viewer_spawn",
-            childConversationId: settled.conversation.id,
-            parentConversationId,
-            operationId,
-          },
-        });
-      } catch {
-        console.warn("[runtime] spawned agent is healthy; lineage bookkeeping will reconcile later");
-      }
-    }
-    if (parentArtifactPath) {
-      if (childPath) rememberHandoffChild(childPath, parentArtifactPath);
-      persistHandoffLineage();
-    }
-    if (!await verifyTmuxHostEvidence(pane.host)) {
-      (await agentRegistry().deliveryWriteOrBusy({ label: "registry.invalidateSpawnHost" }, agentRegistry().invalidateSpawnHost.bind(agentRegistry(), begun.receipt.launchId, "spawn host disappeared before API response")));
-      const lost = agentRegistry().readOnlySnapshot().receipts[begun.receipt.launchId]!;
-      return NextResponse.json(withAccountOverride(spawnResponseForReceipt(lost, childPath)));
-    }
-    return NextResponse.json(withAccountOverride(spawnResponseForReceipt(settled.receipt, childPath)));
+    const runtimeClient = dependencies.runtimeHostClient();
+    if (!runtimeClient) throw new Error("structured spawn runtime host is unavailable");
+    const receipt = await persistStructuredPayload(begun.receipt);
+    deferStructuredSpawn({ ...receipt, admissionOwner: begun.receipt.admissionOwner }, runtimeClient, receipt.queuedPinnedSpawn!.imageRefs);
+    return NextResponse.json(
+      withAccountOverride(spawnResponseForReceipt(begun.receipt, begun.receipt.artifactPath, {
+        structured: true,
+      })),
+      { status: 202 },
+    );
   } catch (error) {
     if (error instanceof AutonomousSpawnAdmissionHeldError) {
       return NextResponse.json({ code: "AUTO_UPDATE_DRAIN", ...updateHoldWait() }, { status: 503 });
@@ -1632,10 +1504,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         retryable: true,
       }, { status: 500 });
     }
-    if (!receipt || receipt.pane === null) {
-      if (receipt) await registry.failSpawnOffLoop(receipt.launchId, "spawn failed before pane binding");
-      deleteInboxImages(imagePaths);
-    }
+    if (receipt && receipt.pane === null) await registry.failSpawnOffLoop(receipt.launchId, "spawn failed before pane binding");
     if (error instanceof SpawnParentError) return NextResponse.json({ error: error.message }, { status: error.status });
     if (error instanceof TeamError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     if (error instanceof LaunchMembershipError) return NextResponse.json({ error: error.message, ...(error.code ? { code: error.code } : {}) }, { status: error.status });

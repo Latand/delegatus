@@ -57,7 +57,7 @@ Object.assign(globalThis, { ResizeObserver: FakeResizeObserver });
 function rootView(kind: HostKind, host: HostAxis): RuntimeSessionView {
   return {
     session: { hostKind: kind, host, artifactPath: "/root.jsonl", conversationId: "conv-root" } as RuntimeSessionView["session"],
-    uiState: {} as RuntimeSessionView["uiState"], attentions: [], receipts: [], legacy: kind === "tmux-legacy", structuredControlsEnabled: true,
+    uiState: {} as RuntimeSessionView["uiState"], attentions: [], receipts: [], structuredControlsEnabled: true,
   };
 }
 let rootKind: HostKind = "claude-broker";
@@ -198,32 +198,8 @@ test("Interrupt on a structured-root subagent names the root through the common 
   const interrupts = calls.filter((c) => c.url.includes("/api/conversation-host"));
   expect(interrupts.length).toBe(1);
   expect((interrupts[0]!.body as { conversationId?: string }).conversationId).toBe("conv-root");
-  // never the legacy routes for a structured root
-  expect(calls.some((c) => c.url.includes("/api/tmux"))).toBe(false);
+  // never the process-signal route for a structured root
   expect(calls.some((c) => c.url.includes("/api/proc"))).toBe(false);
-  await act(async () => root.unmount());
-});
-
-test("Interrupt on a legacy-root subagent keeps the canonical child path", async () => {
-  rootKind = "tmux-legacy";
-  const calls: { url: string; body: unknown }[] = [];
-  stubFetch((url: string, init?: RequestInit) => {
-    calls.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
-    return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, target: "root:%1" }) } as unknown as Response);
-  });
-
-  const { host, root } = await mount(subagent);
-  expect(host.querySelector('[data-strip-surface="live-subagent"]')).not.toBeNull();
-  const stop = stopButton(host)!;
-  await act(async () => {
-    stop.dispatchEvent(new dom.Event("click", { bubbles: true }) as unknown as Event);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
-
-  const interrupts = calls.filter((c) => c.url.includes("/api/conversation-host"));
-  expect(interrupts.length).toBe(1);
-  expect(interrupts[0]!.body).toMatchObject({ action: "interrupt", path: "/child.jsonl", operationId: expect.any(String) });
-  expect(calls.some((c) => c.url.includes("/api/runtime/interrupt"))).toBe(false);
   await act(async () => root.unmount());
 });
 
@@ -249,7 +225,6 @@ function structuredCodexView(): RuntimeSessionView {
     uiState: {} as RuntimeSessionView["uiState"],
     attentions: [],
     receipts: [],
-    legacy: false,
     structuredControlsEnabled: true,
   };
 }
@@ -325,7 +300,7 @@ test("a typed capability refusal is localized from its code, not echoed in Engli
   const { host, root } = await mount(structuredRoot);
   await confirmCompact(host);
 
-  expect(calls).toEqual(["/api/tmux"]);
+  expect(calls).toEqual(["/api/conversation-host"]);
   expect(statusText(host)).toBe(translate("en", "receipt.human.unsupportedCapability"));
   expect(statusText(host)).not.toContain("stream-json");
   await act(async () => root.unmount());
@@ -377,7 +352,6 @@ function structuredClaudeView(receipts: RuntimeSessionView["receipts"] = []): Ru
     uiState: {} as RuntimeSessionView["uiState"],
     attentions: [],
     receipts,
-    legacy: false,
     structuredControlsEnabled: true,
   };
 }

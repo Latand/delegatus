@@ -273,7 +273,6 @@ import { waitForStateLock } from "@/lib/state/lockWait";
 import { TASK_PRIORITIES, taskPriority, type BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { collectSnapshot } from "@/lib/view/collect";
-import { resolveSiblings } from "@/lib/view/siblings";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { searchMemoryTool } from "@/lib/memory/mcp";
 import { validateSnapshotRequest } from "@/lib/view/validation";
@@ -697,7 +696,8 @@ async function dispatchViewerControl(
   const budgetMs = context.deadlineAt === undefined
     ? fileBudget ?? CONTROL_UNSCOPED_RECOVERY_BUDGET_MS
     : Math.max(1, context.deadlineAt - now - CONTROL_DEADLINE_RESERVE_MS);
-  const reconnectSend = pathname === "/api/tmux";
+  /* A message send carries no action; a conversation control names one. */
+  const reconnectSend = pathname === "/api/conversation-host" && body.action === undefined;
   const expiresAt = now + Math.min(fileBudget ?? CONTROL_RECOVERY_BUDGET_MS, budgetMs);
   const requestHeaders = controlRequestHeaders({ "content-type": "application/json", ...headers }, token);
   requestHeaders.set("origin", baseUrl);
@@ -1272,9 +1272,7 @@ function rootSessionSource(): RootSessionSource {
  *
  * The join is by transcript path because that is what a registry ENTRY (which
  * holds the host process ids) and a CONVERSATION (which holds the role) have in
- * common. Both host shapes count: a tmux-hosted agent is the CLI process that
- * parents this MCP server directly, and a structured host is the app-server or
- * broker that parents it instead.
+ * common. The host is the app-server or broker process that parents this MCP server.
  *
  * A conversation whose entry recorded NO host pid stays in the list with an
  * empty pid set. It can never win the ancestry walk — there is nothing to match
@@ -1283,7 +1281,7 @@ function rootSessionSource(): RootSessionSource {
  * carried null pids while its host was alive resolved to "unidentified" and was
  * refused every manager-only tool.
  */
-type CallerHost = NonNullable<RegistrySnapshot["entries"][string]["host"]>["agent"];
+type CallerHost = NonNullable<NonNullable<RegistrySnapshot["entries"][string]["structuredHost"]>["process"]>;
 interface CallerRecord { conversationId: string; role: string | null; hosts: (CallerHost | null)[] }
 function callerRecordsFromSnapshot(snapshot: Pick<RegistrySnapshot, "conversations" | "entries">): CallerRecord[] {
   const owners = new Map<string, string>();
@@ -1294,7 +1292,7 @@ function callerRecordsFromSnapshot(snapshot: Pick<RegistrySnapshot, "conversatio
   }
   for (const entry of Object.values(snapshot.entries)) {
     const owner = owners.get(entry.artifactPath);
-    if (owner) hosted.get(owner)!.hosts.push(entry.host?.agent ?? null, entry.structuredHost?.process ?? null);
+    if (owner) hosted.get(owner)!.hosts.push(entry.structuredHost?.process ?? null);
   }
   return [...hosted.values()];
 }
@@ -1864,9 +1862,8 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
     ...(terminalFailure ? { outcome: "settled", reason: result.error, error: result.error, retrySafe: result.retrySafe } : {}),
     ...(result.memoryCap ? { memoryCap: result.memoryCap } : {}),
     ...(typeof result.runtime === "string" ? { runtime: result.runtime } : {}),
-    /* Whether a brief still needs its own "report back" line. Only a
-       structured launch ends its turns where a notice is owed from, so a tmux
-       child records no launcher and its launcher hears nothing. */
+    /* Whether a brief still needs its own "report back" line. A structured
+       launch ends its turns where a notice is owed from. */
     launcherNotice: args.notifyLauncher === false ? "off" : launcher && result.transport === "structured" ? "on" : "unavailable",
   };
 }
@@ -1910,7 +1907,7 @@ async function sendMessage(
       ...(orchestratorRelayProject ? { project: orchestratorRelayProject } : {}),
     };
     outcome = await withNativeRelayHandoff(body, orchestratorRelayProject ? nativeOrchestratorRelayCaller() : null,
-      headers => dispatchControl(control)(orchestratorRelayProject ? "/api/orchestrator/message" : "/api/tmux", body,
+      headers => dispatchControl(control)(orchestratorRelayProject ? "/api/orchestrator/message" : "/api/conversation-host", body,
         { ...callerCapabilityHeaders(), ...headers }));
   } catch (error) {
     /* #2020: the Viewer's own answer that it refused before reserving
@@ -4587,7 +4584,7 @@ async function bridgeDirective(args: McpToolArgs, control: ViewerControlDependen
     : undefined;
   const body = bridgeDirectiveBody(instruction, trailer);
 
-  const outcome = await control.post("/api/tmux", {
+  const outcome = await control.post("/api/conversation-host", {
     pid: null,
     path: manager.path,
     conversationId: manager.conversationId,
@@ -6521,7 +6518,6 @@ async function operatorSnapshot(args: McpToolArgs, dependencies: ViewerMcpDomain
   return redactPayload({
     ...await dependencies.collectSnapshot(request, {
       completedFileScan: dependencies.completedFileScan,
-      resolveSiblings,
       registrySnapshot: dependencies.registrySnapshot,
     }),
   });
@@ -7097,9 +7093,6 @@ async function conversationAction(
     conversationId,
     path: transcriptPath,
     action,
-    key: text(args.key),
-    label: args.label,
-    question: args.question,
     ...(action === "speed" ? { serviceTier: args.serviceTier } : {}),
     ...(action === "permission" ? { decision: text(args.decision), requestId: text(args.requestId) } : {}),
     ...(action === "answer" ? {

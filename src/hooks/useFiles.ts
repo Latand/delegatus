@@ -125,7 +125,7 @@ export interface FilesData {
   builtGeneration?: number;
 }
 
-const HEALTHY_SYSTEM = { tmux: { status: "healthy" as const } };
+const HEALTHY_SYSTEM = {};
 const EMPTY: FilesData = { files: [], pinOverlayPaths: [], requestScope: null, projectCatalog: [], projectAliases: {}, projectDisplayNames: {}, crownedProjects: [], archivedProjects: [], projectCwds: {}, flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: HEALTHY_SYSTEM, conversationAliases: {}, launchRoutes: {}, workLinks: EMPTY_FILES_WORK_LINKS, loaded: false, scopeCertified: false, catalogFailures: 0 };
 
 export function filesApiUrl(_project?: string | null, pinnedPath?: string | null): string {

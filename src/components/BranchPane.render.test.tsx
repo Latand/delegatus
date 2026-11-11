@@ -58,7 +58,7 @@ test("a finished conversation surfaces as resume with an on-resume runtime slot"
 test("a gated scanner-shaped subagent (inert) mounts no composer — no Send/quick-ack/mic/image path", () => {
   // proc:null/pid:null child with no live runtime root resolves to `inert`
   // (Send hidden). The composer must not render at all, so nothing can POST to
-  // /api/tmux against a subagent whose host is unconfirmed (issue #241 finding 2).
+  // /api/conversation-host against a subagent whose host is unconfirmed (issue #241 finding 2).
   const html = renderToStaticMarkup(
     <BranchPane file={file({ kind: "subagent", parent: "/root.jsonl", proc: null, pid: null })} tasks={[]} isRoot={false} />,
   );

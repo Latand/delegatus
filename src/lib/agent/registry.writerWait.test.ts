@@ -773,50 +773,6 @@ test("Viewer policy admission reads a bounded number of rows as unrelated conver
   expect(reads[1]).toBeLessThan(10);
 });
 
-test("a conversation kill preserves a peer replacement installed during registry writer admission", async () => {
-  const { killConversation } = await import("@/lib/delivery");
-  const directory = fs.mkdtempSync(path.join(root, "kill-admission-race-"));
-  const filename = path.join(directory, "registry.json");
-  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
-  const peer = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
-  const lock = new Database(path.join(directory, "registry.sqlite"));
-  const key = { engine: "codex" as const, sessionId: "fixture-kill-admission" };
-  const pathname = "/sessions/kill-admission.jsonl";
-  const host = { kind: "tmux" as const, endpoint: "/runtime/tmux-fixture",
-    server: { pid: 900, startIdentity: "fixture-server" }, paneId: "%7",
-    panePid: { pid: 107, startIdentity: "fixture-pane" }, windowName: "fixture-worker",
-    agent: { pid: 207, startIdentity: "fixture-agent" }, argv: ["codex", "resume", "fixture"] };
-  const replacement = { ...host, paneId: "%8", windowName: "fixture-successor" };
-  registry.upsert({ key, artifactPath: pathname, cwd: "/repo", accountId: "default",
-    launchProfile: emptyLaunchProfile({ cwd: "/repo" }), status: "idle", host,
-    claimEpoch: 3, claimOwner: null, pendingAction: null });
-  let held = false;
-  let replaced = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const result = await killConversation(pathname, {
-      registry, pathAllowed: () => true, listFiles: async () => [],
-      killHost: async () => {
-        lock.exec("BEGIN IMMEDIATE"); held = true;
-        timer = setTimeout(() => {
-          lock.exec("ROLLBACK"); held = false;
-          const current = peer.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
-          peer.upsert({ ...current, host: replacement, status: "live" });
-          replaced = true;
-        }, 10);
-        return true;
-      },
-    });
-    expect(result).toEqual({ ok: true, target: "%7" });
-    expect(replaced).toBe(true);
-    expect(registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]).toMatchObject({ host: replacement, status: "live" });
-  } finally {
-    clearTimeout(timer);
-    if (held) lock.exec("ROLLBACK");
-    lock.close(); peer.close(); registry.close();
-  }
-});
-
 for (const view of ["cold", "warm", "prepared"] as const) {
   test(`full ${view} snapshots inside writer admission keep the writer until the mutation commits`, async () => {
     const { store: registry, filename } = store(`admitted-full-${view}`);

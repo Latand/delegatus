@@ -1349,7 +1349,7 @@ export const en = {
   "switchCard.openColumn": "Open {title} as a column",
   "switchCard.remove": "Remove from switchboard",
 
-  // TmuxComposer
+  // ConversationComposer
   "composer.imagesCount": { one: "{count} image", other: "{count} images" },
   "composer.attachmentsCount": { one: "{count} attachment", other: "{count} attachments" },
   /* A send that had to bring the host back reports `spawned`/`resumed` for
@@ -1458,9 +1458,7 @@ export const en = {
   "composer.deliveredEcho": "Delivered — appearing in the feed",
   "composer.retrySend": "Retry send",
   "composer.placeholderRelay": "type — I'll relay through the root session…",
-  /* Issue #702: no transport promise. #685 inverted the rollout gates, so a
-     deployment that declares a runtime host spawns structured and pane-less —
-     the placeholder used to name a tmux session the spawn never opens. */
+  /* Issue #702: no transport promise. */
   "composer.placeholderSpawn": "prompt — the agent will start…",
   "composer.placeholderResolving": "message the agent — reconnecting to its session…",
   "composer.placeholderSend": "message the agent…",
@@ -1478,7 +1476,7 @@ export const en = {
   "composer.titleSpawnResumed": "starts a fresh agent session that continues this conversation",
   "composer.root": "root",
   "composer.interruptAria": "Interrupt the agent (Escape)",
-  "composer.interruptTitle": "send Escape to the agent pane",
+  "composer.interruptTitle": "interrupt the agent's current turn",
   "composer.interrupt": "Interrupt",
   "composer.interruptTurn": "Interrupt the turn",
   "composer.compactAria": "Compact the agent's context (/compact)",
@@ -1551,8 +1549,6 @@ export const en = {
   "attach.copyTerminalCommandHint": "Copies the command that opens this conversation in your own terminal; paste it into any shell",
   "attach.takeoverWarning": "Resuming here takes over the conversation from Delegatus.",
   "attach.subagentNote": "Subagents resume through their root session.",
-  "attach.secondaryViewer": "Open a read-only viewer pane in tmux",
-  "attach.secondaryFailed": "Couldn't open the viewer pane — try again.",
 
   // Human receipt reasons (issue #247 §7)
   "receipt.human.deadHost": "the agent's host has died",
@@ -1680,20 +1676,12 @@ export const en = {
   "draft.speedDefault": "speed: default",
   "draft.speedInherited": "speed: inherited",
   "draft.imagesOnly": "(images)",
-  "draft.launched": "agent launched in tmux {target} — waiting for the conversation to appear here…",
   "draft.launchedStructured": "agent launched — waiting for the conversation to appear here…",
-  "draft.slow": "Taking a while. Check tmux window {target} — the panel will pick up the transcript as soon as it appears.",
   "draft.slowStructured": "Taking a while. The panel will pick up the transcript as soon as it appears.",
-  "draft.confirming": "Launched — confirming the agent in tmux {target}. Don't send again; the panel attaches the conversation as soon as its transcript appears.",
   "draft.confirmingStructured": "Launched — confirming the agent. Don't send again; the panel attaches the conversation as soon as its transcript appears.",
-  "draft.confirmingNoTarget": "Confirming whether the agent started. Don't send again — the panel attaches the conversation as soon as its transcript appears.",
-  "draft.confirmingSlow": "Launching slowly — the launch is confirmed in tmux {target}. The panel keeps watching and attaches the conversation itself; don't launch again.",
   "draft.confirmingSlowStructured": "Launching slowly — the launch is confirmed. The panel keeps watching and attaches the conversation itself; don't launch again.",
-  "draft.attention": "The agent may already be running in tmux {target}. Don't launch it again. Dismiss this draft once you've checked; it still attaches automatically if the transcript appears.",
   "draft.attentionStructured": "The agent may already be running. Don't launch it again. Dismiss this draft once you've checked; it still attaches automatically if the transcript appears.",
-  "draft.attentionNoTarget": "The agent may already be running — check your tmux windows. Don't launch it again. Dismiss this draft once you've checked; it still attaches automatically if the transcript appears.",
   "draft.promptAria": "First prompt for the new agent",
-  "draft.placeholder": "first prompt — the agent will start in tmux…",
   "draft.placeholderStructured": "first prompt — the agent will start…",
   "draft.promptTextAria": "First prompt text",
   "draft.addImages": "Add images to the prompt",
@@ -2214,45 +2202,12 @@ export const en = {
   "img.deliveryHint": "attached to the message",
 
   // QuestionCard
-  "question.sec": "{n} s",
-  "question.min": "{n} min",
-  "question.hour": "{n} h",
-  "question.waiting": "waiting for a reply",
-  "question.sentToPane": "Sent to the pane: {text}",
-  "question.keysHint": "keys into the pane · or the composer below",
-  "question.pane": "Pane {target}",
-  "question.alreadyAnswered": "answer already recorded",
-  "question.openFailed": "couldn't open the session",
-  "question.opened": "opened {target}",
-  /* A resume that brought a structured host back names no target, and the
-     card used to fill that hole with the word "tmux" (#1301). */
-  "question.openedUnnamed": "opened the session",
   "question.answered": "Answered: {text}",
-  "question.answeredElsewhere": "Answered elsewhere: {text}",
-  /* Rendered whenever the question resolved no pane target, which is every
-     structured host — so it states what is missing and names no transport
-     (#1301). */
-  "question.noPane": "no terminal to key the answer into",
-  "question.openSession": "open session",
-  "question.rejectComment": "Rejection comment…",
-  "question.approved": "approved",
-  "question.rejected": "rejected",
-  "question.approve": "Approve",
-  "question.reject": "Reject",
-  "question.ownAnswer": "Your own answer…",
   // Explicit dismiss (issue #765) — retires the card from the composer
   // region; the transcript's own tool record stays as history.
   "question.dismiss": "Dismiss the question card",
   // Delivery failure (issue #697) — translated at the boundary, never the
   // server's own exception text.
-  "question.deliveryFailed": "Delivery failed",
-  "question.failedChoice": "not delivered",
-  "question.retryAnswer": "Retry",
-  "question.errorNotRunning": "the agent is no longer running, so nothing was delivered",
-  "question.errorMoved": "the agent has moved on from this question",
-  "question.errorUnconfirmed": "the answer was sent, but the agent never confirmed it",
-  "question.errorNotDelivered": "the agent's screen did not respond as expected, so the answer was not delivered",
-  "question.errorRejected": "Delegatus could not build a valid answer",
 
   // InboxImage
   "inbox.deleted": "deleted from disk",
@@ -2697,7 +2652,6 @@ export const en = {
   "mcp.verb.interrupting": "Interrupting",
   "mcp.verb.killing": "Killing",
   "mcp.verb.compacting": "Compacting",
-  "mcp.verb.answeringDialog": "Answering dialog in",
   "mcp.verb.answeringPermission": "Answering a permission request in",
   "mcp.verb.archiving": "Archiving",
   "mcp.verb.unarchiving": "Unarchiving",
@@ -2772,7 +2726,6 @@ export const en = {
   "mcp.call.conversation.kill": "Killing conversation{target}",
   "mcp.call.conversation.resume": "Resuming conversation{target}",
   "mcp.call.conversation.compact": "Compacting conversation{target}",
-  "mcp.call.conversation.dialogKey": "Answering dialog in conversation{target}",
   "mcp.call.conversation.permission": "Answering a permission request in conversation{target}",
   "mcp.call.conversation.archive": "Archiving conversation{target}",
   "mcp.call.conversation.unarchive": "Unarchiving conversation{target}",
@@ -3858,9 +3811,9 @@ export const en = {
     other: "{count} hosts",
   },
   "resources.idleN": "{n} idle",
-  "resources.orphan": "orphan pane",
-  "resources.hostConflict": "duplicate conversation pane",
-  "resources.hostConflictHint": "multiple live panes claim this conversation",
+  "resources.orphan": "orphan process",
+  "resources.hostConflict": "duplicate conversation host",
+  "resources.hostConflictHint": "multiple live hosts claim this conversation",
   "resources.procs": {
     one: "{count} process",
     other: "{count} processes",
@@ -3869,7 +3822,7 @@ export const en = {
   "resources.kill": "Kill",
   "resources.confirm": "Sure?",
   "resources.killLiveHint": "the agent is working right now — click to unlock, then confirm",
-  "resources.killHint": "kill the tmux pane with its whole process tree",
+  "resources.killHint": "kill this process with its whole process tree",
   "resources.killHostHint": "kill this host and its whole process tree",
   "resources.hostOwned": "owned",
   "resources.hostOwnedHint": "the runtime still holds this host and ends it through its own lifecycle",
@@ -3913,15 +3866,11 @@ export const en = {
   "attach.readonly": "Read-only",
   "attach.copy": "Copy attach command",
   "attach.copyReadonly": "Copy read-only attach command",
-  "attach.hint": "copy the tmux attach command for this pane — paste it into any shell",
   "attach.readonlyHint": "copy a read-only (view-only) attach command — you watch without touching the keys",
   "attach.loading": "resolving…",
   "attach.copied": "attach command copied",
   "attach.copiedReadonly": "read-only command copied",
-  "attach.stale": "This pane changed or closed. Refresh and try again.",
-  "attach.restarted": "The tmux server restarted. Refresh and try again.",
-  "attach.unavailable": "The tmux server is unavailable. Refresh and try again.",
-  "attach.badRequest": "Can’t resolve this pane — refresh the list.",
+  "attach.unavailable": "The attach command is unavailable. Refresh and try again.",
   "attach.network": "Network error — try again.",
   "attach.clipboard": "Couldn’t copy — check clipboard permissions.",
   "attach.refresh": "Refresh",
@@ -3946,7 +3895,7 @@ export const en = {
   "rateLimit.reseatFailed": "reseat failed",
   "rateLimit.reseatAlready": "already reseated",
   "rateLimit.reseatIntended": "next message on {account}",
-  "rateLimit.reseatWaitingTurn": "Reseat queued: waiting for the rate-limited turn to release the pane, then the successor spawns.",
+  "rateLimit.reseatWaitingTurn": "Reseat queued: waiting for the rate-limited turn to end, then the successor spawns.",
 
   // useDictation errors
   "dictation.capWarn": "less than a minute of recording left",
@@ -4496,7 +4445,6 @@ export const en = {
   "runtime.announce.resynced": "runtime resynced from a fresh snapshot",
   "runtime.staleSince": "stale {duration}",
   "runtime.lastKnown": "last update {duration} ago",
-  "runtime.legacyProvenance": "legacy · derived state",
   "staging.badge": "Staging",
   "staging.badgeTitle": "Staging instance — isolated state; nothing here touches prod",
   "runtime.drift": "drift: {evidence}",
@@ -4834,12 +4782,9 @@ export const en = {
   /* Mobile v2 feed (#1439, lane 4): the phone's message header, tool runs
      and question card. Append-only, keys prefixed mobile2.feed.* */
   "mobile2.feed.needsYou": "Needs you",
-  "mobile2.feed.answeredFold": "question · answered {time}",
-  "mobile2.feed.answeredFoldToggle": "Show or hide the answered question",
   "mobile2.feed.running": "running {summary}…",
   "mobile2.feed.runFailed": { one: "{count} actions, {failed} failed — expands in place", other: "{count} actions, {failed} failed — expands in place" },
   "mobile2.feed.runFold": "{count} actions — expands in place",
-  "mobile2.feed.ownAnswerHint": "Or type your own answer — it is sent as the reply.",
   /* Mobile v2 board + host sheet (#1439, lane 2): the triage list the phone
      opens on, and the one place host detail lives. Append-only, keys prefixed
      mobile2.board.* / mobile2.host.* */
@@ -7169,7 +7114,7 @@ export const en = {
   "activity.coverage.counted": "Counted",
   "activity.coverage.missing": "Not seen or not counted",
   "activity.coverage.desktop": "Desktop browser",
-  "activity.coverage.desktopCounted": "Every request: messages, answers, dialog keys, new agents, decisions, new pipelines, task edits",
+  "activity.coverage.desktopCounted": "Every request: messages, answers, new agents, decisions, new pipelines, task edits",
   "activity.coverage.desktopMissing": "Reading and scrolling between requests, board moves",
   "activity.coverage.tablet": "Tablet",
   "activity.coverage.tabletCounted": "The same as on a desktop browser",

@@ -396,6 +396,79 @@ function hostingFixture() {
   return { sources, seats, lives, bodies, seat, ports, controller: productionCurationController(sources, ports), tick: { ...tickInput(), project: PROJECT, now: NOW } };
 }
 
+test.each([
+  { mapped: "codex", claude: "connected", codex: "signed-out", expected: "claude" },
+  { mapped: "claude", claude: "signed-out", codex: "connected", expected: "codex" },
+  { mapped: "codex", claude: "connected", codex: "cli-missing", expected: "claude" },
+  { mapped: "claude", claude: "connected", codex: "connected", expected: "claude" },
+  { mapped: "codex", claude: "signed-out", codex: "signed-out", expected: "codex" },
+  { mapped: "codex", claude: "signed-out", codex: "connected", expected: "codex" },
+] as const)("curator runtime follows engine availability %j", async scenario => {
+  const { saveRoleOverrides, loadRoleOverrides } = await import("@/lib/roles/store");
+  const { resolveSpawnRole } = await import("@/lib/roles/registry");
+  const { defaultModelFor } = await import("@/lib/agent/models");
+  saveRoleOverrides({ curator: { config: { engine: scenario.mapped, model: defaultModelFor(scenario.mapped), effort: "medium" } } });
+  const before = loadRoleOverrides();
+  fixture();
+  const f = hostingFixture(); f.seat();
+  const ports = { ...f.ports, engineReadiness: (engine: "claude" | "codex", project: string | null) => {
+    expect(project).toBe(PROJECT);
+    return scenario[engine];
+  } };
+  expect(await productionCurationController(f.sources, ports).launchIfDue(f.tick)).toContain("launched");
+  expect(f.bodies).toHaveLength(1);
+  const body = f.bodies[0];
+  const runtime = { engine: scenario.expected, model: defaultModelFor(scenario.expected), effort: scenario.expected === scenario.mapped ? "medium" : "high" };
+  const resolved = resolveSpawnRole(body);
+  expect(resolved.ok).toBe(true);
+  expect(resolved.ok && resolved.value?.config).toMatchObject(runtime);
+  expect(loadRoleOverrides()).toEqual(before);
+  const persisted = resolveSpawnRole(readPass(machinePass()!.id)!.launchBody!);
+  expect(persisted.ok && persisted.value?.config).toMatchObject(runtime);
+});
+
+test.each(["ENGINE_NOT_CONNECTED", "project_account_refused"])("curator selected engine refusal releases its pass: %s", async code => {
+  fixture();
+  const f = hostingFixture(); f.seat();
+  const ports = { ...f.ports,
+    engineReadiness: (engine: "claude" | "codex") => engine === "claude" ? "connected" as const : "signed-out" as const,
+    launch: async (body: Record<string, unknown>) => {
+      f.bodies.push(body);
+      // Credentials or account admission can change after runtime selection.
+      return { status: 409, body: { code } };
+    },
+  };
+  expect(await productionCurationController(f.sources, ports).launchIfDue(f.tick)).toContain("failed, no-account");
+  expect(f.bodies).toHaveLength(1);
+  expect(f.bodies[0]).toMatchObject({ engine: "claude", model: "opus", effort: "high" });
+  expect(readPass(String(f.bodies[0].clientAttemptId))).toMatchObject({ state: "failed", failure: "no-account", endedAt: at() });
+  expect(machinePass()).toBeNull();
+});
+
+test("curator recovery replays its persisted engine after connection changes", async () => {
+  fixture();
+  const f = hostingFixture(); f.seat();
+  const firstPorts = { ...f.ports,
+    engineReadiness: (engine: "claude" | "codex") => engine === "claude" ? "connected" as const : "signed-out" as const,
+    launch: async (body: Record<string, unknown>) => { f.bodies.push(body); return { status: 503, body: { code: "AUTO_UPDATE_DRAIN" } }; },
+  };
+  expect(await productionCurationController(f.sources, firstPorts).launchIfDue(f.tick)).toContain("held for the automatic update");
+  const saved = machinePass()!;
+  expect(saved.launchBody).toMatchObject({ engine: "claude", model: "opus", effort: "high" });
+  const code = `import {readPassAuthority} from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))}; console.log(JSON.stringify(readPassAuthority(${JSON.stringify(saved.id)}).launchBody));`;
+  const child = Bun.spawn([process.execPath, "--eval", code], { env: process.env, stdout: "pipe", stderr: "pipe" });
+  const [output, errors, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(exit, errors).toBe(0);
+  expect(JSON.parse(output)).toEqual(saved.launchBody);
+  const restarted = productionCurationController(f.sources, { ...f.ports,
+    engineReadiness: () => { throw Error("a persisted attempt must retain its runtime"); },
+  });
+  expect(await restarted.reconcile(PROJECT)).toContain("launched");
+  expect(f.bodies).toHaveLength(2);
+  expect(f.bodies[1]).toEqual(f.bodies[0]);
+  expect(machinePass()).toMatchObject({ id: saved.id, state: "running" });
+});
+
 test("one sweep shares in-flight and settled machine choices, with N host admissions", async () => {
   const f = hostingFixture();
   const projects = Array.from({ length: 8 }, (_, i) => `quiet-seat-${i}`);
@@ -1564,7 +1637,7 @@ test("ordinary structured recovery cannot continue a curator pass after its seat
   patchPass(p.id, { state: "running", launchedAt: at(), conversationId, launchId: begun.receipt.launchId });
   let spawns = 0;
   await expect(recoverDeadStructuredConversation({ path: artifactPath, conversationId }, {
-    registry: registry as never, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+    registry: registry as never, client: {} as RuntimeHostClient, transportAvailable: () => true, park: () => null,
     resolveAccount: () => ({ engine: "codex", accountId: "codex-test", kind: "managed", home: dir, transcriptRoot: dir, env: { NODE_ENV: "test" } }),
     spawn: async () => { spawns++; throw new Error("ineligible curator recovery spawned"); },
   })).rejects.toThrow(/curation pass abandoned/);

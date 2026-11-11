@@ -6,7 +6,7 @@ import path from "node:path";
 import { expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-import { mergeRuntimeReceipts } from "@/components/TmuxComposer";
+import { mergeRuntimeReceipts } from "@/components/ConversationComposer";
 import { applyEvent, installSnapshot } from "@/components/runtime/runtimeModel";
 import { UnixRuntimeHostClient } from "@/lib/runtime/client";
 import { runtimePresentationReceipt, runtimeScope, terminalRetryOperationId, type RuntimeWriterStatus } from "@/lib/runtime/contracts";

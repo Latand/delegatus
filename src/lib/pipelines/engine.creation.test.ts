@@ -2,6 +2,104 @@ import { startAutoAndSettle } from "./engineEnvironment.fixture";
 import { expect, spyOn, test, crypto, spawn, spawnSync, fs, os, path, monitorEventLoopDelay, Database, laneMovedAt, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, idleUpdate, stoppedProcess, endRestartGate, restartGateFile, realExec, engineModule, adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, pipelineAttemptTargetForSource, setPipelineDismissal, tickPipelines, AgentRegistry, setAgentRegistryForTests, rawCreatePipelineFromRequest, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, saveTasks, loadTasks, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, finishReported, realWorktreeLane, create, boardTask, FETCHED_SHA, slowRemote, provisionRetryClock, DNS_FAILURE, realProvisioningRepo } from "./engine.fixture";
 import type { ServiceDeps, Snapshot, LauncherRecord, PipelinePorts, BoardTask, Pipeline } from "./engine.fixture";
 
+test.each([[true, "master", false], [false, "master", false], [false, "master", true], [false, "heads/master", true]] as const)("a remote-less creation defaults to its checked-out branch (draft %s, branch %s, tag %s)", async (draft, branch, tag) => {
+  savePipelines([]);
+  const f = await realProvisioningRepo("local-base");
+  try {
+    await f.git(f.repo, "symbolic-ref", "HEAD", `refs/heads/${branch}`);
+    await f.git(f.repo, "commit", "--allow-empty", "-m", "Initial fixture");
+    if (tag) await f.git(f.repo, "tag", branch);
+    const h = harness();
+    const calls: string[][] = [];
+    h.ports.exec = (command, args, ...rest) => { calls.push(args); return realExec(command, args, ...rest); };
+    const { realProvisionExec } = await import("./git");
+    h.ports.provisionExec = (command, args, ...rest) => { calls.push(args); return realProvisionExec(command, args, ...rest); };
+    const result = await createPipelineFromRequest({ task: "Local branch", repoDir: f.repo, stages: RUN_STAGES as never, autoStart: !draft }, h.ports);
+    expect(result.error).toBeUndefined();
+    expect(result.pipeline!.baseBranch).toBe(branch);
+    if (draft) await patchPipeline(result.pipeline!.id, { action: "start" }, h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.state).toBe("running");
+    expect(await f.git(result.pipeline!.worktreeDir, "rev-parse", "HEAD")).toBe(await f.git(f.repo, "rev-parse", "HEAD"));
+    expect(calls.some(args => args[0] === "fetch")).toBe(false);
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test.each([["named delivery", true], ["configured non-origin remote", false]] as const)("%s keeps the established default base branch", async (_kind, delivery) => {
+  savePipelines([]);
+  const f = await realProvisioningRepo("named-delivery-base");
+  try {
+    await f.git(f.repo, "symbolic-ref", "HEAD", "refs/heads/documents");
+    await f.git(f.repo, "commit", "--allow-empty", "-m", "Initial fixture");
+    await f.git(f.repo, "branch", "main");
+    await f.git(f.repo, "remote", "add", "publish", "https://example.invalid/project.git");
+    const h = harness();
+    h.ports.exec = (command, args, ...rest) => realExec(command, args, ...rest);
+    const result = await createPipelineFromRequest({ task: "Named delivery base", repoDir: f.repo,
+      stages: RUN_STAGES as never, ...(delivery ? { delivery: { remote: "publish", branch: "refs/heads/result" } } : {}) }, h.ports);
+    expect(result.error).toBeUndefined();
+    expect(result.pipeline!.baseBranch).toBe("main");
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test.each(["release", "absent"])("a named draft base without origin uses the local branch with a publish remote (base %s)", async baseBranch => {
+  savePipelines([]);
+  const f = await realProvisioningRepo("non-origin-draft-base");
+  try {
+    await f.git(f.repo, "commit", "--allow-empty", "-m", "Initial fixture");
+    await f.git(f.repo, "branch", "release");
+    await f.git(f.repo, "remote", "add", "publish", "https://example.invalid/project.git");
+    const head = await f.git(f.repo, "rev-parse", "refs/heads/release");
+    const h = harness();
+    const calls: string[][] = [];
+    h.ports.exec = (command, args, ...rest) => { calls.push(args); return realExec(command, args, ...rest); };
+    const result = await createPipelineFromRequest({ task: "Named local draft base", repoDir: f.repo,
+      stages: RUN_STAGES as never, baseBranch, autoStart: false }, h.ports);
+    if (baseBranch === "release") {
+      expect(result.error).toBeUndefined();
+      expect(result.pipeline).toMatchObject({ state: "draft", baseBranch: "release", baseRef: head, baseRefPinned: false });
+      expect(loadPipelines()[0]).toMatchObject({ state: "draft", baseBranch: "release", baseRef: head });
+    } else {
+      expect(result.status).toBe(409);
+      expect(result.error).toContain("refs/heads/absent");
+      expect(loadPipelines()).toEqual([]);
+    }
+    expect(calls.some(args => args[0] === "fetch")).toBe(false);
+    expect(h.spawnInputs).toHaveLength(0);
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test.each([undefined, "main"])("a local repository without a commit is refused before storage (base %s)", async baseBranch => {
+  savePipelines([]);
+  const f = await realProvisioningRepo("unborn-base");
+  try {
+    const h = harness();
+    h.ports.exec = realExec;
+    const result = await createPipelineFromRequest({ task: "Unborn local branch", repoDir: f.repo,
+      stages: RUN_STAGES as never, ...(baseBranch ? { baseBranch } : {}) }, h.ports);
+    expect(result.status).toBe(409);
+    expect(result.error).toMatch(/no commit yet.*git add.*git commit/i);
+    expect(loadPipelines()).toEqual([]);
+    expect(h.spawnInputs).toHaveLength(0);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("a missing local base in a repository with history asks for an existing branch", async () => {
+  savePipelines([]);
+  const f = await realProvisioningRepo("missing-local-base");
+  try {
+    await f.git(f.repo, "commit", "--allow-empty", "-m", "Initial fixture");
+    const h = harness();
+    h.ports.exec = realExec;
+    const result = await createPipelineFromRequest({ task: "Missing local base", repoDir: f.repo,
+      baseBranch: "absent", stages: RUN_STAGES as never }, h.ports);
+    expect(result.status).toBe(409);
+    expect(result.error).toContain("choose an existing branch");
+    expect(loadPipelines()).toEqual([]);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test("internal conversation source is copied onto an operator draft and retained by Start with null creator", async () => {
   const h = harness();
   savePipelines([]);
@@ -2505,8 +2603,8 @@ test("a followed base in a checkout with no origin is its local branch, and an e
   const h = harness();
   savePipelines([]);
   const baseExec = h.ports.exec;
-  h.ports.exec = (command, args, cwd, env, options) => args[0] === "remote" && args[1] === "get-url"
-    ? { code: 2, stdout: "", stderr: "error: No such remote 'origin'" }
+  h.ports.exec = (command, args, cwd, env, options) => args[0] === "remote" && args.length === 1
+    ? { code: 0, stdout: "", stderr: "" }
     : baseExec(command, args, cwd, env, options);
   const followed = await createPipelineFromRequest({ task: "Local follow", repoDir: "/repo", baseBranch: "release", stages: RUN_STAGES as never, autoStart: false }, h.ports);
   expect(followed.pipeline).toMatchObject({ state: "draft", baseBranch: "release", baseRef: ORIGIN_MAIN_SHA, baseRefPinned: false });

@@ -641,7 +641,7 @@ test("a packaged MCP tool falls back from a retired launch port to the stable Vi
 
 /* ── CAUSAL PROOF (#1490) ─────────────────────────────────────────────────
    The packaged MCP server, over its production control transport, against
-   the PRODUCTION `/api/tmux` and `/api/spawn` handlers served by the
+   the PRODUCTION `/api/conversation-host` and `/api/spawn` handlers served by the
    controlled Viewer role of `receiptStoreProbeChild.ts`. The three processes
    share one isolated registry and one isolated receipt store; the recipient
    and the writer are fixtures that log every actual effect. */
@@ -1139,7 +1139,7 @@ test("spoofing and concurrency: another caller, a changed payload, and two proce
       expect(typeof race[0]?.operationId).toBe("string");
       expect(new Set(race.map((answer) => answer.operationId)).size).toBe(1);
       expect(fixture.effects().filter((effect) => effect.kind === "recipient" && effect.clientMessageId === downstream("send_message", requestId))).toHaveLength(1);
-      expect(fixture.responses().filter((response) => response.pathname === "/api/tmux" && response.body.includes(String(race[0]?.operationId)))).toHaveLength(1);
+      expect(fixture.responses().filter((response) => response.pathname === "/api/conversation-host" && response.body.includes(String(race[0]?.operationId)))).toHaveLength(1);
     }
 
     /* Keep the original same-key race: two MCP processes begin a fresh key
@@ -1224,7 +1224,7 @@ test("send: admitted, response lost BEFORE the recipient acts, original-key reco
     expect(deliveries).toHaveLength(1);
     expect(deliveries[0]).toMatchObject({ clientMessageId: downstream("send_message", "send-barrier-1"), operationId });
     expect(Object.values(fixture.registryFile().heldDeliveries).filter((delivery) => delivery.clientMessageId === downstream("send_message", "send-barrier-1"))).toHaveLength(1);
-    expect(fixture.responses().filter((response) => response.pathname === "/api/tmux" && response.body.includes(operationId))).toHaveLength(1);
+    expect(fixture.responses().filter((response) => response.pathname === "/api/conversation-host" && response.body.includes(operationId))).toHaveLength(1);
   } finally {
     await mcp.close();
     await host.stop();
@@ -1351,7 +1351,7 @@ test("send: a delayed 409 after recovery already proved delivery never regresses
     const deliveries = fixture.effects().filter((effect) => effect.kind === "recipient");
     expect(deliveries).toHaveLength(1);
     expect(deliveries[0]).toMatchObject({ clientMessageId: downstream("send_message", "send-late-verdict-1"), operationId });
-    expect(fixture.responses().filter((response) => response.pathname === "/api/tmux")).toHaveLength(1);
+    expect(fixture.responses().filter((response) => response.pathname === "/api/conversation-host")).toHaveLength(1);
   } finally {
     await original.close();
     await observer.close();
@@ -1401,7 +1401,7 @@ test("through the protocol: a lost claim discloses nothing to another caller, an
       }
     }
     expect(fixture.effects()).toHaveLength(2);
-    expect(fixture.responses().filter((response) => response.pathname === "/api/tmux")).toHaveLength(1);
+    expect(fixture.responses().filter((response) => response.pathname === "/api/conversation-host")).toHaveLength(1);
     expect(fixture.responses().filter((response) => response.pathname === "/api/spawn")).toHaveLength(1);
   } finally {
     await owner.close();

@@ -881,9 +881,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     Date.now(),
     (entry) => {
       const fullEntry = entry as AgentRegistryEntry;
-      return identityAlive(fullEntry.host?.agent, hostProbe)
-        || identityAlive(fullEntry.host?.panePid, hostProbe)
-        || identityAlive(fullEntry.structuredHost?.process, hostProbe);
+      return identityAlive(fullEntry.structuredHost?.process, hostProbe);
     },
   );
   markTiming("files-project-rate-limits");
@@ -1076,7 +1074,6 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
        request, talks to GitHub. */
     workLinks: workLinksForBoard(pipelines, boardTasks),
     systemHealth: {
-      tmux: routeDependencies.tmuxEndpointHealth(),
       registry: registryHealth,
       storage: { incidents: storageIncidents, writes: stateWriteHealth(stateDir()) },
     },

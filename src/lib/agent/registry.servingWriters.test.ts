@@ -27,7 +27,6 @@ import { registryLockHolder } from "./registryLockHolderFixture";
 import { runIdentityWaveMigrationAtStartupOffLoop } from "./identityWaveStartup";
 import { resolveSpawnLineageOffLoop } from "./spawnParent";
 import { recordActualSpawnAccountOffLoop } from "./spawnAccountSettlement";
-import { beginRegistryResumeOffLoop, reconcileObservedTranscriptHostsOffLoop } from "./transcriptHost";
 
 const AT = "2026-10-19T00:00:00.000Z";
 const SESSION = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
@@ -126,23 +125,6 @@ test("transcript identity admission rereads foreign liveness after waiting", asy
   } finally { f.registry.close(); }
 });
 
-test("transcript observation and resume rerun their admitted guards", async () => {
-  const f = fixture();
-  f.seed();
-  let current = true;
-  const guard = () => { if (!current) throw new Error("observation replaced"); };
-  try {
-    await held(f, () => reconcileObservedTranscriptHostsOffLoop([], f.registry, guard));
-    await expect(held(f, () => reconcileObservedTranscriptHostsOffLoop([], f.registry, guard), () => { current = false; })).rejects.toThrow("observation replaced");
-    current = true;
-    const entry = { engine: "codex", path: f.artifactPath } as FileEntry;
-    const spec = { engine: "codex", cwd: "/repo", windowName: "Resume" } as Parameters<typeof beginRegistryResumeOffLoop>[1];
-    const result = await held(f, () => beginRegistryResumeOffLoop(entry, spec, guard, f.registry));
-    expect(result?.receipt.purpose).toBe("resume-successor");
-    await expect(held(f, () => beginRegistryResumeOffLoop(entry, spec, guard, f.registry), () => { current = false; })).rejects.toThrow("observation replaced");
-  } finally { f.registry.close(); }
-});
-
 test("deputy registration repeats seat authority inside admission", async () => {
   const f = fixture();
   let current = true;
@@ -170,63 +152,6 @@ for (const shared of [false, true]) test(`account selection keeps catalog and ro
     })).rejects.toThrow();
     expect(f.registry.engineRouting("claude")).toEqual(before);
   } finally { f.registry.close(); }
-});
-
-for (const phase of ["reservation", "task", "recorded"] as const) {
-  test(`resume revocation after ${phase} admission durably retires its unactuated receipt`, async () => {
-    const f = fixture(); f.seed();
-    let revoked = false;
-    const current = () => {
-      const receipt = Object.values(f.registry.snapshot().receipts)[0];
-      if (!receipt) return true;
-      const taskAdmitted = loadTasks().some(task => task.assignments.some(row => row.launchId === receipt.launchId));
-      if (phase === "reservation" || (phase === "task" && taskAdmitted) || (phase === "recorded" && receipt.membershipAdmitted === true)) revoked = true;
-      return !revoked;
-    };
-    try {
-      const entry = { engine: "codex", path: f.artifactPath } as FileEntry;
-      const spec = { engine: "codex", cwd: "/repo", windowName: "Resume" } as Parameters<typeof beginRegistryResumeOffLoop>[1];
-      await expect(beginRegistryResumeOffLoop(entry, spec, () => {
-        if (!current()) throw new Error("resume authority replaced");
-      }, f.registry)).rejects.toThrow("resume authority replaced");
-      expect(revoked).toBe(true);
-      const receipt = Object.values(f.registry.snapshot().receipts)[0]!;
-      expect(receipt.state).toBe("failed");
-      expect(receipt.admissionOwner).toBeNull();
-      f.registry.close();
-      const reopened = new AgentRegistry(path.join(f.root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
-      try { expect(reopened.spawnRecoverySnapshot([receipt.launchId]).receipts[receipt.launchId]?.state).toBe("failed"); }
-      finally { reopened.close(); }
-    } finally { f.registry.close(); }
-  });
-}
-
-test("resume reports refused revocation cleanup and a reopened writer can finish it", async () => {
-  const f = fixture(false, 1_000); f.seed();
-  const peer = new Database(f.sqliteFilename);
-  let locked = false;
-  const current = () => {
-    const receipt = Object.values(f.registry.snapshot().receipts)[0];
-    if (!receipt?.membershipAdmitted) return true;
-    if (!locked) { peer.exec("BEGIN IMMEDIATE"); locked = true; }
-    return false;
-  };
-  try {
-    const entry = { engine: "codex", path: f.artifactPath } as FileEntry;
-    const spec = { engine: "codex", cwd: "/repo", windowName: "Resume" } as Parameters<typeof beginRegistryResumeOffLoop>[1];
-    const work = beginRegistryResumeOffLoop(entry, spec, () => { if (!current()) throw new Error("resume authority replaced"); }, f.registry);
-    await expect(work).rejects.toThrow("agent registry is busy");
-    expect(locked).toBe(true);
-    const receipt = Object.values(f.registry.snapshot().receipts)[0]!;
-    expect(receipt.state).toBe("starting");
-    peer.exec("ROLLBACK"); locked = false;
-    f.registry.close();
-    const reopened = new AgentRegistry(path.join(f.root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
-    try {
-      expect(await reopened.failSpawnOffLoop(receipt.launchId, "revoked before dispatch")).toBe(true);
-      expect(reopened.spawnRecoverySnapshot([receipt.launchId]).receipts[receipt.launchId]?.state).toBe("failed");
-    } finally { reopened.close(); }
-  } finally { if (locked) peer.exec("ROLLBACK"); peer.close(); f.registry.close(); }
 });
 
 test("actual launch account reconciliation waits and rereads the materialized receipt", async () => {

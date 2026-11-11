@@ -81,7 +81,6 @@ function harness() {
     },
     storeImages: () => [],
     defer: () => {},
-    spawnTmuxAgent: async () => { throw new Error("a real agent must never launch"); },
     spawnStructuredConversation: async () => { throw new Error("a real agent must never launch"); },
   };
   const bindings = viewerMcpBindings(undefined, {
