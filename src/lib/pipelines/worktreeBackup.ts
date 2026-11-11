@@ -14,6 +14,25 @@ const within = (file: string, root: string) => file === root || file.startsWith(
 type SavedFile = { path: string; savedPath: string; bytes: number; hash: string };
 const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
 
+/** The manifest lists every skipped path while they are few. */
+const SKIPPED_PATH_LIMIT = 2_000;
+/** What a backup left out, for a reader who checks it after the checkout is
+ * gone: every path with its size, or past the limit the first paths and a
+ * count and size per directory, largest first. */
+function skippedSummary(skipped: ReadonlyMap<string, number>) {
+  const paths = [...skipped].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([file, bytes]) => ({ path: file, bytes }));
+  const summary = { files: paths.length, bytes: paths.reduce((total, file) => total + file.bytes, 0) };
+  if (paths.length <= SKIPPED_PATH_LIMIT) return { ...summary, paths };
+  const directories = new Map<string, { files: number; bytes: number }>();
+  for (const file of paths) {
+    const row = directories.get(path.dirname(file.path)) ?? { files: 0, bytes: 0 };
+    row.files++; row.bytes += file.bytes; directories.set(path.dirname(file.path), row);
+  }
+  const ranked = [...directories].map(([directory, row]) => ({ directory, ...row })).sort((left, right) => right.bytes - left.bytes || (left.directory < right.directory ? -1 : 1));
+  return { ...summary, paths: paths.slice(0, SKIPPED_PATH_LIMIT), pathsOmitted: paths.length - SKIPPED_PATH_LIMIT,
+    directories: ranked.slice(0, SKIPPED_PATH_LIMIT), directoriesOmitted: Math.max(0, ranked.length - SKIPPED_PATH_LIMIT) };
+}
+
 /** A separate index preserves work without changing the checkout's index,
  * branch, or reflog. The backup's second parent preserves the original index.
  * A backup is usable only after both Git trees and
@@ -58,6 +77,8 @@ export async function backupWorktree(options: {
   const kept: SavedFile[] = [];
   const files: string[] = [];
   const inventory = new Map<string, string>();
+  /** Captures left out as regenerable runner output, with their sizes. */
+  const skipped = new Map<string, number>();
   let inspected = 0;
   const collect = (relative: string, artifact = false) => {
     if (++inspected > 200_000) throw new Error("ignored evidence inventory exceeds its entry bound");
@@ -68,10 +89,13 @@ export async function backupWorktree(options: {
     const components = path.normalize(relative).split(path.sep);
     if (components.includes(".git")) throw new Error("nested repository requires its own preservation");
     const inArtifact = artifact || components.includes(".artifacts");
-    if (!stat.isDirectory() && !inArtifact && options.regenerable?.(relative)) return;
     if (stat.isSymbolicLink()) {
       if (!inArtifact && !isPreservedMedia(relative) && options.disposable(relative)) return;
       throw new Error("linked evidence requires its own preservation");
+    }
+    if (!stat.isDirectory() && !inArtifact && options.regenerable?.(relative)) {
+      if (isPreservedMedia(relative)) skipped.set(relative, Number(stat.size));
+      return;
     }
     if (stat.isDirectory()) {
       const names = fs.readdirSync(source);
@@ -133,11 +157,11 @@ export async function backupWorktree(options: {
     }
     const manifest = statePath("evidence", pipelineId, "worktree-backup.json");
     writeJsonDurably(manifest, { ref, head, branch: options.branch, tree: savedTree, indexTree, indexCommit, files: kept,
-      bytes: kept.reduce((total, file) => total + file.bytes, 0) });
+      bytes: kept.reduce((total, file) => total + file.bytes, 0), skipped: skippedSummary(skipped) });
     const verify = async () => {
       if (!options.guard()) return false;
       const expected = new Map(inventory);
-      files.length = 0; inspected = 0; inventory.clear();
+      files.length = 0; inspected = 0; inventory.clear(); skipped.clear();
       for (const ignored of options.ignored) collect(ignored.replace(/\/$/, ""));
       if (inventory.size !== expected.size || [...inventory].some(([file, stamp]) => expected.get(file) !== stamp)) return false;
       if (await git("rev-parse", "HEAD") !== head || await tree() !== savedTree) return false;

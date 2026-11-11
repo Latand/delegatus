@@ -3772,6 +3772,76 @@ test.each(["recorded-check", "lane-record"])("a capture inside test-results that
   expect(fs.existsSync(f.saved("test-results/case-one/other.png"))).toBe(link === "recorded-check");
 });
 
+test("a board task that names the lane and a directory of captures links the files under it", async () => {
+  const f = await runnerOutputFixture("test-results");
+  fs.mkdirSync(path.join(f.dir, "test-results/case-two")); fs.writeFileSync(path.join(f.dir, "test-results/case-two/other.png"), "unlinked capture");
+  let asked: readonly string[] = [];
+  f.options.linkRecords = needles => {
+    asked = needles;
+    return [JSON.stringify({ id: "task-1", text: "Lane backup-lane failed", note: "screenshots are in `test-results/case-one/`" })];
+  };
+  const report = await sweepMergedWorktrees(f.options);
+  expect(report.removed.map(row => row.path)).toContain(f.dir);
+  expect(asked).toContain("backup-lane"); expect(asked).toContain(f.dir);
+  expect(fs.readFileSync(f.saved(f.capture), "utf8")).toBe("runner capture");
+  expect(fs.existsSync(f.saved("test-results/case-two/other.png"))).toBeFalse();
+});
+
+test("records that cannot be read leave every capture linked", async () => {
+  const f = await runnerOutputFixture("test-results");
+  f.options.linkRecords = () => { throw new Error("state is unreadable"); };
+  const report = await sweepMergedWorktrees(f.options);
+  expect(report.removed.map(row => row.path)).toContain(f.dir);
+  expect(fs.readFileSync(f.saved(f.capture), "utf8")).toBe("runner capture");
+});
+
+test("a link to the HTML report's entry page saves the captures of that report", async () => {
+  const f = await runnerOutputFixture("playwright-report");
+  f.owner.task = "Report: playwright-report/index.html";
+  const report = await sweepMergedWorktrees(f.options);
+  expect(report.removed.map(row => row.path)).toContain(f.dir);
+  expect(fs.readFileSync(f.saved(f.capture), "utf8")).toBe("runner capture");
+});
+
+test("the backup manifest lists the captures it left out, with their sizes", async () => {
+  const f = await runnerOutputFixture("test-results");
+  fs.mkdirSync(path.join(f.dir, "test-results/case-two")); fs.writeFileSync(path.join(f.dir, "test-results/case-two/video.webm"), "12345");
+  expect((await sweepMergedWorktrees(f.options)).removed.map(row => row.path)).toContain(f.dir);
+  const manifest = JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree-backup.json"), "utf8"));
+  expect(manifest.skipped).toEqual({ files: 2, bytes: "runner capture".length + 5, paths: [
+    { path: "test-results/case-one/failure.png", bytes: "runner capture".length },
+    { path: "test-results/case-two/video.webm", bytes: 5 },
+  ] });
+});
+
+test("a symlink to a capture inside test-results still stops the backup", async () => {
+  const f = await runnerOutputFixture("test-results");
+  fs.symlinkSync(path.join(f.dir, "captures/frame.png"), path.join(f.dir, "test-results/case-one/latest.png"));
+  expect((await sweepMergedWorktrees(f.options)).removed).toEqual([]);
+  expect(fs.readFileSync(path.join(f.dir, f.capture), "utf8")).toBe("runner capture");
+});
+
+test("a capture that arrives in test-results while the backup is verified defers the removal", async () => {
+  const f = await runnerOutputFixture("test-results");
+  const run = f.options.git, read = fs.createReadStream;
+  let armed = false, added = false;
+  f.options.git = async (args, cwd) => {
+    if (args[0] === "status" && fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree-backup.json"))) armed = true;
+    return run(args, cwd);
+  };
+  const stream = spyOn(fs, "createReadStream").mockImplementation((file, options) => {
+    if (armed && !added && String(file) === f.saved("captures/frame.png")) {
+      added = true; fs.writeFileSync(path.join(f.dir, "test-results/case-one/late.png"), "late capture");
+    }
+    return read(file, options);
+  });
+  try {
+    expect((await sweepMergedWorktrees(f.options)).removed).toEqual([]);
+    expect(added).toBeTrue();
+    expect(fs.readFileSync(path.join(f.dir, "test-results/case-one/late.png"), "utf8")).toBe("late capture");
+  } finally { stream.mockRestore(); }
+});
+
 test.each(["refused", "corrupt"])("a %s capture copy retains the checkout and can retry", async failure => {
   const f = await staleBackupFixture();
   fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\ncaptures/\n");
