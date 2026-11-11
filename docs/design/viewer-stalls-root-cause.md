@@ -1,8 +1,10 @@
 # Viewer stalls since 28 October: root-cause account
 
-Status: diagnosis for the lane that also builds the fixes. Written 2026-11-11 from a
-read-only observation of one busy installation (24 CPUs, about 115 live agent
-processes, release `803f12c1`). Nothing on that installation was changed.
+Status: diagnosis, and the fixes built from it. Written 2026-11-11 from a read-only
+observation of one busy installation (24 CPUs, about 115 live agent processes, release
+`803f12c1`). Nothing on that installation was changed. Sections 1 to 11 are the
+diagnosis as it was handed to the build; section 12 records what was built, with the
+before and after measurements, and what the build moved to the deferred list.
 
 This document answers four questions: what stops the Viewer and the runtime host, who
 holds the locks and for how long, what changed around 2026-10-28, and which fixes this
@@ -437,7 +439,7 @@ project scope, 2026-11-11).
 - **The week of 28 October**, for the reason in section 6.
 - **The call site of the 177 receipts reads** (section 3.4).
 - **Which statement of the registry open takes the write lock** (section 4.3 shows
-  that the open does).
+  that the open does). Found while building fix 2: section 12.2.
 - **Why an average task write holds the state transaction 0.4 to 0.8 s** (section 4.2).
 - **Rebuild times of the runtime host under 250 ms** (section 5).
 - **Socket-level cause of the connection resets** (section 4.3).
@@ -495,6 +497,8 @@ that change them: 2926, 3585, 3710, 3731, 3749, 3762, 3795, 3802 and 3805.
 `src/lib/state/sqliteStateStore.ts` is changed by open pull request 3668 and
 `src/lib/memory/curation/` by open pull request 3838.
 
+What the build did with each of these, and its measurements, is in section 12.
+
 This account was written against main at `2449d4c3`. Main moved by one commit while it
 was written (pull request 3835, temporary-directory sweeps); that commit touches none of
 the files named above.
@@ -510,6 +514,15 @@ the files named above.
 | Runtime snapshot rebuild under 100 ms; `liveTurn` on idle sessions | Section 5 | 23 s per 97 min now; journal change needs three review rounds; patch from lane `d2a17781` kept |
 | 3 031 structured host entries idle for a week | Section 5 | A retirement policy question: it needs a decision on what may be retired |
 | Function-level profile of the remaining main-thread time | Section 8 | Needs profiler access to the serving process, or the counters of fix 5 after a deploy |
+| Fix 4, a curator apply that does not block the loop under the state lock | Sections 3.4 and 4.2; four holds of 9.6 to 15.0 s in episode 2 | Pull request 3834 was still open when the build reached it (checked 2026-11-11 02:08Z), and its follow-up 3841, opened at 01:18Z, moves the history the apply reads into rows of its own. Built on top of both once they are on main |
+| Key release for the other mutating tools | Section 12.3 | The release applies to tools whose every effect is a write to a store of the serving process, and that set holds `seat_tick_settings` alone. Each further tool needs its binding read for the order of its effects |
+| A state wait that ran out its deadline (`state admission timed out at ...`) still consumes the key | `src/lib/state/lockWait.ts`, `waitForStateLock`: the timeout is raised as the untyped busy error, which other code also raises after a write | Needs a typed timeout that carries its last deferral, and a reading of every caller that retries on a deferral |
+| Starting an engine-wide migration reads and writes every conversation in one write transaction | `commitMigrationIntent` in `src/lib/agent/registry.ts`: one loop over every conversation, with `migrationReadiness` called without its index, so each conversation scans every held delivery and every entry. The same shape as the stop of section 4.1; not measured | Found while building fix 1. Needs the fixture of section 12.1 and its own slice |
+| The registry's keyed readers walk every row a transaction has changed, on every lookup | `pathReaders` and `keyedReaders` in `loadLazyInTransaction`, `src/lib/agent/sqliteRegistryStore.ts`. Inference: this is where the stop of section 12.1 spent its 295 to 432 s (14 000 path lookups, each over 11 000 changed rows). Not profiled on the base | Any transaction that changes many rows and then looks rows up pays it. Fix 1 keeps a stop's transactions to 32 rows, which bounds it there |
+| Other holders of the registry write lock above 5 s | Section 4.1: `registry.archive` 7.3 s, `registry.transcript-hosts` 5.9 s, `inventory.reconcile` 5.6 s | Four episodes in 72 h against six of `migration.stop`; not built |
+| The registry file never shrinks | Section 12.2: the serving registry reads `auto_vacuum = 0`, and so does a registry created today, because the pragma is set after the journal mode has initialised the file. The file is 2.09 GB | A decision: reclaiming the space takes a `VACUUM` of the registry |
+| The state store sets `auto_vacuum` on its open too | `src/lib/state/sqliteStateStore.ts`, the statement beside the store's schema. Whether it runs on every open of an existing database, and so takes a write transaction each time as the registry's did, was not established | Read and measure before changing: the state store's open path has its own retry |
+| Direct `setImmediate` yields and the unlabelled zero-timer yields | Section 3.3: 58 places call `setImmediate` directly; two zero-timer yields carry no label (`src/lib/state/sqliteStateStore.ts`, `src/lib/pipelines/store.ts`) | Fix 5 moves `yieldToRuntime` and the three labelled zero-timer yields. The counter of section 12.5 says after a deploy whether the rest matter |
 
 ## 11. Check after deploy
 
@@ -521,15 +534,177 @@ number of live host processes recorded beside the numbers.
    at a comparable number of live hosts; between 5 % and the base, check 6 says which
    cause remains.
 2. Lines matching `holder=migration.stop`: base 105 in 72 h, ages to 135 s. After fix 1
-   no such line reports an age above 1 000 ms.
+   no such line reports an age above 1 000 ms, and the same holds for the sweep's own
+   label, `holder=migration.stop.sweep`.
 3. `[mcp caller-identification]` records with `outcome: failed`: base 14 in 12 minutes
    in episode 1. After fix 2 none while a registry writer is active.
 4. `[state lease-hold]` with operation `memory.import.curation`: base 14 holds, 86 s,
-   longest 15.0 s in 97 min. After fix 4 and pull request 3834 none above 1 000 ms.
+   longest 15.0 s in 97 min. After fix 4 and pull request 3834 none above 1 000 ms. Fix
+   4 is deferred (section 10), so this check waits for it.
 5. `[viewer loop-gap]` records whose first `reads.top` row is `memory.view.all`: base
    up to 74 s. After pull request 3834 none above 2 s.
-6. The new slice counter of fix 5 in gap records: if gaps persist with one or two
-   slices resumed, section 3.3 is ruled out and the profile of section 8 is the next
-   step.
+6. The `cooperative` field of fix 5 in `[viewer loop-gap]` records (`resumed`, `turns`,
+   `depth`, `maxDepth`, `longestWaitMs`): a gap in which `resumed` is close to `turns`
+   and small was not made by the queue. If gaps persist with one or two slices resumed,
+   section 3.3 is ruled out and the profile of section 8 is the next step. If `depth`
+   stays in the tens and `longestWaitMs` in the seconds, the thread is still saturated
+   and the jobs now wait in the queue where they used to stall the loop.
 7. Runtime host: `[viewer loop-gap]` with `role: runtime-host` after its first minute.
    Base 4.5 s in 96 minutes; it should not rise.
+8. An MCP call refused with the text `state admission is busy at`, repeated under its
+   original `clientRequestId`: for `seat_tick_settings` the repeat executes after fix 3
+   and answers `replayed: false`. Base: the repeat answered the stored refusal.
+
+## 12. What was built
+
+Four of the five fixes of section 9 are built, each in its own commit with its tests;
+the fourth is deferred (section 10). Every measurement below was made on one machine
+(24 CPUs) that was running other work; the load average is given beside each. Tests and
+probes ran in isolated state directories, never against the serving installation.
+
+### 12.1 Fix 1: a stop in bounded transactions
+
+Stopping an intent is now one transaction for the intent and the conversations it owns,
+read by key, followed by a sweep that writes the engine-wide opt-out 32 conversations
+per transaction with the write lock given up between them. The stop records the opt-out
+as a decision on the intent (`stopSweep`); until the sweep reaches a conversation, an
+automatic or lazy migration reads the decision from there, and a manual migration to
+the same target withdraws it. A sweep that a refused write or a restart interrupts keeps
+its marker; the hygiene pass resumes it and the archive pass leaves such an intent hot.
+
+The readiness signature is computed inside the stop's transaction over the
+conversations the stop rolls back, where section 9 said once and outside the lock:
+those are the only rows whose readiness a stop changes, so the bounded form is exact
+and needs no second reading.
+
+Fixture (`src/lib/agent/registry.migrationStop.fixture.ts`): 14 000 conversations on
+the migrating engine (13 400 off the target, 600 on it), 400 on another engine, 27 000
+settled deliveries, one draining intent that owns three waiting conversations with held
+input and one committed conversation; a 140 MB registry. The hygiene pass stops the
+stale intent in a process of its own, as the migration helper does.
+
+| | Rounds | Write transactions of the pass | Longest hold of the write lock | Rows in the largest transaction | Pass | Load average |
+|---|---|---|---|---|---|---|
+| Base `917ccfbf` | 4 | 4 | 295.4, 305.1, 423.5, 431.8 s | 13 410 | 297 to 433 s | 15 to 28 |
+| Head | 4 | 424 | 93, 94, 98, 204 ms | 32 conversations | 9.5 to 11.5 s | 14 to 16 |
+
+With 64 rows per transaction the longest hold was 117 to 176 ms and with 200 it was
+212 ms, so the slice is 32. Half of the head's pass is SQLite writing the rows (0.42 ms
+per row, 5.6 s of an 11.3 s profile); the base wrote the same rows.
+
+Rows after the stop, base against head on one copy of the fixture: three values differ,
+the `settledAt` wall-clock stamps of the three cancelled deliveries' owners. Every
+conversation, delivery, intent and revision counter is equal.
+
+Recurrence test (`src/lib/agent/registry.migrationStop.test.ts`, the last but one case):
+while the stop runs in its own process, this process keeps admitting deliveries with a
+one-second deadline. On the base the first admission made during the stop is refused
+after 1 002 ms. On the head every admission is admitted; the longest wait logged was
+256 ms.
+
+### 12.2 Fix 2: opening a current registry takes no write lock
+
+The open asked for the write lock four times whatever the state of the schema:
+
+- `PRAGMA auto_vacuum = INCREMENTAL`, which opens a write transaction. The serving
+  registry reads `auto_vacuum = 0` (read through a read-only connection), so the
+  statement changed nothing there on any open;
+- the archive installation, in a startup transaction (processes that may run startup
+  migrations);
+- the liveness projection, in a transaction that ran even when it had nothing to create;
+- the first-boot import, which opened its transaction before reading whether the import
+  was complete.
+
+Each step now reads first and takes the lock only when it has something to do: a
+missing object, a retired trigger to drop, a records view in its conserving form, a
+projection or an import behind its version.
+
+| Opening an initialised registry while another connection holds `BEGIN IMMEDIATE` | Five rounds | Load average |
+|---|---|---|
+| Base | `database is locked` after 5 006 to 5 007 ms, every round | 8.0 |
+| Head | opened and read its row in 1.8 to 3.1 ms, every round | 8.0 |
+
+Recurrence test, the one the task asks for (`src/lib/mcp/callerIdentification.test.ts`):
+a second connection holds the write lock while a call arrives at a real task-executor
+process that has not opened the registry. On the base the identity call and the
+`update_task` call are both refused after about 5.1 s. On the head both are answered
+inside the other writer's transaction, with no wait logged.
+
+Caller identification waited at most five seconds for a registry that was not ready; it
+now waits until the call's own deadline, less 250 ms for the refusal to reach the
+caller. Test: the Viewer finishes its migration six seconds into a twelve-second call,
+and the call is identified; on the base it failed at five seconds.
+
+### 12.3 Fix 3: a deferral before any writer gives the key back
+
+Every binding runs under a witness of the writers the stores of its process admitted
+for it: a state collection's lease or transaction, a file transaction, a registry
+mutation. A refusal that is the typed pre-admission deferral, raised while that count is
+zero, releases the claim and answers `store_busy`; the same key then runs the call
+again. A deferral raised after a writer entered is recorded as before.
+
+Narrower than section 9 proposed. The witness sees the stores of its own process, so a
+tool that reaches another process or a network before its first write there could be
+run twice under one key. The release therefore applies to tools whose every effect is a
+write to those stores, and that set starts with `seat_tick_settings`, the tool the
+refusal was observed on (its binding writes the durable setting and dispatches
+nothing). The other mutating tools keep their old behaviour until their bindings are
+read (section 10).
+
+Tests (`src/lib/mcp/deferredBeforeAdmission.test.ts`), with the real tool service, the
+real receipt store and another connection holding the state database's write lock: the
+refused call answers `store_busy` and the same key and arguments then execute; a
+deferral after a first write stays the key's answer and the binding runs once; a
+registry mutation before the deferral counts as a writer; a tool outside the set keeps
+the refusal. On the base the first of these answers `tool_failed` and replays it.
+
+### 12.4 Fix 4: deferred
+
+Pull request 3834 was open when the build reached this fix. See section 10.
+
+### 12.5 Fix 5: one queue for cooperative slices
+
+`yieldToRuntime` and the three labelled zero-timer yields go through one queue for the
+process. A turn of the loop resumes the job that has waited longest; when a resumed job
+yields again and the turn has used less than 4 ms, the next job that was already
+waiting when the turn began shares it; otherwise the rest wait for the next turn. So
+short slices share a turn as they did, a slice longer than the budget has the turn to
+itself, and a job is never resumed in the turn it yielded in. A wait can be withdrawn
+with an abort signal. The loop-gap record carries the queue's counters for the gap
+(`cooperative`, section 11 check 6).
+
+Section 9 proposed one slice per turn. The budget keeps the throughput of jobs with
+very short slices, which one slice per turn would have divided by the number of jobs.
+
+Measurement (`src/lib/cooperative.loopGap.fixture.ts`): N jobs burn a slice and yield
+for 4.5 s under Bun 1.4.0, a 10 ms timer measures gaps as the loop monitor does, three
+rounds each, identical within one tick. Gaps are counted after every job has had its
+first slice.
+
+| Jobs, slice | | Timer ticks | Longest gap | Stalled above 500 ms | Slices per second | Load average |
+|---|---|---|---|---|---|---|
+| 45 jobs, 12 ms | Base | 8 | 531 ms | 3.18 s of 4.5 s | 83 | 9.2 to 9.8 |
+| | Head | 329 to 330 | 3 to 4 ms | 0 | 83 | 9.3 to 9.8 |
+| 17 jobs, 32 ms | Base | 8 | 535 ms | 3.21 s of 4.5 s | 31 | 9.6 to 10.1 |
+| | Head | 124 | 22 to 23 ms | 0 | 31 | 9.3 to 9.9 |
+| 17 jobs, 12 ms | Base | 22 | 195 ms | 0 | 83 | 8.2 to 9.1 |
+| | Head | 358 | 3 ms | 0 | 83 | 8.2 to 9.1 |
+
+The base gap here is N times the slice (531 ms for 45 jobs of 12 ms); section 3.3
+reported 1 075 ms for the same shape from the diagnosis's own probe, which is gone with
+its scratch. Both show the turn growing with the number of jobs; the table above is the
+one that can be run again.
+
+What this measurement does not show is the serving process: there the queue bounds
+each turn, and whether the stall share falls depends on how much of it was this effect
+(check 6 of section 11 answers that after a deploy). Work that is saturated stays
+saturated; it now waits in the queue, where the counter reports it, and requests and
+timers run between its slices.
+
+### 12.6 Checks run for the build
+
+Touched test files and the neighbouring files that exercise the same code ran one file
+per isolated command. Eight of those files have failures on the head; each fails with
+the same tests on the base in the same isolation, and none is in a file this change
+touches except `src/lib/agent/registryArchive.test.ts`, where the two failing cases are
+the base's and the case this change extends passes.
