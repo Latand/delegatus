@@ -289,3 +289,35 @@ test("a write that landed before the connection dropped: the next read moves the
   expect(host.querySelector("[data-memory-source-failed]")).toBeNull();
   expect(lineOf(host)).not.toContain(translate("en", "memorySource.saveFailed"));
 });
+
+/* Before any orchestrator exists the import has nowhere to run: the switch is off
+   and disabled, the line says why, and a press sends nothing. With a seat the
+   same view is the ordinary unchosen state. */
+for (const lang of ["en", "uk"] as const) test(`${lang}: without an orchestrator the switch is disabled with the reason; with one it can be turned on`, async () => {
+  setLocale(lang);
+  /* The Ukrainian line carries no-break spaces after one-letter words, so it never ends a row on one. */
+  const reason = lang === "en" ? "Needs an orchestrator first: create one in a project." : "Спершу потрібен оркестратор: створіть його в\u00a0проєкті.";
+  const states: string[] = [];
+  serve(() => ({ choice: null, phase: null, orchestrator: false } satisfies MemorySourceView));
+  const host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host);
+  await act(async () => { root!.render(<MemorySourceRow onState={(state) => states.push(state)} />); });
+  await settle();
+  expect(stateOf(host)).toBe("needs-orchestrator");
+  expect(lineOf(host)).toBe(reason);
+  expect(switchOf(host).disabled).toBe(true);
+  expect(switchOf(host).getAttribute("aria-checked")).toBe("false");
+  await act(async () => { switchOf(host).click(); });
+  await settle();
+  expect(puts).toEqual([]);
+  expect(states.at(-1)).toBe("needs-orchestrator");
+  act(() => root?.unmount()); document.body.innerHTML = "";
+
+  serve(() => ({ choice: null, phase: null, orchestrator: true } satisfies MemorySourceView), () => ({ choice: "delegatus", phase: "importing", orchestrator: true, import: { counts: null, remainingGenerations: 0, hold: null } }));
+  const second = await render();
+  expect(stateOf(second)).toBe("unchosen");
+  expect(lineOf(second)).toBe(translate(lang, "memorySource.unchosen"));
+  expect(switchOf(second).disabled).toBe(false);
+  await act(async () => { switchOf(second).click(); });
+  await settle();
+  expect(puts).toEqual([{ source: "delegatus" }]);
+});
