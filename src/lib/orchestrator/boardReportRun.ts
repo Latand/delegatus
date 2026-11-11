@@ -302,7 +302,7 @@ async function gatherBoardReportFacts(seat: BoardReportSeat, deadlineMs: number)
   const [
     fs,
     { loadArchivedPipelinesForList, loadPipelinesForList },
-    { loadTasks },
+    { loadTasksForList },
     { projectTaskPipelineIds },
     { canonicalOrchestratorProject, orchestratorRevocations },
     { agentRegistry },
@@ -345,7 +345,7 @@ async function gatherBoardReportFacts(seat: BoardReportSeat, deadlineMs: number)
   const hot = read("lanes", () => loadPipelinesForList(), [] as Pipeline[]);
   const archived = read("archived lanes", () => loadArchivedPipelinesForList(), [] as Pipeline[]);
   const projectLanes = hot.filter((pipeline) => ours(pipeline.project) && !pipeline.hiddenAt);
-  const tasks = read("tasks", () => loadTasks(), [] as BoardTask[])
+  const tasks = read("tasks", () => loadTasksForList(), [] as readonly BoardTask[])
     .filter((task) => ours(task.project) && task.status !== "done");
   const reportTasks = projectTaskPipelineIds(tasks, hot).flatMap((task) => reportTaskFrom(task) ?? []);
   const revokedSeats = new Set(read("seats", () => orchestratorRevocations(), [])

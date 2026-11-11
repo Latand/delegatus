@@ -7,7 +7,7 @@ import { DEFAULT_SEAT_TICK_POLICY, seatTickPolicy } from "@/lib/monitor/seatTick
 import { readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
 import { loadPipelines } from "@/lib/pipelines/store";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
-import { loadTasks } from "@/lib/tasks/store";
+import { loadTasksForList } from "@/lib/tasks/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,7 +17,7 @@ function existingInstall(): boolean {
   const seats = readOrchestratorSeatFile();
   if (Object.keys(seats.seats).length || Object.keys(seats.pending).length || seats.revocations.length) return true;
   if (loadPipelines().length) return true;
-  if (loadTasks().length) return true;
+  if (loadTasksForList().length) return true;
   return hasRoleOverrides();
 }
 
