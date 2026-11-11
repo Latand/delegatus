@@ -1,3 +1,4 @@
+import { keepReportPicturesSoon } from "@/lib/reportMedia/paths";
 import { workspaceRoute, assertWorkspaceProject } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -72,6 +73,7 @@ async function workspacePATCH(
       { status: result.status },
     );
   }
+  if (Object.hasOwn(body, "text") || Object.hasOwn(body, "details")) keepReportPicturesSoon([result.task.text, result.task.details]);
   /* An edit of what the task says or where it stands instructs its agents; a
      move, a colour, an icon, a link or a hide does not, and is not recorded. */
   if (TASK_REQUEST_FIELDS.some((field) => Object.hasOwn(body, field)) && directOperatorActivityAuthority(req).ok) {
