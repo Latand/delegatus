@@ -9,11 +9,21 @@ import { convertNewLegacyReviewStages } from "./legacyReviewDefinition";
 import { buildPipeline } from "./store";
 import { effectiveWorkerLimit, setMachineWorkerLimit, setProjectWorkerLimit } from "@/lib/operator/workerLimit";
 import { renderStagePrompt } from "./prompts";
+import { MAX_STAGE_REPORT_SUMMARY_CHARS } from "./limits";
 import { parseStageVerdict } from "./verdict";
 import { pipelineRoleLookup, resolvePipelineRole } from "./roles";
 import type { PipelineStage } from "./types";
 import { composeStageInput } from "./stageInput";
 import { seededTemplatesFromRoles } from "@/lib/workflows/store";
+
+test("stage guidance includes the shared summary bound's value", () => {
+  const stage: PipelineStage = { id: "build", kind: "run", prompt: "Build", next: null,
+    effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } };
+  const pipeline = buildPipeline({ id: "summary-bound", task: "Build", project: "fixture", repoDir: "/repo",
+    stages: [stage], srcPath: null, srcConversationId: null, now: "2026-11-11T12:00:00.000Z" });
+  const values = renderStagePrompt(pipeline, stage, stage.effectiveRole, "").match(/\b\d+\b/g) ?? [];
+  expect(values).toContain(String(MAX_STAGE_REPORT_SUMMARY_CHARS));
+});
 
 test.each(["vitest", "delegatus", "missing"])("assembled test guidance uses installed tooling and project checks: %s", async (kind) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-test-guidance-"));
