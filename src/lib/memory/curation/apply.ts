@@ -1,5 +1,5 @@
 import { candidateState, candidateById } from "../importCuration";
-import { roleScopePassLastAt } from "../roleViewSource";
+import { roleScopePassLastAt, scopeRowForRewrite } from "../roleViewSource";
 import { importCollection, readImportRecord } from "../importStore";
 import { prepareImportEdits } from "./importApply";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -131,14 +131,11 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
 
     operation?.assertCurrent();
     if (JSON.stringify(readPassAuthority(pass.id)) !== JSON.stringify(fresh)) refuse("CURATE_STALE", "the curator pass changed before commit");
-    // Only the named scopes are rewritten below. Decoding every other scope of
-    // the pass for one timestamp parsed each retained history on every apply;
-    // their answer comes from the per-row digest instead.
-    const named = new Set(input.scopes.map(item => item.scope));
+    // Only the named scopes are rewritten below, and a scope row holds only
+    // its newest entries. The pass's last timestamp in every scope comes from
+    // the per-row digest, which covers the whole history.
     const previousAt = Math.max(0, ...[...allowedScopes].flatMap(scope => {
-      if (!named.has(scope)) { consume(); const at = roleScopePassLastAt(scope, pass.id); return at === null ? [] : [at]; }
-      const row = tx.get(`s:${scope}`);
-      return row?.kind === "scope" ? row.history.filter(h => h.pass === pass.id).map(h => Date.parse(h.at)) : [];
+      consume(); const at = roleScopePassLastAt(scope, pass.id); return at === null ? [] : [at];
     }));
     now = new Date(Math.max(Date.parse(now), previousAt + 1)).toISOString();
     const scopes = new Map<string, RoleMemoryScopeRow>();
@@ -385,8 +382,12 @@ export function revertCuratorPass(id: string, now = new Date().toISOString(), op
   // A pass can contain many individually bounded calls. Prepare its whole undo
   // under the collection lease, then persist every changed row atomically.
   held.patchSync(() => {
+    // An undo reads and rewrites whole histories, undo payloads included, so
+    // each scope it touches is taken with every entry in its row. A scope it
+    // changes is stored that way; the drain moves the entries out again.
+    const whole = (row: RoleMemoryRow | null) => row?.kind === "scope" ? scopeRowForRewrite(row, now) : row;
     const snapshot = [...new Set(pass.scopes.map(canonicalScope))].flatMap(scope => {
-      const row = held.get(`s:${scope}`); return row?.kind === "scope" ? [row] : [];
+      const row = whole(held.get(`s:${scope}`)); return row?.kind === "scope" ? [row] : [];
     });
     const allHistories = snapshot.flatMap(row => row.kind === "scope" ? row.history.filter(h => h.pass === id).map(h => ({ scope: row.scope, history: h })) : []);
     const histories = allHistories.filter(h => !h.history.revertedAt).sort((a, b) => b.history.at.localeCompare(a.history.at));
@@ -398,7 +399,7 @@ export function revertCuratorPass(id: string, now = new Date().toISOString(), op
     const rows = new Map<string, RoleMemoryRow | null>(snapshot.map(row => [key(row), row]));
     const changed = new Map<string, RoleMemoryRow>();
     const tx = {
-      get: (key: string) => { if (!rows.has(key)) rows.set(key, held.get(key)); return rows.get(key) ?? null; },
+      get: (key: string) => { if (!rows.has(key)) rows.set(key, whole(held.get(key))); return rows.get(key) ?? null; },
       put: (row: RoleMemoryRow) => { rows.set(key(row), row); changed.set(key(row), row); },
     };
     const last = new Map<string, string>();

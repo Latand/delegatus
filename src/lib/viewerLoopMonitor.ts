@@ -14,7 +14,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "voice-tools.catalog"
   | "transcript.index" | "catalog.search" | "memory.discovery" | "memory.refresh" | "scanner.worker"
   | "memory.privacy.compile" | "memory.privacy.match" | "memory.privacy.worker"
-  | "memory.source-read" | "memory.source-write" | "memory.select"
+  | "memory.source-read" | "memory.source-write" | "memory.select" | "memory.history-drain"
   | "transfer.export" | "transfer.preview" | "transfer.apply" | "transfer.recover" | "transfer.verify"
   | "memory.import.status" | "memory.import.advance" | "memory.import.sync" | "memory.import.curation" | "memory.import" | "memory.import.backup" | "memory.import.candidates" | "memory.import.retention"
   | "tasks.seat-recovery-cleanup" | "tasks.system-run" | "telegram.report-task-settle" | "memory.curation-cleanup"

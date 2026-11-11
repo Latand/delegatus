@@ -19,7 +19,7 @@ import { roleMemoryEnabled, roleMemorySelectorEnabled, swarmRulesEnabled } from 
 import { swarmRulesForRole, swarmScope, SWARM_ROLE_IDS, SWARM_ROLE_BOUND, publicSwarmTextMatcher } from "./swarmPack";
 import { engineMemoryOff } from "./source";
 import { curationRevision, curationView, machinePassAuthority, passIsLive } from "./curation/store";
-import { activeProfileBasis, privacyRuleRevision, profileScopeKeys, projectViewRows, projectViewRowsCooperatively, projectViewUnaffectedByChanges, roleScopeKeys, roleViewVersion } from "./roleViewSource";
+import { activeProfileBasis, privacyRuleRevision, profileScopeKeys, projectViewRows, projectViewRowsCooperatively, projectViewUnaffectedByChanges, roleScopeKeys, roleViewVersion, rowsWithScopeHistory, scopeRowForRewrite } from "./roleViewSource";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
 import type { ProfileRulesView } from "./profile";
 import { renderLearnedRulesSelection } from "./roleRender";
@@ -57,7 +57,8 @@ function retentionPolicy(project: string, scopes: readonly string[]) {
   // Settings may initialize their collection: read them before the memory write.
   const available = new Map([...new Set(scopes)].map(scope => [scope, curationAvailableForScope(scope, canonicalProject(project))]));
   const evidence = (active: readonly RoleMemoryRule[], pending?: LessonRequestRow | null) => {
-    const stored = roleMemoryCollection()?.snapshot() ?? [];
+    // Task lineage follows the merges recorded over each scope's whole history.
+    const stored = rowsWithScopeHistory(roleMemoryCollection()?.snapshot() ?? []);
     // The current answer's validated application marks are not committed yet.
     const all = pending ? stored.map(row => row.kind === "request" && key(row) === key(pending) ? pending : row) : stored;
     const byId = new Map(all.flatMap(row => row.kind === "rule" ? [[row.id, row] as const] : []));
@@ -188,11 +189,15 @@ export function joinMovedScopes(now = new Date().toISOString(), scopeKeys: () =>
   held.boundedPatch(4096, (tx) => {
     const rulesOf = (ids: readonly string[]) => ids.flatMap((id) => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; });
     for (const from of moved) {
-      const source = tx.get(`s:${from}`);
-      if (source?.kind !== "scope") continue;
+      const moving = tx.get(`s:${from}`);
+      if (moving?.kind !== "scope") continue;
+      // The join rewrites both histories as one, so each scope is taken with
+      // every entry in its row. The joined scope is stored that way; the
+      // history rows either side had are left unnamed for the drain.
+      const source = scopeRowForRewrite(moving, now);
       const into = resolve(from);
       const target = tx.get(`s:${into}`);
-      const current: RoleMemoryScopeRow = target?.kind === "scope" ? target : { kind: "scope", scope: into, revision: 0, active: [], history: [] };
+      const current: RoleMemoryScopeRow = target?.kind === "scope" ? scopeRowForRewrite(target, now) : { kind: "scope", scope: into, revision: 0, active: [], history: [] };
       const joined: RoleMemoryRule[] = [];
       const merged: { from: string; into: string }[] = [];
       const candidates = [...rulesOf(current.active), ...rulesOf(source.active)];
@@ -225,6 +230,8 @@ export function joinMovedScopes(now = new Date().toISOString(), scopeKeys: () =>
       const sourceHistory = source.history.map(entry => ({ ...entry, revisionScope: entry.revisionScope ?? source.scope }));
       const currentHistory = current.history.map(entry => ({ ...entry, revisionScope: entry.revisionScope ?? current.scope }));
       tx.put({ ...current, ...(current.fourScopeTarget || source.fourScopeTarget ? { fourScopeTarget: current.fourScopeTarget ?? source.fourScopeTarget } : {}), revision, active: retained.active.map((rule) => rule.id),
+        // The removed scope's released rows stay recorded on the scope that holds its entries.
+        ...(current.historyDropped || source.historyDropped ? { historyDropped: [...(current.historyDropped ?? []), ...(source.historyDropped ?? [])] } : {}),
         revisionScope, history: keepHistory([...sourceHistory, ...currentHistory, { revision, revisionScope, at: now, by: "succession" as const, added: source.active, merged, archived }]) });
       tx.delete(`s:${from}`);
     }

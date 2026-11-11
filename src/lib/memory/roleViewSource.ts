@@ -9,6 +9,7 @@ import type { RoleMemoryRow, RoleMemoryRule, RoleMemoryScopeRow, ScopeHistoryEnt
 import { yieldToRuntime } from "@/lib/cooperative";
 import { scopeChars } from "./roleConsolidate";
 import { performanceSpans } from "@/lib/performanceSpans";
+import { historyEntries, historyEntryKey, historyUndoKey, scopeWithEntries, type StoredHistoryEntry, type StoredHistoryUndo } from "./roleHistoryRows";
 
 // One read-only connection across compiled Viewer bundles; changing state roots
 // closes it. openCurrentDatabase reopens it after a restore at the same path.
@@ -81,6 +82,99 @@ function keys(prefix: string, predicate = "1", bindings: SQLQueryBindings[] = []
     SELECT row_key FROM state_rows WHERE collection = 'role_memory'
     AND row_key > ? AND row_key < ? AND (${predicate}) ORDER BY row_order, row_key
   `).all(prefix, `${prefix}\uffff`, ...bindings).map(row => row.row_key);
+}
+
+type HistoryRows = NonNullable<RoleMemoryScopeRow["historyRows"]>;
+const SCOPE_CHANGED = "memory scope changed while being read";
+/** The key range of a scope's stored history entries. A scope row names
+ * `count` rows below sequence `next`; a reader that finds another number read
+ * across a write and reads again. */
+const historyRange = (rows: HistoryRows): [string, string] => [historyEntryKey(rows.token, 0), historyEntryKey(rows.token, rows.next)];
+const HISTORY_ROWS_SQL = "FROM state_rows WHERE collection='role_memory_history' AND row_key >= ? AND row_key < ? ORDER BY row_key";
+
+/** A stored scope row with the entries of its history rows ahead of the ones
+ * it holds. Undo payloads are read only on request: they are nearly all of a
+ * long-lived scope's bytes and nothing but an undo uses them. */
+export function scopeRowWithHistory(row: RoleMemoryScopeRow, options: { undo?: boolean; droppedAt?: string } = {}): RoleMemoryScopeRow {
+  if (!row.historyRows) return row;
+  const db = reader("__llvCurationVersionReader");
+  const entries = db.query<{ value_json: string }, [string, string]>(`SELECT value_json ${HISTORY_ROWS_SQL}`)
+    .all(...historyRange(row.historyRows)).map(stored => JSON.parse(stored.value_json) as StoredHistoryEntry);
+  if (entries.length !== row.historyRows.count) throw new Error(SCOPE_CHANGED);
+  if (!options.undo) return scopeWithEntries(row, historyEntries(entries));
+  const undo = new Map(db.query<{ value_json: string }, [string, string]>(`SELECT value_json ${HISTORY_ROWS_SQL}`)
+    .all(historyUndoKey(row.historyRows.token, 0), historyUndoKey(row.historyRows.token, row.historyRows.next))
+    .map(stored => { const held = JSON.parse(stored.value_json) as StoredHistoryUndo; return [held.seq, held.prior] as const; }));
+  return scopeWithEntries(row, historyEntries(entries, undo), options.droppedAt);
+}
+
+/** A scope as a writer takes it to rewrite its whole history: every entry
+ * with its undo payload in the row, and the record that releases the rows. */
+export function scopeRowForRewrite(row: RoleMemoryScopeRow, at: string): RoleMemoryScopeRow {
+  return scopeRowWithHistory(row, { undo: true, droppedAt: at });
+}
+
+/** One stored row; a scope comes with its whole history, without undo payloads. */
+export function roleRowWithHistory(key: string): RoleMemoryRow | null {
+  const held = roleMemoryCollection();
+  for (let attempt = 0; held; attempt++) {
+    const row = held.get(key);
+    if (row?.kind !== "scope") return row;
+    try { return scopeRowWithHistory(row); }
+    catch (error) { if (attempt >= 2 || !(error instanceof Error) || error.message !== SCOPE_CHANGED) throw error; }
+  }
+  return null;
+}
+
+/** Every scope among these rows with its whole history, without undo payloads. */
+export function rowsWithScopeHistory(rows: RoleMemoryRow[]): RoleMemoryRow[] {
+  return rows.flatMap(row => {
+    if (row.kind !== "scope" || !row.historyRows) return [row];
+    const whole = roleRowWithHistory(`s:${row.scope}`);
+    return whole ? [whole] : [];
+  });
+}
+
+/** What the history drain asks of the stored rows, by key and size only. */
+export function scopeHistoryTail(rowKey: string): { entries: number; bytes: number } | null {
+  return reader("__llvCurationVersionReader").query<{ entries: number | null; bytes: number }, [string]>(`
+    SELECT json_array_length(value_json, '$.history') AS entries, length(CAST(value_json AS BLOB)) AS bytes
+    FROM state_rows WHERE collection='role_memory' AND row_key=?
+  `).get(rowKey) as { entries: number; bytes: number } | null;
+}
+/** The oldest stored entries of a scope that carry no curator pass. */
+export function oldestOrdinaryHistoryKeys(rows: HistoryRows, limit: number): string[] {
+  return reader("__llvCurationVersionReader").query<{ row_key: string }, [string, string, number]>(`
+    SELECT row_key FROM state_rows WHERE collection='role_memory_history' AND row_key >= ? AND row_key < ?
+      AND json_extract(value_json, '$.entry.pass') IS NULL ORDER BY row_key LIMIT ?
+  `).all(...historyRange(rows), limit).map(row => row.row_key);
+}
+/** Scope rows that record history rows to release. */
+export function scopeKeysWithDroppedHistory(): string[] {
+  return reader("__llvCurationVersionReader").query<{ row_key: string }, []>(`
+    SELECT row_key FROM state_rows WHERE collection='role_memory' AND row_key > 's:' AND row_key < 's;'
+      AND json_array_length(value_json, '$.historyDropped') > 0 ORDER BY row_key
+  `).all().map(row => row.row_key);
+}
+/** Keys of the stored rows under one token. */
+export function historyKeysOfToken(token: string, limit: number): string[] {
+  return reader("__llvCurationVersionReader").query<{ row_key: string }, [string, string, string, string, number]>(`
+    SELECT row_key FROM state_rows WHERE collection='role_memory_history'
+      AND (row_key >= ? AND row_key < ? OR row_key >= ? AND row_key < ?) LIMIT ?
+  `).all(`h:${token}:`, `h:${token};`, `u:${token}:`, `u:${token};`, limit).map(row => row.row_key);
+}
+/** Tokens with stored rows that no scope row names or records as released:
+ * left by a writer that predates history rows. They are kept. */
+export function unclaimedHistoryTokens(): number {
+  const db = reader("__llvCurationVersionReader");
+  const claimed = new Set(db.query<{ token: string }, []>(`
+    SELECT json_extract(value_json, '$.historyRows.token') AS token FROM state_rows
+      WHERE collection='role_memory' AND row_key > 's:' AND row_key < 's;' AND json_type(value_json, '$.historyRows') IS NOT NULL
+    UNION ALL SELECT json_extract(d.value, '$.token') FROM state_rows s, json_each(s.value_json, '$.historyDropped') d
+      WHERE s.collection='role_memory' AND s.row_key > 's:' AND s.row_key < 's;'
+  `).all().map(row => row.token));
+  return db.query<{ token: string }, []>("SELECT DISTINCT substr(row_key, 3, 16) AS token FROM state_rows WHERE collection='role_memory_history'")
+    .all().filter(row => !claimed.has(row.token)).length;
 }
 
 /** Validate a cooperative view after peer writes without decoding scope
@@ -340,7 +434,7 @@ export function* curationScopeInputs(rowKeys: readonly string[], claim: Curation
       const fields = reader("__llvCurationVersionReader").query<{ key: string; type: string; value: string | number | null }, [string]>(
         "SELECT h.key,h.type,CASE WHEN h.key='history' THEN NULL ELSE h.value END AS value " +
         "FROM state_rows s,json_each(s.value_json) h WHERE s.collection='role_memory' AND s.row_key=? " +
-        "AND h.key IN ('kind','scope','revision','revisionScope','active','curatedAt','history')"
+        "AND h.key IN ('kind','scope','revision','revisionScope','active','curatedAt','history','historyRows')"
       ).all(rowKey);
       if (!fields.length) continue;
       const header = new Map(fields.map(field => [field.key, field]));
@@ -351,39 +445,52 @@ export function* curationScopeInputs(rowKeys: readonly string[], claim: Curation
       const rev = header.get("revision")?.value as number;
       const revisionScope = header.get("revisionScope")?.value as string | null | undefined;
       const curatedAt = header.get("curatedAt")?.value as string | null | undefined;
+      const stored = header.get("historyRows")?.type === "object" ? JSON.parse(header.get("historyRows")!.value as string) as HistoryRows : null;
       yield null;
       const curated = new Map<string, number>(), facts: LessonFact[] = [], calls: ScopeCalls = new Map();
-      let callBytes = 0;
+      let callBytes = 0, changed = false;
       const db = curationHistoryReader();
       try {
+        const note = (fields: string | null) => {
+          if (!fields) throw Error("invalid projected memory history");
+          const [revision, revisionScope, at, by, added, merged, rewritten, passId, counts] = JSON.parse(fields);
+          const source = revisionScope ?? scope;
+          if (passId && counts) {
+            const receipts = calls.get(passId) ?? new Map<string, PassCounts>();
+            receipts.set(at, counts); calls.set(passId, receipts);
+            // An upper bound also covers repeated receipts without serializing
+            // the complete retained map at the end of the read.
+            callBytes += Buffer.byteLength(passId + at + JSON.stringify(counts));
+          }
+          if (by === "curator") curated.set(source, Math.max(curated.get(source) ?? 0, revision));
+          if (by === "agent") {
+            if (added === null || merged === null) throw Error("invalid projected memory history");
+            facts.push({ revision, scope: source, at, count: added.length + merged.length + (rewritten?.length ?? 0) });
+          }
+        };
+        // The cooperative caller closes these cursors on cancellation, timeout
+        // and retry. It never holds a write transaction across a yield.
+        if (stored) {
+          // Entries moved out of the scope row come first: they are the older ones.
+          const rows = db.prepare<{ fields: string | null }, [string, string]>(`
+            SELECT json_extract(value_json, '$.entry.revision', '$.entry.revisionScope', '$.entry.at', '$.entry.by', '$.entry.added',
+              '$.entry.merged', '$.entry.rewritten', '$.entry.pass', '$.entry.counts') AS fields ${HISTORY_ROWS_SQL}
+          `);
+          let found = 0;
+          try { for (const item of rows.iterate(...historyRange(stored))) { note(item.fields); found++; yield null; } }
+          finally { rows.finalize(); }
+          if (found !== stored.count) { changed = true; }
+        }
         const history = db.prepare<{ fields: string }, [string]>(`
           SELECT json_extract(h.value, '$.revision', '$.revisionScope', '$.at', '$.by', '$.added', '$.merged', '$.rewritten', '$.pass', '$.counts') AS fields
           FROM state_rows s, json_each(s.value_json, '$.history') h
           WHERE s.collection='role_memory' AND s.row_key=?
         `);
-        // The cooperative caller closes this cursor on cancellation, timeout and
-        // retry. It never holds a write transaction across a yield.
         try {
-          for (const item of history.iterate(rowKey)) {
-            if (!item.fields) throw Error("invalid projected memory history");
-            const [revision, revisionScope, at, by, added, merged, rewritten, passId, counts] = JSON.parse(item.fields);
-            const source = revisionScope ?? scope;
-            if (passId && counts) {
-              const receipts = calls.get(passId) ?? new Map<string, PassCounts>();
-              receipts.set(at, counts); calls.set(passId, receipts);
-              // An upper bound also covers repeated receipts without serializing
-              // the complete retained map at the end of the read.
-              callBytes += Buffer.byteLength(passId + at + JSON.stringify(counts));
-            }
-            if (by === "curator") curated.set(source, Math.max(curated.get(source) ?? 0, revision));
-            if (by === "agent") {
-              if (added === null || merged === null) throw Error("invalid projected memory history");
-              facts.push({ revision, scope: source, at, count: added.length + merged.length + (rewritten?.length ?? 0) });
-            }
-            yield null;
-          }
+          if (!changed) for (const item of history.iterate(rowKey)) { note(item.fields); yield null; }
         } finally { history.finalize(); }
       } finally { db.close(); }
+      if (changed) continue;
       const since = [curatedAt, claim.lastClaimAt].filter((at): at is string => !!at).sort().at(-1) ?? "";
       const row: CurationScopeInput = { scope, revision: rev, ...(revisionScope == null ? {} : { revisionScope }), active,
         newLessons: yield* countLessons(facts, curated, since, claim) };
@@ -460,34 +567,42 @@ function* projectedScopeRowSteps(rowKeys: readonly string[]): Generator<RoleMemo
   if (!rowKeys.length) return;
   const db = reader();
   const base = db.query<{ base_json: string; history_type: string | null }, [string]>(`SELECT json_extract(value_json,
-    '$.kind', '$.scope', '$.revision', '$.revisionScope', '$.active', '$.curatedAt') AS base_json, json_type(value_json, '$.history') AS history_type
+    '$.kind', '$.scope', '$.revision', '$.revisionScope', '$.active', '$.curatedAt', '$.historyRows') AS base_json, json_type(value_json, '$.history') AS history_type
     FROM state_rows WHERE collection='role_memory' AND row_key=?`);
   const history = db.prepare<{ fields_json: string }, [string]>(`SELECT json_extract(h.value,
     '$.revision', '$.revisionScope', '$.at', '$.by', '$.pass', '$.counts',
     '$.revertedAt', '$.added', '$.merged', '$.rewritten', '$.archived') AS fields_json
     FROM state_rows s, json_each(s.value_json, '$.history') h
     WHERE s.collection='role_memory' AND s.row_key=?`);
+  const rows = db.prepare<{ fields_json: string }, [string, string]>(`SELECT json_extract(value_json,
+    '$.entry.revision', '$.entry.revisionScope', '$.entry.at', '$.entry.by', '$.entry.pass', '$.entry.counts',
+    '$.entry.revertedAt', '$.entry.added', '$.entry.merged', '$.entry.rewritten', '$.entry.archived') AS fields_json ${HISTORY_ROWS_SQL}`);
   try {
     for (const rowKey of rowKeys) {
       const header = base.get(rowKey);
       const baseJson = header?.base_json;
       if (!baseJson) continue;
-      const [kind, scope, revision, revisionScope, active, curatedAt] = JSON.parse(baseJson) as [string, string, number, string | null, string[], string | null];
+      const [kind, scope, revision, revisionScope, active, curatedAt, stored] = JSON.parse(baseJson) as [string, string, number, string | null, string[], string | null, HistoryRows | null];
       if (kind !== "scope") throw new Error("invalid projected memory scope");
       if (!Array.isArray(active) || header!.history_type !== "array") throw new Error("invalid projected memory scope");
       const changes: ScopeHistoryEntry[] = [];
-      for (const item of history.iterate(rowKey)) {
-        const [changeRevision, changeScope, at, by, pass, counts, revertedAt, added, merged, rewritten, archived] = JSON.parse(item.fields_json) as unknown[];
+      const change = (fields: string) => {
+        const [changeRevision, changeScope, at, by, pass, counts, revertedAt, added, merged, rewritten, archived] = JSON.parse(fields) as unknown[];
         changes.push({ revision: changeRevision as number, ...(changeScope === null ? {} : { revisionScope: changeScope as string }), at: at as string,
           by: by as ScopeHistoryEntry["by"], ...(pass === null ? {} : { pass: pass as string }), ...(counts === null ? {} : { counts: counts as ScopeHistoryEntry["counts"] }),
           ...(revertedAt === null ? {} : { revertedAt: revertedAt as string }), added: added as string[], merged: merged as ScopeHistoryEntry["merged"],
           ...(rewritten === null ? {} : { rewritten: rewritten as ScopeHistoryEntry["rewritten"] }), archived: archived as string[] });
-        yield null;
+      };
+      // Entries moved out of the scope row come first: they are the older ones.
+      if (stored) {
+        for (const item of rows.iterate(...historyRange(stored))) { change(item.fields_json); yield null; }
+        if (changes.length !== stored.count) throw new Error(SCOPE_CHANGED);
       }
+      for (const item of history.iterate(rowKey)) { change(item.fields_json); yield null; }
       if (kind === "scope" && Array.isArray(active)) yield { kind, scope, revision, ...(revisionScope === null ? {} : { revisionScope }), active,
         history: changes, ...(curatedAt === null ? {} : { curatedAt }) };
     }
-  } finally { history.finalize(); }
+  } finally { history.finalize(); rows.finalize(); }
 
 }
 
@@ -597,50 +712,63 @@ function scopeHistoryDigest(scope: string, slot: ReaderSlot = "__llvRoleViewRead
     return held.digest;
   }
   if (held) { cache.rows.delete(rowKey); cache.bytes -= held.bytes; }
-  const digest: ScopeHistoryDigest = { revision: 0, curatedAt: null, stored: false, kind: null, active: [], passAt: new Map(), curatorAt: new Map(), unnamed: null };
-  if (version === undefined) return digest;
-  // Each stored value is selected by an uncorrelated subquery, which SQLite
-  // evaluates once per statement. A column of the scope row named beside
-  // json_each is loaded again for every history entry, and a row larger than
-  // the page cache then costs entries times its size in file reads.
-  const entries = db.query<{ header: string | null; entry: number | null; pass: unknown; by: unknown; at: unknown }, [string, string]>(`
-    SELECT CASE WHEN h.key IS NULL OR h.key=0 THEN (SELECT json_extract(value_json, '$.revision', '$.curatedAt', '$.kind', '$.active')
-        FROM state_rows WHERE collection='role_memory' AND row_key=?) END AS header, h.key AS entry,
-      json_extract(h.value, '$.pass') AS pass, json_extract(h.value, '$.by') AS by, json_extract(h.value, '$.at') AS at
-    FROM (SELECT 1) LEFT JOIN json_each((SELECT value_json FROM state_rows WHERE collection='role_memory' AND row_key=?), '$.history') h
-  `).all(rowKey, rowKey);
-  let bytes = rowKey.length * 2 + 128;
-  for (const entry of entries) {
-    if (entry.header !== null) {
-      const [revision, curatedAt, kind, active] = JSON.parse(entry.header) as [number | null, string | null, unknown, unknown];
-      digest.stored = true; digest.revision = revision ?? 0; digest.curatedAt = curatedAt; digest.kind = kind;
-      if (Array.isArray(active)) { digest.active = active; bytes += JSON.stringify(active).length * 2; }
+  for (let attempt = 0, read = version; ; attempt++, read = stored()) {
+    const digest: ScopeHistoryDigest = { revision: 0, curatedAt: null, stored: false, kind: null, active: [], passAt: new Map(), curatorAt: new Map(), unnamed: null };
+    if (read === undefined) return digest;
+    let bytes = rowKey.length * 2 + 128, rows: HistoryRows | null = null;
+    const note = (entry: { pass: unknown; by: unknown; at: unknown }) => {
+      const pass = typeof entry.pass === "string" ? entry.pass : null;
+      if (pass !== null) {
+        const at = Date.parse(entry.at as string);
+        if (!digest.passAt.has(pass)) bytes += pass.length * 2 + 32;
+        digest.passAt.set(pass, digest.passAt.has(pass) ? Math.max(digest.passAt.get(pass)!, at) : at);
+      }
+      if (entry.by !== "curator" || typeof entry.at !== "string") return;
+      if (pass === null) { if (digest.unnamed === null || entry.at > digest.unnamed) digest.unnamed = entry.at; }
+      else {
+        const last = digest.curatorAt.get(pass);
+        if (last === undefined) bytes += pass.length * 2 + 64;
+        if (last === undefined || entry.at > last) digest.curatorAt.set(pass, entry.at);
+      }
+    };
+    // Each stored value is selected by an uncorrelated subquery, which SQLite
+    // evaluates once per statement. A column of the scope row named beside
+    // json_each is loaded again for every history entry, and a row larger than
+    // the page cache then costs entries times its size in file reads.
+    const entries = db.query<{ header: string | null; entry: number | null; pass: unknown; by: unknown; at: unknown }, [string, string]>(`
+      SELECT CASE WHEN h.key IS NULL OR h.key=0 THEN (SELECT json_extract(value_json, '$.revision', '$.curatedAt', '$.kind', '$.active', '$.historyRows')
+          FROM state_rows WHERE collection='role_memory' AND row_key=?) END AS header, h.key AS entry,
+        json_extract(h.value, '$.pass') AS pass, json_extract(h.value, '$.by') AS by, json_extract(h.value, '$.at') AS at
+      FROM (SELECT 1) LEFT JOIN json_each((SELECT value_json FROM state_rows WHERE collection='role_memory' AND row_key=?), '$.history') h
+    `).all(rowKey, rowKey);
+    for (const entry of entries) {
+      if (entry.header !== null) {
+        const [revision, curatedAt, kind, active, historyRows] = JSON.parse(entry.header) as [number | null, string | null, unknown, unknown, HistoryRows | null];
+        digest.stored = true; digest.revision = revision ?? 0; digest.curatedAt = curatedAt; digest.kind = kind; rows = historyRows;
+        if (Array.isArray(active)) { digest.active = active; bytes += JSON.stringify(active).length * 2; }
+      }
+      if (entry.entry !== null) note(entry);
     }
-    if (entry.entry === null) continue;
-    const pass = typeof entry.pass === "string" ? entry.pass : null;
-    if (pass !== null) {
-      const at = Date.parse(entry.at as string);
-      if (!digest.passAt.has(pass)) bytes += pass.length * 2 + 32;
-      digest.passAt.set(pass, digest.passAt.has(pass) ? Math.max(digest.passAt.get(pass)!, at) : at);
+    // The entries moved out of the scope row: one small row each, read
+    // without the undo payloads stored beside them.
+    const moved = !rows ? [] : db.query<{ fields: string }, [string, string]>(
+      `SELECT json_extract(value_json, '$.entry.pass', '$.entry.by', '$.entry.at') AS fields ${HISTORY_ROWS_SQL}`).all(...historyRange(rows));
+    for (const row of moved) { const [pass, by, at] = JSON.parse(row.fields) as unknown[]; note({ pass, by, at }); }
+    // Keep the digest only when the row and the file stayed the same across
+    // the read; the scope row and its history rows are separate statements,
+    // so an answer read across a write is read again.
+    const sameFile = databaseFileIdentity(file) === identity;
+    const settled = stored() === read && moved.length === (rows?.count ?? 0);
+    if (!settled && sameFile) { if (attempt >= 2) throw new Error(SCOPE_CHANGED); continue; }
+    if (settled && sameFile && digest.stored && bytes <= 1024 * 1024) {
+      cache.rows.set(rowKey, { revision: read, digest, bytes }); cache.bytes += bytes;
+      while (cache.rows.size > 256 || cache.bytes > 8 * 1024 * 1024) {
+        const oldest = cache.rows.keys().next().value!;
+        cache.bytes -= cache.rows.get(oldest)!.bytes; cache.rows.delete(oldest);
+      }
     }
-    if (entry.by !== "curator" || typeof entry.at !== "string") continue;
-    if (pass === null) { if (digest.unnamed === null || entry.at > digest.unnamed) digest.unnamed = entry.at; }
-    else {
-      const last = digest.curatorAt.get(pass);
-      if (last === undefined) bytes += pass.length * 2 + 64;
-      if (last === undefined || entry.at > last) digest.curatorAt.set(pass, entry.at);
-    }
+    return digest;
   }
-  // Keep the digest only when the row and the file stayed the same across the
-  // read; a peer write in between leaves the next call to read again.
-  if (digest.stored && bytes <= 1024 * 1024 && stored() === version && databaseFileIdentity(file) === identity) {
-    cache.rows.set(rowKey, { revision: version, digest, bytes }); cache.bytes += bytes;
-    while (cache.rows.size > 256 || cache.bytes > 8 * 1024 * 1024) {
-      const oldest = cache.rows.keys().next().value!;
-      cache.bytes -= cache.rows.get(oldest)!.bytes; cache.rows.delete(oldest);
-    }
-  }
-  return digest;
 }
 
 export function roleScopeReadMetadata(scope: string, pass: string): ScopeReadMetadata {
@@ -677,7 +805,7 @@ export function projectViewRows(project: string): RoleMemoryRow[] {
   const selected = new Map<string, RoleMemoryRow>();
   const take = (key: string) => {
     if (selected.has(key)) return;
-    const row = held.get(key);
+    const row = key.startsWith("s:") ? roleRowWithHistory(key) : held.get(key);
     if (row) selected.set(key, row);
   };
   for (const scope of scopes) take(`s:${scope}`);
@@ -720,7 +848,7 @@ export async function projectViewRowsCooperatively(project: string): Promise<Rol
   let sliceStarted = performance.now(), sliceRows = 0;
   const take = (key: string) => {
     if (selected.has(key)) return;
-    const row = held.get(key); if (row) selected.set(key, row);
+    const row = key.startsWith("s:") ? roleRowWithHistory(key) : held.get(key); if (row) selected.set(key, row);
   };
   for (const row of projected) for (const id of row.active) {
     take(`r:${id}`); sliceRows++;

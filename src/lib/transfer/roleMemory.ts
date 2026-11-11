@@ -121,7 +121,11 @@ export function planRoleMemory(
     const scope = row.value as RoleMemoryScopeRow;
     const held = current(row.key);
     if (!held) {
-      writes.set(row.key, structuredClone(scope));
+      // A bundle carries whole histories; a reference to rows of the install
+      // that wrote it names nothing here.
+      const arriving = structuredClone(scope);
+      delete arriving.historyRows;
+      writes.set(row.key, arriving);
       outcomes.push({ key: row.key, outcome: "new" });
       continue;
     }

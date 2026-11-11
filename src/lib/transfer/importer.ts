@@ -7,6 +7,7 @@ import { memoryProfileCollection } from "@/lib/memory/profileStore";
 import { curationCollection } from "@/lib/memory/curation/store";
 import { refreshLessonKnownValues, roleMemoryCollection } from "@/lib/memory/roleStore";
 import type { RoleMemoryRow } from "@/lib/memory/roleTypes";
+import { historyRowsByToken, ROLE_HISTORY_COLLECTION, scopeFromCollectedRows } from "@/lib/memory/roleHistoryRows";
 import { projectIdentityFromDirectory, projectIdentityFromRepositoryRoot, repositoryRootForPath } from "@/lib/projects/identity";
 import { fsyncPath } from "@/lib/state/durableJson";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
@@ -392,6 +393,21 @@ function rowsRevision(collection: string): string {
   return collectionRevision(readTargetRows(collection));
 }
 
+/** This install's role memory rows as a bundle holds them: every scope with
+    its whole history in its row. The plan compares and merges in that format. */
+function wholeRoleRows(rows: ReadonlyMap<string, string>): Map<string, string> {
+  const whole = new Map(rows);
+  let tokens: ReturnType<typeof historyRowsByToken> | undefined;
+  for (const [key, json] of rows) {
+    if (!key.startsWith("s:") || !json.includes('"historyRows"')) continue;
+    const row = JSON.parse(json) as RoleMemoryRow;
+    if (row.kind !== "scope" || !row.historyRows) continue;
+    tokens ??= historyRowsByToken([...(readTargetRows(ROLE_HISTORY_COLLECTION)?.rows.values() ?? [])].map(stored => JSON.parse(stored) as unknown));
+    whole.set(key, JSON.stringify(scopeFromCollectedRows(row, tokens)));
+  }
+  return whole;
+}
+
 const ROLE_SEED_INITIALIZERS: Record<string, () => void> = {
   role_memory: () => { roleMemoryCollection(true); },
   role_memory_curation: () => { curationCollection(true); },
@@ -567,7 +583,7 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
 
   /* With no role record left to plan (all imported before), the figures are this install's own rows. */
   if (!byPart.has("rows:role_memory")) {
-    writes.roleRowsAfter = [...(readTargetRows("role_memory")?.rows ?? new Map<string, string>())]
+    writes.roleRowsAfter = [...wholeRoleRows(readTargetRows("role_memory")?.rows ?? new Map<string, string>())]
       .filter(([key]) => key.startsWith("r:") || key.startsWith("s:")).map(([, json]) => JSON.parse(json) as RoleMemoryRow);
   }
 
@@ -646,7 +662,7 @@ function planRows(
   }
   const target = readTargetRows(part.collection);
   revisions[`rows:${part.collection}`] = collectionRevision(target);
-  const held = target?.rows ?? new Map<string, string>();
+  const held = part.merge === "role-memory" ? wholeRoleRows(target?.rows ?? new Map<string, string>()) : target?.rows ?? new Map<string, string>();
   const out = writes.rows.get(part.collection) ?? { part, records: [] };
   writes.rows.set(part.collection, out);
   const valid = rows.filter(row => {
