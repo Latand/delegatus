@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { statePath } from "@/lib/configDir";
 import { backupWorktree } from "./worktreeBackup";
 
@@ -28,30 +28,62 @@ function checkout(captures: number) {
   return { directory, head: git("rev-parse", "HEAD") };
 }
 
-async function backup(captures: number, pipelineId: string, guard: () => boolean) {
+const options = (pipelineId: string, captures: number, guard: () => boolean) => {
   const { directory, head } = checkout(captures);
-  const result = await backupWorktree({ directory, pipelineId, head, branch: "main", ignored: ["results/"], disposable: () => false, guard });
-  result.close();
-  return result;
-}
+  return { directory, pipelineId, head, branch: "main", ignored: ["results/"], disposable: () => false, guard };
+};
 
 test("the number of guard reads does not grow with the number of evidence files", async () => {
   let few = 0, many = 0;
-  await backup(3, "guard-few", () => { few++; return true; });
-  await backup(60, "guard-many", () => { many++; return true; });
+  // An unbounded reuse keeps a slow disk from adding a guard read.
+  (await backupWorktree({ ...options("guard-few", 3, () => { few++; return true; }), guardReuseMs: Number.POSITIVE_INFINITY })).close();
+  (await backupWorktree({ ...options("guard-many", 60, () => { many++; return true; }), guardReuseMs: Number.POSITIVE_INFINITY })).close();
   expect(fs.readdirSync(statePath("evidence", "guard-many", "worktree", "results"))).toHaveLength(60);
   expect(fs.readFileSync(statePath("evidence", "guard-many", "worktree", "results", "capture-59.png"), "utf8")).toBe("capture 59");
   expect(many).toBe(few);
 });
 
-test("ownership lost while evidence is copied still refuses the backup", async () => {
+test("ownership lost while evidence is copied refuses the backup at its verification", async () => {
   const saved = statePath("evidence", "guard-lost", "worktree", "results", "capture-0.png");
-  await expect(backup(8, "guard-lost", () => !fs.existsSync(saved))).rejects.toThrow();
+  await expect(backupWorktree(options("guard-lost", 8, () => !fs.existsSync(saved)))).rejects.toThrow("worktree changed after backup");
+});
+
+test("ownership lost at a Git step refuses the backup there", async () => {
+  let reads = 0;
+  await expect(backupWorktree(options("guard-git", 2, () => ++reads < 2))).rejects.toThrow(/^backup ownership changed$/);
 });
 
 test("with no reuse every evidence read asks the guard", async () => {
-  const { directory, head } = checkout(4);
   const saved = statePath("evidence", "guard-each", "worktree", "results", "capture-0.png");
-  await expect(backupWorktree({ directory, pipelineId: "guard-each", head, branch: "main", ignored: ["results/"],
-    disposable: () => false, guard: () => !fs.existsSync(saved), guardReuseMs: 0 })).rejects.toThrow("while reading evidence");
+  await expect(backupWorktree({ ...options("guard-each", 4, () => !fs.existsSync(saved)), guardReuseMs: 0 }))
+    .rejects.toThrow("backup ownership changed while reading evidence");
+});
+
+test("the returned verification asks the guard itself, however recently it held", async () => {
+  let held = true, reads = 0;
+  const backup = await backupWorktree(options("verify-first", 5, () => { reads++; return held; }));
+  try {
+    held = false;
+    const before = reads;
+    expect(await backup.verify()).toBeFalse();
+    expect(reads - before).toBe(1);
+  } finally { backup.close(); }
+});
+
+test("ownership lost while the verification reads evidence stops the verification", async () => {
+  let held = true, armed = false, streams = 0;
+  const read = fs.createReadStream;
+  const stream = spyOn(fs, "createReadStream").mockImplementation(((file: fs.PathLike, settings?: unknown) => {
+    if (armed && ++streams === 3) held = false;
+    return (read as (file: fs.PathLike, settings?: unknown) => fs.ReadStream)(file, settings);
+  }) as typeof fs.createReadStream);
+  try {
+    const backup = await backupWorktree(options("verify-middle", 5, () => held));
+    try {
+      armed = true;
+      // The reads reuse the guard that held; the Git step after them asks it.
+      await expect(backup.verify()).rejects.toThrow(/^backup ownership changed$/);
+      expect(streams).toBeGreaterThanOrEqual(3);
+    } finally { backup.close(); }
+  } finally { stream.mockRestore(); }
 });
