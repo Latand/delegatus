@@ -20,7 +20,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "memory.import.status" | "memory.import.advance" | "memory.import.sync" | "memory.import.curation" | "memory.import" | "memory.import.backup" | "memory.import.candidates" | "memory.import.retention"
   | "tasks.seat-recovery-cleanup" | "tasks.system-run" | "telegram.report-task-settle" | "memory.curation-cleanup"
   | "delivery.inbox-batch" | "composer.upload"
-  | "http.render" | "links.task-export" | "role-memory.view"
+  | "http.render" | "http.stream" | "links.task-export" | "role-memory.view"
   | "registry.delivery-key" | "orchestrator.relay-recovery" | "orchestrator.authority" | "memory.delivery-evidence"
   | "registry.read" | "registry.write" | "registry.prepare" | "runtime.startup" | "runtime.startup-bind" | "runtime.spawn-recovery" | "agent.deferred-spawn" | "state.rollback-checkpoint"
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"

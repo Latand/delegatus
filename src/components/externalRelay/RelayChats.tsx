@@ -152,6 +152,7 @@ function answerDot(answer: Pick<RelayAnswerRow, "state" | "outcome">): MobileRow
   if (answer.state === "running" || !answer.outcome) return "accent";
   if (answer.outcome === "answered") return "success";
   if (answer.outcome === "declined:handoff") return "neutral";
+  if (answer.outcome === "failure_notice") return "warning";
   return answer.outcome.startsWith("declined") ? "warning" : "danger";
 }
 const answerOutcome = (t: TFunction, answer: Pick<RelayAnswerRow, "state" | "outcome">) =>

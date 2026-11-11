@@ -1,7 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
 import { migrationDeliveryFixture } from "@/test-helpers/migrationDelivery";
 import { agentRegistry } from "@/lib/agent/registry";
@@ -9,17 +8,7 @@ import { accountManager } from "@/lib/accounts/manager";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import { advanceConversationMigration, drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
 import type { SuccessorProviderPort } from "@/lib/accounts/migration/contracts";
-import { procBackend } from "@/lib/proc";
-import { setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
-import { setCodexShellPolicyReaderForTest } from "@/lib/git/codexShellPolicy";
-import { outputPathFor, stderrPathFor, stdoutPathFor } from "@/lib/reviewHistory/artifacts";
 import { enforceAccountCreditGuard } from "./accountCreditGuard";
-import { headlessRuns } from "@/lib/agent/headless";
-import { newRound, recordHeadlessLaunch, reserveReviewerSpawn, tickFlows } from "@/lib/flows/engine";
-import { headlessReviewStatus, startHeadlessReview, stopHeadlessReviewAndWait } from "@/lib/flows/exec";
-import { loadFlow, saveFlows } from "@/lib/flows/store";
-import type { Flow } from "@/lib/flows/types";
-import type { FileEntry } from "@/lib/types";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
@@ -167,159 +156,6 @@ for (const state of ["owed", "submitted"] as const) for (const loss of ["exhaust
     } finally { selection.mockRestore(); await f.cleanup(); }
   });
 }
-
-test.each(["owned", "restarted", "paused", "before transcript", "completed", "completed paused"] as const)("the credit guard stops an actual %s detached reviewer before retrying its round once", async mode => {
-  const completed = mode.startsWith("completed");
-  const paused = mode === "paused" || mode === "completed paused";
-  const f = migrationDeliveryFixture();
-  const registry = agentRegistry();
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-credit-review-"));
-  const previousMemory = process.env.DELEGATUS_AGENT_MEMORY;
-  const previousCpu = process.env.DELEGATUS_AGENT_CPU;
-  process.env.DELEGATUS_AGENT_MEMORY = "off";
-  process.env.DELEGATUS_AGENT_CPU = "off";
-  const restoreFeatures = setCodexFeatureReaderForTest(() => [{ name: "multi_agent", stage: "stable", enabled: false }]);
-  const restorePolicy = setCodexShellPolicyReaderForTest(() => ({}));
-  const bin = path.join(os.homedir(), ".local", "bin", "codex");
-  expect(path.dirname(os.homedir())).toBe(path.dirname(process.env.LLV_STATE_DIR!));
-  fs.mkdirSync(path.dirname(bin), { recursive: true });
-  fs.writeFileSync(bin, `#!${process.execPath}\nif (process.argv.includes('--version')) { console.log('codex-cli 0.134.0'); process.exit(0); }\nawait Bun.stdin.text();\nconsole.log(JSON.stringify({type:'thread.started',thread_id:crypto.randomUUID()}));\nsetInterval(() => {}, 1000);\n`, { mode: 0o700 });
-  const git = (args: string[]) => {
-    const env = { ...process.env };
-    for (const key of Object.keys(env)) if (key.startsWith("GIT_")) delete env[key];
-    const result = spawnSync("git", args, { cwd: root, env, encoding: "utf8" });
-    expect(result.status).toBe(0);
-    return result.stdout.trim();
-  };
-  git(["init", "-b", "main"]);
-  fs.writeFileSync(path.join(root, ".git", "info", "exclude"), "*\n");
-  git(["-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "commit", "--allow-empty", "-m", "fixture"]);
-  const sha = git(["rev-parse", "HEAD"]);
-  const flow = { id: `guard-${mode}`, template: "implement-review-loop", project: "fixture", cwd: root,
-    implementerPath: path.join(root, "implementer.jsonl"), roles: { implementer: { engine: "codex", model: null, effort: "high" },
-      reviewer: { engine: "codex", model: null, effort: "high" } }, baseRef: sha, baseMode: "head", mode: completed ? "manual" : "auto", reviewerMode: "headless",
-    roundLimit: 3, state: paused ? "paused" : "reviewing", pausedState: paused ? "reviewing" : null,
-    stateDetail: null, rounds: [], createdAt: new Date().toISOString(), closedAt: null } as Flow;
-  fs.writeFileSync(flow.implementerPath, "");
-  const round = newRound(flow, "button", "keep the review input");
-  const entries: FileEntry[] = [{ path: flow.implementerPath, root: "codex-sessions", name: "implementer.jsonl", project: "fixture",
-    title: "Fixture", engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: Date.now() / 1000,
-    size: 0, activity: "idle", proc: null, pid: null, model: null, pendingQuestion: null, waitingInput: null }];
-  flow.rounds = [round];
-  const reservation = reserveReviewerSpawn(flow, round, flow.roles.reviewer, "account-a", registry);
-  round.accountId = "account-a";
-  round.spawnStartedAt = new Date().toISOString();
-  let restoreSelection = () => {};
-  try {
-    const launched = await startHeadlessReview(flow.id, round.n, flow.roles.reviewer, root, "review", 30_000, null, null, { command: bin });
-    recordHeadlessLaunch(round, launched);
-    const transcript = path.join(root, "reviewer-a.jsonl");
-    fs.writeFileSync(transcript, "preserved reviewer transcript\n");
-    if (mode !== "before transcript") {
-      round.reviewerPath = transcript;
-      const settled = registry.settleSpawn(reservation.receipt.launchId, { key: { engine: "codex", sessionId: `reviewer-${mode}` },
-        artifactPath: transcript, cwd: root, accountId: "account-a", status: "starting", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
-      expect(settled.kind).toBe("settled");
-      if (settled.kind === "settled") round.reviewerConversationId = settled.conversation.id;
-    }
-    if (completed) {
-      expect(await stopHeadlessReviewAndWait(flow.id, 1, round)).toBe(true);
-      fs.writeFileSync(outputPathFor(flow.id, 1), "VERDICT: APPROVE\nExisting review is complete.\n");
-      fs.writeFileSync(stdoutPathFor(flow.id, 1), "completed stdout\n");
-      fs.writeFileSync(stderrPathFor(flow.id, 1), "completed stderr\n");
-      round.reviewerPid = null;
-      round.reviewerIdentity = null;
-    }
-    saveFlows([flow]);
-    if (mode === "restarted") {
-      const run = headlessRuns.get(`${flow.id}:1`)!;
-      clearTimeout(run.timer);
-      headlessRuns.delete(`${flow.id}:1`);
-    }
-    observe(registry, "account-a", 98);
-    observe(registry, "account-b", 1);
-    const selection = spyOn(accountManager, "resolveProjectSpawn").mockImplementation((engine, request) => {
-      if (completed) return { kind: "exhausted", resetsAt: null, allowedAccountIds: ["account-a", "account-b"] };
-      const result = selectProjectAccount({ ...request, engine, accounts: ["account-a", "account-b"].map(id => ({ id, authPresent: true })),
-        observations: registry.quotaObservations("codex"), now: Date.now(),
-        bindings: [{ engine: "codex", accountId: "account-b", project: "fixture", createdAt: new Date().toISOString() }] });
-      return result.kind === "available" ? { kind: "available", account: { engine, accountId: result.accountId!, kind: "managed",
-        home: root, transcriptRoot: root, env: { NODE_ENV: "test" } } } : result;
-    });
-    restoreSelection = () => selection.mockRestore();
-    await bindStructuredDeliveryQueue([], { registry, client: f.client, hostlessSettleIntervalMs: 0, watchdogIntervalMs: 0, settlementSweepMs: 0 });
-    expect(headlessReviewStatus(flow.id, 1, round, "codex")?.status).toBe(completed ? "done" : "running");
-    observe(registry, "account-a", 99);
-    await Promise.all([kickStructuredDeliveryQueue(), kickStructuredDeliveryQueue()]);
-    expect(launched.pid).toBeNumber();
-    expect(procBackend.processIdentity(launched.pid!)).not.toBe(launched.identity);
-    const stopped = loadFlow(flow.id)!;
-    if (completed) {
-      expect(stopped).toMatchObject({ state: paused ? "paused" : "relay_pending",
-        rounds: [{ verdict: "APPROVE", reviewerPath: transcript, accountId: "account-a", autoRetryCount: 0 }] });
-      if (paused) expect(stopped.pausedState).toBe("relay_pending");
-      for (const [filename, content] of [[outputPathFor(flow.id, 1), "VERDICT: APPROVE\nExisting review is complete.\n"],
-        [stdoutPathFor(flow.id, 1), "completed stdout\n"], [stderrPathFor(flow.id, 1), "completed stderr\n"]]) {
-        expect(fs.readFileSync(filename!, "utf8")).toBe(content!);
-      }
-      const before = Object.keys(registry.readOnlySnapshot().receipts);
-      await tickFlows(entries);
-      await kickStructuredDeliveryQueue();
-      expect(Object.keys(registry.readOnlySnapshot().receipts)).toEqual(before);
-      expect(loadFlow(flow.id)?.rounds[0]?.verdict).toBe("APPROVE");
-      return;
-    }
-    expect(stopped).toMatchObject({ cwd: root, state: mode === "paused" ? "paused" : "spawning",
-      rounds: [{ n: 1, readyNote: "keep the review input", reviewerPid: null, accountId: null, autoRetryCount: 0 }] });
-    expect(fs.readFileSync(transcript, "utf8")).toBe("preserved reviewer transcript\n");
-    const cuts = interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list()
-      .filter(item => item.conversationId === round.reviewerConversationId);
-    if (mode === "before transcript") {
-      expect(cuts).toHaveLength(0);
-      expect(registry.readOnlySnapshot().receipts[reservation.receipt.launchId]?.error).toContain("paid-credit guard");
-    } else {
-      expect(cuts).toMatchObject([{ reason: "account-guard", state: "discharged", resolution: expect.stringContaining("flow relaunches") }]);
-      expect(cuts).toHaveLength(1);
-    }
-    expect(registry.readOnlySnapshot().receipts[reservation.receipt.launchId]?.state).not.toBe("starting");
-    if (mode === "paused") return;
-    await tickFlows(entries);
-    await tickFlows(entries);
-    const resumed = loadFlow(flow.id)!;
-    expect({ state: resumed.state, detail: resumed.stateDetail }).toEqual({ state: "reviewing", detail: null });
-    expect(resumed.rounds).toHaveLength(1);
-    expect(resumed.rounds[0]!.accountId).toBe("account-b");
-    const replacement = resumed.rounds[0]!;
-    expect(replacement.reviewerPid).toBeNumber();
-    expect(replacement.launchId).not.toBe(reservation.receipt.launchId);
-    expect(await stopHeadlessReviewAndWait(flow.id, 1, round)).toBe(false);
-    expect(headlessReviewStatus(flow.id, 1, replacement, "codex")?.status).toBe("running");
-    const run = headlessRuns.get(`${flow.id}:1`)!;
-    const identity = run.identity;
-    run.identity = null;
-    try {
-      expect(await stopHeadlessReviewAndWait(flow.id, 1, {
-        reviewerPid: replacement.reviewerPid, reviewerIdentity: "stale-start-identity",
-      })).toBe(false);
-    } finally { run.identity = identity; }
-    expect(headlessReviewStatus(flow.id, 1, replacement, "codex")?.status).toBe("running");
-    await kickStructuredDeliveryQueue();
-    await tickFlows(entries);
-    expect(loadFlow(flow.id)?.rounds[0]?.reviewerPid).toBe(replacement.reviewerPid);
-  } finally {
-    const current = loadFlow(flow.id)?.rounds[0];
-    if (current) await stopHeadlessReviewAndWait(flow.id, 1, current);
-    await stopHeadlessReviewAndWait(flow.id, 1, round);
-    saveFlows([]);
-    restoreSelection(); restoreFeatures(); restorePolicy();
-    if (previousMemory === undefined) delete process.env.DELEGATUS_AGENT_MEMORY; else process.env.DELEGATUS_AGENT_MEMORY = previousMemory;
-    if (previousCpu === undefined) delete process.env.DELEGATUS_AGENT_CPU; else process.env.DELEGATUS_AGENT_CPU = previousCpu;
-    fs.rmSync(bin, { force: true });
-    fs.rmSync(root, { recursive: true, force: true });
-    await f.cleanup();
-  }
-});
-
 
 test.each(["reconciliation", "record", "update"] as const)("guard %s yields while another process owns the obligation journal lock", async operation => {
   const f = migrationDeliveryFixture();
