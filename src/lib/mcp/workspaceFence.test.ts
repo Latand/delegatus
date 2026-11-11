@@ -282,7 +282,7 @@ test("an external caller without a capability keeps project reads while broken c
   }
 });
 
-for (const delivery of ["empty", "reused", "answer", "dialog-key", "permission"] as const) {
+for (const delivery of ["empty", "reused", "answer", "permission"] as const) {
   test(`a member's ${delivery} input fences an owner conversation before dispatch and after restart`, async () => {
     snapshot.conversations.conversation_member = conversation("conversation_member", own, false) as never;
     store.recordMessageAuthor({ clientMessageId: "reused-id", conversationId: "conversation_elsewhere", memberId: owner.id, at: AT, textDigest: null });
@@ -295,7 +295,7 @@ for (const delivery of ["empty", "reused", "answer", "dialog-key", "permission"]
       completedFileScan: async () => ({ snapshot: { files: [] } }) as never,
       recordOperatorRequest: () => null,
       collectImagePayloads: () => ({ images: [], error: null }),
-      conversationActions: ["answer", "dialog-key", "permission"],
+      conversationActions: ["answer", "permission"],
       applyConversationAction: async () => { await assertFenced(); return { status: 200, body: { ok: true } } as never; },
       enqueueStructuredMessage: async () => { await assertFenced(); return { ok: true, structured: true, outcome: "queued", target: null, operationId: "member-delivery" } as never; },
       deliverConversationMessage: async () => { await assertFenced(); return { ok: true, outcome: "held", target: null }; },
@@ -304,7 +304,7 @@ for (const delivery of ["empty", "reused", "answer", "dialog-key", "permission"]
       expect((await call("get_task", { taskId: "task_1" })).ok).toBe(true);
       const body = { conversationId: "conversation_member", text: "workspace request",
         ...(delivery === "reused" ? { clientMessageId: "reused-id" } : {}),
-        ...(["answer", "dialog-key", "permission"].includes(delivery) ? { action: delivery, key: "Enter", answer: {} } : {}) };
+        ...(["answer", "permission"].includes(delivery) ? { action: delivery, answer: {} } : {}) };
       const response = await conversationHostPOST(new NextRequest("http://localhost/api/conversation-host", {
         method: "POST", headers: { host: "localhost", "content-type": "application/json" }, body: JSON.stringify(body),
       }), { actor: { kind: "member", memberId: member.id } });
@@ -324,12 +324,12 @@ for (const delivery of ["empty", "reused", "answer", "dialog-key", "permission"]
 }
 
 
-for (const action of ["message", "answer", "dialog-key", "permission"]) test(`a failed authority write refuses a member delivery before the host is called: ${action}`, async () => {
+for (const action of ["message", "answer", "permission"]) test(`a failed authority write refuses a member delivery before the host is called: ${action}`, async () => {
   let effects = 0;
   setConversationHostDependenciesForTests({
     completedFileScan: async () => ({ snapshot: { files: [] } }) as never,
     recordOperatorRequest: () => null,
-    conversationActions: ["answer", "dialog-key", "permission"],
+    conversationActions: ["answer", "permission"],
     applyConversationAction: async () => { effects++; return { status: 200, body: { ok: true } } as never; },
     collectImagePayloads: () => ({ images: [], error: null }),
     enqueueStructuredMessage: async () => { effects++; return null; },

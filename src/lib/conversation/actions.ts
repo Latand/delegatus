@@ -1,13 +1,6 @@
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
 import { BRANCH_SHARED_HOST_CODE, BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
-import {
-  answerDialogKey,
-  compactConversation,
-  interruptConversation,
-  killConversation,
-  resumeConversation,
-  type DeliveryOutcome,
-} from "@/lib/delivery";
+import { resumeConversation, type DeliveryOutcome } from "@/lib/delivery";
 import { DEPUTY_CONVERSATION_CLOSED, deputyDeliveryRefusal } from "@/lib/orchestrator/deputies";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { dispatchStructuredControl } from "@/lib/runtime/structuredControls";
@@ -19,10 +12,8 @@ import { nativeAnswerResolution, type NativeAnswerInput } from "./nativeAnswer";
 
 /* `permission` answers a structured host's pending tool permission request
    (#2215), and `answer` its pending native question or plan, named by the
-   request id the board shows (docs/design/attention-auto-resolve.md).
-   `dialog-key` stays the terminal-dialog control: a structured host has no
-   terminal to press a key in, so it keeps refusing it. */
-export const CONVERSATION_ACTIONS = ["interrupt", "kill", "resume", "compact", "dialog-key", "permission", "answer", "speed"] as const;
+   request id the board shows (docs/design/attention-auto-resolve.md). */
+export const CONVERSATION_ACTIONS = ["interrupt", "kill", "resume", "compact", "permission", "answer", "speed"] as const;
 export type ConversationAction = typeof CONVERSATION_ACTIONS[number];
 
 export type ConversationActionRequest = {
@@ -35,9 +26,6 @@ export type ConversationActionRequest = {
   transcriptPath: string;
   action: string;
   serviceTier?: unknown;
-  key?: string;
-  label?: unknown;
-  question?: unknown;
   /** `permission` only: allow once or deny. */
   decision?: string;
   /** `permission`: the request to answer; the oldest pending one when absent.
@@ -56,7 +44,11 @@ type ConversationActionBody =
   | { ok: true; structured: true; target: string; operationId: string; receipt: { operationId: string; status: string } }
   | { ok: false; outcome: "failed"; code: typeof BRANCH_SHARED_HOST_CODE; error: string }
   | { ok: false; outcome: "failed"; code: typeof DEPUTY_CONVERSATION_CLOSED; error: string; seatConversationId: string }
+  | { ok: false; outcome: "failed"; code: "no_structured_host"; error: string }
   | { error: string };
+
+export const NO_STRUCTURED_HOST_CODE = "no_structured_host";
+export const NO_STRUCTURED_HOST_ERROR = "no structured host holds this conversation";
 
 export type ConversationActionResult = { status: number; body: ConversationActionBody };
 
@@ -64,12 +56,8 @@ export interface ConversationActionDependencies {
   registry(): AgentRegistry;
   structuredEnabled(): boolean;
   dispatchStructuredControl: typeof dispatchStructuredControl;
-  interruptConversation: typeof interruptConversation;
-  killConversation: typeof killConversation;
   resumeConversation: typeof resumeConversation;
   onResumed?: (conversationId: string) => void | Promise<void>;
-  compactConversation: typeof compactConversation;
-  answerDialogKey: typeof answerDialogKey;
   /** The conversation's current native question or plan, read from its
       transcript, or null when none is pending. */
   changeSpeed?: typeof changeConversationSpeed;
@@ -86,11 +74,7 @@ const productionDependencies: ConversationActionDependencies = {
   registry: agentRegistry,
   structuredEnabled: () => structuredHostsEnabled(),
   dispatchStructuredControl,
-  interruptConversation,
-  killConversation,
   resumeConversation,
-  compactConversation,
-  answerDialogKey,
   pendingQuestion: currentPendingQuestion,
 };
 
@@ -179,18 +163,6 @@ export async function applyConversationAction(
   }
   if (request.onlyIfIdle) return failure("automatic retirement requires the structured control channel", 409);
   if (!transcriptPath) return failure("conversationId or transcriptPath is required", 400);
-  if (request.action === "permission") {
-    return failure("no structured host holds this conversation; a terminal-hosted permission prompt is answered with dialog-key", 409);
-  }
-
-  if (request.action === "interrupt") return deliveryResult(await dependencies.interruptConversation(transcriptPath));
-  if (request.action === "kill") {
-    const outcome = await dependencies.killConversation(transcriptPath);
-    if (outcome.ok && !outcome.target) {
-      return deliveryResult({ ok: false, outcome: "failed", error: "kill resolved no registered pane", status: 409 });
-    }
-    return deliveryResult(outcome);
-  }
   if (request.action === "resume") {
     const outcome = await dependencies.resumeConversation(transcriptPath);
     if (outcome.ok && "outcome" in outcome && outcome.outcome === "resumed" && conversation) {
@@ -201,13 +173,9 @@ export async function applyConversationAction(
     }
     return deliveryResult(outcome);
   }
-  if (request.action === "compact") return deliveryResult(await dependencies.compactConversation(transcriptPath));
-  return deliveryResult(await dependencies.answerDialogKey(
-    transcriptPath,
-    request.key ?? "",
-    request.label,
-    request.question,
-  ));
+  /* Interrupt, kill, compact and a permission answer act on a structured host.
+     The structured control above answered for every conversation that has one. */
+  return { status: 409, body: { ok: false, outcome: "failed", code: NO_STRUCTURED_HOST_CODE, error: NO_STRUCTURED_HOST_ERROR } };
 }
 
 /**
@@ -244,7 +212,7 @@ async function answerNativeQuestion(
       })
     : null;
   if (!structured) {
-    return failure("no structured host holds this conversation; a terminal-hosted question is answered with dialog-key", 409);
+    return failure("no structured host holds this conversation, so nothing can receive the answer", 409);
   }
   return structured;
 }

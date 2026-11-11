@@ -43,7 +43,7 @@ export function fleetRuntimeFor(rows: readonly AgentLivenessRecord[], registry: 
   }
   return (row: AgentLivenessRecord) => {
     const rank = (entry: AgentRegistryEntry) => {
-      const pid = entry.structuredHost?.process?.pid ?? entry.host?.panePid.pid;
+      const pid = entry.structuredHost?.process?.pid;
       if (row.host.state === "alive" && row.host.pid !== null && pid === row.host.pid) return 4 + (entry.status === "live" ? 2 : entry.status === "idle" ? 1 : 0);
       return entry.status === "live" ? 2 : entry.status === "idle" ? 1 : 0;
     };

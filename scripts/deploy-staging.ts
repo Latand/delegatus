@@ -39,7 +39,6 @@ import { stagingReleaseRecord, STAGING_RELEASE_FILE, type StagingReleaseRecord }
 import {
   viewerComposeSnapshotWithoutUnsupportedApiCredentials,
   viewerComposeServiceFromConfig,
-  viewerComposeServiceWithExistingTmux,
 } from "../src/runtime-host/candidateContainer";
 import { ensureCanonicalMirror } from "../src/runtime-host/canonicalMirror";
 import { viewerComposeSnapshotPath } from "../src/runtime-host/deploymentArtifacts";
@@ -56,12 +55,6 @@ import {
   stagingViewerDockerArgs,
   type StagingContainerContext,
 } from "../src/runtime-host/stagingContainer";
-
-/** Staging preserves prod's existing host tmux endpoint without changing prod's state. */
-export function stagingContainerContext(input: Omit<StagingContainerContext, "tmux">, prodStateDir: string): StagingContainerContext {
-  const service = viewerComposeServiceWithExistingTmux(prodStateDir, input.service);
-  return { ...input, service, tmux: { tmuxTmpdir: service.environment.TMUX_TMPDIR || "/tmp" } };
-}
 
 /** Prod state families the issue forbids staging from touching. */
 export const PROD_STATE_EVIDENCE_FILES: ReadonlySet<string> = new Set([
@@ -338,7 +331,7 @@ async function main(): Promise<void> {
     catch { fs.rmSync(sourceDir, { recursive: true, force: true }); }
   }
 
-  const context = stagingContainerContext({ revision, image, service, paths }, prodStateDir);
+  const context: StagingContainerContext = { revision, image, service, paths };
 
   fs.mkdirSync(stagingStateDir, { recursive: true, mode: 0o700 });
   await containerGone(STAGING_VIEWER_CONTAINER);

@@ -8,6 +8,33 @@ compatibility raises the major version.
 
 ## [Unreleased]
 
+### Removed
+- **The tmux transport.** Every agent runs on a structured host, and
+  Delegatus starts no `tmux` process. `LLV_SPAWN_TRANSPORT=tmux` is refused
+  at the first spawn. A rollback switch (`LLV_STRUCTURED_HOSTS=0`,
+  `LLV_RUNTIME_EVENTS=0`, `NEXT_PUBLIC_RUNTIME_UI=0`) now refuses a spawn
+  and names the switch; it no longer moves the spawn onto a terminal pane.
+- **Sending to a conversation with no host.** A message to a conversation
+  that has no structured host and cannot be resumed is refused with a
+  reason. Held delivery and the account-migration drain work as before.
+- **Answering by keys.** `POST /api/answer`, the `dialog-key` action of
+  `/api/conversation-host` and of the MCP `conversation_action` tool, and
+  the question card that keyed an answer into a terminal are removed. A
+  question or plan is answered through the host that asked it
+  (`answer` and `permission`).
+- **`POST /api/tasks/[id]/spawn`.** Start an agent for a task through
+  `/api/spawn` with the task id.
+- **The external tmux endpoint mode** (`LLV_LEGACY_TMUX_EXTERNAL`,
+  `LLV_TMUX_TMPDIR`, the `legacy-tmux-migration-complete` marker), the
+  `TMUX_TMPDIR` setting and the `/tmp/tmux-<uid>` mount in Compose, and the
+  `tmux` wrapper in the Docker image.
+- **`siblings` in the agent snapshot** and the tmux entry of
+  `systemHealth` in `/api/files`.
+
+### Changed
+- A launch an older release left in flight on the terminal transport ends
+  failed with a reason; launch it again.
+
 ## [2.0.0] — 2026-10-27
 
 ### Breaking change

@@ -30,7 +30,6 @@ import {
 import { resourceWorkerRequestProblem } from "@/lib/resourceWorkerRequest";
 import { readViewerTree } from "@/lib/resourceViewerTree";
 import { overlayResourceSessionTitles } from "@/lib/session/titleProjection";
-import type { TmuxAttachReference } from "@/lib/tmux";
 import { statePath } from "@/lib/configDir";
 import { recordHelperGroup } from "@/lib/helperLease";
 import { fsyncPath } from "@/lib/state/durableJson";
@@ -39,10 +38,10 @@ import { RESOURCE_STRUCTURED_HOST_LIMIT, type FileEntry, type ResourceSession, t
 
 /**
  * System memory pressure + per-agent-session memory attribution, the data
- * behind the rail resources block and its cleanup list. Each tmux pane whose
- * process tree contains a claude/codex CLI is one session; the tree sum is
- * what actually frees up on kill-pane — the MCP children (`npm exec`, node
- * servers) hanging off the CLI usually outweigh the CLI itself.
+ * behind the rail resources block and its cleanup list. Each structured host
+ * is one session; the tree sum is what actually frees up when it is killed —
+ * the MCP children (`npm exec`, node servers) hanging off the CLI usually
+ * outweigh the CLI itself.
  */
 
 /** Per-session process attribution is expensive on large transcript inventories.
@@ -189,11 +188,20 @@ function captureSystemMemory(proc: Pick<ProcBackend, "systemMemory"> = procBacke
   return system ? { ...system, capturedAt: new Date().toISOString() } : null;
 }
 
-/** What the kill path needs to take a snapshot row down safely, on whichever
-    transport owns it: for a pane, the stable `%N` pane id to address and the
-    pane pid to verify it against; for a structured host, the pid, start
-    identity, and boot epoch observed with it. */
-export type KillTargetRef = TmuxAttachReference | StructuredHostKillRef;
+/** The reference an observation persisted before pane hosts were retired
+    carries for a pane row. Nothing acts on it; it is kept so such an
+    observation still parses. */
+export interface StoredPaneKillRef {
+  tmuxServerPid: number;
+  tmuxServerStartIdentity: string | null;
+  paneId: string;
+  panePid: number;
+  paneStartIdentity: string | null;
+}
+
+/** What the kill path needs to take a snapshot row down safely: the pid, start
+    identity, and boot epoch observed with a structured host. */
+export type KillTargetRef = StoredPaneKillRef | StructuredHostKillRef;
 
 /**
  * One structured host as the registry knows it, assembled by the viewer and
@@ -317,17 +325,8 @@ export function lastResourceTargetRefs(): Array<{ target: string; ref: KillTarge
   return globalStore.__llvLastResourceTargets?.map(({ target, ref }) => ({ target, ref: { ...ref } })) ?? [];
 }
 
-/** Snapshot pane ref recorded for `target`, or null when it was never listed
-    — or when the row it names is a structured host, which the tmux kill and
-    attach paths have nothing to do with. */
-export function allowedKillTarget(target: string): TmuxAttachReference | null {
-  if (target === "") return null;
-  const ref = globalStore.__llvResourceTargets?.get(target) ?? null;
-  return ref === null || isStructuredHostKillRef(ref) ? null : ref;
-}
-
-/** Drops `target` from the allowlist after a kill: the coordinates are free
-    for tmux to reuse, so a repeated POST must not pass the gate again. */
+/** Drops `target` from the allowlist after a kill, so a repeated POST does
+    not pass the gate again. */
 export function consumeKillTarget(target: string): void {
   if (globalStore.__llvResourceTargets?.delete(target)) {
     globalStore.__llvResourceTargetEpoch = (globalStore.__llvResourceTargetEpoch ?? 0) + 1;

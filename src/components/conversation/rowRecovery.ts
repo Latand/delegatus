@@ -9,7 +9,7 @@ import { useSyncExternalStore } from "react";
  * Slice 3 moved delivery status onto the message itself: one row, one quiet
  * affordance, and the transport evidence behind that affordance. The controls
  * that go with the evidence — ask the runtime again under this message's
- * original key, replay the admitted operation, end it — live in `TmuxComposer`,
+ * original key, replay the admitted operation, end it — live in `ConversationComposer`,
  * which owns the payload store, the receipt stream and the reconciliation
  * window. The row is rendered by `LogFeed`, which owns none of that.
  *
