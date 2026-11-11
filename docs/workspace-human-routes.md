@@ -166,6 +166,7 @@ served API route has no declared decision or a project handler loses its gate.
 | `/api/monitor/seat-tick/settings` | GET, PUT | owner |
 | `/api/onboarding` | GET, PUT | owner |
 | `/api/onboarding/health` | DELETE, GET, POST | owner |
+| `/api/operator/heap` | GET | owner |
 | `/api/operator/settings` | GET, PUT | owner |
 | `/api/operator/worker-limit` | GET, PUT | owner |
 | `/api/orchestrator/ghost` | GET, POST | project |
