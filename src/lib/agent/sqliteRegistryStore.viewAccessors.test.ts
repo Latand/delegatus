@@ -94,14 +94,14 @@ test("a refresh that rewrites one delivery makes no accessor per archived operat
   const deliveries = Object.keys(first.heldDeliveries).length;
   expect(owners).toBeGreaterThan(400);
   const cost = costOfRefreshes(reader, 8, round => writer.mutate((file) => {
-    file.heldDeliveries[delivery]!.updatedAt = new Date(Date.UTC(2026, 9, 13, 0, 0, round)).toISOString();
+    file.heldDeliveries[delivery]!.text = `rewritten ${round}`;
   }, false));
   expect(cost.accessors).toBeLessThan((owners + deliveries) / 10);
   expect(cost.functions).toBeLessThan((owners + deliveries) / 10);
   expect(cost.scopes).toBeLessThan((owners + deliveries) / 10);
   const operationId = first.heldDeliveries[delivery]!.command.operationId;
   cost.held.forEach((view, index) => {
-    expect(view.heldDeliveries[delivery]!.updatedAt).toBe(new Date(Date.UTC(2026, 9, 13, 0, 0, index + 1)).toISOString());
+    expect(view.heldDeliveries[delivery]!.text).toBe(`rewritten ${index + 1}`);
     expect(Object.keys(view.deliveryOperationOwners)).toEqual(Object.keys(first.deliveryOperationOwners));
     expect(view.deliveryOperationOwners[operationId]).toEqual(first.deliveryOperationOwners[operationId]);
   });
@@ -144,7 +144,7 @@ test("an archived operation owner reads the deliveries of the view it is read th
   const held = reader.readOnlySnapshot().file;
   const views: RegistryFile[] = [];
   const judged: unknown[] = [];
-  const states = ["failed", "cancelled", "delivered"] as const;
+  const states = ["failed", "delivered", "failed"] as const;
   for (const state of states) {
     writer.mutate((file) => { file.heldDeliveries[before.deliveryId]!.state = state; }, false);
     views.push(reader.readOnlySnapshot().file);
@@ -189,7 +189,7 @@ test("owners synthesized from archived deliveries survive a refresh that takes t
   const delivery = dataset.pendingDeliveryIds[0]!;
   for (let round = 1; round <= 3; round++) {
     writer.mutate((file) => {
-      file.heldDeliveries[delivery]!.updatedAt = new Date(Date.UTC(2026, 9, 13, 0, 0, round)).toISOString();
+      file.heldDeliveries[delivery]!.text = `rewritten ${round}`;
     }, false);
     const view = reader.readOnlySnapshot().file;
     const whole = judge.snapshot().file;
