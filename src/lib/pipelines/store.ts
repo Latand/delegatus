@@ -1,4 +1,6 @@
 import { settleClosedPipelineAttempts } from "./closeAttempts";
+import { assertPipelineNotRetiring, admitAttemptRetirement } from "./retirementClaim";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import { agentRegistry } from "@/lib/agent/registry";
 import { defaultStageFailEdge } from "./failEdgeBudget";
 import { isTaskSummaryContent } from "@/lib/tasks/summary";
@@ -8,7 +10,7 @@ import { projectStoreSignature } from "@/lib/projects/persistence";
 import { isPublicationRecovery, mergePublicationRecovery, publicationInterrupted, PUBLICATION_RETRY_DELAYS_MS, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { pipelinePauseInputSchema } from "./pauseMetadata";
-import { forEachCooperatively } from "@/lib/cooperative";
+import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { controllerPipelineKeys, controllerReferences, inheritControllerGuards } from "./controllerScope";
 import { StateLockDeferredError, outsideStateLockWait, stateLockAttempt, stateLockProcessKind, waitForStateLock } from "@/lib/state/lockWait";
 import { withWaitCorrelation } from "@/lib/blockingWaits";
@@ -1515,7 +1517,7 @@ export async function loadPipelinesForStartupAsync(): Promise<Pipeline[]> {
   for (const pipeline of evidence.pipelines) {
     result.push(performanceSpans.sync("pipeline.copy", () => cloneLoadedPipeline(pipeline, resolveProject), 1));
     if (performance.now() - slice >= 4) {
-      await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
+      await performanceSpans.wait("pipeline.yield", () => yieldToRuntime());
       // A project move may have committed while this copy yielded.
       resolveProject = projectAliasResolver();
       slice = performance.now();
@@ -1891,6 +1893,12 @@ export function pipelineStateCollectionSeeds(): [StateCollectionSeed<unknown>, S
   ];
 }
 
+/** The archive list keeps every lane's structure, ids, states and short
+    values in memory. Role scaffolds, prompts, stage inputs, outputs and report
+    texts are nine tenths of an archived lane and are read from its row when a
+    reader asks for one. */
+const ARCHIVED_PIPELINE_INLINE_TEXT = 512;
+
 function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteStateCollection<Pipeline> } {
   const filename = stateDatabaseFile();
   const held = pipelineStores.get(filename);
@@ -1915,6 +1923,7 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
       if (!isPipeline(pipeline)) {
         throw new PipelineStoreError("refusing to persist a malformed pipeline record");
       }
+      assertPipelineNotRetiring(pipeline.id, () => pipelineRevision(pipeline));
     },
   };
   const active = new SqliteStateCollection<Pipeline>(filename, {
@@ -1928,6 +1937,7 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
     collection: "pipelines_archive",
     decode: (value) => decodePipeline(value, "pipelines_archive"),
     strictDecode: true,
+    deferTextLongerThan: ARCHIVED_PIPELINE_INLINE_TEXT,
   });
   const created = { active, archive };
   pipelineStores.set(filename, created);
@@ -2186,6 +2196,19 @@ export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedT
   }, remaining()));
 }
 
+/** A short state admission publishes the durable fence. The sweep owns its
+ * lifetime outside this lease and re-reads authority before removing data. */
+export async function claimAttemptRetirement(pipelineId: string, directory: string) {
+  const owner = captureProcessIdentity(process.pid);
+  return waitForStateLock("pipelines.retirement-claim", () => {
+    const { active, archive } = stores();
+    return active.boundedPatch(2, tx => {
+      const pipeline = tx.get(pipelineId) ?? archive.get(pipelineId);
+      return admitAttemptRetirement(pipelineId, directory, pipeline ? pipelineRevision(pipeline) : "missing", owner);
+    }, undefined, { collection: archive, prepare: () => ({ records: [] }) });
+  });
+}
+
 /** Called under the existing pipeline lease; indexed reads, no provisioning. */
 export function assignPipelineDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false,
   lookup: typeof pipelineDeliveryLookup = pipelineDeliveryLookup): void {
@@ -2337,7 +2360,24 @@ export function savePipelines(pipelines: Pipeline[]): void {
 const SETTLED_PIPELINE_ARCHIVE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
 
 /** Shared archive rows, validated by revision, database identity and decoder
- * authority. Projection consumers must never mutate this frozen graph. */
+ * authority. Projection consumers must never mutate this frozen graph.
+ *
+ * Contract of a listed lane. Its structure and every value up to
+ * ARCHIVED_PIPELINE_INLINE_TEXT characters are in memory. A longer text (role
+ * scaffold, prompt, spec, stage input, output, report text) is read from the
+ * lane's row when a reader asks for it: one row read per lane, named
+ * `state.deferred-text` in the loop-gap reads, with rows kept decoded up to
+ * 32 MB. A reader that walks long text across the whole list therefore reads
+ * every archived row once per walk; take `selectArchivedPipelines` or a by-id
+ * read for that instead.
+ *
+ * A lane held across a rewrite of its own row keeps its listed values.
+ * `JSON.stringify` of it serializes the current row whole, so a response is
+ * one consistent record. A direct read of one of its long texts throws
+ * StateSnapshotChangedError, because the listed version's text is gone and a
+ * later version's text does not belong to the listed values. Archived rows
+ * are written once when a lane settles, so this needs the same lane archived
+ * again while a reader holds the list. */
 export function loadArchivedPipelinesForList(): readonly Pipeline[] {
   const rows = archiveStore().loadReadonly();
   freezeArchive(rows);

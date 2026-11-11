@@ -24,9 +24,76 @@ import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantP
 import { identityMaterializationFence } from "./identityMaterialization";
 import type { AgentRegistryEntry, ConversationAuthorityFacts, RegistryFile, SeatChildrenAnchor, SeatChildrenPage, SnapshotSpawnProjection, SnapshotTitleConversationProjection } from "./registry";
 import { sessionKeyId } from "./sessionKey";
-import { drainRegistryEndingChanges, endingInstant, prepareRegistryEndingsBatch, registryEndingChangesPending, registryEndingsPrepared } from "./registryEndings";
+import { drainRegistryEndingChanges, endingInstant, prepareRegistryEndingsBatch, registryEndingChangesPending, registryEndingsPrepared, RETIRED_ENDING_TRIGGERS } from "./registryEndings";
 import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
 import { protectionConversation, protectionDelivery, protectionEntry, type WorktreeProtection } from "./worktreeProtection";
+
+/** Whether every named table, view, index and trigger exists; a plain read. */
+function sqliteObjectsExist(db: BunDatabase, names: readonly string[]): boolean {
+  const existing = new Set(db.query<{ name: string }, []>("SELECT name FROM sqlite_master").all().map(row => row.name));
+  return names.every(name => existing.has(name));
+}
+
+const LIVENESS_PROJECTION_OBJECTS = [
+  "registry_liveness_entries", "registry_liveness_receipts",
+  "registry_liveness_insert", "registry_liveness_update", "registry_liveness_delete",
+] as const;
+
+/** The archive schema and the triggers installed with it, in one startup transaction. */
+function installRegistryArchiveSchema(db: BunDatabase): void {
+  installRegistryArchive(db);
+  // Older normalizers omit this field. Keep active namespace authority
+  // until a current writer has proved and recorded its retirement.
+  db.exec(`CREATE TRIGGER IF NOT EXISTS registry_signal_domain_update BEFORE UPDATE ON registry_rows
+  WHEN OLD.collection='entries'
+    AND json_type(OLD.value_json,'$.structuredHost.signalDomain')='object'
+    AND COALESCE(json_extract(OLD.value_json,'$.structuredHost.signalDomain.retired'),0)!=1
+    AND COALESCE(json_type(NEW.value_json,'$.structuredHost.signalDomain'),'missing')!='object'
+  BEGIN SELECT RAISE(ABORT,'agent signal domain metadata requires a current reader'); END`);
+  db.exec(`CREATE TRIGGER IF NOT EXISTS registry_signal_domain_delete BEFORE DELETE ON registry_rows
+  WHEN OLD.collection='entries'
+    AND json_type(OLD.value_json,'$.structuredHost.signalDomain')='object'
+    AND COALESCE(json_extract(OLD.value_json,'$.structuredHost.signalDomain.retired'),0)!=1
+  BEGIN SELECT RAISE(ABORT,'agent signal domain metadata requires a current reader'); END`);
+}
+
+/* What a complete archive installation leaves in `sqlite_master`, read once
+   per process from an installation into an empty in-memory database: the
+   check follows the installer, whatever statements it gains, without a second
+   list of them here. */
+let archiveSchemaObjects: { names: string[]; recordsView: string } | undefined;
+
+/**
+ * Whether this database already holds everything {@link installRegistryArchiveSchema}
+ * would install, by a plain read. The installation runs in a write
+ * transaction, so a registry that is already current would otherwise take the
+ * write lock on every open to create nothing. The records view is compared by
+ * its text: the conserving form damage leaves behind is rechecked under the
+ * lock on every open, as before.
+ */
+function registryArchiveSchemaInstalled(db: BunDatabase, Database: typeof import("bun:sqlite").Database): boolean {
+  if (!archiveSchemaObjects) {
+    const empty = new Database(":memory:");
+    try {
+      empty.exec(`CREATE TABLE registry_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE registry_rows (collection TEXT NOT NULL, row_key TEXT NOT NULL, value_json TEXT NOT NULL, row_order INTEGER NOT NULL, PRIMARY KEY(collection, row_key));
+        CREATE TABLE registry_grant_changes (seq INTEGER PRIMARY KEY AUTOINCREMENT, collection TEXT NOT NULL, row_key TEXT NOT NULL);`);
+      const base = new Set(empty.query<{ name: string }, []>("SELECT name FROM sqlite_master").all().map(row => row.name));
+      installRegistryArchiveSchema(empty);
+      const installed = empty.query<{ name: string; sql: string | null }, []>("SELECT name, sql FROM sqlite_master").all()
+        .filter(row => !base.has(row.name) && !row.name.startsWith("sqlite_"));
+      archiveSchemaObjects = {
+        names: installed.map(row => row.name),
+        recordsView: installed.find(row => row.name === "registry_records")?.sql ?? "",
+      };
+    } finally { empty.close(); }
+  }
+  if (!sqliteObjectsExist(db, archiveSchemaObjects.names)) return false;
+  /* The installation also removes what earlier builds left: one such trigger is work for it. */
+  if (RETIRED_ENDING_TRIGGERS.some(name => sqliteObjectsExist(db, [name]))) return false;
+  return db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type='view' AND name='registry_records'").get()?.sql
+    === archiveSchemaObjects.recordsView;
+}
 
 /** Startup owns these transactions. Explicit statements also pass through the
  * writer observer; Bun's transaction callback API bypasses Database.exec. */
@@ -100,6 +167,26 @@ export function failedLaunchRepairQuery(legacy: boolean): string {
     AND json_extract(value_json,'$.state')='failed'
     AND json_extract(value_json,'$.failureRepairState') ${legacy ? "IS NULL" : "='pending'"}
     ORDER BY row_order LIMIT ?`;
+}
+
+/** One attempt's original operation and its handshake retries, by client id.
+    A single predicate joining the equality and sixteen patterns with OR named
+    no index, so SQLite read every receipt body for each call: 19,882 receipts
+    and 158 MB on a long-lived registry, about 250 ms, once per closed lane
+    copy. The equality seeks the client-id index, and the patterns walk only
+    the index range of handshake retries. */
+export function pipelineSpawnHistorySelection(base: string): { sql: string; values: string[] } {
+  // Spawn keys are clipped at 128 characters. Account for each possible
+  // safe-integer width before choosing the surviving base suffix.
+  const prefix = "handshake_retry_";
+  const patterns = Array.from({ length: 16 }, (_, index) => prefix + "[0-9]".repeat(index + 1)
+    + `_${base}`.slice(0, 128 - prefix.length - index - 1));
+  const id = "json_extract(value_json,'$.clientAttemptId')";
+  // Every pattern starts with the prefix and a digit; ":" follows "9".
+  return { sql: `SELECT row_key FROM registry_rows WHERE collection='receipts' AND ${id}=?
+    UNION ALL SELECT row_key FROM registry_rows WHERE collection='receipts' AND ${id}>=? AND ${id}<?
+      AND (${patterns.map(() => `${id} GLOB ?`).join(" OR ")})
+    LIMIT 129`, values: [base, `${prefix}0`, `${prefix}:`, ...patterns] };
 }
 
 const ROW_COLLECTIONS = [
@@ -1159,7 +1246,15 @@ export class SqliteAgentRegistryStore {
     this.db = openCurrentDatabase(filename, () => {
       const db = observeRegistryWriter(observeSqlite(new Database(filename, { create: true, strict: true }), "registry"), filename);
       try {
-        db.exec(`PRAGMA busy_timeout = ${options.deferColdKeyInitialization ? 0 : 5000}; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON; PRAGMA auto_vacuum = INCREMENTAL;`);
+        db.exec(`PRAGMA busy_timeout = ${options.deferColdKeyInitialization ? 0 : 5000};`);
+        /* An existing registry is opened without asking for its write lock
+           (docs/design/viewer-stalls-root-cause.md, section 4.3): a process
+           that started while another writer held the lock failed after the
+           busy timeout before it could read one row. Setting `auto_vacuum`
+           opens a write transaction, and on a database that already has
+           tables it changes nothing, so only a new database is given it. */
+        const existing = Boolean(db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_meta'").get());
+        db.exec(`PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON;${existing ? "" : " PRAGMA auto_vacuum = INCREMENTAL;"}`);
         db.exec(`
         CREATE TABLE IF NOT EXISTS registry_meta (
           key TEXT PRIMARY KEY,
@@ -1195,24 +1290,9 @@ export class SqliteAgentRegistryStore {
           INSERT INTO registry_grant_changes(collection, row_key) VALUES (OLD.collection, OLD.row_key);
         END;
         `);
-        if (options.allowArchiveMigration !== false) {
+        if (options.allowArchiveMigration !== false && !registryArchiveSchemaInstalled(db, Database)) {
           assertStateStartupMutation(path.dirname(filename),"agent registry archive schema");
-          withStartupTransaction(db, () => {
-            installRegistryArchive(db);
-            // Older normalizers omit this field. Keep active namespace authority
-            // until a current writer has proved and recorded its retirement.
-            db.exec(`CREATE TRIGGER IF NOT EXISTS registry_signal_domain_update BEFORE UPDATE ON registry_rows
-            WHEN OLD.collection='entries'
-              AND json_type(OLD.value_json,'$.structuredHost.signalDomain')='object'
-              AND COALESCE(json_extract(OLD.value_json,'$.structuredHost.signalDomain.retired'),0)!=1
-              AND COALESCE(json_type(NEW.value_json,'$.structuredHost.signalDomain'),'missing')!='object'
-            BEGIN SELECT RAISE(ABORT,'agent signal domain metadata requires a current reader'); END`);
-            db.exec(`CREATE TRIGGER IF NOT EXISTS registry_signal_domain_delete BEFORE DELETE ON registry_rows
-            WHEN OLD.collection='entries'
-              AND json_type(OLD.value_json,'$.structuredHost.signalDomain')='object'
-              AND COALESCE(json_extract(OLD.value_json,'$.structuredHost.signalDomain.retired'),0)!=1
-            BEGIN SELECT RAISE(ABORT,'agent signal domain metadata requires a current reader'); END`);
-          });
+          withStartupTransaction(db, () => installRegistryArchiveSchema(db));
         }
         return db;
       } catch (error) {
@@ -1248,9 +1328,12 @@ export class SqliteAgentRegistryStore {
        every edge, about 6 ms apiece over a retained registry (#2761). */
     registryEvidenceIndexes.install(this.db, path.dirname(filename));
     const livenessProjectionReady = this.meta("liveness_projection_version") === "2";
+    /* An installed projection at the current version needs nothing, and a
+       transaction that would create nothing still takes the write lock. */
+    const livenessInstalled = livenessProjectionReady && sqliteObjectsExist(this.db, LIVENESS_PROJECTION_OBJECTS);
     // Replace the previous predicates and backfill under one startup lock.
     // A dead host can still own a scope after its live process is cleared.
-    this.runAtomically([
+    if (!livenessInstalled) this.runAtomically([
       `CREATE TABLE IF NOT EXISTS registry_liveness_entries (
         row_key TEXT PRIMARY KEY, row_order INTEGER NOT NULL
       )`,
@@ -1410,7 +1493,9 @@ export class SqliteAgentRegistryStore {
     }
     this.generationIdentitiesReady = this.generationIdentitiesInstalled(this.db);
     this.secureFiles();
-    this.importFirstBoot(options.initialSnapshot, options.verifyImport);
+    /* The import decides again under its own write lock; an imported
+       registry never becomes unimported, so this read spares the lock. */
+    if (!this.imported()) this.importFirstBoot(options.initialSnapshot, options.verifyImport);
     if (options.allowArchiveMigration !== false) this.prepareCallerIndexes();
     if (this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_caller_roots'").get()) {
       registryCallerIndexes.install(this.db, path.dirname(filename));
@@ -3847,15 +3932,8 @@ export class SqliteAgentRegistryStore {
       identities from the client-id index before hydrating any receipt bodies.
       registry_rows also retains the current versions of archived receipts. */
   pipelineSpawnHistoryKeys(base: string): string[] {
-    // Spawn keys are clipped at 128 characters. Account for each possible
-    // safe-integer width before choosing the surviving base suffix.
-    const prefix = "handshake_retry_";
-    const patterns = Array.from({ length: 16 }, (_, index) => prefix + "[0-9]".repeat(index + 1)
-      + `_${base}`.slice(0, 128 - prefix.length - index - 1));
-    return this.db.query<{ row_key: string }, string[]>(`SELECT row_key FROM registry_rows
-      WHERE collection='receipts' AND (json_extract(value_json,'$.clientAttemptId')=?
-        ${patterns.map(() => "OR json_extract(value_json,'$.clientAttemptId') GLOB ?").join(" ")})
-      LIMIT 129`).all(base, ...patterns).map(row => row.row_key);
+    const { sql, values } = pipelineSpawnHistorySelection(base);
+    return this.db.query<{ row_key: string }, string[]>(sql).all(...values).map(row => row.row_key);
   }
 
   /** Diagnostic attribution needs one client id, including a conserving
