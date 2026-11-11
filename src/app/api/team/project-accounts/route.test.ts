@@ -54,7 +54,7 @@ function observe(engine: "codex" | "claude", accountId: string, plan: string, we
   agentRegistry().recordQuotaObservation({
     engine, accountId, authenticated: true, authCheckedAt: new Date(NOW).toISOString(), observedAt: new Date(NOW).toISOString(), bootId: "fixture-boot",
     provenance: { source: "live", reason: null, staleSince: null },
-    limits: { plan, session: { usedPercent: 11, resetsAt: Math.floor(NOW / 1000) + 3600 }, weekly: { usedPercent: weekly, resetsAt: Math.floor(NOW / 1000) + 86_400 }, tiers: [] },
+    limits: { plan, session: { usedPercent: 11, resetsAt: Math.floor(NOW / 1000) + 3600 }, weekly: { usedPercent: weekly, resetsAt: Math.floor(NOW / 1000) + 86_400 }, tiers: [], capturedAt: Math.floor(NOW / 1000) },
   });
 }
 

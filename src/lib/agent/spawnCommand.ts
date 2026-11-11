@@ -118,10 +118,11 @@ function prefersUkrainian(req: Pick<NextRequest, "headers">): boolean {
 /** The one body of a refused account choice. `reason` says whether the project
     has no account list or the named account is outside it; a refusal for lack
     of capacity carries none. */
-function projectAccountRefusedResponse(error: ProjectAccountRefusedError | MemberAccountRefusedError): NextResponse {
+function projectAccountRefusedResponse(error: ProjectAccountRefusedError | MemberAccountRefusedError): NextResponse<ApiError> {
   const reason = error instanceof MemberAccountRefusedError ? error.reason
     : error.resolution.kind === "not_allowed" ? "outside_account_list" : undefined;
-  return NextResponse.json({ error: error.message, code: "project_account_refused", ...(reason ? { reason } : {}) }, { status: 409 });
+  const body: ApiError & { code: string; reason?: string } = { error: error.message, code: "project_account_refused", ...(reason ? { reason } : {}) };
+  return NextResponse.json(body, { status: 409 });
 }
 
 function isSqliteBusy(error: unknown): boolean {
