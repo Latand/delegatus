@@ -18,6 +18,7 @@ export const prototypeQuestionsSchema = z.array(z.object({
   text: codePointText(300, 1, true).describe("Question: 1–300 Unicode code points after trimming; recommended target 240. Preserve the complete approval scope. On refusal, shorten explicitly and retry after proving no effect."),
   options: z.array(z.object({ label: codePointText(120, 1, true).describe("Option label: 1–120 Unicode code points after trimming; recommended target 90. Preserve option identity; exactly one recommended option per question."), recommended: z.boolean().optional() }).strict()).min(2).max(6),
   multiple: z.boolean().optional(), other: z.boolean().optional(),
+  skippable: z.boolean().optional().describe("false removes the question's \"Already decided\" row, so it can only be answered. Only for a form without taskId: task rounds are copied to linked installations, and older copies reject unknown fields."),
 }).strict()).min(1).max(7).superRefine((questions, ctx) => {
   if (new Set(questions.map(q => q.id)).size !== questions.length) ctx.addIssue({ code: "custom", message: "question ids must be unique" });
   questions.forEach((q, i) => {
@@ -46,6 +47,7 @@ export function parsePrototypeInput(raw: unknown): PublishPrototypeInput {
   const parsed = prototypePublishSchema.safeParse(raw);
   if (!parsed.success) throw new PrototypeError(`invalid prototype publication: ${parsed.error.issues.map(issue => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`);
   if (!parsed.data.title || parsed.data.issueReport) throw new PrototypeError("a composed form needs a title");
+  if (parsed.data.taskId !== undefined && parsed.data.questions?.some(question => question.skippable !== undefined)) throw new PrototypeError("skippable is for a form published without taskId: a task round is copied to linked installations, which reject the field");
   if (new Set((parsed.data.variants ?? []).map(v => v.number)).size !== (parsed.data.variants ?? []).length) throw new PrototypeError("variant numbers must be unique");
   if (parsed.data.dir && (parsed.data.variants ?? []).some(v => v.frames?.length || v.videos?.length)) throw new PrototypeError("use dir or explicit frames and videos in variants");
   if (!parsed.data.variants?.length && !parsed.data.questions?.length) throw new PrototypeError("publish variants or questions");
