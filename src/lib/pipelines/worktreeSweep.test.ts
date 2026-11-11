@@ -3835,6 +3835,30 @@ test.each(["process", "conversation", "running", "young", "unknown-ignored"])("b
   expect(fs.readFileSync(path.join(f.dir, "draft.txt"), "utf8")).toBe("must stay");
 });
 
+test("a process that appears after the backup's last verification keeps the checkout", async () => {
+  const f = await staleBackupFixture(); fs.writeFileSync(path.join(f.dir, "draft.txt"), "must stay");
+  const run = f.options.git, read = fs.readFileSync;
+  let armed = false, appeared = false;
+  f.options.git = async (args, cwd) => {
+    // The sweep's own status read after the manifest precedes its `verify`.
+    if (args[0] === "status" && fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree-backup.json"))) armed = true;
+    return run(args, cwd);
+  };
+  f.options.scan = () => ({ ownNamespace: null, processes: appeared ? [{ pid: 123, namespace: null, stamped: false, paths: [f.dir] }] : [] });
+  // `verify` reads the checkout's index after its own last guard. A process
+  // that starts there is seen only by the sweep's guard before removal.
+  const index = spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) => {
+    if (armed && path.basename(String(file)) === "index") appeared = true;
+    return (read as (file: fs.PathOrFileDescriptor, options?: unknown) => unknown)(file, options);
+  }) as typeof fs.readFileSync);
+  try {
+    const report = await sweepMergedWorktrees(f.options);
+    expect(appeared).toBeTrue();
+    expect(report.removed).toEqual([]);
+    expect(fs.readFileSync(path.join(f.dir, "draft.txt"), "utf8")).toBe("must stay");
+  } finally { index.mockRestore(); }
+});
+
 test("a backup ref changed before final dispatch retains the checkout", async () => {
   const f = await staleBackupFixture(); fs.writeFileSync(path.join(f.dir, "draft.txt"), "preserved");
   const run = f.options.git;
