@@ -554,3 +554,52 @@ test("the real sampler names a block spent copying and parsing", async () => {
   expect(named.get("parse") ?? 0).toBeGreaterThan(0);
   expect(categories.callers.find(row => row.native === "structuredClone")!.positions[0]![0]).toMatch(/^src\/lib\/loopProfiler\.test\.ts:\d+:\d+$/);
 });
+
+test("route chunks with dynamic segments and groups keep their own file", () => {
+  const route = path.join(root, ".next/server/app/(board)/tasks/[id]/page.js");
+  const source = path.join(root, "src/app/(board)/tasks/[id]/page.tsx");
+  const categories = categorizeLoopProfile({ traces: [
+    { frames: [{ name: "f", sourceURL: route, line: 1, column: 7 }] },
+    { frames: [native("structuredClone"), { name: "f", sourceURL: source, line: 12, column: 3 }] },
+    { frames: [{ name: "f", sourceURL: path.join(root, ".next/server/app/(board)/../../../../outside.js"), line: 1, column: 1 }] },
+    { frames: [{ name: "f", sourceURL: path.join(root, ".next/server/app/[id]/node_modules/x.js"), line: 1, column: 1 }] },
+  ] }, root);
+  expect(categories.files).toEqual([["elsewhere", 2], [".next/server/app/(board)/tasks/[id]/page.js", 1]]);
+  expect(categories.callers).toEqual([{ native: "structuredClone", positions: [["src/app/(board)/tasks/[id]/page.tsx:12:3", 1]] }]);
+});
+
+test("a long gap with full frames and a full histogram stays within the record budget", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "loop-profile-budget-"));
+  try {
+    await mkdir(path.join(directory, "src"), { recursive: true });
+    const names = Array.from({ length: 40 }, (_, i) => `blockingFunctionWithALongDescriptiveName${i}`);
+    await writeFile(path.join(directory, "src/wide.ts"), names.map(name => `function ${name}() {}`).join("\n"));
+    const wide = path.join(directory, "src/wide.ts");
+    const long = (i: number) => path.join(directory, `.next/server/chunks/${"segment-".repeat(18)}${i % 40}.js`);
+    const traces = [
+      ...Array.from({ length: 2000 }, (_, i) => ({ frames: [{ name: names[i % 40]!, sourceURL: wide, line: i % 40 + 1, column: 1 }] })),
+      ...Array.from({ length: 2000 }, (_, i) => ({ frames: [native(["structuredClone", "parse", "all", "get", "run", "set", "has", "stringify"][i % 8]!),
+        { name: "f", sourceURL: long(i), line: 1, column: i + 1 }] })),
+    ];
+    const h = harness(5000); h.ports.root = directory;
+    const done = h.recorder.start(); await turn(); h.time(5000);
+    expect(h.gap(0, 5000, 3000)).toBe(true);
+    h.finish({ stackTraces: { traces } }); await done;
+    const [record] = h.emitted as Extract<LoopGapProfile, { status: "captured" }>[];
+    expect(record!.frames!.rows.length).toBeGreaterThan(0);
+    expect(record!.categories!.native.length).toBe(8);
+    expect(Buffer.byteLength(JSON.stringify(record!.categories))).toBeGreaterThan(1500);
+    expect(Buffer.byteLength(JSON.stringify(record))).toBeLessThanOrEqual(LOOP_PROFILE_BYTES);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a native name shared by several built-ins keeps its callers below the busiest four", () => {
+  const busy = ["structuredClone", "stringify", "split", "replace", "sort"];
+  const traces = [
+    ...busy.flatMap((name, rank) => Array.from({ length: 10 - rank }, () => ({ frames: [native(name), caller(1, rank + 1)] }))),
+    { frames: [native("get"), caller(1, 700)] },
+    { frames: [native("toLowerCase"), caller(1, 800)] },
+  ];
+  const named = categorizeLoopProfile({ traces }, root).callers.map(row => row.native);
+  expect(named).toEqual(["structuredClone", "stringify", "split", "replace", "get"]);
+});

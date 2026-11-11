@@ -110,6 +110,9 @@ const nativeNames = new Set([
   "nextTick", "emit", "fetch", "json", "text", "enqueue", "close", "gc", "deepEquals", "inspect", "isDeepStrictEqual",
 ]);
 const nativeRows = 12, fileRows = 8, callerRows = 3, callerNatives = 4;
+/* One name, several built-ins: a SQLite statement, a Map, a Promise. Their
+ * callers tell them apart, so these keep their callers whatever their rank. */
+const sharedNames = new Set(["all", "get", "run", "set", "has", "values", "parse", "exec"]);
 
 /** A repository-relative emitted chunk or source file, or null. Never a path outside the serving root. */
 function safeFile(sourceURL: string | undefined, root: string, known: Map<string, string | null>) {
@@ -122,7 +125,8 @@ function safeFile(sourceURL: string | undefined, root: string, known: Map<string
     if (source.startsWith("file:")) { const url = new URL(source); source = url.search || url.hash || url.host ? "" : fileURLToPath(url); }
     if (path.isAbsolute(source)) {
       const file = path.relative(root, source).split(path.sep).join("/");
-      if ((/^(?:src|scripts)\/[\w./-]+\.[cm]?[jt]sx?$/.test(file) || /^\.next\/server\/[\w./-]+\.[cm]?js$/.test(file))
+      // Route folders carry dynamic segments and groups: `[id]`, `(group)`.
+      if ((/^(?:src|scripts)\/[\w./()[\]-]+\.[cm]?[jt]sx?$/.test(file) || /^\.next\/server\/[\w./()[\]-]+\.[cm]?js$/.test(file))
         && !file.split("/").some(part => part === ".." || part === "node_modules")) held = file;
     }
   } catch { held = null; }
@@ -176,7 +180,7 @@ export function categorizeLoopProfile(raw: LoopProfile, root: string) {
   const nativeTop = top(native, nativeRows);
   const result = { samples: raw.traces.length, inspectedSamples: count, native: nativeTop, regexp, script, empty,
     files: top(files, fileRows),
-    callers: nativeTop.slice(0, callerNatives).filter(([name]) => callers.has(name))
+    callers: nativeTop.filter(([name], rank) => (rank < callerNatives || sharedNames.has(name)) && callers.has(name))
       .map(([name]) => ({ native: name, positions: top(callers.get(name)!, callerRows) })) };
   // Positions are the longest part: drop them first, then file rows.
   while (Buffer.byteLength(JSON.stringify(result)) > 2048 && result.callers.length) result.callers.pop();
@@ -277,8 +281,11 @@ export function createLoopProfiler(ports: LoopProfilerPorts, expires: number) {
           categories: categorizeLoopProfile(raw.stackTraces as LoopProfile, ports.root),
           frames: current.pending.some(gap => gap.frames) ? trimLoopProfile(raw.stackTraces as LoopProfile, ports.root) : undefined,
         }));
-        for (const gap of current.pending) gap.emit({ status: "captured", from: current.from, to, intervalUs,
-          ...(gap.frames ? { frames } : {}), categories });
+        const record = (withFrames: boolean): LoopGapProfile => ({ status: "captured", from: current.from, to, intervalUs,
+          ...(withFrames && frames ? { frames } : {}), categories });
+        // Frames were cut to the whole budget on their own: make room for the histogram beside them.
+        while (frames?.rows.length && Buffer.byteLength(JSON.stringify(record(true))) > LOOP_PROFILE_BYTES) frames.rows.pop();
+        for (const gap of current.pending) gap.emit(record(gap.frames));
       }
     } catch {
       stopped = true;
