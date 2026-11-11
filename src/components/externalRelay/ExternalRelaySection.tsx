@@ -147,6 +147,7 @@ export function outcomeText(t: TFunction, outcome: string): string {
   if (kind === "compacted" && ["compacted", "started_fresh", "nothing_to_compact"].includes(reason ?? "")) return t(`externalRelay.compact.${reason}` as Parameters<TFunction>[0]);
   if (kind === "owner_stop_pending") return t("externalRelay.outcome.ownerStopPending");
   if (kind === "answered") return t("externalRelay.outcome.answered");
+  if (kind === "failure_notice") return t("externalRelay.outcome.failureNotice");
   if (kind === "lease_lost") return t("externalRelay.outcome.leaseLost");
   if (kind === "local_error") return t("externalRelay.outcome.localError");
   if (kind === "declined" && reason === "handoff") return t("externalRelay.outcome.handoff");

@@ -484,6 +484,7 @@ export const en = {
   "externalRelay.alarm": "Needs attention",
   "externalRelay.alarm.ownerStopQuarantined": "An owner run could not be confirmed stopped; its record is kept",
   "externalRelay.alarm.pendingDeliveryContext": "A late answer has no delivery context yet",
+  "externalRelay.outcome.failureNotice": "Failed; the requester got a failure notice",
   "externalRelay.outcome.answered": "Answered",
   "externalRelay.outcome.declined": "Declined: {reason}",
   "externalRelay.outcome.failed": "Failed: {reason}",

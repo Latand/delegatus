@@ -20,7 +20,7 @@ import { processMatches, terminateHeadlessReviewerGroup } from "@/lib/agent/head
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { createManagedClaudeAccount } from "@/lib/accounts/claude";
 import { advertisedSlots, completeRelayRequest, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest as runClaimedRequestWithLeaseWorker, runningCount } from "./runner";
-import { relayActivity } from "./activity";
+import { relayActivity, relayOutcomeLabel } from "./activity";
 import { changeRun, dropRun, externalRelayFile, readRunLedger, reserveRun, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
@@ -3261,6 +3261,51 @@ for (const worker of [false, true]) test(`owner ${failure} keeps its reason in d
   } finally { logging.mockRestore(); await service.close(); }
 });
 
+test("an owner failure notice keeps its wire outcome, is recorded under its own outcome and journaled once without text", async () => {
+  const completions: unknown[] = [], lines: Record<string, unknown>[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.targets[0]!.fallback = "none";
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const requestId = "owner_notice_outcome";
+  const logging = spyOn(console, "error").mockImplementation(() => {});
+  const info = spyOn(console, "info").mockImplementation((...args) => {
+    try {
+      const line = JSON.parse(String(args[1])) as Record<string, unknown>;
+      if (line.event === "relay_request_finished" && line.requestId === requestId) lines.push(line);
+    } catch { /* Other journal lines carry no structured payload. */ }
+  });
+  try {
+    const completion = await runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, request_id: requestId,
+      answer: { ...contextRequest.answer, max_chars: 4000 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      leaseWorker: false,
+      ownerPorts: { launch: async () => { throw new Error("fixture launch refused"); },
+        observe: async () => ({ state: "failed", conversationId: "conversation_notice", failure: { kind: "launch-failed", detail: "fixture" } }),
+        stop: async () => {} },
+    });
+    // The requester does get a reply, so the service still sees `answered`.
+    expect(completion?.outcome).toBe("answered");
+    expect(completions).toHaveLength(1);
+    expect(completions[0]).toMatchObject({ outcome: "answered" });
+    expect(relayOutcomeLabel(completion)).toBe("failure_notice");
+    const record = readAnswerRecord(paired.id, "target_1", requestId);
+    expect(record).toMatchObject({ outcome: "failure_notice", delivery: "accepted", state: "finished" });
+    expect(record?.diagnostic?.source).toBeTruthy();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ outcome: "failure_notice", delivery: "accepted", diagnosticSource: record!.diagnostic!.source, owner: true, relayId: paired.id });
+    expect(typeof lines[0]!.durationMs).toBe("number");
+    expect("promptBytes" in lines[0]!).toBe(true);
+    const text = completion?.outcome === "answered" ? completion.answer.text : "";
+    expect(text.length).toBeGreaterThan(0);
+    expect(JSON.stringify(lines[0])).not.toContain(text);
+    expect(Object.keys(lines[0]!).sort()).toEqual(["delivery", "diagnosticSource", "durationMs", "event", "outcome", "owner", "promptBytes", "relayId", "requestId", "targetId"]);
+  } finally { logging.mockRestore(); info.mockRestore(); await service.close(); }
+});
+
 for (const worker of [false, true]) test(`owner runner exception is recorded before the stop wait and answered after confirmed stop (worker=${worker})`, async () => {
   const relayStore = await import("./store");
   const completions: unknown[] = [], journal: unknown[][] = [];
@@ -3446,7 +3491,7 @@ test(`a fresh process recovers an abandoned diagnosed owner failure: ${recovery}
       expect(completions).toEqual([expect.objectContaining({ outcome: "answered",
         answer: expect.objectContaining({ action: "reply", text: "Your request could not be completed. Please try again." }) })]);
       expect(JSON.stringify(completions)).not.toContain("RelayStoreBusy");
-      expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ state: "finished", outcome: "answered", delivery: "accepted",
+      expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ state: "finished", outcome: "failure_notice", delivery: "accepted",
         diagnostic: { source: "launch" }, answer: { text: "Your request could not be completed. Please try again." } });
     } else if (recovery === "completed") {
       expect(completions).toEqual([]);

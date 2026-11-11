@@ -483,6 +483,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "externalRelay.alarm": "Потребує уваги",
   "externalRelay.alarm.ownerStopQuarantined": "Зупинку запуску власника не підтверджено; запис збережено",
   "externalRelay.alarm.pendingDeliveryContext": "Пізня відповідь ще не має контексту доставки",
+  "externalRelay.outcome.failureNotice": "Не вдалося; запитувач отримав сповіщення про збій",
   "externalRelay.outcome.answered": "Відповіли",
   "externalRelay.outcome.declined": "Відхилено: {reason}",
   "externalRelay.outcome.failed": "Не вдалося: {reason}",

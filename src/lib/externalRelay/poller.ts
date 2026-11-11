@@ -15,7 +15,7 @@ import {
 import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { isStagingMode } from "@/lib/staging";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { noteRelayOutcome, relayActivity } from "./activity";
+import { noteRelayOutcome, relayActivity, relayOutcomeLabel } from "./activity";
 import { pruneAnswerRecords, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
 import { discoverRelay, ExternalRelayError, fetchRelayTargets, isUnknownFeatureRefusal, relayCall } from "./client";
 import { requestSchema, RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND, type ExternalRelayCompletion } from "./protocol";
@@ -149,8 +149,10 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
           const sent = await deliverOwnerLateAnswer(relay, run.requestId, pending.body, pending.files,
             () => ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId));
           if (sent.delivery === "accepted") {
+            // Failure custody replaces the saved text with the scrubbed notice.
             settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, "accepted", run.conversationId,
-              sent.body.outcome === "answered" ? sent.body.answer : null, true);
+              sent.body.outcome === "answered" ? sent.body.answer : null, true,
+              !!(run.ownerTurn.failureReply || run.ownerTurn.diagnostic));
             removeRunDirectory(run.runDir);
             dropRun(run.requestId);
           }
@@ -260,7 +262,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
       const sent = await deliverOwnerLateAnswer(relay, run.requestId, body, [],
         () => ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId));
       if (sent.delivery === "accepted") {
-        settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, "accepted", held.conversationId, failureAnswer, true);
+        settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, "accepted", held.conversationId, failureAnswer, true, true);
         removeRunDirectory(run.runDir);
         dropRun(run.requestId);
       }
@@ -313,14 +315,14 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
         if (delivery !== "accepted") {
           // Keep uncertain attempts fenced. A definite refusal leaves the
           // saved reply eligible for late delivery once its deadline passes.
-          settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery, held.conversationId, answer);
+          settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery, held.conversationId, answer, false, true);
           continue;
         }
       }
     }
     removeRunDirectory(run.runDir);
     const current = run.ownerTurn ? readRunLedger().runs.find(r => r.requestId === run.requestId) : undefined;
-    settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery, current?.conversationId, answer);
+    settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery, current?.conversationId, answer, false, true);
     settle();
   }
   await sweepConversationsAsync(readRelayStore().relays, Date.now(), Date.now() + 5_000);
@@ -542,12 +544,7 @@ async function poll(
         void run.then(leaseReady, leaseReady);
         const trackedRun = run
           .then((outcome) => {
-            noteRelayOutcome(
-              relay.id,
-              outcome
-                ? `${outcome.outcome}${outcome.outcome === "answered" ? "" : `:${outcome.reason}`}`
-                : "lease_lost",
-            );
+            noteRelayOutcome(relay.id, relayOutcomeLabel(outcome));
           })
           .catch(() => {
             noteRelayOutcome(relay.id, "local_error");

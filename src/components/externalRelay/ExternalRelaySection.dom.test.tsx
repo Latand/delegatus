@@ -758,6 +758,19 @@ test("a retained custody alarm shows beside the last request's own result", asyn
   expect(calm.querySelector("[data-external-relay-last-outcome]")?.textContent).toBe(outcome!);
 });
 
+test("a delivered failure notice reads differently from an answer", async () => {
+  accounts({ claude: [signedIn("main")] });
+  const outcomes: (string | null | undefined)[] = [];
+  for (const lastOutcome of ["answered", "failure_notice"]) {
+    answers.relay = { relays: [relay()], pending: [], status: [{ id: "relay-1", state: { state: "polling", lastOutcome, lastOutcomeAt: null, lastProgress: null }, running: {} }] };
+    route();
+    outcomes.push((await mount(<ExternalRelaySection />)).querySelector("[data-external-relay-last-outcome]")?.textContent);
+  }
+  expect(outcomes[0]).toBeTruthy();
+  expect(outcomes[1]).toBeTruthy();
+  expect(outcomes[1]).not.toBe(outcomes[0]);
+});
+
 /* Audit B35, B36: a target's settings and pause or resume show at once; the
    other controls stay usable, and a refusal shows the stored value with the error. */
 function heldPatch() {
