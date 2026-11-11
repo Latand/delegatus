@@ -595,6 +595,36 @@ export async function inspectAttemptTree(directory: string, original = directory
   }
 }
 
+/** An independent directory snapshot protects new markers even when expired
+ * evidence is deliberately discarded. Check it synchronously after every
+ * awaited observation and again at removal dispatch. Never follow links. */
+export async function snapshotAttemptProtection(directory: string, budgetMs = 30_000): Promise<{ current: () => boolean }> {
+  const until = performance.now() + Math.max(0, Math.min(30_000, budgetMs));
+  const directories = new Map<string, string>();
+  const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.mtimeNs, stat.ctimeNs].join(":");
+  const pending = [directory];
+  while (pending.length) {
+    if (performance.now() >= until || directories.size >= 10000) throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
+    const current = pending.pop()!, stat = fs.lstatSync(current, { bigint: true });
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("attempt protection directory changed");
+    directories.set(current, signature(stat));
+    const entries = fs.opendirSync(current);
+    try {
+      for (let entry; (entry = entries.readSync());) {
+        if (performance.now() >= until || pending.length + directories.size >= 10000)
+          throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
+        if (entry.isDirectory()) pending.push(path.join(current, entry.name));
+      }
+    } finally { entries.closeSync(); }
+  }
+  return { current: () => {
+    try {
+      for (const [file, before] of directories) if (signature(fs.lstatSync(file, { bigint: true })) !== before) return false;
+      return true;
+    } catch { return false; }
+  } };
+}
+
 /** An unreadable tree can retire only when the readonly namespace proves it
  * has no captures. The deletion namespace repeats that proof at dispatch. */
 export async function attemptTreeHasNoEvidence(directory: string, original: string): Promise<void> {
@@ -602,7 +632,7 @@ export async function attemptTreeHasNoEvidence(directory: string, original: stri
 }
 
 export async function removeAttemptTree(directory: string, original = directory, guard?: () => Promise<boolean>, requireNoEvidence = false,
-  dispatchGuard?: () => boolean, postDeleteGuard = dispatchGuard): Promise<void> {
+  dispatchGuard?: () => boolean, postDeleteGuard = dispatchGuard, discardExpiredEvidence = false): Promise<void> {
   if (requireNoEvidence) {
     const { identity } = await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
     removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
@@ -612,7 +642,7 @@ export async function removeAttemptTree(directory: string, original = directory,
   try { await fs.promises.rm(directory, { recursive: true, force: true }); }
   catch (error) {
     if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
-    const { identity } = await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
+    const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard);
     removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
   }
 }
