@@ -485,9 +485,13 @@ test("cold session facade opening yields while the SQLite writer is contended", 
   });
   try { expect(archive.archiveInactive()).toBeGreaterThan(0); }
   finally { archive.close(); }
-  const archivedDb = new Database(path.join(directory, "agent-registry.sqlite"), { readonly: true });
+  const archivedDb = new Database(path.join(directory, "agent-registry.sqlite"));
   try {
     expect(archivedDb.query("SELECT 1 FROM registry_cold WHERE collection='conversations' AND row_key=?").get(conversation.id)).toBeTruthy();
+    /* An open contends with a writer only when it has something to install,
+       so the registry is put one step behind: the open below must take the
+       write lock to restore the liveness projection's version. */
+    archivedDb.query("DELETE FROM registry_meta WHERE key='liveness_projection_version'").run();
   } finally { archivedDb.close(); }
   const holder = registryLockHolder(path.join(directory, "agent-registry.sqlite"));
   closeAgentRegistryForTests();
