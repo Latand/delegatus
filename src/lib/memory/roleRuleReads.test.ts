@@ -6,7 +6,7 @@ import path from "node:path";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rule-reads-"));
 process.env.LLV_STATE_DIR = path.join(root, "initial");
 const { resetProjectAliasesForTests } = await import("@/lib/projects/aliases");
-const { learnedRulesSnapshot, roleMemoryCollection, roleScope, stageLessons, storedLessonPatterns, storedLessonTexts, withoutStoredLessonsIn } = await import("./roleStore");
+const { learnedRulesSnapshot, roleMemoryCollection, roleScope, stageLessons, storedLessonPatternsIn, storedLessonTexts, withoutStoredLessonsIn } = await import("./roleStore");
 const { memoryProblemSignals, readMemoryProblem } = await import("./roleProblems");
 import type { LessonRequestRow, RoleMemoryRule, RoleMemoryScopeRow, ScopeHistoryEntry } from "./roleTypes";
 
@@ -57,8 +57,8 @@ test("the privacy matcher reads rule rows and decodes no scope row", () => {
   expect(texts.value).toContain(LESSON);
   expect(texts.value).toContain("Read the stored ledger revision before each shared write");
   expect(texts.bytes).toBeLessThan(64 * 1024);
-  const matched = decodedBytes(() => ({ patterns: storedLessonPatterns().length, text: withoutStoredLessonsIn(`before ${LESSON} after`) }));
-  expect(matched.value).toEqual({ patterns: 3, text: "before [learned rule] after" });
+  const matched = decodedBytes(() => ({ patterns: storedLessonPatternsIn(`before ${LESSON} after`).length, text: withoutStoredLessonsIn(`before ${LESSON} after`) }));
+  expect(matched.value).toEqual({ patterns: 1, text: "before [learned rule] after" });
   expect(matched.bytes).toBeLessThan(64 * 1024);
 });
 
