@@ -1472,3 +1472,142 @@ test("a conversation that takes over one the scanner found before a stop keeps t
     registry.close();
   }
 });
+
+/*
+ * The decision a send takes (section 12.10). A send to a conversation that is
+ * not on the account its engine is routed to follows routing, unless the
+ * opt-out that stands for the conversation names that account. One opt-out
+ * stands: the newest decision, written on the row already or still on its way
+ * from the sweep of a stop. The cases below hold the send to the answer it
+ * gives once every sweep has finished, wherever the sweeps have got to.
+ */
+
+/* The fourth review's sequence: a stop of the first target, a migration of the
+   active conversations to a second target, a stop of that one, and routing set
+   back to the first. The newest opt-out names the second target, so a send
+   follows routing to the first. */
+for (const firstSweepPending of [false, true]) {
+  test(`a send follows routing back to a target stopped before the stop of another target, with the first stop's sweep ${firstSweepPending ? "not started" : "finished"}`, async () => {
+    const answers: Array<{ laterSweepPending: boolean; target: string | null }> = [];
+    for (const laterSweepPending of [false, true]) {
+      const fixture = fixtureCopy();
+      const registry = open(fixture);
+      /* Inactive, and far outside each stop's own transaction. */
+      const id = fixture.sourceConversationIds.at(-1)! as ConversationId;
+      try {
+        clock(0);
+        if (firstSweepPending) await stopWithoutSweep(registry, fixture);
+        else expect((await registry.stopMigrationIntent(fixture.intentId, { expectedRevision: fixture.intentRevision })).acquired).toBe(true);
+        clock(1);
+        const later = registry.commitMigrationIntent({
+          engine: "codex", targetId: LATER_TARGET, origin: "manual", requestId: "later-active",
+          expectedRevision: registry.engineRouting("codex").revision, scope: "active",
+        });
+        expect(registry.conversation(id)!.migration).toBeNull();
+        clock(2);
+        if (laterSweepPending) await stopIntentWithoutSweep(registry, later.id);
+        else expect((await registry.stopMigrationIntent(later.id)).acquired).toBe(true);
+        clock(3);
+        registry.setEngineRouting("codex", MIGRATION_STOP_TARGET);
+        const sent = registry.requestConversationMigrationToActiveAccount(id);
+        answers.push({ laterSweepPending, target: sent.migration?.targetId ?? null });
+      } finally {
+        registry.close();
+      }
+    }
+    expect(answers).toEqual([
+      { laterSweepPending: false, target: MIGRATION_STOP_TARGET },
+      { laterSweepPending: true, target: MIGRATION_STOP_TARGET },
+    ]);
+  });
+}
+
+/* The same decision through the write a send makes: the reservation of the
+   message and the move that follows routing are one transaction. */
+test("a message admitted while two stops are unswept follows routing by the opt-out that stands", async () => {
+  const fixture = fixtureCopy();
+  const registry = open(fixture);
+  const [banned, free] = fixture.sourceConversationIds.slice(-2) as ConversationId[];
+  try {
+    clock(0);
+    await stopWithoutSweep(registry, fixture);
+    /* Routed to the stopped target, with its opt-out on the way: the message is admitted and nothing moves. */
+    expect(registry.holdDelivery(banned!, "sent after the stop", "sent-after-the-stop", "text", [], null, {}, { reseatToActiveAccount: {} }).state).toBe("assigned");
+    expect(registry.conversation(banned!)!.migration).toBeNull();
+
+    clock(1);
+    const later = registry.commitMigrationIntent({
+      engine: "codex", targetId: LATER_TARGET, origin: "manual", requestId: "later-active",
+      expectedRevision: registry.engineRouting("codex").revision, scope: "active",
+    });
+    clock(2);
+    await stopIntentWithoutSweep(registry, later.id);
+    /* Its message made the conversation active: the second migration enrolled it and the stop rolled that back.
+       Routed to the second target, the newest opt-out: the next message starts no other move. */
+    expect(registry.holdDelivery(banned!, "sent after the second stop", "sent-after-the-second-stop", "text", [], null, {}, { reseatToActiveAccount: {} }).state).toBe("assigned");
+    expect(registry.conversation(banned!)!.migration).toMatchObject({ intentId: later.id, targetId: LATER_TARGET, phase: "rolled-back" });
+
+    clock(3);
+    registry.setEngineRouting("codex", MIGRATION_STOP_TARGET);
+    /* Routed back to the first target, whose opt-out the second stop replaced: the message waits for the move. */
+    expect(registry.holdDelivery(free!, "sent after routing came back", "sent-after-routing-came-back", "text", [], null, {}, { reseatToActiveAccount: {} }).state).toBe("held");
+    expect(registry.conversation(free!)!.migration).toMatchObject({ targetId: MIGRATION_STOP_TARGET, phase: "requested" });
+
+    /* Both sweeps then leave the second stop's opt-out on both conversations, and the move as it was asked for. */
+    clock(4);
+    expect(await registry.continueMigrationStop(fixture.intentId)).toBe(true);
+    expect(await registry.continueMigrationStop(later.id)).toBe(true);
+    const finished = registry.readOnlySnapshot();
+    for (const intent of Object.values(finished.migrationIntents)) expect(intent.stopSweep).toBeUndefined();
+    for (const id of [banned!, free!]) expect(finished.conversations[id]!.migrationOptOut).toMatchObject({ targetId: LATER_TARGET, updatedAt: at(2) });
+    expect(finished.conversations[free!]!.migration).toMatchObject({ targetId: MIGRATION_STOP_TARGET, phase: "requested" });
+  } finally {
+    registry.close();
+  }
+});
+
+/* An opt-out stored by a release from before the order has no place, and a
+   sweep orders its stop against it by time, keeping it at an equal time
+   (section 12.8). A send reads the same order before the sweep arrives. */
+test("a send orders an opt-out stored without a place against an unswept stop as the sweep will", async () => {
+  const answers: Array<{ sweepPending: boolean; older: string | null; sameInstant: string | null }> = [];
+  for (const sweepPending of [false, true]) {
+    const fixture = fixtureCopy();
+    const [older, sameInstant] = fixture.sourceConversationIds.slice(-2) as ConversationId[];
+    const legacy = { [older!]: { targetId: MIGRATION_STOP_TARGET, updatedAt: at(0) }, [sameInstant!]: { targetId: MIGRATION_STOP_TARGET, updatedAt: at(2) } };
+    const stored = new Database(fixture.sqliteFilename);
+    try {
+      for (const [id, optOut] of Object.entries(legacy)) {
+        const changed = stored.query("UPDATE registry_rows SET value_json = json_set(value_json, '$.migrationOptOut', json(?)) WHERE collection = 'conversations' AND row_key = ?")
+          .run(JSON.stringify(optOut), id);
+        expect(changed.changes).toBeGreaterThan(0);
+      }
+    } finally {
+      stored.close();
+    }
+    const registry = open(fixture);
+    try {
+      /* The fixture's draining intent is moved to a second target, which enrols no inactive conversation, and stopped there. */
+      clock(1);
+      const later = registry.commitMigrationIntent({
+        engine: "codex", targetId: LATER_TARGET, origin: "manual", requestId: "later-active",
+        expectedRevision: registry.engineRouting("codex").revision, scope: "active",
+      });
+      clock(2);
+      if (sweepPending) await stopIntentWithoutSweep(registry, later.id);
+      else expect((await registry.stopMigrationIntent(later.id)).acquired).toBe(true);
+      clock(3);
+      registry.setEngineRouting("codex", MIGRATION_STOP_TARGET);
+      const target = (id: ConversationId) => registry.requestConversationMigrationToActiveAccount(id).migration?.targetId ?? null;
+      answers.push({ sweepPending, older: target(older!), sameInstant: target(sameInstant!) });
+    } finally {
+      registry.close();
+    }
+  }
+  /* Stored a second before the stop: the stop is the newer decision and the first target is free again.
+     Stored in the stop's own millisecond: kept, so the conversation stays opted out of the first target. */
+  expect(answers).toEqual([
+    { sweepPending: false, older: MIGRATION_STOP_TARGET, sameInstant: null },
+    { sweepPending: true, older: MIGRATION_STOP_TARGET, sameInstant: null },
+  ]);
+});

@@ -1563,22 +1563,25 @@ function stopSweepOptsOut(
 }
 
 /** The stopped intents of an engine whose sweep still has an opt-out to
-    write, from `targetId` alone when one is named. */
-function pendingStopSweeps(file: RegistryFile, engine: AgentEngine, targetId?: string): MigrationIntent[] {
+    write, whatever target each stopped: the newest of their decisions is the
+    one that stands, so a reader that picked them by target would miss it. */
+function pendingStopSweeps(file: RegistryFile, engine: AgentEngine): MigrationIntent[] {
   return Object.values(file.migrationIntents).filter((intent) =>
-    intent.state === "stopped" && intent.engine === engine && intent.stopSweep?.optOut === true
-    && (targetId === undefined || intent.targetId === targetId));
+    intent.state === "stopped" && intent.engine === engine && intent.stopSweep?.optOut === true);
 }
 
-/** A stop decides the opt-out and its sweep writes it. Until the sweep reaches
-    a conversation, the decision is read from the stopped intent, so no caller
-    sees the conversation as free to move in between. */
-function stopSweepStillOptsOut(conversation: RegistryConversation, sweeps: readonly MigrationIntent[]): boolean {
-  return sweeps.some((intent) => stopSweepOptsOut(conversation, intent, intent.stopSweep!));
-}
-
-/** The opt-out that stands for a conversation: the one stored on it, or a
-    newer one that a stop decided and its sweep has not written yet. */
+/**
+ * The opt-out that stands for a conversation: the one stored on it, or a
+ * newer one that a stop decided and its sweep has not written yet.
+ *
+ * A stop decides the opt-out and its sweep writes it. Until the sweep reaches
+ * a conversation the decision is read from the stopped intent, so whoever
+ * decides whether the conversation may move reads this, with every unfinished
+ * stop of the engine ({@link pendingStopSweeps}). The stored slot by itself
+ * can be behind in both directions: empty or older while a stop of the
+ * asked-for target is on its way, and still naming a target while a newer
+ * stop of another target has replaced that decision.
+ */
 function standingMigrationOptOut(
   conversation: RegistryConversation,
   sweeps: readonly MigrationIntent[],
@@ -10950,7 +10953,6 @@ export class AgentRegistry {
     const targetId = file.engineRouting[conversation.engine].activeAccountId;
     const source = conversation.generations.at(-1);
     if (!targetId || !source || source.accountId === null || source.accountId === targetId) return clone(conversation);
-    if (conversation.migrationOptOut?.targetId === targetId) return clone(conversation);
     /* The launch's own first message (#2051). The launch picked this account
        moments ago by the automatic rule, where the project's pool ranks
        accounts by room and routing only breaks a tie. Moving the
@@ -10992,11 +10994,21 @@ export class AgentRegistry {
       return clone(conversation);
     }
 
-    /* A stop whose sweep has not reached this conversation yet already opted
-       it out, unless something was decided for the conversation since. Read
-       here, where the intents are listed anyway, so the checks above cost a
-       send nothing more than they did. */
-    if (stopSweepStillOptsOut(conversation, pendingStopSweeps(file, conversation.engine, targetId))) return clone(conversation);
+    /* Whether the conversation is opted out of the routed account is one
+       decision, read once: the opt-out that stands, stored already or still
+       on its way from the sweep of a stop. While a stop is writing, the
+       stored slot by itself is behind. It can be empty while a stop of the
+       routed account is on its way, and it can still name the routed account
+       after a newer, unswept stop of another account replaced that opt-out.
+       The stops of the routed account by themselves miss that newer stop as
+       well, and the conversation then stayed off an account it was free to
+       move to until the sweep arrived. Every return above leaves the
+       conversation as it is, so the decision is read here, where the intents
+       are listed anyway, and a send that an earlier check stops lists
+       nothing. With no stop writing, this is the stored slot. */
+    if (standingMigrationOptOut(conversation, pendingStopSweeps(file, conversation.engine))?.targetId === targetId) {
+      return clone(conversation);
+    }
     const changedAt = now();
     let intent = Object.values(file.migrationIntents)
       .filter((candidate) => candidate.engine === conversation.engine && candidate.targetId === targetId && candidate.state !== "stopped" && engineScopedIntent(candidate))
