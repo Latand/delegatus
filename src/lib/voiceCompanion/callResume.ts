@@ -146,21 +146,22 @@ export const spoke = (entries: readonly TranscriptEntry[]) =>
 
 const PRIVATE_MARKER = "A private part of this call is not repeated here.";
 const short = (text: string) => { const line = text.replace(/\s+/gu, " ").trim(); return line.length > LINE_LIMIT ? `${line.slice(0, LINE_LIMIT - 1)}…` : line; };
+interface ContinuationLine { text: string; required?: boolean; waiting?: boolean; status?: string; instruction?: string }
 /** One line per settled turn, request and report, in order. A part stops at its private-history cut. */
-function lines(segment: CallSegment, clock: VoiceClock, now: number, point?: ResumePoint, cursor?: ResumeCursor, requests?: ReadonlySet<TranscriptEntry>): Array<{ text: string; waiting?: boolean }> {
+function lines(segment: CallSegment, clock: VoiceClock, now: number, point?: ResumePoint, cursor?: ResumeCursor, requests?: ReadonlySet<TranscriptEntry>): ContinuationLine[] {
   const { rows, cut, history } = privateCut(segment.entries);
-  const said = rows.slice(0, cut).flatMap(row => {
+  const said = rows.slice(0, cut).flatMap<ContinuationLine>(row => {
     const data = row.data;
     const at = `[${clock.when(segment.createdAt + row.atMs, now)}] `;
     if ((row.kind === "utterance" || row.kind === "reply") && data.final === true && typeof data.text === "string" && data.text.trim()) {
       const cut = point?.resumeOf.part === segment.id && point.resumeOf.item === row.id;
       const speaker = row.kind === "utterance" ? cursor?.operatorOpen === row.id ? "operator (cut off, unanswered)" : cut ? "operator (unanswered)" : "operator"
         : cut ? `voice (cut; the operator heard up to «${short(point.heard)}»)` : cursor?.unplayed?.includes(row.id) ? "voice (unheard)" : "voice";
-      return [{ text: `${at}${speaker}: ${short(cut && point.kind === "reply" ? point.remaining : data.text)}` }];
+      return [{ text: `${at}${speaker}: ${short(cut && point.kind === "reply" ? point.remaining : data.text)}`, required: cut || cursor?.operatorOpen === row.id }];
     }
     if (row.kind === "request" && typeof data.instruction === "string" && (!requests || requests.has(row))) {
       const waiting = ["sending", "queued", "delivered", "unknown"].includes(String(data.status));
-      return [{ text: `${at}request to the orchestrator (${String(data.status)}${waiting ? "; waiting for the orchestrator's answer" : ""}): ${short(data.instruction)}`, waiting }];
+      return [{ text: `${at}request to the orchestrator (${String(data.status)}${waiting ? "; waiting for the orchestrator's answer" : ""}): ${short(data.instruction)}`, waiting, status: String(data.status), instruction: short(data.instruction) }];
     }
     if (row.kind === "report" && typeof data.text === "string") return [{ text: `${at}orchestrator report (${String(data.status)}): ${short(data.text)}` }];
     return [];
@@ -184,14 +185,28 @@ export function continuationBlock(segments: readonly CallSegment[], options: { d
   const rows = segments.flatMap(segment => lines(segment, clock, now, options.point,
     segment.id === (options.cursorPart ?? options.point?.resumeOf.part) ? options.cursor : undefined, requests));
   const all = rows.map(row => clean(row.text));
-  const notes = options.summary ? clean(`Your notes on the earlier part of this call: ${summaryText(options.summary)}`) : null;
+  let notes = options.summary ? clean(`Your notes on the earlier part of this call: ${summaryText(options.summary)}`) : null;
   const compose = (kept: readonly string[]) => {
     const omitted = all.length - kept.length;
     return [header, ...(omitted && notes ? [notes] : []), ...(omitted ? [`[${omitted} earlier lines of this call are not repeated here]`] : []), ...kept].join("\n");
   };
-  // Open requests have priority over old speech, while the selected rows keep journal order.
+  // Keep the current cut and every open request ahead of optional history. Long descriptions share the room.
+  const critical = rows.flatMap((row, index) => row.required ? [index] : []);
+  const pending = rows.flatMap((row, index) => row.waiting ? [index] : []);
+  const priority = [...new Set([...critical, ...pending])];
+  if (compose(priority.map(index => all[index]!)).length > budget) {
+    notes = null;
+    if (pending.length && compose(priority.map(index => all[index]!)).length > budget) {
+      const reserved = header.length + critical.reduce((size, index) => size + all[index]!.length + 1, 0) + 100;
+      const room = Math.max(0, Math.floor((budget - reserved) / pending.length) - 1);
+      for (const index of pending) {
+        const row = rows[index]!;
+        const value = clean(`request (${row.status}; waiting): ${row.instruction}`);
+        all[index] = value.length <= room ? value : room > 0 ? `${value.slice(0, room - 1)}…` : "";
+      }
+    }
+  }
   const selected = new Set<number>();
-  const priority = rows.flatMap((row, index) => row.waiting ? [index] : []);
   for (const index of [...priority, ...all.map((_, index) => index).reverse()]) {
     if (selected.has(index)) continue;
     const next = [...selected, index].sort((a, b) => a - b).map(at => all[at]!);
