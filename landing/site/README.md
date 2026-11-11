@@ -228,7 +228,7 @@ product file, compare the drawing, fix `boardDemo.js` and `styles.css`.
 | Seat draft («Create the orchestrator for …», Runs on, the cream button) | `src/components/orchestrator/OrchestratorPanel.tsx`, `RunsOnRow.tsx` |
 | Seat head (costume avatar, dot and word, role tab, chips) | `OrchestratorPanel.tsx`, `IncumbentHeader.tsx`, `src/components/brand/RoleAvatar.tsx` |
 | Chat rows, tool rows, «Worked for», the turn line | `src/components/feed/FeedItem.tsx`, `UserMessageRow.tsx`, `cards/ToolCard.tsx` |
-| Composer (placeholder, mic, send, footer row) | `src/components/TmuxComposer.tsx` |
+| Composer (placeholder, mic, send, footer row) | `src/components/ConversationComposer.tsx` |
 | Phone composer (one box, field above the tools row: model chip, attach, dictate, send) | `src/components/ComposerBar.tsx` (`unitTools`) |
 | Phone seat badge and chat state line | `src/components/mobile/MobileOrchestratorSheet.tsx` (`SeatBadge`), `MobileBoard.tsx` (`statePhrase`), `MobileFocusView.tsx` |
 | Columns, strips, empty boxes, counts | `src/components/kanban/KanbanBoard.tsx`, `kanbanLayout.ts`, `kanbanBoard.css` |

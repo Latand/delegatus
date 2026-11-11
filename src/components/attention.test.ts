@@ -37,7 +37,6 @@ function question(toolUseId: string, askedAt: number): PendingQuestion {
     toolUseId,
     transcriptPath: "/t",
     pid: 1,
-    paneTarget: null,
     askedAt: new Date(askedAt * 1000).toISOString(),
   };
 }

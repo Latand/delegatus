@@ -12,14 +12,14 @@ import { AgentControlStrip } from "../AgentControlStrip";
 import { LogFeed } from "../LogFeed";
 import { ToolDisclosurePolicy } from "../feed/toolDisclosure";
 import { DeadHostBanner } from "../runtime/DeadHostBanner";
-import { TmuxComposer } from "../TmuxComposer";
+import { ConversationComposer } from "../ConversationComposer";
 import { useAgentCapabilities } from "../useAgentCapabilities";
 
 const noop = () => undefined;
 
 /**
  * The orchestrator's REAL conversation, in the dock column (PRD #976 decision 2:
- * `LogFeed` + `TmuxComposer`, never a bespoke chat renderer). Composed exactly
+ * `LogFeed` + `ConversationComposer`, never a bespoke chat renderer). Composed exactly
  * as `BranchPane` composes them — the same feed, the same agent controls, the
  * same dead-host recovery, the same composer — so a message typed here takes
  * the composer's ordinary delivery path and a dead conversation is RESUMED by
@@ -79,7 +79,7 @@ export function OrchestratorConversation({ file, projectName, hostControls = tru
             the strip is left for a seat whose composer stands down. */}
         {sendCap.state === "hidden" ? <AgentControlStrip file={file} /> : null}
         <div ref={setStepsMount} className="contents" />
-        <TmuxComposer
+        <ConversationComposer
           file={file}
           deadHost={deadHost}
           sendBlockedReason={sendBlockedReason}

@@ -27,7 +27,6 @@ for (const directory of Object.values(environment).filter(value => value !== "1"
 
 const scanner = await import("./index");
 const processes = await import("./process");
-const tmux = await import("@/lib/tmux");
 const reader = await import("@/lib/session/reader");
 const durableJson = await import("@/lib/state/durableJson");
 const flows = await import("@/lib/flows/engine");
@@ -77,7 +76,6 @@ function fixture() {
   const cacheRead = spyOn(durableJson, "readJsonCache");
   spies.push(sessionRead, cacheRead,
     spyOn(processes, "agentProcesses").mockReturnValue([]),
-    spyOn(tmux, "panePidMap").mockResolvedValue({ kind: "no-server" }),
     spyOn(flows, "tickFlows").mockResolvedValue({ flows: [], changed: false }),
     spyOn(pipelines, "tickPipelines").mockResolvedValue({ pipelines: [], changed: false }),
     spyOn(workflows, "tickWorkflows").mockResolvedValue({ workflows: [], changed: false }));

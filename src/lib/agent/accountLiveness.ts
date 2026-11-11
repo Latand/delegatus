@@ -150,7 +150,6 @@ function withinGrace(timestamp: string | null | undefined, probe: LivenessProbe)
  */
 export function entryIsLive(entry: AgentRegistryEntry, probe: LivenessProbe): boolean {
   if (!HOSTED_ENTRY_STATUSES.has(entry.status)) return false;
-  if (identityAlive(entry.host?.agent, probe) || identityAlive(entry.host?.panePid, probe)) return true;
   if (identityAlive(entry.structuredHost?.process ?? null, probe)) return true;
   return withinGrace(entry.updatedAt, probe);
 }
