@@ -1000,6 +1000,9 @@ one every owner conversation already has: after the owner writes, the seat acts
 with the owner's reach while the member's earlier request is still in its
 context. An older build reads a `workspaceFromMessage` seat as a plain member
 binding, which is the narrower answer.
+A seat record written before the field existed, bound by an agent-triggered
+designation, is read as message authority, so a seat an earlier release bound
+this way answers to the next person who writes to it with no state edit.
 
 Authority resolution shares one lazy seat map across the parent chain. The
 process retains one map for the seats file's path and filesystem identity;

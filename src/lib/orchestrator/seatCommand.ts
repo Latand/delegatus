@@ -79,6 +79,7 @@ import {
   orchestratorSeatFor,
   repairOrchestratorSeatRuntimeIdentity,
   prepareOrchestratorSeatAuthCredentialBaseline,
+  seatWorkspaceFromMessage,
   type OrchestratorSeat,
   type OrchestratorSeatTerminalization,
   type StillbornSeatRollback,
@@ -137,7 +138,7 @@ function seatWorkspace(project: string, admission: SeatLaunchAdmission | undefin
     if (!admission?.workspace) return triggered;
   }
   if (admission?.workspace) return { principal: admission.workspace, fromMessage: false };
-  if (incumbent?.workspace && !incumbent.workspaceFromMessage) return { principal: incumbent.workspace, fromMessage: false };
+  if (incumbent?.workspace && !seatWorkspaceFromMessage(incumbent)) return { principal: incumbent.workspace, fromMessage: false };
   return incumbent?.conversationId ? reach(incumbent.conversationId) : { principal: null, fromMessage: false };
 }
 function seatWorkspaceInput(reach: WorkspaceReach): { workspace?: WorkspacePrincipal; workspaceFromMessage?: boolean } {

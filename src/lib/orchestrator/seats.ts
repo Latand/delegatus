@@ -82,12 +82,13 @@ export interface OrchestratorSeatTrigger {
 
 export interface OrchestratorSeat {
   workspace?: import("@/lib/team/workspacePrincipal").WorkspacePrincipal;
-  /** `workspace` came from a member's message to a seat this one replaced, and
-      nobody designated this seat for that member. Such a fence is message
-      authority: the next person who writes to this seat's conversation decides
-      its reach, exactly as on the conversation the member wrote to. Absent, the
-      binding is the designation itself and no later message changes it. */
-  workspaceFromMessage?: true;
+  /** True: `workspace` came from a member's message to a seat this one
+      replaced, and nobody designated this seat for that member. Such a fence is
+      message authority: the next person who writes to this seat's conversation
+      decides its reach. False: the binding is the designation itself and no
+      later message changes it. Absent on records written before the field
+      existed; read it through `seatWorkspaceFromMessage`. */
+  workspaceFromMessage?: boolean;
   project: string;
   /** Monotonic designation epoch; strictly increases across the whole file. */
   seatEpoch: number;
@@ -337,7 +338,7 @@ function normalizeSeat(value: unknown): OrchestratorSeat | null {
   return {
     project: seat.project,
     ...(seat.workspace ? { workspace: { ...seat.workspace } } : {}),
-    ...(seat.workspace && seat.workspaceFromMessage === true ? { workspaceFromMessage: true as const } : {}),
+    ...(seat.workspace && typeof seat.workspaceFromMessage === "boolean" ? { workspaceFromMessage: seat.workspaceFromMessage } : {}),
     seatEpoch: seat.seatEpoch,
     conversationId: seat.conversationId ?? null,
     path: seat.path ?? null,
@@ -1071,7 +1072,7 @@ export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginS
     }
     const seat: OrchestratorSeat = {
       ...(input.workspace ? { workspace: { ...input.workspace } } : {}),
-      ...(input.workspace && input.workspaceFromMessage ? { workspaceFromMessage: true as const } : {}),
+      ...(input.workspace ? { workspaceFromMessage: input.workspaceFromMessage === true } : {}),
       project,
       seatEpoch: file.nextSeatEpoch,
       conversationId: input.conversationId ?? null,
@@ -1465,6 +1466,16 @@ export function activeOrchestratorSeatsOrUnknown(): OrchestratorSeat[] | null {
 // One file and one map per process, evicted on path or filesystem identity
 // changes. Every call stats the file: peer writes, revocations, permission
 // changes and atomic replacements take effect without a polling interval.
+/** A record written before the field existed cannot say where its binding came
+    from. An agent-triggered designation only ever copied the reach of the
+    conversation behind it, and that copy is how a member's message became a
+    permanent binding, so such a record is read as message authority: it stays
+    fenced until a person writes to the seat, and then that person decides. */
+export function seatWorkspaceFromMessage(seat: Pick<OrchestratorSeat, "workspace" | "workspaceFromMessage" | "triggeredBy">): boolean {
+  if (!seat.workspace) return false;
+  return seat.workspaceFromMessage ?? seat.triggeredBy?.kind === "agent";
+}
+
 /** What a designation recorded about one seat conversation's workspace reach. */
 export interface SeatWorkspaceBinding {
   workspace: OrchestratorSeat["workspace"];
@@ -1489,7 +1500,7 @@ export function orchestratorWorkspacePrincipalsOrUnknown(): ReadonlyMap<string |
     return workspacePrincipalsCache.principals;
   const seats = activeOrchestratorSeatsOrUnknown();
   const principals = seats === null ? null : new Map(seats.map(seat => [seat.conversationId,
-    { workspace: seat.workspace, fromMessage: seat.workspaceFromMessage === true }]));
+    { workspace: seat.workspace, fromMessage: seatWorkspaceFromMessage(seat) }]));
   workspacePrincipalsCache = principals === null ? undefined : { file, identity, principals };
   return principals;
 }

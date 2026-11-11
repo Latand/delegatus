@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { statePath } from "@/lib/configDir";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { closeAgentRegistryForTests, type RegistryConversation } from "@/lib/agent/registry";
 import type { ViewerMcpDomainDependencies } from "@/lib/mcp/bindings";
@@ -204,4 +205,21 @@ test("a seat a member designated keeps the member's reach whatever the owner wri
   await seatRotatesItself(third);
   writes(owner, third);
   expect(await reach(third)).toEqual(MEMBER_REACH);
+});
+
+test("a seat stamped by an agent's rotation before the fix answers to the owner's message with no manual repair", async () => {
+  const stamped = "conversation_22222222-2222-4222-8222-222222222222";
+  beginOrchestratorSeatIntent({ project: PROJECT, mandate: "own the board", clientRequestId: "stamped_000001", mode: "spawn", telegramGrant: true,
+    workspace: scope, triggeredBy: { kind: "agent", conversationId: SEAT, seatEpoch: 1 }, now: AT });
+  completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "stamped_000001", conversationId: stamped, path: `${stamped}.jsonl`, now: AT });
+  // The record as the earlier release wrote it: no word on where the binding came from.
+  const file = statePath("orchestrator-seats.json");
+  const seats = JSON.parse(fs.readFileSync(file, "utf8"));
+  delete seats.seats[PROJECT].workspaceFromMessage;
+  fs.writeFileSync(file, JSON.stringify(seats));
+  launched.set(stamped, { workspace: scope, parent: SEAT });
+  writes(member, SEAT);
+  expect(await reach(stamped)).toEqual(MEMBER_REACH);
+  writes(owner, stamped);
+  expect(await reach(stamped)).toEqual(OWNER_REACH);
 });
