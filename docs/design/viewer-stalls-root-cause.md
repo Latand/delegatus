@@ -6,7 +6,7 @@ observation of one busy installation (24 CPUs, about 115 live agent processes, r
 diagnosis as it was handed to the build; section 12 records what was built, with the
 before and after measurements, and what the build moved to the deferred list. Sections
 12.7, 12.8 and 12.9 record what the three reviews of the build found in fix 1 and how
-each was fixed.
+each was fixed, and section 12.10 does the same for the final check that followed them.
 
 This document answers four questions: what stops the Viewer and the runtime host, who
 holds the locks and for how long, what changed around 2026-10-28, and which fixes this
@@ -526,6 +526,7 @@ the files named above.
 | The state store sets `auto_vacuum` on its open too | `src/lib/state/sqliteStateStore.ts`, the statement beside the store's schema. Whether it runs on every open of an existing database, and so takes a write transaction each time as the registry's did, was not established | Read and measure before changing: the state store's open path has its own retry |
 | The plain registry snapshot brings its view up to date in one synchronous step | Section 12.7: 538 to 923 ms on the loop after one small transaction at incident size (load average 29 to 32); 127 and 134 ms after 32 and 1 280 changed rows (load average 19). The hygiene pass still reads it after a stop, in the helper process (`terminalizeStaleUndeliverableHeldDeliveries` in `src/lib/reaperRuntime.ts`), as it did on the base | The stop no longer reads it. Its other callers each have to move to the prepared view or to a keyed read, which is the open work on registry reads |
 | Direct `setImmediate` yields and the unlabelled zero-timer yields | Section 3.3: 58 places call `setImmediate` directly; two zero-timer yields carry no label (`src/lib/state/sqliteStateStore.ts`, `src/lib/pipelines/store.ts`) | Fix 5 moves `yieldToRuntime` and the three labelled zero-timer yields. The counter of section 12.5 says after a deploy whether the rest matter |
+| A send that reaches the opt-out reads every migration intent of the registry | Section 12.10: 0.33 to 0.37 ms before, 0.88 to 1.03 ms after, per send that the standing opt-out stops, with 87 intents. A conversation that starts and a change of account make the same read (section 12.9) | A stored value beside the engine's routing that says whether a stop is still writing would spare the read when none is. Every stop, sweep and withdrawal would have to keep it right, which is the kind of ordering four reviews found defects in. Not built; measure sends after a deploy first |
 | The whole-registry reading shows a stopped migration as waiting until the sweep has written it | Section 12.8: `readOnlySnapshot` is the stored rows; the Accounts panel and the coordinator's work list read it | Every decision is taken from the keyed read, which shows the stop at once; a projection over the whole reading would cost every reader of it |
 
 ## 11. Check after deploy
@@ -587,7 +588,9 @@ ordered against what is decided in between, and how the stop leaves the loop fre
 Section 12.8 describes how the stop is in force for every conversation the intent owns
 before the sweep reaches it, and how decisions made in the same millisecond are ordered.
 Section 12.9 describes how the sweep tells which conversations the stop covered without
-reading the clock.
+reading the clock. Section 12.10 describes how a send that follows routing reads the one
+opt-out that stands while sweeps are unfinished, and holds the table of orderings that
+decision is tested against.
 
 The readiness signature is computed inside the stop's transaction over the
 conversations the stop rolls back, where section 9 said once and outside the lock:
@@ -736,7 +739,8 @@ timers run between its slices.
 
 ### 12.6 Checks run
 
-Run on the final tree, after the changes of section 12.9.
+Run on the tree of section 12.9. The change of section 12.10 came after them, and the
+checks run for it are listed there.
 
 - **Tests.** One file per isolated command (private home, temporary directory and state
   directory, the control URL on a closed port), thirty files. These pass:
@@ -866,11 +870,12 @@ Two limits were left by choice in this round. The first no longer holds: decisio
 stamped in the same millisecond as a stop were kept by its sweep, whichever was written
 first, because the registry had no finer order than its clock. The second review showed
 that this loses a stop that follows another decision within one millisecond, and
-section 12.8 gives every decision a place of its own. The second limit stands: a send
-that follows routing checks the stored opt-out before it lists the intents, as it did
-before fix 1, so a conversation with an older opt-out from the routed account stays
-there until a pending sweep of another target has reached it, where the base would
-have moved it.
+section 12.8 gives every decision a place of its own. The second no longer holds
+either: a send that follows routing checked the stored opt-out before it listed the
+intents, as it did before fix 1, so a conversation with an older opt-out from the routed
+account stayed there until a pending sweep of another target had reached it, where the
+base would have moved it. The final check of the build reported that as a defect, and
+section 12.10 has the send read the opt-out that stands.
 
 #### The loop during a stop
 
@@ -1197,8 +1202,8 @@ Limits, by choice:
   conversation is placed behind it and it covers by account alone.
 - While a stop is writing, each conversation that starts and each change of account
   reads the engine's intents once to find the unfinished stops. The same read is made
-  by every send that follows routing. Its cost was not measured, and no gain is claimed
-  for this round.
+  by a send that follows routing as far as the opt-out. Its cost was not measured in
+  this round, and no gain is claimed for it; section 12.10 measures it for the send.
 
 #### Measurements of this round
 
@@ -1227,3 +1232,229 @@ durations and the longest holds overlap, so neither a gain nor a loss is read fr
 them. Neither probe starts or moves a conversation during the sweep: the early write
 of this round, one conversation in the transaction of the writer that changes it, was
 not measured at incident size.
+
+### 12.10 Review round 4: a send reads the opt-out that stands
+
+The final check of the build found one defect in fix 1, in the path the three rounds
+before it had reworked. A send to a conversation that is not on the account its engine
+is routed to follows routing, unless the conversation is opted out of that account
+(`requestConversationMigrationToActiveAccount` in `src/lib/agent/registry.ts`, which the
+admission of a message also runs inside its own transaction). The send read the opt-out
+in two places, and neither read was the opt-out that stands:
+
+- First it read the value stored on the conversation, and stopped when that named the
+  routed account. Section 12.7 had recorded this read as a limit left by choice.
+- Later, where it lists the intents, it looked at the unfinished stops of the routed
+  account alone. That read came with fix 1.
+
+The review's sequence: a stop of target A; a manual migration of the active
+conversations to B, which leaves an inactive conversation where it is; a stop of B whose
+sweep has not run; routing set back to A; a send to the inactive conversation. The stop
+of B is the newest decision for that conversation, so it is opted out of B and free to
+follow routing to A. With B's sweep finished the send asked for the move to A. With it
+unfinished the send asked for nothing. When A's sweep had finished, the first read
+found A's stored opt-out. When neither sweep had finished, the second read found A's
+unfinished stop and never looked at B's. The conversation then stayed on its account
+until B's sweep reached it, which after a refused write waits for the next hygiene
+pass. The base, one transaction per stop, moved it. By the review's own logs its probe
+passes 2 of 2 on the lane's base and fails 2 of 2 on the head it read; its two cases,
+brought into the stop's test file, fail on that head and pass on this one.
+
+#### One decision
+
+The send now reads one decision, once: the opt-out that stands for the conversation
+(`standingMigrationOptOut`), taken over every unfinished stop of the engine, whatever
+account each stopped (`pendingStopSweeps`, which no longer takes an account to pick
+by). It is the function the engine-wide migration, the reseat and the takeover of a
+scanner-made conversation already read. Both earlier reads are removed, with the helper
+that served the second.
+
+The decision is read where the intents are listed anyway, after the checks that list
+nothing: the pin, the launch's own first message, a reseat still carrying its message,
+the project's pool, the placed account, and a migration parked for an explicit retry.
+Each of those returns the conversation as it is, so reading the opt-out after them
+changes no answer, and a send that one of them stops reads no intents, as before.
+
+After this change the stored opt-out is read by itself in three kinds of place, and
+none of them decides whether a conversation may move: the sweep, which compares the
+stored value with its own stop to order its late write; the writers that put the
+standing opt-out down on the row (a change of account, a pinned conversation in a
+manual migration, a takeover); and the function that computes the standing opt-out.
+
+#### The table of orderings
+
+Four reviews in a row found an ordering the stop got wrong, each in code the round
+before had changed. This round wrote the orderings down as a table and runs the table
+as tests (`src/lib/agent/registry.migrationStop.orderings.fixture.ts`, run by
+`src/lib/agent/registry.migrationStop.orderings.test.ts` and
+`src/lib/agent/registry.migrationStop.orderingClocks.test.ts`).
+
+A row is a sequence of decisions, and names what a send then answers for a fixed cast:
+two conversations on the source account, one in the first transaction of a sweep and
+one in the last; a pinned one; one already on the stopped account; one on the second
+account; and each conversation the row starts. The twenty rows:
+
+| Row | Decisions, in order | The send then moves |
+|---|---|---|
+| 1 | Stop of A; a conversation starts | Only the one that started |
+| 2 | Stop of A; routing to B | The source conversations and the one on A, to B |
+| 3 | Stop of A; routing to B; routing to A | None |
+| 4 | Stop of A; migration of the active conversations to B; a conversation starts; stop of B | None |
+| 5 | Row 4, then routing to A (the review's sequence) | The source conversations and the one that started, to A |
+| 6 | Stop of A; migration of every conversation to B; stop of B; routing to A | The source conversations, to A |
+| 7 | Stop of A; migration of the active to B; stop of B; a source conversation moved onto A | None |
+| 8 | Stop of A; migration of the active to B; stop of B; a source conversation moved onto B; routing to A | The source conversations, to A |
+| 9 | Stop of A; migration of the active to B; stop of B; routing to A; routing to B | None |
+| 10 | Stop of A; manual migration of the active back to A; a conversation starts; stop of that migration | None |
+| 11 | Stop of A; migration of the active to B; stop of B; manual migration of the active to A; a conversation starts; stop of that migration; routing to B | The source conversations and the one that started, to B |
+| 12 | Stop of A; manual migration of the active back to A | The source conversations and the one on B, to A |
+| 13 | Stop of A; automatic migration of every conversation to A | None |
+| 14 | Stop of A; migration of the active to B; a conversation starts; stop of B; automatic migration of every conversation to A | The source conversations and the one that started, to A |
+| 15 | Stop of A; routing to B; the same intent stopped again; routing to A | None |
+| 16 | Stop of A; a conversation starts; the same intent stopped again | None |
+| 17 | Stop of A; routing to B; a send that follows routing; a conversation starts; stop of the migration that send started; routing to A | The source conversations and the one that started, to A |
+| 18 | Stop of A; a reseat onto A; its rollback | None |
+| 19 | Stop of A; a reseat onto A; routing to B; its rollback; routing to A | The reseated conversation, to A |
+| 20 | Stop of A; a reseat onto A; its rollback; migration of the active to B; stop of B; routing to A | The source conversations, to A |
+
+Each row is run once with every sweep finished inside its stop and the registry kept
+open, and that run is held to the answers the row names. It is then run again for every
+way its sweeps can be left:
+
+- each stop's sweep finished at once or left unfinished, in every combination;
+- an unfinished sweep left in one of two ways: not started, or ended by a refused write
+  after its first transaction, which leaves the conversations of that transaction
+  written and the rest not;
+- the unfinished sweeps left for after the send, or resumed before it: each one alone,
+  all of them oldest first, all of them newest first;
+- the sweeps still left after the send finished oldest first or newest first;
+- every stop made through the synchronous form.
+
+Every one of those runs reopens the registry between every two steps, so each value a
+decision reads comes back from the store; the runs that resume no sweep before the send
+are made a second time with the registry kept open. Every run has to give the answers
+of the first run and, once the sweeps that were left have finished, leave every
+conversation with the same standing opt-out, its time, and the same migration. A row
+with one stop is 10 runs, with two stops 32, with three 94: 548 runs under a clock that
+steps one second per decision. Under a clock frozen for the whole sequence and under
+one set back by a second before every step, each row is run with no sweep started at
+its stop, in every order of resuming, reopened between every two steps: 232 more runs.
+One case beside the table checks what the two ways of leaving a sweep unfinished store,
+so that neither can turn into the other unnoticed.
+
+Tests added to `src/lib/agent/registry.migrationStop.test.ts`, four cases: the review's
+two probes; the same sequence through the admission of a message, with the sweeps then
+finished; and an opt-out stored without a place by an earlier release, which the send
+orders against an unfinished stop by time as the sweep does (section 12.8).
+
+On the head the review read, run with this round's test files: all four cases added to
+the stop's test file fail, and five of the twenty rows fail under each of the three
+clocks (rows 5, 8, 11, 17 and 20, the rows in which a stop of another account follows
+the opt-out and routing then returns); the other fifteen rows and the case beside the
+table pass there. On this head every case passes.
+
+The decision line was then replaced, on this head, by each of three other readings, and
+the 64 cases that reach it were run (the sixty of the table and the four above):
+
+| The send reads | Cases that fail, of 64 |
+|---|---|
+| The stored opt-out alone | 61 |
+| The stored opt-out and the unfinished stops of the routed account | 49 |
+| No opt-out | 60 |
+
+#### Limits, by choice
+
+- The copy of a conversation a keyed read returns carries the stored opt-out, and for a
+  conversation whose migration a stop still has to roll back, the opt-out as that one
+  stop leaves it (section 12.8). It is not the standing opt-out over every unfinished
+  stop. Nothing outside the registry decides from that field; the registry's own
+  decisions read the standing opt-out inside their transaction.
+- The first limit of section 12.8 stands and now holds for the send's read too: an
+  opt-out written by a release from before that section has no place, so the send
+  orders it against an unfinished stop by time, as the sweep will. One case holds the
+  two to the same answer.
+- A send that reaches the opt-out reads the engine's intents once, as a conversation
+  that starts and a change of account do (section 12.9). The cost is measured below. A
+  value kept beside the engine's routing that says whether any stop is still writing
+  would spare all three the read when none is. It would be one more stored value that
+  every stop, sweep and withdrawal has to keep right, and it is not built (section 10).
+
+#### Measurements of this round
+
+The stop and its sweep are unchanged, so the probes of sections 12.1 and 12.7 were not
+run again and no gain or loss is claimed for them. The change is in what a send reads,
+and that was measured: the call a send makes to follow routing
+(`requestConversationMigrationToActiveAccount`, one registry transaction per call) for
+conversations the routed account's opt-out stands for, with every sweep finished. The
+registry is the incident-size fixture of section 12.1 (14 404 conversations) with 87
+migration intents, the number the serving registry held on 2026-11-11 (counted through
+a read-only connection). The head the review read and this head ran in turn, two
+processes each, three rounds of 400 calls per process, on a machine running other work.
+A pinned conversation, which returns before any of these checks, was timed between the
+calls as the cost of the transaction by itself.
+
+| | Processes | Median per round, opted-out conversation | 90th percentile per round | Median per round, pinned conversation | Load average |
+|---|---|---|---|---|---|
+| Head the review read | 2 | 0.33 to 0.37 ms | 0.36 to 0.47 ms | 0.31 to 0.35 ms | 8 to 9 |
+| Final | 2 | 0.88 to 1.03 ms | 0.96 to 1.52 ms | 0.32 to 0.38 ms | 8 to 11 |
+
+A send that the standing opt-out stops costs 0.5 to 0.7 ms more than it did. On the
+head it returned on the stored value before any other check; it now runs the checks
+before the opt-out and reads the 87 intents. A first placement of the read, at the
+place of the old stored-value check, measured 0.78 to 0.82 ms for the same calls (load
+average 6 to 7), and would have added the read of the intents to every send that
+follows routing, including the ones the pool or the placed account stops. The final
+placement leaves those sends, and the sends that go on to ask for a migration and
+listed the intents already, with the reads they had; that part follows from where the
+read sits and was not measured. The cost grows with the number of intents the registry
+keeps.
+
+#### Checks of this round
+
+Run on the final tree of this section.
+
+- **Tests.** One file per isolated command (private home, configuration, temporary and
+  state directories, the control URL on a closed port), through the gate wrapper,
+  sixteen files. These pass: `src/lib/agent/registry.migrationStop.test.ts` 63 cases,
+  `src/lib/agent/registry.migrationStop.orderings.test.ts` 21,
+  `src/lib/agent/registry.migrationStop.orderingClocks.test.ts` 40,
+  `src/lib/agent/registry.test.ts` 147, `src/lib/agent/registry.reseat.test.ts` 28,
+  `src/lib/agent/registry.migrationBinding.test.ts` 18,
+  `src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts` 32,
+  `src/lib/accounts/migration/controller.test.ts` 22,
+  `src/lib/accounts/migration/coordinatorNeverStarted.test.ts` 4,
+  `src/lib/runtime/structuredReconfigure.test.ts` 41 and
+  `src/lib/runtime/structuredAccountSwitch.test.ts` 17. The two table files took 63 s
+  and 23 s at a load average of 7, and 85 s and 32 s at a load average of 16 to 18.
+- **Files with failures, compared with the head the review read.** Five neighbouring
+  files have failing cases. Each was run in the same isolation on this head and on
+  `944bcfe9` and fails with the same named cases on both:
+  `src/lib/runtime/structuredMessageDelivery.test.ts` (two),
+  `src/lib/delivery.test.ts` (twelve), `src/lib/accounts/migration/coordinator.test.ts`
+  (two), `src/app/api/spawn/route.test.ts` (twenty-five) and
+  `src/lib/reaperRuntime.test.ts` (one). Section 12.6 has `coordinator.test.ts` and
+  `reaperRuntime.test.ts` with the same counts against the lane's base. The other three
+  were not in that run; their cause was not looked into.
+- **Each new test on the code before it.** Described above: the four added cases and
+  five rows of the table under each clock fail on the head the review read, and three
+  other readings of the opt-out fail 61, 49 and 60 of the 64 cases.
+- **Typecheck.** `tsc --noEmit` over the whole tree: no errors.
+- **Main.** Main is at `98239ac2`, twelve pull requests ahead of this lane's base: the
+  eight of section 12.6 and 3836, 3842, 3843 and 3844. None changes the lines this
+  round changes, and the final tree merges with main without a conflict. On the merged
+  tree the typecheck has no errors and `src/lib/agent/registry.migrationStop.test.ts`
+  (63), `src/lib/agent/registry.migrationStop.orderings.test.ts` (21),
+  `src/lib/agent/registry.migrationStop.orderingClocks.test.ts` (40),
+  `src/lib/agent/registry.test.ts` (137 there), `src/lib/agent/registry.reseat.test.ts`
+  (28), `src/lib/accounts/migration/controller.test.ts` (22) and
+  `src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts` (32) pass. The open
+  pull requests that change `src/lib/agent/registry.ts` (3710 and 2926) change other
+  lines of it.
+- **Runtime host rehearsal.** The runtime host loads the registry module this round
+  changes, so the rehearsal is run although no file under `src/runtime-host/` changed.
+  On the final tree `bun scripts/verify-runtime-host.ts` under Bun 1.4.0 completed the
+  succession in 507 ms, and the stable listener and the runtime socket each answered 27
+  of 27 polls over 15 s (load average 11). That is a statement about the runtime host.
+  The Viewer was not started from this tree.
+- **Privacy publication gate.** Passed over the commits and their added lines, and
+  again over the whole of each touched file.
