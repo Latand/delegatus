@@ -226,8 +226,9 @@ and icon instead of a tab.
 
 This opens a window onto the page and nothing more. The app does not start
 Delegatus: if Delegatus is not running, the window shows the browser's "can't
-reach this site" page. Start it as above first. There is no service worker, so
-the window needs the running Delegatus even to open.
+reach this site" page. Start it as above first. Delegatus caches nothing for
+offline use (its only service worker delivers push notifications), so the
+window needs the running Delegatus even to open.
 
 ## The setup guide
 
