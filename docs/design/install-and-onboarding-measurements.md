@@ -42,8 +42,8 @@ replaced by environment lookups. `env.json` contains the private roots above,
 `LLV_GATE_RUNNER=off`, telemetry off and `DO_NOT_TRACK=1`.
 
 Every recorded command was followed once by `wait_for_check` on that exact
-absolute log path. The timings below exclude CPU admission waits. Repeated command listings refer
-to the same recorded campaign.
+absolute log path. The timings below exclude CPU admission waits. Each campaign
+is listed once and has its own recorder log; later sections refer to its results.
 
 ## (i) Import before and after the first seat
 
@@ -84,9 +84,10 @@ Verdict **confirmed**. A seated user project supplies a necessary fallback when 
 
 ```sh
 rtk proxy bash "$GATE" --record "$TMPDIR/catalogue-measurements.log" python3 "$MEASURE/models.py"
-rtk proxy bash "$GATE" --record "$TMPDIR/source-measurements-final.log" python3 "$MEASURE/run-source.py"
 rtk proxy bash "$GATE" --record "$TMPDIR/dom-measurements.log" python3 "$MEASURE/run-dom.py"
 ```
+
+The source results below come from the campaign in section (i).
 
 The catalogue probe sends `initialize`, `initialized`, `account/read` with
 `refreshToken=false`, then `model/list` with `includeHidden=true` over stdio.
@@ -182,9 +183,7 @@ Verdict **refuted** for completing this Update from 1.11.0 here. The updater ref
 
 ## (iv) Curator on a Claude-only install
 
-```sh
-rtk proxy bash "$GATE" --record "$TMPDIR/source-measurements-final.log" python3 "$MEASURE/run-source.py"
-```
+This section uses the source campaign in section (i).
 
 The isolated credential-presence fixture made `engineReadiness` return
 `claude=connected` and `codex=signed-out`. Its Claude credential file was an
@@ -224,7 +223,7 @@ Verdict **could not be measured here**. A real Mac is unavailable for Safari Add
 ## (vi) Readiness with the access key enabled
 
 ```sh
-MEASUREMENT_RUN_ID=access-key-readiness rtk proxy bash "$GATE" --record "$TMPDIR/cli-measurements-v2.log" python3 "$MEASURE/lifecycle.py"
+MEASUREMENT_RUN_ID=access-key-readiness rtk proxy bash "$GATE" --record "$TMPDIR/access-key-readiness.log" python3 "$MEASURE/lifecycle.py"
 ```
 
 The private install received a generated LLV_TOKEN. The unauthenticated
@@ -243,8 +242,9 @@ Verdict **confirmed**. The access-key install is serving, and the launcher's una
 MEASUREMENT_RUN_ID=cold-a rtk proxy bash "$GATE" --record "$TMPDIR/cli-cold-a.log" python3 "$MEASURE/lifecycle.py"
 MEASUREMENT_RUN_ID=cold-b rtk proxy bash "$GATE" --record "$TMPDIR/cli-cold-b.log" python3 "$MEASURE/lifecycle.py"
 MEASUREMENT_RUN_ID=codex-cold rtk proxy bash "$GATE" --record "$TMPDIR/codex-cold-measurements.log" python3 "$MEASURE/codex-start.py"
-rtk proxy bash "$GATE" --record "$TMPDIR/dom-measurements.log" python3 "$MEASURE/run-dom.py"
 ```
+
+The interaction counts below use the DOM campaign in section (ii).
 
 Each invocation uses its required run id to create new `cli-v2-<run-id>-*`
 roots. The driver refuses a reused root and records the empty HOME and Bun
