@@ -1,4 +1,6 @@
 import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, touchedTests, writeFileSync } from "./local-gate-tests.fixture";
+import { existsSync } from "node:fs";
+import { GATE_TASKS_MAX } from "./gate-tasks";
 
 
 test("review evidence names the exact base and head without changing repository refs", async () => {
@@ -88,6 +90,26 @@ test("a head crash is named and blocks without hiding results from other files",
   expect(result.introduced).toHaveLength(2); expect(result.introduced[0]!.name).toStartWith("<runner error>");
   expect(f.logs.at(-1)).toContain("2 new failures, 0 pre-existing failures");
 });
+const taskControl = process.platform === "linux" && Bun.which("python3") && Bun.which("systemd-run")
+  && spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore", timeout: 5_000 }).status === 0
+  && readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line.startsWith("0::") && existsSync(path.join("/sys/fs/cgroup", line.slice(3), "pids.max")));
+test.skipIf(!taskControl)("per-file summaries retain the owning unit's task peak", async () => {
+  const f = fixture(source(true));
+  expect((await f.run()).introduced).toHaveLength(0);
+  const line = f.logs.find(line => line.startsWith("touched-tests: head file "))!;
+  expect(line).toMatch(new RegExp(`delegatus-gate-[a-f0-9-]+\\.service: pids\\.peak=\\d+ pids\\.max=${GATE_TASKS_MAX} pids\\.events:max=0`));
+});
+test.skipIf(!taskControl)("a real bounded task-limit refusal keeps its name and unit through the comparator", async () => {
+  const f = fixture(source(true));
+  writeFileSync(path.join(f.dir, "storm.test.ts"), `import { test } from "bun:test";
+    import { spawnSync } from "node:child_process";
+    test("bounded task control", () => { spawnSync("python3", [${JSON.stringify(path.join(root, "scripts/fixtures/gateForkStorm.py"))}, "--exit-on-denial"]); });`);
+  const result = await f.run(["./storm.test.ts"]);
+  expect(result.introduced).toHaveLength(1);
+  expect(result.introduced[0]!.name).toMatch(/GATE_TASK_LIMIT_REACHED: task limit reached in delegatus-gate-[a-f0-9-]+\.service/);
+  expect(f.logs.join("\n")).toContain(`pids.peak=${GATE_TASKS_MAX} pids.max=${GATE_TASKS_MAX}`);
+  expect(f.logs.join("\n")).not.toContain("runner did not finish (70)");
+}, 30_000);
 test("per-file processes isolate globals and distinct state/HOME/TMPDIR before imports", async () => {
   const f = fixture('import { test } from "bun:test"; globalThis.sharedFixture = 1; test("first", () => {});');
   const second = `import { expect, test } from "bun:test"; import { stateDir } from ${JSON.stringify(path.join(root, "src/lib/configDir.ts"))}; test("isolated", () => { expect(globalThis.sharedFixture).toBeUndefined(); for (const key of ["LLV_STATE_DIR", "HOME", "TMPDIR"]) expect(process.env[key]).toStartWith(${JSON.stringify(path.join(gateTemporaryRoot(), "delegatus-test-comparison-"))}); expect(stateDir()).toBe(process.env.LLV_STATE_DIR); });`;
