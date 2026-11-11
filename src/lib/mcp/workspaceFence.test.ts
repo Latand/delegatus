@@ -270,6 +270,21 @@ test("named launch and migration accounts cannot escape the workspace pool", asy
   expect(dispatched).toEqual(["/api/conversations/conversation_member/migration"]);
 });
 
+test("where the project has no account list, a member's agent cannot name an account in any tool", async () => {
+  for (const account of ["account-a", "account-zzz"]) {
+    for (const key of ["account", "accountId", "targetAccountId"]) {
+      expect(await call("spawn_agent", { cwd: root, engine: "codex", [key]: account })).toMatchObject(REFUSED);
+    }
+    expect(await call("conversation_action", { conversationId: "conversation_member", action: "select-account", accountId: account })).toMatchObject(REFUSED);
+    expect(await call("conversation_migration", { conversationId: "conversation_member", action: "select-account", accountId: account })).toMatchObject(REFUSED);
+    expect(await call("agent_fleet", { project: own, engine: "codex", account })).toMatchObject(REFUSED);
+  }
+  expect(dispatched).toEqual([]);
+  /* Naming no account stays allowed: Delegatus picks. */
+  expect(await call("spawn_agent", { cwd: root, engine: "codex", title: "Inspect routing", ["prompt"]: "Inspect routing" })).not.toMatchObject(REFUSED);
+  expect(dispatched).toEqual(["/api/spawn"]);
+});
+
 test("an external caller without a capability keeps project reads while broken capabilities refuse", async () => {
   dependencies.attentionAuthority = () => ({ kind: "unidentified" });
   rebuild();
