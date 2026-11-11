@@ -7,6 +7,7 @@ import { statePath } from "@/lib/configDir";
 import { knownProjectFileRoots } from "@/lib/scanner/projectDirectories";
 import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { homeDirectory } from "@/lib/platformHome";
+import { keptReportPicture, reportMediaRoot } from "@/lib/reportMedia/lookup";
 import { isEvidenceImage } from "./evidenceFormats";
 export { isEvidenceImage } from "./evidenceFormats";
 
@@ -38,18 +39,22 @@ export function underRoot(candidate: string, root: string): boolean {
 }
 
 /* Durable rendered evidence is outside every managed scratch root. The
-   historical OS temp location remains readable for existing report links. */
+   historical OS temp location remains readable for existing report links.
+   The report picture store is read as evidence whatever is configured: it
+   holds rasters only, and it comes last so the first root stays the place
+   agents are told to render into. */
 export function evidenceRoots(): string[] {
   const configured = process.env.LLV_EVIDENCE_ROOTS;
   const roots = configured === undefined ? [statePath("evidence"), "/var/tmp"] : configured.split(":");
-  return roots.map((root) => root.trim()).filter((root) => path.isAbsolute(root)).map((root) => path.resolve(root));
+  return [...new Set([...roots.map((root) => root.trim()).filter((root) => path.isAbsolute(root)).map((root) => path.resolve(root)), reportMediaRoot()])];
 }
 
 /** A lane checkout's directory name ends with the lane's id. */
 const LANE_CHECKOUT = /-pipeline-([A-Za-z0-9_]+)$/;
 
 /**
- * The saved copy of a picture that lay in a lane checkout which is gone.
+ * The saved copy of a picture that lay in a lane checkout which is gone, for
+ * lanes retired before the report picture store kept their pictures.
  * Retirement copies a checkout's ignored media to
  * `evidence/<lane>/worktree/<path inside the checkout>` and lists each file in
  * the lane's backup manifest; a copy that met different bytes under the same
@@ -88,15 +93,16 @@ export function savedLaneCopy(missing: string): string | null {
 
 /**
  * Where a requested local path is read from: the path itself while anything
- * lies there, and the saved copy once its lane checkout is gone. The answer
- * goes through the same admission as any other path.
+ * lies there; afterwards the copy the report picture store kept when a report
+ * named it, or the copy a retired lane checkout left. The answer goes through
+ * the same admission as any other path.
  */
 export function readablePlace(abs: string): string {
   try {
     lstatSync(abs);
     return abs;
   } catch {
-    return savedLaneCopy(abs) ?? abs;
+    return keptReportPicture(abs) ?? savedLaneCopy(abs) ?? abs;
   }
 }
 

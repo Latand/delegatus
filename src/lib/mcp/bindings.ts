@@ -1,4 +1,5 @@
 import { textLengthError } from "@/lib/textLimits";
+import { keepReportPicturesSoon } from "@/lib/reportMedia/store";
 import { AsyncResource } from "node:async_hooks";
 import { redactMonitorText } from "@/lib/monitor/redact";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -2321,6 +2322,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
   const fields = result.replay ? [] : matchedFields ?? Object.keys(result.task);
   if (!result.replay) logMaintenanceWrite(maintainer, result.matched ? "update_task" : "create_task", prior, result.task, fields);
+  if (!result.replay) keepReportPicturesSoon([result.task.text, result.task.details]);
   return { ...taskAcknowledgement(result.task, args, fields), replay: result.replay, ...(result.matched !== undefined ? { matched: result.matched } : {}), ...(result.notes ? { notes: result.notes } : {}), ...taskTextLanguageWarnings(args.text, dependencies) };
 }
 
@@ -2429,6 +2431,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     throw new Refusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
   }
   logMaintenanceWrite(maintainer, "update_task", prior, result.task, changedFields);
+  keepReportPicturesSoon([result.task.text, result.task.details]);
   return { ...taskAcknowledgement(result.task, args, changedFields), ...(result.notes ? { notes: result.notes } : {}), ...taskTextLanguageWarnings(args.text, dependencies) };
 }
 
