@@ -22,6 +22,9 @@ const observed = {
   leftOut: [] as string[],
   completed: false,
   admission: "unobserved",
+  creationError: "unobserved",
+  initialEntries: [] as string[],
+  spawnCount: -1,
   changes: false,
   applyCompleted: false,
   undoCompleted: false,
@@ -89,6 +92,7 @@ beforeAll(async () => {
   fs.mkdirSync(path.join(folder, "out"));
   fs.writeFileSync(path.join(folder, "out/letter.txt"), "Original letter\n");
   fs.writeFileSync(path.join(folder, "secret-handling.pdf"), "Ordinary document about handling\n");
+  observed.initialEntries = fs.readdirSync(folder).sort();
   for (const name of [...admitted, "secret-handling.pdf"]) observed.initialFiles.set(name, fileDigest(path.join(folder, name)));
   for (const command of [["gh", "pr", "list"], ...["fetch", "push", "pull", "ls-remote", "clone"].map(arg => ["git", arg]), ["git", "remote", "update"]]) {
     const [program, ...args] = command;
@@ -119,6 +123,9 @@ beforeAll(async () => {
     { id: "fix", kind: "run", role: { roleId: "builder" }, prompt: "Fix", next: "second-review" },
     { id: "second-review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review again", next: null },
   ] }, h.ports);
+  observed.creationError = created.error ?? (created.pipeline ? "pipeline created" : "creation returned no outcome");
+  observed.spawnCount = h.spawnInputs.length;
+  observed.attemptedRemoteCommands = [...refusedCommands];
   if (created.pipeline) {
     const pipeline = created.pipeline;
     expect(await git(folder, "remote")).toBe("");
@@ -173,7 +180,9 @@ beforeAll(async () => {
       const applied = await lifecycle.applyReviewedResult(pipeline);
       observed.applyCompleted = applied.applied;
       observed.resultInFolder = applied.applied && fs.existsSync(path.join(folder, "result.txt"))
-        && fs.readFileSync(path.join(folder, "result.txt"), "utf8") === "Reviewed result\n";
+        && fs.readFileSync(path.join(folder, "result.txt"), "utf8") === "Reviewed result\n"
+        && fs.existsSync(path.join(folder, "drawing.pdf"))
+        && fileDigest(path.join(folder, "drawing.pdf")) === createHash("sha256").update(Buffer.alloc(3 * 1024 * 1024, 1)).digest("hex");
       if (lifecycle.undoAppliedResult) {
         const undone = await lifecycle.undoAppliedResult(pipeline);
         observed.undoCompleted = undone.restored;
@@ -194,9 +203,18 @@ function fileDigest(file: string): string {
 test("G0 fixture builds every office file and refuses forge commands on both command ports", () => {
   expect(fs.statSync(path.join(folder, "archive.bin")).size).toBe(80 * 1024 * 1024);
   expect(fs.statSync(path.join(folder, "drawing.pdf")).size).toBe(3 * 1024 * 1024);
-  expect(fs.readdirSync(folder)).toHaveLength(204);
+  expect(observed.initialEntries).toEqual([...names, "archive.bin", "drawing.pdf", "out", "secret-handling.pdf"].sort());
   expect(observed.initialFiles.size).toBe(admitted.length + 1);
   expect(observed.portRefusals).toHaveLength(7);
+});
+
+test("G0 records the exact expected admission stop and verifies creation refuses for that reason", () => {
+  const expected = "project exceeds the initial commit path-list bound";
+  expect(observed.admission).toBe(expected);
+  expect(observed.creationError).toContain(expected);
+  expect(loadPipelines()).toEqual([]);
+  expect(fs.existsSync(path.join(folder, ".git"))).toBe(false);
+  expect(observed.spawnCount).toBe(0);
   expect(observed.attemptedRemoteCommands).toEqual([]);
 });
 
