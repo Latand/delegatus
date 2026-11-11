@@ -65,6 +65,45 @@ export function renderLearnedRulesSelection(scopes: readonly { scope: string; ru
   return { block, rules: selected.flatMap(scope => scope.rules) };
 }
 
+/** Incremental size of the same block rendered above. Each id can occur in
+ * several scopes after succession; adding it accounts for every occurrence,
+ * empty-scope placeholders and the decimal counts in the first line. */
+export function learnedRulesByteCounter(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[], initial: ReadonlySet<string>) {
+  const selected = new Set(initial);
+  const counts = scopes.map(scope => scope.rules.filter(rule => selected.has(rule.id)).length);
+  const kinds = scopes.map(scope => scopeKind(scope.scope));
+  const totals = new Map<string, number>();
+  scopes.forEach((_, i) => totals.set(kinds[i], (totals.get(kinds[i]) ?? 0) + counts[i]));
+  let bytes = Buffer.byteLength(renderBlock(scopes.map(scope => ({ ...scope, rules: scope.rules.filter(rule => selected.has(rule.id)) })), {}));
+  const additions = new Map<string, Map<number, { count: number; bytes: number }>>();
+  scopes.forEach((scope, index) => scope.rules.forEach(rule => {
+    if (selected.has(rule.id)) return;
+    let places = additions.get(rule.id);
+    if (!places) additions.set(rule.id, places = new Map());
+    const held = places.get(index) ?? { count: 0, bytes: 0 };
+    held.count++; held.bytes += Buffer.byteLength(ruleLine(rule)); places.set(index, held);
+  }));
+  return {
+    get bytes() { return bytes; },
+    add(id: string, ceiling: number): boolean {
+      if (selected.has(id)) return bytes <= ceiling;
+      const places = additions.get(id);
+      let delta = 0;
+      const added = new Map<string, number>();
+      for (const [index, value] of places ?? []) {
+        delta += value.bytes + value.count - (counts[index] ? 0 : 1 + Buffer.byteLength("- none yet"));
+        added.set(kinds[index], (added.get(kinds[index]) ?? 0) + value.count);
+      }
+      for (const [kind, count] of added) delta += String((totals.get(kind) ?? 0) + count).length - String(totals.get(kind) ?? 0).length;
+      if (bytes + delta > ceiling) return false;
+      bytes += delta; selected.add(id);
+      for (const [index, value] of places ?? []) counts[index] += value.count;
+      for (const [kind, count] of added) totals.set(kind, (totals.get(kind) ?? 0) + count);
+      return true;
+    },
+  };
+}
+
 function renderBlock(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[], options: LearnedRulesReader): string {
   const role = scopes.map(entry => scopeRole(entry.scope)).find(role => role !== null);
   const reader = role ?? (options.reader === "operator" ? "operator" : undefined);

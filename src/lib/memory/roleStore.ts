@@ -9,7 +9,7 @@ import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
-import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasKeys, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { databaseFileIdentity } from "@/lib/state/currentDatabase";
 import { effectiveCurationSetting, readSeatTickSettings, seatTickSettingsPath } from "@/lib/monitor/seatTickSettings";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature, StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
@@ -249,10 +249,14 @@ export function activeRules(scope: string): RoleMemoryRule[] {
 /** The block a new stage of this role and project starts with. */
 export function learnedRulesSnapshot(project: string, roleId: string | null, maxBytes = Infinity, reader?: "operator") {
   // A process start resolves aliases in its snapshot; it never joins or migrates state.
-  // Membership of every scope and the rules those scopes name: no history, no other rule.
-  const stored = scopeMembershipRows();
+  // A moved project's predecessors still own scope rows until a writer joins
+  // them. Enumerate those keys from aliases, never from foreign scope rows.
+  const wanted = readableScopes(project, roleId);
+  const projects = projectAliasKeys(project);
+  const stored = scopeMembershipRows(wanted.flatMap(scope => scopeProject(scope) === null ? [scope]
+    : projects.map(key => scopeKind(scope) === "role" ? `role:${key}:${scopeRole(scope)}` : `project:${key}`)));
   const resolve = scopeResolver();
-  const scopes = readableScopes(project, roleId).map(scope => {
+  const scopes = wanted.map(scope => {
     if (scopeKind(scope) === "swarm") return { scope, revisions: [], rules: swarmRulesForRole(roleId!) };
     const active = stored.flatMap(row => resolve(row.scope) === scope ? row.active : [])
       .flatMap(id => { const found = rule(id); return found?.state === "active" && !found.versionOf ? [found] : []; });

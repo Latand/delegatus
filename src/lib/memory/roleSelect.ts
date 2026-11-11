@@ -1,8 +1,8 @@
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { yieldToRuntime } from "@/lib/cooperative";
+import { cooperativeSlice, type CooperativeSliceOptions } from "@/lib/cooperative";
 import { roleMemoryEnabled } from "./settings";
 import { ruleLine } from "./roleConsolidate";
-import { renderLearnedRulesSelection } from "./roleRender";
+import { learnedRulesByteCounter } from "./roleRender";
 import type { RoleMemoryRule } from "./roleTypes";
 import { reserveSelectionSpend, settleSelectionSpend } from "./roleSelectionSpend";
 import { emptySelectionEvidence, configuredRoleSelectionProvider, RoleSelectionProviderError, type RoleSelectionProvider, type SelectionEvidence } from "./roleSelectionProvider";
@@ -10,11 +10,11 @@ import { emptySelectionEvidence, configuredRoleSelectionProvider, RoleSelectionP
 export const MEMORY_SELECTION_DEADLINE_MS = 3_000;
 export const SHADOW_BLOCK_MAX_BYTES = 24_000;
 export const ROLE_SELECTION_THRESHOLD = 0.02;
-const BM25_SCORE_BATCH_SIZE = 16;
 export type SelectionScopes = readonly { scope: string; rules: readonly RoleMemoryRule[] }[];
 type Scopes = SelectionScopes;
 export interface ShadowSelection { selector: "whole" | "bm25" | "jev"; selectorVersion: string; reason: string; scores: [string, number][]; shadowIds: string[]; evidence?: SelectionEvidence }
-type Options = { apiKey?: string | null; fetch?: typeof fetch; signal?: AbortSignal; timeoutMs?: number; now?: () => Date; provider?: RoleSelectionProvider };
+type Options = { apiKey?: string | null; fetch?: typeof fetch; signal?: AbortSignal; timeoutMs?: number; now?: () => Date; provider?: RoleSelectionProvider; cooperative?: CooperativeSliceOptions };
+type Checkpoint = ReturnType<typeof cooperativeSlice>;
 const stop = new Set("the and for with from this that before after when then into every only its any are not all one each has was have than your you of to in on at by is it as an a or be do".split(" "));
 const terms = (text: string) => (text.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []).filter(term => !stop.has(term));
 const points = (text: string) => [...text].length;
@@ -29,12 +29,12 @@ export function alwaysOn(rules: readonly RoleMemoryRule[]): Set<string> {
   }).map(rule => rule.id));
 }
 
-async function bm25(rules: readonly RoleMemoryRule[], brief: string, signal: AbortSignal): Promise<number[]> {
+async function bm25(rules: readonly RoleMemoryRule[], brief: string, checkpoint: Checkpoint): Promise<number[]> {
   const query = new Set(terms(brief));
   const documents: Map<string, number>[] = [], lengths: number[] = [];
   const frequencies = new Map<string, number>();
   for (let i = 0; i < rules.length; i++) {
-    if (i % 16 === 0) { await yieldToRuntime(); signal.throwIfAborted(); }
+    const pending = checkpoint(); if (pending) await pending;
     const counts = new Map<string, number>();
     const words = terms(rules[i].rule);
     for (const word of words) counts.set(word, (counts.get(word) ?? 0) + 1);
@@ -44,38 +44,34 @@ async function bm25(rules: readonly RoleMemoryRule[], brief: string, signal: Abo
   const mean = lengths.reduce((a, b) => a + b, 0) / (rules.length || 1) || 1;
   const words = [...query];
   const scores: number[] = [];
-  for (let start = 0; start < documents.length; start += BM25_SCORE_BATCH_SIZE) {
-    signal.throwIfAborted();
-    const end = Math.min(start + BM25_SCORE_BATCH_SIZE, documents.length);
-    for (let i = start; i < end; i++) {
-      const doc = documents[i];
-      let score = 0;
-      for (const word of words) {
-        const tf = doc.get(word) ?? 0, df = frequencies.get(word) ?? 0;
-        score += Math.log(1 + (rules.length - df + 0.5) / (df + 0.5)) * tf * 2.2 / (tf + 1.2 * (0.25 + 0.75 * lengths[i] / mean));
-      }
-      scores.push(score);
+  for (let i = 0; i < documents.length; i++) {
+    const pending = checkpoint(); if (pending) await pending;
+    const doc = documents[i];
+    let score = 0;
+    for (const word of words) {
+      const tf = doc.get(word) ?? 0, df = frequencies.get(word) ?? 0;
+      score += Math.log(1 + (rules.length - df + 0.5) / (df + 0.5)) * tf * 2.2 / (tf + 1.2 * (0.25 + 0.75 * lengths[i] / mean));
     }
-    if (end < documents.length) { await yieldToRuntime(); signal.throwIfAborted(); }
+    scores.push(score);
   }
   return scores;
 }
 
-export async function packRoleSelection(scopes: Scopes, rules: RoleMemoryRule[], scores: number[], threshold: number, signal: AbortSignal): Promise<Pick<ShadowSelection, "scores" | "shadowIds">> {
+export async function packRoleSelection(scopes: Scopes, rules: RoleMemoryRule[], scores: number[], threshold: number, signal: AbortSignal, checkpoint: Checkpoint = cooperativeSlice(signal)): Promise<Pick<ShadowSelection, "scores" | "shadowIds">> {
   // Layers arrive in slice 3; operator-kept rules already exist today.
   const protectedIds = alwaysOn(rules);
   const selected = new Set(protectedIds);
+  const byteCount = learnedRulesByteCounter(scopes, protectedIds);
   let chars = 0;
   const order = rules.map((rule, rank) => ({ rule, rank, score: scores[rank] })).sort((a, b) => b.score - a.score || a.rank - b.rank || a.rule.id.localeCompare(b.rule.id));
   for (let i = 0; i < order.length; i++) {
-    if (i % 16 === 0) { await yieldToRuntime(); signal.throwIfAborted(); }
+    const pending = checkpoint(); if (pending) await pending;
     const { rule, score } = order[i];
     if (selected.has(rule.id) || score < threshold) continue;
     const length = points(ruleLine(rule)) + (chars ? 1 : 0);
     if (chars + length > 9_000) continue;
+    if (!byteCount.add(rule.id, SHADOW_BLOCK_MAX_BYTES)) continue;
     selected.add(rule.id);
-    const rendered = renderLearnedRulesSelection(scopes.map(scope => ({ scope: scope.scope, rules: scope.rules.filter(rule => selected.has(rule.id)) })));
-    if (Buffer.byteLength(rendered.block) > SHADOW_BLOCK_MAX_BYTES) { selected.delete(rule.id); continue; }
     chars += length;
   }
   return { shadowIds: rules.filter(rule => selected.has(rule.id)).map(rule => rule.id), scores: rules.flatMap((rule, i) => selected.has(rule.id) && !protectedIds.has(rule.id) ? [[rule.id, Math.round(scores[i] * 1000) / 1000] as [string, number]] : []) };
@@ -105,6 +101,13 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
       if (performance.now() >= deadline) controller.abort();
       signal.throwIfAborted();
     };
+    // Both local phases spend one slice. Checking the deadline here also
+    // catches cancellation while synchronous arithmetic is still running.
+    const localCheckpoint = (): Checkpoint => {
+      const slice = cooperativeSlice(signal, options.cooperative);
+      return () => { checkDeadline(); return slice(); };
+    };
+    const checkpoint = localCheckpoint();
     // Start external work only after checking the monotonic deadline. A timer
     // callback can run late when the event loop is busy.
     const bounded = async <T>(work: () => Promise<T>, observe?: (value: T) => void): Promise<T> => { checkDeadline(); const result = await Promise.race([work(), expired]); observe?.(result); checkDeadline(); return result; };
@@ -117,12 +120,12 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
         let fallback: Pick<ShadowSelection, "scores" | "shadowIds"> | undefined;
         let suffix = "bm25-no-match";
         try {
-          const candidateScores = await bm25(candidates, brief, signal);
+          const candidateScores = await bm25(candidates, brief, checkpoint);
           const byId = new Map(candidates.map((rule, i) => [rule.id, candidateScores[i]]));
           const scores = rules.map(rule => byId.get(rule.id) ?? 0);
           evidence.allScores = candidates.map((rule, i) => [rule.id, candidateScores[i]]);
           phase("pack-bm25");
-          fallback = await packRoleSelection(scopes, rules, scores, -Infinity, signal);
+          fallback = await packRoleSelection(scopes, rules, scores, -Infinity, signal, checkpoint);
           suffix = scores.some(score => score > 0) ? "bm25" : "bm25-no-match";
         } catch {
           // A local scoring defect must not bypass a working Decisions path.
@@ -188,7 +191,7 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
           evidence.scoreSource = "jev";
           const jevScores = new Map(evidence.allScores);
           phase("pack-jev");
-          return { selector: "jev", selectorVersion: `${provider.model}-v2`, reason: "jev", ...await packRoleSelection(scopes, rules, rules.map(rule => jevScores.get(rule.id) ?? 0), ROLE_SELECTION_THRESHOLD, signal) };
+          return { selector: "jev", selectorVersion: `${provider.model}-v2`, reason: "jev", ...await packRoleSelection(scopes, rules, rules.map(rule => jevScores.get(rule.id) ?? 0), ROLE_SELECTION_THRESHOLD, signal, localCheckpoint()) };
         } catch (error) {
           return result(signal.aborted ? "jev-timeout" : error instanceof RoleSelectionProviderError ? `jev-${error.message}` : error instanceof SyntaxError ? "jev-shape" : "jev-network");
         }
