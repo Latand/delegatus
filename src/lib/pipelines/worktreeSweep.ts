@@ -620,7 +620,7 @@ export function conversationCwdStatus(
   }
   const entries = Object.entries(file.entries ?? {}).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
   const ownersFor = (entry: NonNullable<(typeof entries)[number][1]>) => {
-    const owners = [entry.structuredHost?.process, entry.host?.agent, entry.host?.panePid]
+    const owners = [entry.structuredHost?.process]
       .filter((identity): identity is ProcessIdentity => !!identity);
     const survivors = entry.structuredTerminationSurvivors ?? [];
     const claimant = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;

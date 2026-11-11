@@ -876,15 +876,13 @@ test("a failed migration's parked message releases its dead conversation's linke
   expect(reopened.readOnlySnapshot().heldDeliveries[delivery.id]?.state).toBe("held");
 });
 
-for (const owner of ["structured", "survivor", "claimant", "tmux-agent", "tmux-pane"] as const)
+for (const owner of ["structured", "survivor", "claimant"] as const)
   test.each(["alive", "unverified"] as const)(`a ${owner} owner that is %s protects a settled registry conversation`, (verdict) => {
     const { registry, filename, key } = finishedRegistryConversation(caseDir);
     const entry = registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
     const identity = (pid: number) => ({ pid, startIdentity: `owner-${pid}`, bootEpoch: "fixture-boot" });
-    registry.upsert({ ...entry, status: "dead", claimOwner: `structured-host:${JSON.stringify(identity(61005))}`,
-      host: { kind: "tmux", endpoint: "fixture", server: identity(61006), paneId: "%1", windowName: "fixture",
-        agent: identity(61003), panePid: identity(61004), argv: [] } });
-    const livePid = { structured: 61001, survivor: 61002, claimant: 61005, "tmux-agent": 61003, "tmux-pane": 61004 }[owner];
+    registry.upsert({ ...entry, status: "dead", claimOwner: `structured-host:${JSON.stringify(identity(61005))}` });
+    const livePid = { structured: 61001, survivor: 61002, claimant: 61005 }[owner];
     const reopened = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
     const cwds = liveOrWaitingConversationCwds(reopened.worktreeProtectionSnapshot(), Date.parse("2026-10-21T00:00:00Z"),
       current => processIdentityProvenDead(current, {

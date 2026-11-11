@@ -59,7 +59,7 @@ unprivileged user and PID namespaces, and a systemd user manager that
 delegates the cpu, memory and pids cgroup controllers. Where any of these is missing, and on macOS and Windows,
 agents launch without the boundary and the launch reports it as off with the
 cause. A missing boundary never stops a launch. Known gaps: an agent can still
-reach the systemd user manager, Docker and the shared tmux server, which can
+reach the systemd user manager, Docker and a tmux server of the same user, which can
 act on other processes of the same user.
 
 macOS works through a backend that uses `ps` and `lsof` in place of `/proc`.

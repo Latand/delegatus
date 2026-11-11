@@ -432,7 +432,7 @@ export function MobileConversationMenu({
           ) : null}
         </div>
       </MobileSheet>
-      {actions.attachOpen ? <AttachTerminalDialog file={file} mode={actions.attachMode} onClose={actions.closeAttach} /> : null}
+      {actions.attachOpen ? <AttachTerminalDialog file={file} onClose={actions.closeAttach} /> : null}
     </>
   );
 }

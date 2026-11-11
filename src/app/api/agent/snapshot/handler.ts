@@ -6,14 +6,12 @@ import type { completedFileScan } from "@/lib/scanner/scanCache";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { collectSnapshot, type SnapshotPhaseObserver, type SnapshotPhaseTiming } from "@/lib/view/collect";
 import { SnapshotError } from "@/lib/view/snapshot";
-import type { resolveSiblings } from "@/lib/view/siblings";
 import { readBoundedJson, validateSnapshotRequest, ViewValidationError } from "@/lib/view/validation";
 
 const headers = { "Cache-Control": "no-store" };
 
 export interface SnapshotRouteDependencies {
   completedFileScan: typeof completedFileScan;
-  resolveSiblings: typeof resolveSiblings;
   registrySnapshot?: () => RegistryFile;
   snapshotSpawns?: (launchIds: readonly string[]) => SnapshotSpawnProjection;
   snapshotTitleConversations?: (conversationIds: readonly string[]) => SnapshotTitleConversationProjection;

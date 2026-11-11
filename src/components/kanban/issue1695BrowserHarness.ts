@@ -290,7 +290,7 @@ export async function captureAcceptedCreation(browser: Browser, out: string, pho
         catalogs++;
         return Response.json({ files: [], pipelines: showStored ? loadPipelines() : controls, tasks: [controlTask], flows: [], workflows: [],
           projectCatalog: [{ project, displayName: "Atlas", conversations: 0, smt: 1 }], projectCwds: { [project]: repo },
-          systemHealth: { tmux: { status: "healthy" } } }, { headers: { ETag: `"catalog-${catalogs}"` } });
+          systemHealth: {} }, { headers: { ETag: `"catalog-${catalogs}"` } });
       },
       "/api/pipelines": async (request: Request) => {
         if (request.method !== "POST") return Response.json({ pipelines: showStored ? loadPipelines() : [] });
@@ -3495,7 +3495,7 @@ export function taskSummaryResponse(lang: "en" | "uk", now = TASK_SUMMARY_NOW) {
   ];
   return {
     tasks,
-    body: { files: [], tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }], projectCwds: { atlas: "/repo/atlas" }, systemHealth: { tmux: { status: "healthy" } } },
+    body: { files: [], tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }], projectCwds: { atlas: "/repo/atlas" }, systemHealth: {} },
     texts: { ...data, longHeadline, longText },
   };
 }

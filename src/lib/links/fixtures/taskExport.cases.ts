@@ -269,7 +269,7 @@ test("pending omission sweeps advance across repeated unchanged log requests", a
   readLogPage(after, initial);
   readLogPage(after, initial);
   const files = [{ path: "late", conversationId: "late", waitingInput: null, pendingQuestion: {
-    kind: "question" as const, toolUseId: "late", transcriptPath: "late", pid: 0, paneTarget: null, askedAt: new Date(now + 1).toISOString(),
+    kind: "question" as const, toolUseId: "late", transcriptPath: "late", pid: 0, askedAt: new Date(now + 1).toISOString(),
   } }];
   const first = builder.build({ kind: "log", after, filter, now, files });
   expect("rows" in first.page && first.page.rows).toEqual([]);

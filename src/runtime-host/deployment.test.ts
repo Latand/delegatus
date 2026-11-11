@@ -1159,7 +1159,6 @@ test("newly promoted Viewer environment requests the next deployment through run
   } } }));
   const args = viewerCandidateDockerArgs(release("current", "current"), composeService, {
     runtimeSocket: socketPath,
-    tmuxTmpdir: "/run/user/1000/agent-log-viewer",
   });
   const environment = {} as NodeJS.ProcessEnv;
   for (let index = 0; index < args.length; index += 1) {

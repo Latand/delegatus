@@ -39,7 +39,6 @@ import { GET as pipelineGET, PATCH as pipelinePATCH } from "@/app/api/pipelines/
 import { queuePipelineCreation, pipelineCreationQueueDir } from "@/lib/pipelines/creationQueue";
 import * as creationQueue from "@/lib/pipelines/creationQueue";
 import { setConversationHostDependenciesForTests } from "@/app/api/conversation-host/dependencies";
-import { allowedKillTarget, lastResourceTargetRefs, noteSessionTargets } from "@/lib/resources";
 import { GET as settingsGET, PUT as settingsPUT } from "@/app/api/projects/settings/route";
 import { setBridgeReports, setMergeOnReview, setReportTelegram } from "@/lib/projects/settings";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
@@ -53,11 +52,9 @@ import { GET as memberGET } from "@/app/api/team/workspaces/[id]/members/route";
 import { GET as workspacesGET } from "@/app/api/team/workspaces/route";
 import { POST as spawnPOST } from "@/app/api/spawn/route";
 import { POST as spawnValidatePOST } from "@/app/api/spawn/validate/route";
-import { POST as taskSpawnPOST } from "@/app/api/tasks/[id]/spawn/route";
 import { POST as pipelinesPOST } from "@/app/api/pipelines/route";
 import { POST as preflightPOST } from "@/app/api/pipelines/preflight/route";
 import * as scanCache from "@/lib/scanner/scanCache";
-import * as transcriptHost from "@/lib/agent/transcriptHost";
 import { GET as conversationsGET } from "@/app/api/conversations/route";
 import { GET as filesGET } from "@/app/api/files/route";
 import { createFilesProjectionQueue, type FilesProjectionQueue } from "@/app/api/files/projectionQueue";
@@ -375,67 +372,6 @@ describe("workspace authority", () => {
     const response = await memberGET(request(`/api/team/workspaces/${W1}/members`, manager), { params: Promise.resolve().then(() => { store.removeWorkspaceMember(W1, manager.id); return { id: W1 }; }) });
     expect(response.status).toBe(403);
   });
-  test("resource pane targets stay owner-only beside an authorized conversation on both mounts", async () => {
-    const registry = agentRegistry();
-    const receipt = registry.beginSpawn("codex", root, { project: "repo-alpha", title: "Own conversation" });
-    const artifactPath = path.join(root, "own.jsonl");
-    registry.completeSpawn(receipt.launchId, { key: { engine: "codex", sessionId: fixtureSessionId(3) }, artifactPath, cwd: root, accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
-    const target = "beta-agent:1.0";
-    const ref = { paneId: "%42", panePid: 4242, tmuxServerPid: 4200, tmuxServerStartIdentity: null, paneStartIdentity: null };
-    const endpoint = { kind: "tmux-tmpdir" as const, tmuxTmpdir: root, socketName: "default" as const, socketPath: path.join(root, "tmux.sock") };
-    const identities: Record<string, string>[] = [{ path: artifactPath }, { conversationId: receipt.conversationId }];
-    const previousTargets = lastResourceTargetRefs();
-    const killed: string[] = [];
-    let attaches = 0;
-    setConversationHostDependenciesForTests({
-      panePidOf: async () => ref.panePid,
-      killPane: async pane => { killed.push(pane); },
-      tmuxEndpointDescriptor: () => endpoint,
-      resolveTmuxAttach: async (reference, requestedEndpoint = endpoint) => {
-        expect(reference).toEqual(ref);
-        attaches++;
-        return { ok: true, target, endpoint: requestedEndpoint, command: "fixture attach", readOnlyCommand: "fixture read only" };
-      },
-    });
-    try {
-      for (const route of ["conversation-host", "tmux"]) {
-        const { GET, POST } = await import(`../../app/api/${route}/route.ts`);
-        noteSessionTargets([{ target, ref }]);
-        for (const actor of [member, manager, outsider]) {
-          for (const identity of identities) {
-            const calls = [
-              () => POST(request(`/api/${route}`, actor, "POST", { action: "kill-target", target, ...identity })),
-              () => GET(request(`/api/${route}?attach=1&target=${encodeURIComponent(target)}&${new URLSearchParams(identity)}`, actor)),
-              () => POST(request(`/api/${route}?target=${encodeURIComponent(target)}`, actor, "POST", { action: "interrupt", ...identity })),
-              () => POST(request(`/api/${route}`, actor, "POST", { action: "kill-target", ...identity })),
-            ];
-            for (const call of calls) {
-              const denied = await call();
-              expect(denied.status).toBe(403);
-              expect(await denied.json()).toEqual({ error: "workspace access denied", code: "workspace_forbidden" });
-              expect(allowedKillTarget(target)).toEqual(ref);
-              expect(killed).toEqual([]);
-              expect(attaches).toBe(0);
-            }
-          }
-        }
-        const attached = await GET(request(`/api/${route}?attach=1&target=${encodeURIComponent(target)}&conversationId=${receipt.conversationId}`, owner));
-        expect(attached.status).toBe(200);
-        expect((await attached.json()).attach.target).toBe(target);
-        expect(attaches).toBe(1);
-        expect(allowedKillTarget(target)).toEqual(ref);
-        const killedResponse = await POST(request(`/api/${route}`, owner, "POST", { action: "kill-target", target, path: artifactPath }));
-        expect(killedResponse.status).toBe(200);
-        expect(killed).toEqual([ref.paneId]);
-        expect(allowedKillTarget(target)).toBeNull();
-        killed.length = 0;
-        attaches = 0;
-      }
-    } finally {
-      setConversationHostDependenciesForTests(null);
-      noteSessionTargets(previousTargets);
-    }
-  });
 
   test("a cwd or repoDir that resolves outside the member's workspace is refused on every directory route", async () => {
     const [alpha, beta] = ["alpha", "beta"].map(name => {
@@ -464,7 +400,6 @@ describe("workspace authority", () => {
     const routes = (actor: Member, directory: string) => [
       ["/api/spawn", () => spawnPOST(request("/api/spawn", actor, "POST", { cwd: directory, engine: "codex", prompt: "escape" }))],
       ["/api/spawn/validate", () => spawnValidatePOST(request("/api/spawn/validate", actor, "POST", { cwd: directory, engine: "codex" }))],
-      ["/api/tasks/[id]/spawn", () => taskSpawnPOST(request("/api/tasks/task-own/spawn", actor, "POST", { cwd: directory, engine: "codex" }), { params: Promise.resolve({ id: "task-own" }) })],
       ["/api/pipelines", () => pipelinesPOST(request("/api/pipelines", actor, "POST", { project: alphaKey, repoDir: directory }))],
       ["/api/pipelines/preflight", () => preflightPOST(request("/api/pipelines/preflight", actor, "POST", { repoDir: directory }))],
       ["/api/orchestrator/seat", () => seatGET(request(`/api/orchestrator/seat?project=${encodeURIComponent(alphaKey)}&cwd=${encodeURIComponent(directory)}`, actor))],
@@ -517,16 +452,14 @@ describe("workspace authority", () => {
     ];
     const sends: unknown[] = [];
     const scanned = async () => ({ snapshot: { files } }) as never;
-    const emptyHosts = async () => ({ hosts: [], observation: "available", canonicalFor: () => null }) as never;
     const deliver = async (message: unknown) => { sends.push(message); return { ok: true, target: "probe:0.0", operationId: "op-probe" } as never; };
     setConversationHostDependenciesForTests({
-      completedFileScan: scanned, readTranscriptHosts: emptyHosts,
+      completedFileScan: scanned,
       deliverConversationMessage: deliver as never,
       // Structured admission declines, so a send that passes the gate reaches the legacy pid ladder.
       enqueueStructuredMessage: (async (message: unknown) => { sends.push(message); return null; }) as never,
     });
     const scan = spyOn(scanCache, "completedFileScan").mockImplementation(scanned);
-    const hosts = spyOn(transcriptHost, "readTranscriptHosts").mockImplementation(emptyHosts);
     const previousHosts = process.env.LLV_STRUCTURED_HOSTS;
     const send = (route: string, actor: Member, body: Record<string, unknown>) => request(`/api/${route}`, actor, "POST", { text: "probe", ...body });
     try {
@@ -562,7 +495,6 @@ describe("workspace authority", () => {
       else process.env.LLV_STRUCTURED_HOSTS = previousHosts;
       setConversationHostDependenciesForTests(null);
       scan.mockRestore();
-      hosts.mockRestore();
     }
   });
 
@@ -752,7 +684,7 @@ describe("workspace authority", () => {
     const receipt = registry.beginSpawn("codex", root, { project: "repo-beta", title: "Workspace foreign conversation" });
     const artifactPath = `${root}/foreign.jsonl`;
     registry.completeSpawn(receipt.launchId, { key: { engine: "codex", sessionId: fixtureSessionId(2) }, artifactPath, cwd: root, accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
-    for (const route of ["runtime/send", "runtime/inject", "runtime/interrupt", "runtime/steer", "runtime/answer", "runtime/queue", "conversation-host", "tmux", "answer"]) {
+    for (const route of ["runtime/send", "runtime/inject", "runtime/interrupt", "runtime/steer", "runtime/answer", "runtime/queue", "conversation-host", "tmux"]) {
       const routes = await import(`../../app/api/${route}/route.ts`) as { POST(req: NextRequest): Promise<Response> };
       const denied = await routes.POST(request(`/api/${route}`, member, "POST", { project: "repo-alpha", conversationId: receipt.conversationId, path: artifactPath, transcriptPath: artifactPath, action: "interrupt", text: "message", idempotencyKey: "workspace-message" }));
       expect(denied.status, route).toBe(403);
@@ -791,7 +723,7 @@ describe("workspace authority", () => {
 
   test("the board projection removes foreign rows, aliases, names and navigation maps", () => {
     const files = ["alpha", "beta"].map(name => ({ ...catalogEntryToFileEntry({ path: `${root}/${name}.jsonl`, root: "codex-sessions", name, project: `repo-${name}`, title: name, firstPrompt: "", engine: "codex", kind: "session", fmt: "codex", mtime: now / 1000, size: 10 }, now), conversationId: `conversation_${name}` as const }));
-    const source: FilesResponse = { files, tasks: [...loadTasksForList()], flows: [], pipelines: [], workflows: [], systemHealth: { tmux: { status: "healthy" } }, projectCatalog: [], projectAliases: { "repo-alpha": "repo-beta" }, projectDisplayNames: { "repo-alpha": "alpha", "repo-beta": "beta" }, conversationAliases: { hidden: "conversation_beta" }, launchRoutes: { hidden: "conversation_beta" }, projectCwds: { "repo-alpha": "alpha", "repo-beta": "beta" }, crownedProjects: ["repo-alpha", "repo-beta"] };
+    const source: FilesResponse = { files, tasks: [...loadTasksForList()], flows: [], pipelines: [], workflows: [], systemHealth: {}, projectCatalog: [], projectAliases: { "repo-alpha": "repo-beta" }, projectDisplayNames: { "repo-alpha": "alpha", "repo-beta": "beta" }, conversationAliases: { hidden: "conversation_beta" }, launchRoutes: { hidden: "conversation_beta" }, projectCwds: { "repo-alpha": "alpha", "repo-beta": "beta" }, crownedProjects: ["repo-alpha", "repo-beta"] };
     const result = workspaceFiles(workspaceScope(store, member.id), source);
     expect(result.files).toHaveLength(1);
     expect(result.tasks).toHaveLength(1);
@@ -998,7 +930,7 @@ test.each(["stored", "refused", "queued"] as const)("retained %s creation disapp
     }
     catalogs++;
     const scope = workspaceScope(store, member.id);
-    return Response.json(workspaceFiles(scope, { files: [], pipelines: [pipeline], tasks: [], flows: [], workflows: [], systemHealth: { tmux: { status: "healthy" } } } as FilesResponse),
+    return Response.json(workspaceFiles(scope, { files: [], pipelines: [pipeline], tasks: [], flows: [], workflows: [], systemHealth: {} } as FilesResponse),
       { headers: { ETag: '"retained-catalog"' } });
   }, { authority: () => ({ owner: member.id, signature: "last-confirmed-alpha-membership" }), creationStore: () => storage });
   try {

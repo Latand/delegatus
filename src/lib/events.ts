@@ -28,7 +28,7 @@ export type ViewerEventAction =
   | "reset-credit";
 
 export interface ViewerEventFields {
-  /** tmux target the action addressed, when known. */
+  /** Target the action addressed, when known. */
   target?: string;
   /** Transcript path the action belongs to, when known. */
   path?: string;

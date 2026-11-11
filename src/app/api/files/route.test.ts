@@ -59,7 +59,6 @@ let scanGates: Promise<void>[] = [];
 let scanAborts = 0;
 let hydrateScannedFiles: (files: FileEntry[], options: unknown) => FileEntry[] = (files) => files;
 let registryRoot = "";
-let tmuxHealth: unknown = { status: "healthy" };
 let stateDir = "";
 let previousState: string | undefined;
 
@@ -109,7 +108,6 @@ beforeEach(() => {
   scanGates = [];
   scanAborts = 0;
   hydrateScannedFiles = (files) => files;
-  tmuxHealth = { status: "healthy" };
   flowsStore = () => [];
   pipelinesStore = () => [];
   archivedOwnershipStore = () => [];
@@ -126,7 +124,6 @@ beforeEach(() => {
     loadTasks: () => deepFreeze(boardTasksStore()) as never,
     loadWorkflows: () => [],
     filterWorkflowsForFileScan: () => [],
-    tmuxEndpointHealth: () => tmuxHealth as never,
   });
   replaceConversationCatalog([]);
   resetPresenceForTest();
@@ -504,7 +501,7 @@ test("repeated files reads reuse the pure read snapshot and retain ETag behavior
   expect(first.status).toBe(200);
   expect(await first.json()).toMatchObject({
     files: [], projectCatalog: [], flows: [], pipelines: [], workflows: [], tasks: [],
-    systemHealth: { tmux: { status: "healthy" }, registry: { backendMode: expect.any(String) } },
+    systemHealth: { registry: { backendMode: expect.any(String) } },
     conversationAliases: {},
   });
   expect(second.status).toBe(304);
@@ -1853,7 +1850,6 @@ test("a warm snapshot returns the completed projection while an independent refr
     body: JSON.stringify({ schemaVersion: 1, text: { include: false } }),
   }) as never, {
     completedFileScan,
-    resolveSiblings: async () => ({ selfResolution: "omitted", agents: [] }),
     registrySnapshot: () => ({ conversations: {}, entries: {}, lineageEdges: {}, memberships: {}, conversationAliases: {}, receipts: {} }) as never,
     snapshotDeadlineMs: 1_000,
     scheduler: { setTimeout: () => { deadlinesArmed += 1; return deadlinesArmed; }, clearTimeout: () => {} },
@@ -4398,7 +4394,7 @@ test("worker ENOSPC fallback retains input A until input B rebuilds after an unr
 
 test("disk-full alert overlays a persisted representation from before write health existed", async () => {
   scannedFiles = [];
-  const body = JSON.stringify({ files: [], systemHealth: { tmux: { status: "healthy" } } });
+  const body = JSON.stringify({ files: [], systemHealth: {} });
   const digest = createHash("sha1").update(body).digest("hex");
   const bodyFile = `files-response-cache-${digest}.json`;
   fs.writeFileSync(path.join(stateDir, bodyFile), body);
