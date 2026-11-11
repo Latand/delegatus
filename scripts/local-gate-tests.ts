@@ -54,6 +54,17 @@ export function comparatorEnding(error: unknown): { line: string; code: number }
     ? { line: `touched-tests: no verdict: ${message}; nothing was judged`, code: 75 }
     : { line: `touched-tests: ${message}; gate error (blocking)`, code: 1 };
 }
+
+function assertWorkersSucceeded(workers: readonly PromiseSettledResult<unknown>[], diagnostics: readonly string[] = []): void {
+  const rejected = workers.filter((worker): worker is PromiseRejectedResult => worker.status === "rejected");
+  if (!rejected.length) return;
+  // Filtered workers can throw before recording a file result. Inspect every
+  // rejection, including the peer of a timed-out confirmation side.
+  if (diagnostics.length || rejected.some(worker => !(worker.reason instanceof BudgetExhausted))) {
+    throw new Error([...rejected.map(worker => worker.reason instanceof Error ? worker.reason.message : String(worker.reason)), ...diagnostics].join("\n"));
+  }
+  throw rejected[0]!.reason;
+}
 const RUNNER_ERROR = "<runner error> ";
 interface Counts { pass: number; fail: number }
 interface FlakySite extends TestSite { base: Counts; head: Counts }
@@ -114,24 +125,31 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
     const sides = ["base", "head"] as const;
     // The two isolated sides owe the same samples and share one deadline.
     // Await both even on refusal so no owned runner outlives this round.
-    const samples = await Promise.allSettled(sides.map(async side => rerun(side, sites)));
-    for (const [index, side] of sides.entries()) {
-      const sample = samples[index]!;
-      if (sample.status === "rejected") throw sample.reason;
-      const run = sample.value;
+    const samples = await Promise.allSettled(sides.map(async side => {
+      const run = await rerun(side, sites);
       // A between-tests error the same side already showed in its first sample
       // is that file's known state; only a diagnostic the first sample lacked
       // leaves the retry without usable evidence.
       const known = new Set((side === "base" ? base : head).failures.filter(site => site.kind === "error").map(key));
       if (run.failures.some(site => site.kind === "error" && !known.has(key(site)))) throw new Error(`${side} rerun: incomplete runner or between-tests error`);
       for (const item of pending) {
-        const fail = occurrenceCount(run.failures, item.site), pass = occurrenceCount(run.passed, item.site);
-        if (side === "base" && fail + pass !== occurrenceCount(base.passed, item.site) + occurrenceCount(base.failures, item.site)) throw new Error(`base rerun: missing or skipped test ${item.site.file}: ${item.site.name}`);
-        if (side === "base" && fail) item.baseRetryFailed = true;
-        if (side === "head") {
-          if (fail + pass !== occurrenceCount(head.failures, item.site) + occurrenceCount(head.passed, item.site)) throw new Error(`head rerun: missing or skipped test ${item.site.file}: ${item.site.name}`);
-          if (pass) item.headRetryPassed = true;
+        const first = side === "base" ? base : head;
+        if (occurrenceCount(run.failures, item.site) + occurrenceCount(run.passed, item.site)
+          !== occurrenceCount(first.failures, item.site) + occurrenceCount(first.passed, item.site)) {
+          throw new Error(`${side} rerun: missing or skipped test ${item.site.file}: ${item.site.name}`);
         }
+      }
+      return run;
+    }));
+    assertWorkersSucceeded(samples);
+    for (const [index, side] of sides.entries()) {
+      const sample = samples[index]!;
+      if (sample.status === "rejected") throw sample.reason;
+      const run = sample.value;
+      for (const item of pending) {
+        const fail = occurrenceCount(run.failures, item.site), pass = occurrenceCount(run.passed, item.site);
+        if (side === "base" && fail) item.baseRetryFailed = true;
+        if (side === "head" && pass) item.headRetryPassed = true;
         item[side].pass += pass; item[side].fail += fail;
       }
     }
@@ -298,6 +316,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     let exitCode: number;
     let cleanupConfirmed = false;
     let taskPeak: string | null = null;
+    let survivors: string | undefined;
     try {
       result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(Math.min(budgets.fileMs, remaining) + 5_000), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--timeout=60000", "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
         // Keep the independent five-second cleanup allowance, measured as
@@ -311,12 +330,12 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     // exits is neither a bound handle nor proof against PID reuse.
     try {
       const output = readFileSync(log, "utf8");
+      survivors = output.split("\n").find(line => line.startsWith("owned runner: surviving owned processes:"));
       const task = gateTaskDiagnostics(output);
       taskPeak = task.peak;
       if (exitCode !== 0 && task.failure) throw new Error(task.failure);
       if (result.signalCode || ![0, 1].includes(exitCode)) throw new Error(`runner did not finish (${result.signalCode ?? exitCode})`);
       const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, filtered);
-      const survivors = output.split("\n").find(line => line.startsWith("owned runner: surviving owned processes:"));
       // A complete report still needs the service's ownership verdict.
       // Retain it so cleanup fixed on head can recover a broken baseline.
       if (survivors && exitCode !== 0) {
@@ -332,7 +351,8 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       failures.push(...parsed.failures); passed.push(...parsed.passed); completed.push(file);
       if (parsed.failures.length) options.onFailure?.();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const cause = error instanceof Error ? error.message : String(error);
+      const message = survivors && !cause.includes(survivors) ? `${cause}; ${survivors}` : cause;
       if (filtered) {
         const detail = `${label}: ${file}: ${message}; elapsed ${(performance.now() - started).toFixed(0)}ms`;
         if (message === "runner did not finish (124)") throw new BudgetExhausted(detail);
@@ -348,19 +368,11 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     options.onFile?.(results[index]!, cleanupConfirmed);
   }
   }));
-  const rejected = workers.find(worker => worker.status === "rejected");
-  if (rejected?.status === "rejected") {
-    // All owned runners have settled. Preserve their observed diagnostics
-    // before an aggregate deadline can turn failed cleanup into a retry.
-    // A runner deadline alone keeps the existing capacity-retry semantics.
-    const diagnostics = results.flatMap(run => run?.failures.filter(site => site.kind === "error"
-      && site.name !== `${RUNNER_ERROR}runner did not finish (124)`) ?? []);
-    if (diagnostics.length) {
-      const reason = rejected.reason instanceof Error ? rejected.reason.message : String(rejected.reason);
-      throw new Error([reason, ...diagnostics.map(site => `${label}: ${site.file}: ${diagnosticName(site)}`)].join("\n"));
-    }
-    throw rejected.reason;
-  }
+  // All owned runners have settled. Completed file diagnostics and filtered
+  // worker rejections must both veto a capacity retry after budget expiry.
+  const diagnostics = results.flatMap(run => run?.failures.filter(site => site.kind === "error"
+    && site.name !== `${RUNNER_ERROR}runner did not finish (124)`) ?? []);
+  assertWorkersSucceeded(workers, diagnostics.map(site => `${label}: ${site.file}: ${diagnosticName(site)}`));
   for (const run of results) { failures.push(...run.failures); passed.push(...run.passed); completed.push(...run.completed); }
   return { failures, passed, completed, elapsedMs: performance.now() - started };
 }

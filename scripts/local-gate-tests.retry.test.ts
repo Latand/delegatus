@@ -1,5 +1,5 @@
 import { betweenTests, cliAt, confirmFailures, expect, fixture, FLAKY_BUDGET_MS, FLAKY_RERUNS, path, readFileSync, root, SAME_WAY, scheduledFixture, scheduledSource, source, spawnSync, spyOn, test, type TestRun, type TestSite, touchedTests, writeFileSync } from "./local-gate-tests.fixture";
-import { BudgetExhausted } from "./local-gate-tests";
+import { BudgetExhausted, comparatorEnding } from "./local-gate-tests";
 
 
 test("a base-only scheduled failure is FLAKY with both counts and no unrelated reruns", async () => {
@@ -356,6 +356,97 @@ test.each(["accepts", "refuses"] as const)("confirmation sides overlap and await
     expect(outcome.value.flaky).toHaveLength(1);
   }
 });
+
+test.each(["base", "head", "both", "neither"] as const)("confirmation preserves ordinary peer refusals when %s sides exhaust their budget", async budgetSide => {
+  const site: TestSite = { file: "example.test.ts", suite: "", name: "target", kind: "test", occurrence: 0 };
+  const base: TestRun = { failures: [], passed: [site], completed: [site.file], elapsedMs: 0 };
+  const head: TestRun = { ...base, failures: [site], passed: [] };
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const entered: string[] = [];
+  const confirmation = confirmFailures(base, head, async side => {
+    entered.push(side);
+    await held;
+    if (side === budgetSide || budgetSide === "both") throw new BudgetExhausted(`${side} deadline`);
+    throw new Error(`${side} cleanup refusal`);
+  });
+  const observed = confirmation.catch(error => error);
+  try { expect(entered).toEqual(["base", "head"]); }
+  finally { release(); }
+  const ending = comparatorEnding(await observed);
+  expect(ending.code).toBe(budgetSide === "both" ? 75 : 1);
+  for (const side of ["base", "head"]) {
+    if (side !== budgetSide && budgetSide !== "both") expect(ending.line).toContain(`${side} cleanup refusal`);
+  }
+});
+
+test.each(["base", "head"] as const)("confirmation checks a completed peer's runner diagnostics before the %s deadline", async budgetSide => {
+  const site: TestSite = { file: "example.test.ts", suite: "", name: "target", kind: "test", occurrence: 0 };
+  const diagnostic: TestSite = { file: site.file, suite: "", name: "<runner error> cleanup refusal", kind: "error" };
+  // Existing diagnostics retain their comparison policy; only a newly observed
+  // runner failure is decisive when the other side runs out of time.
+  for (const known of [false, true]) {
+    const base: TestRun = { failures: known ? [diagnostic] : [], passed: [site], completed: [site.file], elapsedMs: 0 };
+    const head: TestRun = { ...base, failures: [site, ...base.failures], passed: [] };
+    const error = await confirmFailures(base, head, async side => {
+      if (side === budgetSide) throw new BudgetExhausted(`${side} deadline`);
+      return { ...base, failures: [diagnostic] };
+    }).catch(error => error);
+    const ending = comparatorEnding(error);
+    expect(ending.code).toBe(known ? 75 : 1);
+    if (!known) expect(ending.line).toContain(`${budgetSide === "base" ? "head" : "base"} rerun: incomplete runner or between-tests error`);
+  }
+});
+
+test.each(["base", "head"] as const)("confirmation checks a completed peer's test counts before the %s deadline", async budgetSide => {
+  const site: TestSite = { file: "example.test.ts", suite: "", name: "target", kind: "test", occurrence: 0 };
+  const base: TestRun = { failures: [], passed: [site], completed: [site.file], elapsedMs: 0 };
+  const head: TestRun = { ...base, failures: [site], passed: [] };
+  const error = await confirmFailures(base, head, async side => {
+    if (side === budgetSide) throw new BudgetExhausted(`${side} deadline`);
+    return { ...base, passed: [] };
+  }).catch(error => error);
+  const ending = comparatorEnding(error);
+  expect(ending.code).toBe(1);
+  expect(ending.line).toContain(`${budgetSide === "base" ? "head" : "base"} rerun: missing or skipped test example.test.ts: target`);
+});
+
+const serviceTest = test.skipIf(process.platform !== "linux"
+  || spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" }).status !== 0);
+serviceTest.each(["timeout first", "cleanup first", "only timeouts"] as const)("filtered worker refusals survive comparator restarts: %s", mode => {
+  const timeout = 'import { test } from "bun:test"; test("contract", () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20000));';
+  const cleanup = `import { test } from "bun:test";
+test("contract", async () => {
+  const child = Bun.spawn([process.execPath, "-e", 'require("node:child_process").spawn("sleep", ["300"], { detached: true, stdio: "ignore" }).unref(); process.exit(0)'], { stdout: "ignore", stderr: "ignore" });
+  await child.exited;
+  process.exit(0);
+});`;
+  const f = fixture(source(true));
+  const files = ["a.test.ts", "b.test.ts"];
+  const cleanupFile = mode === "cleanup first" ? files[0]! : files[1]!;
+  for (const file of files) writeFileSync(path.join(f.dir, file), mode !== "only timeouts" && file === cleanupFile ? cleanup : timeout);
+  f.git("add", "."); f.git("commit", "-m", "Filtered worker refusal baseline");
+  const base = f.git("rev-parse", "HEAD");
+  for (const file of files) writeFileSync(path.join(f.dir, file), 'import { test, expect } from "bun:test"; test("contract", () => expect(false).toBe(true));');
+  const driver = path.join(f.dir, "driver.ts");
+  writeFileSync(driver, `import { touchedTests, comparatorEnding } from ${JSON.stringify(path.join(root, "scripts/local-gate-tests.ts"))};
+import { publicationDeadlineOnly } from ${JSON.stringify(path.join(root, "src/lib/pipelines/publication.ts"))};
+try { await touchedTests(${JSON.stringify(f.dir)}, ${JSON.stringify(base)}, ${JSON.stringify(files)}, { budgets: { fileMs: 3500, runMs: 60000 } }); }
+catch (error) { const ending = comparatorEnding(error); console.log(ending.line); console.log("retryable=" + publicationDeadlineOnly(ending.line)); process.exitCode = ending.code; }`);
+  // Restart the real comparator: no in-memory state may conceal a refusal on
+  // the next publication attempt. The owned runners reap the fixture children.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const outcome = spawnSync(process.execPath, [driver], { cwd: f.dir, env: f.env, encoding: "utf8", timeout: 30000 });
+    expect(outcome.status, outcome.stdout + outcome.stderr).toBe(mode === "only timeouts" ? 75 : 1);
+    expect(outcome.stdout).toContain(`retryable=${mode === "only timeouts"}`);
+    if (mode === "only timeouts") expect(outcome.stdout).toContain("nothing was judged");
+    else {
+      expect(outcome.stdout).toContain(`baseline: ${cleanupFile}:`);
+      expect(outcome.stdout).toContain("owned runner: surviving owned processes:");
+      expect(outcome.stdout).toContain("gate error (blocking)");
+    }
+  }
+}, 60000);
 
 
 test("the shared retry deadline blocks before another child starts", async () => {
