@@ -1,4 +1,5 @@
 import { expect, test, reserveActivationOnly, loadPipelines, savePipelines, patchPipeline, tickPipelines, engineModule, AgentRegistry, setAgentRegistryForTests, path, recoveryReport, registerPipelineTick } from "./engine.fixture";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { reportLaneFrom } from "@/lib/orchestrator/boardReportRun";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -39,10 +40,11 @@ async function retainedRetryCheck() {
 }
 
 /** Real creation, report, native transcript, MCP action and controller;
- * only launch, runtime control and the launch ledger are local test seams. */
-async function completedFailureRetry(receiptState: "path-pending" | "completed" = "path-pending", publication: "internal" | "remote-branch" = "internal", recordedReport = true) {
+ * runtime control and dispatch are local seams; productionIdentity retains
+ * the real staged registry and default receipt and identity ports. */
+async function completedFailureRetry(receiptState: "path-pending" | "completed" = "path-pending", publication: "internal" | "remote-branch" = "internal", recordedReport = true, productionIdentity = false) {
   const h = harness();
-  const nativePath = (n: string | number) => path.join(process.env.LLV_STATE_DIR!, `retry-native-${n}.jsonl`);
+  const nativePath = (n: string | number) => path.join(process.env.LLV_STATE_DIR!, `00000000-0000-4000-8000-${String(n).padStart(12, "0")}.jsonl`);
   const spawn = h.ports.spawnAgent;
   h.ports.spawnAgent = async (input, reserved) => {
     const result = await spawn(input, reserved);
@@ -55,7 +57,7 @@ async function completedFailureRetry(receiptState: "path-pending" | "completed" 
     return n ? nativePath(n) : null;
   };
   h.ports.conversationIdForPath = file => file === "/codex/creator.jsonl" ? "conversation_creator"
-    : `conversation_stage_${/retry-native-(\d+)\.jsonl$/.exec(file)?.[1]}`;
+    : `conversation_stage_${Number(/(\d{12})\.jsonl$/.exec(file)?.[1])}`;
   h.ports.sourcePathAllowed = file => file.startsWith(process.env.LLV_STATE_DIR!) || file === "/codex/creator.jsonl";
   h.ports.conversationDeliveryOutstanding = () => false;
   h.ports.conversationTurnInterrupted = async () => null;
@@ -82,11 +84,36 @@ async function completedFailureRetry(receiptState: "path-pending" | "completed" 
   expect(retryAttempt()).toMatchObject({ n: 1, state: "failed", verdict: { status: "fail" } });
   if (recordedReport) expect(retryAttempt().report).toMatchObject({ verdict: { status: "fail" } });
   else expect(retryAttempt().report).toBeFalsy();
-  const receipt = { state: receiptState, launchId: "launch-1", conversationId, sessionId: null, transcript: null, paneId: null };
+  const receipt = { state: receiptState, launchId: "launch-1", conversationId, sessionId: null, transcript: null, paneId: null,
+    retryIdentity: { engine: retryAttempt().effectiveRole.engine, sessionId: retryAttempt().sessionId!, artifactPath: pathname } };
   h.ports.spawnReceipt = id => id === receipt.launchId ? receipt as never : null;
   h.ports.spawnReceiptState = id => h.ports.spawnReceipt(id)?.state ?? null;
   h.ports.claimSpawnRetry = () => { throw new Error("completed execution must retain its original launch receipt"); };
   h.ports.failStageLaunch = () => { throw new Error("completed execution must not become a never-started launch"); };
+  let registry: InstanceType<typeof AgentRegistry> | null = null;
+  if (productionIdentity) {
+    registry = new AgentRegistry(path.join(fs.mkdtempSync(path.join(process.env.TMPDIR!, "retry-registry-")), "registry.json"));
+    setAgentRegistryForTests(registry);
+    const lane = retryLane();
+    const profile = emptyLaunchProfile({ cwd: lane.worktreeDir!, title: "Completed stage fixture" });
+    const begun = registry.beginSpawnRequest({ engine: "codex", cwd: lane.worktreeDir!, transport: "structured",
+      launchProfile: profile, conversationId: conversationId as `conversation_${string}`, expectedArtifactPath: pathname });
+    if (begun.kind !== "created") throw new Error("expected a fresh registry receipt");
+    const entry = { key: { engine: "codex" as const, sessionId: path.basename(pathname, ".jsonl") }, artifactPath: pathname,
+      cwd: lane.worktreeDir!, accountId: null, launchProfile: profile, status: "dead" as const, host: null,
+      claimEpoch: 1, claimOwner: null, pendingAction: null };
+    expect(registry.stageStructuredSpawn(begun.receipt.launchId, entry).kind).toBe("settled");
+    if (receiptState === "completed") registry.completeSpawn(begun.receipt.launchId, entry);
+    Object.assign(lane.runs[0]!.attempts[0]!, { launchId: begun.receipt.launchId, sessionId: entry.key.sessionId });
+    savePipelines([lane]);
+    const actual = engineModule.defaultPipelinePorts();
+    h.ports.spawnReceipt = actual.spawnReceipt;
+    h.ports.spawnReceiptState = actual.spawnReceiptState;
+    h.ports.pathForConversation = actual.pathForConversation;
+    h.ports.conversationIdForPath = actual.conversationIdForPath;
+    expect(actual.pathForConversation(conversationId)).toBe(receiptState === "path-pending" ? null : pathname);
+    expect(actual.conversationIdForPath(pathname)).toBe(receiptState === "path-pending" ? null : conversationId);
+  }
   const dependencies = {
     callerAttribution: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
     readPipelineRecord: engineModule.getPipeline,
@@ -108,8 +135,8 @@ async function completedFailureRetry(receiptState: "path-pending" | "completed" 
     expectedStageDigest: stageDigest(retryLane().stages[0]!) });
   expect(override.isError, override.raw).toBe(false);
   expect(override.answer.graphEdit).toMatchObject({ appliesFromAttempt: 2 });
-  return { h, call, receipt, old: structuredClone(retryAttempt()), transcript: fs.readFileSync(pathname, "utf8"),
-    close: async () => { await client.close(); await server.close(); } };
+  return { h, call, receipt, registry, old: structuredClone(retryAttempt()), transcript: fs.readFileSync(pathname, "utf8"),
+    close: async () => { await client.close(); await server.close(); registry?.close(); setAgentRegistryForTests(null); } };
 }
 
 test.each([
@@ -117,8 +144,10 @@ test.each([
   { state: "completed", recordedReport: true },
   { state: "path-pending", recordedReport: false },
 ] as const)("completed fail retries through MCP after override with $state receipt, recorded report $recordedReport (#2034)", async ({ state, recordedReport }) => {
-  const f = await completedFailureRetry(state, "internal", recordedReport);
+  const f = await completedFailureRetry(state, "internal", recordedReport, true);
   try {
+    const registryReceipt = f.registry!.spawnReceipt(f.old.launchId!);
+    const registryConversation = f.registry!.conversation(f.old.conversationId as `conversation_${string}`);
     const check = await retainedRetryCheck();
     const lane = retryLane();
     const request = { action: "retry-stage", stageId: "build", clientRequestId: "completed-fail-retry" };
@@ -135,7 +164,8 @@ test.each([
     expect(retryAttempt()).toMatchObject({ n: 2, state: "running", definition: { prompt: "Run the corrected build check" } });
     expect(f.h.spawnInputs[1]!.prompt).toContain("Run the corrected build check");
     expect(fs.readFileSync(f.old.agentPath!, "utf8")).toBe(f.transcript);
-    expect(f.receipt.state).toBe(state);
+    expect(f.registry!.spawnReceipt(f.old.launchId!)).toEqual(registryReceipt);
+    expect(f.registry!.conversation(f.old.conversationId as `conversation_${string}`)).toEqual(registryConversation);
     const checkStore = new RecordedCheckStore();
     try { expect(checkStore.get(check.id)).toEqual(check); }
     finally { checkStore.close(); }
@@ -153,7 +183,7 @@ test.each([
 test.each(["live host", "unconfirmed stop", "unknown delivery", "busy transcript", "missing transcript", "missing verdict",
   "identity mismatch", "starting receipt", "missing receipt"] as const)
 ("completed failure retry keeps execution fenced for %s (#2034)", async counterexample => {
-  const f = await completedFailureRetry();
+  const f = await completedFailureRetry("path-pending", "internal", true, true);
   let stops = 0;
   f.h.ports.stopSettledStageWriter = async () => {
     stops++;
@@ -170,11 +200,23 @@ test.each(["live host", "unconfirmed stop", "unknown delivery", "busy transcript
     lane.runs[0]!.attempts[0]!.verdict = null;
     savePipelines([lane]);
   }
-  if (counterexample === "identity mismatch") f.receipt.conversationId = "conversation_foreign";
-  if (counterexample === "starting receipt") Object.assign(f.receipt, { state: "starting" });
+  if (counterexample === "identity mismatch") {
+    const lane = retryLane();
+    lane.runs[0]!.attempts[0]!.sessionId = "foreign-session";
+    savePipelines([lane]);
+  }
+  if (counterexample === "starting receipt") {
+    const entry = f.registry!.readOnlySnapshot().entries[`codex:${f.old.sessionId}`]!;
+    const begun = f.registry!.beginSpawnRequest({ engine: "codex", cwd: entry.cwd, transport: "structured",
+      launchProfile: entry.launchProfile!, conversationId: f.old.conversationId as `conversation_${string}` });
+    if (begun.kind !== "created") throw new Error("expected an uncertain receipt");
+    const lane = retryLane();
+    lane.runs[0]!.attempts[0]!.launchId = begun.receipt.launchId;
+    savePipelines([lane]);
+  }
   if (counterexample === "missing receipt") f.h.ports.spawnReceipt = () => null;
   const before = structuredClone(retryAttempt());
-  const receipt = structuredClone(f.receipt);
+  const receipt = f.registry!.spawnReceipt(before.launchId!);
   try {
     const request = { action: "retry-stage", stageId: "build", clientRequestId: "refused-completed-retry" };
     const refused = await f.call(request);
@@ -183,7 +225,7 @@ test.each(["live host", "unconfirmed stop", "unknown delivery", "busy transcript
     expect(retryLane().state).toBe("needs_decision");
     expect(retryLane().runs[0]!.attempts).toHaveLength(1);
     expect(retryAttempt()).toEqual(before);
-    expect(f.receipt).toEqual(receipt);
+    expect(f.registry!.spawnReceipt(before.launchId!)).toEqual(receipt);
     expect(f.h.spawnInputs).toHaveLength(1);
     expect(stops).toBe(counterexample === "live host" || counterexample === "unconfirmed stop" ? 1 : 0);
   } finally { await f.close(); }
@@ -248,8 +290,55 @@ test.each(["transcript read", "host stop", "shutdown read"] as const)("completed
   }
 });
 
+test.each(["before read", "transcript read", "host stop", "shutdown read"] as const)
+("completed retry rechecks production identity at %s (#2034)", async boundary => {
+  for (const change of ["entry path", "entry launch", "generation"] as const) {
+    const f = await completedFailureRetry("path-pending", "internal", true, true);
+    const before = structuredClone(retryAttempt());
+    const receipt = f.registry!.spawnReceipt(before.launchId!);
+    const withdraw = () => {
+      const entry = f.registry!.readOnlySnapshot().entries[`codex:${f.old.sessionId}`]!;
+      if (change === "entry path") f.registry!.upsert({ ...entry, artifactPath: `${entry.artifactPath}.other` });
+      if (change === "entry launch") f.registry!.upsert({ ...entry, structuredHostOperationId: "foreign-launch" });
+      if (change === "generation") {
+        const begun = f.registry!.beginSpawnRequest({ engine: "codex", cwd: entry.cwd, transport: "structured",
+          launchProfile: entry.launchProfile!, conversationId: f.old.conversationId as `conversation_${string}`,
+          expectedArtifactPath: `${entry.artifactPath}.successor` });
+        if (begun.kind !== "created") throw new Error("expected a successor reservation");
+        f.registry!.stageStructuredSpawn(begun.receipt.launchId, { ...entry,
+          key: { engine: "codex", sessionId: "successor-session" }, artifactPath: `${entry.artifactPath}.successor` });
+      }
+    };
+    if (boundary === "before read") withdraw();
+    else if (boundary === "transcript read") f.h.ports.durableTurnEvidence = async (...args) => {
+      const evidence = await durableStageTurnEvidence(...args); withdraw(); return evidence;
+    };
+    else if (boundary === "host stop") f.h.ports.stopSettledStageWriter = async () => { withdraw(); return { outcome: "stopped" }; };
+    else {
+      let reads = 0;
+      f.h.ports.stopSettledStageWriter = async () => {
+        fs.appendFileSync(f.old.agentPath!, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(),
+          payload: { type: "token_count", info: null } }) + "\n");
+        return { outcome: "stopped" };
+      };
+      f.h.ports.durableTurnEvidence = async (...args) => {
+        const evidence = await durableStageTurnEvidence(...args);
+        if (++reads === 2) withdraw();
+        return evidence;
+      };
+    }
+    try {
+      const refused = await f.call({ action: "retry-stage", stageId: "build" });
+      expect(refused.isError, `${change}: ${refused.raw}`).toBe(true);
+      expect(retryAttempt()).toEqual(before);
+      expect(f.registry!.spawnReceipt(before.launchId!)).toEqual(receipt);
+      expect(f.h.spawnInputs).toHaveLength(1);
+    } finally { await f.close(); }
+  }
+});
+
 test("completed retry refuses a stale delivery epoch owned by another lane (#2034)", async () => {
-  const f = await completedFailureRetry("path-pending", "remote-branch");
+  const f = await completedFailureRetry("path-pending", "remote-branch", true, true);
   const old = structuredClone(retryAttempt());
   const lane = retryLane();
   expect(lane.delivery).toBeTruthy();

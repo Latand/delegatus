@@ -285,6 +285,9 @@ export type PipelineSpawnReceipt = PipelineStageSpawn & {
   currentGeneration?: boolean;
   /** Generation identity checked independently from the retry-claim fence. */
   generationMatches?: boolean;
+  /** Internal retry proof from the original receipt, current generation and
+      native entry. It grants no public path resolution or execution completion. */
+  retryIdentity?: { engine: string; sessionId: string; artifactPath: string } | null;
   /** Current path reached by a committed succession from this launch's generation. */
   successorTranscript?: string | null;
   /** Persisted retry owner, used to resume this controller's idempotent claim. */
@@ -1985,6 +1988,11 @@ export function defaultPipelinePorts(
           && !engineProcessMayRun(evidence.entry) && !capturedTreeMayRun(evidence.entry),
         currentGeneration: stageLaunchGenerationMatches(receipt, evidence.generation, evidence.entry),
         generationMatches: stageLaunchGenerationIdentityMatches(receipt, evidence.generation, evidence.entry),
+        retryIdentity: receipt.transport === "structured" && !receipt.retryClaim
+          && stageLaunchGenerationIdentityMatches(receipt, evidence.generation, evidence.entry)
+          && receipt.key?.engine === receipt.engine && evidence.generation?.id === receipt.key?.sessionId
+          && evidence.entry?.structuredHostOperationId === receipt.launchId
+          ? { engine: receipt.engine, sessionId: receipt.key!.sessionId, artifactPath: receipt.artifactPath! } : null,
         successorTranscript,
         retryClaimId: receipt.retryClaim?.claimId ?? null,
       };
@@ -17924,8 +17932,8 @@ export async function patchPipeline(
           || JSON.stringify(receipt) !== completedReceiptProof || receipt?.launchId !== attempt!.launchId
           || receipt?.conversationId !== attempt!.conversationId
           || (ports.spawnReceiptState ? ports.spawnReceiptState(retryLaunchId!) : receipt?.state) !== "path-pending"
-          || ports.pathForConversation(attempt!.conversationId!) !== attempt!.agentPath
-          || ports.conversationIdForPath(attempt!.agentPath!) !== attempt!.conversationId
+          || !receipt?.retryIdentity || receipt.retryIdentity.engine !== attempt!.effectiveRole.engine
+          || receipt.retryIdentity.sessionId !== attempt!.sessionId || receipt.retryIdentity.artifactPath !== attempt!.agentPath
           || !ports.sourcePathAllowed(attempt!.agentPath!) || pipelineSurvivorRefusal(pipeline)
           || ports.conversationDeliveryOutstanding?.(attempt!.conversationId!) !== false) {
           return { error: ownerError || "the completed attempt's retry ownership or delivery evidence changed; retry was cancelled", status: 409 };
