@@ -64,8 +64,8 @@ test("the operator turns the drain on, which takes and names a backup, and off a
   expect(tail()).toBe(0);
   const off = await put({ enabled: false });
   expect(off.status).toBe(200);
-  expect(await off.json()).toMatchObject({ enabled: false, backup: null });
-  expect(fs.existsSync(kept)).toBe(false);
+  expect(await off.json()).toMatchObject({ enabled: false, backup: { present: true } });
+  expect(fs.existsSync(kept)).toBe(true);
   roleMemoryCollection(true)!.boundedPatch(2, tx => {
     const row = tx.get(`s:${SCOPE}`) as RoleMemoryScopeRow;
     tx.put({ ...row, history: [{ revision: 41, at: new Date(1_760_000_100_000).toISOString(), by: "agent", added: [], merged: [], archived: [] }] });

@@ -61,9 +61,11 @@ let idle: string | null = null;
 
 /* The operator's switch, and the backup that protects the move. Off unless
    the operator turned it on for this store. */
-export interface RoleHistoryBackup { name: string; at: string; bytes: number }
+export interface RoleHistoryBackup { name: string; at: string; bytes: number; keptUntil: string }
 type Setting = { enabled: boolean; at: string; backup?: RoleHistoryBackup };
-/** How long the backup taken at turning on is kept out of backup retention. */
+/** How long the backup taken at turning on is kept out of backup retention,
+ * whether or not the drain is turned off meanwhile: an operator turns it off
+ * exactly when something went wrong. */
 export const ROLE_HISTORY_BACKUP_KEPT_MS = 30 * 24 * 60 * 60 * 1000;
 const RESTORE_NOTE = "restoring it returns the whole state database, every store in it, to that moment";
 const KEPT_PREFIX = "role-memory-history-";
@@ -90,6 +92,13 @@ function releaseKeptBackup(): void {
   const kept = keptBackup();
   if (kept) fs.rmSync(kept.file, { force: true });
 }
+/** Release the kept copy once its thirty days have passed, whatever the switch says. */
+export function releaseExpiredRoleHistoryBackup(now = Date.now()): void {
+  const held = setting();
+  if (!held?.backup || now <= Date.parse(held.backup.keptUntil)) return;
+  releaseKeptBackup();
+  writeSetting({ enabled: held.enabled, at: held.at });
+}
 
 type TakeBackup = () => Promise<Map<string, BackupOutcome>>;
 let takeBackup: TakeBackup = () => runBackupPassInWorker(path.dirname(statePath("state.sqlite")), new Map());
@@ -99,14 +108,14 @@ const takeBackupInWorker = takeBackup;
 export function setRoleHistoryBackupPassForTests(pass: TakeBackup | null): void { takeBackup = pass ?? takeBackupInWorker; }
 /** Turning the drain on takes a state backup through the product's backup
  * pass, which checks the copy's integrity before it keeps it, and keeps that
- * copy under a name of its own until the drain is turned off or thirty days
- * pass. A store that already has history rows is past the point a backup
+ * copy under a name of its own for thirty days. A store that already has history rows is past the point a backup
  * guards and needs none. */
 export async function setRoleHistoryRowsEnabled(enabled: boolean, options: { now?: number; takeBackup?: TakeBackup } = {}): Promise<void> {
   const now = options.now ?? Date.now(), at = new Date(now).toISOString();
-  if (!enabled) { releaseKeptBackup(); writeSetting({ enabled: false, at }); idle = null; return; }
   const held = setting();
-  if (storeHasHistoryRows()) { writeSetting({ enabled: true, at: held?.backup ? held.at : at, ...(held?.backup ? { backup: held.backup } : {}) }); return; }
+  // Turning off keeps the backup: it is the way back from whatever went wrong.
+  if (!enabled) { writeSetting({ enabled: false, at, ...(held?.backup ? { backup: held.backup } : {}) }); idle = null; return; }
+  if (storeHasHistoryRows()) { writeSetting({ enabled: true, at, ...(held?.backup ? { backup: held.backup } : {}) }); return; }
   let outcome: BackupOutcome | undefined;
   try { outcome = (await (options.takeBackup ?? takeBackup)()).get("state.sqlite"); }
   catch (error) { throw new RoleHistoryDrainRefusal(`the state backup did not run (${error instanceof Error ? error.name : "unknown"}); nothing was turned on`); }
@@ -122,7 +131,7 @@ export async function setRoleHistoryRowsEnabled(enabled: boolean, options: { now
   const name = `${KEPT_PREFIX}${newest.name}`, kept = path.join(backupDirectory(), name);
   fs.rmSync(kept, { force: true });
   try { fs.linkSync(newest.file, kept); } catch { fs.copyFileSync(newest.file, kept); }
-  writeSetting({ enabled: true, at, backup: { name, at: new Date(newest.at).toISOString(), bytes: newest.bytes } });
+  writeSetting({ enabled: true, at, backup: { name, at: new Date(newest.at).toISOString(), bytes: newest.bytes, keptUntil: new Date(now + ROLE_HISTORY_BACKUP_KEPT_MS).toISOString() } });
   idle = null;
 }
 
@@ -316,12 +325,12 @@ export async function drainRoleHistory(options: RoleHistoryDrainOptions & { acti
 }
 
 export const ROLE_HISTORY_RESTORE_NOTE = RESTORE_NOTE;
-export function roleHistoryRowsStatus(): { enabled: boolean; backup: (RoleHistoryBackup & { present: boolean; restore: string; keptUntil: string }) | null; idle: string | null; unclaimed: number; incomplete: number } {
+export function roleHistoryRowsStatus(): { enabled: boolean; backup: (RoleHistoryBackup & { present: boolean; restore: string }) | null; idle: string | null; unclaimed: number; incomplete: number } {
   const held = setting();
   const backup = held?.backup ?? null;
   return {
     enabled: held?.enabled === true,
-    backup: backup ? { ...backup, present: keptBackup() !== null, restore: RESTORE_NOTE, keptUntil: new Date(Date.parse(held!.at) + ROLE_HISTORY_BACKUP_KEPT_MS).toISOString() } : null,
+    backup: backup ? { ...backup, present: keptBackup() !== null, restore: RESTORE_NOTE } : null,
     idle: held?.enabled === true ? idle : null,
     unclaimed: unclaimedRoleHistoryTokens(),
     incomplete: incomplete.size,
@@ -332,9 +341,9 @@ export function roleHistoryRowsStatus(): { enabled: boolean; backup: (RoleHistor
  * release serves traffic. The reason a pass did not run or stopped is kept
  * for the status. */
 export async function roleHistoryDrainTick(active: () => Promise<boolean>, options: RoleHistoryDrainOptions & { pauseMs?: number } = {}): Promise<boolean> {
+  releaseExpiredRoleHistoryBackup(options.now);
   const held = setting();
   if (held?.enabled !== true) { idle = null; return false; }
-  if (held.backup && (options.now ?? Date.now()) - Date.parse(held.at) > ROLE_HISTORY_BACKUP_KEPT_MS) { releaseKeptBackup(); writeSetting({ enabled: true, at: held.at }); }
   if (!await active()) { idle = "this release does not serve traffic yet"; return false; }
   try {
     await drainRoleHistory({ ...options, active: roleHistoryRowsEnabled });

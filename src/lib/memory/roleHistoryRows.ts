@@ -133,8 +133,12 @@ export function rowsWithCollectedHistory<T>(memory: readonly T[], history: () =>
   });
 }
 
-/** What makes two stored entries the same change of one scope lineage,
- * whatever was marked on the entry since. */
-export function historyEntryIdentity(entry: Pick<ScopeHistoryEntry, "revision" | "revisionScope" | "at" | "by" | "pass">, scope: string): string {
-  return JSON.stringify([entry.revisionScope ?? scope, entry.revision, entry.at, entry.by, entry.pass ?? null]);
+/** What makes two stored entries the same change of one scope lineage: its
+ * place in the lineage and what it changed, whatever was marked on the entry
+ * since (an undo, its undo payload moving to a row of its own). Two entries
+ * at one place that changed different things are two entries. */
+export function historyEntryIdentity(entry: ScopeHistoryEntry | StoredHistoryEntry["entry"], scope: string): string {
+  const content: Partial<ScopeHistoryEntry> = { ...(entry as ScopeHistoryEntry) };
+  for (const mark of ["revisionScope", "revertedAt", "undoSkipped", "prior"] as const) delete content[mark];
+  return JSON.stringify([entry.revisionScope ?? scope, content]);
 }

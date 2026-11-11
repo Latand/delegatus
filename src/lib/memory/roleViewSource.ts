@@ -212,14 +212,11 @@ export function unclaimedHistoryTokens(): { token: string; scope: string }[] {
 export function scopeHistoryIdentities(row: RoleMemoryScopeRow): Set<string> {
   const seen = new Set(row.history.map(entry => historyEntryIdentity(entry, row.scope)));
   if (!row.historyRows) return seen;
-  const stored = reader("__llvCurationVersionReader").query<{ fields: string }, [string, string]>(
-    `SELECT json_extract(value_json, '$.entry.revisionScope', '$.entry.revision', '$.entry.at', '$.entry.by', '$.entry.pass') AS fields ${HISTORY_ROWS_SQL}`)
-    .all(...historyRange(row.historyRows));
+  // The entry rows only: an identity leaves the undo payload out.
+  const stored = reader("__llvCurationVersionReader").query<{ entry: string }, [string, string]>(
+    `SELECT json_extract(value_json, '$.entry') AS entry ${HISTORY_ROWS_SQL}`).all(...historyRange(row.historyRows));
   if (stored.length !== row.historyRows.count) throw new Error(SCOPE_CHANGED);
-  for (const item of stored) {
-    const [revisionScope, revision, at, by, pass] = JSON.parse(item.fields) as [string | null, number, string, ScopeHistoryEntry["by"], string | null];
-    seen.add(historyEntryIdentity({ revision, at, by, ...(revisionScope === null ? {} : { revisionScope }), ...(pass === null ? {} : { pass }) }, row.scope));
-  }
+  for (const item of stored) seen.add(historyEntryIdentity(JSON.parse(item.entry) as StoredHistoryEntry["entry"], row.scope));
   return seen;
 }
 

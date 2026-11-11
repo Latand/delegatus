@@ -12,7 +12,7 @@ import { applyCuration, revertCuratorPass, type CurationApply } from "./curation
 import { claimPass, curationScopes, curationStatus, patchPass } from "./curation/store";
 import { drainRoleHistory, drainRoleHistoryStep, ROLE_HISTORY_BACKUP_AGE_MS, ROLE_HISTORY_BACKUP_KEPT_MS, roleHistoryDrainTick, RoleHistoryDrainRefusal, roleHistoryRowsEnabled, roleHistoryRowsStatus, setRoleHistoryRowsEnabled, unclaimedRoleHistoryTokens } from "./roleHistoryDrain";
 import { BACKUP_DIRECTORY, listBackups, pruneBackups, runBackupPass, stateDatabases } from "@/lib/state/durability";
-import { ROLE_HISTORY_COLLECTION, roleHistoryCollection } from "./roleHistoryRows";
+import { keepHistory, ROLE_HISTORY_COLLECTION, roleHistoryCollection } from "./roleHistoryRows";
 import { joinMovedScopes, leaveLessons, projectView, recordLessonRequest, roleMemoryCollection, roleScope } from "./roleStore";
 import { activeRoleRuleRows, projectViewRows, projectViewRowsCooperatively, roleScopePassLastAt, roleScopeReadMetadata, scopeRowForRewrite, scopeRowWithHistory } from "./roleViewSource";
 import { ROLE_MEMORY_HISTORY_LIMIT, type RoleMemoryRule, type RoleMemoryScopeRow, type RuleSource, type ScopeHistoryEntry } from "./roleTypes";
@@ -305,8 +305,14 @@ test("a write by an earlier release keeps the scope's history rows and loses no 
 function earlierReleaseJoin(from: string, into: string) {
   roleMemoryCollection(true)!.boundedPatch(8, tx => {
     const source = tx.get(`s:${from}`) as RoleMemoryScopeRow, target = tx.get(`s:${into}`) as RoleMemoryScopeRow;
-    const lineage = (row: RoleMemoryScopeRow) => row.history.map(entry => ({ ...entry, revisionScope: entry.revisionScope ?? row.scope }));
-    tx.put({ ...target, revision: 21, history: [...lineage(source), ...lineage(target), { revision: 21, at: at(950_000), by: "succession", added: [], merged: [], archived: [] }] });
+    // As the join of the previous release writes it: each entry keeps the
+    // revision lineage of the scope row it came from, and one entry records the join.
+    const revision = Math.max(target.revision, source.revision) + 1;
+    const revisionScope = `succession:${from}:${into}:${revision}`;
+    const sourceHistory = source.history.map(entry => ({ ...entry, revisionScope: entry.revisionScope ?? source.scope }));
+    const currentHistory = target.history.map(entry => ({ ...entry, revisionScope: entry.revisionScope ?? target.scope }));
+    tx.put({ ...target, revision, active: [...target.active, ...source.active], revisionScope,
+      history: keepHistory([...sourceHistory, ...currentHistory, { revision, revisionScope, at: at(950_000), by: "succession" as const, added: source.active, merged: [], archived: [] }]) });
     tx.delete(`s:${from}`);
   });
 }
@@ -477,9 +483,11 @@ test("turning the drain on takes a state backup, keeps it out of retention and n
   expect(fs.existsSync(kept)).toBe(true);
   expect(await roleHistoryDrainTick(async () => true, { minEntries: 1 })).toBe(true);
   expect(stored(scope).history).toEqual([]);
+  // Turning it off keeps the backup: that is when it is needed.
   await setRoleHistoryRowsEnabled(false);
   expect(roleHistoryRowsEnabled()).toBe(false);
-  expect(fs.existsSync(kept)).toBe(false);
+  expect(fs.existsSync(kept)).toBe(true);
+  expect(roleHistoryRowsStatus()).toMatchObject({ enabled: false, backup: { present: true } });
 });
 
 test("turning the drain on is refused when no backup could be taken, and a refused pass says why", async () => {
@@ -505,10 +513,26 @@ test("the kept backup is released thirty days after the drain was turned on", as
   await setRoleHistoryRowsEnabled(true, { takeBackup: backupPass });
   const kept = path.join(dir, BACKUP_DIRECTORY, roleHistoryRowsStatus().backup!.name);
   await roleHistoryDrainTick(async () => true, { minEntries: 1 });
-  await roleHistoryDrainTick(async () => true, { minEntries: 1, now: Date.now() + ROLE_HISTORY_BACKUP_KEPT_MS + 60_000 });
-  expect(fs.existsSync(kept)).toBe(false);
-  expect(roleHistoryRowsStatus()).toMatchObject({ enabled: true, backup: null });
+  // The clock releases it whatever the switch says, and only once the thirty days have passed.
   await setRoleHistoryRowsEnabled(false);
+  await roleHistoryDrainTick(async () => true, { now: Date.now() + ROLE_HISTORY_BACKUP_KEPT_MS - 60_000 });
+  expect(fs.existsSync(kept)).toBe(true);
+  await roleHistoryDrainTick(async () => true, { now: Date.now() + ROLE_HISTORY_BACKUP_KEPT_MS + 60_000 });
+  expect(fs.existsSync(kept)).toBe(false);
+  expect(roleHistoryRowsStatus()).toMatchObject({ enabled: false, backup: null });
+});
+
+test("entries at one place of a lineage that changed different things are both kept by a join", async () => {
+  const from = "role:history-rows-old:builder", into = "role:history-rows-new:builder";
+  const moved = (added: string): ScopeHistoryEntry => ({ revision: 1, revisionScope: "role:shared-line:builder", at: at(), by: "agent", added: [added], merged: [], archived: [] });
+  seed(from, [moved("r_00000000000000e1"), moved("r_00000000000000e2")]);
+  roleMemoryCollection(true)!.patchSync(() => ({ records: [{ kind: "scope", scope: into, revision: 1, active: [], history: [moved("r_00000000000000e2"), moved("r_00000000000000e3")] }] }));
+  await drainAll();
+  expect(persistProjectAliases([{ source: "history-rows-old", target: "history-rows-new", displayName: "history-rows-new" }])).toBe(true);
+  roleMemoryCollection(true)!.boundedPatch(2, tx => { tx.delete(`s:${from}`); });
+  await drainAll();
+  // The entry both scopes held once stays single; the one only the moved scope held is added.
+  expect(whole(into).history.map(entry => entry.added[0]).sort()).toEqual(["r_00000000000000e1", "r_00000000000000e2", "r_00000000000000e3"]);
 });
 
 test("a refused scope row is not read again until it changes", async () => {
