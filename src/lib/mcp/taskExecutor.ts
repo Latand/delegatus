@@ -21,7 +21,7 @@ export const TASK_EXECUTOR_FRAME_BYTES = 32 * 1024 * 1024;
 export const TASK_EXECUTOR_HTTP_FRAME_BYTES = TASK_CHANNEL_REPLY_BYTES;
 export type ExecutorHttpResponse = { status: number; headers: [string, string][]; body: ReadableStream<Uint8Array> };
 type ExecutorResult = McpToolResult | { conversationId: string | null } | { http: ExecutorHttpResponse };
-type ExecutorReply = { id: number; result?: ExecutorResult; error?: string; http?: ExecutorHttpResponse; control?: { ready?: string | null; heartbeat?: boolean; retiring?: boolean } };
+type ExecutorReply = { id: number; result?: ExecutorResult; error?: string; http?: ExecutorHttpResponse; control?: { ready?: string | null; heartbeat?: boolean; retiring?: boolean; memory?: boolean } };
 type ExecutorWireReply = Omit<ExecutorReply, "http"> & { http?: Omit<ExecutorHttpResponse, "body"> };
 type Pending = { tool: string; claim: string; bytes: number; finish: (error?: Error, result?: ExecutorResult) => void; dispose: () => void };
 export type TaskExecutorRequest = { id: number; name: string; args: McpToolArgs; caller: McpHttpCaller; deadlineAt: number; nativeWork?: McpToolCallContext["nativeWork"] };
@@ -285,7 +285,7 @@ export class McpTaskExecutor {
       if (reply.id === 0) {
         withViewerOperation("mcp.tasks.executor", () => {
           if (!reply.control) throw new Error("invalid task executor control frame");
-          if (reply.control.retiring === true) { this.retire(child, "idle"); return; }
+          if (reply.control.retiring === true) { this.retire(child, reply.control.memory === true ? "memory limit" : "idle"); return; }
           if (reply.control.ready !== undefined) {
             const description = reply.control.ready;
             if (description !== null && !decodeTaskChannel(description)) throw new Error("invalid task executor channel");

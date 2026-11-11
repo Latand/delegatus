@@ -5,7 +5,14 @@
  * reloads the manager, stops or starts the service or moves a running process.
  * The printed steps apply them when the operator chooses a quiet moment.
  *
- *   node bin/install-cpu-placement.mjs [--unit delegatus.service] [--dir DIR] [--force]
+ *   node bin/install-cpu-placement.mjs [--unit delegatus.service] [--dir DIR] [--memory-high VALUE] [--force]
+ *
+ * It also writes the service's memory ceiling: MemoryHigh, the soft limit.
+ * Above it the kernel reclaims the service's page cache and slows its
+ * allocations; it kills nothing. The service cgroup also holds the pipe relays
+ * and guardians of running agents, so a hard MemoryMax there could end agent
+ * sessions and is never written. VALUE is a systemd memory value (50%, 48G,
+ * infinity) and defaults to half of the machine's memory.
  *
  * DIR defaults to ${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user. An existing
  * file with other content is left alone unless --force is given.
@@ -25,8 +32,19 @@ export function onlineCpuCount() {
   return os.cpus().length || os.availableParallelism();
 }
 
-export function cpuPlacementFiles({ unit = "delegatus.service", cpus = onlineCpuCount() } = {}) {
+/** Half of physical memory. On a 128 GiB host serving about 100 agents the
+    service held 18.5 GiB of anonymous memory and 12.6 GiB of kernel memory
+    with 40 GiB of reclaimable page cache, and its agents another 37 GiB. */
+export const DEFAULT_MEMORY_HIGH = "50%";
+
+export function validMemoryHigh(value) {
+  return /^(?:infinity|\d+(?:\.\d+)?%|\d+[KMGT]?)$/.test(value);
+}
+
+export function cpuPlacementFiles({ unit = "delegatus.service", cpus = onlineCpuCount(), memoryHigh = DEFAULT_MEMORY_HIGH } = {}) {
+  if (!validMemoryHigh(memoryHigh)) throw new Error(`not a systemd memory value: ${memoryHigh}`);
   return [
+    { path: `${unit}.d/memory.conf`, text: `[Service]\nMemoryAccounting=yes\nMemoryHigh=${memoryHigh}\n` },
     { path: `${unit}.d/cpu.conf`, text: "[Service]\nSlice=delegatus.slice\nCPUAccounting=yes\nCPUWeight=1000\n" },
     { path: "delegatus-agents.slice.d/cpu.conf", text: "[Slice]\nCPUAccounting=yes\nCPUWeight=100\n" },
     { path: "delegatus-agents-work.slice", text: `[Unit]\nDescription=Delegatus test and pipeline workloads\n\n[Slice]\nCPUAccounting=yes\nCPUWeight=100\nCPUQuota=${workAggregateCpuQuota(cpus)}%\nCPUQuotaPeriodSec=20ms\n` },
@@ -43,12 +61,14 @@ export function activationSteps(unit = "delegatus.service") {
     `# ControlGroup must end in delegatus.slice/${unit}; an unchanged path names a process that outlived the stop.`,
     `systemctl --user show '${unit}' -p Slice -p ControlGroup -p CPUWeight`,
     "systemctl --user show delegatus-agents-work.slice -p CPUWeight -p CPUQuotaPerSecUSec -p CPUQuotaPeriodUSec",
+    "# The memory ceiling is soft: MemoryHigh shows the configured value and MemoryMax stays infinity.",
+    `systemctl --user show '${unit}' -p MemoryHigh -p MemoryMax -p MemoryCurrent`,
   ];
 }
 
-export function installCpuPlacement({ dir, unit = "delegatus.service", cpus, force = false }) {
+export function installCpuPlacement({ dir, unit = "delegatus.service", cpus, memoryHigh = DEFAULT_MEMORY_HIGH, force = false }) {
   const results = [];
-  for (const file of cpuPlacementFiles({ unit, cpus })) {
+  for (const file of cpuPlacementFiles({ unit, cpus, memoryHigh })) {
     const target = path.join(dir, file.path);
     let existing = null;
     try { existing = fs.readFileSync(target, "utf8"); } catch (error) { if (error.code !== "ENOENT") throw error; }
@@ -65,14 +85,16 @@ export function installCpuPlacement({ dir, unit = "delegatus.service", cpus, for
 function main(argv) {
   const option = (name) => { const index = argv.indexOf(name); return index >= 0 ? argv[index + 1] : undefined; };
   if (argv.includes("-h") || argv.includes("--help")) {
-    process.stdout.write("usage: install-cpu-placement.mjs [--unit delegatus.service] [--dir DIR] [--force]\n");
+    process.stdout.write("usage: install-cpu-placement.mjs [--unit delegatus.service] [--dir DIR] [--memory-high VALUE] [--force]\n");
     return 0;
   }
   if (process.platform !== "linux") { process.stderr.write("CPU placement files are for a Linux systemd user manager.\n"); return 2; }
   const unit = option("--unit") ?? "delegatus.service";
   if (!/^[\w:@.-]+\.service$/.test(unit)) { process.stderr.write(`not a service unit name: ${unit}\n`); return 2; }
   const dir = option("--dir") ?? path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "systemd", "user");
-  const results = installCpuPlacement({ dir, unit, force: argv.includes("--force") });
+  const memoryHigh = option("--memory-high") ?? DEFAULT_MEMORY_HIGH;
+  if (!validMemoryHigh(memoryHigh)) { process.stderr.write(`not a systemd memory value: ${memoryHigh}\n`); return 2; }
+  const results = installCpuPlacement({ dir, unit, memoryHigh, force: argv.includes("--force") });
   for (const result of results) process.stdout.write(`${result.outcome.padEnd(9)} ${result.path}\n`);
   if (results.some((result) => result.outcome === "kept")) process.stdout.write("A kept file differs from this release's; compare it, then rerun with --force to replace it.\n");
   process.stdout.write(`\nNothing is active yet. To apply:\n${activationSteps(unit).join("\n")}\n`);

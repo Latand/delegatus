@@ -110,6 +110,25 @@ hours. A fatal stage OOM retries once after memory recovers, retaining its
 worktree. A second consecutive OOM, or a 30-minute wait without recovery, stops
 for a decision. See [the design](design/agent-memory-isolation.md).
 
+### The service's own ceiling
+
+Agents run in scopes under `delegatus-agents.slice`. The service cgroup holds
+the Viewer, the runtime host, their workers, and also the pipe relays and
+guardians of every running agent. A hard `MemoryMax` on the service could
+therefore end agent sessions, so the installer writes only the soft limit:
+`delegatus.service.d/memory.conf` with `MemoryHigh=50%`, half of the machine's
+memory (`node bin/install-cpu-placement.mjs --memory-high 48G` chooses another
+value, `infinity` removes the ceiling). Above `MemoryHigh` the kernel reclaims
+the service's page cache and slows its allocations; it kills nothing.
+
+Resident workers have a ceiling of their own (`src/lib/residentWorkerMemory.ts`).
+A worker whose resident set passed its limit retires between two requests
+through its ordinary path, the next request starts a fresh process, and the
+journal gets one `[resident worker] retired: memory limit` line with the
+worker's name, pid, resident bytes and limit. The task worker's limit is 2 GiB.
+`LLV_RESIDENT_WORKER_RSS_LIMIT_MB` overrides the limit of every resident worker;
+`0` turns the ceiling off.
+
 ## Agent CPU
 
 On Linux with a systemd user manager, hosts the operator talks to run in
@@ -139,7 +158,7 @@ the card, for example "CPU queue is stalled · 7th · nothing started for
 | `DELEGATUS_CPU_PRESSURE` | `off` turns the pressure wait off; `DELEGATUS_CPU_PRESSURE_HOLD` and `DELEGATUS_CPU_PRESSURE_RELEASE` set the thresholds (`30`, `20`). |
 
 To give the service itself `CPUWeight=1000` beside the agents, run
-`node bin/install-cpu-placement.mjs`. It writes three files under
+`node bin/install-cpu-placement.mjs`. It writes four files under
 `$HOME/.config/systemd/user` and prints the reload, stop and start that apply
 them; run them at a quiet moment. A plain restart can leave the service in its
 old cgroup. Dedicated CPUs for production need root; see
