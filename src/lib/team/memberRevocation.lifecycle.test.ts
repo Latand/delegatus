@@ -733,8 +733,11 @@ test.each((["before-release", "after-release", "restart-before-release"] as cons
       if (order === "restart-before-release") await runChild(f, "reconcile", "after-setup-release");
       // A child reconciler persists commands; the parent fixture delivers them.
       // Either target ordering can leave a kill pending at the crash boundary.
-      await f.queue.drain();
-      await reconcileMemberRevocations({ store: f.store, registry: f.registry, client: f.client, now: f.nextRecoveryAt, assertActive: () => {} });
+      for (let pass = 0; pass < 8 && f.store.memberRevocationPending(); pass++) {
+        await f.queue.drain();
+        await reconcileMemberRevocations({ store: f.store, registry: f.registry, client: f.client, now: f.nextRecoveryAt, assertActive: () => {} });
+      }
+      expect(f.store.memberRevocationPending()).toBe(false);
       reconciled = true;
     }
     return result;
