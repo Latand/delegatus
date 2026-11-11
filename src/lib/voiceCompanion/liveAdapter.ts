@@ -1,6 +1,6 @@
 "use client";
 
-import { BROWSER_DROP_CAUSES, type CompanionCommand, type CompanionEvent, type CompanionUsage, type ConnectionEpisode, type DropCause, type Payload, type ResumableCall, type VoiceCompanionAdapter } from "./contract";
+import { BROWSER_DROP_CAUSES, type CompanionCommand, type CompanionEvent, type CompanionUsage, type ConnectionEpisode, type DropCause, type Payload, type ResumableCall, type ResumeCursor, type VoiceCompanionAdapter } from "./contract";
 import { createBrowserCues, type CompanionCues } from "./cues";
 import { clientTimeZone } from "@/lib/i18n";
 import type { SessionTranscriptRecord } from "./transcriptRecord";
@@ -60,6 +60,12 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
   /** A browser close can be lost. The next resume start carries its validated diagnostic until the server commits it. */
   private pendingDrop: ({ sessionId: string } & { cause: typeof BROWSER_DROP_CAUSES[number]; episode?: ConnectionEpisode }) | null = null;
   private cursor = 0;
+  private resumeCut: { sessionId: string; cursor: ResumeCursor } | null = null;
+  private durations = new Map<string, { ms: number; final: boolean }>();
+  private operatorOpen: string | undefined;
+  private peerConnected = false;
+  private hearReady = true;
+  private peerReady: (() => void) | null = null;
   private seq = 0;
   private born = 0;
   private epoch = 0;
@@ -124,6 +130,9 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     const preparingAt = this.clock();
     if (this.sessionId || (!options.resume && this.media)) await this.close();
     this.stopObserver();
+    const cut = options.resume && this.resumeCut?.sessionId === options.resume ? this.resumeCut.cursor : undefined;
+    if (!options.resume) this.resumeCut = null;
+    this.peerConnected = false; this.hearReady = !options.resume;
     this.contextSync = null; this.syncedProject = undefined; this.contextUncertain = false;
     if (!options.resume) this.muted = false;
     this.recovering = !!options.resume;
@@ -133,11 +142,14 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     const epoch = ++this.epoch;
     this.localSession = crypto.randomUUID(); this.requestId = crypto.randomUUID();
     this.cursor = 0; this.seq = 0; this.born = performance.now();
+    this.durations.clear(); this.operatorOpen = undefined;
     this.outputs = []; this.claimed = new Set(); this.playing = null; this.lastPlayed = null; this.unbound = [];
     const callbacks: MediaCallbacks = { playback: sample => { if (epoch === this.epoch) this.playback(sample); },
       input: speaking => { if (epoch === this.epoch) this.inputSpeaking = speaking; }, lost: (code, cause) => { if (epoch === this.epoch) this.lost(code, cause); },
       connection: (state, inputSpeaking) => {
         if (epoch !== this.epoch) return;
+        if (state === "connected") { this.peerConnected = true; this.peerReady?.(); }
+        else this.peerConnected = false;
         if (state === "disconnected") this.episode ??= { at: this.clock(), ms: 0, speaking: this.playing ? "voice" : (inputSpeaking ?? this.inputSpeaking) ? "operator" : null };
         else if (this.episode) {
           const episode = this.episode; this.episode = null;
@@ -157,7 +169,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
       const pendingDrop = options.resume && this.pendingDrop?.sessionId === options.resume ? this.pendingDrop : null;
       const drop = pendingDrop ? { cause: pendingDrop.cause, ...(pendingDrop.episode ? { episode: pendingDrop.episode } : {}) } : null;
       const body = { action: "start", ...options, signal: undefined, ...clientTimeZone(), sdp, requestId: this.requestId,
-        ...(drop ? { drop } : {}),
+        ...(drop ? { drop } : {}), ...(options.cursor ?? cut ? { cursor: options.cursor ?? cut } : {}),
         ...(options.resume ? { reconnect: { ...reconnect, noticedToStartMs: reconnect.noticedToStartMs + Math.max(0, Math.round(this.clock() - preparingAt)) } } : {}) };
       let result: Record<string, unknown>;
       try { result = await this.request(body, "", signal); }
@@ -178,6 +190,14 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
       if (this.attemptError) throw this.attemptError;
       this.contextMute();
       if (epoch !== this.epoch) throw new Error("SESSION_CLOSED");
+      if (options.resume && !this.peerConnected) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await abortable(new Promise<void>(resolve => { this.peerReady = resolve; timer = setTimeout(resolve, 5_000); }), signal);
+        } finally { if (timer) clearTimeout(timer); this.peerReady = null; }
+      }
+      if (epoch !== this.epoch) throw new Error("SESSION_CLOSED");
+      this.hearReady = true;
       failureCause = "viewer-unreachable";
       await abortable(this.readEvents(), signal);
       if (this.attemptError) throw this.attemptError;
@@ -227,7 +247,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
   }
   private readEvents(): Promise<void> {
     const sessionId = this.observedId;
-    if (!sessionId) return Promise.resolve();
+    if (!sessionId || !this.hearReady) return Promise.resolve();
     if (this.poll && this.pollOwner === sessionId) return this.poll;
     const epoch = this.epoch;
     const promise = (async () => {
@@ -245,8 +265,17 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
         if (value.type === "orchestrator.answer" && value.status !== "progress") this.pendingDeliveries.delete(value.delivery.clientMessageId);
         if (value.type !== "session.closed") this.emit(value, value);
         if (value.type === "timer.fired") this.cues.timer();
-        if (value.type === "transcript.snapshot" && value.speaker === "companion") this.arrived(value.itemId);
+        if (value.type === "transcript.snapshot") {
+          if (value.speaker === "companion") {
+            if (typeof value.audioMs === "number") this.durations.set(value.itemId, { ms: value.audioMs, final: value.final });
+            else if (typeof value.startMs === "number" && typeof value.endMs === "number") this.durations.set(value.itemId, { ms: Math.max(0, value.endMs - value.startMs), final: value.final });
+            this.arrived(value.itemId);
+          } else if (!value.final) this.operatorOpen = value.itemId;
+          else if (this.operatorOpen === value.itemId) this.operatorOpen = undefined;
+        }
+        if (value.type === "transcript.final" && value.speaker === "operator" && this.operatorOpen === value.itemId) this.operatorOpen = undefined;
         if (value.type === "session.closed") {
+          if (["transport", "error"].includes(value.reason)) this.takeCut();
           this.disconnected();
           this.stopPlayback("closed");
           this.media?.mute(true);
@@ -276,6 +305,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
   private arrived(itemId: string): void {
     if (this.outputs.includes(itemId)) return;
     this.outputs = [...this.outputs, itemId].slice(-64);
+    for (const id of this.durations.keys()) if (!this.outputs.includes(id)) this.durations.delete(id);
     const finished = this.unbound.shift();
     if (finished) {
       this.claimed.add(itemId);
@@ -387,11 +417,26 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     this.connected = false;
     this.cues.disconnect();
   }
+  /** Take browser-only evidence before cleanup erases playback. A completed line is never marked cut. */
+  private takeCut(): void {
+    if (!this.sessionId) return;
+    const playing = this.playing ?? this.lastPlayed;
+    const quiet = !this.playing || this.paused;
+    const heard = playing?.bound ? { itemId: playing.itemId, playedMs: Math.max(0, Math.round(playing.playedMs - (quiet ? 250 : 0))) } : undefined;
+    const duration = heard ? this.durations.get(heard.itemId) : undefined;
+    const complete = heard && duration?.final && playing!.playedMs >= duration.ms;
+    this.resumeCut = { sessionId: this.sessionId, cursor: {
+      ...(heard && !complete ? { heard } : {}),
+      unplayed: this.outputs.filter(id => !this.claimed.has(id)),
+      ...(this.operatorOpen ? { operatorOpen: this.operatorOpen } : {}),
+    } };
+  }
   /** A failed peer connection, a closed channel or a Viewer that stopped answering cut the call off: a drop. */
   private lost(code: string, cause?: DropCause): void {
     if (this.buffering) { this.attemptError = new Error(code); this.attemptCause = cause; return; }
     if (!this.sessionId) return;
     const drop = code === "PROVIDER_ERROR";
+    this.takeCut();
     this.stopPlayback("closed");
     this.disconnected();
     const ending = this.end(drop || this.resuming, cause);
@@ -448,6 +493,8 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
       return this.closing;
     }
     ++this.epoch;
+    this.peerReady?.();
+    if (retain && this.resumeCut?.sessionId !== this.sessionId) this.takeCut();
     if (this.timer) clearTimeout(this.timer); this.timer = null;
     this.disconnected();
     this.stopPlayback("closed");
