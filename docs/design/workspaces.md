@@ -1000,20 +1000,15 @@ one every owner conversation already has: after the owner writes, the seat acts
 with the owner's reach while the member's earlier request is still in its
 context. An older build reads a `workspaceFromMessage` seat as a plain member
 binding, which is the narrower answer.
-A seat belongs to its project, so its own Telegram grant stays usable under
-member reach. One judgement (`telegramAgentAccess`) serves every path to the
-bot: the agent route applies it to each request, tools and direct requests
-alike, and the MCP fence asks it before dispatch. A fenced caller is refused,
-except a project's current seat that holds `telegramGrant` and that no person
-designated for a member. That seat reaches only the chats its workspace holds:
-the project's effective report destination, the workspace's report and
-directive chats, and the report destinations of the workspace's projects, as
-the bot's live catalog resolves them. A held chat that is also the owner's
-private chat, or that another workspace or a project outside this workspace
-holds, takes posts and gives no history. The chat list for such a seat is built
-from the chats it may post in. `publish_prototype_review` and
-`read_prototype_review` pass to their routes, which apply the workspace fence
-to the caller themselves. Every other
+A seat belongs to its project, so the Telegram grant on its record stays
+usable under member reach: the project's current seat passes the five
+`telegram_bot_*` tools while a member's message fences it. Its workers hold no
+grant, a seat a person designated for a member stays without the tools, and
+losing the project ends the grant. The grant adds no chat scoping: the seat
+reaches every chat the agent route serves, so a member can read and write
+through the seat to any of them (operator decision, 2026-11-11).
+`publish_prototype_review` and `read_prototype_review` pass to their routes,
+which apply the workspace fence to the caller themselves. Every other
 installation-wide tool stays refused. A record's agent author carries the
 sender's project as a label; the result scan does not read it as a project
 key, and the answer withholds an author from outside the caller's reach.

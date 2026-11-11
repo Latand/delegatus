@@ -15,8 +15,6 @@ import { projectForCwd } from "@/lib/scanner/describe";
 import { shortId } from "@/lib/shortIds";
 import { buildPipeline } from "@/lib/pipelines/store";
 import { conversationWorkspacePrincipal } from "@/lib/team/workspacePrincipal";
-import { telegramAgentAccess } from "@/lib/team/seatTelegram";
-import { setReportTelegram } from "@/lib/projects/settings";
 import { createPipelineFromRequest, defaultPipelinePorts, patchPipeline } from "@/lib/pipelines/engine";
 import { findPipelineRecord } from "@/lib/pipelines/store";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
@@ -837,67 +835,55 @@ test("parallel request keys cannot expose another workspace's in-flight or saved
   } finally { release.resolve(); recorded.resolve(); await Promise.allSettled([first, collision].filter(Boolean)); factory.mockRestore(); setAgentRegistryForTests(null); registry.close(); }
 });
 
-test("a fenced seat keeps its Telegram grant for the chats its workspace holds, and for nothing else", async () => {
+test("a fenced seat keeps the Telegram tools its record grants; no other fenced caller does", async () => {
   const seat = "conversation_seat";
   snapshot.conversations[seat] = conversation(seat, own, false) as never;
   dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: seat, role: "orchestrator" });
-  // The bot's live catalog. "left" is a chat the bot is no longer in, so it is absent.
-  const catalog = [
-    { chatId: "-100", chat: "team", alias: "team" }, { chatId: "-150", chat: "directives", alias: "directives" },
-    { chatId: "-200", chat: "beta-reports", alias: "beta-reports" }, { chatId: "-400", chat: "unclaimed", alias: "unclaimed" },
-    { chatId: "77", chat: "77" }, { chatId: "88", chat: "88" }, { chatId: "-500", chat: "shared", alias: "shared" },
-  ];
-  store.insertMember({ ...owner, id: "m_owner_linked", name: "linked", telegram: { userId: "77", username: null, firstName: null, linkedAt: AT } });
-  store.putWorkspaceDefaults(W1, { accounts: { claude: [], codex: [] }, reportChat: { chat: "team", name: "Alpha" }, directiveChats: ["directives", "left"] });
-  store.putWorkspaceDefaults(W2, { accounts: { claude: [], codex: [] }, reportChat: { chat: "beta-reports", name: "Beta" }, directiveChats: [] });
-  // This project's own destination is a chat another workspace's project reports to as well.
-  expect(setReportTelegram(own, { chat: "shared", name: "Shared" }, "fixture", AT)).not.toBe(false);
-  expect(setReportTelegram(other, { chat: "shared", name: "Shared" }, "fixture", AT)).not.toBe(false);
-  dependencies.telegramAgentAccess = id => telegramAgentAccess(id, store, id => (snapshot.conversations[id] ?? null) as never, () => catalog);
   rebuild();
   let requests = 0;
-  const send = (chat: string) => call("telegram_bot_send", { chat, text: "status", clientRequestId: `telegram-send-${++requests}` });
-  const read = (chat: string) => call("telegram_bot_messages", { chat, clientRequestId: `telegram-read-${++requests}` });
-  const designate = (key: string, workspace?: { memberId: string; workspaceId: string }) => {
+  const tools = (): Promise<{ ok: boolean }[]> => Promise.all([
+    call("telegram_bot_chats", { clientRequestId: `telegram-${++requests}` }),
+    call("telegram_bot_messages", { chat: "team", clientRequestId: `telegram-${++requests}` }),
+    call("telegram_bot_send", { chat: "team", text: "status", clientRequestId: `telegram-${++requests}` }),
+  ]);
+  const refused = async () => { for (const answer of await tools()) expect(answer).toMatchObject(REFUSED); };
+  const served = async () => { for (const answer of await tools()) expect(answer.ok).toBe(true); };
+  const designate = (key: string, grant: boolean, workspace?: { memberId: string; workspaceId: string }) => {
     beginOrchestratorSeatIntent({ project: own, mandate: "Run this workspace", clientRequestId: key, mode: "existing", conversationId: seat,
-      ...(workspace ? { workspace } : {}), telegramGrant: true, now: AT });
+      ...(workspace ? { workspace } : {}), telegramGrant: grant, now: AT });
     completeOrchestratorSeatIntent({ project: own, clientRequestId: key, conversationId: seat, path: `${seat}.jsonl`, now: AT });
   };
-  // A fenced conversation that is no seat has no grant.
+  // A conversation a member wrote to that is no seat.
   store.admitConversationMember(seat, member.id);
-  expect(await call("telegram_bot_chats")).toMatchObject(REFUSED);
-  expect(await send("team")).toMatchObject(REFUSED);
-  // The owner's seat, fenced by a member's message: the workspace's own chats.
-  designate("telegram-seat");
-  expect((await call("telegram_bot_chats")).ok).toBe(true);
-  for (const chat of ["team", "-150"]) {
-    expect((await send(chat)).ok).toBe(true);
-    expect((await read(chat)).ok).toBe(true);
-  }
-  // The project's destination takes posts; shared with another workspace, it gives no history.
-  expect((await send("shared")).ok).toBe(true);
-  expect(await read("shared")).toMatchObject(REFUSED);
-  // An unclaimed group, a private chat of anyone, another workspace's chat, a chat the bot left and an unknown one.
-  for (const chat of ["unclaimed", "88", "77", "beta-reports", "left", "elsewhere"]) {
-    expect(await send(chat)).toMatchObject(REFUSED);
-    expect(await read(chat)).toMatchObject(REFUSED);
-  }
+  await refused();
+  // The owner's seat, fenced by the member's message.
+  designate("seat-without-grant", false);
+  await refused();
+  designate("seat-with-grant", true);
+  await served();
+  // The grant covers the Telegram tools and no other installation-wide tool.
   expect(await call("deploy_exact_sha", { sha: "a".repeat(40) })).toMatchObject(REFUSED);
+  expect(await call("account_limits")).toMatchObject(REFUSED);
   // The seat's worker holds no grant.
   dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: "conversation_member", role: "builder" });
   rebuild();
-  expect(await send("team")).toMatchObject(REFUSED);
+  await refused();
   dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: seat, role: "orchestrator" });
   rebuild();
-  // A seat a person designated for the member gets no grant from this rule.
-  designate("member-seat", { memberId: member.id, workspaceId: W1 });
-  expect(await send("team")).toMatchObject(REFUSED);
-  expect(await call("telegram_bot_chats")).toMatchObject(REFUSED);
-  designate("owner-seat-again");
-  expect((await send("team")).ok).toBe(true);
-  // Losing the project ends the grant with it.
+  // A seat a person designated for the member stays without the tools.
+  designate("member-seat", true, { memberId: member.id, workspaceId: W1 });
+  await refused();
+  designate("owner-seat-again", true);
+  await served();
+  // An unreadable seat record and a lost project both end the grant.
+  const seats = path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json");
+  const saved = fs.readFileSync(seats, "utf8");
+  fs.writeFileSync(seats, "{");
+  for (const answer of await tools()) expect(answer.ok).toBe(false);
+  fs.writeFileSync(seats, saved);
+  await served();
   store.removeWorkspaceMember(W1, member.id);
-  expect(await send("team")).toMatchObject(REFUSED);
+  await refused();
 });
 
 test("an agent author's project label never refuses a permitted transcript, and a foreign transcript stays refused", async () => {

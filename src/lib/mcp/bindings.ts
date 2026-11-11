@@ -892,9 +892,6 @@ interface TargetedConversationOptions extends McpToolCallContext {
 
 export interface ViewerMcpDomainDependencies {
   workspaceProject?(identity: string): string | null;
-  /** What the caller may do with the Telegram bot; the agent route applies the
-      same judgement to every request it receives. */
-  telegramAgentAccess?(conversationId: string | null): import("@/lib/team/seatTelegram").TelegramAgentAccess | Promise<import("@/lib/team/seatTelegram").TelegramAgentAccess>;
   /** Keyed workspace authority reads; never decode the installation registry. */
   workspaceConversation?(identity: string): import("@/lib/agent/registry").RegistryConversation | null;
   listFiles(options?: Parameters<typeof listFiles>[0]): Promise<FileEntry[]>;

@@ -5,8 +5,6 @@ import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { telegramBotFailure } from "@/lib/telegram/bot/http";
 import { telegramBotService } from "@/lib/telegram/bot/service";
 import { parseTelegramChatReference } from "@/lib/telegram/chatReference";
-import { productionTelegramAgentAccess, type TelegramAgentAccess } from "@/lib/team/seatTelegram";
-import { workspaceDenied } from "@/lib/team/workspaceRoute";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,33 +18,19 @@ export const dynamic = "force-dynamic";
  * posts. The sender is resolved here from the forwarded
  * conversation capability, never from an argument, so the attribution a post
  * carries is the caller's own. No answer carries the token or the bot id.
- *
- * The caller's workspace reach is judged here, for the tools and for a direct
- * request alike (`telegramAgentAccess`): a fenced caller is refused, except a
- * project's seat using its grant within the chats its workspace holds.
  */
-
-async function access(req: NextRequest): Promise<TelegramAgentAccess> {
-  try { return await productionTelegramAgentAccess(callerConversationId(req)); }
-  catch { return { kind: "refused" }; }
-}
 
 export async function GET(req: NextRequest) {
   const rejected = rejectCrossOrigin(req);
   if (rejected) return rejected;
   const params = new URL(req.url).searchParams;
-  const reach = await access(req);
-  if (reach.kind === "refused") return workspaceDenied();
   const service = telegramBotService();
   try {
     switch (params.get("op")) {
       case "chats":
-        // A fenced seat's answer is built from the chats it may post in, and nothing else.
-        if (reach.kind === "seat") return NextResponse.json({ chats: service.listChats().chats.filter(chat => reach.send(chat.chatId)) });
         await service.discoverCloneChats();
         return NextResponse.json(service.listChats({ includeInactive: params.get("includeInactive") === "1" }));
       case "messages":
-        if (reach.kind === "seat" && !reach.read(params.get("chat") ?? "")) return workspaceDenied();
         return NextResponse.json(service.readMessages({
           chat: params.get("chat") ?? "",
           limit: params.get("limit") ?? undefined,
@@ -68,8 +52,6 @@ export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
   try { body = await req.json() as Record<string, unknown>; } catch { return NextResponse.json({ error: "Invalid JSON", code: "invalid_json" }, { status: 400 }); }
   if (body.op !== "send" && body.op !== "send_media" && body.op !== "send_document") return NextResponse.json({ error: "Unknown Telegram bot action", code: "invalid_action" }, { status: 400 });
-  const reach = await access(req);
-  if (reach.kind === "refused" || (reach.kind === "seat" && !reach.send(body.chat))) return workspaceDenied();
   try {
     const service = telegramBotService();
     const parsed = parseTelegramChatReference(body.chat);

@@ -11,6 +11,7 @@ import { conversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
 import { readDeliveryProgress } from "@/lib/runtime/deliveryProgress";
 import { existingTeamStore } from "@/lib/team/store";
 import { conversationWorkspacePrincipal, workspacePrincipalAccess } from "@/lib/team/workspacePrincipal";
+import { seatHoldsTelegramGrant } from "@/lib/team/seatTelegram";
 import { workspaceDirectory } from "@/lib/team/workspaces";
 import { assertWorkspaceExecution, runWithWorkspaceExecution } from "@/lib/team/workspaceExecution";
 import { selectedContextArg } from "./selectedContextTarget";
@@ -33,9 +34,8 @@ const PROJECT_TOOLS = new Set([
   "conversation_action", "conversation_migration", "agent_fleet", "agent_activity", "lifecycle_events", "bridge_report", "bridge_directive",
   "get_orchestrator", "create_orchestrator", "send_message_to_orchestrator", "ask_orchestrator_in_parallel", "rotate_orchestrator", "seat_tick_settings",
 ]);
-// The agent route judges these for the fenced caller (`telegramAgentAccess`):
-// a project's seat keeps its Telegram grant within its workspace's chats. The
-// fence asks the same question first, so a refusal never reaches the route.
+// A project's seat keeps the Telegram grant on its record under member reach
+// (`seatHoldsTelegramGrant`), with the chats the agent route serves any caller.
 const SEAT_TELEGRAM_TOOLS = new Set(["telegram_bot_send", "telegram_bot_send_media", "telegram_bot_send_document", "telegram_bot_chats", "telegram_bot_messages"]);
 // These reach a Viewer route that applies the workspace fence itself to the
 // caller's forwarded capability, so the route judges their arguments.
@@ -86,16 +86,11 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
       };
       const project = conversationProject(callerId ?? "");
       let allowed = workspacePrincipalAccess(principal);
-      // Arguments of a delegated tool name files and chats, never project
-      // identities; its route judges them. The result scan below still runs.
+      // Arguments of these tools name chats and files, never project identities,
+      // so the identity pass skips them. The result scan below still runs.
       const delegated = !PROJECT_TOOLS.has(tool);
-      const telegram = seatTelegram ? async () => {
-        const access = await (dependencies.telegramAgentAccess
-          ?? (async (id: string | null) => (await import("@/lib/team/seatTelegram")).productionTelegramAgentAccess(id)))(callerId);
-        if (access.kind !== "seat") denied();
-        if (tool === "telegram_bot_messages" ? !access.read(input.chat) : tool !== "telegram_bot_chats" && !access.send(input.chat)) denied();
-      } : null;
-      await telegram?.();
+      const granted = () => { if (seatTelegram && !seatHoldsTelegramGrant(callerId, store, lookup)) denied(); };
+      granted();
       const allowedProjects = workspaceDirectory(store).workspaces.find(workspace => workspace.id === principal.workspaceId)?.projects ?? [];
       const args = { ...input };
       if (typeof args.project === "string") {
@@ -219,7 +214,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
           visit(answer);
         } });
         assert();
-        await telegram?.();
+        granted();
         answerProjects = workspaceDirectory(store).workspaces.flatMap(workspace => workspace.projects);
         if (tool === "search_transcripts" && result.ok) {
           const scope = result.projectScope as { resolved?: string } | undefined;
