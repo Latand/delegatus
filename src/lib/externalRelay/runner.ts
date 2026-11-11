@@ -911,7 +911,7 @@ export async function runClaimedRequest(
           ? ownerContinuationPrompt(request, owner, ownerTarget.hardCapMinutes, conversation, ownerAdditions)
           : prepareOwnerPrompt(request, owner, ownerTarget.hardCapMinutes, ownerAdditions)) : null;
         if (usingCloud && !cloudFailed && preparedOwner?.context !== undefined) {
-          // A remote environment cannot read request-local context or media.
+          // A remote environment cannot read request-local context files.
           // No Cloud turn has started for this prompt; use the native fallback.
           cloudOwnerDirectory(target.project);
           selection = accountManager.resolveHeadlessSpawn(target.engine!, null, [], target.project, target.model);
@@ -968,6 +968,7 @@ export async function runClaimedRequest(
             rawDeadlineAt: rawRequest.deadline_at,
             preparedPrompt: preparedOwner!,
             contextDirectory: localRunDir,
+            onPromptBytes: bytes => { if (chain) chain = { ...chain, promptBytes: chain.promptBytes + bytes - Buffer.byteLength(persistentPrompt) }; },
             request, owner, target: { ...ownerTarget, engine: configuredTarget!.engine }, deadline, admissionDeadlineAt: executionDeadline, accountId: selectedAccount().accountId,
             hardCapMs: Math.min(cloud ? Math.max(0, executionDeadline - Date.now()) : target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
             onConversation: async (conversationId, initialPrompt) => {

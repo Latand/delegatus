@@ -917,6 +917,7 @@ type OwnerRunInput = {
   admissionDeadlineAt?: number;
   onConversation(conversationId: string, initialPrompt?: { operationId: string; initialMessage: string }): void | Promise<void>;
   onProgress?(observed: RelayStepObservation): void;
+  onPromptBytes?(bytes: number): void;
   onDiagnostic?(diagnostic: OwnerTurnDiagnostic): void;
   continuation?: { conversationId: string; prompt: string };
 };
@@ -1081,6 +1082,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
       if (Buffer.byteLength(continuationPrompt ?? initialPrompt!) > MAX_STRUCTURED_TEXT_BYTES)
         throw new RelayMandatoryPromptTooLargeError(Buffer.byteLength(continuationPrompt ?? initialPrompt!));
       assertStructuredTextEnvelope(continuationPrompt ?? initialPrompt!);
+      input.onPromptBytes?.(Buffer.byteLength(deliveredPrompt));
       launchAttempted = true;
       let launched: ReportSpawnResult;
       if (input.continuation) {
