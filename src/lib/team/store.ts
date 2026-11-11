@@ -147,6 +147,7 @@ export type MemberRevocationTarget = {
   turnId: string | null;
   process: import("@/lib/processIdentity").ProcessIdentity | null;
   launchId?: string | null;
+  stopAttempt?: number;
   state: "pending" | "stopped" | "gone" | "held";
 };
 
@@ -156,6 +157,7 @@ function revocationTarget(body: string, id: string, db: Db): MemberRevocationTar
     || !["host", "launch"].includes(row.kind) || typeof row.conversationId !== "string" || !row.conversationId.startsWith("conversation_")
     || !["pending", "stopped", "gone", "held"].includes(row.state)
     || row.launchId != null && typeof row.launchId !== "string"
+    || row.stopAttempt != null && (!Number.isSafeInteger(row.stopAttempt) || row.stopAttempt < 0)
     || row.turnId !== null && typeof row.turnId !== "string"
     || row.kind === "host" && (!row.key || !["claude", "codex", "copilot"].includes(row.key.engine) || typeof row.key.sessionId !== "string")
     || row.kind === "launch" && row.key !== null
@@ -288,7 +290,7 @@ export interface EventQuery {
 const teamIndexes = declaredIndexes([
   `CREATE INDEX IF NOT EXISTS member_revocation_targets_pending ON member_revocation_targets(revocation_id, state, retry_at, id)`,
   `CREATE INDEX IF NOT EXISTS member_revocations_pending ON member_revocations(complete, retry_at, id)`,
-  `CREATE INDEX IF NOT EXISTS member_revocations_member ON member_revocations(member_id, at DESC)`,
+  `CREATE INDEX IF NOT EXISTS member_revocations_member_order ON member_revocations(member_id)`,
   `CREATE INDEX IF NOT EXISTS workspace_members_member ON workspace_members(member_id, workspace_id)`,
   `CREATE INDEX IF NOT EXISTS sessions_member ON sessions(member_id)`,
   `CREATE INDEX IF NOT EXISTS passkeys_member ON passkeys(member_id)`,
@@ -470,7 +472,7 @@ export class TeamStore {
   }
 
   latestMemberRevocation(memberId: string): string | null {
-    return this.db.query<{ at: string }, [string]>("SELECT at FROM member_revocations WHERE member_id = ? ORDER BY at DESC LIMIT 1").get(memberId)?.at ?? null;
+    return this.db.query<{ id: string }, [string]>("SELECT id FROM member_revocations WHERE member_id = ? ORDER BY rowid DESC LIMIT 1").get(memberId)?.id ?? null;
   }
 
   pendingMemberRevocations(now = Date.now()): MemberRevocation[] {
@@ -494,10 +496,18 @@ export class TeamStore {
   }
 
   saveRevocationTarget(target: MemberRevocationTarget): void {
-    const body = JSON.stringify(target);
-    revocationTarget(body, target.revocationId, this.db);
-    this.db.query("INSERT INTO member_revocation_targets(revocation_id, id, body, state) VALUES (?, ?, ?, ?) ON CONFLICT(revocation_id, id) DO UPDATE SET body = excluded.body, state = excluded.state")
-      .run(target.revocationId, target.id, body, target.state);
+    this.transaction(() => {
+      const previous = this.db.query<{ body: string }, [string, string]>("SELECT body FROM member_revocation_targets WHERE revocation_id = ? AND id = ?")
+        .get(target.revocationId, target.id);
+      const saved = previous ? revocationTarget(previous.body, target.revocationId, this.db) : null;
+      if (saved && saved.state !== "pending") return;
+      const next = { ...target, process: saved?.process ?? target.process,
+        stopAttempt: Math.max(saved?.stopAttempt ?? 0, target.stopAttempt ?? 0) };
+      const body = JSON.stringify(next);
+      revocationTarget(body, target.revocationId, this.db);
+      this.db.query("INSERT INTO member_revocation_targets(revocation_id, id, body, state) VALUES (?, ?, ?, ?) ON CONFLICT(revocation_id, id) DO UPDATE SET body = excluded.body, state = excluded.state")
+        .run(next.revocationId, next.id, body, next.state);
+    });
   }
 
   deferRevocationTarget(revocationId: string, id: string, retryAt: number): void {

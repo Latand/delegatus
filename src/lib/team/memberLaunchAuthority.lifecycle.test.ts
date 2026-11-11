@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,9 +11,10 @@ import type { SpawnedStructuredHost } from "@/lib/runtime/structuredSpawn";
 import { FakeEngineHost } from "@/lib/runtime/fixtures/fakeEngineHost";
 import { claimInstall, createInvite, redeemJoin, restoreMember, revokeMember } from "./members";
 import { resetTeamStoreForTests, teamStore } from "./store";
+import { assertMemberLaunchAllowed } from "./memberLaunchAuthority";
 
-const cleanup: Array<() => void> = [];
-afterEach(() => { for (const release of cleanup.splice(0).reverse()) release(); });
+const cleanup: Array<() => void | Promise<void>> = [];
+afterEach(async () => { for (const release of cleanup.splice(0).reverse()) await release(); });
 
 for (const when of ["before-admission", "during-admission", "during-host-start", "after-restore"] as const) test(`member launch authority is read at the native boundary: ${when}`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "launch-revocation-"));
@@ -66,4 +67,45 @@ for (const when of ["before-admission", "during-admission", "during-host-start",
     await expect(run(fresh.receipt)).rejects.toThrow("native start reached");
     expect(starts).toBe(1);
   }
+});
+
+test("revocation ordering survives frozen and backward clocks, copied profiles and a fresh reader process", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "launch-order-"));
+  const previous = process.env.LLV_STATE_DIR;
+  cleanup.push(() => { setSystemTime(); resetTeamStoreForTests(); if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous; fs.rmSync(root, { recursive: true, force: true }); });
+  setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+  process.env.LLV_STATE_DIR = root;
+  resetTeamStoreForTests();
+  const store = teamStore();
+  const device = { surface: "desktop" as const, browser: "chrome" as const };
+  const owner = claimInstall(store, "Owner", device).member;
+  const person = redeemJoin(store, createInvite(store, owner, null).code, "Member A", device).member;
+  const registry = new AgentRegistry(path.join(root, "agent-registry.json"));
+  cleanup.push(() => registry.close());
+  const begin = () => {
+    const result = beginLegacySpawnFixture(registry, { engine: "claude", cwd: root, transport: "structured",
+      launchProfile: { workspace: { memberId: person.id, workspaceId: "workspace-a" } } });
+    if (result.kind !== "created") throw Error("admission failed");
+    return result.receipt;
+  };
+  const old = begin();
+  revokeMember(store, owner, person);
+  restoreMember(store, owner, store.member(person.id)!);
+  const firstFresh = begin();
+  expect(firstFresh.createdAt).toBe(old.createdAt);
+  expect(() => assertMemberLaunchAllowed(old)).toThrow("member access revoked");
+  expect(() => assertMemberLaunchAllowed(firstFresh)).not.toThrow();
+  setSystemTime(new Date("2029-12-31T23:59:59.000Z"));
+  revokeMember(store, owner, store.member(person.id)!);
+  restoreMember(store, owner, store.member(person.id)!);
+  const fresh = begin();
+  expect(fresh.memberRevocationId).not.toBe(firstFresh.memberRevocationId);
+  expect(() => assertMemberLaunchAllowed(firstFresh)).toThrow("member access revoked");
+  expect(() => assertMemberLaunchAllowed(fresh)).not.toThrow();
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures/memberRevocationChild.ts"), "authority", person.id, firstFresh.launchId, fresh.launchId], {
+    env: { ...process.env, LLV_STATE_DIR: root }, stdout: "pipe", stderr: "pipe",
+  });
+  cleanup.push(async () => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await child.exited; });
+  const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect({ code, out, err }).toEqual({ code: 0, out: "", err: "" });
 });

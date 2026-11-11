@@ -10,7 +10,8 @@ import { existingTeamStore, type TeamStore, type MemberRevocation, type MemberRe
 import { MEMBER_REVOCATION_HOLD } from "./memberLaunchAuthority";
 
 function controlId(target: MemberRevocationTarget, kind: "interrupt" | "kill"): string {
-  return `member-revocation-${kind}-${crypto.createHash("sha256").update(`${target.revocationId}:${target.id}`).digest("hex")}`;
+  const base = `member-revocation-${kind}-${crypto.createHash("sha256").update(`${target.revocationId}:${target.id}`).digest("hex")}`;
+  return kind === "kill" && target.stopAttempt ? `${base}-${target.stopAttempt}` : base;
 }
 
 function hostPrincipal(registry: AgentRegistry, entry: AgentRegistryEntry | null) {
@@ -26,8 +27,8 @@ function memberOwnsHost(registry: AgentRegistry, entry: AgentRegistryEntry | nul
 
 function plan(store: TeamStore, registry: AgentRegistry, revocation: MemberRevocation): void {
   const targets: MemberRevocationTarget[] = [];
-  for (const receipt of registry.openSpawnReceipts()) {
-    if (receipt.launchProfile.workspace?.memberId !== revocation.memberId || receipt.launchProfile.workspace.fromMessage || receipt.createdAt > revocation.at || receipt.key) continue;
+  for (const receipt of registry.memberLaunchReceipts(revocation.memberId)) {
+    if (receipt.launchProfile.workspace?.memberId !== revocation.memberId || receipt.launchProfile.workspace.fromMessage || receipt.key) continue;
     targets.push({ id: receipt.launchId, revocationId: revocation.id, kind: "launch", conversationId: receipt.conversationId,
       key: null, turnId: null, process: null, launchId: receipt.launchId, state: "pending" });
   }
@@ -38,8 +39,6 @@ function plan(store: TeamStore, registry: AgentRegistry, revocation: MemberRevoc
     const principal = hostPrincipal(registry, entry);
     if (principal?.memberId !== revocation.memberId || principal.fromMessage) continue;
     if (!conversation || !generation) throw new Error("revoked host conversation ownership is unavailable");
-    const launch = entry.structuredHostOperationId ? registry.spawnReceipt(entry.structuredHostOperationId) : null;
-    if ((launch?.createdAt ?? generation.createdAt) > revocation.at) continue;
     targets.push({ id: sessionKeyId(entry.key), revocationId: revocation.id, kind: "host", conversationId: conversation.id,
       key: entry.key, turnId: entry.structuredHost?.activeTurnRef ?? null, process: entry.structuredHost?.process ?? null,
       launchId: entry.structuredHostOperationId ?? null, state: "pending" });
@@ -70,14 +69,17 @@ async function settleTarget(store: TeamStore, registry: AgentRegistry, client: R
     } else if (receipt.key) {
       const entry = registry.hostEntry(receipt.key);
       if (!entry || !memberOwnsHost(registry, entry, revocation.memberId)) throw new Error("revoked launch host identity changed");
-      store.saveRevocationTarget({ id: sessionKeyId(receipt.key), revocationId: revocation.id, kind: "host", conversationId: receipt.conversationId,
-        key: receipt.key, turnId: entry.structuredHost?.activeTurnRef ?? null, process: entry.structuredHost?.process ?? null, launchId: receipt.launchId, state: "pending" });
-      target.state = "gone";
+      store.transaction(() => {
+        store.saveRevocationTarget({ id: sessionKeyId(receipt.key!), revocationId: revocation.id, kind: "host", conversationId: receipt.conversationId,
+          key: receipt.key!, turnId: entry.structuredHost?.activeTurnRef ?? null, process: entry.structuredHost?.process ?? null, launchId: receipt.launchId, state: "pending" });
+        store.saveRevocationTarget({ ...target, state: "gone" });
+      });
+      return;
     } else {
       const held = await registry.failSpawnOffLoop(target.id, MEMBER_REVOCATION_HOLD, () => {
         assertActive();
         const current = registry.spawnReceipt(target.id);
-        if (!current || current.key || current.launchProfile.workspace?.memberId !== revocation.memberId || current.createdAt > revocation.at)
+        if (!current || current.key || current.launchProfile.workspace?.memberId !== revocation.memberId || current.launchProfile.workspace.fromMessage)
           throw new Error("revoked launch identity changed");
       });
       assertActive();
@@ -91,7 +93,7 @@ async function settleTarget(store: TeamStore, registry: AgentRegistry, client: R
   }
   if (!target.key) throw new Error("revoked host has no generation fence");
   if (!client) throw new Error("runtime host is unavailable; revocation remains pending");
-  const stopId = controlId(target, "kill");
+  let stopId = controlId(target, "kill");
   let stopped = await client.operationStatus(stopId);
   assertActive();
   if (stopped?.receipt.status === "delivered") {
@@ -105,6 +107,14 @@ async function settleTarget(store: TeamStore, registry: AgentRegistry, client: R
     return;
   }
   if (!memberOwnsHost(registry, current, revocation.memberId)) throw new Error("revoked host launch principal changed");
+  if (stopped?.receipt.status === "failed" || stopped?.receipt.status === "rejected") {
+    // A terminal refusal has no pending effect to replay. Persist the next
+    // command identity before dispatch so restart reuses that exact attempt.
+    target.stopAttempt = (target.stopAttempt ?? 0) + 1;
+    store.saveRevocationTarget(target);
+    stopId = controlId(target, "kill");
+    stopped = null;
+  }
   if (!stopped) {
     const survivors = current?.structuredTerminationSurvivors ?? [];
     if (target.process && processIdentityStatus(target.process) === "dead"
@@ -128,7 +138,7 @@ async function settleTarget(store: TeamStore, registry: AgentRegistry, client: R
   kickStructuredDeliveryQueue();
   stopped = await client.operationStatus(stopId);
   assertActive();
-  if (stopped?.receipt.status !== "delivered") throw new Error("revoked host termination is not confirmed");
+  if (stopped?.receipt.status !== "delivered") throw new Error(stopped?.receipt.reason ?? "revoked host termination is not confirmed");
   recordStoppedTarget(store, registry, target);
 }
 

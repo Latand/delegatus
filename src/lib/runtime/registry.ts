@@ -40,8 +40,22 @@ import { isDeepStrictEqual } from "node:util";
 import { randomUUID } from "node:crypto";
 import { registryConversationsForEntryKey, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
+import { assertMemberLaunchAllowed } from "@/lib/team/memberLaunchAuthority";
 
 export { structuredHostsEnabled };
+
+/** Boot adoption keeps the original launch's tombstone and writer claim
+    through native preparation, including a reconnect or fallback. */
+function memberAdoptionGuard(registry: AgentRegistry, entry: AgentRegistryEntry): (() => void) | undefined {
+  const profile = entry.launchProfile ?? registry.launchProfileForPath(entry.artifactPath);
+  if (!profile?.workspace || profile.workspace.fromMessage) return;
+  const receipt = registry.spawnReceiptForHost(entry.key);
+  return () => {
+    assertMemberLaunchAllowed({ launchProfile: profile, memberRevocationId: receipt?.memberRevocationId });
+    if (!registry.ownsStructuredHostClaim(entry.key, entry.claimOwner!, entry.claimEpoch))
+      throw new Error("member host adoption ownership changed");
+  };
+}
 
 export async function startCodexStructuredHost(
   options: CodexAppServerHostOptions,
@@ -1135,12 +1149,16 @@ export async function adoptCodexRegistryHosts(
           return;
         }
         try {
+          const memberCurrent = memberAdoptionGuard(registry, claimed);
+          memberCurrent?.();
           const retainedProtocolVersion = claimed.structuredHost.protocolVersion;
           const options = {
             ...await optionsFor(claimed),
             initialEventCursor: claimed.structuredHost.eventCursor,
             ...(socketOwner ? { socketOwner, readProtocolVersion: () => retainedProtocolVersion ?? "unknown" } : {}),
           };
+          const previousGuard = options.assertCurrent;
+          if (memberCurrent) options.assertCurrent = () => { previousGuard?.(); memberCurrent(); };
           // Preparing memory can wait for state admission. Recheck both the
           // writer claim and admission before opening a new engine generation.
           const fresh = startupHostSnapshot(registry, entry.key, true);
@@ -1287,10 +1305,14 @@ export async function adoptClaudeRegistryHosts(
           return;
         }
         try {
+          const memberCurrent = memberAdoptionGuard(registry, claimed);
+          memberCurrent?.();
           const options = {
             ...await optionsFor(claimed),
             initialEventCursor: claimed.structuredHost.eventCursor,
           };
+          const previousGuard = options.assertCurrent;
+          if (memberCurrent) options.assertCurrent = () => { previousGuard?.(); memberCurrent(); };
           // Preparing memory can wait for state admission. Recheck both the
           // writer claim and admission before opening a new engine generation.
           const fresh = startupHostSnapshot(registry, entry.key, true);

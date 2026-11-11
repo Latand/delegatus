@@ -1,6 +1,7 @@
 import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "@/lib/runtime/engineHost";
 import { recordedAgentScope, recordedScopeProcess, normalizeAgentScope, sameAgentScope, type AgentScopeIdentity } from "@/lib/runtime/agentScope";
 import { registryWriterDetail } from "./registryWriter";
+import { memberLaunchRevocationId } from "@/lib/team/memberLaunchAuthority";
 import { worktreeProtection, type WorktreeProtection } from "./worktreeProtection";
 import { agentSignalDomainAlive, normalizeAgentSignalDomain, normalizeSignalBoundaryOff, type AgentSignalDomain, type SignalBoundaryOff } from "@/lib/runtime/agentSignalSandbox";
 import { liveRootSession } from "@/lib/root/adopt";
@@ -356,6 +357,8 @@ export interface SpawnReceipt {
   createdAt: string;
   /** Runtime admission acknowledged; the host's setup ceiling starts here. */
   hostSetupStartedAt?: string;
+  /** Revocation tombstone observed by the admission writer. Legacy means none. */
+  memberRevocationId?: string | null;
   state: "starting" | "pane-bound" | "host-verified" | "prompt-delivered" | "path-pending" | "completed" | "failed" | "conflicted";
   artifactPath: string | null;
   /** Tracks whether inventory has ever materialized the reserved artifact. */
@@ -6971,6 +6974,26 @@ export class AgentRegistry {
     return this.readKeyed(file => clone(registryOpenSpawnReceipts(file)));
   }
 
+  /** Includes terminal setup that still owns cleanup; the liveness index
+      excludes retained history before loading any receipt payloads. */
+  memberLaunchReceipts(memberId: string): SpawnReceipt[] {
+    return this.readKeyed(file => registryLivenessRows(file).receipts
+      .filter(receipt => !receipt.key && receipt.launchProfile.workspace?.memberId === memberId
+        && !receipt.launchProfile.workspace.fromMessage).map(receipt => clone(receipt)));
+  }
+
+  /** The host operation is authoritative. Older settlement writers omitted
+      it; their latest receipt for this exact native generation is indexed. */
+  spawnReceiptForHost(key: SessionKey): SpawnReceipt | null {
+    return this.readKeyed(file => {
+      const entry = file.entries[sessionKeyId(key)];
+      const receipt = entry?.structuredHostOperationId ? file.receipts[entry.structuredHostOperationId]
+        : registryRowsMatching(file, "receipts", "key.sessionId", key.sessionId)
+          .findLast(row => row.key?.engine === key.engine && row.artifactPath === entry?.artifactPath);
+      return receipt ? clone(receipt) : null;
+    });
+  }
+
   /** Revocation inspects current hosted rows without loading cold history. */
   memberHostEntries(memberId: string): AgentRegistryEntry[] {
     return this.readKeyed(file => registryRowsMatching(file, "entries", "structuredHost.kind",
@@ -7729,6 +7752,8 @@ export class AgentRegistry {
           : null,
         telegramSeatGrant,
         createdAt,
+        ...(profile.workspace && !profile.workspace.fromMessage
+          ? { memberRevocationId: memberLaunchRevocationId(profile.workspace.memberId) } : {}),
         state: rejection ? "failed" : "starting",
         artifactPath: rejection ? null : input.expectedArtifactPath ?? null,
         artifactLifecycle: "pending",
@@ -7881,9 +7906,9 @@ export class AgentRegistry {
           ...receipt.launchProfile,
           title: receipt.queuedPinnedSpawn.spec.launchProfile?.title,
         }, this.mcpGrantPolicy);
-        receipt.hostSetupStartedAt = new Date(startedAt).toISOString();
         receipt.queuedPinnedSpawn = null;
       }
+      receipt.hostSetupStartedAt = new Date(startedAt).toISOString();
     });
   }
 

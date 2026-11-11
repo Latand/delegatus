@@ -3,6 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { sessionKeyId } from "@/lib/agent/sessionKey";
+import { defaultStartHost, spawnStructuredConversation, type SpawnedStructuredHost } from "@/lib/runtime/structuredSpawn";
+import * as publicationSource from "@/lib/git/repositoryCommitIdentity";
+import { adoptClaudeRegistryHosts } from "@/lib/runtime/registry";
+import { assertMemberLaunchAllowed } from "./memberLaunchAuthority";
+import { reconcileMemberRevocations } from "./memberRevocation";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { beginLegacySpawnFixture, structuredHostFixture } from "@/lib/agent/registryTestFixtures";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
@@ -13,14 +19,14 @@ import { StructuredDeliveryQueue } from "@/lib/runtime/structuredDeliveryQueue";
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "@/lib/runtime/structuredHostControl";
 import { runtimeJournalClient } from "@/lib/runtime/startupRecipient.fixture";
 import { PATCH } from "@/app/api/team/members/[id]/route";
-import { claimInstall, createInvite, redeemJoin } from "./members";
+import { claimInstall, createInvite, redeemJoin, restoreMember, revokeMember } from "./members";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { teamStore, resetTeamStoreForTests } from "./store";
 
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
-async function fixture() {
+async function fixture(killFailures = 0) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "member-revocation-"));
   const previous = process.env.LLV_STATE_DIR;
   cleanups.push(() => { resetTeamStoreForTests(); setAgentRegistryForTests(null); if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous; fs.rmSync(root, { recursive: true, force: true }); });
@@ -63,6 +69,7 @@ async function fixture() {
     transition: async (id, status, details) => { journal.transitionOperation(id, status, details); },
     status: async id => journal.operationResult(id)?.receipt ?? null,
   }, id => id === begun.receipt.conversationId ? host : null, async (id, target) => {
+    if (killFailures-- > 0) return false;
     const ref = structuredHostKillRefFromRegistry(target, { snapshot: () => registry.readOnlySnapshot(), conversationId: id as `conversation_${string}` });
     if (!ref.ok) throw Error(ref.error);
     const entry = registry.hostEntry(target)!;
@@ -87,7 +94,7 @@ async function fixture() {
     body: JSON.stringify({ status: "revoked" }),
   }), { params: Promise.resolve({ id: person.member.id }) });
   let recoveryAt = Date.now();
-  return { root, store, owner, person, registry, child, interrupts, revoke, client, commands, key, queue,
+  return { root, store, owner, person, registry, child, interrupts, revoke, client, commands, key, queue, receipt: begun.receipt,
     nextRecoveryAt: () => recoveryAt += 60_000,
     restartRuntime: () => { journal.close(); journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true }); },
     get journal() { return journal; } };
@@ -344,4 +351,246 @@ test("an interrupt failure leaves a durable pending stop and a held queue; repea
   await runChild(f, "reconcile");
   expect((await f.revoke()).status).toBe(200);
   expect(f.store.events({ actions: ["member.revoked"], limit: 10 })).toHaveLength(1);
+});
+
+test("revocation during native auth keeps fresh setup pending and prevents native execution", async () => {
+  const f = await fixture();
+  const begun = beginLegacySpawnFixture(f.registry, { engine: "claude", cwd: f.root, transport: "structured", ownStartingActuation: true,
+    launchProfile: { workspace: { memberId: f.person.member.id, workspaceId: "workspace-a" } } });
+  if (begun.kind !== "created") throw Error("admission failed");
+  let spawned = false;
+  await expect(spawnStructuredConversation({ registry: f.registry, client: f.client, receipt: begun.receipt, engine: "claude", prompt: "",
+    account: { engine: "claude", accountId: "subscription-a", kind: "legacy", home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } },
+    spec: { engine: "claude", command: "claude", cwd: f.root, windowName: "native-race", launchProfile: begun.receipt.launchProfile },
+  }, { startHost: (input, capability) => defaultStartHost(input, capability, { claude: {
+    readAuthStatus: async () => {
+      expect(f.registry.spawnReceipt(begun.receipt.launchId)?.hostSetupStartedAt).toBeDefined();
+      expect((await f.revoke()).status).toBe(202);
+      expect(f.store.memberRevocationPending()).toBe(true);
+      return { loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" };
+    },
+    spawnProcess: () => { spawned = true; throw Error("native spawn reached"); },
+  } }) })).rejects.toThrow("member access revoked");
+  expect(spawned).toBe(false);
+  expect(f.registry.spawnReceipt(begun.receipt.launchId)?.admissionOwner).toBeNull();
+  await runChild(f, "reconcile");
+  expect(f.store.memberRevocationPending()).toBe(false);
+  expect(f.store.events({ actions: ["member.revoked"], limit: 1 })[0]!.detail).toMatchObject({ stoppedHosts: 1, heldLaunches: 1, pending: false });
+});
+
+for (const engine of ["claude", "codex", "copilot"] as const) for (const resumed of [false, true]) {
+  test(`native ${engine} ${resumed ? "adopt" : "start"} rechecks revocation after publication preparation`, async () => {
+    const f = await fixture();
+    const sessionId = "00000000-0000-0000-0000-000000000008";
+    const artifact = path.join(f.root, `${sessionId}.jsonl`);
+    const profile = emptyLaunchProfile({ cwd: f.root, workspace: { memberId: f.person.member.id, workspaceId: "workspace-a" } });
+    let conversationId: `conversation_${string}` | undefined;
+    if (resumed) {
+      fs.writeFileSync(artifact, JSON.stringify({ type: "session_meta", payload: { id: sessionId } }) + "\n");
+      conversationId = f.registry.ensureConversation(engine, artifact, "subscription-a").id;
+      f.registry.upsert({ key: { engine, sessionId }, artifactPath: artifact, cwd: f.root, accountId: "subscription-a", launchProfile: profile,
+        status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+    }
+    const begun = beginLegacySpawnFixture(f.registry, { engine, cwd: f.root, transport: "structured", launchProfile: profile,
+      ...(resumed ? { purpose: "resume-successor", expectedArtifactPath: artifact, conversationId } : {}) });
+    if (begun.kind !== "created") throw Error("admission failed");
+    const original = publicationSource.repositoryPublicationSource;
+    const read = spyOn(publicationSource, "repositoryPublicationSource").mockImplementation(async (...args) => {
+      const result = await original(...args);
+      revokeMember(f.store, f.owner.member, f.person.member);
+      return result;
+    });
+    cleanups.push(() => read.mockRestore());
+    let spawned = false;
+    const spawnProcess = () => { spawned = true; throw Error("native spawn reached"); };
+    await expect(defaultStartHost({ registry: f.registry, client: f.client, receipt: begun.receipt, engine, prompt: "",
+      account: { engine, accountId: "subscription-a", kind: "legacy", home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } },
+      spec: { engine, command: engine, cwd: f.root, windowName: "native-guard", launchProfile: begun.receipt.launchProfile },
+    }, "fixture-capability", {
+      claude: { spawnProcess, readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }) },
+      codex: { spawnProcess, readProtocolVersion: () => "0.162.1" },
+      copilot: { spawnProcess },
+    })).rejects.toThrow("member access revoked");
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(spawned).toBe(false);
+  });
+}
+
+test("a host setup timeout retains admission until late cleanup confirms release", async () => {
+  const f = await fixture();
+  const begun = beginLegacySpawnFixture(f.registry, { engine: "claude", cwd: f.root, transport: "structured", ownStartingActuation: true,
+    launchProfile: { workspace: { memberId: f.person.member.id, workspaceId: "workspace-a" } } });
+  if (begun.kind !== "created") throw Error("admission failed");
+  let started!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  let finish!: (host: SpawnedStructuredHost) => void;
+  const pendingHost = new Promise<SpawnedStructuredHost>(resolve => { finish = resolve; });
+  const lateHost = new FakeEngineHost();
+  let released = false;
+  lateHost.release = async () => { released = true; };
+  cleanups.push(() => { finish(lateHost as unknown as SpawnedStructuredHost); });
+  let ownerReleased!: () => void;
+  const ownerRelease = new Promise<void>(resolve => { ownerReleased = resolve; });
+  const release = f.registry.releaseStructuredSpawnAdmissionOwner.bind(f.registry);
+  const releaseSpy = spyOn(f.registry, "releaseStructuredSpawnAdmissionOwner").mockImplementation((...args) => {
+    const result = release(...args); ownerReleased(); return result;
+  });
+  cleanups.push(() => releaseSpy.mockRestore());
+  const opening = spawnStructuredConversation({ registry: f.registry, client: f.client, receipt: begun.receipt, engine: "claude", prompt: "",
+    account: { engine: "claude", accountId: "subscription-a", kind: "legacy", home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } },
+    spec: { engine: "claude", command: "claude", cwd: f.root, windowName: "late-setup", launchProfile: begun.receipt.launchProfile },
+  }, { durableSetupTimeoutMs: 100, startHost: () => { started(); return pendingHost; } });
+  const failed = expect(opening).rejects.toThrow("durable host setup timed out");
+  await entered;
+  expect((await f.revoke()).status).toBe(202);
+  await failed;
+  await runChild(f, "reconcile");
+  expect(f.registry.spawnReceipt(begun.receipt.launchId)?.admissionOwner).not.toBeNull();
+  expect(f.store.memberRevocationPending()).toBe(true);
+  finish(lateHost as unknown as SpawnedStructuredHost);
+  await ownerRelease;
+  expect(released).toBe(true);
+  await runChild(f, "reconcile");
+  expect(f.store.memberRevocationPending()).toBe(false);
+});
+
+test("Viewer boot adoption carries member revocation through the host's auth await", async () => {
+  const f = await fixture();
+  f.child.kill("SIGTERM");
+  await f.child.exited;
+  const entry = f.registry.hostEntry(f.key)!;
+  f.registry.upsert({ ...entry, status: "unhosted", claimOwner: null, structuredHost: { ...entry.structuredHost!, process: null, writerClaimEpoch: 0 } });
+  let authRead = false, spawned = false;
+  const failures: unknown[] = [];
+  const adopted = await adoptClaudeRegistryHosts(f.registry, () => ({ cwd: f.root, env: { NODE_ENV: "test" },
+    readAuthStatus: async () => {
+      authRead = true;
+      revokeMember(f.store, f.owner.member, f.person.member);
+      return { loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" };
+    },
+    spawnProcess: () => { spawned = true; throw Error("native spawn reached"); },
+  }), { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" }, () => true, undefined, { onFailure: (_entry, error) => { failures.push(error); } });
+  expect(authRead).toBe(true);
+  expect(spawned).toBe(false);
+  expect(adopted).toEqual([]);
+  expect(failures).toMatchObject([expect.objectContaining({ message: expect.stringContaining("member access revoked") })]);
+});
+
+for (const operationPointer of [false, true]) test(`Viewer boot adoption admits a fresh restored launch with operation pointer ${operationPointer}`, async () => {
+  const f = await fixture();
+  f.child.kill("SIGTERM");
+  await f.child.exited;
+  revokeMember(f.store, f.owner.member, f.person.member);
+  restoreMember(f.store, f.owner.member, f.store.member(f.person.member.id)!);
+  const begun = beginLegacySpawnFixture(f.registry, { engine: "claude", cwd: f.root, transport: "structured", launchProfile: f.receipt.launchProfile });
+  if (begun.kind !== "created") throw Error("admission failed");
+  const key = { engine: "claude" as const, sessionId: "00000000-0000-0000-0000-000000000009" };
+  const settled = f.registry.settleSpawn(begun.receipt.launchId, { key, artifactPath: path.join(f.root, `${key.sessionId}.jsonl`), cwd: f.root,
+    accountId: null, status: "unhosted", host: null, launchProfile: begun.receipt.launchProfile, structuredHost: structuredHostFixture(null),
+    claimEpoch: 0, claimOwner: null, pendingAction: null, ...(operationPointer ? { structuredHostOperationId: begun.receipt.launchId } : {}) });
+  if (settled.kind !== "settled") throw Error("settlement failed");
+  let reached = false;
+  await adoptClaudeRegistryHosts(f.registry, () => ({ cwd: f.root, env: { NODE_ENV: "test" } }), { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
+    entry => entry.key.sessionId === key.sessionId, undefined, {
+      adoptHost: async (_id, options) => { options.assertCurrent?.(); reached = true; throw Error("native admission reached"); },
+    });
+  expect(reached).toBe(true);
+});
+
+test("a terminal kill refusal retries durably after a process restart without repeating a successful stop", async () => {
+  const f = await fixture(1);
+  expect((await f.revoke()).status).toBe(202);
+  const firstKill = f.commands.find(id => id.startsWith("member-revocation-kill-"))!;
+  expect(f.journal.operationResult(firstKill)?.receipt).toMatchObject({ status: "failed", reason: "structured host termination is unavailable" });
+  expect(processIdentityStatus(captureProcessIdentity(f.child.pid))).toBe("alive");
+  await runChild(f, "reconcile", "after-retry-target");
+  f.restartRuntime();
+  await runChild(f, "reconcile");
+  await f.queue.drain();
+  await runChild(f, "reconcile");
+  expect((await f.revoke()).status).toBe(200);
+  expect(f.journal.operationResult(firstKill)?.receipt.status).toBe("failed");
+  expect(f.journal.operationResult(`${firstKill}-1`)?.receipt.status).toBe("delivered");
+  expect(processIdentityStatus(captureProcessIdentity(f.child.pid))).toBe("dead");
+  expect(f.interrupts).toEqual(["turn-a"]);
+  expect(f.store.events({ actions: ["member.revoked"], limit: 10 })).toMatchObject([{ detail: { stoppedHosts: 1, pending: false } }]);
+});
+
+test("a rejected kill keeps its reason and retries through the same generation fence", async () => {
+  const f = await fixture();
+  const command = f.client.command;
+  let rejected: string | null = null;
+  f.client.command = async input => {
+    if (input.kind !== "kill" || rejected) return command(input);
+    const result = f.journal.executeOperation(input);
+    rejected = result.operationId;
+    f.journal.transitionOperation(result.operationId, "rejected", { reason: "injected control rejection" });
+    return f.journal.operationResult(result.operationId)!;
+  };
+  expect((await f.revoke()).status).toBe(202);
+  expect(f.store.events({ actions: ["member.revoked"], limit: 1 })[0]!.detail).toMatchObject({ revocationError: "injected control rejection", pending: true });
+  await runChild(f, "reconcile");
+  f.restartRuntime();
+  await f.queue.drain();
+  await runChild(f, "reconcile");
+  expect(f.journal.operationResult(rejected!)?.receipt).toMatchObject({ status: "rejected", reason: "injected control rejection" });
+  expect(f.journal.operationResult(`${rejected}-1`)?.receipt.status).toBe("delivered");
+  expect(f.store.events({ actions: ["member.revoked"], limit: 1 })[0]!.detail).toMatchObject({ stoppedHosts: 1, pending: false });
+});
+
+test("backward clock revocation stops existing hosts and holds their queue across restore and restart", async () => {
+  const f = await fixture();
+  const queued = queueLaunch(f);
+  const receipt = f.registry.spawnReceipt(queued)!;
+  revokeMember(f.store, f.owner.member, f.person.member, Date.parse(receipt.createdAt) - 1_000);
+  await runChild(f, "reconcile");
+  await f.queue.drain();
+  await runChild(f, "reconcile");
+  expect(processIdentityStatus(captureProcessIdentity(f.child.pid))).toBe("dead");
+  expect(f.registry.spawnReceipt(queued)).toMatchObject({ state: "failed", queuedPinnedSpawn: null });
+  restoreMember(f.store, f.owner.member, f.store.member(f.person.member.id)!);
+  expect(() => assertMemberLaunchAllowed(receipt)).toThrow("member access revoked");
+  expect(f.store.events({ actions: ["member.revoked"], limit: 1 })[0]!.detail).toMatchObject({ stoppedHosts: 1, heldLaunches: 1, pending: false });
+});
+
+for (const launchFirst of [false, true]) test(`a recovered launch cannot erase a confirmed host target: launch first ${launchFirst}`, async () => {
+  const f = await fixture();
+  revokeMember(f.store, f.owner.member, f.person.member);
+  const event = f.store.events({ actions: ["member.revoked"], limit: 1 })[0]!;
+  const receipt = f.registry.spawnReceipt(f.receipt.launchId)!;
+  if (receipt.admissionOwner) f.registry.releaseStructuredSpawnAdmissionOwner(receipt.launchId, receipt.admissionOwner);
+  const hostTarget = { id: sessionKeyId(f.key), revocationId: event.id, kind: "host" as const, conversationId: receipt.conversationId,
+    key: f.key, turnId: "turn-a", process: captureProcessIdentity(f.child.pid), launchId: receipt.launchId, state: "pending" as const };
+  f.store.saveRevocationTarget(hostTarget);
+  f.store.saveRevocationTarget({ ...hostTarget, id: receipt.launchId, kind: "launch", key: null, turnId: null, process: null });
+  f.store.markRevocationPlanned(event.id);
+  const read = f.store.revocationTargets.bind(f.store);
+  const order = spyOn(f.store, "revocationTargets").mockImplementation((id, due) => read(id, due).sort((a, b) =>
+    (a.kind === "launch" ? -1 : 1) * (launchFirst ? 1 : -1) - (b.kind === "launch" ? -1 : 1) * (launchFirst ? 1 : -1)));
+  cleanups.push(() => order.mockRestore());
+  await reconcileMemberRevocations({ store: f.store, registry: f.registry, client: f.client, now: f.nextRecoveryAt, assertActive: () => {} });
+  // An obsolete conversion replay must preserve both evidence and outcome.
+  f.store.saveRevocationTarget({ ...hostTarget, process: null });
+  await runChild(f, "reconcile");
+  expect((await f.revoke()).status).toBe(200);
+  expect(f.store.revocationTargets(event.id).find(target => target.kind === "host")).toMatchObject({ process: hostTarget.process, state: "stopped" });
+  expect(f.store.events({ actions: ["member.revoked"], limit: 1 })[0]!.detail).toMatchObject({ stoppedHosts: 1, pending: false });
+});
+
+for (const cut of ["after-host-target", "after-launch-target"] as const) test(`launch conversion rolls back a crash ${cut}`, async () => {
+  const f = await fixture();
+  revokeMember(f.store, f.owner.member, f.person.member);
+  const event = f.store.events({ actions: ["member.revoked"], limit: 1 })[0]!;
+  const receipt = f.registry.spawnReceipt(f.receipt.launchId)!;
+  if (receipt.admissionOwner) f.registry.releaseStructuredSpawnAdmissionOwner(receipt.launchId, receipt.admissionOwner);
+  f.store.saveRevocationTarget({ id: receipt.launchId, revocationId: event.id, kind: "launch", conversationId: receipt.conversationId,
+    key: null, turnId: null, process: null, launchId: receipt.launchId, state: "pending" });
+  f.store.markRevocationPlanned(event.id);
+  await runChild(f, "reconcile", cut);
+  expect(f.store.revocationTargets(event.id)).toMatchObject([{ kind: "launch", state: "pending" }]);
+  await runChild(f, "reconcile");
+  await runChild(f, "reconcile");
+  await f.queue.drain();
+  await runChild(f, "reconcile");
+  expect(f.store.events({ actions: ["member.revoked"], limit: 1 })[0]!.detail).toMatchObject({ stoppedHosts: 1, pending: false });
 });

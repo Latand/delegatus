@@ -2115,7 +2115,8 @@ export async function startCopilotStructuredHost(
     ? startupHostSnapshot(input.registry, { engine: "copilot", sessionId: resumeSessionId }).entries[sessionKeyId({ engine: "copilot", sessionId: resumeSessionId })]?.structuredHost?.eventCursor
     : undefined;
   const access = await materializeAttemptAccess(input, capability);
-  const options = { ...copilotHostOptions(input, access, initialEventCursor), ...overrides };
+  const options = { ...copilotHostOptions(input, access, initialEventCursor), ...overrides,
+    assertCurrent: () => assertMemoryPreparedStartCurrent(input) };
   await input.authorize?.();
   return resumeSessionId
     ? await CopilotAcpHost.adopt(resumeSessionId, options)
@@ -2191,7 +2192,8 @@ export async function defaultStartHost(
   capability: string,
   engineProcess: {
     claude?: Partial<Pick<ClaudeStreamBrokerHostOptions, "spawnProcess" | "readAuthStatus">>;
-    codex?: Partial<Pick<CodexAppServerHostOptions, "spawnProcess">>;
+    codex?: Partial<Pick<CodexAppServerHostOptions, "spawnProcess" | "readProtocolVersion">>;
+    copilot?: Partial<Pick<CopilotAcpHostOptions, "spawnProcess">>;
   } = {},
 ): Promise<SpawnedStructuredHost> {
   input = admittedStructuredLaunchInput(input);
@@ -2199,6 +2201,7 @@ export async function defaultStartHost(
   await input.registry.recordSpawnMemoryCapOffLoop(input.receipt.launchId, agentMemoryCapForPlan(memoryCell?.plan ?? null));
   input = admittedStructuredLaunchInput(input);
   if (input.engine === "copilot") return await startCopilotStructuredHost(input, capability, {
+    ...engineProcess.copilot,
     ...(memoryCell ? { memoryCell } : {}),
   });
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
@@ -2240,6 +2243,7 @@ export async function defaultStartHost(
       initialEventCursor,
       env,
       ...engineProcess.codex,
+      assertCurrent: () => assertMemoryPreparedStartCurrent(input),
       ...(memoryCell ? { memoryCell } : {}),
     };
     await input.authorize?.();
@@ -2252,6 +2256,7 @@ export async function defaultStartHost(
   const options = {
     ...await claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor, validateTelegramGrant, input.receipt.agentRole),
     ...engineProcess.claude,
+    assertCurrent: () => assertMemoryPreparedStartCurrent(input),
     ...(memoryCell ? { memoryCell } : {}),
   };
   await input.authorize?.();
@@ -2825,6 +2830,7 @@ export async function spawnStructuredConversation(
   let host: SpawnedStructuredHost | null = null;
   let runtimeAdmitted = false;
   let hostStartRequested = false;
+  let nativeSetupPending = false;
   const binding: HostBinding = { stopPersistence: () => {}, unregister: async () => {} };
   let key: SessionKey | null = null;
   let forgetUnpublishedHost = () => {};
@@ -2975,7 +2981,7 @@ export async function spawnStructuredConversation(
       assertAdmissionCurrent();
       return input.registry.setReceiptViewerMcpTransport(input.receipt.launchId, viewerMcpTransportForLaunch({ ...input.account.env, LLV_SPAWN_CAPABILITY: capability }));
     });
-    if (foregroundAdmissionOwner && queuedAdmission?.admissionDeadlineAt) {
+    if (foregroundAdmissionOwner) {
       await input.registry.deliveryWriteOrBusy({ label: "spawn.begin-host-setup", operationId }, () => {
         assertAdmissionCurrent();
         input.registry.beginStructuredHostSetup(operationId, foregroundAdmissionOwner, now());
@@ -2997,18 +3003,31 @@ export async function spawnStructuredConversation(
       durableSetupTimer.unref?.();
     });
     hostStartRequested = true;
+    nativeSetupPending = true;
     const startingHost = startHost(input, capability);
     void startingHost.then(async (lateHost) => {
-      if (!durableSetupTimedOut) return;
+      if (!durableSetupTimedOut) { nativeSetupPending = false; return; }
       try {
         await withHostStopOrigin({ path: "structured-spawn-late-cleanup", operationId: input.receipt.launchId }, () => lateHost.release());
+        nativeSetupPending = false;
+        if (foregroundAdmissionOwner) await input.registry.deliveryWriteOrBusy({ label: "spawn.late-admission.release", operationId }, () =>
+          input.registry.releaseStructuredSpawnAdmissionOwner(operationId, foregroundAdmissionOwner));
       } catch (error) {
         spawnDiagnosticErrorFor(input.receipt.clientAttemptId, "[spawn] late structured host could not be released after setup timeout", {
           launchId: input.receipt.launchId,
           error: structuredSpawnFailureReason(error),
         });
       }
-    }, () => {});
+    }, async error => {
+      if (error instanceof StructuredHostAdoptionCleanupError) return;
+      nativeSetupPending = false;
+      if (durableSetupTimedOut && foregroundAdmissionOwner) {
+        try {
+          await input.registry.deliveryWriteOrBusy({ label: "spawn.late-admission.release", operationId }, () =>
+            input.registry.releaseStructuredSpawnAdmissionOwner(operationId, foregroundAdmissionOwner));
+        } catch { /* Durable ownership keeps revocation pending for recovery. */ }
+      }
+    });
     host = await withinDurableSetup(startingHost);
     assertMemberCurrent();
     if (host.viewerMcpTransport) (await input.registry.deliveryWriteOrBusy({ label: "registry.setReceiptViewerMcpTransport" }, input.registry.setReceiptViewerMcpTransport.bind(input.registry, input.receipt.launchId, host.viewerMcpTransport)));
@@ -3375,7 +3394,7 @@ export async function spawnStructuredConversation(
   } finally {
     // This call no longer advances setup, including when cleanup/projection
     // failed. Hand recovery back without releasing a newer admission owner.
-    if (foregroundAdmissionOwner && !admissionDeferred) {
+    if (foregroundAdmissionOwner && !admissionDeferred && !(durableSetupTimedOut && nativeSetupPending)) {
       try {
         await withoutOperationLease(() => input.registry.deliveryWrite({ label: "spawn.admission.release", operationId },
           () => input.registry.releaseStructuredSpawnAdmissionOwner(operationId, foregroundAdmissionOwner)));
