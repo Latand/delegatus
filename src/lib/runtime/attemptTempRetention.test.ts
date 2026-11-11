@@ -24,10 +24,10 @@ function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-attempt-retention-")); roots.push(root);
   const filename = path.join(root, "owners.sqlite");
   const store = new AttemptTempStore(filename);
-  const make = (name: string, age = 0, evidence = false) => {
+  const make = (name: string, age = 0, evidence = false, launchId = name) => {
     const directory = path.join(root, `llv-stage-${name}`); fs.mkdirSync(directory);
     fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
-    store.register({ directory, pipelineId: "lane", launchId: name, retainUntilClose: evidence, createdAt: NOW - age });
+    store.register({ directory, pipelineId: "lane", launchId, retainUntilClose: evidence, createdAt: NOW - age });
     return directory;
   };
   const sweep = (state: AttemptTempState = "settled", options = {}) => sweepAttemptTemps(store, {
@@ -158,7 +158,7 @@ test.each(["keep", "outside-git", "cwd", "checkout-link"])("retention preserves 
 test.each(["absent", "quarantine"])("expired recorded hold is settled for a previously %s root", async kind => {
   const f = fixture(), directory = f.make(kind, 30 * 86400000);
   try {
-    const ids = [await holdFinishedRoot(directory, "lane", "first"), await holdFinishedRoot(directory, "lane", "second")];
+    const ids = [await holdFinishedRoot(directory, "lane", "first", [], f.store.owner(directory)!.launchId), await holdFinishedRoot(directory, "lane", "second", [], f.store.owner(directory)!.launchId)];
     if (kind === "absent") fs.rmSync(directory, { recursive: true });
     else {
       const stat = fs.lstatSync(directory), trash = path.join(f.root, ".delegatus-trash-llv-stage-quarantine-fixture");
@@ -178,7 +178,7 @@ test.each(["absent", "quarantine"])("expired recorded hold is settled for a prev
 test("retention removal holds no state transaction or collection lease", async () => {
   const f = fixture(), directory = f.make("lock-free", 30 * 86400000);
   try {
-    await holdFinishedRoot(directory, "lane");
+    await holdFinishedRoot(directory, "lane", "", [], f.store.owner(directory)!.launchId);
     let removals = 0;
     const result = await f.sweep("expired", { remove: async (trash: string, guard: () => Promise<boolean>, dispatch: () => boolean) => {
       expect(await guard()).toBeTrue(); expect(dispatch()).toBeTrue();
@@ -197,7 +197,7 @@ test("retention removal holds no state transaction or collection lease", async (
 
 test.each(["before-quarantine", "after-quarantine"])("a new process resumes expired retirement %s", async where => {
   const f = fixture(), directory = f.make(where, 30 * 86400000);
-  await holdFinishedRoot(directory, "lane");
+  await holdFinishedRoot(directory, "lane", "", [], f.store.owner(directory)!.launchId);
   let interrupted = false;
   try {
     const report = await f.sweep("expired", where === "before-quarantine" ? { references: async () => { interrupted = true; throw new Error("fixture stop before quarantine"); } }
@@ -222,6 +222,41 @@ test("a mismatched recorded-check binding refuses expiry and leaves independent 
     expect(report.errors).toBe(1); expect(report.removed).toBe(1);
     expect(recordedRootHeld(directory)).toBeTrue(); expect(fs.existsSync(directory)).toBeTrue(); expect(fs.existsSync(independent)).toBeFalse();
   } finally { f.store.close(); }
+});
+
+test.each(["pipeline", "launch", "identity", "missing"] as const)("a changed sibling %s refuses the whole acknowledgement before preparation and after admission", async change => {
+  for (const boundary of ["preparation", "admission"] as const) {
+    const f = fixture(), directory = f.make("first"), sibling = f.make("sibling", 0, true, "first");
+    const id = await holdFinishedRoot(directory, "lane", boundary, [sibling], "first");
+    const mutate = () => {
+      const db = new Database(f.filename);
+      try {
+        if (change === "missing") db.query("DELETE FROM roots WHERE directory=?").run(sibling);
+        else {
+          const field = { pipeline: "pipelineId", launch: "launchId", identity: "identity" }[change];
+          db.query(`UPDATE roots SET ${field}=? WHERE directory=?`).run(change === "identity" ? "0:0" : "replacement", sibling);
+        }
+      } finally { db.close(); }
+    };
+    const write = RecordedCheckStore.prototype.write;
+    let injected = false;
+    const hook = spyOn(RecordedCheckStore.prototype, "write").mockImplementation(async function (this: RecordedCheckStore, ...args: Parameters<typeof write>) {
+      if (boundary === "admission" && args[0].id === id && args[0].acknowledgement?.disposition === "expired-with-lane") { mutate(); injected = true; }
+      return write.apply(this, args);
+    });
+    try {
+      if (boundary === "preparation") mutate();
+      const report = await f.sweep("expired", { maxRoots: 1, authority: async () => ({ state: "expired", expiresAt: NOW - 1000, revision: "fixture", isCurrent: () => true }) });
+      expect(report.removed).toBe(0); expect(report.errors).toBe(1);
+      if (boundary === "admission") expect(injected).toBeTrue();
+      for (const root of [directory, sibling]) {
+        expect(recordedRootHeld(root)).toBeTrue(); expect(fs.existsSync(root)).toBeTrue();
+        expect(f.store.requiredRootExpiry(root)).toBe(boundary === "preparation" ? null : NOW - 1000);
+      }
+      const checks = new RecordedCheckStore();
+      try { expect(checks.get(id)?.acknowledgement).toBeNull(); } finally { checks.close(); }
+    } finally { hook.mockRestore(); f.store.close(); }
+  }
 });
 
 test("copies retain unfinished, recent and unattributed data and never touch durable evidence stores", async () => {
@@ -265,7 +300,7 @@ test("forty expired held roots drain in pages of four or thirty-two across proce
   try {
     for (let n = 0; n < 40; n++) {
       const directory = f.make(`bounded-${String(n).padStart(2, "0")}`, 30 * 86400000); directories.push(directory);
-      await holdFinishedRoot(directory, "lane"); f.store.measure(directory, 4096);
+      await holdFinishedRoot(directory, "lane", "", [], f.store.owner(directory)!.launchId); f.store.measure(directory, 4096);
     }
     expect((await f.sweep("expired")).removed).toBe(4);
   } finally { f.store.close(); }

@@ -13,6 +13,60 @@ import { holdFinishedRoot, finishedLane } from "./attemptTempRetention.testSuppo
 import { RecordedCheckStore, recordedRootHeld } from "@/lib/recordedChecks/store";
 import { attemptTempJournalPath } from "@/lib/tempSweep";
 
+test.each([false, true])("all roots of an acknowledged check await expiry after clock rollback (restart=%s)", async restart => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempAuthority } = await import("./attemptTempProduction");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-sibling-rollback-")); roots.push(root);
+  const expired = Date.parse("2026-11-01T00:00:01Z"), cutoff = expired - 1000, beforeExpiry = expired - 86400000;
+  let now = expired;
+  const p = finishedLane(root, "2026-10-25T00:00:00Z"); savePipelines([p]);
+  const directories = ["first", "sibling"].map(name => path.join(root, `llv-stage-${name}`));
+  const filename = path.join(root, "owners.sqlite"), store = new AttemptTempStore(filename);
+  for (const [index, directory] of directories.entries()) {
+    fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "retained data");
+    store.register({ directory, pipelineId: p.id, launchId: "retention-launch", retainUntilClose: true, createdAt: index + 1 });
+  }
+  const id = await holdFinishedRoot(directories[0], p.id, "", directories.slice(1));
+  const write = RecordedCheckStore.prototype.write;
+  const acknowledgement = spyOn(RecordedCheckStore.prototype, "write").mockImplementation(async function (this: RecordedCheckStore, ...args: Parameters<typeof write>) {
+    const result = await write.apply(this, args);
+    if (args[0].acknowledgement?.disposition === "expired-with-lane") now = beforeExpiry;
+    return result;
+  });
+  const authority: NonNullable<Parameters<typeof sweepAttemptTemps>[1]["authority"]> = (owner, inventory) => attemptTempAuthority(owner, inventory, () => now);
+  const options = { now: () => now, authority, state: async (owner: Parameters<typeof authority>[0], inventory: Parameters<typeof authority>[1]) => (await authority(owner, inventory)).state,
+    maxRoots: 1, references: async () => true, scan: () => ({ ownNamespace: null, processes: [] }) };
+  const sweep = async () => {
+    if (!restart) return sweepAttemptTemps(store, options);
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), filename, String(now), "production"],
+      { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+    const [output, error, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(exit, error).toBe(0);
+    return JSON.parse(output);
+  };
+  try {
+    expect((await sweepAttemptTemps(store, options)).removed).toBe(0);
+    const checks = new RecordedCheckStore();
+    try { expect(checks.get(id)?.acknowledgement?.disposition).toBe("expired-with-lane"); } finally { checks.close(); }
+    for (const directory of directories) {
+      expect(recordedRootHeld(directory)).toBeFalse();
+      expect(store.requiredRootExpiry(directory)).toBe(cutoff);
+    }
+    now = beforeExpiry + 60001;
+    // The sibling was outside the first page; force both visits before expiry.
+    for (const directory of directories) store.release(directory);
+    for (let n = 0; n < directories.length; n++) {
+      const report = await sweep();
+      expect(report.checked).toBe(1); expect(report.removed).toBe(0); expect(report.errors).toBe(0);
+    }
+    for (const directory of directories) expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("retained data");
+    now = expired;
+    for (const directory of directories) store.release(directory);
+    for (let n = 0; n < directories.length; n++) expect((await sweep()).removed).toBe(1);
+    for (const directory of directories) { expect(fs.existsSync(directory)).toBeFalse(); expect(store.has(directory)).toBeFalse(); }
+  } finally { acknowledgement.mockRestore(); store.close(); }
+});
+
 test.each(["acknowledgement", "quarantine", "removal"] as const)(
   "previously held roots retain their expiry across clock rollback at %s and a process restart", async boundary => {
   const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");

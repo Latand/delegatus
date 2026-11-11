@@ -8,7 +8,7 @@ import { attemptTempJournalPath, sweepStaleTempDirs, type ProcessScan } from "@/
 import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, snapshotAttemptProtection, removeAttemptTree, RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
-import { recordedRootHeld, recordRootRetirement, expireRecordedRootHolds } from "@/lib/recordedChecks/store";
+import { recordedRootHeld, recordRootRetirement, expireRecordedRootHolds, type CheckRow } from "@/lib/recordedChecks/store";
 import { FINISHED_LANE_RETENTION_MS } from "@/lib/pipelines/laneFinish";
 import { claimAttemptRetirement } from "@/lib/pipelines/store";
 import { hasAttemptRetirementClaim, restoreRefusedAttemptTrash } from "@/lib/pipelines/retirementClaim";
@@ -148,6 +148,18 @@ export class AttemptTempStore {
   }
   requiredRootExpiry(directory: string): number | null {
     return this.db.query<{ expiresAt: number }, [string]>("SELECT expiresAt FROM root_expiry_admission WHERE directory=?").get(directory)?.expiresAt ?? null;
+  }
+  requireRecordedRootExpiry(row: CheckRow, expiresAt: number | null): () => boolean {
+    const rootsCurrent = () => row.descriptor.manifest.roots.every(root => {
+      const owner = this.owner(root.directory);
+      return owner?.identity === root.identity && owner.pipelineId === row.binding.pipeline && owner.launchId === row.binding.launch;
+    });
+    this.db.transaction(() => {
+      if (!rootsCurrent()) throw new Error("recorded root creation binding mismatch");
+      if (expiresAt !== null) for (const root of row.descriptor.manifest.roots) this.requireRootExpiry(root.directory, expiresAt);
+    })();
+    return () => rootsCurrent() && (expiresAt === null || row.descriptor.manifest.roots.every(root =>
+      (this.requiredRootExpiry(root.directory) ?? -Infinity) >= expiresAt));
   }
   rootFailure(directory: string, failure: string | null) {
     const prior = this.db.query<{ failure: string | null }, [string]>("SELECT failure FROM root_retention WHERE directory=?").get(directory)?.failure;
@@ -319,14 +331,11 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         checkBudget();
         store.retainRoot(owner.directory, unpinned ? retentionExpiry : null);
         if (unpinned && initialAuthority.state === "expired" && owner.pipelineId && initialAuthority.isCurrent() && options.mode !== "dry-run") {
-          // Persist the prerequisite before acknowledgement can release the
-          // last hold. A restart or clock rollback must not turn this root
-          // into an ordinary unheld root eligible for immediate retirement.
-          if (retentionExpiry !== null) {
-            store.requireRootExpiry(owner.directory, retentionExpiry);
-            requiredExpiry = store.requiredRootExpiry(owner.directory);
-          }
-          await expireRecordedRootHolds(owner.directory, owner.pipelineId, now(), () => initialAuthority.isCurrent() && protection.current());
+          // The CAS releases the whole check, including roots outside this
+          // page. Persist their prerequisites together before that await.
+          await expireRecordedRootHolds(owner.directory, owner.pipelineId, now(), () => initialAuthority.isCurrent() && protection.current(),
+            row => store.requireRecordedRootExpiry(row, retentionExpiry));
+          requiredExpiry = store.requiredRootExpiry(owner.directory);
         }
         if (recordedRootHeld(owner.directory) && !(options.mode === "dry-run" && initialAuthority.state === "expired")) {
           if (pendingTrash && options.mode !== "dry-run") restoreRefusedAttemptTrash(owner.directory, owner.identity);

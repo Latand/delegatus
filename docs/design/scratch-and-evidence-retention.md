@@ -254,9 +254,12 @@ read and dispatch refuses.
   authority answered `"closed"` with an `expiresAt`, `defer(directory,
   expiresAt)` and record `root_retention(directory, expiresAt)` (§5.5) so the
   row is not re-read every page cycle and the card can count it.
-- Before settling a hold, persist its expiry prerequisite separately in
-  `root_expiry_admission`. Keep checking it after acknowledgement, at dispatch
-  and after restart; a rollback to `"closed"` cannot authorize immediate
+- Before settling a hold, persist the expiry prerequisite for every manifest
+  root together in `root_expiry_admission`, including roots outside the current
+  page. Require each registered identity, lane and launch to match the check
+  binding, and recheck these receipts after CAS admission. Keep checking expiry
+  after acknowledgement, at dispatch and after restart; a rollback to `"closed"`
+  cannot authorize immediate
   retirement of a previously held root (§15).
 - In `eligible()` (`:261-326`): `"expired"` counts as settled at `:272`; for
   `"expired"`, `preserveAttemptEvidence` is skipped and the evidence fence is
@@ -278,7 +281,7 @@ read and dispatch refuses.
 
 ### 5.3 Settling a recorded-check hold (`recordedChecks/store.ts`, `service.ts`)
 
-`expireRecordedRootHolds(directory, pipelineId)`, called only by the sweep and
+`expireRecordedRootHolds`, called only by the sweep and
 only for an `"expired"` lane:
 
 1. Read `recorded_check_roots` rows for `directory` with `held=1`. For each run
@@ -286,6 +289,11 @@ only for an `"expired"` lane:
 2. Refuse (record a failure, keep the root) unless the row's
    `binding.pipeline` equals the root owner's `pipelineId`. Handoff already
    requires that (`service.ts:93-99`); the check only guards corrupt rows.
+   Before the CAS, validate every manifest root against its creation receipt
+   (identity, pipeline and launch) and persist all expiry prerequisites in one
+   attempt-ledger transaction outside the state write lock. A missing or
+   changed sibling refuses the acknowledgement. Recheck the same receipts and
+   persisted cutoffs inside the CAS authority callback after any lock wait.
 3. Write the row with `acknowledgement = { actor: "retention", disposition:
    "expired-with-lane", resultRevision, resultDigest, evidenceDigest, at }`
    through the existing `store.write` CAS (`store.ts:254-256`), taking the
@@ -394,8 +402,10 @@ step and no one-shot cleanup.
 ## 7. Bounds, restarts, locks, failures
 
 - **Per pass.** Roots: unchanged page (4, or 32 under pressure) and 40 s
-  budget; expiry adds one authority read (already done per row) and at most a
-  few short state transactions per expired held root. Copies: ≤ 32 adoption
+  budget; expiry adds one authority read (already done per row) and up to
+  eight short state transactions per expired held root. Each check has at most
+  eight manifest roots; their cutoff writes and creation-receipt reads are
+  bounded by those same limits. Copies: ≤ 32 adoption
   directory records, ≤ 8 removals, 10 s. Every query is a key or index seek.
   Copy discovery reads at most 32 records, including dot entries, per page;
   at most one native 4 KiB chunk is read and its tail is persisted. Its work
@@ -611,7 +621,12 @@ directory is absent, then forgets the root ledger row. A cleanup observation
 alone never substitutes for the lane-finish and binding checks.
 
 Before expiry acknowledgement can release a recorded-check hold, the attempt
-ledger persists the root's expiry prerequisite in `root_expiry_admission`.
+ledger persists every manifest root's expiry prerequisite together in
+`root_expiry_admission`. All roots must retain the check's registered identity,
+pipeline and launch, including roots not selected in this sweep page. The CAS
+rechecks those creation receipts and cutoffs after lock admission; a failure
+retains every hold. A failed acknowledgement can leave conservative cutoffs,
+which remain safe to replay.
 This prerequisite belongs to the registered root until it is forgotten;
 reporting updates cannot clear it. Eligibility, final dispatch and removal
 require both expired lane authority and the recorded cutoff. A clock rollback
@@ -631,7 +646,12 @@ cancellation recognizes the restored identity and completes cancellation.
 
 Regression cases in `attemptTempProduction.test.ts` move the clock backwards
 after acknowledgement, at quarantine rename and before removal, then start a
-new process before expiry and finally retire after expiry. Root and copy cases
+new process before expiry and finally retire after expiry. A two-root check
+also exercises rollback immediately after the real acknowledgement, visits
+both roots before expiry in the same process and a new process using production
+authority, and removes both after expiry. Sibling identity, lane, launch and
+missing-receipt cases refuse the entire acknowledgement both before preparation
+and after the awaited writer admission. Root and copy cases
 recover a dead owner's protected quarantine, repeat three passes and exercise
 the supported merge retry (`blocked` to `queued`) and reopening transitions.
 
@@ -644,6 +664,9 @@ Run the explicit test files with isolated state through `scripts/gate-slot.sh`:
 `runtime/attemptCopyDiscovery.test.ts` for 65/513-directory restart pages,
 late marker tests at root/copy reference and authority boundaries, and live,
 dead and journaled claim recovery in the retention and production files.
+`recordedChecks/lifecycle.integration.test.ts` uses production authority for
+pending and unread holds while refusing retirement and deletion callbacks;
+late files still count toward pressure and their live evidence stays held.
 Run the typecheck and privacy publication gate. Hosted checks, including
 `bun-runtime`, run on the published commit.
 

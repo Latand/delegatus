@@ -31,6 +31,7 @@ if (process.argv[2] === "--load") {
 }
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
+import { attemptTempAuthority } from "./attemptTempProduction";
 
 if (process.argv[2] === "--hold") {
   process.stdout.write("ready\n");
@@ -70,9 +71,11 @@ try {
   const repository = path.join(path.dirname(process.argv[2]!), "budget-repository");
   const report = await sweepAttemptTemps(store, {
     now: () => now, runBudgetMs: budgetMode && process.argv[4] === "budget-run" ? 40_000 : undefined,
+    ...(process.argv[4] === "production" ? { authority: (owner, inventory) => attemptTempAuthority(owner, inventory, () => now) } : {}),
     maxRoots: process.argv[4] === "expired-pressure" ? 32 : process.argv[4] === "pressure" ? 4 : budgetMode ? 2 : process.argv.includes("--default-budget") ? undefined : 1,
     capBytes: process.argv[4] === "expired-pressure" || process.argv[4] === "pressure" || budgetMode ? 0 : undefined,
     state: async (owner, inventory) => {
+      if (process.argv[4] === "production") return (await attemptTempAuthority(owner, inventory, () => now)).state;
       if (process.argv[4] === "budget-inventory" || process.argv[4] === "budget-read") {
         await inventory.targets(repository);
       }

@@ -360,7 +360,8 @@ export const recordedLaunchHeld = (launch: string) => readRecorded(store => stor
 export const recordedRootHeld = (directory: string) => readRecorded(store => store.rootHeld(directory), false);
 /** Called under attempt-sweep admission, with short CAS writes only. The
  * caller's lane revision is checked inside each write after lock admission. */
-export async function expireRecordedRootHolds(directory: string, pipelineId: string, now: number, current: () => boolean) {
+export async function expireRecordedRootHolds(directory: string, pipelineId: string, now: number, current: () => boolean,
+  prepareRoots: (row: CheckRow) => () => boolean) {
   if (!recordedRootHeld(directory)) return;
   const store = await openRecordedChecks();
   try {
@@ -368,10 +369,15 @@ export async function expireRecordedRootHolds(directory: string, pipelineId: str
     if (rows.some(row => row.binding.pipeline !== pipelineId)) throw new Error("recorded root lane binding mismatch");
     for (const row of rows) {
       if (row.acknowledgement) continue;
+      // Acknowledgement releases every manifest root. Persist their retention
+      // prerequisites outside the state transaction, then recheck after admission.
+      const rootsCurrent = prepareRoots(row);
       await store.write({ ...row, revision: row.revision + 1, acknowledgement: {
         actor: "retention", disposition: "expired-with-lane", at: now,
         resultRevision: row.result?.revision ?? 0, resultDigest: row.result?.digest ?? "", evidenceDigest: row.result?.evidenceDigest ?? "",
-      } }, row.revision, () => { if (!current()) throw new Error("lane changed before retention acknowledgement"); });
+      } }, row.revision, () => {
+        if (!current() || !rootsCurrent()) throw new Error("lane or root binding changed before retention acknowledgement");
+      });
     }
   } finally { store.close(); }
 }
