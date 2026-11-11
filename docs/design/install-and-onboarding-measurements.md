@@ -240,38 +240,39 @@ Verdict **confirmed**. The access-key install is serving, and the launcher's una
 ## (vii) N8 timings and interaction counts
 
 ```sh
-rtk proxy bash "$GATE" --record "$TMPDIR/cli-measurements.log" python3 "$MEASURE/lifecycle.py"
-rtk proxy bash "$GATE" --record "$TMPDIR/cli-measurements-v2.log" python3 "$MEASURE/lifecycle.py"
+MEASUREMENT_RUN_ID=cold-a rtk proxy bash "$GATE" --record "$TMPDIR/cli-cold-a.log" python3 "$MEASURE/lifecycle.py"
+MEASUREMENT_RUN_ID=cold-b rtk proxy bash "$GATE" --record "$TMPDIR/cli-cold-b.log" python3 "$MEASURE/lifecycle.py"
 rtk proxy bash "$GATE" --record "$TMPDIR/codex-cold-measurements.log" python3 "$MEASURE/codex-start.py"
 rtk proxy bash "$GATE" --record "$TMPDIR/dom-measurements.log" python3 "$MEASURE/run-dom.py"
 ```
 
-The first CLI campaign used `cli-*` roots and preceded the dependency-install
-prelude in the appendix. Its `bun x` cases installed their own dependencies
-and returned 200. The repeat used `cli-v2-*` roots.
+Each invocation uses its required run id to create new `cli-v2-<run-id>-*`
+roots. The driver refuses a reused root and records the empty HOME and Bun
+cache checks beside every launch. The two invocations therefore have distinct
+empty roots for every runtime and mode.
 
 Cold runs used a fresh HOME and Bun package cache per sample and this command.
 The clock starts immediately before process creation and ends at the first
 GET / returning 200 with Delegatus HTML. The data are empty installs and the
 same published package. Other machine load was uncontrolled. These are
-observed elapsed times.
+observed elapsed times from the `solo` rows in the two run ids above. Both
+invocations also run the team, access-key and install modes; those results are
+reported in their respective sections.
 
 ```sh
-"$RUNTIME" x --bun delegatus-cli@2.0.0 --port "$PORT" --hostname 127.0.0.1 --no-open
+"$RUNTIME" "$MEASURE/npm-2.0.0/package/bin/cli.mjs" --port "$PORT" --hostname 127.0.0.1 --no-open
 ```
 
-| Sign-in situation | Bun 1.4.0 seconds, two samples | Bun 1.4.3 seconds, two samples |
-| --- | --- | --- |
-| Neither engine, CLIs absent | 10.273, 8.491 | 6.857, 7.947 |
-| Codex only | 8.388, 8.013 | 8.273, 8.886 |
-| Claude only | Unmeasured, authenticated Claude account unavailable in scratch | Same gap |
-| Both | Unmeasured, authenticated Claude account unavailable in scratch | Same gap |
+| Runtime | `cold-a` first response | `cold-b` first response | Per-sample response and isolation |
+| --- | ---: | ---: | --- |
+| Bun 1.4.0 | 9.576 s | 7.805 s | GET 200, Delegatus HTML, fresh HOME/cache |
+| Bun 1.4.3 | 10.054 s | 8.886 s | GET 200, Delegatus HTML, fresh HOME/cache |
 
-The Codex-only runs also read `/api/accounts`. Each returned 200,
-Claude `credentialPresent=false, cli=missing`, and Codex
-`credentialPresent=true, cli=found`.
-
-Verdict **confirmed** for the recorded HTTP first-page timings in the neither and Codex-only situations. Claude-only and both-engine timings **could not be measured here** with authenticated accounts.
+These timings measure the first HTTP response from the same installed package;
+they do not measure a signed-in account's post-load account state. The separate
+Codex catalogue and readiness probes above cover the Codex-only account.
+Authenticated Claude-only and both-engine timings remain unmeasured because
+the scratch install has no authenticated Claude account.
 
 The interaction probe mounted the current guide components using the existing
 `OnboardingDialog.dom.test.tsx` setup. HTTP responses were fixtures. It
@@ -547,6 +548,8 @@ finally:
 import os, pathlib, subprocess, json, socket, time, urllib.request, urllib.error, re, signal, hashlib
 base = pathlib.Path(__file__).resolve().parent
 source = base / 'src'
+sample = os.environ['MEASUREMENT_RUN_ID']
+if not re.fullmatch(r'[a-z0-9-]+', sample): raise ValueError('invalid run id')
 runtimes = [('1.4.0', pathlib.Path(os.environ['PINNED_BUN'])), ('1.4.3', base/'bun-1.4.3/bun-linux-x64/bun')]
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, msg, headers, newurl): return None
@@ -588,8 +591,11 @@ for version in ['1.11.0','2.0.0']:
 results=[]
 for runtime_version, runtime in runtimes:
     for mode in ['solo','team','key','install']:
-        directory=base/f'cli-v2-{runtime_version}-{mode}'; directory.mkdir(exist_ok=True)
+        directory=base/f'cli-v2-{sample}-{runtime_version}-{mode}'; directory.mkdir()
         env=environment(directory,runtime)
+        home_empty=not any((directory/'home').iterdir())
+        cache_empty=not any((directory/'cache').iterdir())
+        if not home_empty or not cache_empty: raise RuntimeError('sample HOME or cache was not empty')
         if mode=='team':
             code='import {teamStore} from "./src/lib/team/store"; import {claimInstall} from "./src/lib/team/members"; claimInstall(teamStore(),"Fixture owner",{surface:"desktop",browser:"chrome"}); console.log("team-owner-created");'
             setup=subprocess.run([str(runtime),'--eval',code],cwd=source,env=env,capture_output=True,text=True,timeout=30)
@@ -609,7 +615,7 @@ for runtime_version, runtime in runtimes:
                         status,headers,body=request(f'http://127.0.0.1:{selected}/')
                         if status!=503:observed=(status,headers,body);break
                     except (OSError,urllib.error.URLError): time.sleep(.2)
-                row={'measurement':'iii' if mode!='key' else 'vi','runtime':runtime_version,'package':'2.0.0','mode':mode,'firstResponseSeconds':round(time.monotonic()-started,3)}
+                row={'measurement':'iii' if mode!='key' else 'vi','sample':sample,'runtime':runtime_version,'package':'2.0.0','mode':mode,'freshHome':home_empty,'freshBunCache':cache_empty,'homeRoot':directory.name+'/home','bunCacheRoot':directory.name+'/cache/bun','firstResponseSeconds':round(time.monotonic()-started,3)}
                 if observed:
                     status,headers,body=observed
                     row.update(status=status,location=headers.get('Location'),containsDelegatus='Delegatus' in body)

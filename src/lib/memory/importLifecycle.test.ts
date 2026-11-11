@@ -116,6 +116,25 @@ test.each(["fallback", "viewer", "explicit", "pending"] as const)("import host s
   expect(JSON.parse(output)).toEqual({ host, projects: candidates.map(c => c.curationProject).sort() });
 });
 
+test("an unrelated designated seat cannot host notes from a different selected project", async () => {
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const { viewerRepositoryProjects } = await import("@/lib/projects/viewerRepository");
+  const { default: metadata } = await import("../../../package.json");
+  const viewer = viewerRepositoryProjects(metadata.repository.url, process.cwd())[0];
+  for (const project of ["unrelated-existing-project", "another-unrelated-project"]) {
+    const clientRequestId = `import-seat-${project}`;
+    const conversationId = `conversation_import_${project}`;
+    expect(beginOrchestratorSeatIntent({ project, clientRequestId, conversationId, mode: "existing", mandate: "Fixture mandate", now: AT }).kind).toBe("begun");
+    expect(completeOrchestratorSeatIntent({ project, clientRequestId, conversationId, path: null, now: AT }).kind).toBe("activated");
+  }
+  await fs.writeFile(path.join(memory, "topic.md"), "A newcomer note belongs to the selected project.\n");
+
+  const record = await runMemoryImportWork(request(), { projectForSlug: () => "newcomer-project" });
+
+  expect(record.hostProject).toBe(viewer);
+  expect(readImportCandidates(ID).candidates.map(candidate => candidate.curationProject)).toEqual([viewer]);
+});
+
 test("the flip waits for every loaded part and happens once; active follows the committed final scan", async () => {
   await backup("x".repeat(16384) + "Decisive instruction in the final bytes.\n");
   const before = await fs.readFile(path.join(memory, "topic.md"));
