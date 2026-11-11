@@ -38,6 +38,9 @@ side by side:
   work to the period, including attempts still open at the end.
 - `cohort` selects original tasks created during the period and includes all
   their lanes known by AS_OF, including lanes linked through child tasks.
+- Class aggregation uses the first related lane declaration recorded before
+  acceptance; tasks with no such lane use their creation declaration. Later
+  lanes and defect corrections cannot reclassify an earlier acceptance.
 - Both show acceptance by declared class, nearest-rank latency percentiles from
   first ready time, the open remainder and its age, holds at the cutoff, and the
   unknown share of repeated attempts. Child tasks and correction tasks earn no

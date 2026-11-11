@@ -29,6 +29,19 @@ export function accountingReport(tasks: readonly BoardTask[], pipelines: readonl
     return id;
   };
   const laneRoots = new Map(lanes.map(lane => [lane.id, new Set(lane.taskIds.map(rootId))]));
+  const classLanes = new Map<string, Pipeline[]>();
+  for (const lane of lanes) for (const id of lane.taskIds) {
+    const member = taskById.get(id);
+    if (member?.accounting?.correctsTaskId) continue;
+    const root = member?.accounting?.originalTaskId ?? id;
+    const related = classLanes.get(root) ?? []; related.push(lane); classLanes.set(root, related);
+  }
+  for (const related of classLanes.values()) related.sort((a, b) => time(a.createdAt) - time(b.createdAt) || a.id.localeCompare(b.id));
+  const classAtLaunch = (task: BoardTask) => {
+    const cutoff = task.accounting?.accepted?.at;
+    const first = classLanes.get(task.id)?.find(lane => !cutoff || time(lane.createdAt) <= time(cutoff));
+    return first?.taskClass ?? taskClass(task);
+  };
   const attempts = lanes.flatMap(lane => lane.runs.flatMap(run => run.attempts.filter(a => !a.historical).map(attempt => ({ lane, stage: run.stageId, attempt }))));
   const view = (cohort: boolean) => {
     const selected = cohort ? roots.filter(task => inPeriod(task.createdAt)) : roots.filter(task => time(task.createdAt) < to);
@@ -55,7 +68,7 @@ export function accountingReport(tasks: readonly BoardTask[], pipelines: readonl
     for (const row of remainder) if (!row.holdKnown) holds.unknown++; else if (row.hold) holds[row.hold in holds ? row.hold as keyof typeof holds : "other"]++;
     const classes = new Map<string, { declaredClass: LaneClass; acceptedOriginalTasks: number; p50ReadyToAcceptedMs: number | null; p90ReadyToAcceptedMs: number | null; tasks: string[] }>();
     for (const task of accepted) {
-      const declaration = taskClass(task), key = JSON.stringify(declaration);
+      const declaration = classAtLaunch(task), key = JSON.stringify(declaration);
       const group = classes.get(key) ?? { declaredClass: declaration, acceptedOriginalTasks: 0, p50ReadyToAcceptedMs: null, p90ReadyToAcceptedMs: null, tasks: [] };
       group.acceptedOriginalTasks++; group.tasks.push(task.id); classes.set(key, group);
     }

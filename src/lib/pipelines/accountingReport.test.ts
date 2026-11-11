@@ -81,3 +81,15 @@ test("invalid report bounds refuse instead of fabricating a period", () => {
   expect(() => accountingReport([], [], { ...period, to: period.from })).toThrow("invalid report period");
   expect(() => accountingReport([], [], { ...period, asOf: period.from })).toThrow("invalid report period");
 });
+
+
+test("class aggregation uses the first lane declaration made before acceptance", () => {
+  const created = createTask([], { project: "fixture", text: "Deliver change", placement: "unplaced", accounting: { criteria: "The example succeeds" } }, [], { now: () => at(2000), id: () => "original" });
+  if (!created.ok) throw new Error(created.error);
+  const root = accept(created.task, 8000);
+  const lane = (id: string, created: number, size: string) => buildPipeline({ id, task: "Deliver change", taskIds: [root.id],
+    taskClass: { size, money: false, access: true, dataMigration: null }, project: "fixture", repoDir: "/repo", stages: [], srcPath: null, srcConversationId: null, now: at(created) });
+  const first = lane("first", 3000, "small"), later = lane("later", 4000, "large"), retrospective = lane("after", 9000, "large");
+  expect(accountingReport([root], [later, retrospective, first], period).calendar.classes[0]!.declaredClass.size).toBe("small");
+  expect(accountingReport([root], [retrospective], period).calendar.classes[0]!.declaredClass.size).toBeNull();
+});
