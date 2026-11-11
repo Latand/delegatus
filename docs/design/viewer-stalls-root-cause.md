@@ -703,8 +703,25 @@ timers run between its slices.
 
 ### 12.6 Checks run for the build
 
-Touched test files and the neighbouring files that exercise the same code ran one file
-per isolated command. Eight of those files have failures on the head; each fails with
-the same tests on the base in the same isolation, and none is in a file this change
-touches except `src/lib/agent/registryArchive.test.ts`, where the two failing cases are
-the base's and the case this change extends passes.
+- **Tests.** Touched test files and the neighbouring files that exercise the same code
+  ran one file per isolated command (private home, temporary directory and state
+  directory, the control URL on a closed port). On the final tree the sixteen touched
+  and adjacent files pass, except two cases of `src/lib/agent/registryArchive.test.ts`
+  that fail the same way on the base; the case this change extends there passes. Eight
+  of the wider set of files have failures on the head, and each fails with the same
+  tests on the base in the same isolation.
+- **Each new test on the base.** The recurrence tests of 12.1, 12.2 and 12.3 and the
+  measurement of 12.5 were run against the base tree and fail or stall there as
+  described above.
+- **Typecheck.** `tsc --noEmit` over the whole tree: no errors.
+- **Runtime host rehearsal.** The loop monitor runs in the runtime host and now reads
+  the cooperative queue, and the host opens the registry through the changed path, so
+  the rehearsal was run although no file under `src/runtime-host/` changed:
+  `bun scripts/verify-runtime-host.ts` under Bun 1.4.0 completed the succession in
+  1 019 ms, and the stable listener and the runtime socket each answered 27 of 27
+  polls over 15 s. That is a statement about the runtime host. The Viewer was not
+  started from this tree.
+- **Privacy publication gate.** Passed over the commits and their added lines, and
+  again over the whole of each touched file.
+- **Base.** Main gained two commits while this was built (pull requests 3835 and
+  3837); neither touches a file changed here and the branch merges with it cleanly.
