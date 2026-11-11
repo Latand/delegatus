@@ -1,5 +1,5 @@
 import { textLengthError } from "@/lib/textLimits";
-import { keepReportPicturesSoon } from "@/lib/reportMedia/store";
+import { keepReportPicturesSoon } from "@/lib/reportMedia/paths";
 import { AsyncResource } from "node:async_hooks";
 import { redactMonitorText } from "@/lib/monitor/redact";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";

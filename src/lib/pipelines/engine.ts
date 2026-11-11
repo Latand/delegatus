@@ -231,7 +231,7 @@ import type {
   PipelineAttemptState,
 } from "./types";
 import { PIPELINE_FAIL_EDGE_EXHAUSTIONS } from "./types";
-import { keepReportPicturesSoon, recordTexts } from "@/lib/reportMedia/store";
+import { keepReportPicturesSoon } from "@/lib/reportMedia/paths";
 import { fencedBlocks, MAX_OUTPUT_CHARS, normalizeStageCompletion, parseStageVerdict, stageVerdictProse, stageVerdictRejectionReason, verdictRoutesAsFail, type ParsedStageVerdict, type StageCompletionInput } from "./verdict";
 
 export type PipelineStageSpawn = {
@@ -19058,9 +19058,9 @@ export async function reportStageCompletion(
       ? { ...existing, provenanceState: "unknown" as const, provenanceAt: report.at }
       : existing), entry].slice(-MAX_PIPELINE_STAGE_REPORTS);
     await persist();
-    /* The pictures the report names live in the lane checkout or its scratch
-       directory; their copies outlast both. */
-    keepReportPicturesSoon(recordTexts([report.summary, report.result, report.taskSummary, report.verdict]));
+    /* The pictures the report names live in the lane checkout, its scratch
+       directory or a temp directory; their copies outlast all three. */
+    keepReportPicturesSoon([report.summary, report.result, report.taskSummary, report.verdict], pipeline.id);
     const recordedChecks = attempt.launchId ? recordedAttemptReceipts(attempt.launchId) : [];
     return { pipelineId: pipeline.id, stageId, attempt: attempt.n, report, replaced: prior !== null,
       ...(recordedChecks.length ? { recordedChecks } : {}) };

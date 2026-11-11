@@ -13,7 +13,7 @@ import { indexTranscripts, readInlineImage, transcriptImages, type IndexedImage 
  * A task's album: every picture its agents looked at, were handed or named,
  * across all its conversations and pipeline stages, newest first. A picture
  * named by path is kept only while the file exists under a root the artifact
- * route serves, or while its retired lane checkout left a saved copy; one
+ * route serves, or while the report picture store keeps a copy of it; one
  * whose bytes live in the transcript is always drawable.
  */
 
@@ -122,9 +122,11 @@ function drawable(taskId: string, collected: Collected[]): Array<Collected & { s
   const out: Array<Collected & { src: string; file: string | null }> = [];
   for (const entry of ordered) {
     if (out.length >= ALBUM_MAX_IMAGES) break;
-    const file = entry.image.path ? readablePlace(resolveLocal(entry.image.path)) : null;
-    if (file && drawableFile(file, lexical ??= lexicalAllowedRoots(), real)) {
-      out.push({ ...entry, file, src: `/api/artifact?${new URLSearchParams({ path: file }).toString()}` });
+    const file = entry.image.path ? resolveLocal(entry.image.path) : null;
+    /* A kept copy stands for a picture that is gone; the picture keeps its own name. */
+    const place = file ? readablePlace(file, lexical ??= lexicalAllowedRoots()) : null;
+    if (file && place && drawableFile(place, lexical ??= lexicalAllowedRoots(), real)) {
+      out.push({ ...entry, file, src: `/api/artifact?${new URLSearchParams({ path: place }).toString()}` });
     } else if (entry.image.inline) {
       out.push({ ...entry, file: null, src: `/api/tasks/${encodeURIComponent(taskId)}/album/image?id=${albumImageId(entry.image.key)}` });
     }

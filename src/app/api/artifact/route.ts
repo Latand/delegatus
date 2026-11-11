@@ -74,7 +74,7 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
   const raw = req.nextUrl.searchParams.get("path") ?? "";
   if (!raw) return NextResponse.json({ error: "path is required" }, { status: 400 });
 
-  /* A picture inside a retired lane checkout is read from its saved copy. */
+  /* A picture a report named is read from its kept copy once it is gone. */
   const abs = readablePlace(resolveLocal(raw));
   const admission = admittedAs(abs, lexicalAllowedRoots());
   if (!admission) return fail("access-denied", "path is outside the allowed roots");

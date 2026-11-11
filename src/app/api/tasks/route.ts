@@ -1,4 +1,4 @@
-import { keepReportPicturesSoon } from "@/lib/reportMedia/store";
+import { keepReportPicturesSoon } from "@/lib/reportMedia/paths";
 import { operatorTimeZone } from "@/lib/operator/settings";
 import { requestWorkspaceScope, filterWorkspaceRows, workspaceRoute, assertWorkspaceProject } from "@/lib/team/workspaceRoute";
 import fs from "node:fs";

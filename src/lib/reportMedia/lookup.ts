@@ -22,6 +22,8 @@ export interface ReportMediaRow {
   at: number;
   /** When the picture was last seen at its own path. */
   seenAt: number;
+  /** The lane whose report named it; absent for a text that belongs to none. */
+  lane?: string;
 }
 
 export const REPORT_MEDIA_FILE = /^[a-f0-9]{64}\.(?:png|jpg|jpeg|gif|webp|avif|bmp)$/;
@@ -30,8 +32,8 @@ const INDEX_BYTES = 16 * 1024 * 1024;
 
 function validRow(row: unknown): row is ReportMediaRow {
   if (!row || typeof row !== "object") return false;
-  const { path: named, file, bytes, at, seenAt } = row as Record<string, unknown>;
-  return typeof named === "string" && path.isAbsolute(named) && typeof file === "string" && REPORT_MEDIA_FILE.test(file)
+  const { path: named, file, bytes, at, seenAt, lane } = row as Record<string, unknown>;
+  return (lane === undefined || typeof lane === "string") && typeof named === "string" && path.isAbsolute(named) && typeof file === "string" && REPORT_MEDIA_FILE.test(file)
     && Number.isInteger(bytes) && (bytes as number) > 0 && Number.isFinite(at) && Number.isFinite(seenAt);
 }
 

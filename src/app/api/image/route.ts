@@ -34,7 +34,7 @@ const MIME: Record<string, string> = {
  * Confined to files with an image extension under the roots the artifact
  * route reads (known projects, stage scratch and raster evidence roots) — a
  * localhost-only tool, but there is no reason to hand out arbitrary files.
- * A path into a lane checkout that was retired answers with the saved copy.
+ * A path a report named answers with the kept copy once its file is gone.
  */
 async function workspaceGET(req: NextRequest): Promise<NextResponse<ApiError> | NextResponse> {
   // Same gate as the mutating routes: a drive-by page or DNS-rebind must not
@@ -52,8 +52,8 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<ApiError> | 
 
   const raw = req.nextUrl.searchParams.get("path") ?? "";
   if (!raw) return NextResponse.json({ error: "path is required" }, { status: 400 });
-  /* A picture a report names inside a retired lane checkout is read from
-     the copy retirement saved. */
+  /* A picture a report named is read from the copy kept for it once it is
+     gone from its own path. */
   const abs = readablePlace(resolveLocal(raw));
 
   const admission = admittedAs(abs, lexicalAllowedRoots());

@@ -6,7 +6,8 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 
 import { keptReportPicture, reportMediaRoot, reportMediaRows } from "./lookup";
-import { keepReportPictures, recordTexts, reportMediaLimits, reportPicturePaths, type ReportMediaLimits } from "./store";
+import { recordTexts } from "./paths";
+import { keepReportPictures, reportMediaLimits, reportPicturePaths, type ReportMediaLimits } from "./store";
 
 const { GET: image } = await import("@/app/api/image/route");
 
@@ -92,56 +93,86 @@ test("paths are read bare, as link targets, as file URLs and from the home short
   ])).toEqual(["/a/one.png", "/a/two.JPG", "/a/three.webp", path.join(home, "shots/four.png"), "/a/seven.gif"]);
 });
 
-test("a file outside the served roots, a non-picture under a picture's name and an oversized picture are not copied", async () => {
-  const outside = picture("secret.png", PNG, elsewhere);
+test("a picture in a temp directory that a report names is kept after the directory is swept, and is shown while it is still there", async () => {
+  /* `elsewhere` stands for the OS temp directory: readable by the service,
+     and no root the path routes serve. */
+  const shot = picture("claude-run/images/3.png", PNG, elsewhere);
+  expect((await served(shot)).status).toBe(403);
+  expect(await keepReportPictures([`Operator screenshot: ${shot}`])).toEqual([shot]);
+  expect((await served(shot)).bytes.equals(PNG)).toBeTrue();
+  fs.rmSync(elsewhere, { recursive: true, force: true });
+  const kept = await served(shot);
+  expect(kept.status).toBe(200);
+  expect(kept.bytes.equals(PNG)).toBeTrue();
+});
+
+test("a non-picture under a picture's name, an oversized picture and a file of another store are not copied", async () => {
   const renamed = picture("notes.png", Buffer.from("plain text\n"));
   const large = picture("large.png", Buffer.concat([PNG, Buffer.alloc(4096)]));
-  const link = path.join(checkout, "link.png");
-  fs.symlinkSync(outside, link);
-  expect(await keepReportPictures([`${outside} ${renamed} ${large} ${link}`], Date.now(), limits({ fileBytes: 1024 }))).toEqual([]);
+  const fenced = picture("round/frame.png", PNG, path.join(process.env.LLV_STATE_DIR!, "prototype-reviews"));
+  const linked = path.join(checkout, "linked.png");
+  fs.symlinkSync(fenced, linked);
+  expect(await keepReportPictures([`${renamed} ${large} ${fenced} ${linked} ${path.join(checkout, "absent.png")}`], { limits: limits({ fileBytes: 1024 }) })).toEqual([]);
   expect(fs.existsSync(reportMediaRoot()) ? storedFiles() : []).toEqual([]);
-  expect(keptReportPicture(outside)).toBeNull();
+  expect(keptReportPicture(fenced)).toBeNull();
 });
 
 test("the store never exceeds its total size: the longest-unnamed pictures leave first", async () => {
   const sizes = [0, 1, 2, 3].map((n) => Buffer.concat([PNG, Buffer.alloc(1000, n + 1)]));
   const shots = sizes.map((bytes, n) => picture(`shot-${n}.png`, bytes));
   const cap = limits({ totalBytes: sizes[0]!.length * 2 + 10 });
-  for (const [n, shot] of shots.entries()) await keepReportPictures([shot], 1000 + n, cap);
+  for (const [n, shot] of shots.entries()) await keepReportPictures([shot], { now: 1000 + n, limits: cap });
   expect(storedFiles()).toHaveLength(2);
   expect(storedFiles().reduce((sum, name) => sum + fs.statSync(path.join(reportMediaRoot(), name)).size, 0)).toBeLessThanOrEqual(cap.totalBytes);
   retire();
   expect((await Promise.all(shots.map(served))).map((answer) => answer.status === 200)).toEqual([false, false, true, true]);
 });
 
-test("a copy expires after the retention, counted from when its picture was last at its own path", async () => {
+test("a copy that belongs to no lane expires after the retention, counted from when its picture was last at its own path", async () => {
   const gone = picture("gone.png");
   const staying = picture("staying.png", OTHER_PNG);
   const start = 1_000_000;
-  await keepReportPictures([`${gone} ${staying}`], start);
+  await keepReportPictures([`${gone} ${staying}`], { now: start });
   fs.rmSync(gone);
   const later = picture("later.png", Buffer.concat([PNG, Buffer.alloc(8, 7)]));
-  await keepReportPictures([later], start + 6 * DAY);
+  await keepReportPictures([later], { now: start + 6 * DAY });
   expect(keptReportPicture(gone)).not.toBeNull();
-  await keepReportPictures([later], start + 8 * DAY);
+  await keepReportPictures([later], { now: start + 8 * DAY });
   expect(keptReportPicture(gone)).toBeNull();
   /* Its picture still lies in the checkout, so its clock has not started. */
   expect(keptReportPicture(staying)).not.toBeNull();
   fs.rmSync(staying);
-  await keepReportPictures([later], start + 14 * DAY);
+  await keepReportPictures([later], { now: start + 14 * DAY });
   expect(keptReportPicture(staying)).not.toBeNull();
-  await keepReportPictures([later], start + 16 * DAY);
+  await keepReportPictures([later], { now: start + 16 * DAY });
   expect(keptReportPicture(staying)).toBeNull();
   expect(storedFiles()).toHaveLength(1);
+});
+
+test("a lane's pictures stay while the lane runs and leave the retention after it finished", async () => {
+  const shot = picture(".artifacts/lane.png");
+  const start = 1_000_000;
+  let finishedAt: number | null = null;
+  const laneFinishedAt = (lane: string) => lane === "ab12cd34" ? finishedAt : undefined;
+  await keepReportPictures([shot], { lane: "ab12cd34", now: start, laneFinishedAt });
+  retire();
+  /* Weeks into a running lane, a later write applies the limits. */
+  await keepReportPictures([picture("x.png", OTHER_PNG, elsewhere)], { now: start + 30 * DAY, laneFinishedAt });
+  expect(keptReportPicture(shot)).not.toBeNull();
+  finishedAt = start + 31 * DAY;
+  await keepReportPictures([picture("y.png", OTHER_PNG, elsewhere)], { now: start + 37 * DAY, laneFinishedAt });
+  expect(keptReportPicture(shot)).not.toBeNull();
+  await keepReportPictures([picture("z.png", OTHER_PNG, elsewhere)], { now: start + 39 * DAY, laneFinishedAt });
+  expect(keptReportPicture(shot)).toBeNull();
 });
 
 test("two paths with the same bytes share one copy, and a picture written again under its path is replaced", async () => {
   const first = picture("a.png");
   const second = picture("b.png");
-  await keepReportPictures([`${first} ${second}`], 1);
+  await keepReportPictures([`${first} ${second}`], { now: 1 });
   expect(storedFiles()).toHaveLength(1);
   fs.writeFileSync(first, OTHER_PNG);
-  await keepReportPictures([first], 2);
+  await keepReportPictures([first], { now: 2 });
   expect(reportMediaRows().map((row) => row.path).sort()).toEqual([first, second]);
   retire();
   expect((await served(first)).bytes.equals(OTHER_PNG)).toBeTrue();

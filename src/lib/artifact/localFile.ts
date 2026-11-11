@@ -1,4 +1,4 @@
-import { constants as FS, lstatSync, readFileSync, realpathSync, statSync, type promises as fsp } from "node:fs";
+import { constants as FS, lstatSync, realpathSync, type promises as fsp } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -49,61 +49,24 @@ export function evidenceRoots(): string[] {
   return [...new Set([...roots.map((root) => root.trim()).filter((root) => path.isAbsolute(root)).map((root) => path.resolve(root)), reportMediaRoot()])];
 }
 
-/** A lane checkout's directory name ends with the lane's id. */
-const LANE_CHECKOUT = /-pipeline-([A-Za-z0-9_]+)$/;
-
 /**
- * The saved copy of a picture that lay in a lane checkout which is gone, for
- * lanes retired before the report picture store kept their pictures.
- * Retirement copies a checkout's ignored media to
- * `evidence/<lane>/worktree/<path inside the checkout>` and lists each file in
- * the lane's backup manifest; a copy that met different bytes under the same
- * name is kept under the name the manifest gives. Records keep the path the
- * picture had in the checkout, so this is where that path leads afterwards.
- * Null when the path names no lane checkout or the lane saved no such file.
+ * Where a requested local path is read from. A file that lies at the path,
+ * under a root these routes serve, is read there. Otherwise the copy the
+ * report picture store kept when a report named the path stands for it: the
+ * picture was swept with its lane checkout or its temp directory, or it lies
+ * where these routes do not read. The answer goes through the same admission
+ * as any other path.
  */
-export function savedLaneCopy(missing: string): string | null {
-  if (!isEvidenceImage(missing)) return null;
-  const segments = missing.split(path.sep);
-  for (let at = segments.length - 2; at > 0; at--) {
-    const lane = segments[at]!.match(LANE_CHECKOUT)?.[1];
-    if (!lane) continue;
-    const relative = segments.slice(at + 1).join(path.sep);
-    const store = statePath("evidence", lane, "worktree");
-    let saved = relative;
+export function readablePlace(abs: string, roots: AllowedRoots = lexicalAllowedRoots()): string {
+  if (admittedAs(abs, roots)) {
     try {
-      const manifest = JSON.parse(readFileSync(statePath("evidence", lane, "worktree-backup.json"), "utf8")) as { files?: unknown };
-      const listed = Array.isArray(manifest.files)
-        ? manifest.files.find((file): file is { path: string; savedPath: string } => file?.path === relative && typeof file.savedPath === "string")
-        : undefined;
-      if (listed) saved = listed.savedPath;
+      lstatSync(abs);
+      return abs;
     } catch {
-      /* A lane with no readable manifest may still hold the copy under the
-         checkout's own path. */
-    }
-    const copy = path.resolve(store, saved);
-    try {
-      if (underRoot(copy, store) && copy !== store && statSync(copy).isFile()) return copy;
-    } catch {
-      /* No copy under this lane. */
+      /* Gone from its own path. */
     }
   }
-  return null;
-}
-
-/**
- * Where a requested local path is read from: the path itself while anything
- * lies there; afterwards the copy the report picture store kept when a report
- * named it, or the copy a retired lane checkout left. The answer goes through
- * the same admission as any other path.
- */
-export function readablePlace(abs: string): string {
-  try {
-    lstatSync(abs);
-    return abs;
-  } catch {
-    return keptReportPicture(abs) ?? savedLaneCopy(abs) ?? abs;
-  }
+  return keptReportPicture(abs) ?? abs;
 }
 
 /* Stores under an allowed root that answer only through their own route. The

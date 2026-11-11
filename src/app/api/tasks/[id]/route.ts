@@ -1,4 +1,4 @@
-import { keepReportPicturesSoon } from "@/lib/reportMedia/store";
+import { keepReportPicturesSoon } from "@/lib/reportMedia/paths";
 import { workspaceRoute, assertWorkspaceProject } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
