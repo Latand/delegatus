@@ -4212,6 +4212,7 @@ test.each(["gone", "unknown", "unreadable", "publishing", "actuated", "actuation
     operationStatus: async id => journal.operationResult(id),
     command: async command => { commands++; return journal.executeOperation(command); },
     transitionOperation: async (id, status, details, options) => {
+      if (status === "failed") expect(options?.requirePristineAdmission).toBe(true);
       if (mode === "actuation-wins" && status === "failed") {
         journal.transitionOperation(id, "delivering", { reason: "delivering-owner:other-executor@other-writer" });
         journal.transitionOperation(id, "queued", { reason: "delivery-auto-retry", deliveryUnverified: true });
