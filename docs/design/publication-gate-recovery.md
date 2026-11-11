@@ -146,13 +146,25 @@ The production transport and its deadlines are unchanged.
 
 ## Recovery test file budget
 
-The complete recovery file took 319.15 seconds, exceeding the gate's existing
+In the initial measurement, the complete recovery file took 319.15 seconds,
+exceeding the gate's existing
 300-second file limit. Its 14-case publication consumer seam moved unchanged
 to `publicationRecovery.gateFaults.test.ts`. The two complete files then passed
 123 cases in 191.48 seconds and 14 cases in 27.59 seconds. Their combined 2,915
 assertions equal the original file's count. Both files remain selected by the
 ordinary changed-test rule. Machine loads were unmatched; these timings record
 the observed fit within the file limit.
+
+A later publication exhausted the same 300-second limit in the remaining
+123-case recovery file; its baseline completed in 288.97 seconds. The two
+existing files now divide those cases further: 72 remain in
+`publicationRecovery.test.ts`, and 51 repair-decision cases move unchanged
+into `publicationRecovery.gateFaults.test.ts`, which now has 65 cases. All 36
+test declarations retain their exact contents. The complete files pass with
+137 cases and the same 2,915 assertions, in separate isolated gate-slot runs
+of 143.08 and 108.38 seconds. These observations record completion within the
+unchanged file limit on their respective loads. Selection, confirmation,
+ownership and cleanup checks remain unchanged.
 
 This adds a mechanical test-split commit after the native repair. The planned
 privacy, comparator, fixture-isolation and native-repair commits retain their
