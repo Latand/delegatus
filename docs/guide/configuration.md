@@ -84,8 +84,15 @@ and `reason` say:
 | --- | --- | --- |
 | `available` | `null` | This version of Delegatus answers. Ready. |
 | `degraded` | `VIEWER_AUTH_REQUIRED` | Something answers with a refusal, which is what Delegatus does when its access key is on. Treat it as running and open the page with the key. |
-| `unknown` | `VIEWER_UNRECOGNIZED` | Another program, or an older Delegatus, holds the port. Do not stop it; offer another port. |
+| `unknown` | `VIEWER_UNRECOGNIZED` | Another program, or an older Delegatus, answered and is not recognized. This is the only signal of a foreign listener. Do not stop it; offer another port. |
+| `unknown` | `PROBE_TIMEOUT` or `PROBE_ERROR` | Nothing answered in time, typically while Delegatus is still starting (the probe waits 1.5 seconds). Keep probing until your own deadline. |
 | `blocked` | `VIEWER_UNREACHABLE` | Nothing listens yet. Keep waiting until your own deadline. |
+
+Key on `state` and `reason` together: `unknown` alone does not say who holds
+the port. While Delegatus starts, expect `blocked` with `VIEWER_UNREACHABLE`,
+then a few `unknown` rows with `PROBE_TIMEOUT` while the page is not yet
+answering, then `available`. Treat any pair not in this table as not ready
+yet, never as a busy port.
 
 Do not use `GET /` answering `200` as the test. Once the setup guide's Phone
 step has turned the access key on, the page answers `403` to a request without
