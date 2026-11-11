@@ -2,7 +2,7 @@ import { PrivacyWorkError, privacyFailureOf } from "./memory/privacyFailure";
 import readline from "node:readline";
 import { TaskPageBuilder, type PageBuildRequest } from "./links/taskPageBuild";
 
-import { RoleMemoryRefusal, refreshLessonKnownValues, observeLessonPrivacyPhase, storedLessonPatterns, storedLessonRevision, hasStoredLesson, withoutStoredLessonsIn } from "./memory/roleStore";
+import { RoleMemoryRefusal, refreshLessonKnownValues, observeLessonPrivacyPhase, storedLessonPatternsIn, storedLessonRevision, hasStoredLesson, withoutStoredLessonsIn } from "./memory/roleStore";
 import { renderReport } from "./bridge/reportRender";
 import { lessonPattern } from "./memory/roleConsolidate";
 import { EMPTY_DENY_LIST } from "./bridge/publicSafe";
@@ -61,15 +61,16 @@ for await (const line of lines) {
         // The worker always checks authoritative lessons. Explicit deny-list
         // lessons supplement them and cannot disable the stored privacy fence.
         withoutStoredLessonsIn(null, { requireComplete: true });
+        const explicit = request.kind === "report" ? [] : (deny.lessons ?? []).flatMap(text => { const pattern = lessonPattern(text); return pattern ? [pattern] : []; });
         const localDeny = request.kind === "report"
           ? { ...deny, hasLesson: hasStoredLesson }
-          : { ...deny, lessonPatterns: [...storedLessonPatterns(), ...(deny.lessons ?? []).flatMap(text => {
-            const pattern = lessonPattern(text); return pattern ? [pattern] : [];
-          })] };
+          : { ...deny, lessonPatternsIn: (text: string) => [...storedLessonPatternsIn(text), ...explicit] };
         process.stdout.write(`${JSON.stringify({ id, correlation, phase: "match" })}\n`);
         value = performanceSpans.sync("privacy.match", () => request.kind === "report"
           ? renderReport({ ...request.input, at: new Date(request.input.at), deny: localDeny })
           : scrubIssueReport(request.report, localDeny));
+        // A lesson's pattern is compiled when it first comes up; one the engine refused is found here.
+        withoutStoredLessonsIn(null, { requireComplete: true });
       }
       if (storedLessonRevision() !== privacyRevision) throw new PrivacyWorkError("store-changed");
       process.stdout.write(`${JSON.stringify({ id, correlation, rssBytes: residentWorkerRssBytes(), result: { privacyRevision, value } })}\n`);
