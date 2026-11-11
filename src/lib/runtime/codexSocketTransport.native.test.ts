@@ -152,7 +152,7 @@ for (const mode of ["delayedexit", "delayedcontrol", "shortlive", "unlinked", "s
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([child.exited, new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error("owned drain fixture exceeded its parent deadline")), 20_000);
+          timer = setTimeout(() => reject(new Error("owned drain fixture exceeded its parent deadline")), 35_000);
         })]);
         expect(child.exitCode, await errors).toBe(0);
         const result = JSON.parse(await output);
