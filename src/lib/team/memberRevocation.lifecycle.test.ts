@@ -12,7 +12,7 @@ import { assertMemberLaunchAllowed } from "./memberLaunchAuthority";
 import { reconcileMemberRevocations } from "./memberRevocation";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { beginLegacySpawnFixture, structuredHostFixture } from "@/lib/agent/registryTestFixtures";
-import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import * as runtimeClient from "@/lib/runtime/client";
 import { FakeEngineHost } from "@/lib/runtime/fixtures/fakeEngineHost";
@@ -24,8 +24,46 @@ import { claimInstall, createInvite, redeemJoin, restoreMember, revokeMember } f
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { teamStore, resetTeamStoreForTests } from "./store";
 
-const cleanups: Array<() => void | Promise<void>> = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+type FixtureCleanup = () => void | Promise<void>;
+const cleanups: FixtureCleanup[] = [];
+async function runFixtureCleanups(callbacks: FixtureCleanup[]): Promise<void> {
+  const failures: unknown[] = [];
+  for (const cleanup of callbacks.reverse()) {
+    try { await cleanup(); } catch (error) { failures.push(error); }
+  }
+  if (failures.length) throw new AggregateError(failures, "fixture cleanup did not complete");
+}
+afterEach(async () => { await runFixtureCleanups(cleanups.splice(0)); });
+
+async function stopFixtureSetup(processes: readonly import("@/lib/processIdentity").ProcessIdentity[],
+  engine: "claude" | "codex", conversationId: string | null): Promise<void> {
+  const failures: unknown[] = [];
+  for (const native of processes) {
+    if (processIdentityStatus(native) === "dead") continue;
+    try {
+      if (!native.startIdentity) throw new Error("fixture setup has no process identity");
+      const stopped = await terminateStructuredHostTree({ kind: "structured", ...native, startIdentity: native.startIdentity,
+        bootEpoch: native.bootEpoch ?? null, engine, sessionId: null, conversationId,
+        owned: false, seat: false, turnBusy: null, lastActiveAt: null }, { retainedSurvivors: processes });
+      if (!stopped.ok) throw new Error(stopped.error);
+    } catch (error) { failures.push(error); }
+  }
+  if (failures.length) throw new AggregateError(failures, "fixture setup cleanup did not complete");
+}
+
+/** Retain waiter and native identities before any fixture assertion can fail.
+ * A successful checkpoint can delete setup custody, so retain its identities
+ * locally too, until all fixture processes have confirmed termination. */
+function ownFixtureSetup(registry: AgentRegistry, launchId: string, engine: "claude" | "codex", conversationId: string | null) {
+  const processes: import("@/lib/processIdentity").ProcessIdentity[] = [];
+  const capture = () => {
+    for (const native of registry.spawnReceipt(launchId)?.hostSetup?.processes ?? [])
+      if (!processes.some(previous => sameRecordedProcessIdentity(previous, native))) processes.push(native);
+  };
+  const cleanup = async () => { capture(); await stopFixtureSetup(processes, engine, conversationId); };
+  cleanups.push(cleanup);
+  return { capture, cleanup };
+}
 
 async function fixture(killFailures = 0, engine: "claude" | "codex" = "claude") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "member-revocation-"));
@@ -804,6 +842,7 @@ test.each((["claude", "codex"] as const).flatMap(engine => [false, true].map(nul
 test.each((["claude", "codex"] as const).flatMap(engine => [false, true].map(deferred => ({ engine, deferred }))))(
   "boot adoption transfers custody only at a successful checkpoint (%j)", async ({ engine, deferred }) => {
   const f = await fixture(0, engine);
+  const custody = ownFixtureSetup(f.registry, f.receipt.launchId, engine, f.receipt.conversationId);
   f.child.kill("SIGTERM"); await f.child.exited;
   const old = f.registry.hostEntry(f.key)!;
   f.registry.upsert({ ...old, status: "unhosted", claimOwner: null,
@@ -825,8 +864,9 @@ test.each((["claude", "codex"] as const).flatMap(engine => [false, true].map(def
   const adoptHost = async (_id: string, options: { assertCurrent?: () => void }) => {
     native = await spawnManagedEngine(process.execPath, ["--no-env-file", "-e", "console.log('ready'); setInterval(() => {}, 1000)"],
       { cwd: f.root, env: process.env, detached: true }, null, undefined, process.env, undefined, options.assertCurrent);
-    exited = new Promise(resolve => native.once("exit", () => resolve()));
-    cleanups.push(async () => { if (native.exitCode === null && native.signalCode === null) native.kill("SIGKILL"); await exited; });
+    custody.capture();
+    exited = new Promise(resolve => native.once("close", () => resolve()));
+    cleanups.push(async () => { await custody.cleanup(); await exited; });
     await new Promise<void>(resolve => native.stdout!.once("data", () => resolve()));
     const identity = captureProcessIdentity(native.pid!);
     host = Object.assign(new FakeEngineHost(undefined, { status: "idle", sessionKey: f.key.sessionId, endpoint: `stdio:${native.pid}`,
@@ -854,8 +894,10 @@ test.each((["claude", "codex"] as const).flatMap(engine => [false, true].map(def
   expect(f.store.events({ actions: ["member.revoked"], limit: 1 })[0]!.detail).toMatchObject({ stoppedHosts: 1, pending: false });
 });
 
-async function crashMemberAdoption(engine: "claude" | "codex", phase: "preparing" | "executing") {
+async function crashMemberAdoption(engine: "claude" | "codex", phase: "preparing" | "executing",
+  validateReply?: (receipt: import("@/lib/agent/registry").SpawnReceipt) => void) {
   const f = await fixture(0, engine);
+  const custody = ownFixtureSetup(f.registry, f.receipt.launchId, engine, f.receipt.conversationId);
   f.child.kill("SIGTERM"); await f.child.exited;
   const old = f.registry.hostEntry(f.key)!;
   f.registry.upsert({ ...old, status: "unhosted", claimOwner: null,
@@ -866,13 +908,10 @@ async function crashMemberAdoption(engine: "claude" | "codex", phase: "preparing
   });
   cleanups.push(async () => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await child.exited; });
   const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  expect({ code, err: err.replace(/^.*signal-sandbox.*\n/gm, "") }).toEqual({ code: 71, err: "" });
+  custody.capture();
   const saved = JSON.parse(out) as import("@/lib/agent/registry").SpawnReceipt;
-  cleanups.push(async () => {
-    for (const native of saved.hostSetup!.processes) if (processIdentityStatus(native) === "alive")
-      await terminateStructuredHostTree({ kind: "structured", ...native, startIdentity: native.startIdentity!, bootEpoch: native.bootEpoch ?? null,
-        engine, sessionId: null, conversationId: saved.conversationId, owned: false, seat: false, turnBusy: null, lastActiveAt: null });
-  });
+  validateReply?.(saved);
+  expect({ code, err: err.replace(/^.*signal-sandbox.*\n/gm, "") }).toEqual({ code: 71, err: "" });
   expect(saved.hostSetup?.phase).toBe(phase);
   expect(processIdentityStatus(saved.admissionOwner!)).toBe("dead");
   return { ...f, saved, predecessor: old.structuredHost!.process };
@@ -925,7 +964,9 @@ test.each(["claude", "codex"] as const)("explicit resume retires crashed adoptio
   if (begun.kind !== "created") throw Error("resume fixture admission failed");
   let opened = 0;
   let replacement!: import("node:child_process").ChildProcess;
-  let replacementExited!: Promise<void>;
+  let replacementClosed: Promise<void> | undefined;
+  const custody = ownFixtureSetup(f.registry, begun.receipt.launchId, engine, begun.receipt.conversationId);
+  cleanups.push(async () => { await custody.cleanup(); await replacementClosed; });
   const resumed = await spawnStructuredConversation({ registry: f.registry, client: f.client, receipt: begun.receipt, engine, prompt: "",
     account: { engine, accountId: "subscription-a", kind: "legacy", home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } },
     spec: { engine, command: engine, cwd: f.root, windowName: "resume-adoption", transcript: f.saved.artifactPath!, launchProfile: begun.receipt.launchProfile },
@@ -936,8 +977,8 @@ test.each(["claude", "codex"] as const)("explicit resume retires crashed adoptio
     const { spawnManagedEngine } = await import("@/lib/runtime/agentSignalSandbox");
     replacement = await spawnManagedEngine(process.execPath, ["--no-env-file", "-e", "console.log('ready'); setInterval(() => {}, 1000)"],
       { cwd: f.root, env: process.env, detached: true }, null);
-    replacementExited = new Promise(resolve => replacement.once("exit", () => resolve()));
-    cleanups.push(async () => { if (replacement.exitCode === null && replacement.signalCode === null) replacement.kill("SIGKILL"); await replacementExited; });
+    custody.capture();
+    replacementClosed = new Promise(resolve => replacement.once("close", () => resolve()));
     await new Promise<void>(resolve => replacement.stdout!.once("data", () => resolve()));
     const native = captureProcessIdentity(replacement.pid!);
     const host = Object.assign(new FakeEngineHost(undefined, { status: "idle", sessionKey: f.key.sessionId, endpoint: `stdio:${native.pid}`,
@@ -945,6 +986,7 @@ test.each(["claude", "codex"] as const)("explicit resume retires crashed adoptio
       pendingAttention: [], activeFlags: [], account: null }), {
       identity: { sessionId: f.key.sessionId, threadId: f.key.sessionId, path: f.saved.artifactPath },
       setWriterFence: () => {}, onStateChange: () => () => {},
+      release: async () => { await custody.cleanup(); await replacementClosed; },
     });
     return host as unknown as SpawnedStructuredHost;
   }, publishHost: async () => async () => {}, deliverFirst: async () => {} });
@@ -953,11 +995,12 @@ test.each(["claude", "codex"] as const)("explicit resume retires crashed adoptio
   expect(processIdentityStatus(captureProcessIdentity(replacement.pid!))).toBe("alive");
   f.restartRuntime();
   await runChild(f, "revoke");
-  for (let pass = 0; pass < 4 && f.store.memberRevocationPending(); pass++) {
+  for (let pass = 0; pass < 8 && f.store.memberRevocationPending(); pass++) {
     await runChild(f, "reconcile");
     await f.queue.drain();
   }
-  await replacementExited;
+  expect(f.store.memberRevocationPending()).toBe(false);
+  await replacementClosed;
   expect(f.saved.hostSetup!.processes.every(native => processIdentityStatus(native) === "dead")).toBe(true);
   expect(f.registry.spawnReceipt(f.saved.launchId)?.hostSetup?.processes).toEqual(f.saved.hostSetup!.processes);
   expect(f.store.memberRevocationPending()).toBe(false);
@@ -1002,4 +1045,32 @@ test.each(["adoption.recovery-tree", "adoption.recovery-cleanup"])(
   expect(f.registry.spawnReceipt(f.saved.launchId)?.admissionOwner).toEqual(f.saved.admissionOwner);
   if (boundary === "adoption.recovery-tree")
     expect(f.saved.hostSetup!.processes.some(native => processIdentityStatus(native) === "alive")).toBe(true);
+});
+
+
+test.each(["claude", "codex"] as const)("fixture cleanup owns crashed setup before reply validation (%s)", async engine => {
+  let saved!: import("@/lib/agent/registry").SpawnReceipt;
+  try {
+    await expect(crashMemberAdoption(engine, "executing", receipt => {
+      saved = receipt;
+      throw new Error("injected child reply validation failure");
+    })).rejects.toThrow("injected child reply validation failure");
+    expect(saved.hostSetup!.processes.some(native => processIdentityStatus(native) === "alive")).toBe(true);
+    await runFixtureCleanups(cleanups.splice(0));
+    expect(saved.hostSetup!.processes.every(native => processIdentityStatus(native) === "dead")).toBe(true);
+  } finally {
+    if (saved) await stopFixtureSetup(saved.hostSetup!.processes, engine, saved.conversationId);
+  }
+});
+
+test("fixture cleanup still releases an owned process after another release refuses", async () => {
+  const child = Bun.spawn([process.execPath, "-e", "console.log('ready'); setInterval(() => {}, 1000)"], { stdout: "pipe", stderr: "ignore" });
+  const release = async () => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await child.exited; };
+  cleanups.push(release);
+  const reader = child.stdout.getReader(); await reader.read(); reader.releaseLock();
+  const identity = captureProcessIdentity(child.pid);
+  try {
+    await expect(runFixtureCleanups([release, async () => { throw new Error("injected release refusal"); }])).rejects.toThrow();
+    expect(processIdentityStatus(identity)).toBe("dead");
+  } finally { await release(); }
 });
