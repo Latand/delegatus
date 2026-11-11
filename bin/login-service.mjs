@@ -6,7 +6,7 @@ import { assertLauncherAvailable, portFree } from "./launcher-adoption.mjs";
 import { cliRuntimeHostConfig } from "./server-runtime.mjs";
 
 export const SERVICE_MARKER = 'Written by "delegatus service install". "delegatus service remove" deletes it.';
-import { SERVICE_NAME, AGENT_NAME, serviceCommand } from "./service-manager.mjs";
+import { SERVICE_NAME, AGENT_NAME, launchdDisabled, serviceCommand } from "./service-manager.mjs";
 const SETTINGS = ["XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR", "LANG", "LC_ALL", "LLV_LANG", "DELEGATUS_TELEMETRY", "LLV_TELEMETRY", "DO_NOT_TRACK"];
 
 export function serviceContainer(env = process.env) {
@@ -33,7 +33,7 @@ function environmentValue(value) { return '"' + safe(value).replaceAll("\\", "\\
 function xml(value) { return safe(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("'", "&apos;"); }
 function shellWord(value) { return `'${String(value).replaceAll("'", "'\\''")}'`; }
 
-export function serviceEnvironment(env) {
+export function serviceEnvironment(env, home = homedir()) {
   const captured = { PATH: env.PATH || "/usr/bin:/bin" };
   for (const name of SETTINGS) if (env[name] !== undefined) captured[name] = env[name];
   // CLI aliases are normalized before dispatch. Also accept callers using this module directly.
@@ -41,6 +41,13 @@ export function serviceEnvironment(env) {
     const alias = `DELEGATUS_${name.slice(4)}`;
     if (env[alias] !== undefined) captured[name] = env[alias];
   }
+  // User managers pass their own environment to jobs. Pin defaults too, and
+  // both state names: the CLI folds DELEGATUS_* over LLV_* before starting.
+  captured.XDG_CONFIG_HOME = captured.XDG_CONFIG_HOME?.trim() || path.join(home, ".config");
+  captured.XDG_CACHE_HOME = captured.XDG_CACHE_HOME?.trim() || path.join(home, ".cache");
+  captured.LLV_STATE_DIR = cliRuntimeHostConfig("/", { env: captured, home }).stateDirectory;
+  captured.DELEGATUS_STATE_DIR = captured.LLV_STATE_DIR;
+  if (![captured.XDG_CONFIG_HOME, captured.XDG_CACHE_HOME, captured.LLV_STATE_DIR].every(path.isAbsolute)) throw new Error("relative-path");
   for (const value of Object.values(captured)) safe(value);
   return captured;
 }
@@ -64,6 +71,7 @@ const COPY = {
     manager: "The per-user service manager is unavailable. Use a desktop login session with a user service manager.",
     foreign: "This service file belongs to another installation; nothing was changed:",
     state: "The service would use a different state directory:", unsafe: "A path or setting contains a quote or control character; use a plain value.",
+    absolute: "State, config and cache directories must use absolute paths.",
     changed: "The service file changed during the command. Retry after checking it.", failed: "The service manager refused the command. Check its log and retry.",
     already: "Already installed.", absent: "Not installed. Nothing to remove.", written: "Service file:", command: "Start command:", settings: "Captured settings:",
     running: "Delegatus is already running. The service starts it at your next login. To switch now: delegatus stop --all, then delegatus service install.",
@@ -83,6 +91,7 @@ const COPY = {
     manager: "Менеджер служб користувача недоступний. Увійдіть у сеанс із менеджером служб користувача.",
     foreign: "Цей файл служби належить іншій установці; нічого не змінено:",
     state: "Служба використовуватиме інший каталог стану:", unsafe: "Шлях або налаштування містить лапки чи керівний символ; використайте звичайне значення.",
+    absolute: "Каталоги стану, налаштувань і кешу мають бути задані абсолютними шляхами.",
     changed: "Файл служби змінився під час виконання команди. Перевірте його й повторіть спробу.", failed: "Менеджер служб відхилив команду. Перевірте журнал і повторіть спробу.",
     already: "Уже встановлено.", absent: "Не встановлено. Видаляти нічого.", written: "Файл служби:", command: "Команда запуску:", settings: "Збережені налаштування:",
     running: "Delegatus уже працює. Служба запустить його під час наступного входу. Щоб перейти зараз: delegatus stop --all, потім delegatus service install.",
@@ -165,7 +174,7 @@ export async function runServiceCommand(args, { root, lang = "en", host = loginS
       [root === host.temp || root.startsWith(host.temp + path.sep) || /(?:^|\/)bunx-\d+-/.test(root), copy.temporary],
       [/(?:^|\/)self-update\/[^/]+\/releases\//.test(root) || !existsSync(path.join(root, "dist", "standalone", "server.js")) || !existsSync(path.join(root, "dist", "runtime-host.mjs")), copy.package],
     ]) if (refused) throw new Error(message);
-    const env = serviceEnvironment(host.env);
+    const env = serviceEnvironment(host.env, host.home);
     const bun = stableBun(host);
     for (const value of [root, bun, host.home, host.accountHome]) safe(value);
     const manual = cliRuntimeHostConfig(root, { env: { ...host.env, ...env }, home: host.home });
@@ -179,7 +188,7 @@ export async function runServiceCommand(args, { root, lang = "en", host = loginS
       env: host.env, timeoutMs: ["disable", "bootout"].includes(args[0]) ? 125_000 : 5000,
     });
     const requireCall = async args => { const result = await call(args); if (result.code !== 0) throw new Error(copy.failed); return result; };
-    let unit = {}, loaded = false, macRunning = false, graphical = true, config = path.join(host.accountHome, ".config");
+    let unit = {}, loaded = false, macRunning = false, disabled = false, config = path.join(host.accountHome, ".config");
     if (linux) {
       const manager = await call(["show", "--property=Version"]);
       if (manager.code !== 0) throw new Error(copy.manager);
@@ -190,7 +199,14 @@ export async function runServiceCommand(args, { root, lang = "en", host = loginS
       unit = properties(shown.stdout);
       if (!unit.LoadState || shown.code !== 0 && unit.LoadState !== "not-found") throw new Error(copy.manager);
     } else {
-      graphical = (await call(["print", domain])).code === 0;
+      const graphical = (await call(["print", domain])).code === 0;
+      if (action === "install") {
+        if (!graphical) throw new Error(copy.manager);
+        const result = await requireCall(["print-disabled", domain]);
+        const observed = launchdDisabled(result.stdout);
+        if (observed === null) throw new Error(copy.manager);
+        disabled = observed;
+      }
       loaded = graphical && (await call(["print", job])).code === 0;
       if (loaded) {
         const listed = await requireCall(["list", AGENT_NAME]);
@@ -231,12 +247,14 @@ export async function runServiceCommand(args, { root, lang = "en", host = loginS
       if (changed) await guarded(["daemon-reload"]);
       if (unit.UnitFileState !== "enabled") await guarded(["enable", SERVICE_NAME]);
       if (unit.ActiveState === "failed") await guarded(["reset-failed", SERVICE_NAME]);
-    } else if (changed) mkdirSync(path.join(host.accountHome, "Library", "Logs", "Delegatus"), { recursive: true });
+    } else {
+      if (changed) mkdirSync(path.join(host.accountHome, "Library", "Logs", "Delegatus"), { recursive: true });
+      if (disabled) await guarded(["enable", job]);
+    }
     const active = linux ? ["active", "activating", "deactivating"].includes(unit.ActiveState) : macRunning;
     if (changed && (active || loaded)) log(`${copy.later} ${linux ? "systemctl --user restart delegatus.service" : `launchctl bootout ${job}; launchctl bootstrap ${domain} ${shellWord(file)}`}`);
     if (!active || (linux && unit.ActiveState === "failed")) {
       if (host.live(record)) log(copy.running);
-      else if (!graphical) log(copy.next);
       else if (!await host.portFree(port)) log(`${copy.busy} ${port}`);
       else {
         assertFile(file, bytes, copy);
@@ -253,7 +271,7 @@ export async function runServiceCommand(args, { root, lang = "en", host = loginS
     log(copy.check); log(copy.undo);
     return 0;
   } catch (error) {
-    log(error.message === "unsafe-value" ? copy.unsafe : error.code === "ENOENT" || error.killed ? copy.manager : error.message || copy.failed);
+    log(error.message === "unsafe-value" ? copy.unsafe : error.message === "relative-path" ? copy.absolute : error.code === "ENOENT" || error.killed ? copy.manager : error.message || copy.failed);
     return 1;
   }
 }

@@ -300,10 +300,18 @@ WantedBy=default.target
   expands specifiers in `ExecStart=` and `Environment=`; the plist is
   XML-escaped. A path or value with a newline, a `"` or a control character
   is refused.
-- **Captured settings.** `PATH` always. These only when set at install
-  time: `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `LLV_STATE_DIR` (and its
-  `DELEGATUS_` alias), so the service resolves the same state directory,
-  `installId` and releases directory (§1.3); `LANG`, `LC_ALL`, `LLV_LANG`;
+- **Captured settings.** `PATH` always. `XDG_CONFIG_HOME` and
+  `XDG_CACHE_HOME` always hold the effective absolute paths from the
+  installing shell, falling back to its home's `.config` and `.cache`.
+  `LLV_STATE_DIR` always holds the effective absolute state directory,
+  including the legacy-directory fallback. `DELEGATUS_STATE_DIR` holds the
+  same value because the CLI folds that alias over `LLV_STATE_DIR`.
+  This pins defaults as well as explicit settings: a user manager passes
+  its own environment to jobs, and its conflicting state aliases or XDG
+  roots must not change the launcher record, release pointer, runtime-host
+  endpoint or cache. Relative state, config or cache paths are refused
+  before writes or manager calls. These rules also apply to the macOS
+  agent. The remaining settings are copied only when set: `LANG`, `LC_ALL`, `LLV_LANG`;
   and the telemetry opt-outs `DELEGATUS_TELEMETRY`, `LLV_TELEMETRY` and
   `DO_NOT_TRACK` (`src/lib/telemetry/store.ts:41-45`), so a person who opted
   out in their shell stays opted out. Nothing else is copied: no access key,
@@ -376,6 +384,13 @@ installs (`bin/cli.mjs:1270-1272`).
 
 The agent is loaded into the login session with `launchctl bootstrap
 gui/<uid> <plist>` and removed with `launchctl bootout gui/<uid>/org.delegatus.server`.
+Install first reads `launchctl print-disabled gui/<uid>` and, after proving
+the plist is owned, calls `launchctl enable gui/<uid>/org.delegatus.server`
+only when that label has a persisted disabled override. This precedes
+bootstrap or kickstart and also restores login startup when a running
+agent was disabled. A missing override means enabled; an unreadable list
+refuses install before writing. `disable` persists across boots until
+`enable`, independently of the plist ([launchctl(1)](https://keith.github.io/xcode-man-pages/launchctl.1.html)).
 The `gui/<uid>` domain is the one Terminal and apps run in. Engine CLIs that
 keep their login in the keychain need it; whether they read it from a launchd
 agent is unconfirmed (§5).
@@ -393,7 +408,9 @@ In order, each step printed:
    and never overwritten. The marker check happens inside that write.
 3. Linux: `systemctl --user daemon-reload`, then `systemctl --user enable
    delegatus.service`, and `reset-failed` when the unit is failed. macOS: the
-   log directory is created.
+   log directory is created, and a persisted disabled override is cleared
+   with `enable` before any start. An already enabled agent receives no
+   enable command.
 4. Start now only when nothing serves this install: no live launcher in this
    install's record (the check of `bin/launcher-adoption.mjs:83-88`) and the
    port is free. Linux: `systemctl --user start delegatus.service`. macOS:
@@ -440,7 +457,7 @@ Each prints one plain sentence with the reason and what to do instead.
 | Windows or another OS | `process.platform` | Start at login exists on Linux and macOS. |
 | Run as root | `process.getuid() === 0` | Run it as the user who uses Delegatus, without sudo. |
 | Container | `LLV_DOCKER_NSENTER_SHIMS=1`, `/.dockerenv` or `/run/.containerenv` | Use the container's restart policy (`docs/docker.md`). |
-| No user service manager (Linux) | `systemctl` missing, or `systemctl --user show --property=Version` fails within 5 s | Names the manager's first error line, for example WSL without systemd or a shell with no user session. |
+| No user service manager | Linux: `systemctl` missing, or `systemctl --user show --property=Version` fails within 5 s. macOS install: `gui/<uid>` unavailable, or disabled overrides unreadable. | Use a desktop login session with a per-user service manager. |
 | Not running under Bun | `process.versions.bun` absent | The service runs Delegatus with Bun; run the command where `bun` runs Delegatus. |
 | A checkout | `<root>/.git` exists | A checkout keeps its own unit and deploy procedure (`docs/guide/operations.md`, `docs/deploy-checkout.md`). |
 | A temporary copy | root under the temp directory or a `bunx-<uid>-` path segment (§1.2) | Install the command with `bun add -g delegatus-cli`, then run `delegatus service install`. |
@@ -449,9 +466,12 @@ Each prints one plain sentence with the reason and what to do instead.
 | Different state directory | §3.2 parity check | Names both directories. |
 | Bad `--port` | the CLI's existing `parsePort` | The existing message. |
 
-macOS with no graphical login (an SSH session only) is no refusal: the plist
-is written, `bootstrap` is skipped when `gui/<uid>` is missing, and the
-output says it starts at the next desktop login.
+macOS install requires a graphical login domain. Without one (for example,
+an SSH-only session), or when its disabled overrides cannot be read, install
+refuses before writing: it cannot confirm or restore login startup there.
+Remove can still delete an owned, unloaded plist without that domain and
+never changes disabled overrides. A later install reads the persisted
+override again and enables the agent if necessary.
 
 ### 3.7 A Delegatus that is already running
 
@@ -509,8 +529,8 @@ The service starts the same root, so every existing guard applies to it:
 ### 3.9 The doctor row
 
 One new id, `service.login`, last in `CAPABILITY_IDS`. The probe runs one
-read-only command (two on macOS) with a fixed argument list, asynchronously
-with `execFile`, an `AbortSignal` and the existing 1.5 s deadline, with no
+read-only command (up to three on macOS) with a fixed argument list, asynchronously
+with `spawn`, an `AbortSignal` and the existing 1.5 s deadline, with no
 shell. The report carries no path or command output. The row describes the
 unit or agent of that name whoever wrote it, so a checkout's own
 `delegatus.service` reports as well.
@@ -519,7 +539,11 @@ subprocesses" sentence to name this one exception: only the service manager
 knows whether a unit is enabled, running or failed.
 
 - Linux: `systemctl --user show delegatus.service --property=LoadState,UnitFileState,ActiveState,SubState,NRestarts`.
-- macOS: the plist's presence, `launchctl print gui/<uid>/org.delegatus.server`
+- macOS: the plist's presence, then `launchctl print-disabled gui/<uid>`
+  for the exact label's persisted override. A true override gives
+  `SERVICE_DISABLED` even if the job is loaded or running. An unreadable
+  or refused list gives `SERVICE_UNAVAILABLE`; it never implies enabled.
+  If enabled, `launchctl print gui/<uid>/org.delegatus.server`
   for its exit status only (its text "is NOT API", `launchctl(1)`), then
   `launchctl list org.delegatus.server` for `PID` and `LastExitStatus`. An
   answer it cannot parse gives `unknown`.
@@ -598,6 +622,18 @@ Unit tests:
   appears in the rendered file; `DO_NOT_TRACK=1` and `XDG_CONFIG_HOME` do.
 - **U8** The state directory and `installId` derived from the unit's
   environment equal those of `cliRuntimeHostConfig` in the installing process.
+  Run the real CLI with the rendered unit or plist environment merged over
+  conflicting manager `LLV_STATE_DIR`, `DELEGATUS_STATE_DIR`, config and
+  cache roots. Its launcher record, release pointer, runtime-host paths and
+  releases directory equal a manual start for default paths, explicit paths,
+  alias precedence and existing legacy directories. Refuse relative roots
+  before writes or manager calls.
+- **U9** A persisted disabled macOS agent is enabled before bootstrap;
+  reinstalling an enabled agent leaves it running without mutations.
+  Cover loaded and unloaded jobs, enable refusal and retry, unreadable
+  overrides, foreign plists and replacement during enable. Remove twice
+  never enables a disabled job. A missing graphical domain refuses install
+  before writes.
 - **D1** Each row of the §3.9 table from stubbed manager output, in JSON and
   human output, en and uk; a hung stub ends as `PROBE_TIMEOUT` within the
   deadline; no report contains a path. `bin/doctor.test.ts:99` still

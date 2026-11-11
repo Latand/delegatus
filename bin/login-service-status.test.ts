@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { inspectLoginService } from "./login-service-status.mjs";
-import { serviceCommand } from "./service-manager.mjs";
+import { launchdDisabled, serviceCommand } from "./service-manager.mjs";
 import { runDoctor } from "./doctor.mjs";
 import { formatDoctor, runDoctorCommand } from "./doctor-command.mjs";
 import type { DoctorHost, ReasonCode } from "../src/lib/doctor/contracts";
@@ -53,10 +53,56 @@ for (const [status, output, reason] of [
   const calls: string[][] = [];
   const result = await inspectLoginService(host, new AbortController().signal, async (command, args) => {
     expect(command).toBe("launchctl"); calls.push(args);
+    if (args[0] === "print-disabled") return { code: 0, stdout: "disabled services = {\n}\n", stderr: "" };
     return { code: status, stdout: output, stderr: "" };
   });
   expect(result[1]).toBe(reason);
-  expect(calls.length).toBe(status ? 1 : 2);
+  expect(calls.length).toBe(status ? 2 : 3);
+});
+
+for (const [output, expected] of [
+  ['disabled services = {\n "org.delegatus.server" => true\n}', true],
+  ['disabled services = {\n "org.delegatus.server" => false\n}', false],
+  ['disabled services = {\n "org.delegatus.server.other" => true\n}', false],
+  ["disabled services = {\n}", false],
+  ["disabled services = {}", false],
+  ["future output", null],
+  ['disabled services = {\n "org.delegatus.server" => unknown\n}', null],
+  ['disabled services = {\n "org.delegatus.server" => true\n "org.delegatus.server" => false\n}', null],
+  ['disabled services = {\n "org.delegatus.server" => false\n truncated', null],
+] as const) test(`launchd disabled overrides parse as ${expected}: ${output}`, () => {
+  expect(launchdDisabled(output)).toBe(expected);
+});
+
+test("macOS persisted disabled state reaches JSON and human doctor output before process status", async () => {
+  const host = fixture("darwin"); host.inspect = async file => file.endsWith(".plist") ? "present" : "absent";
+  const calls: string[][] = [];
+  host.loginService = signal => inspectLoginService(host, signal, async (command, args) => {
+    expect(command).toBe("launchctl"); calls.push(args);
+    expect(args[0]).toBe("print-disabled");
+    return { code: 0, stdout: 'disabled services = {\n "org.delegatus.server.other" => false\n "org.delegatus.server" => true\n}\n', stderr: "" };
+  });
+  const report = await runDoctor({ host });
+  expect(report.capabilities.at(-1)).toMatchObject({ id: "service.login", reason: "SERVICE_DISABLED", state: "degraded", timedOut: false });
+  expect(calls).toEqual([["print-disabled", `gui/${process.getuid?.() ?? -1}`]]);
+  for (const lang of ["en", "uk"] as const) {
+    const text = formatDoctor({ ...report, capabilities: [report.capabilities.at(-1)!] }, lang);
+    expect(text).toContain(lang === "en" ? "Installed and turned off" : "Встановлено й вимкнено");
+    expect(text).not.toContain("enabled"); expect(text).not.toContain(host.home);
+  }
+  const output: string[] = [];
+  expect(await runDoctorCommand(["--json"], { run: async () => ({ ...report, capabilities: [report.capabilities.at(-1)!] }), log: line => output.push(line) })).toBe(0);
+  expect(JSON.parse(output[0]).capabilities.at(-1).reason).toBe("SERVICE_DISABLED");
+});
+
+for (const code of [0, 1]) test(`macOS unreadable disabled overrides remain unknown, exit ${code}`, async () => {
+  const host = fixture("darwin"); host.inspect = async file => file.endsWith(".plist") ? "present" : "absent";
+  const calls: string[][] = [];
+  const result = await inspectLoginService(host, new AbortController().signal, async (_command, args) => {
+    calls.push(args); return { code, stdout: "unrecognized output", stderr: "" };
+  });
+  expect(result).toEqual(["unknown", "SERVICE_UNAVAILABLE"]);
+  expect(calls.length).toBe(1); expect(calls[0][0]).toBe("print-disabled");
 });
 
 test("unsupported hosts and absent Mac agent spawn no command", async () => {

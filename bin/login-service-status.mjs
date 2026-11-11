@@ -1,5 +1,5 @@
 import path from "node:path";
-import { AGENT_NAME, SERVICE_NAME, serviceCommand } from "./service-manager.mjs";
+import { AGENT_NAME, SERVICE_NAME, launchdDisabled, serviceCommand } from "./service-manager.mjs";
 
 /** Read only manager state; raw output and paths never enter the report.
  * @param {import('../src/lib/doctor/contracts').DoctorHost} host
@@ -38,8 +38,13 @@ export async function inspectLoginService(host, signal, run = serviceCommand) {
   signal.throwIfAborted();
   if (present === "absent") return ["degraded", "SERVICE_NOT_INSTALLED"];
   if (present !== "present") return [...unavailable()];
-  const domain = `gui/${process.getuid?.() ?? -1}/${AGENT_NAME}`;
-  const shown = await call("launchctl", ["print", domain]);
+  const domain = `gui/${process.getuid?.() ?? -1}`;
+  const overrides = await call("launchctl", ["print-disabled", domain]);
+  if (!overrides || overrides.code !== 0) return [...unavailable()];
+  const disabled = launchdDisabled(overrides.stdout);
+  if (disabled === null) return [...unavailable()];
+  if (disabled) return ["degraded", "SERVICE_DISABLED"];
+  const shown = await call("launchctl", ["print", `${domain}/${AGENT_NAME}`]);
   if (!shown) return [...unavailable()];
   if (shown.code !== 0) return ["degraded", "SERVICE_NOT_RUNNING"];
   const listed = await call("launchctl", ["list", AGENT_NAME]);

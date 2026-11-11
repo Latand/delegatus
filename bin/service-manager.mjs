@@ -3,6 +3,26 @@ import { spawn } from "node:child_process";
 export const SERVICE_NAME = "delegatus.service";
 export const AGENT_NAME = "org.delegatus.server";
 
+/** A missing override means enabled; an unreadable list proves neither state.
+ * @param {string} text
+ * @returns {boolean | null}
+ */
+export function launchdDisabled(text) {
+  const body = text.trim().match(/^disabled services = \{([\s\S]*)\}$/)?.[1];
+  if (body === undefined) return null;
+  let disabled = false, seen = false;
+  for (const line of body.split("\n").map(line => line.trim()).filter(Boolean)) {
+    const entry = line.match(/^"([^"\r\n]+)"\s*=>\s*(true|false)\s*[,;]?$/);
+    if (!entry) return null;
+    if (entry[1] === AGENT_NAME) {
+      if (seen) return null;
+      seen = true;
+      disabled = entry[2] === "true";
+    }
+  }
+  return disabled;
+}
+
 /** A bounded subprocess with no shell. Abort waits for the owned child to close.
  * @param {string} command @param {string[]} args
  * @param {{env?: NodeJS.ProcessEnv, signal?: AbortSignal, timeoutMs?: number}} [options]
