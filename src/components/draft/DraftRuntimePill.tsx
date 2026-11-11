@@ -126,6 +126,7 @@ export function DraftRuntimePill({ launch, disabled = false, projectAccounts }: 
     runsOn: launch.launchAccountId,
     next: launch.launchAccountId,
     applying: false,
+    noneSignedIn: Boolean(member && memberPool?.pool === "set" && !memberPool.accounts.some((account) => account.signedIn)),
     pick: (accountId) => {
       launch.setAccountId(accountId);
       if (!isMobile) close();

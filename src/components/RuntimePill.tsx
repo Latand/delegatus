@@ -1165,6 +1165,9 @@ export interface AccountChoice {
   applying: boolean;
   /** The conversation of a running stage: a pick moves the attempt at once, with no message to wait for. */
   immediate?: boolean;
+  /** A member's pool has no signed-in account: the Account row says «not signed in» in place of «automatic»,
+      because no launch can start on this list. */
+  noneSignedIn?: boolean;
   pick: (accountId: string) => void;
 }
 
@@ -1544,7 +1547,7 @@ function buildRows({
   if (accountChoice) {
     submenus.push({
       key: "account", kind: "submenu", label: t("mobile2.composer.accountGroup"),
-      detail: accountChoice.next ? nameOf(accountChoice.next) : t("draft.accountAutomatic"),
+      detail: accountChoice.next ? nameOf(accountChoice.next) : t(accountChoice.noneSignedIn ? "draft.accountNotSignedIn" : "draft.accountAutomatic"),
       checked: false, enabled: true, submenu: "account", role: "menuitem", activate: () => onOpenPanel("account"),
     });
   }

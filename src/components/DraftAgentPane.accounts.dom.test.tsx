@@ -623,6 +623,19 @@ test("a pool with no signed-in account says so and who can sign in, instead of p
   click(pill(host));
   await until(() => popover("[data-runtime-popover-account]")?.textContent === "No account on this project's list is signed in. The owner or a manager can sign one in.");
   expect(popover("[data-runtime-popover-account]")!.textContent).not.toContain("starts on");
+  /* The Account row below says the same thing, never «automatic». */
+  const detail = popover('[data-runtime-value="account"] [data-runtime-row-label] + span')!.textContent;
+  expect(detail).toBe("not signed in");
+});
+
+test("a pool with a signed-in account keeps the Account row reading automatic", async () => {
+  await asTeam("member");
+  installMember(BOTH, [], []);
+  const host = mount("member-signed-in-automatic");
+  await settle();
+  click(pill(host));
+  await until(() => popover('[data-runtime-value="account"] [data-runtime-row-label] + span') !== null);
+  expect(popover('[data-runtime-value="account"] [data-runtime-row-label] + span')!.textContent).toBe("automatic");
 });
 
 test("a member whose draft stands on Copilot moves to an engine the pool can start, and is never offered Copilot", async () => {

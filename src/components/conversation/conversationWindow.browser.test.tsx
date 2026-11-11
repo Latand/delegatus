@@ -3608,6 +3608,20 @@ describe("a member picks an account of the project's list in the new agent's com
         };
         /* The composer, its popover and its status, with a margin: the rest of the window is empty canvas. */
         const shot = async (page: import("playwright-core").Page, key: string, label: string) => {
+          /* A popover that is still taking its rows or being placed again has no final size: frame it only once
+             its height and top are the same on two animation frames in a row. */
+          await page.evaluate(() => new Promise<void>((resolve) => {
+            let last = "";
+            let same = 0;
+            const tick = () => {
+              const popover = document.querySelector("[data-runtime-popover]")?.getBoundingClientRect();
+              const now = popover ? `${popover.top}:${popover.height}` : "none";
+              same = now === last ? same + 1 : 0;
+              last = now;
+              if (same >= 2) resolve(); else requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+          }));
           const box = await page.evaluate(() => {
             const rects = ["[data-kanban-draft]", "[data-runtime-popover]", '[data-testid="composer-status"]']
               .flatMap((selector) => [...document.querySelectorAll(selector)].map((element) => element.getBoundingClientRect()));
@@ -3703,6 +3717,10 @@ describe("a member picks an account of the project's list in the new agent's com
             const account = page.locator("[data-runtime-popover-account]");
             await account.waitFor();
             expect(await account.innerText()).toBe(t(lang, "draft.accountNoneSignedIn"));
+            /* The same surface says one thing: the Account row reads «not signed in», never «automatic». */
+            const accountRow = await page.locator('[data-runtime-popover] [data-runtime-value="account"] [data-runtime-row-label] + span').innerText();
+            expect(accountRow).toBe(t(lang, "draft.accountNotSignedIn"));
+            expect(accountRow).not.toBe(t(lang, "draft.accountAutomatic"));
             await shot(page, key, "root");
             await whole(page, "[data-runtime-popover]", key, "root");
             await page.locator('[data-runtime-popover] [data-runtime-value="account"]').click();
@@ -3762,6 +3780,13 @@ describe("a member picks an account of the project's list in the new agent's com
             expect(requests.some((request) => request.includes("project-accounts"))).toBe(false);
             await shot(page, key, "account");
             await whole(page, "[data-runtime-popover]", key, "account");
+            /* Both account rows are whole inside the popover when it is framed. */
+            const inside = await page.evaluate(() => {
+              const popover = document.querySelector("[data-runtime-popover]")!.getBoundingClientRect();
+              return [...document.querySelectorAll('[data-runtime-popover] [data-runtime-row="account"]')]
+                .every((row) => row.getBoundingClientRect().bottom <= popover.bottom + 0.5);
+            });
+            expect(inside).toBe(true);
             expect(pageErrors).toEqual([]);
           } finally { await context.close(); }
         }
