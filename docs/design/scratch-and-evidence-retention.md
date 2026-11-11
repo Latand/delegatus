@@ -254,6 +254,10 @@ read and dispatch refuses.
   authority answered `"closed"` with an `expiresAt`, `defer(directory,
   expiresAt)` and record `root_retention(directory, expiresAt)` (§5.5) so the
   row is not re-read every page cycle and the card can count it.
+- Before settling a hold, persist its expiry prerequisite separately in
+  `root_expiry_admission`. Keep checking it after acknowledgement, at dispatch
+  and after restart; a rollback to `"closed"` cannot authorize immediate
+  retirement of a previously held root (§15).
 - In `eligible()` (`:261-326`): `"expired"` counts as settled at `:272`; for
   `"expired"`, `preserveAttemptEvidence` is skipped and the evidence fence is
   an independent directory snapshot, so symlinked or irregular evidence no
@@ -425,6 +429,9 @@ step and no one-shot cleanup.
   independent paths in the same lane from retiring. Success releases its
   namespace; an interrupted journal retains the fence across process death.
   A later sweep reclaims it under the same admission and replays the journal.
+  If protection refuses replay, the sweep restores the proved tree and
+  cancels the journal before releasing the claim (§15). A restored root stays
+  registered; absent-root reconciliation cannot forget its ledger row.
   A claim left before journal creation is safely reacquired on the next visit.
   Claims also record the helper's boot-aware process identity. If it dies
   after forgetting its ledger row, a pipeline mutation can release a claim
@@ -602,6 +609,31 @@ Missing-root reconciliation uses real persisted recorded-check rows: expiry
 acknowledges their holds through the ordinary CAS writer even when the source
 directory is absent, then forgets the root ledger row. A cleanup observation
 alone never substitutes for the lane-finish and binding checks.
+
+Before expiry acknowledgement can release a recorded-check hold, the attempt
+ledger persists the root's expiry prerequisite in `root_expiry_admission`.
+This prerequisite belongs to the registered root until it is forgotten;
+reporting updates cannot clear it. Eligibility, final dispatch and removal
+require both expired lane authority and the recorded cutoff. A clock rollback
+after acknowledgement therefore retains the root, including across a helper
+restart; ordinary immediate retirement of unheld roots cannot bypass it.
+
+A refused quarantine replay has a cancellation path. Once the serialized
+sweep has returned without a removal or an uncertain removal error,
+`restoreRefusedAttemptTrash` proves the journal's original path, same-parent
+trash name, disposable intent, owner and directory identity. It renames the
+surviving tree back, cancels the journal and then releases the retirement
+claim. This also applies to automatic copies and a dead helper's recovered
+claim. Keep markers and payloads survive while merge retry and reopening can
+proceed. An occupied original or changed trash identity refuses cancellation
+and retains the recovery fence. A restart between restoration and journal
+cancellation recognizes the restored identity and completes cancellation.
+
+Regression cases in `attemptTempProduction.test.ts` move the clock backwards
+after acknowledgement, at quarantine rename and before removal, then start a
+new process before expiry and finally retire after expiry. Root and copy cases
+recover a dead owner's protected quarantine, repeat three passes and exercise
+the supported merge retry (`blocked` to `queued`) and reopening transitions.
 
 Run the explicit test files with isolated state through `scripts/gate-slot.sh`:
 `laneFinish.test.ts`, `attemptTempProduction.test.ts`,

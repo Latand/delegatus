@@ -9,6 +9,7 @@ import { AttemptTempStore, type AttemptTempSweepOptions, type AttemptTempAuthori
 import { attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { claimAttemptRetirement } from "@/lib/pipelines/store";
+import { restoreRefusedAttemptTrash } from "@/lib/pipelines/retirementClaim";
 import { discoverAttemptCopies } from "./attemptCopyDiscovery";
 
 const HOUR = 3600000;
@@ -102,14 +103,19 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
       const parent = copyParent();
       if (!parent) throw new Error("attempt evidence parent missing");
       copyPath(row.destination, parent);
+      const journal = attemptTempJournalPath(row.destination), pending = fs.existsSync(journal);
+      if (pending && row.pipelineId && options.mode !== "dry-run")
+        releaseClaim = await claimAttemptRetirement(row.pipelineId, row.destination);
       const authority = await observe(row);
       const expiresAt = row.kind === "agent" ? row.expiresAt : authority.expiresAt ?? null;
       store.registerCopy({ ...row, expiresAt, checkedAt: expiresAt && expiresAt > now() ? expiresAt : now() + (authority.state === "expired" ? 60000 : HOUR) });
-      if (authority.state !== "expired" || !authority.isCurrent()) continue;
-      if (row.pipelineId && options.mode !== "dry-run") {
+      if (authority.state !== "expired" || !authority.isCurrent()) {
+        if (pending && options.mode !== "dry-run") restoreRefusedAttemptTrash(row.destination);
+        continue;
+      }
+      if (!releaseClaim && row.pipelineId && options.mode !== "dry-run") {
         releaseClaim = await claimAttemptRetirement(row.pipelineId, row.destination);
       }
-      const journal = attemptTempJournalPath(row.destination), pending = fs.existsSync(journal);
       let target = row.destination;
       if (pending) {
         const intent = readEnvelope(journal) as { directory?: unknown; trash?: unknown };
@@ -143,6 +149,7 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
       if (!pending && await held(row.destination)) continue;
       const removed = pending ? await finishTreeTrash(journal, held, undefined, validate, true)
         : await removeTreeViaTrash(row.destination, { journal, held, validate, disposable: true });
+      if (!removed) restoreRefusedAttemptTrash(row.destination, identity ?? undefined);
       if (removed || !fs.existsSync(row.destination) && !fs.existsSync(journal)) {
         store.forgetCopy(row.destination);
         if (removed) { report.removed++; report.removedBytes += row.bytes; }

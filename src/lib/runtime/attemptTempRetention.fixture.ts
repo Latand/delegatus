@@ -84,7 +84,7 @@ try {
         process.stdout.write("ready\n");
         for await (const chunk of process.stdin) { void chunk; /* The parent releases this observation. */ }
       }
-      return process.argv[4]?.startsWith("expired") ? "expired" : process.argv[4] === "live" ? "live" : process.argv[4] === "orphan" ? "orphan" : "settled";
+      return process.argv[4]?.startsWith("expired") ? "expired" : process.argv[4] === "closed" ? "closed" : process.argv[4] === "live" ? "live" : process.argv[4] === "orphan" ? "orphan" : "settled";
     }, scan: () => ({ ownNamespace: null, processes: [] }),
     references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true),
     onRetired: retired,

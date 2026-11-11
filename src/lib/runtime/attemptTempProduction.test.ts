@@ -11,6 +11,130 @@ import { statePath } from "@/lib/configDir";
 import { attemptReferencesClear } from "./attemptTempFilesystem";
 import { holdFinishedRoot, finishedLane } from "./attemptTempRetention.testSupport";
 import { RecordedCheckStore, recordedRootHeld } from "@/lib/recordedChecks/store";
+import { attemptTempJournalPath } from "@/lib/tempSweep";
+
+test.each(["acknowledgement", "quarantine", "removal"] as const)(
+  "previously held roots retain their expiry across clock rollback at %s and a process restart", async boundary => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempAuthority } = await import("./attemptTempProduction");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-clock-rollback-")); roots.push(root);
+  const expired = Date.parse("2026-11-01T00:00:01Z"), beforeExpiry = expired - 86400000;
+  let now = expired, rolledBack = false;
+  const p = finishedLane(root, "2026-10-25T00:00:00Z"); savePipelines([p]);
+  const directory = path.join(root, "llv-stage-clock-rollback"); fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "payload"), "retained data");
+  const filename = path.join(root, "owners.sqlite"), store = new AttemptTempStore(filename);
+  store.register({ directory, pipelineId: p.id, launchId: "retention-launch", retainUntilClose: true, createdAt: 1 });
+  const id = await holdFinishedRoot(directory);
+  const rollback = () => { now = beforeExpiry; rolledBack = true; };
+  const write = RecordedCheckStore.prototype.write;
+  const acknowledgement = spyOn(RecordedCheckStore.prototype, "write").mockImplementation(async function (this: RecordedCheckStore, ...args: Parameters<typeof write>) {
+    const result = await write.apply(this, args);
+    if (boundary === "acknowledgement" && args[0].acknowledgement?.disposition === "expired-with-lane") rollback();
+    return result;
+  });
+  const rename = fs.renameSync.bind(fs);
+  const quarantine = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+    rename(from, to);
+    if (boundary === "quarantine" && from === directory && path.basename(String(to)).startsWith(".delegatus-trash-")) rollback();
+  });
+  const authority: NonNullable<Parameters<typeof sweepAttemptTemps>[1]["authority"]> = (owner, inventory) => attemptTempAuthority(owner, inventory, () => now);
+  const options = { now: () => now, authority, state: async (owner: Parameters<typeof authority>[0], inventory: Parameters<typeof authority>[1]) => (await authority(owner, inventory)).state,
+    references: async () => true, scan: () => ({ ownNamespace: null, processes: [] }) };
+  try {
+    const report = await sweepAttemptTemps(store, { ...options, ...(boundary === "removal" ? { remove: async (target, _guard, dispatch) => {
+      rollback();
+      if (!dispatch()) throw new Error("attempt temp deferred: clock rollback before removal");
+      await fs.promises.rm(target, { recursive: true });
+    } } : {}) });
+    expect(rolledBack).toBeTrue(); expect(report.removed).toBe(0); expect(report.errors).toBe(0);
+    expect(store.requiredRootExpiry(directory)).toBe(Date.parse("2026-11-01T00:00:00Z"));
+    store.release(directory); // Force the next process to inspect before expiry.
+    const checks = new RecordedCheckStore();
+    try { expect(checks.get(id)?.acknowledgement?.disposition).toBe("expired-with-lane"); } finally { checks.close(); }
+  } finally { acknowledgement.mockRestore(); quarantine.mockRestore(); store.close(); }
+  // A new OS process must honor the persisted prerequisite, even though the
+  // check is already acknowledged and its root is no longer held.
+  const fixture = path.join(import.meta.dir, "attemptTempRetention.fixture.ts");
+  const restart = Bun.spawn([process.execPath, fixture, filename, String(beforeExpiry + 60001), "closed"],
+    { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [output, error, exit] = await Promise.all([new Response(restart.stdout).text(), new Response(restart.stderr).text(), restart.exited]);
+  expect(exit, error).toBe(0); expect(JSON.parse(output).checked).toBe(1); expect(JSON.parse(output).removed).toBe(0);
+  expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("retained data");
+  const recovered = new AttemptTempStore(filename);
+  try { now = expired; expect((await sweepAttemptTemps(recovered, options)).removed).toBe(1); }
+  finally { recovered.close(); }
+});
+
+test.each([["root", false], ["copy", false], ["root", true], ["copy", true]] as const)(
+  "a protected %s quarantine releases retry and reopen after owner death (already restored=%s)", async (kind, restored) => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempAuthority } = await import("./attemptTempProduction");
+  const { sweepEvidenceCopies } = await import("./attemptEvidenceCopies");
+  const { digest } = await import("@/lib/recordedChecks/wire");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-protected-replay-")); roots.push(root);
+  const now = Date.parse("2026-11-01T00:00:01Z"), p = finishedLane(root, "2026-10-01T00:00:00Z");
+  p.merge = { state: "blocked", by: null, repository: "fixture/repository", prNumber: 1,
+    policyChangedAt: p.closedAt!, reviewedHead: "a".repeat(40), chain: [], updates: [], seenChecks: [], head: null, headSeenAt: null,
+    lastChecks: null, readAt: null, nextReadAt: null, requestedAt: p.closedAt!, mergedHead: null, mergeCommit: null, method: null,
+    mergedAt: null, attempts: 0, reason: null, blockedAt: null, updatedAt: p.closedAt! };
+  savePipelines([p]);
+  const directory = kind === "root" ? path.join(root, "llv-stage-protected-replay") : statePath("evidence", "attempt-temp", digest(root));
+  fs.mkdirSync(path.join(directory, "nested"), { recursive: true });
+  fs.writeFileSync(path.join(directory, "nested", ".delegatus-keep"), "operator pin");
+  fs.writeFileSync(path.join(directory, "payload"), "keep data");
+  const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
+  if (kind === "root") store.register({ directory, pipelineId: p.id, launchId: "retention-launch", retainUntilClose: true, createdAt: 1 });
+  else store.registerCopy({ destination: directory, pipelineId: p.id, launchId: "copy", kind: "lane", createdAt: 1, expiresAt: 1, checkedAt: 0, bytes: 4096 });
+  const fixture = path.join(import.meta.dir, "attemptTempRetention.fixture.ts");
+  const owner = Bun.spawn([process.execPath, fixture, "--claim-hold", p.id, directory],
+    { env: { ...process.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  try {
+    const reader = owner.stdout.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe("ready\n"); reader.releaseLock();
+    const stat = fs.lstatSync(directory), trash = path.join(path.dirname(directory), `.delegatus-trash-${path.basename(directory)}-replay`);
+    fs.renameSync(directory, trash);
+    fs.writeFileSync(attemptTempJournalPath(directory), JSON.stringify({ directory, trash, uid: stat.uid, identity: `${stat.dev}:${stat.ino}`, disposable: true }));
+    if (restored) fs.renameSync(trash, directory); // Crash before journal cancellation.
+    owner.stdin.end(); expect(await owner.exited).toBe(0);
+    const queued = structuredClone(p); queued.merge!.state = "queued"; queued.merge!.attempts++; queued.merge!.updatedAt = new Date(now).toISOString();
+    expect(() => savePipelines([queued])).toThrow("retirement pending");
+    const authority: NonNullable<Parameters<typeof sweepAttemptTemps>[1]["authority"]> = (owner, inventory) => attemptTempAuthority(owner, inventory, () => now);
+    for (let i = 0; i < 3; i++) {
+      const report = await (kind === "root" ? sweepAttemptTemps : sweepEvidenceCopies)(store, { now: () => now + i * 60001,
+        authority, state: async (owner, inventory) => (await authority(owner, inventory)).state,
+        references: async () => true, scan: () => ({ ownNamespace: null, processes: [] }) });
+      expect(report.removed).toBe(0); expect(report.errors).toBe(0);
+    }
+    expect(fs.existsSync(trash)).toBeFalse(); expect(fs.existsSync(attemptTempJournalPath(directory))).toBeFalse();
+    expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("keep data");
+    expect(fs.existsSync(path.join(directory, "nested", ".delegatus-keep"))).toBeTrue();
+    expect(() => savePipelines([queued])).not.toThrow();
+    queued.state = "running"; expect(() => savePipelines([queued])).not.toThrow();
+  } finally { owner.stdin.end(); await owner.exited; store.close(); }
+});
+
+test.each(["identity", "occupied", "binding"] as const)("refused quarantine cancellation preserves a changed %s and its claim", async change => {
+  const { claimAttemptRetirement } = await import("@/lib/pipelines/store");
+  const { restoreRefusedAttemptTrash } = await import("@/lib/pipelines/retirementClaim");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-cancel-fence-")); roots.push(root);
+  const p = finishedLane(root, "2026-10-01T00:00:00Z"); savePipelines([p]);
+  const directory = path.join(root, "llv-stage-cancel"), trash = path.join(root, ".delegatus-trash-llv-stage-cancel-replay");
+  fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "keep data");
+  const stat = fs.lstatSync(directory), identity = `${stat.dev}:${stat.ino}`;
+  const release = await claimAttemptRetirement(p.id, directory);
+  fs.renameSync(directory, trash);
+  const journal = attemptTempJournalPath(directory);
+  fs.writeFileSync(journal, JSON.stringify({ directory: change === "binding" ? directory + "-other" : directory,
+    trash, identity: change === "identity" ? "0:0" : identity, uid: stat.uid, disposable: true }));
+  if (change === "occupied") { fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "replacement"); }
+  try {
+    expect(() => restoreRefusedAttemptTrash(directory, identity)).toThrow("changed");
+    expect(fs.existsSync(journal)).toBeTrue(); expect(fs.readFileSync(path.join(trash, "payload"), "utf8")).toBe("keep data");
+    if (change === "occupied") expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("replacement");
+    release(); p.state = "running"; expect(() => savePipelines([p])).toThrow("retirement pending");
+  } finally { fs.unlinkSync(journal); release(); } // Only this test owns the intent; no remover was launched.
+});
 
 test.each([null, "invalid-clock"])("unknown completed attempt clock preserves the real hold and automatic copy (%s)", async completedAt => {
   const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");

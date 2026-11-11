@@ -86,7 +86,8 @@ test.each([
       return true;
     } });
     expect(injected).toBeTrue(); expect(report.removed).toBe(0); expect(f.store.copy(destination)).not.toBeNull();
-    expect(fs.existsSync(replay ? target : path.join(destination, "nested", ".delegatus-keep"))).toBeTrue();
+    expect(fs.existsSync(path.join(destination, "nested", ".delegatus-keep"))).toBeTrue();
+    expect(fs.existsSync(attemptTempJournalPath(destination))).toBeFalse();
   } finally { f.store.close(); process.env.LLV_STATE_DIR = priorState; }
 });
 
@@ -106,7 +107,8 @@ test.each([false, true])("a human marker added in the final root authority read 
         return { state: "expired", expiresAt: 1, revision: "fixture", isCurrent: () => true };
       } });
     expect(injected).toBeTrue(); expect(report.removed).toBe(0); expect(f.store.has(directory)).toBeTrue();
-    expect(fs.existsSync(path.join(replay ? trash : directory, "nested", ".delegatus-keep"))).toBeTrue();
+    expect(fs.existsSync(path.join(directory, "nested", ".delegatus-keep"))).toBeTrue();
+    expect(fs.existsSync(attemptTempJournalPath(directory))).toBeFalse();
   } finally { f.store.close(); }
 });
 
@@ -638,7 +640,7 @@ test.each([false, true])("producer record revision drift preserves native remova
       expect(injected).toBeTrue();
       expect(changed).toMatchObject({ removed: 0, errors: 0, liveHeld: 1 });
       expect(await attemptTempState(owner)).toBe(transition === "attempt-running" ? "live" : "unknown");
-      expect(fs.readFileSync(path.join(replay ? trash : directory, "payload"), "utf8")).toBe("preserve me");
+      expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("preserve me");
     } finally {
       store.close(); savePipelines([]);
       if (!producerExisted) fs.rmSync(producer, { recursive: true, force: true });
@@ -687,7 +689,7 @@ test.each([false, true])("post-eligibility producer and checkout changes preserv
       const result = await sweep();
       expect(injected).toBeTrue();
       expect(result.removed).toBe(0);
-      expect(fs.readFileSync(path.join(replay ? trash : directory, "data"), "utf8").length).toBe(4096);
+      expect(fs.readFileSync(path.join(directory, "data"), "utf8").length).toBe(4096);
     } finally {
       if (fs.existsSync(retiredProducer)) fs.renameSync(retiredProducer, producer);
       f.store.close();
@@ -773,7 +775,7 @@ test.each([false, true])("final dispatch rechecks checkout discovery and externa
       expect(changed).toBe(change !== "control");
       expect(result.removed).toBe(change === "control" ? 1 : 0);
       if (change !== "control") {
-        expect(fs.readFileSync(path.join(replay ? trash : directory, "payload"), "utf8")).toBe("keep");
+        expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("keep");
         if (change === "absent-no-marker") fs.renameSync(consumer + "-old", consumer);
         if (change === "restore-no-marker") fs.unlinkSync(path.join(consumer, "dependency"));
         if (change === "alias-retarget") { fs.unlinkSync(alias); fs.symlinkSync(unrelated, alias, "dir"); }
