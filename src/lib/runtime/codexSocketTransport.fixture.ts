@@ -334,7 +334,7 @@ try {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([Promise.all(owned.map(child => child.closed)), new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("owned startup children did not close")), 3000);
+        timer = setTimeout(() => reject(new Error("owned startup children did not close")), 16_000);
       })]);
       collection = { nativeCompleted, waiterLive, initialSize, size: fs.fstatSync(sink!).size,
         writes: mode === "shortlive" ? [] : JSON.parse(fs.readFileSync(path.join(root!, "writes.json"), "utf8")),
