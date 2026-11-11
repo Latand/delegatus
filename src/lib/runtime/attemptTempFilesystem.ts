@@ -290,6 +290,14 @@ export class RepositoryLinkInventory {
     return true;
   }
   private readonly lexicalTargets = new WeakMap<object, string[]>();
+  /** The signature lists what decides the answer: the identity of each
+   * directory from the cwd upward and whether it holds a `.git` marker. A
+   * directory's timestamps are left out. They move whenever any entry is made
+   * in it, and a cwd outside every checkout has ancestors that are written
+   * all the time (the state directory, a temp root), so a signature with them
+   * refused every fence on a busy machine. A new marker is read directly here,
+   * a replaced directory changes identity, and the directories of a checkout
+   * found here are versioned by its link inventory. */
   private discoverRepository(cwd: string): RepositoryDiscovery {
     const cwdStat = fs.statSync(cwd);
     if (!cwdStat.isDirectory()) throw new Error(`process cwd is not a directory: ${cwd}`);
@@ -298,11 +306,11 @@ export class RepositoryLinkInventory {
     let current = path.resolve(cwd);
     for (let depth = 0; depth < 64; depth++) {
       const stat = fs.statSync(current);
-      versions.push(`${current}:${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}`);
+      versions.push(`${current}:${stat.dev}:${stat.ino}`);
       try {
         const markerPath = path.join(current, ".git");
         const marker = fs.lstatSync(markerPath);
-        versions.push(`${markerPath}:${marker.dev}:${marker.ino}:${marker.mtimeMs}:${marker.ctimeMs}`);
+        versions.push(`${markerPath}:${marker.dev}:${marker.ino}`);
         repository = current;
         break;
       } catch (error) {

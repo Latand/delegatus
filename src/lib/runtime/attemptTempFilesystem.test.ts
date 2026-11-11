@@ -956,3 +956,30 @@ test.skipIf(process.platform !== "linux")("a closed lane's checkout link stops h
     await child.exited; store.close();
   }
 });
+
+test("a write beside a process cwd outside every checkout leaves the fence standing; a new checkout marker fells it", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-busy-ancestor"); fs.mkdirSync(directory);
+  // A cwd under a directory that other work writes all the time, such as a
+  // state directory or a temp root, with no checkout above it.
+  const busy = path.join(parent, "busy"), cwd = path.join(busy, "holder"); fs.mkdirSync(cwd, { recursive: true });
+  const inventory = new RepositoryLinkInventory();
+  const scan = { ownNamespace: null, processes: [{ pid: 51, namespace: null, stamped: false, paths: [cwd] }] };
+  expect(await attemptReferencesClear(directory, directory, scan, async () => true, inventory)).toBeTrue();
+  await new Promise(resolve => setTimeout(resolve, 25));
+  fs.writeFileSync(path.join(busy, "journal"), "entry");
+  fs.writeFileSync(path.join(cwd, "scratch"), "entry");
+  expect(inventory.unchangedAll()).toBeTrue();
+  // The same cwd becoming a checkout is the change the fence exists for.
+  fs.mkdirSync(path.join(busy, ".git"));
+  expect(inventory.unchangedAll()).toBeFalse();
+});
+
+test("a replaced directory above a process cwd fells the fence", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-replaced-ancestor"); fs.mkdirSync(directory);
+  const busy = path.join(parent, "busy"), cwd = path.join(busy, "holder"); fs.mkdirSync(cwd, { recursive: true });
+  const inventory = new RepositoryLinkInventory();
+  const scan = { ownNamespace: null, processes: [{ pid: 52, namespace: null, stamped: false, paths: [cwd] }] };
+  expect(await attemptReferencesClear(directory, directory, scan, async () => true, inventory)).toBeTrue();
+  fs.renameSync(busy, busy + "-previous"); fs.mkdirSync(cwd, { recursive: true });
+  expect(inventory.unchangedAll()).toBeFalse();
+});

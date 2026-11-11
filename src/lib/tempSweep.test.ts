@@ -1005,3 +1005,19 @@ test("temp cleanup protects a live owner without loading full registry history",
     expect(full).not.toHaveBeenCalled();
   } finally {full.mockRestore();fs.rmSync(root,{recursive:true,force:true});}
 });
+
+test("a root owned by the attempt ledger is kept without a walk of its tree", async () => {
+  const root = tempRoot();
+  const owned = aged(root, "llv-stage-ledger", 2 * DAY), plain = aged(root, "llv-stage-plain", 2 * DAY);
+  fs.writeFileSync(path.join(owned, ".delegatus-attempt-owner"), "attempt-temp.sqlite\n");
+  const inspected: string[] = [], measured: string[] = [];
+  const report = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: root, via: "" }], mode: "dry-run",
+    scan: { ownNamespace: null, processes: [] },
+    inspect: (directory, settings) => { inspected.push(directory); return inspectTree(directory, settings); },
+    measure: async directory => { measured.push(directory); return 1; } });
+  expect(report.kept.inUse).toBe(1);
+  expect(fs.existsSync(owned)).toBeTrue();
+  expect(inspected).not.toContain(owned); expect(measured).not.toContain(owned);
+  // A root the ledger does not own is still read by this sweep.
+  expect(inspected).toContain(plain);
+});

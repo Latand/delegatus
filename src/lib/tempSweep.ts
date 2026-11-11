@@ -727,11 +727,14 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         report.keptBytes![reason] += bytes;
         return true;
       };
-      const inspection = inspect(reachable, root, candidate);
+      // The attempt ledger owns this root: it measures it with one native
+      // `du` and decides its retirement. This sweep never removes it, so a
+      // walk of its tree here would only repeat that measurement.
       if (!options.onlyDirectories && fs.existsSync(path.join(reachable, ".delegatus-attempt-owner"))) {
-        await keep("inUse");
+        await keep("inUse", 0);
         continue;
       }
+      const inspection = inspect(reachable, root, candidate);
       const newest = inspection.newestMs;
       const pinned = fs.existsSync(path.join(reachable, ".delegatus-keep")) || (() => { try { fs.lstatSync(path.join(reachable, ".delegatus-keep")); return true; } catch { return false; } })();
       if (pinned || inspection.hold) {
