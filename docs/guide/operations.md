@@ -63,9 +63,10 @@ is your choice. Five failed starts in ten minutes stop the restart loop.
 Doctor names the failure; fix its cause, then repeat the install command.
 
 macOS uses `~/Library/LaunchAgents/org.delegatus.server.plist` and logs to
-`~/Library/Logs/Delegatus/server.log`. It runs in the graphical login session;
-an install over SSH is saved for the next desktop login. launchd throttles
-restarts to one per ten seconds.
+`~/Library/Logs/Delegatus/server.log`. Install requires an available graphical
+login session. Without one, such as in an SSH-only session, the command refuses
+before writing the service file; log in to the desktop and repeat
+`delegatus service install`. launchd throttles restarts to one per ten seconds.
 
 If another Delegatus already runs, install enables the service for the next
 login and leaves the running instance alone. To switch now, finish your work,
