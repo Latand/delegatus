@@ -252,6 +252,24 @@ export function settleInterruptedAnswer(relayId: string, targetId: string, reque
   }
 }
 
+/** Marks the record of a late answer that was written off undelivered, so the
+ * write-off is readable beside the kept answer and its diagnostic. */
+export const RELAY_LATE_ANSWER_EXPIRED_OUTCOME = "failed:delivery_expired";
+export function recordLateAnswerExpired(relayId: string, targetId: string, requestId: string): void {
+  try {
+    for (const file of recordFiles(targetDir(relayId, targetId), requestId)) {
+      const record = readRecord(file);
+      if (!record || record.delivery === "accepted") continue;
+      const now = Date.now();
+      writeRecord(file, { ...record, outcome: RELAY_LATE_ANSWER_EXPIRED_OUTCOME, delivery: record.delivery ?? "unconfirmed",
+        ...(record.state === "running" ? { state: "finished" as const, finishedAt: new Date(now).toISOString(),
+          durationMs: now - Date.parse(record.startedAt) } : {}) });
+    }
+  } catch (error) {
+    logFailure("settle", error);
+  }
+}
+
 /** Removes expired records, and reconciles unfinished records when the owner
  * supplies the active ledger. Snapshot files before the ledger so a newly
  * reserved run cannot be mistaken for abandoned work. */

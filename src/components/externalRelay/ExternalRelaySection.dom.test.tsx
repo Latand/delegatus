@@ -744,6 +744,20 @@ for (const locale of ["en", "uk"] as const) test(`an unresolved owner stop stays
   } finally { setLocale("en"); }
 });
 
+test("a retained custody alarm shows beside the last request's own result", async () => {
+  accounts({ claude: [signedIn("main")] });
+  const state = { state: "polling", lastOutcome: "answered", lastOutcomeAt: "2026-09-28T17:08:43.000Z", lastProgress: null };
+  answers.relay = { relays: [relay()], pending: [], status: [{ id: "relay-1", state: { ...state, alarm: "owner_stop_quarantined", alarmAt: "2026-09-28T17:00:00.000Z" }, running: {} }] };
+  route();
+  const host = await mount(<ExternalRelaySection />);
+  const outcome = host.querySelector("[data-external-relay-last-outcome]")?.textContent;
+  expect(host.querySelector("[data-external-relay-alarm]")?.getAttribute("data-external-relay-alarm")).toBe("owner_stop_quarantined");
+  answers.relay = { relays: [relay()], pending: [], status: [{ id: "relay-1", state: { ...state, alarm: null, alarmAt: null }, running: {} }] };
+  const calm = await mount(<ExternalRelaySection />);
+  expect(calm.querySelector("[data-external-relay-alarm]")).toBeNull();
+  expect(calm.querySelector("[data-external-relay-last-outcome]")?.textContent).toBe(outcome!);
+});
+
 /* Audit B35, B36: a target's settings and pause or resume show at once; the
    other controls stay usable, and a refusal shows the stored value with the error. */
 function heldPatch() {

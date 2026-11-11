@@ -3884,7 +3884,7 @@ for (const age of ["within", "past"] as const) test(`owner stop that stays uncon
       expect(row?.capacityReleased).toBe(true); expect(row?.ownerTurn?.confirmed).toBeUndefined();
       expect(row?.ownerTurn?.quarantinedAt).toBe(new Date(now).toISOString());
       expect(JSON.stringify(journal)).toContain("ALARM:");
-      expect(relayPollerStatus(paired.id).lastOutcome).toBe("owner_stop_quarantined");
+      expect(relayPollerStatus(paired.id).alarm).toBe("owner_stop_quarantined");
       await sweepExternalRelayOrphans(ports);
       expect(stops).toBe(3); expect(completions).toEqual([]);
       expect(readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn?.released?.at).toBe(new Date(now).toISOString());

@@ -1,6 +1,6 @@
 import { ownerTierFor } from "./profile";
 import { ownerTurnDiagnostic } from "./diagnostic";
-import { deliverOwnerLateAnswer, ownerRecoveryRequest } from "./ownerLateDelivery";
+import { deliverOwnerLateAnswer, expireOwnerLateAnswer, ownerLateAnswerTerminal, ownerLateAnswerUndeliverable, ownerRecoveryRequest } from "./ownerLateDelivery";
 import { ownerFailureAnswer, confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
 import { ownerRelayFailureReplyAuthorized } from "./ownerAuthority";
 import { changeRun, changeRunAsync, OWNER_RELEASED_CUSTODY_RETENTION_MS, ownerStopPending } from "./store";
@@ -93,14 +93,16 @@ export function relayPollerStatus(id: string) {
   const status = { state: loop ? loop.state : ("paused" as const), ...relayActivity(id) };
   try {
     const runs = readRunLedger().runs;
-    const alarm = runs.find(run => run.relayId === id && (run.ownerTurn?.quarantinedAt || run.ownerTurn?.lateAnswer?.status === "pending-delivery-context"));
-    if (alarm) return { ...status, lastOutcome: alarm.ownerTurn?.quarantinedAt ? "owner_stop_quarantined" : "pending-delivery-context",
-      lastOutcomeAt: alarm.ownerTurn?.quarantinedAt ?? alarm.startedAt };
+    // Retained custody that needs the operator is reported beside the last
+    // request's own result, which stays readable while the alarm stands.
+    const held = runs.find(run => run.relayId === id && (run.ownerTurn?.quarantinedAt || run.ownerTurn?.lateAnswer?.status === "pending-delivery-context"));
+    const alarm = held ? { alarm: held.ownerTurn?.quarantinedAt ? "owner_stop_quarantined" as const : "pending-delivery-context" as const,
+      alarmAt: held.ownerTurn?.quarantinedAt ?? held.startedAt } : { alarm: null, alarmAt: null };
     const pending = runs.find(run => run.relayId === id && ownerStopPending(run));
-    return { ...status, ...(pending ? { lastOutcome: "owner_stop_pending", lastOutcomeAt: pending.startedAt } : {}) };
+    return { ...status, ...alarm, ...(pending ? { lastOutcome: "owner_stop_pending", lastOutcomeAt: pending.startedAt } : {}) };
   } catch {
     console.error("External relay cancellation custody unreadable; run ledger preserved");
-    return { ...status, lastOutcome: "local_error" };
+    return { ...status, alarm: null, alarmAt: null, lastOutcome: "local_error" };
   }
 }
 export function wakeExternalRelayPoller(id: string) {
@@ -126,21 +128,35 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
       && (run.capacityReleased || run.ownerTurn.confirmed)) continue;
     if (run.ownerTurn?.lateAnswer && !run.completionAccepted && !ownerStopPending(run)) {
       if (relayRequestInFlight(run.requestId) || processMatches(run.ownerPid, run.ownerIdentity) && run.ownerPid !== process.pid) continue;
-      const relay = readRelayStore().relays.find(item => item.id === run.relayId);
-      if (!relay || !ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId)) continue;
-      ownerRecoveries.add(run.requestId);
-      try {
-        const pending = run.ownerTurn.lateAnswer;
-        const sent = await deliverOwnerLateAnswer(relay, run.requestId, pending.body, pending.files,
-          () => ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId));
-        if (sent.delivery === "accepted") {
-          settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, "accepted", run.conversationId,
-            sent.body.outcome === "answered" ? sent.body.answer : null, true);
-          removeRunDirectory(run.runDir);
-          dropRun(run.requestId);
-        }
-      } finally { ownerRecoveries.delete(run.requestId); }
-      continue;
+      const pending = run.ownerTurn.lateAnswer;
+      if (ownerLateAnswerTerminal(pending)) {
+        // A terminal late answer is never retried. Its row, answer and files
+        // stay for the operator's reconciliation; the sweep only records, once,
+        // that the settled row holds no target slot.
+        if (!run.capacityReleased) changeRun(run.requestId, row => ownerStopPending(row) || relayRequestInFlight(row.requestId) ? row
+          : { ...row, capacityReleased: true });
+        continue;
+      }
+      {
+        // An answer that can never be delivered is written off after its
+        // window, whatever the relay's settings say. A deliverable answer has
+        // no such limit, however long the install was off.
+        if (ownerLateAnswerUndeliverable(run)) { await expireOwnerLateAnswer(run.requestId); continue; }
+        const relay = readRelayStore().relays.find(item => item.id === run.relayId);
+        if (!relay || !ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId)) continue;
+        ownerRecoveries.add(run.requestId);
+        try {
+          const sent = await deliverOwnerLateAnswer(relay, run.requestId, pending.body, pending.files,
+            () => ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId));
+          if (sent.delivery === "accepted") {
+            settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, "accepted", run.conversationId,
+              sent.body.outcome === "answered" ? sent.body.answer : null, true);
+            removeRunDirectory(run.runDir);
+            dropRun(run.requestId);
+          }
+        } finally { ownerRecoveries.delete(run.requestId); }
+        continue;
+      }
     }
     // Accepted completion already ended execution. Finish abandoned cleanup
     // without controlling a host or sending a second service completion.
