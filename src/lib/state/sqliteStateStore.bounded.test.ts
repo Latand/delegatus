@@ -681,3 +681,25 @@ test("paged moves preserve an identical target row under its own key selector", 
     expect(target.revision()).toBe(revision);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a whole-collection snapshot records its copy as named synchronous work", async () => {
+  const { performanceSites, performanceSpans } = await import("@/lib/performanceSpans");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "snapshot-copy-"));
+  const filename = path.join(dir, "state.sqlite");
+  const rows: Row[] = Array.from({ length: 40 }, (_, index) => ({ key: `k${index}`, value: index }));
+  let copies = 0;
+  const options = { collection: "send_failure_notices", schemaVersion: 1, busyMessage: "busy",
+    key: (row: Row) => row.key, decode: (raw: unknown) => raw as Row, clone: (row: Row) => { copies++; return structuredClone(row); } };
+  let store: SqliteStateCollection<Row> | undefined;
+  try {
+    initializeStateCollections(filename, [{ ...options, migrationId: "snapshot-copy-v1", loadRecords: () => rows }]);
+    store = new SqliteStateCollection<Row>(filename, options);
+    store.loadReadonly();
+    performanceSpans.clear(); copies = 0;
+    const since = performance.now();
+    expect(store.snapshot()).toEqual(rows);
+    expect(copies).toBe(40);
+    const named = performanceSpans.snapshot(since).records.filter(record => performanceSites[record.site] === "state.copy");
+    expect(named.map(record => ({ kind: record.kind, rows: record.rows, failed: record.failed }))).toEqual([{ kind: "sync", rows: 40, failed: false }]);
+  } finally { store?.close(); performanceSpans.clear(); fs.rmSync(dir, { recursive: true, force: true }); }
+});

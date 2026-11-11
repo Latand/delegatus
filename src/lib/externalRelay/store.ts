@@ -469,7 +469,11 @@ export async function claimRelayRequestAsync(requestId: string, leaseId: string,
   await withFileLockAsync(file, () => {
     const now = Date.now();
     const ledger = readRelayRequestLedger();
-    const claims = ledger.claims.filter(claim => claim.terminalAt === undefined || now - claim.terminalAt < RELAY_REQUEST_CLAIM_RETENTION_MS);
+    // A claim whose owner process is gone can be claimed again at any time, so
+    // past the retention window it fences nothing and leaves with the tombstones.
+    const claims = ledger.claims.filter(claim => claim.terminalAt === undefined
+      ? now - claim.claimedAt < RELAY_REQUEST_CLAIM_RETENTION_MS || procBackend.processIdentity(claim.ownerPid) === claim.ownerIdentity
+      : now - claim.terminalAt < RELAY_REQUEST_CLAIM_RETENTION_MS);
     const existing = claims.find(claim => claim.requestId === requestId && claim.leaseId === leaseId);
     if (existing) {
       if (existing.terminalAt !== undefined) {
