@@ -9,7 +9,25 @@ import { assertMemberLaunchAllowed } from "../memberLaunchAuthority";
 
 const [mode, memberId, cut, now] = process.argv.slice(2);
 const store = teamStore();
-if (mode === "setup-crash" || mode === "setup-exec-crash") {
+if (mode === "adoption-exec-crash") {
+  const { adoptClaudeRegistryHosts, adoptCodexRegistryHosts } = await import("@/lib/runtime/registry");
+  const { spawnManagedEngine } = await import("@/lib/runtime/agentSignalSandbox");
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "agent-registry.json"));
+  const adopt = cut === "codex" ? adoptCodexRegistryHosts : adoptClaudeRegistryHosts;
+  await adopt(registry, () => ({ cwd: process.env.LLV_STATE_DIR!, env: process.env }),
+    { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" }, () => true, undefined, {
+      adoptHost: async (_id, options) => {
+        options.assertCurrent?.();
+        const child = await spawnManagedEngine(process.execPath, ["--no-env-file", "-e", "console.log('ready'); setInterval(() => {}, 1000)"],
+          { cwd: options.cwd, env: options.env, detached: true }, null, undefined, process.env, undefined, options.assertCurrent);
+        await new Promise<void>(resolve => child.stdout.once("data", () => resolve()));
+        revokeMember(store, store.owner()!, store.member(memberId!)!);
+        console.log(JSON.stringify(captureProcessIdentity(child.pid!)));
+        process.exit(71);
+      },
+    });
+} else if (mode === "setup-crash" || mode === "setup-exec-crash") {
   const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "agent-registry.json"));
   const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd: process.env.LLV_STATE_DIR!, transport: "structured", ownStartingActuation: true,

@@ -40,9 +40,10 @@ function plan(store: TeamStore, registry: AgentRegistry, revocation: MemberRevoc
     const principal = hostPrincipal(registry, entry);
     if (principal?.memberId !== revocation.memberId || principal.fromMessage) continue;
     if (!conversation || !generation) throw new Error("revoked host conversation ownership is unavailable");
+    const receipt = registry.spawnReceiptForHost(entry.key);
     targets.push({ id: sessionKeyId(entry.key), revocationId: revocation.id, kind: "host", conversationId: conversation.id,
       key: entry.key, turnId: entry.structuredHost?.activeTurnRef ?? null, process: entry.structuredHost?.process ?? null,
-      launchId: entry.structuredHostOperationId ?? null, state: "pending" });
+      launchId: receipt?.launchId ?? entry.structuredHostOperationId ?? null, state: "pending" });
   }
   store.transaction(() => {
     for (const target of targets) store.saveRevocationTarget(target);
@@ -85,7 +86,10 @@ async function settleSetup(store: TeamStore, registry: AgentRegistry, receipt: S
   const check = () => {
     assertActive();
     const current = registry.spawnReceipt(receipt.launchId);
-    if (!current || (current.key && registry.hostEntry(current.key)?.structuredHost?.process)
+    const bound = current?.key ? registry.hostEntry(current.key) : null;
+    if (!current || (setup?.adoptionClaimEpoch !== undefined
+      ? bound?.claimEpoch !== setup.adoptionClaimEpoch
+      : current.key && bound?.structuredHost?.process)
       || JSON.stringify([current.launchId, current.conversationId, current.engine, current.createdAt, current.memberRevocationId]) !== JSON.stringify(launchIdentity)
       || JSON.stringify(current.key) !== JSON.stringify(receipt.key) || current.launchProfile.workspace?.memberId !== revocation.memberId
       || current.launchProfile.workspace.fromMessage || !current.admissionOwner
@@ -95,7 +99,11 @@ async function settleSetup(store: TeamStore, registry: AgentRegistry, receipt: S
     return current;
   };
   check();
-  if (!setup || setup.phase === "preparing") {
+  if (setup?.cleanupConfirmed) {
+    if (setup.processes.some(process => processIdentityStatus(process) !== "dead"))
+      throw new Error("revoked setup cleanup evidence is not confirmed");
+    target.process ??= setup.processes[0] ?? null;
+  } else if (!setup || setup.phase === "preparing") {
     // Legacy evidence cannot prove whether exec happened. Current writers
     // record `preparing` before any native adapter is invoked.
     if (!setup || processIdentityStatus(owner) !== "dead") throw new Error("revoked launch host setup cleanup is not confirmed");
@@ -170,6 +178,14 @@ async function settleTarget(store: TeamStore, registry: AgentRegistry, client: R
   }
   if (!target.key) throw new Error("revoked host has no generation fence");
   const provisional = registry.hostEntry(target.key);
+  const adoptionReceipt = registry.spawnReceiptForHost(target.key);
+  if (adoptionReceipt?.hostSetup?.adoptionClaimEpoch !== undefined) {
+    // The previous root can already be dead while adoption's new engine is
+    // executing. Settle that tree before any old-root gone shortcut.
+    if (!adoptionReceipt.hostSetup.processes.some(native => target.process && sameRecordedProcessIdentity(native, target.process)))
+      target.process = null;
+    if (await settleSetup(store, registry, adoptionReceipt, revocation, target, assertActive)) return;
+  }
   if (provisional?.structuredHost && !provisional.structuredHost.process && target.launchId) {
     const receipt = registry.spawnReceipt(target.launchId);
     if (receipt && await settleSetup(store, registry, receipt, revocation, target, assertActive)) return;

@@ -6,7 +6,7 @@ import { NextRequest } from "next/server";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { defaultStartHost, spawnStructuredConversation, type SpawnedStructuredHost } from "@/lib/runtime/structuredSpawn";
 import * as publicationSource from "@/lib/git/repositoryCommitIdentity";
-import { adoptClaudeRegistryHosts } from "@/lib/runtime/registry";
+import { adoptClaudeRegistryHosts, adoptCodexRegistryHosts, flushStructuredHostPersistence } from "@/lib/runtime/registry";
 import { assertMemberLaunchAllowed } from "./memberLaunchAuthority";
 import { reconcileMemberRevocations } from "./memberRevocation";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
@@ -26,7 +26,7 @@ import { teamStore, resetTeamStoreForTests } from "./store";
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
-async function fixture(killFailures = 0) {
+async function fixture(killFailures = 0, engine: "claude" | "codex" = "claude") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "member-revocation-"));
   const previous = process.env.LLV_STATE_DIR;
   cleanups.push(() => { resetTeamStoreForTests(); setAgentRegistryForTests(null); if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous; fs.rmSync(root, { recursive: true, force: true }); });
@@ -44,11 +44,11 @@ async function fixture(killFailures = 0) {
   const reader = child.stdout.getReader();
   await reader.read(); reader.releaseLock();
   const identity = captureProcessIdentity(child.pid);
-  const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd: root, transport: "structured",
+  const begun = beginLegacySpawnFixture(registry, { engine, cwd: root, transport: "structured",
     launchProfile: { workspace: { memberId: person.member.id, workspaceId: "workspace-a" } } });
   if (begun.kind !== "created") throw Error("fixture admission failed");
-  const key = { engine: "claude" as const, sessionId: "00000000-0000-0000-0000-000000000001" };
-  const columns = { ...structuredHostFixture(identity), activeTurnRef: "turn-a" };
+  const key = { engine, sessionId: "00000000-0000-0000-0000-000000000001" };
+  const columns = { ...structuredHostFixture(identity, engine === "claude" ? "claude-broker" : "codex-app-server"), activeTurnRef: "turn-a" };
   const settled = registry.settleSpawn(begun.receipt.launchId, { key, artifactPath: path.join(root, `${key.sessionId}.jsonl`), cwd: root,
     accountId: null, status: "live", host: null, launchProfile: begun.receipt.launchProfile, structuredHost: columns,
     claimEpoch: 1, claimOwner: "fixture", pendingAction: null });
@@ -700,4 +700,143 @@ test("dead setup owner after native exec is recovered by a fresh process before 
   expect(f.store.memberRevocationPending()).toBe(false);
   expect(f.store.events({ actions: ["member.revoked"], limit: 1 })[0]?.detail).toMatchObject({ stoppedHosts: 2, pending: false });
   expect((await f.revoke()).status).toBe(200);
+});
+
+test.each(["before-release", "after-release", "restart-before-release"] as const)(
+  "durable native custody and revocation preceding owner cleanup preserve exact stop count (%s)", async order => {
+  const f = await fixture();
+  const begun = beginLegacySpawnFixture(f.registry, { engine: "claude", cwd: f.root, transport: "structured", ownStartingActuation: true,
+    launchProfile: { workspace: { memberId: f.person.member.id, workspaceId: "workspace-a" } } });
+  if (begun.kind !== "created") throw Error("admission failed");
+  const extra = Bun.spawn([process.execPath, "-e", "console.log('ready'); setInterval(() => {}, 1000)"], { stdout: "pipe", stderr: "ignore" });
+  cleanups.push(async () => { if (extra.exitCode === null) extra.kill("SIGKILL"); await extra.exited; });
+  const reader = extra.stdout.getReader(); await reader.read(); reader.releaseLock();
+  const native = captureProcessIdentity(extra.pid);
+  const host = new FakeEngineHost(undefined, { status: "active", sessionKey: "unbound", endpoint: "fixture:unbound", pid: extra.pid,
+    processStartIdentity: native.startIdentity, eventCursor: 0, protocolVersion: "fixture-v1", activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null });
+  host.release = async () => { if (extra.exitCode === null) extra.kill("SIGTERM"); await extra.exited; };
+  const write = f.registry.deliveryWriteOrBusy.bind(f.registry);
+  let reconciled = false;
+  f.registry.deliveryWriteOrBusy = async (correlation, action) => {
+    const result = await write(correlation, action);
+    if (correlation.label === "spawn.setup-cleanup") {
+      expect(f.registry.spawnReceipt(begun.receipt.launchId)?.hostSetup?.cleanupConfirmed).toBe(true);
+      expect(f.registry.spawnReceipt(begun.receipt.launchId)?.admissionOwner).not.toBeNull();
+      if (order === "after-release") f.registry.releaseStructuredSpawnAdmissionOwner(begun.receipt.launchId, begun.receipt.admissionOwner!);
+      if (order === "restart-before-release") await runChild(f, "reconcile", "after-setup-release");
+      await reconcileMemberRevocations({ store: f.store, registry: f.registry, client: f.client, now: f.nextRecoveryAt, assertActive: () => {} });
+      reconciled = true;
+    }
+    return result;
+  };
+  await expect(spawnStructuredConversation({ registry: f.registry, client: f.client, receipt: begun.receipt, engine: "claude", prompt: "",
+    account: { engine: "claude", accountId: "subscription-a", kind: "legacy", home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } },
+    spec: { engine: "claude", command: "claude", cwd: f.root, windowName: "cleanup-race", launchProfile: begun.receipt.launchProfile },
+  }, { startHost: async () => {
+    f.registry.recordStructuredHostSetup(begun.receipt.launchId, begun.receipt.admissionOwner!, native);
+    revokeMember(f.store, f.owner.member, f.person.member);
+    return host as unknown as SpawnedStructuredHost;
+  } })).rejects.toThrow("member access revoked");
+  expect(reconciled).toBe(true);
+  expect(processIdentityStatus(native)).toBe("dead");
+  expect(f.store.events({ actions: ["member.revoked"], limit: 1 })[0]!.detail).toMatchObject({ stoppedHosts: 2, pending: false });
+  const commands = [...f.commands];
+  await runChild(f, "reconcile");
+  expect((await f.revoke()).status).toBe(200);
+  expect(f.commands).toEqual(commands);
+  expect(f.store.events({ actions: ["member.revoked"], limit: 1 })[0]!.detail).toMatchObject({ stoppedHosts: 2, heldLaunches: 0, pending: false });
+});
+
+test.each((["claude", "codex"] as const).flatMap(engine => [false, true].map(nullRoot => ({ engine, nullRoot }))))(
+  "boot adoption retains the replacement through revoke and Viewer loss (%j)", async ({ engine, nullRoot }) => {
+  const f = await fixture(0, engine);
+  f.child.kill("SIGTERM"); await f.child.exited;
+  const entry = f.registry.hostEntry(f.key)!;
+  f.registry.upsert({ ...entry, status: "unhosted", claimOwner: null,
+    structuredHost: { ...entry.structuredHost!, ...(nullRoot ? { process: null } : {}), writerClaimEpoch: 0 } });
+  const old = f.registry.spawnReceipt(f.receipt.launchId)!;
+  if (old.admissionOwner) f.registry.releaseStructuredSpawnAdmissionOwner(old.launchId, old.admissionOwner);
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures/memberRevocationChild.ts"), "adoption-exec-crash", f.person.member.id, engine], {
+    env: { ...process.env, LLV_STATE_DIR: f.root }, stdout: "pipe", stderr: "pipe",
+  });
+  cleanups.push(async () => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await child.exited; });
+  const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect({ code, err: err.replace(/^.*signal-sandbox.*\n/gm, "") }).toEqual({ code: 71, err: "" });
+  const native = JSON.parse(out) as import("@/lib/processIdentity").ProcessIdentity;
+  cleanups.push(async () => { if (processIdentityStatus(native) === "alive") await terminateStructuredHostTree({ kind: "structured", ...native,
+    startIdentity: native.startIdentity!, bootEpoch: native.bootEpoch ?? null, engine, sessionId: null, conversationId: null,
+    owned: false, seat: false, turnBusy: null, lastActiveAt: null }); });
+  expect(processIdentityStatus(native)).toBe("alive");
+  const custody = f.registry.spawnReceipt(f.receipt.launchId)!.hostSetup;
+  expect(custody?.phase).toBe("executing");
+  const claimEpoch = f.registry.hostEntry(f.key)!.claimEpoch;
+  let reopened = false;
+  const retry = engine === "claude" ? adoptClaudeRegistryHosts : adoptCodexRegistryHosts;
+  await retry(f.registry, () => ({ cwd: f.root, env: process.env }), { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
+    () => true, undefined, { adoptHost: async () => { reopened = true; throw Error("unsettled adoption reopened"); } });
+  expect(reopened).toBe(false);
+  expect(f.registry.hostEntry(f.key)!.claimEpoch).toBe(claimEpoch);
+  expect(f.registry.spawnReceipt(f.receipt.launchId)!.hostSetup).toEqual(custody);
+  await runChild(f, "reconcile");
+  await runChild(f, "reconcile");
+  expect(processIdentityStatus(native)).toBe("dead");
+  expect((await f.revoke()).status).toBe(200);
+  expect(f.store.memberRevocationPending()).toBe(false);
+  expect(f.store.events({ actions: ["member.revoked"], limit: 1 })[0]!.detail).toMatchObject({ stoppedHosts: 1, pending: false });
+  restoreMember(f.store, f.owner.member, f.store.member(f.person.member.id)!);
+  await runChild(f, "reconcile");
+  expect(processIdentityStatus(native)).toBe("dead");
+});
+
+test.each((["claude", "codex"] as const).flatMap(engine => [false, true].map(deferred => ({ engine, deferred }))))(
+  "boot adoption transfers custody only at a successful checkpoint (%j)", async ({ engine, deferred }) => {
+  const f = await fixture(0, engine);
+  f.child.kill("SIGTERM"); await f.child.exited;
+  const old = f.registry.hostEntry(f.key)!;
+  f.registry.upsert({ ...old, status: "unhosted", claimOwner: null,
+    structuredHost: { ...old.structuredHost!, writerClaimEpoch: 0 } });
+  const { spawnManagedEngine } = await import("@/lib/runtime/agentSignalSandbox");
+  let native!: import("node:child_process").ChildProcess;
+  let exited!: Promise<void>;
+  let host!: FakeEngineHost;
+  let failCheckpoint = deferred;
+  const persist = f.registry.setStructuredHostClaimed.bind(f.registry);
+  const checkpoint = spyOn(f.registry, "setStructuredHostClaimed").mockImplementation((...args) => {
+    if (failCheckpoint && args[1].process?.pid === native?.pid) {
+      failCheckpoint = false;
+      throw Error("checkpoint storage temporarily unavailable");
+    }
+    return persist(...args);
+  });
+  cleanups.push(() => checkpoint.mockRestore());
+  const adoptHost = async (_id: string, options: { assertCurrent?: () => void }) => {
+    native = await spawnManagedEngine(process.execPath, ["--no-env-file", "-e", "console.log('ready'); setInterval(() => {}, 1000)"],
+      { cwd: f.root, env: process.env, detached: true }, null, undefined, process.env, undefined, options.assertCurrent);
+    exited = new Promise(resolve => native.once("exit", () => resolve()));
+    cleanups.push(async () => { if (native.exitCode === null && native.signalCode === null) native.kill("SIGKILL"); await exited; });
+    await new Promise<void>(resolve => native.stdout!.once("data", () => resolve()));
+    const identity = captureProcessIdentity(native.pid!);
+    host = Object.assign(new FakeEngineHost(undefined, { status: "idle", sessionKey: f.key.sessionId, endpoint: `stdio:${native.pid}`,
+      pid: native.pid!, processStartIdentity: identity.startIdentity, eventCursor: 1, protocolVersion: "fixture-v1", activeTurnRef: null,
+      pendingAttention: [], activeFlags: [], account: null }), {
+      setWriterFence: () => {}, onStateChange: () => () => {},
+    });
+    return host as unknown as import("@/lib/runtime/claudeStreamBrokerHost").ClaudeStreamBrokerHost
+      & import("@/lib/runtime/codexAppServerHost").CodexAppServerHost;
+  };
+  const adopt = engine === "claude" ? adoptClaudeRegistryHosts : adoptCodexRegistryHosts;
+  const adopted = await adopt(f.registry, () => ({ cwd: f.root, env: process.env }), { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
+    () => true, undefined, { adoptHost });
+  expect(adopted).toHaveLength(1);
+  if (deferred) {
+    expect(f.registry.spawnReceipt(f.receipt.launchId)?.hostSetup?.phase).toBe("executing");
+    expect(f.registry.hostEntry(f.key)?.structuredHost?.process).toEqual(old.structuredHost!.process);
+    await flushStructuredHostPersistence(host);
+  }
+  expect(f.registry.spawnReceipt(f.receipt.launchId)?.hostSetup).toBeUndefined();
+  expect(f.registry.spawnReceipt(f.receipt.launchId)?.admissionOwner).toBeNull();
+  expect(f.registry.hostEntry(f.key)?.structuredHost?.process?.pid).toBe(native.pid!);
+  expect((await f.revoke()).status).toBe(200);
+  await exited;
+  expect(f.store.events({ actions: ["member.revoked"], limit: 1 })[0]!.detail).toMatchObject({ stoppedHosts: 1, pending: false });
 });

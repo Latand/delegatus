@@ -41,6 +41,7 @@ import { randomUUID } from "node:crypto";
 import { registryConversationsForEntryKey, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
 import { assertMemberLaunchAllowed } from "@/lib/team/memberLaunchAuthority";
+import { withStructuredSetupCustody } from "./structuredSetupCustody";
 
 export { structuredHostsEnabled };
 
@@ -54,6 +55,46 @@ function memberAdoptionGuard(registry: AgentRegistry, entry: AgentRegistryEntry)
     assertMemberLaunchAllowed({ launchProfile: profile, memberRevocationId: receipt?.memberRevocationId });
     if (!registry.ownsStructuredHostClaim(entry.key, entry.claimOwner!, entry.claimEpoch))
       throw new Error("member host adoption ownership changed");
+  };
+}
+
+function pendingMemberAdoption(registry: AgentRegistry, entry: AgentRegistryEntry): boolean {
+  const profile = entry.launchProfile ?? registry.launchProfileForPath(entry.artifactPath);
+  if (!profile?.workspace || profile.workspace.fromMessage) return false;
+  const setup = registry.spawnReceiptForHost(entry.key)?.hostSetup;
+  return setup?.adoptionClaimEpoch !== undefined && !setup.cleanupConfirmed;
+}
+
+async function memberAdoptionCustody(registry: AgentRegistry, entry: AgentRegistryEntry, owner: ProcessIdentity,
+  guard: (() => void) | undefined) {
+  if (!guard) return null;
+  const receipt = registry.spawnReceiptForHost(entry.key);
+  if (!receipt) throw new Error("member adoption launch receipt is unavailable");
+  await registry.deliveryWriteOrBusy({ label: "adoption.begin-setup", operationId: receipt.launchId }, () => {
+    guard();
+    registry.beginStructuredHostAdoption(receipt.launchId, entry.key, owner, entry.claimEpoch);
+  });
+  let active = true;
+  return {
+    enabled: () => active,
+    beforeExec: () => { guard(); registry.recordStructuredHostSetup(receipt.launchId, owner); },
+    record: (native: ProcessIdentity) => registry.recordStructuredHostSetup(receipt.launchId, owner, native),
+    checkpoint: (persisted: AgentRegistryEntry) => {
+      if (!active) return;
+      if (persisted.structuredHost?.process) registry.completeStructuredHostAdoption(receipt.launchId, owner);
+      else {
+        registry.confirmStructuredHostSetupCleanup(receipt.launchId, owner);
+        registry.releaseStructuredSpawnAdmissionOwner(receipt.launchId, owner);
+      }
+      active = false;
+    },
+    cleanup: async () => {
+      await registry.deliveryWriteOrBusy({ label: "adoption.setup-cleanup", operationId: receipt.launchId }, () => {
+        registry.confirmStructuredHostSetupCleanup(receipt.launchId, owner);
+        registry.releaseStructuredSpawnAdmissionOwner(receipt.launchId, owner);
+      });
+      active = false;
+    },
   };
 }
 
@@ -163,6 +204,8 @@ export async function persistCodexHost(
 }
 
 export interface StructuredHostPersistenceOptions {
+  /** Runs inside the checkpoint writer, including a deferred first write. */
+  onCheckpoint?: (entry: AgentRegistryEntry) => void;
   cursorDebounceMs?: number;
   /** Initial retry delay, doubled on consecutive refusals up to the cursor interval or 30 s. */
   checkpointRetryMs?: number;
@@ -262,16 +305,20 @@ async function bindStructuredHostPersistence(
   const persist = async (state: HostState, terminal = false): Promise<AgentRegistryEntry> => {
     try {
       const columns = columnsFromState(state, writerClaimEpoch);
-      const persisted = await registry.deliveryWriteOrBusy({ label: "registry.host-checkpoint" }, () => registry.setStructuredHostClaimed(
-        key,
-        /* `unhosted` releases the writer claim permanently. Keeping its wrapper
-           PID would make the released row appear owned for every successor. */
-        terminal && state.status === "unhosted" ? { ...columns, process: null } : columns,
-        terminal && releasedStatus === "dead" ? "dead" : registryStatus(state),
-        claimOwner,
-        writerClaimEpoch,
-        terminal,
-      ));
+      const persisted = await registry.deliveryWriteOrBusy({ label: "registry.host-checkpoint" }, () => {
+        const entry = registry.setStructuredHostClaimed(
+          key,
+          /* `unhosted` releases the writer claim permanently. Keeping its wrapper
+             PID would make the released row appear owned for every successor. */
+          terminal && state.status === "unhosted" ? { ...columns, process: null } : columns,
+          terminal && releasedStatus === "dead" ? "dead" : registryStatus(state),
+          claimOwner,
+          writerClaimEpoch,
+          terminal,
+        );
+        if (entry) options.onCheckpoint?.(entry);
+        return entry;
+      });
       if (!persisted) {
         /* Two refusals share one null. A captured termination tree holds the row
            while this writer still owns it; a lost claim means another writer does. */
@@ -1103,6 +1150,7 @@ export async function adoptCodexRegistryHosts(
       await registry.withOperationLock(entry.key, owner, async () => {
         const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
         if (!current?.structuredHost || !candidate(current)) return;
+        if (pendingMemberAdoption(registry, current)) return;
         const socketOwner = current.structuredHost.process && verifiedCodexSocketOwner({ endpoint: current.structuredHost.endpoint, process: current.structuredHost.process })
           ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process, signalDomain: current.structuredHost.signalDomain, signalBoundary: current.structuredHost.signalBoundary } : undefined;
         const recordedConversation = registryConversationsForEntryKey(startupHostSnapshot(registry, entry.key), sessionKeyId(entry.key))[0];
@@ -1148,6 +1196,7 @@ export async function adoptCodexRegistryHosts(
           }, "dead", claimed.claimOwner!, claimed.claimEpoch, true)));
           return;
         }
+        let custody: Awaited<ReturnType<typeof memberAdoptionCustody>> = null;
         try {
           const memberCurrent = memberAdoptionGuard(registry, claimed);
           memberCurrent?.();
@@ -1171,13 +1220,17 @@ export async function adoptCodexRegistryHosts(
           }
           /* The production static method calls `this.open`; keep its class
              receiver instead of extracting it into an unbound function. */
-          const host = dependencies.adoptHost
-            ? await dependencies.adoptHost(entry.key.sessionId, options)
-            : await CodexAppServerHost.adopt(entry.key.sessionId, options);
-          await bindCodexHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch);
+          custody = await memberAdoptionCustody(registry, claimed, owner, memberCurrent);
+          const host = await withStructuredSetupCustody(custody, () => dependencies.adoptHost
+            ? dependencies.adoptHost(entry.key.sessionId, options)
+            : CodexAppServerHost.adopt(entry.key.sessionId, options));
+          memberCurrent?.();
+          await bindCodexHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch,
+            "unhosted", { onCheckpoint: custody?.checkpoint });
           adopted.push({ key: entry.key, host });
           dependencies.onAdopted?.({ key: entry.key, host });
         } catch (error) {
+          try { await custody?.cleanup(); } catch { /* live setup remains durably owned for reconciliation */ }
           if (error instanceof StructuredHostAdoptionCleanupError
             && error.host instanceof CodexAppServerHost) {
             try {
@@ -1190,6 +1243,7 @@ export async function adoptCodexRegistryHosts(
                 "dead",
               );
               await withHostStopOrigin({ path: "startup-adoption-cleanup", operationId: sessionKeyId(entry.key) }, () => error.host.release());
+              await custody?.cleanup();
             } catch { /* retain the live process and claim until its late reap is observed */ }
             return;
           }
@@ -1267,6 +1321,7 @@ export async function adoptClaudeRegistryHosts(
       await registry.withOperationLock(entry.key, owner, async () => {
         const eligible = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
         if (!eligible?.structuredHost || !shouldAdopt(eligible)) return;
+        if (pendingMemberAdoption(registry, eligible)) return;
         let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
         if (!claimed) {
           const current = startupHostSnapshot(registry, entry.key).entries[`claude:${entry.key.sessionId}`];
@@ -1304,6 +1359,7 @@ export async function adoptClaudeRegistryHosts(
           }, "dead", claimed.claimOwner!, claimed.claimEpoch, true)));
           return;
         }
+        let custody: Awaited<ReturnType<typeof memberAdoptionCustody>> = null;
         try {
           const memberCurrent = memberAdoptionGuard(registry, claimed);
           memberCurrent?.();
@@ -1324,13 +1380,17 @@ export async function adoptClaudeRegistryHosts(
             return;
           }
           /* Claude adoption has the same receiver-bound static open seam. */
-          const host = dependencies.adoptHost
-            ? await dependencies.adoptHost(entry.key.sessionId, options)
-            : await ClaudeStreamBrokerHost.adopt(entry.key.sessionId, options);
-          await bindClaudeHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch);
+          custody = await memberAdoptionCustody(registry, claimed, owner, memberCurrent);
+          const host = await withStructuredSetupCustody(custody, () => dependencies.adoptHost
+            ? dependencies.adoptHost(entry.key.sessionId, options)
+            : ClaudeStreamBrokerHost.adopt(entry.key.sessionId, options));
+          memberCurrent?.();
+          await bindClaudeHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch,
+            "unhosted", { onCheckpoint: custody?.checkpoint });
           adopted.push({ key: entry.key, host });
           dependencies.onAdopted?.({ key: entry.key, host });
         } catch (error) {
+          try { await custody?.cleanup(); } catch { /* live setup remains durably owned for reconciliation */ }
           if (error instanceof StructuredHostAdoptionCleanupError
             && error.host instanceof ClaudeStreamBrokerHost) {
             try {
@@ -1343,6 +1403,7 @@ export async function adoptClaudeRegistryHosts(
                 "dead",
               );
               await withHostStopOrigin({ path: "startup-adoption-cleanup", operationId: sessionKeyId(entry.key) }, () => error.host.release());
+              await custody?.cleanup();
             } catch { /* retain the live process and claim until its late reap is observed */ }
             return;
           }

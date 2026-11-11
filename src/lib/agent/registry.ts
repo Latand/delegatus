@@ -359,7 +359,7 @@ export interface SpawnReceipt {
   hostSetupStartedAt?: string;
   /** Pre-session custody. `preparing` proves no engine exec was admitted;
       `executing` without process evidence remains an uncertain launch. */
-  hostSetup?: { phase: "preparing" | "executing"; processes: ProcessIdentity[]; cleanupConfirmed?: true };
+  hostSetup?: { phase: "preparing" | "executing"; processes: ProcessIdentity[]; cleanupConfirmed?: true; adoptionClaimEpoch?: number };
   /** Revocation tombstone observed by the admission writer. Legacy means none. */
   memberRevocationId?: string | null;
   state: "starting" | "pane-bound" | "host-verified" | "prompt-delivered" | "path-pending" | "completed" | "failed" | "conflicted";
@@ -4699,7 +4699,9 @@ function normalizePendingOrchestratorSeatIdentity(value: unknown): IdentityWaveS
 
 function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnReceipt {
   if (value.hostSetup && (!["preparing", "executing"].includes(value.hostSetup.phase)
-    || !Array.isArray(value.hostSetup.processes))) throw new Error("structured setup custody is malformed");
+    || !Array.isArray(value.hostSetup.processes)
+    || value.hostSetup.adoptionClaimEpoch !== undefined && (!Number.isSafeInteger(value.hostSetup.adoptionClaimEpoch)
+      || value.hostSetup.adoptionClaimEpoch < 1))) throw new Error("structured setup custody is malformed");
   if (value.proactiveTaskIds !== undefined && (!Array.isArray(value.proactiveTaskIds)
     || value.proactiveTaskIds.length > 128 || value.proactiveTaskIds.some(id => typeof id !== "string" || !id))) {
     throw new Error("retained proactive task authority is unreadable");
@@ -4715,6 +4717,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     ...value,
     hostSetup: value.hostSetup ? { phase: value.hostSetup.phase,
       processes: normalizeStructuredTerminationSurvivors(value.hostSetup.processes)!,
+      ...(value.hostSetup.adoptionClaimEpoch === undefined ? {} : { adoptionClaimEpoch: value.hostSetup.adoptionClaimEpoch }),
       ...(value.hostSetup.cleanupConfirmed === true ? { cleanupConfirmed: true } : {}) } : undefined,
     memoryCap: memoryCap ?? undefined,
     clientAttemptId: typeof value.clientAttemptId === "string" ? value.clientAttemptId : null,
@@ -7924,6 +7927,37 @@ export class AgentRegistry {
     });
   }
 
+  /** Boot adoption owns native setup until its first durable host checkpoint.
+      The old generation's process is not evidence of the replacement's exit. */
+  beginStructuredHostAdoption(launchId: string, key: SessionKey, owner: ProcessIdentity, claimEpoch: number): void {
+    this.mutate(file => {
+      const receipt = file.receipts[launchId];
+      const entry = file.entries[sessionKeyId(key)];
+      if (!receipt || !receipt.key || sessionKeyId(receipt.key) !== sessionKeyId(key)
+        || entry?.claimOwner !== structuredClaimOwner(owner) || entry.claimEpoch !== claimEpoch
+        || entry.structuredHost?.writerClaimEpoch !== claimEpoch
+        || receipt.hostSetup?.adoptionClaimEpoch !== undefined && !receipt.hostSetup.cleanupConfirmed)
+        throw new Error("structured adoption custody changed");
+      assertMemberLaunchAllowed(receipt);
+      receipt.admissionOwner = clone(owner);
+      receipt.hostSetupStartedAt = now();
+      receipt.hostSetup = { phase: "preparing", processes: [], adoptionClaimEpoch: claimEpoch };
+    });
+  }
+
+  completeStructuredHostAdoption(launchId: string, owner: ProcessIdentity): void {
+    this.mutate(file => {
+      const receipt = file.receipts[launchId];
+      const entry = receipt?.key ? file.entries[sessionKeyId(receipt.key)] : null;
+      if (!receipt?.admissionOwner || !sameRecordedProcessIdentity(receipt.admissionOwner, owner)
+        || receipt.hostSetup?.adoptionClaimEpoch !== entry?.claimEpoch
+        || entry?.claimOwner !== structuredClaimOwner(owner) || !entry.structuredHost?.process)
+        throw new Error("structured adoption checkpoint is unavailable");
+      delete receipt.hostSetup;
+      receipt.admissionOwner = null;
+    });
+  }
+
   /** Synchronous, non-waiting writers at the native exec boundary. An
       unavailable writer refuses exec; no lock wait may hide a new child. */
   recordStructuredHostSetup(launchId: string, owner: ProcessIdentity, native?: ProcessIdentity): void {
@@ -7934,7 +7968,11 @@ export class AgentRegistry {
         || !sameRecordedProcessIdentity(receipt.admissionOwner, owner)) throw new Error("structured setup custody changed");
       if (!native) {
         assertMemberLaunchAllowed(receipt);
-        if (receipt.state !== "starting") throw new Error("structured setup is no longer admitted");
+        if (receipt.hostSetup.adoptionClaimEpoch !== undefined) {
+          const entry = receipt.key ? file.entries[sessionKeyId(receipt.key)] : null;
+          if (entry?.claimOwner !== structuredClaimOwner(owner) || entry.claimEpoch !== receipt.hostSetup.adoptionClaimEpoch)
+            throw new Error("structured adoption custody changed");
+        } else if (receipt.state !== "starting") throw new Error("structured setup is no longer admitted");
         return;
       }
       receipt.hostSetup.phase = "executing";
