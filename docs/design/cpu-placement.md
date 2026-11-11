@@ -77,6 +77,11 @@ server; a pane sharing the server's cgroup is always placed.
 
 ## Classification
 
+Every local gate service also has `TasksMax=768`, sized from real pre-push and
+browser peaks. Its kernel readback, per-gate peak line, named task-limit failure
+and controller fallback are specified in [Gate task limit](gate-task-limit.md).
+This bound is independent of CPU placement.
+
 A structured host or a tmux pane is work when its conversation holds a
 `pipeline` or `flow` membership; every other host serves the operator,
 orchestrator seats included. Headless runs and workflow stage agents are always

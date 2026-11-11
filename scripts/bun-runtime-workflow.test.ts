@@ -231,7 +231,46 @@ test("README seed and all frame layouts run against the PR build with isolated s
   expect(step.if).toBeUndefined();
   for (const name of ["HOME", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "TMPDIR"]) expect(step.env?.[name]).toContain("${{ runner.temp }}/readme-");
   expect(step.env?.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:1");
-  expect(step.run).toContain("install --with-deps chromium");
   expect(step.run).toContain("bash scripts/gate-slot.sh bun test scripts/capture-readme-media.test.ts");
   expect(step.run).toContain("bash scripts/gate-slot.sh bun scripts/capture-readme-media.ts --check-layout");
+});
+
+test("README layout uses installed Chrome offline and preserves every failed check", () => {
+  const script = steps.find(step => step.name === "Check README seed and frame layout")!.run!;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "readme-browser-"));
+  try {
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    for (const command of ["bash", "mkdir"]) fs.symlinkSync(Bun.which(command)!, path.join(bin, command));
+    // An installer call fails even when every test stub would succeed.
+    fs.writeFileSync(path.join(bin, "bun"), "#!/bin/bash\nexit 97\n", { mode: 0o755 });
+    fs.mkdirSync(path.join(root, "scripts"));
+    fs.writeFileSync(path.join(root, "scripts/gate-slot.sh"), `#!/bin/bash
+set -eu
+printf '%s|%s\\n' "$CHROME_BIN" "$*" >> "$RUNNER_TEMP/invocations"
+if [[ "$2" == test ]]; then exit "$SEED_EXIT"; fi
+exit "$LAYOUT_EXIT"
+`);
+    const chrome = path.join(bin, "google-chrome");
+    for (const [installed, version, seed, layout] of [
+      [true, 0, 0, 0], [false, 0, 0, 0], [true, 19, 0, 0], [true, 0, 17, 0], [true, 0, 0, 23],
+    ] as const) {
+      if (installed) fs.writeFileSync(chrome, '#!/bin/bash\n[[ "$*" == --version ]] || exit 98\nexit "$VERSION_EXIT"\n', { mode: 0o755 });
+      else fs.rmSync(chrome);
+      const scratch = fs.mkdtempSync(path.join(root, "sample-"));
+      const result = Bun.spawnSync([Bun.which("bash")!, "-c", script], {
+        cwd: root, timeout: 5000, env: { ...process.env, PATH: bin, CHROME_BIN: undefined,
+          RUNNER_TEMP: scratch, HOME: path.join(scratch, "home"), XDG_CONFIG_HOME: path.join(scratch, "config"),
+          LLV_STATE_DIR: path.join(scratch, "state"), TMPDIR: path.join(scratch, "tmp"),
+          VERSION_EXIT: String(version), SEED_EXIT: String(seed), LAYOUT_EXIT: String(layout) },
+      });
+      expect(result.exitCode).toBe(installed ? version || seed || layout : 1);
+      const invocations = path.join(scratch, "invocations");
+      const calls = fs.existsSync(invocations) ? fs.readFileSync(invocations, "utf8").trim().split("\n") : [];
+      expect(calls).toEqual(!installed || version !== 0 ? [] : [
+        `${chrome}|bun test scripts/capture-readme-media.test.ts`,
+        ...(seed === 0 ? [`${chrome}|bun scripts/capture-readme-media.ts --check-layout`] : []),
+      ]);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
