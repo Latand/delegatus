@@ -185,6 +185,7 @@ test.skipIf(!process.env.CHROME_BIN)("every capture target is present in the ini
 test.skipIf(!process.env.CHROME_BIN)("initial target readiness does not require unrelated network idle", async () => {
   const { chromium } = await import("playwright-core");
   let release: ((response: Response) => void) | undefined;
+  let requestDeadline: ReturnType<typeof setTimeout> | undefined;
   let requestStarted!: () => void;
   const pendingRequest = new Promise<void>(resolve => { requestStarted = resolve; });
   const server = Bun.serve({
@@ -208,11 +209,17 @@ test.skipIf(!process.env.CHROME_BIN)("initial target readiness does not require 
     page.setDefaultNavigationTimeout(3_000);
     const layout = { ids: { "harbor-api": "fixture" }, files: {} } as unknown as Parameters<typeof openTarget>[3];
     await openTarget(page, `http://127.0.0.1:${server.port}`, { kind: "project", project: "harbor-api" }, layout);
-    await pendingRequest;
+    await Promise.race([
+      pendingRequest,
+      new Promise<never>((_, reject) => {
+        requestDeadline = setTimeout(() => reject(new Error("background request did not start")), 3_000);
+      }),
+    ]);
     await waitForFrameText(page, { id: "board", requiredText: ["Seeded row ready"] }, 3_000);
     expect(release).toBeDefined();
     expect(new URL(page.url()).hash).toBe("#p=fixture");
   } finally {
+    clearTimeout(requestDeadline);
     release?.(new Response("done"));
     server.stop(true);
     await browser?.close();
