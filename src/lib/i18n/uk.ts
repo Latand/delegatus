@@ -2443,6 +2443,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "feed.processingFailed": "Не вдалося показати цей запис",
   "feed.processingFailedRecord": "Запис: {type}",
   "feed.agentEnded": "агент завершився",
+  "feed.pictureMissing": "Зображення недоступне",
   "feed.copyCode": "Скопіювати код",
   "feed.copyMd": "Скопіювати повідомлення (Markdown)",
   "feed.voiceTurn": "Голос",

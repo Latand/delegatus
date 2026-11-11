@@ -27,6 +27,7 @@ import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady, pipelineEvide
 import { databaseFileIdentity, databaseSwapMarker, databaseSwapInProgress, DatabaseReplacedError, openCurrentDatabase } from "./currentDatabase";
 import { collectionReadCache, rememberCollectionReadCache, type ReadCacheSlot } from "./collectionReadCache";
 import { FileTransactionBusyError } from "./fileTransaction";
+import { noteWriterAdmitted } from "./admissionWitness";
 import { isDiskFullError, noteStateCommit, noteStateDiskFull, StateDiskFullError, stateFreeBytes, STATE_DISK_FULL_FLOOR_BYTES } from "./diskFull";
 
 export const STATE_LEASE_MAX_AGE_MS = 15 * 60_000;
@@ -818,6 +819,7 @@ function isBusyError(error: unknown): boolean {
 function withImmediateTransaction<T>(db: Database, busyMessage: string, operation: () => T, collection?: string): T {
   assertOperationLease();
   stateLockAttempt(`state.transaction.${collection ?? "import"}`, () => db.exec("BEGIN IMMEDIATE"), collection);
+  noteWriterAdmitted();
   const holdStart = performance.now();
   try {
     const before = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
@@ -1518,7 +1520,7 @@ export async function readCompactPipelineEvidence<T>(filename: string, prior: Co
     const incremental = prior?.identity === identity && prior.sourceRevision !== undefined && prior.sourceRevision <= sourceRevision;
     let slice = performance.now();
     const yieldIfNeeded = async () => {
-      await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
+      await performanceSpans.wait("pipeline.yield", () => yieldToRuntime());
       assertActive();
       slice = performance.now();
     };
@@ -1659,7 +1661,7 @@ export async function visitStateCollectionsRows(
       catch (error) { throw new Error(`corrupt ${row.collection} SQLite row: ${row.row_key}`, { cause: error }); }
       visit(value, row.collection);
       if (performance.now() - slice >= 4) {
-        await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
+        await performanceSpans.wait("pipeline.yield", () => yieldToRuntime());
         assertActive();
         slice = performance.now();
       }
@@ -3666,6 +3668,7 @@ export class SqliteStateCollection<T> {
         VALUES (?, ?, ?, ?, ?)
       `).run(this.options.collection, ownerToken, process.pid, procBackend.processIdentity(process.pid), Date.now());
       performanceSpans.sync("state.lease-commit", () => db.exec("COMMIT"));
+      noteWriterAdmitted();
       const start = performance.now();
       const operation = viewerLoopMonitor.current() ?? `${this.options.collection}.mutation`;
       const timer = setTimeout(() => {

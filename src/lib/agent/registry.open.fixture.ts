@@ -12,6 +12,10 @@ const filename = path.join(process.env.LLV_STATE_DIR!, "agent-registry.json");
 new registryModule.AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" }).close();
 const peer = new Database(filename.replace(/\.json$/, ".sqlite"));
 peer.exec("PRAGMA busy_timeout=0");
+/* An open asks for the write lock at these steps only when it has something
+   to install there, so the registry is put one step behind: the liveness
+   projection loses its version, or the import its completion mark. */
+peer.query("DELETE FROM registry_meta WHERE key=?").run(site === "runAtomically" ? "liveness_projection_version" : "migration_complete");
 const exec = Database.prototype.exec;
 const prototype = SqliteAgentRegistryStore.prototype as unknown as Record<string, (...args: unknown[]) => unknown>;
 const original = prototype[site!]!;

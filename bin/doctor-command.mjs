@@ -9,7 +9,7 @@ const COPY = {
     labels: {
       "engine.claude": "Claude CLI", "engine.codex": "Codex CLI", "auth.codex": "Codex credential file",
       "transcripts.claude": "Claude transcript root", "transcripts.codex": "Codex transcript root",
-      "transcription.local": "Local transcription", "viewer.server": "Viewer listener",
+      "transcription.local": "Local transcription", "viewer.server": "Viewer listener", "service.login": "Start at login",
     },
     states: { available: "present", degraded: "check needed", blocked: "missing", unknown: "unknown" },
     reasons: {
@@ -23,6 +23,13 @@ const COPY = {
       VIEWER_UNRECOGNIZED: "The listener did not identify the diagnostics endpoint. Check its port and version.",
       PROBE_TIMEOUT: "The read exceeded its deadline. Retry the check.",
       PROBE_ERROR: "The source could not be inspected. Check read permissions and retry.",
+      SERVICE_NOT_INSTALLED: "Not installed: Delegatus does not start at login. delegatus service install adds it.",
+      SERVICE_DISABLED: "Installed and turned off. delegatus service install turns it on.",
+      SERVICE_NOT_RUNNING: "Installed and enabled. It starts at the next login.",
+      SERVICE_RESTARTING: "It keeps failing to start. See its log.",
+      SERVICE_FAILED: "It stopped after repeated failures. Read the log, fix the cause, run delegatus service install.",
+      SERVICE_RUNNING: "Installed, enabled and running.",
+      SERVICE_UNAVAILABLE: "No per-user service manager here.",
     },
   },
   uk: {
@@ -32,7 +39,7 @@ const COPY = {
     labels: {
       "engine.claude": "CLI Claude", "engine.codex": "CLI Codex", "auth.codex": "Файл облікових даних Codex",
       "transcripts.claude": "Каталог розмов Claude", "transcripts.codex": "Каталог розмов Codex",
-      "transcription.local": "Локальна транскрипція", "viewer.server": "Сервер Delegatus",
+      "transcription.local": "Локальна транскрипція", "viewer.server": "Сервер Delegatus", "service.login": "Запуск під час входу",
     },
     states: { available: "наявне", degraded: "потрібна перевірка", blocked: "відсутнє", unknown: "невідомо" },
     reasons: {
@@ -46,6 +53,13 @@ const COPY = {
       VIEWER_UNRECOGNIZED: "Сервер не підтвердив адресу діагностики. Перевірте його порт і версію.",
       PROBE_TIMEOUT: "Читання перевищило відведений час. Повторіть перевірку.",
       PROBE_ERROR: "Джерело не вдалося перевірити. Перевірте права читання й повторіть спробу.",
+      SERVICE_NOT_INSTALLED: "Не встановлено: Delegatus не запускається під час входу. Команда delegatus service install додасть службу.",
+      SERVICE_DISABLED: "Встановлено й вимкнено. Команда delegatus service install увімкне службу.",
+      SERVICE_NOT_RUNNING: "Встановлено й увімкнено. Запуск відбудеться під час наступного входу.",
+      SERVICE_RESTARTING: "Спроби запуску завершуються помилкою. Перегляньте журнал.",
+      SERVICE_FAILED: "Зупинено після повторних помилок. Перегляньте журнал, усуньте причину й виконайте delegatus service install.",
+      SERVICE_RUNNING: "Встановлено, увімкнено й запущено.",
+      SERVICE_UNAVAILABLE: "Менеджер служб користувача тут недоступний.",
     },
   },
 };
@@ -57,6 +71,7 @@ export function formatDoctor(report, lang = "en") {
   return [copy.heading, ...report.capabilities.flatMap(capability => [
     `${glyphs[capability.state]} ${copy.labels[capability.id]}: ${copy.states[capability.state]}`,
     ...(capability.reason ? [`  ${copy.reasons[capability.reason]}`] : []),
+    ...(capability.id === "service.login" && ["SERVICE_FAILED", "SERVICE_RESTARTING"].includes(capability.reason ?? "") ? [report.platform.os === "linux" ? "  journalctl --user -u delegatus.service" : "  ~/Library/Logs/Delegatus/server.log"] : []),
   ])].join("\n");
 }
 

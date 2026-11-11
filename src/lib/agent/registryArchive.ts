@@ -140,7 +140,10 @@ const archiveCandidateBranches = (intentOwned: string) => [
       AND json_extract(s.value_json,'$.state') NOT IN ('completed','failed','conflicted')))`,
   `(collection IN ('lineageEdges','memberships') AND EXISTS (
     SELECT 1 FROM registry_cold c WHERE c.collection='conversations' AND c.row_key=r.row_key))`,
+  /* A stopped intent whose sweep still has opt-outs to write stays hot: the
+     sweep and the readers that honour its decision find it by enumeration. */
   `(collection='migrationIntents' AND json_extract(value_json,'$.state') IN ('complete','stopped')
+    AND json_extract(value_json,'$.stopSweep') IS NULL
     AND NOT ${intentOwned})`,
   `(collection='heldDeliveries' AND json_extract(value_json,'$.state') IN ('delivered','failed','cancelled','superseded'))`,
   `(collection='deliveryOperationOwners' AND json_extract(value_json,'$.terminalState') IN ('delivered','failed'))`,

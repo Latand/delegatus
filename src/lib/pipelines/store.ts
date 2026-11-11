@@ -10,7 +10,7 @@ import { projectStoreSignature } from "@/lib/projects/persistence";
 import { isPublicationRecovery, mergePublicationRecovery, publicationInterrupted, PUBLICATION_RETRY_DELAYS_MS, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { pipelinePauseInputSchema } from "./pauseMetadata";
-import { forEachCooperatively } from "@/lib/cooperative";
+import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { controllerPipelineKeys, controllerReferences, inheritControllerGuards } from "./controllerScope";
 import { StateLockDeferredError, outsideStateLockWait, stateLockAttempt, stateLockProcessKind, waitForStateLock } from "@/lib/state/lockWait";
 import { withWaitCorrelation } from "@/lib/blockingWaits";
@@ -1517,7 +1517,7 @@ export async function loadPipelinesForStartupAsync(): Promise<Pipeline[]> {
   for (const pipeline of evidence.pipelines) {
     result.push(performanceSpans.sync("pipeline.copy", () => cloneLoadedPipeline(pipeline, resolveProject), 1));
     if (performance.now() - slice >= 4) {
-      await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
+      await performanceSpans.wait("pipeline.yield", () => yieldToRuntime());
       // A project move may have committed while this copy yielded.
       resolveProject = projectAliasResolver();
       slice = performance.now();
