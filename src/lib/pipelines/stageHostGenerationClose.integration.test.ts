@@ -87,6 +87,7 @@ const runtimeSocket = path.join(isolated, "runtime-host.sock");
 const generationEnvironment: Record<string, string | undefined> = {
   PATH: process.env.PATH,
   ...isolatedEnvironment,
+  LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
   LLV_STRUCTURED_HOSTS: "1",
   LLV_RUNTIME_HOST_SOCKET: runtimeSocket,
   LLV_RUNTIME_JOURNAL: path.join(isolated, "runtime-events.sqlite"),
