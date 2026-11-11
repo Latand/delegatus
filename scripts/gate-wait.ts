@@ -19,6 +19,21 @@ export const COMPLETION_WAIT_MS = 4 * 60 * 60_000;
 const TAIL_BYTES = 16_384;
 const directory = (log: string) => `${log}.gate`;
 
+/** Only a closed producer observation contributes time; an unavailable
+ * observation source cannot change execution or the terminal check receipt. */
+export function closedQueueSpans(directory: string | null): { start: number; end: number }[] | undefined {
+  if (!directory) return undefined;
+  try {
+    return fs.readdirSync(directory).filter(name => name.endsWith(".json")).sort().slice(0, 256).flatMap(name => {
+      try {
+        const value = JSON.parse(fs.readFileSync(path.join(directory, name), "utf8"));
+        return value.closed === true && Number.isFinite(value.start) && Number.isFinite(value.end) && value.end >= value.start
+          ? [{ start: value.start as number, end: value.end as number }] : [];
+      } catch { return []; }
+    });
+  } catch { return undefined; }
+}
+
 export async function recordGate(log: string, command: string[], manifestFile?: string): Promise<number> {
   log = path.join(fs.realpathSync(path.dirname(log)), path.basename(log));
   const manifest = manifestFile ? manifestSchema.parse(readEnvelope(manifestFile)) : null;
@@ -45,6 +60,9 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
     descriptor = { ...input, wrapper: null, descriptorDigest: descriptorDigest(input) };
     writeEnvelope(path.join(dir, "descriptor.json"), descriptor);
   }
+  let queueTiming: string | null = descriptor ? path.join(dir, "queue-timing") : null;
+  try { if (queueTiming) fs.mkdirSync(queueTiming, { mode: 0o700 }); }
+  catch { queueTiming = null; }
   let code = 127;
   let wrapperSignal: string | null = null;
   let cancellation: Terminal["cancellation"] = null;
@@ -60,6 +78,7 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
       stdio: ["ignore", fd, "pipe"],
       env: { ...process.env, LLV_GATE_WAIT_STARTED: path.join(dir, "running"), ...(descriptor ? {
         LLV_RECORDED_CHECK_DIRECTORY: dir, LLV_RECORDED_CHECK_ID: descriptor.runId,
+        ...(queueTiming ? { LLV_RECORDED_CHECK_WAIT_ROOT: queueTiming } : {}),
         LLV_GATE_RUNNER: "off", LLV_OWNED_RUN_TIMEOUT_MS: String(executionAllowance),
       } : {}) },
     });
@@ -125,8 +144,9 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
       report = { ...report, command: null, commandExit: null, commandSignal: null };
     cancellation ??= reports.map(entry => entry.cancellation).filter((entry): entry is NonNullable<typeof entry> => entry !== null)
       .sort((left, right) => left.atUptimeMs - right.atUptimeMs)[0] ?? null;
+    const queueSpans = closedQueueSpans(queueTiming);
     writeEnvelope(path.join(dir, "result.json"), { version: 1, runId: descriptor.runId, descriptorDigest: descriptor.descriptorDigest,
-      wrapperExit: code, wrapperSignal, cancellation, closedAt: Date.now(), closedUptimeMs: custodyClock(), report, reports,
+      wrapperExit: code, wrapperSignal, cancellation, queueSpans, closedAt: Date.now(), closedUptimeMs: custodyClock(), report, reports,
       dispatch: fs.existsSync(path.join(dir, "running")) || report || reports.length ? "started" : "not-started" } satisfies Terminal);
   }
   const exit = fs.openSync(path.join(dir, "exit.tmp"), "wx", 0o600);

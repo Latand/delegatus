@@ -1,3 +1,4 @@
+import { declaredClassSchema, repeatReasonSchema, type RepeatReason } from "./accounting";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
@@ -3898,7 +3899,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
   const input = renderCutRetryInput(attempt.input, attempt.n, condition.label);
   setCursorState(pipeline, stage.id, "pending");
   pipeline.cursor!.input = input;
-  const retry = await newAttempt(pipeline, stage);
+  const retry = await newAttempt(pipeline, stage, ports.now(), condition.kind === "host_death" ? "host-lost" : condition.kind === "usage_limit" ? "account-limit" : "unknown");
   if (retry) {
     if (modelCapacity(condition) && retry.effectiveRole.engine === attempt.effectiveRole.engine) {
       const account = attemptAccountPin(stage, attempt);
@@ -3933,7 +3934,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
     through advance/fail-edge routing, which writes a fresh relay record. */
 function setCursorState(pipeline: Pipeline, stageId: string, state: NonNullable<Pipeline["cursor"]>["state"]): void {
   const keep = pipeline.cursor?.stageId === stageId
-    ? { input: pipeline.cursor.input, activatedBy: pipeline.cursor.activatedBy, ...(pipeline.cursor.launchedBy ? { launchedBy: pipeline.cursor.launchedBy } : {}) }
+    ? { repeatReason: pipeline.cursor.repeatReason, admittedAt: pipeline.cursor.admittedAt, input: pipeline.cursor.input, activatedBy: pipeline.cursor.activatedBy, ...(pipeline.cursor.launchedBy ? { launchedBy: pipeline.cursor.launchedBy } : {}) }
     : { input: null, activatedBy: null };
   pipeline.cursor = { stageId, state, ...keep };
 }
@@ -4031,7 +4032,17 @@ function latestAcceptedRun(pipeline: Pipeline, stageId: string): PipelineStageAt
   return null;
 }
 
-async function newAttempt(pipeline: Pipeline, stage: PipelineStage): Promise<PipelineStageAttempt | null> {
+function repeatReasonForActivation(pipeline: Pipeline, stage: PipelineStage): RepeatReason {
+  const edge = pipeline.cursor?.activatedBy;
+  const source = edge && pipeline.runs.find(run => run.stageId === edge.stageId)?.attempts.find(a => a.n === edge.attempt);
+  if ((source?.verdict?.status === "fail" || source?.verdict?.status === "needs_decision") && source.verdict.findings?.length) return "review-finding";
+  if (source?.accounting?.repeatReason === "review-finding" && edge?.edge === "pass") return "review-finding";
+  const prior = runFor(pipeline, stage.id)?.attempts.at(-1);
+  if (prior?.suspension?.reason === "account") return "account-limit";
+  return "unknown";
+}
+
+async function newAttempt(pipeline: Pipeline, stage: PipelineStage, now: string, reason?: RepeatReason): Promise<PipelineStageAttempt | null> {
   const run = runFor(pipeline, stage.id);
   if (!run) {
     await park(pipeline, "pipeline stage run record is missing");
@@ -4040,6 +4051,9 @@ async function newAttempt(pipeline: Pipeline, stage: PipelineStage): Promise<Pip
   const cursorRelay = pipeline.cursor?.stageId === stage.id ? pipeline.cursor : null;
   const attempt: PipelineStageAttempt = {
     n: run.attempts.length + 1,
+    accounting: { admittedAt: run.attempts.length && cursorRelay?.admittedAt === run.attempts.at(-1)?.accounting?.admittedAt
+      ? now : cursorRelay?.admittedAt ?? now, startedAt: null,
+      repeatReason: run.attempts.length ? reason ?? cursorRelay?.repeatReason ?? repeatReasonForActivation(pipeline, stage) : null, time: null },
     state: "pending",
     effectiveRole: structuredClone(stage.effectiveRole),
     launchId: null,
@@ -4065,7 +4079,7 @@ async function newAttempt(pipeline: Pipeline, stage: PipelineStage): Promise<Pip
     error: null,
   };
   /* One hand launches one attempt; a relaunch the engine makes after it is the engine's. */
-  if (pipeline.cursor) delete pipeline.cursor.launchedBy;
+  if (pipeline.cursor) { delete pipeline.cursor.launchedBy; delete pipeline.cursor.repeatReason; }
   run.attempts.push(attempt);
   return attempt;
 }
@@ -4188,6 +4202,7 @@ export function adoptAttempt(
   }
   const attempt: PipelineStageAttempt = {
     n: run.attempts.length + 1,
+    accounting: { admittedAt: null, startedAt: conversationRef.startedAt, repeatReason: "unknown", time: null },
     historical: true,
     state: "running",
     effectiveRole,
@@ -4401,6 +4416,7 @@ async function advancePipeline(
     return;
   }
   pipeline.cursor = {
+    admittedAt: ports.now(),
     stageId: successor.next,
     state: "pending",
     input: successor.handoff && !successor.recheck ? budgetSpentInput(attempt?.output ?? null, successor.handoff) : attempt?.output ?? null,
@@ -5179,6 +5195,7 @@ async function routeFailedAttempt(
       answered): nothing was reviewed, so there are no findings to hand past a
       spent budget and the edge loops and parks as it always did. */
   reviewed = true,
+  admittedAt?: string,
 ): Promise<boolean> {
   if (!stage.onFail) return false;
   const terminalGrant = terminalReviewGrantForAttempt(pipeline, stage, attempt);
@@ -5212,6 +5229,7 @@ async function routeFailedAttempt(
   // Historical transport traversals must not shorten a new explicit grant.
   if (targetStage && (terminalGrant?.stageId === stage.id || used < loopRounds)) {
     pipeline.cursor = {
+      admittedAt,
       stageId: targetStage.id,
       state: "pending",
       input,
@@ -5234,6 +5252,7 @@ async function routeFailedAttempt(
        it wrote one nobody reviewed. */
     attempt.reviewedHead = attempt.reviewHeadSha ?? pipeline.lastPassedCommit ?? null;
     pipeline.cursor = {
+      admittedAt,
       stageId: targetStage.id,
       state: "pending",
       input,
@@ -6281,6 +6300,8 @@ async function settleStageVerdict(
         failEdgeInput(parsed),
         parsed.verdict.findings?.[0] ?? "stage verdict: fail",
         parsed.verdict.status === "fail",
+        true,
+        ports.now(),
       )
     ) {
       if (decisionRoutedAsFail) attempt.decisionRequested = true;
@@ -6402,7 +6423,7 @@ async function retryOutOfMemoryStage(pipeline: Pipeline, stage: PipelineStage, a
   pipeline.state = "running";
   pipeline.stateDetail = `${error}; retrying once memory recovers`;
   setCursorState(pipeline, stage.id, "pending");
-  const retry = await newAttempt(pipeline, stage);
+  const retry = await newAttempt(pipeline, stage, ports.now());
   if (!retry) return;
   retry.input = renderOutOfMemoryRetryInput(attempt.input, attempt.n, kill);
   retry.memoryWait = { startedAt: ports.now(), rounds: 0, retryAfter: new Date(unixMs(ports.now()) + 60_000).toISOString(), budgetMs: MEMORY_WAIT_BUDGET.budgetMs, retryMaxMs: MEMORY_WAIT_BUDGET.retryMaxMs };
@@ -6818,7 +6839,7 @@ async function startReplacementAttempt(
   const orphan = lost.orphanStopped ? "; its agent process was still running and Delegatus stopped it by its recorded identity" : "";
   attempt.error = `${INTERRUPTION_WORDS[cause].error}${why}${orphan}; replaced by a fresh stage attempt`;
   attempt.restartRecovery ??= { ...recovery };
-  const replacement = await newAttempt(pipeline, stage);
+  const replacement = await newAttempt(pipeline, stage, ports.now(), cause === "restart" || cause === "host-lost" ? cause : "unknown");
   if (!runFor(pipeline, stage.id) || !replacement) {
     await park(pipeline, interruptedTurnRecoveryParkDetail("reservation", cause === "restart"), attempt);
     return;
@@ -8591,7 +8612,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
             const retry = current.runtimeSwitches!.find(item => item.id === record.id)!.retry!;
             retry.completedAt = ports.now(); delete retry.pendingReason;
             resetStageForRetry(live, stage);
-            const next = (await newAttempt(live, stage))!;
+            const next = (await newAttempt(live, stage, ports.now(), "operator-revision"))!;
             next.input = current.input;
             next.activatedBy = current.activatedBy ? { ...current.activatedBy } : null;
             next.restartContext = { previousAttempt: current.n, transcriptPath: record.from.agentPath };
@@ -9060,7 +9081,7 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   }
   attempt.state = "failed"; attempt.completedAt = ports.now(); attempt.error = attempt.suspension.detail;
   resetStageForRetry(pipeline, stage);
-  const next = (await newAttempt(pipeline, stage))!;
+  const next = (await newAttempt(pipeline, stage, ports.now()))!;
   next.input = attempt.input;
   next.activatedBy = attempt.activatedBy ? { ...attempt.activatedBy } : null;
   next.restartContext = { previousAttempt: attempt.n, transcriptPath: attempt.agentPath };
@@ -9596,6 +9617,7 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
     }
     attempt.executionRuntime = "cloud";
     attempt.state = "running"; attempt.startedAt = ports.now();
+    if (attempt.accounting) attempt.accounting.startedAt ??= attempt.startedAt;
     attempt.cloud = { phase: "reserved", environmentId,
       branch: pipeline.delivery.target.branch.replace(/^refs\/heads\//, ""), headSha: pipeline.lastPassedCommit,
       deadlineAt: new Date(unixMs(ports.now()) + cloudStageDeadlineMs(runtime, attempt.effectiveRole.access)).toISOString(),
@@ -9653,8 +9675,8 @@ async function tickRunStage(
   const canSpendRecoveryCheck = () => ports.monotonicNow() < recoveryAccountingDeadline;
   const prior = currentAttempt(pipeline, stage.id);
   const attempt = pipeline.cursor?.state === "pending" && prior && ["passed", "failed", "needs_decision", "skipped"].includes(prior.state)
-    ? await newAttempt(pipeline, stage)
-    : prior ?? await newAttempt(pipeline, stage);
+    ? await newAttempt(pipeline, stage, ports.now())
+    : prior ?? await newAttempt(pipeline, stage, ports.now());
   if (!attempt || pipeline.state === "needs_decision") return;
   if (attempt.activation || unstartedPendingAttempt(attempt) && pipelineHasActivation(pipeline)) {
     if (!attempt.launchId && !attempt.conversationId && !attempt.report && !attempt.verdict) {
@@ -9867,6 +9889,7 @@ async function tickRunStage(
     const bound = attemptStage(stage, attempt);
     attempt.state = "spawning";
     attempt.startedAt = activationNow;
+    if (attempt.accounting) attempt.accounting.startedAt ??= activationNow;
     setCursorState(pipeline, stage.id, "spawning");
     spawnsThisProcess.add(attemptKey(pipeline, stage, attempt));
     try {
@@ -10345,7 +10368,7 @@ async function tickRunStage(
     attempt.state = "failed";
     attempt.completedAt = ports.now();
     attempt.error = HISTORICAL_MISSING_STAGE_VERDICT;
-    if (await routeFailedAttempt(pipeline, stage, attempt, HISTORICAL_MISSING_STAGE_VERDICT, HISTORICAL_MISSING_STAGE_VERDICT, true, false)) return;
+    if (await routeFailedAttempt(pipeline, stage, attempt, HISTORICAL_MISSING_STAGE_VERDICT, HISTORICAL_MISSING_STAGE_VERDICT, true, false, ports.now())) return;
     await park(pipeline, HISTORICAL_MISSING_STAGE_VERDICT, attempt);
     return;
   }
@@ -11757,7 +11780,7 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
   delete wait.stageRetry;
   delete attempt.controllerWait;
   resetStageForRetry(pipeline, stage);
-  const next = await newAttempt(pipeline, stage);
+  const next = await newAttempt(pipeline, stage, ports.now());
   if (next) {
     const fallback = !target && (retry.fallback ?? (wait.resetsAt === null));
     next.providerFallbackRetries = (attempt.providerFallbackRetries ?? 0) + (fallback ? 1 : 0);
@@ -14566,6 +14589,8 @@ export async function createPipelineFromRequest(
   // Interactive callers can acknowledge the existing durable creation queue
   // when a writer is busy. Share one admission deadline with the earlier
   // validation/preflight work, leaving time for the acknowledgement to render.
+  const taskClass = declaredClassSchema.safeParse(req.taskClass ?? {});
+  if (!taskClass.success) return { error: "invalid taskClass declaration", status: 400 };
   const admissionDeadline = options.queueWhenBusy ? performance.now() + 500 : undefined;
   assertWorkspaceExecution();
   if (options.conversationSource !== undefined && !isPipelineConversationSource(options.conversationSource)) {
@@ -14730,12 +14755,19 @@ export async function createPipelineFromRequest(
   if (base && !base.ok) {
     return { error: followsBaseBranch && !followsLocalBranch ? `${base.error}; fetch origin ${requestedBaseBranch} in this checkout and create the draft again` : base.error, status: 409 };
   }
-  const inventedTasks = loadTasksByIds(new Set(taskIds)).filter(task => task.proactive && !proactiveCandidateDecision(task).adopted);
+  const declaredTasks = loadTasksByIds(new Set(taskIds));
+  const inventedTasks = declaredTasks.filter(task => task.proactive && !proactiveCandidateDecision(task).adopted);
   if (inventedTasks.length && !options.creationRequest) {
     const key = `proactive:${inventedTasks.map(task => task.id).sort().join(":")}`;
     options = { ...options, creationRequest: { key, digest: crypto.createHash("sha256").update(JSON.stringify({ task, spec, stages: normalized.stages, taskIds })).digest("hex") } };
   }
   const pipeline = buildPipeline({
+    taskClass: req.taskClass !== undefined ? taskClass.data : (() => {
+      const classes = declaredTasks.map(task => task.accounting?.declaredClass).filter(Boolean);
+      if (!classes.length || classes.length !== declaredTasks.length) return taskClass.data;
+      const { project: _project, ...declaration } = classes[0]!;
+      return classes.every(row => JSON.stringify(row) === JSON.stringify(classes[0])) ? declaration : taskClass.data;
+    })(),
     id: inventedTasks.length && options.creationRequest ? crypto.createHash("sha256").update(options.creationRequest.key).digest("hex").slice(0, 16) : crypto.randomUUID().slice(0, 8),
     task,
     taskIds,
@@ -15708,7 +15740,8 @@ async function resolveDecision(
   setCursorState(pipeline, stage.id, "pending");
   pipeline.cursor!.input = renderDecisionInput(attempt.input, decision);
   recordHandLaunch(pipeline, actor, decision.at);
-  const next = (await newAttempt(pipeline, stage))!;
+  const next = (await newAttempt(pipeline, stage, ports.now()))!;
+  next.accounting!.repeatReason = req.repeatReason ?? "unknown";
   next.decisionAnswerId = decision.clientRequestId;
   if (publicationDecision && pipeline.delivery?.operation?.state === "settled") {
     recordSettledPublicationFailure(pipeline, attempt, ports);
@@ -15984,6 +16017,8 @@ export async function patchPipeline(
   assertAuthority?: () => void,
   workspaceMemberId?: string,
 ): Promise<PipelinePatchResult> {
+  if (req.repeatReason !== undefined && (!repeatReasonSchema.safeParse(req.repeatReason).success || !["retry-stage", "resolve-decision"].includes(req.action)))
+    return { error: "invalid repeatReason for this action", status: 400 };
   assertAuthority?.();
   const memberInput = workspaceMemberId && ["resolve-decision", "continue-review", "update-draft", "add-stage", "override-stage"].includes(req.action);
   const inputPrincipal = (pipelines: readonly Pipeline[]) => {
@@ -16439,6 +16474,7 @@ export async function patchPipeline(
       // Before the pin marker existed, only an explicit base resolved a draft.
       if (!unresolved && pipeline.baseRefPinned === undefined) pipeline.baseRefPinned = true;
       pipeline.state = "provisioning";
+      if (pipeline.cursor) pipeline.cursor.admittedAt = ports.now();
       pipeline.stateDetail = unresolved ? PIPELINE_BASE_UNRESOLVED_DETAIL : null;
       recordHandLaunch(pipeline, actor, ports.now());
     } else if (req.action === "update-draft") {
@@ -17017,7 +17053,7 @@ export async function patchPipeline(
             "Repair the following publication refusal using this stage's current instructions, then report the result:",
             repair.detail].filter(Boolean).join("\n\n");
           recordHandLaunch(pipeline, actor, ports.now());
-          await newAttempt(pipeline, stage);
+          await newAttempt(pipeline, stage, ports.now(), req.repeatReason ?? "unknown");
           pipeline.state = "running";
           pipeline.pausedState = null;
           pipeline.stateDetail = null;
@@ -17178,6 +17214,7 @@ export async function patchPipeline(
         attempt.completedAt ??= ports.now();
       }
       resetStageForRetry(pipeline, stage);
+      if (pipeline.cursor) { pipeline.cursor.admittedAt = ports.now(); pipeline.cursor.repeatReason = req.repeatReason ?? "unknown"; }
       recordHandLaunch(pipeline, actor, ports.now());
     } else if (req.action === "skip-stage") {
       const budgetRefusal = terminalBudgetDecisionRefusal(attempt);

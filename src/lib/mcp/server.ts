@@ -1,3 +1,5 @@
+import { declaredClassSchema, repeatReasonSchema } from "@/lib/pipelines/accounting";
+import { taskDeclarationSchema, acceptTaskSchema } from "@/lib/tasks/accounting";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { FLOW_RETIREMENT } from "@/lib/flows/retirement";
 import { ISSUE_REPORT_RESPONSE_RULE } from "@/lib/issueReports/approvalForm";
@@ -4375,6 +4377,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     operationId: z.string().min(1).describe("The operationId a send_message call returned."),
   }).passthrough(),
   create_task: z.object({
+    accounting: taskDeclarationSchema.optional().describe("Freeze acceptance criteria, task class, original-task membership and defect correction link at creation. Unknown fields stay null."),
     progress: z.number().int().min(0).max(100).nullable().optional()
       .describe("Task progress estimate from 0 to 100; omitted or null leaves it absent on creation. On a finding match, omitted preserves it and null clears it. Time and reporter are server-derived. Maintain it whenever you update the task."),
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
@@ -4410,6 +4413,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("The machine that runs the task on a linked board; a new task always runs on the machine that creates it, so the only value is \"here\"."),
   }).passthrough(),
   update_task: z.object({
+    accept: acceptTaskSchema.optional().describe("Record acceptance against creation criteria with evidence. Requires current expectedProject and expectedRevision. Done alone records no acceptance."),
     summary: taskSummaryInputSchema.nullable().optional().describe("The task's Summary panel: headline, two or three sentences, what is left. Replaces it; null clears it. Author and time are server-derived."),
     progress: z.number().int().min(0).max(100).nullable().optional()
       .describe("Task progress estimate from 0 to 100; null clears it, omitted preserves it. Use taskId; cannot combine with refine. Time and reporter are server-derived. Maintain it whenever you update the task."),
@@ -4469,6 +4473,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     }
   }).meta({ dependentRequired: { expectedProject: ["expectedRevision"], expectedRevision: ["expectedProject"], hide: ["expectedProject", "expectedRevision"], restoreHold: ["expectedProject", "expectedRevision"], pos: ["expectedProject", "expectedRevision"], placement: ["expectedProject", "expectedRevision"] } }),
   create_pipeline: z.object({
+    taskClass: declaredClassSchema.optional().describe("Class declared at creation: size and money/access/dataMigration flags. Unknown stays null; project is controller-derived."),
     clientRequestId: clientRequestIdSchema,
     recoveryOnly: recoveryOnlySchema,
     delivery: z.object({
@@ -4502,6 +4507,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     publication: z.enum(["internal", "remote-branch"]).optional().describe("Omitted: publish when the owner delivery target has a remote, local-only when it has none. internal: never push while the lane runs. remote-branch: requires a remote, pushes every accepted revision and fences reviews on the delivery branch. Without baseRef, the controller fetches origin/<baseBranch> time-bounded, or resolves local <baseBranch> when origin is absent."),
   }).passthrough(),
   pipeline_action: z.object({
+    repeatReason: repeatReasonSchema.optional().describe("Why retry-stage or resolve-decision repeats the stage. Omitted stays unknown unless the controller knows the cause."),
     src: z.string().optional().describe("set-src: creator transcript path; required for this action."),
     overwrite: z.boolean().optional().describe("set-src: true authorizes replacing existing creator lineage; defaults to false."),
     resumeCondition: pipelineResumeConditionSchema.optional().describe("pause: remind when this date arrives or fresh cached usage for the named account/window falls below belowPercent. Omit for a reminder after 24 hours. Reminders never resume a lane automatically."),

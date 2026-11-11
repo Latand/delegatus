@@ -4779,6 +4779,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private acceptNotification(method: string, params: JsonObject, reconcileBufferedLifecycle = false, receivedAt?: string): void {
+    const accountingAt = reconcileBufferedLifecycle ? undefined : receivedAt ?? new Date().toISOString();
     /* #1629: the canonical transcript. These are the app-server's own
        notifications, so they survive a data-channel drop and are what the
        thread's committed timeline is built from. Answered before the pending
@@ -4901,7 +4902,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       if (reconcileBufferedLifecycle) this.bufferedActiveTurnId = turnId;
       this.activeTurnId = turnId;
       this.selectModel(this.currentImageModel());
-      this.emit({ kind: "turn-started", turnId });
+      this.emit({ kind: "turn-started", turnId, accountingAt });
       return;
     }
     if (method === "item/agentMessage/delta") {
@@ -4941,7 +4942,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       const user = record(params.item);
       const operationId = user?.type === "userMessage" ? stringField(user, "clientId") : null;
       this.emit({
-        kind: "item",
+        kind: "item", accountingAt,
         turnId: eventTurnId,
         item: this.boundImageBodies(params.item),
         phase,
@@ -4968,7 +4969,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       if (this.activeTurnId === turnId) this.activeTurnId = null;
       if (reconcileBufferedLifecycle
         && !this.events.some((event) => event.kind === "turn-started" && event.turnId === turnId)) {
-        this.emit({ kind: "turn-started", turnId });
+        this.emit({ kind: "turn-started", turnId, accountingAt });
       }
       if (status !== "completed") {
         this.cancelVoiceStream(turnId);
@@ -4977,7 +4978,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         if (stream) this.clearVoiceStreamTimer(stream);
         this.voiceStreams.delete(turnId);
       }
-      this.emit({ kind: "turn-ended", turnId, status });
+      this.emit({ kind: "turn-ended", turnId, status, accountingAt });
       this.settlePendingCompactionsFromTerminalTurn(turn, status);
       for (const [itemId, itemTurn] of this.openToolItems) if (itemTurn === turnId) this.openToolItems.delete(itemId);
       /* Only this host's own boundary interrupt counts as the cut: a turn the

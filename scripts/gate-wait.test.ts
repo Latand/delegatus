@@ -1,10 +1,11 @@
-import { afterEach, expect, test } from "bun:test";
+import { reportCpuWait, cpuInheritedWaitMs } from "../src/lib/runtime/cpuAdmissionBudget";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
-import { waitForGateCompletion, gateSnapshot, logTail, waitForGate } from "./gate-wait";
+import { waitForGateCompletion, gateSnapshot, logTail, waitForGate, closedQueueSpans } from "./gate-wait";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { checkEnvironment } from "./gate-cache";
 import { isolatedEnvironment } from "./local-gate";
@@ -359,3 +360,22 @@ test.skipIf(process.platform !== "linux")("recorder death ends its original supe
     expect(fs.readFileSync(path.join(f.root, "executions"), "utf8")).toBe("run\n");
   } finally { if (descriptor.wrapper) await stopFixtureIdentity(descriptor.wrapper, 5000); }
 }, 45_000);
+
+
+test("closed queue observations round-trip independently of execution budgets", () => {
+  const f = fixture();
+  const env = { LLV_CPU_WAIT_ROOTS: "[]", LLV_RECORDED_CHECK_WAIT_ROOT: f.root };
+  const clock = spyOn(Date, "now").mockReturnValue(1000);
+  let end: (() => void) | undefined;
+  try {
+    end = reportCpuWait(env);
+    expect(closedQueueSpans(f.root)).toEqual([]);
+    clock.mockReturnValue(1500); end(); end = undefined;
+    expect(closedQueueSpans(f.root)).toEqual([{ start: 1000, end: 1500 }]);
+    expect(cpuInheritedWaitMs(env)).toBe(0);
+    fs.writeFileSync(path.join(f.root, "invalid.json"), "not JSON");
+    fs.writeFileSync(path.join(f.root, "open.json"), JSON.stringify({ start: 1500, end: 2000, closed: false }));
+    expect(closedQueueSpans(f.root)).toEqual([{ start: 1000, end: 1500 }]);
+    expect(closedQueueSpans(path.join(f.root, "missing"))).toBeUndefined();
+  } finally { end?.(); clock.mockRestore(); }
+});

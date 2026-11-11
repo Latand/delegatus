@@ -1,3 +1,5 @@
+import { readNativeTiming } from "./attemptTiming";
+import { splitAttemptTime } from "@/lib/pipelines/accounting";
 import * as publicationSource from "@/lib/git/repositoryCommitIdentity";
 import * as telegramLaunch from "./telegramConnectorEnv";
 import * as mcpTickFixture from "../monitor/seatTickController.fixture";
@@ -12,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { AgentRegistry } from "@/lib/agent/registry";
@@ -2409,7 +2411,7 @@ describe("CodexAppServerHost", () => {
     expect(replacement.identity.threadId).toBe("durable-thread");
     expect(replacementServer.requests.some((request) => request.method === "thread/resume")).toBeTrue();
     const replay = replacement.attach(1)[Symbol.asyncIterator]();
-    expect((await replay.next()).value).toEqual({ kind: "turn-started", turnId: "turn-1", seq: 2 });
+    expect((await replay.next()).value).toEqual({ kind: "turn-started", turnId: "turn-1", seq: 2, accountingAt: expect.any(String) });
     expect((await replay.next()).value).toMatchObject({ kind: "item", phase: "completed", seq: 3 });
     expect((await replay.next()).value).toEqual({ kind: "session-status", status: "unhosted", seq: 4 });
     expect((await replay.next()).value).toEqual({ kind: "session-status", status: "idle", seq: 5 });
@@ -5230,7 +5232,7 @@ describe("CodexAppServerHost", () => {
 
     const events = eventStore.load(parentThreadId);
     expect(events.filter((event) => event.kind !== "session-status")).toEqual([
-      { kind: "turn-started", turnId: parentTurnId, seq: 2 },
+      { kind: "turn-started", turnId: parentTurnId, seq: 2, accountingAt: expect.any(String) },
       { kind: "delta", turnId: parentTurnId, text: "The parent answer ", seq: 3 },
       { kind: "delta", turnId: parentTurnId, text: "stays one ", seq: 4 },
       { kind: "delta", turnId: parentTurnId, text: "continuous stream.", seq: 5 },
@@ -8390,3 +8392,27 @@ for (const scenario of ["pending-denial", "replayed-start", "restored-replayed-s
       await assertWake(true);
     } finally { await bindStructuredDeliveryQueue([], { client: null }); await stop(); await host.release(); journal.close(); registry.close(); }
   });
+
+
+test("native accounting clocks reach the retained time reader through the real Codex producer", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-timing-"));
+  const threadId = "accounting-thread";
+  const server = new FakeAppServer(threadId);
+  const events = new FileRuntimeEventStore(root);
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: events, spawnProcess: fakeSpawn(server) });
+  const at = (ms: number) => new Date(ms).toISOString();
+  try {
+    setSystemTime(new Date(1000));
+    await host.send({ id: "accounting-turn", text: "Run the check" });
+    setSystemTime(new Date(2000));
+    server.notify("item/started", { threadId, turnId: "turn-1", item: { id: "tool", type: "commandExecution", command: "true" } });
+    setSystemTime(new Date(3000));
+    server.notify("item/completed", { threadId, turnId: "turn-1", item: { id: "tool", type: "commandExecution", command: "true", exitCode: 0 } });
+    const open = splitAttemptTime(at(1000), at(4000), readNativeTiming(threadId, root));
+    expect(open).toMatchObject({ modelMs: 1000, toolsMs: 1000, unknownMs: 1000 });
+    setSystemTime(new Date(5000));
+    server.notify("turn/completed", { threadId, turn: { id: "turn-1", status: "completed" } });
+    expect(splitAttemptTime(at(1000), at(5000), readNativeTiming(threadId, root)))
+      .toMatchObject({ modelMs: 3000, toolsMs: 1000, unknownMs: 0 });
+  } finally { setSystemTime(); await host.release(); }
+});

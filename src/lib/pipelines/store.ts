@@ -1,3 +1,5 @@
+import { settleAttemptAccounting } from "./attemptAccounting";
+import { attemptAccountingSchema, declaredClassSchema, laneClassSchema, repeatReasonSchema } from "./accounting";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
 import { assertPipelineNotRetiring, admitAttemptRetirement } from "./retirementClaim";
 import { captureProcessIdentity } from "@/lib/processIdentity";
@@ -326,6 +328,8 @@ function isAttempt(value: unknown, index: number): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const attempt = value as Record<string, unknown>;
   return (
+    (attempt.accounting === undefined || attemptAccountingSchema.safeParse(attempt.accounting).success
+      && (attempt.n === 1 || (attempt.accounting as import("./accounting").AttemptAccounting).repeatReason !== null)) &&
     attempt.n === index + 1 && isSetupResult(attempt.setup) &&
     (attempt.cloud === undefined || isCloudStageAttempt(attempt.cloud)) &&
     (attempt.executionRuntime === undefined || ["local", "cloud", "cloud-then-local"].includes(String(attempt.executionRuntime))) &&
@@ -1134,6 +1138,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
         && Number.isSafeInteger(pipeline.remoteAction.takeover?.expectedEpoch) && pipeline.remoteAction.takeover!.expectedEpoch > 0
         && typeof pipeline.remoteAction.takeover?.reason === "string" && pipeline.remoteAction.takeover.reason.length > 0)))) &&
     (pipeline.stageReports === undefined || (Array.isArray(pipeline.stageReports) && pipeline.stageReports.length <= MAX_PIPELINE_STAGE_REPORTS && pipeline.stageReports.every(isStageReportEntry))) &&
+    (pipeline.taskClass === undefined || laneClassSchema.safeParse(pipeline.taskClass).success) &&
     (pipeline.pos === undefined || (
       typeof pipeline.pos === "object" && pipeline.pos !== null &&
       Number.isFinite(pipeline.pos.x) && Number.isFinite(pipeline.pos.y)
@@ -1161,6 +1166,8 @@ function isPipelineShape(value: unknown): value is Pipeline {
     typeof cursor !== "object" ||
     !ids.includes(cursor.stageId) ||
     !["pending", "spawning", "running", "reviewing", "committing"].includes(cursor.state) ||
+    (cursor.admittedAt !== undefined && !Number.isFinite(Date.parse(cursor.admittedAt))) ||
+    (cursor.repeatReason !== undefined && !repeatReasonSchema.safeParse(cursor.repeatReason).success) ||
     !(cursor.input === undefined || isNullableString(cursor.input)) ||
     !isActivation(cursor.activatedBy) ||
     (cursor.activatedBy != null && !ids.includes(cursor.activatedBy.stageId))
@@ -1636,6 +1643,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
     closeReport: pipeline.closeReport ? structuredClone(pipeline.closeReport) : undefined,
     project: resolveProject(pipeline.project),
     taskIds: [...pipeline.taskIds],
+    ...(pipeline.taskClass ? { taskClass: { ...pipeline.taskClass } } : {}),
     proactiveTaskIds: pipeline.proactiveTaskIds ? [...pipeline.proactiveTaskIds] : undefined,
     creationIntent: pipeline.creationIntent ? { ...pipeline.creationIntent } : undefined,
     spec: typeof pipeline.spec === "string" ? pipeline.spec : undefined,
@@ -1672,6 +1680,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
       attempts: Array.isArray(run.attempts)
         ? run.attempts.map((attempt) => ({
             ...attempt,
+            ...(attempt.accounting ? { accounting: structuredClone(attempt.accounting) } : {}),
             ...(attempt.setup ? { setup: { ...attempt.setup, command: [...attempt.setup.command] } } : {}),
             ...(attempt.startupOwnerWait ? { startupOwnerWait: { ...attempt.startupOwnerWait } } : {}),
             ...(attempt.roleMemoryDispatchWait ? { roleMemoryDispatchWait: { ...attempt.roleMemoryDispatchWait } } : {}),
@@ -1919,6 +1928,9 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
       ? error
       : new PipelineStoreError("pipeline registry contains malformed records", { cause: error }),
     validate: (pipeline: Pipeline) => {
+      for (const run of pipeline.runs) for (const attempt of run.attempts.slice(-2)) {
+        if (attempt.completedAt && attempt.accounting && !attempt.accounting.time) settleAttemptAccounting(attempt);
+      }
       releaseTerminalDelivery(pipeline);
       if (!isPipeline(pipeline)) {
         throw new PipelineStoreError("refusing to persist a malformed pipeline record");
@@ -2567,6 +2579,7 @@ export function pipelineIdentity(id: string, task: string, repoDir: string): Pic
 }
 
 export function buildPipeline(input: {
+  taskClass?: import("./accounting").DeclaredClass;
   id: string;
   task: string;
   taskIds?: string[];
@@ -2591,6 +2604,7 @@ export function buildPipeline(input: {
     ...(input.creationIntent ? { creationIntent: { ...input.creationIntent } } : {}),
     ...(input.spec ? { spec: input.spec } : {}),
     ...(input.inputContext ? { inputContext: structuredClone(input.inputContext) } : {}),
+    taskClass: { ...declaredClassSchema.parse(input.taskClass ?? {}), project: input.project },
     project: input.project,
     repoDir: input.repoDir,
     ...identity,
@@ -2605,7 +2619,7 @@ export function buildPipeline(input: {
       onFail: defaultStageFailEdge(stage, stage.onFail),
     })),
     runs: input.stages.map((stage) => ({ stageId: stage.id, attempts: [] })),
-    cursor: input.stages.length ? { stageId: input.stages[0]!.id, state: "pending", input: null, activatedBy: null } : null,
+    cursor: input.stages.length ? { admittedAt: input.state === "draft" || !Number.isFinite(Date.parse(input.now)) ? undefined : input.now, stageId: input.stages[0]!.id, state: "pending", input: null, activatedBy: null } : null,
     state: input.state ?? "provisioning",
     pausedState: null,
     stateDetail: null,
