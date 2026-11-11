@@ -465,6 +465,81 @@ test("an unconfirmed between-tests diagnostic alone retains the deadline policy"
   expect(comparatorEnding(error).code).toBe(75);
 });
 
+test.each(["deadline", "completed", "no retry refusal", "pre-existing retry refusal"] as const)("diagnostic retry assertions keep their verdict across comparator processes: %s", mode => {
+  const f = fixture(source(true));
+  const marker = path.join(f.dir, "retry-assertion-runs");
+  const scheduled = `import { test, expect, describe } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+const side = basename(process.cwd()) === "baseline" ? "base" : "head";
+const marker = ${JSON.stringify(marker)} + "-" + side;
+const run = existsSync(marker) ? Number(readFileSync(marker, "utf8")) + 1 : 1;
+writeFileSync(marker, String(run));
+test("A initial assertion", () => expect(side === "base" || run > 2).toBe(true));
+test("B retry regression", () => expect(side === "base"
+  ? ${JSON.stringify(mode)} !== "pre-existing retry refusal"
+  : run !== 2 || ${JSON.stringify(mode)} === "no retry refusal").toBe(true));
+describe("diagnostic", () => { if (side === "head" && run === 1) throw new Error("E initial diagnostic"); });`;
+  writeFileSync(path.join(f.dir, "example.test.ts"), scheduled);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "Diagnostic retry assertion schedule");
+  const base = f.git("rev-parse", "HEAD");
+  const driver = path.join(f.dir, "driver.ts");
+  writeFileSync(driver, `import { touchedTests, comparatorEnding, FLAKY_BUDGET_MS } from ${JSON.stringify(path.join(root, "scripts/local-gate-tests.ts"))};
+import { publicationDeadlineOnly } from ${JSON.stringify(path.join(root, "src/lib/pipelines/publication.ts"))};
+// Only the comparator clock advances. The real test processes complete their
+// reports and cleanup before the next filtered confirmation is denied admission.
+let now = 0;
+Object.defineProperty(performance, "now", { value: () => now });
+try {
+  const result = await touchedTests(${JSON.stringify(f.dir)}, ${JSON.stringify(base)}, ["example.test.ts"], { log: line => {
+    console.log(line);
+    if (${JSON.stringify(mode)} !== "completed" && line.startsWith("touched-tests: head rerun file ")) now = FLAKY_BUDGET_MS + 1;
+  } });
+  console.log("retryable=false"); process.exitCode = result.introduced.length ? 1 : 0;
+} catch (error) { const ending = comparatorEnding(error); console.log(ending.line); console.log("retryable=" + publicationDeadlineOnly(ending.line)); process.exitCode = ending.code; }`);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    for (const side of ["base", "head"]) writeFileSync(marker + "-" + side, "0");
+    const outcome = spawnSync(process.execPath, [driver], { cwd: f.dir, env: f.env, encoding: "utf8", timeout: 30000 });
+    const blocking = mode === "deadline" || mode === "completed";
+    expect(outcome.status, outcome.stdout + outcome.stderr).toBe(blocking ? 1 : 75);
+    expect(outcome.stdout).toContain(`retryable=${!blocking}`);
+    expect(outcome.stdout).toContain("touched-tests: head rerun file example.test.ts:");
+    if (blocking) expect(outcome.stdout).toContain("NEW example.test.ts: B retry regression");
+    else expect(outcome.stdout).not.toContain("NEW example.test.ts:");
+    if (mode !== "completed") {
+      expect(outcome.stdout).toContain("flaky rerun budget");
+      expect(readFileSync(marker + "-head", "utf8")).toBe("2");
+      expect(outcome.stdout).not.toContain("NEW example.test.ts: A initial assertion");
+    }
+    // The schedule becomes green in a fresh process; it cannot undo the
+    // established refusal or turn that refusal into an automatic retry.
+    const next = cliAt(f, base);
+    expect(next.status, next.stdout + next.stderr).toBe(0);
+    expect(next.stdout).toContain("green head; no baseline checkout or sample needed");
+  }
+});
+
+test.each(["base", "head"] as const)("diagnostic retry assertions retain later %s exit causes", async failingSide => {
+  const initial: TestSite = { file: "example.test.ts", suite: "", name: "A initial assertion", kind: "test", occurrence: 0 };
+  const added: TestSite = { ...initial, suite: "contract", name: "B retry regression" };
+  const diagnostic: TestSite = { ...initial, name: "<between-tests error> transient", kind: "error" };
+  const base: TestRun = { failures: [], passed: [initial, added], completed: [initial.file], elapsedMs: 0 };
+  const head: TestRun = { ...base, failures: [initial, diagnostic], passed: [added] };
+  for (const cause of [new BudgetExhausted("confirmation deadline"), new Error("confirmation cancelled"),
+    new Error("ownership refused"), new Error("cleanup refused")]) {
+    const error = await confirmFailures(base, head, (side, sites) => {
+      if (sites.some(site => site.kind === "error")) return { ...head, failures: [initial, added], passed: [] };
+      if (side === failingSide) throw cause;
+      return side === "base" ? base : { ...head, failures: [initial], passed: [added] };
+    }).catch(error => error);
+    const ending = comparatorEnding(error);
+    expect(ending.code).toBe(1);
+    expect(ending.line).toContain(cause.message);
+    expect(ending.line).toContain("NEW example.test.ts: contract > B retry regression");
+    expect(ending.line).not.toContain("NEW example.test.ts: A initial assertion");
+  }
+});
+
 const serviceTest = test.skipIf(process.platform !== "linux"
   || spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" }).status !== 0);
 serviceTest.each(["timeout first", "cleanup first", "only timeouts"] as const)("filtered worker refusals survive comparator restarts: %s", mode => {

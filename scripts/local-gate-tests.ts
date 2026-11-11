@@ -80,6 +80,8 @@ const occurrenceCount = (sites: readonly TestSite[], site: TestSite) => sites.fi
  */
 export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "base" | "head", sites: readonly TestSite[]) => TestRun | Promise<TestRun>) {
   const comparison = compareTests(base, head);
+  const initialAssertions = new Set(head.failures.filter(site => site.kind === "test").map(comparisonKey));
+  const needsConfirmation = (site: TestSite) => site.kind === "test" && initialAssertions.has(comparisonKey(site));
   const flaky: FlakySite[] = [];
   // A completed file can still report an unhandled rejection after a timed-out
   // test. Re-run that entire file once before a transient diagnostic parks a
@@ -111,7 +113,7 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
     }
     // Only assertions in the initial sample have the occurrence counts required
     // for filtered confirmation. New retry failures above remain blocking.
-    const candidates = [...new Map(comparison.introduced.filter(site => site.kind === "test" && head.failures.some(other => comparisonKey(other) === comparisonKey(site))).map(site => [occurrenceKey(site), site])).values()];
+    const candidates = [...new Map(comparison.introduced.filter(needsConfirmation).map(site => [occurrenceKey(site), site])).values()];
     if (!candidates.length) return { ...comparison, flaky };
     const evidence = candidates.map(site => ({ site,
       base: { pass: occurrenceCount(base.passed, site), fail: occurrenceCount(base.failures, site) },
@@ -168,12 +170,14 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
     const keepNonFlaky = (sites: TestSite[]) => sites.filter(site => !flakyOccurrences.has(occurrenceKey(site)));
     return { ...comparison, introduced: keepNonFlaky(comparison.introduced), preexisting: keepNonFlaky(comparison.preexisting), flaky };
   } catch (error) {
-    // A later confirmation deadline cannot erase a file refusal already
-    // established against the base. Between-tests errors still owe their one
-    // full-file retry; an ordinary runner deadline alone remains retryable.
-    const retained = comparison.introduced.filter(site => site.kind === "error"
-      && site.name !== `${RUNNER_ERROR}runner did not finish (124)`
-      && (diagnosticRetryCompleted || !site.name.startsWith("<between-tests error> ")));
+    // Every exceptional exit retains refusals already established against
+    // the base, including retry-only assertions outside filtered confirmation.
+    // Initial assertions and between-tests errors still owe their existing
+    // confirmations; an ordinary runner deadline alone remains retryable.
+    const retained = comparison.introduced.filter(site => site.kind === "test"
+      ? !needsConfirmation(site)
+      : site.name !== `${RUNNER_ERROR}runner did not finish (124)`
+        && (diagnosticRetryCompleted || !site.name.startsWith("<between-tests error> ")));
     if (!retained.length) throw error;
     throw new Error([error instanceof Error ? error.message : String(error),
       ...retained.map(site => `NEW ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)}`)].join("\n"));

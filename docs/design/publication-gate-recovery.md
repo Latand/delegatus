@@ -58,6 +58,13 @@ full-file diagnostic retry later times out. A repeated or newly observed error
 from a completed diagnostic retry also remains decisive. Matching pre-existing
 errors keep their comparison policy; a between-tests error still owes its
 existing full-file retry before it becomes decisive.
+New assertions established by that complete retry also retain their `NEW`
+identity and reason when a later confirmation expires, is cancelled, or
+refuses ownership or cleanup. They return exit 1 and prevent automatic retry.
+Initial assertions still owe filtered confirmation; a deadline with no
+established refusal retains exit 75. The process controls in
+`scripts/local-gate-tests.retry.test.ts` exercise both outcomes across fresh
+comparator processes with a fixed clock and test schedule.
 The checkpoint controls exercise both a real surviving child followed by
 aggregate expiry and a clean expiry that resumes green files in a new process.
 
