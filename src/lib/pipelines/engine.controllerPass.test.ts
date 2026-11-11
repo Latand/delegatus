@@ -847,7 +847,7 @@ test("continuation failures cannot starve later cancellation or host teardown ac
   // deadline, beyond Bun's default five-second budget for this whole test.
 }, 30_000);
 
-test.each([0,1000])("resident terminal hosts and stale flow cleanup use indexed peer ownership with %s retained peers", async history => {
+test.each([0,1000])("resident terminal hosts use indexed peer ownership with %s retained peers", async history => {
   const { h, lane } = await committing();
   lane.state = "completed"; lane.cursor = null;
   const attempt = lane.runs[0]!.attempts[0]!;
@@ -856,28 +856,26 @@ test.each([0,1000])("resident terminal hosts and stale flow cleanup use indexed 
   Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
   peer.runs[0]!.attempts[0]!.state = "running";
   peer.runs[0]!.attempts[0]!.flowId = "attached-flow";
-  lane.pendingReviewFlowCleanup = ["attached-flow", "orphan-flow"];
   const retained = Array.from({ length: history }, (_, index) => {
     const row = structuredClone(lane); row.id = `ownership-history-${index}`;
     Object.assign(row,pipelineIdentity(row.id,row.task,row.repoDir));
-    row.state = "closed"; row.closedAt = h.ports.now(); row.pendingReviewFlowCleanup = [];
+    row.state = "closed"; row.closedAt = h.ports.now();
     row.delivery = undefined; row.runs = row.runs.map(run => ({ ...run, attempts: [] }));
     return row;
   });
   savePipelines([lane, peer, ...retained]);
   h.ports.stageHostResident = async () => true;
   h.ports.conversationAgentActive = async () => false;
-  let stopped = 0; const closed: string[] = [];
+  let stopped = 0;
   h.ports.stopStageAgent = async () => { stopped++; return { outcome: "stopped" }; };
-  h.ports.closeFlow = async id => { closed.push(id); return {}; };
   const original = SqliteStateCollection.prototype.loadReadonly;
   const loads = spyOn(SqliteStateCollection.prototype, "loadReadonly").mockImplementation(function(this: SqliteStateCollection<unknown>, ...args) {
-    if (new Error().stack?.match(/reconcileTerminalStageHosts|drainPendingStaleControllerFlows|settleStaleControllerFlow/)) throw new Error("whole collection ownership read");
+    if (new Error().stack?.match(/reconcileTerminalStageHosts/)) throw new Error("whole collection ownership read");
     return original.apply(this, args);
   });
   try {
     await tickPipelinesController([], h.ports);
-    expect(stopped).toBe(0); expect(closed).toEqual(["orphan-flow"]);
+    expect(stopped).toBe(0);
     expect(await controllerFlowAttached("attached-flow")).toBe(true);
     const rows = loadPipelines(); rows[1]!.runs[0]!.attempts[0]!.state = "passed"; savePipelines(rows);
     await tickPipelinesController([], h.ports);
@@ -885,7 +883,7 @@ test.each([0,1000])("resident terminal hosts and stale flow cleanup use indexed 
   } finally { loads.mockRestore(); }
 });
 
-test.each([64, 4096])("closed-lane cleanup keeps eligibility checks bounded with %s unlaunched attempts", async history => {
+test.each([64, 4096])("a closed lane with leftover review-flow cleanup ids keeps eligibility checks bounded with %s unlaunched attempts", async history => {
   const { h, lane } = await committing();
   const original = lane.runs[0]!.attempts[0]!;
   lane.state = "closed"; lane.cursor = null; lane.closedAt = h.ports.now();
@@ -910,9 +908,8 @@ test.each([64, 4096])("closed-lane cleanup keeps eligibility checks bounded with
   };
   try { await tickPipelinesController([], h.ports); }
   finally { Array.prototype.some = some; }
-  expect(closed).toEqual(["cleanup-flow"]);
+  expect(closed).toEqual([]);
   expect(visits).toBeLessThanOrEqual(256);
-  expect(loadPipelines()[0]!.pendingReviewFlowCleanup ?? []).toEqual([]);
   expect((await selectPipelineControllerWork(Number.MAX_SAFE_INTEGER, [])).some(work => work.row_key === lane.id)).toBe(true);
 }, 30_000);
 
