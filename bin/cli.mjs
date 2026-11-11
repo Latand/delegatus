@@ -97,6 +97,8 @@ Options:
   -h, --help           Show this help
 
 Commands:
+  service install [--port <n>]  Start Delegatus at login (opt-in)
+  service remove       Remove the login service
   stop --all           Stop the Viewer, the runtime host and every agent
                        host Delegatus started`,
     badPort: (value) => `Invalid port: ${value}`,
@@ -153,6 +155,8 @@ Commands:
   -h, --help           Показати довідку
 
 Команди:
+  service install [--port <n>]  Запускати Delegatus під час входу
+  service remove       Видалити службу входу
   stop --all           Зупинити Viewer, runtime host і кожен хост агента,
                        який запустив Delegatus`,
     badPort: (value) => `Некоректний порт: ${value}`,
@@ -1465,9 +1469,15 @@ async function main() {
   // settings and must not ask for custody that the settlement released.
   delete process.env.LLV_LAUNCHER_CREDENTIAL_HANDOFF;
   startupLock.release();
+  // The bootstrap retains successful startup after shutdown removes the record.
+  // Its private child channel also covers a stop immediately after readiness.
+  if (process.connected && typeof process.send === "function") {
+    try { process.send({ kind: "delegatus-launcher-healthy" }, () => {}); }
+    catch { /* A departed bootstrap cannot receive this optional observation. */ }
+  }
 
-  /* Restart requests are taken only once startup has finished, and only from
-     a checkout: a packaged install is updated by its package manager. */
+  /* Restart requests are taken once startup finishes, for checkouts and
+     packaged installs whose launcher supports relaunch. */
   {
     const attemptWeb = async (release, verifyPage = true, keepWhenRefused = false) => {
       if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname, packageRoot)) {
@@ -1692,7 +1702,7 @@ function handOffLauncher({ checkout, entry, record }) {
   return new Promise((done) => {
     const env = { ...process.env, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: checkout };
     const child = spawn(process.execPath, [...process.execArgv, entry, ...process.argv.slice(2)], {
-      cwd: checkout, env, stdio: "inherit",
+      cwd: checkout, env, stdio: ["inherit", "inherit", "inherit", "ipc"],
     });
     let forwarded = false;
     let startupSettled = false;
@@ -1721,11 +1731,21 @@ function handOffLauncher({ checkout, entry, record }) {
     process.on("SIGTERM", forward);
     let spawnError = null;
     let timer;
+    let healthTimer;
+    const settled = () => {
+      startupSettled = true;
+      clearInterval(healthTimer);
+      clearTimeout(timer);
+    };
+    child.on("message", message => {
+      if (message?.kind === "delegatus-launcher-healthy") settled();
+    });
     let finished = false;
     const finish = started => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
+      clearInterval(healthTimer);
       clearTimeout(signalStopTimer);
       clearTimeout(signalKillTimer);
       process.off("SIGINT", forward);
@@ -1740,7 +1760,7 @@ function handOffLauncher({ checkout, entry, record }) {
         try { recorded = JSON.parse(readFileSync(record, "utf8"))?.launcher?.pid === child.pid; } catch { /* no record */ }
       }
       const oneShot = ["team", "stop", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
-      if (!recorded && !forwarded && !oneShot) {
+      if (!recorded && !startupSettled && !forwarded && !oneShot) {
         console.error(`[self-update] installed launcher could not start (${spawnError?.message || `exit ${status}`}); using the checkout launcher.`);
         finish(false);
       } else {
@@ -1749,6 +1769,11 @@ function handOffLauncher({ checkout, entry, record }) {
       }
     });
     const json = file => { try { return JSON.parse(readFileSync(file, "utf8")); } catch { return null; } };
+    // Older releases have no readiness message. Retain their healthy record too.
+    healthTimer = setInterval(() => {
+      if (startupHandoffSucceeded(child.pid, child.exitCode == null && child.signalCode == null, forwarded, json(record))) settled();
+    }, 100);
+    healthTimer.unref?.();
     const directory = dirname(record);
     const suffix = record.slice(record.lastIndexOf("launcher-") + 9);
     const trialFile = join(directory, `trial-${suffix}`);
@@ -1868,7 +1893,10 @@ async function checkoutLauncher() {
   await main();
 }
 
-if (process.argv[2] === "doctor") {
+if (process.argv[2] === "service") {
+  const { runServiceCommand } = await import("./login-service.mjs");
+  process.exitCode = await runServiceCommand(process.argv.slice(3), { root: findPackageRoot(cliDir), lang: LANG });
+} else if (process.argv[2] === "doctor") {
   // Stay outside launcher custody, release selection and startup side effects.
   try {
     const { runDoctorCommand } = await import("./doctor-command.mjs");

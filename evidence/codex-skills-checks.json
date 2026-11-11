@@ -710,15 +710,15 @@
     }
   },
   "currentVerification": {
-    "generatedAt": "2026-11-11T13:11:12.666019+00:00",
-    "mainParent": "662a6012b39f051669da557d828c13b9e82aa27d",
+    "generatedAt": "2026-11-11T13:30:25.158175+00:00",
+    "mainParent": "e4215ed935d94a83199982734a51eaa83edbc51c",
     "reviewedParent": "0a6252a353e95767dfcbf374652cbcb4e75a4194",
     "status": "Final merged source verified; pipeline publication owns push and hosted CI.",
     "isolation": "One explicit test file per recorded gate; private HOME, XDG_CONFIG_HOME, TMPDIR, LLV_STATE_DIR and engine homes, Viewer control URL on closed port 1. Heavy checks sequential; the test preload supplies further per-file isolation.",
     "testRuntime": "Bun 1.4.0",
     "summary": {
       "files": 20,
-      "passed": 1386,
+      "passed": 1387,
       "matchingMainFailures": 45,
       "skipped": 1,
       "newFailures": 0
@@ -1013,12 +1013,12 @@
           "scripts/local-gate.hooks.test.ts"
         ],
         "exit": 0,
-        "finishedAt": "2026-11-11T12:52:53.654354+00:00",
+        "finishedAt": "2026-11-11T13:26:41.305167+00:00",
         "pass": 37,
         "fail": 0,
         "skip": 0,
-        "durationSeconds": 106.97,
-        "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e"
+        "durationSeconds": 148.46,
+        "baseRevision": "e4215ed935d94a83199982734a51eaa83edbc51c"
       },
       {
         "file": "scripts/local-gate.test.ts",
@@ -1028,12 +1028,12 @@
           "scripts/local-gate.test.ts"
         ],
         "exit": 0,
-        "finishedAt": "2026-11-11T12:54:30.885251+00:00",
-        "pass": 63,
+        "finishedAt": "2026-11-11T13:28:17.383128+00:00",
+        "pass": 64,
         "fail": 0,
         "skip": 0,
-        "durationSeconds": 96.66,
-        "baseRevision": "941e0193d0bdf083b3c6a0d06132de55b07dd22e"
+        "durationSeconds": 94.95,
+        "baseRevision": "e4215ed935d94a83199982734a51eaa83edbc51c"
       },
       {
         "file": "src/lib/memory/roleHistoryRows.test.ts",
@@ -1444,7 +1444,8 @@
           "--noEmit"
         ],
         "exit": 0,
-        "finishedAt": "2026-11-11T13:03:26.412124+00:00"
+        "finishedAt": "2026-11-11T13:03:26.412124+00:00",
+        "baseRevision": "662a6012b39f051669da557d828c13b9e82aa27d"
       },
       "synced-lint": {
         "command": [
@@ -1454,7 +1455,8 @@
           "662a6012b39f051669da557d828c13b9e82aa27d"
         ],
         "exit": 0,
-        "finishedAt": "2026-11-11T13:03:34.056193+00:00"
+        "finishedAt": "2026-11-11T13:03:34.056193+00:00",
+        "baseRevision": "662a6012b39f051669da557d828c13b9e82aa27d"
       },
       "synced-build": {
         "command": [
@@ -1463,7 +1465,8 @@
           "build"
         ],
         "exit": 0,
-        "finishedAt": "2026-11-11T13:06:49.479955+00:00"
+        "finishedAt": "2026-11-11T13:06:49.479955+00:00",
+        "baseRevision": "662a6012b39f051669da557d828c13b9e82aa27d"
       },
       "synced-viewer": {
         "command": [
@@ -1471,7 +1474,8 @@
           "scripts/verify-viewer-runtime.ts"
         ],
         "exit": 0,
-        "finishedAt": "2026-11-11T13:06:57.271025+00:00"
+        "finishedAt": "2026-11-11T13:06:57.271025+00:00",
+        "baseRevision": "662a6012b39f051669da557d828c13b9e82aa27d"
       },
       "synced-socket": {
         "command": [
@@ -1480,7 +1484,8 @@
           "--codex-socket"
         ],
         "exit": 0,
-        "finishedAt": "2026-11-11T13:07:10.454144+00:00"
+        "finishedAt": "2026-11-11T13:07:10.454144+00:00",
+        "baseRevision": "662a6012b39f051669da557d828c13b9e82aa27d"
       },
       "synced-host": {
         "command": [
@@ -1490,7 +1495,8 @@
           "bun"
         ],
         "exit": 0,
-        "finishedAt": "2026-11-11T13:07:29.276314+00:00"
+        "finishedAt": "2026-11-11T13:07:29.276314+00:00",
+        "baseRevision": "662a6012b39f051669da557d828c13b9e82aa27d"
       }
     },
     "mergeHookControls": {
@@ -1567,12 +1573,13 @@
       "Whitespace-only cleanup in src/lib/accounts/codex.ts and src/lib/conversation/actions.test.ts satisfies the staged-whitespace check",
       "Latest workspace fromMessage metadata and report-picture retention remain intact.",
       "Pre-commit lint uses incoming published main history during a pending merge; regression controls keep unpublished errors blocking.",
-      "A trailing empty line inherited in src/lib/memory/roleHistoryRows.test.ts was removed for the staged-whitespace gate."
+      "A trailing empty line inherited in src/lib/memory/roleHistoryRows.test.ts was removed for the staged-whitespace gate.",
+      "Final main catch-up merged without conflict and keeps gate task-peak diagnostics alongside the merge-aware lint baseline."
     ],
     "driverDisposition": "scripts/observe-codex-skills.py removed as a one-shot driver. Both existing JSON files remain as retained evidence with historical and current records separated.",
     "sourceDigests": {
       "scripts/local-gate.hooks.test.ts": "9ad51a3775187173f5127ceb32b87a4caa9053192e09965ee8ff844f77f91dca",
-      "scripts/local-gate.ts": "b1c6979cf380de60cd52b94daf44f3c4de4f5d15cb56afe0a89b529575e5e3e9",
+      "scripts/local-gate.ts": "40b149103ef42ded4b40a7b2bb4793e2894c55f94f9c7adde5f64177b2fb0b0e",
       "src/lib/accounts/codex.ts": "8dca720c950c4fb38ded048967d5d21e999231ca72b7ee87c83fc963be75da92",
       "src/lib/accounts/codexAppServer.test.ts": "df69e600605e52f66d0bb509038ede91a44df7c988f4a5699764dce432eb7596",
       "src/lib/accounts/codexAppServer.ts": "efd778631fb8aedf232ff11feb40518496e0147715a6ceae332331525556d249",
@@ -1606,7 +1613,50 @@
     "publication": "No deployment or live-service action. Normal hooks remain enabled. Hosted checks, including complete bun-runtime, belong to pipeline publication.",
     "pullRequest": {
       "title": "Omit machine skills instructions from delegated Codex launches",
-      "body": "Delegated Codex launches (pipeline stages and role-preset spawns) use `skills.include_instructions=false`. Operator-owned root sessions inherit their account configuration. The policy travels on the launch profile through resume and account migration; no setting or interface is added.\n\nAn isolated native Codex 0.166.0 app-server, using the production thread-config builder and a port-0 local Responses stub, measured the launch developer message at **23,563 \u2192 1,311 UTF-8 bytes**, saving **22,252 bytes** in each of two alternating pairs. The separate first developer scaffold stayed at 21,779 bytes; total developer text fell from 45,342 to 23,090 bytes. All other developer text matched byte for byte after removing the skills block. Both nested and dotted override forms were confirmed on the native app-server. The historical 0.162.1 observation remains labelled separately in `evidence/codex-skills-instructions.json`.\n\nLaunch coverage includes:\n\n- CLI fresh/resume and publication preparation; transcript-based and receipt-based terminal attach; ordinary spawn admission for operator, delegated child and role-preset launches.\n- Local pipeline admission and hosted Codex Cloud stages; structured fresh/resume; startup rehosting, verified socket adoption and the native socket's reduced resume configuration; both startup and foreground recovery.\n- Account migration metadata fork, target validation resume and successor publication, including legacy role recovery; durable resume-profile copying, tested through JSON and SQLite registry restarts.\n- Existing closed ephemeral and Cloud relay policy, with the operator Cloud path retaining inherited instructions. Voice companion is an operator interface; account authentication, version/protocol and shell-policy probes create no conversation developer message. Scheduled Daily Report uses the operator spawn lane; Codex update rehearsals run isolated diagnostic fixtures.\n\nIntegration with current main preserves stage Git environments, MCP/plugin grants during adoption, and the expanded foreground recovery and claim-fence scenarios. The three conflicting files are `src/lib/agent/spawnCommand.telegram.test.ts`, `src/lib/runtime/startup.ts` and `src/lib/runtime/structuredRecovery.test.ts`. Main's removed Claude tmux test stays removed. Three main files received whitespace-only cleanup required by the staged-whitespace gate. Later main additions to report-picture retention and workspace launch metadata are preserved.\n\nA merge-aware pre-commit lint baseline uses published history from the incoming parent. Real Git regression cases show that inherited main errors pass, while new errors and errors from unpublished incoming branches remain blocked; the controls also cover main advancing during a pending merge.\n\nThe one-shot `scripts/observe-codex-skills.py` driver is removed. Both existing JSON evidence files remain as retained records, with historical results labelled and current verification recorded separately; the ad hoc observation procedure is retained privately.\n\nThe current verification record is `evidence/codex-skills-checks.json`. No deployment is included.\n\nVerification: 20 isolated test files; 1,386 passing cases, 45 failures reproduced on the same main revision, 1 existing skip and zero new failures. All 22 independent removal controls fail as expected. Typecheck, scoped lint, production build and the local Viewer/socket/runtime-host rehearsals pass under Bun 1.4.0. Required hosted checks, including the complete bun-runtime job, run during pipeline publication.\n\nThe per-file records name their tested merge snapshots. After the final main update to memory reads, its direct test, every launch-policy target, all four baseline comparisons, and the type, lint, build and runtime gates were rechecked. All owned launch-source bytes remained unchanged during that update."
+      "body": "Delegated Codex launches (pipeline stages and role-preset spawns) use `skills.include_instructions=false`. Operator-owned root sessions inherit their account configuration. The policy travels on the launch profile through resume and account migration; no setting or interface is added.\n\nAn isolated native Codex 0.166.0 app-server, using the production thread-config builder and a port-0 local Responses stub, measured the launch developer message at **23,563 \u2192 1,311 UTF-8 bytes**, saving **22,252 bytes** in each of two alternating pairs. The separate first developer scaffold stayed at 21,779 bytes; total developer text fell from 45,342 to 23,090 bytes. All other developer text matched byte for byte after removing the skills block. Both nested and dotted override forms were confirmed on the native app-server. The historical 0.162.1 observation remains labelled separately in `evidence/codex-skills-instructions.json`.\n\nLaunch coverage includes:\n\n- CLI fresh/resume and publication preparation; transcript-based and receipt-based terminal attach; ordinary spawn admission for operator, delegated child and role-preset launches.\n- Local pipeline admission and hosted Codex Cloud stages; structured fresh/resume; startup rehosting, verified socket adoption and the native socket's reduced resume configuration; both startup and foreground recovery.\n- Account migration metadata fork, target validation resume and successor publication, including legacy role recovery; durable resume-profile copying, tested through JSON and SQLite registry restarts.\n- Existing closed ephemeral and Cloud relay policy, with the operator Cloud path retaining inherited instructions. Voice companion is an operator interface; account authentication, version/protocol and shell-policy probes create no conversation developer message. Scheduled Daily Report uses the operator spawn lane; Codex update rehearsals run isolated diagnostic fixtures.\n\nIntegration with current main preserves stage Git environments, MCP/plugin grants during adoption, and the expanded foreground recovery and claim-fence scenarios. The three conflicting files are `src/lib/agent/spawnCommand.telegram.test.ts`, `src/lib/runtime/startup.ts` and `src/lib/runtime/structuredRecovery.test.ts`. Main's removed Claude tmux test stays removed. Three main files received whitespace-only cleanup required by the staged-whitespace gate. Later main additions to report-picture retention and workspace launch metadata are preserved.\n\nA merge-aware pre-commit lint baseline uses published history from the incoming parent. Real Git regression cases show that inherited main errors pass, while new errors and errors from unpublished incoming branches remain blocked; the controls also cover main advancing during a pending merge.\n\nThe one-shot `scripts/observe-codex-skills.py` driver is removed. Both existing JSON evidence files remain as retained records, with historical results labelled and current verification recorded separately; the ad hoc observation procedure is retained privately.\n\nThe current verification record is `evidence/codex-skills-checks.json`. No deployment is included.\n\nVerification: 20 isolated test files; 1,387 passing cases, 45 failures reproduced on the same main revision, 1 existing skip and zero new failures. All 22 independent removal controls fail as expected. Typecheck, scoped lint, production build and the local Viewer/socket/runtime-host rehearsals pass under Bun 1.4.0. Required hosted checks, including the complete bun-runtime job, run during pipeline publication.\n\nThe per-file records name their tested merge snapshots. After the final main update to memory reads, its direct test, every launch-policy target, all four baseline comparisons, and the type, lint, build and runtime gates were rechecked. All owned launch-source bytes remained unchanged during that update.\n\nThe final catch-up also retains main\u2019s start-at-login command and gate task limits. Neither adds a Codex project-launch path. The combined gate passed both full test files, typecheck, scoped lint and gate bundling."
+    },
+    "previousMainParent": "662a6012b39f051669da557d828c13b9e82aa27d",
+    "finalIntegration": {
+      "mainParent": "e4215ed935d94a83199982734a51eaa83edbc51c",
+      "changes": [
+        "start-at-login service command",
+        "gate task limit and peak diagnostics"
+      ],
+      "launchAudit": "No new Codex launch path. All Codex launch source and policy tests remain byte-identical. Only the merge-baseline helper file also receives main diagnostics; its full direct and hook tests were repeated.",
+      "checks": {
+        "catchup-types": {
+          "command": [
+            "bunx",
+            "tsc",
+            "--noEmit"
+          ],
+          "exit": 0,
+          "finishedAt": "2026-11-11T13:29:28.459833+00:00",
+          "baseRevision": "e4215ed935d94a83199982734a51eaa83edbc51c"
+        },
+        "catchup-lint": {
+          "command": [
+            "bun",
+            "scripts/eslint-changes.ts",
+            "--base",
+            "e4215ed935d94a83199982734a51eaa83edbc51c"
+          ],
+          "exit": 0,
+          "finishedAt": "2026-11-11T13:29:50.133048+00:00",
+          "baseRevision": "e4215ed935d94a83199982734a51eaa83edbc51c"
+        },
+        "catchup-build-gate": {
+          "command": [
+            "bun",
+            "run",
+            "build:gate"
+          ],
+          "exit": 0,
+          "finishedAt": "2026-11-11T13:29:51.882065+00:00",
+          "baseRevision": "e4215ed935d94a83199982734a51eaa83edbc51c"
+        }
+      },
+      "sourceChanges": "CLI/service and gate infrastructure, documentation and a doctor type contract; prior Viewer and runtime-host rehearsals exercise unchanged process implementations."
     }
   }
 }

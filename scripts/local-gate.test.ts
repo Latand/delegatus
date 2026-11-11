@@ -519,6 +519,14 @@ test("a deadline that passed before a step starts prepares nothing, alone or in 
   }
   expect(prepared).toEqual([]);
 });
+
+test("a successful grouped check retains its gate peak when ordinary output is hidden", async () => {
+  const peak = "gate-slot: retained.service: pids.peak=37 pids.max=768 pids.events:max=0";
+  const runner = stepRunner(null, () => ({ types: `echo ordinary-output; echo '${peak}' >&2` }));
+  expect(await runner.run([grouped("types")])).toBeNull();
+  expect(runner.lines.some(line => /^pre-push: types: passed in \d+ s; retained\.service: pids\.peak=37 pids\.max=768 pids\.events:max=0$/.test(line))).toBe(true);
+  expect(runner.lines.join("\n")).not.toContain("ordinary-output");
+});
 test.skipIf(process.platform !== "linux")("a cold fixture install excludes CPU queue time and reaches its verdict after the original deadline", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "gate-cold-")); roots.push(dir);
   writeFileSync(path.join(dir, "pressure"), "some avg10=99.00 avg60=99.00 avg300=99.00 total=1\n");
