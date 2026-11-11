@@ -182,6 +182,43 @@ test.skipIf(!process.env.CHROME_BIN)("every capture target is present in the ini
   }
 }, 60_000);
 
+test.skipIf(!process.env.CHROME_BIN)("initial target readiness does not require unrelated network idle", async () => {
+  const { chromium } = await import("playwright-core");
+  let release: ((response: Response) => void) | undefined;
+  let requestStarted!: () => void;
+  const pendingRequest = new Promise<void>(resolve => { requestStarted = resolve; });
+  const server = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    fetch(request) {
+      if (new URL(request.url).pathname === "/pending") {
+        return new Promise<Response>(resolve => {
+          release = resolve;
+          requestStarted();
+        });
+      }
+      return new Response('<body>Seeded row ready<script>if(location.hash.startsWith("#p=")) fetch("/pending")</script></body>', {
+        headers: { "Content-Type": "text/html" },
+      });
+    },
+  });
+  let browser: import("playwright-core").Browser | undefined;
+  try {
+    browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const page = await browser.newPage();
+    page.setDefaultNavigationTimeout(3_000);
+    const layout = { ids: { "harbor-api": "fixture" }, files: {} } as unknown as Parameters<typeof openTarget>[3];
+    await openTarget(page, `http://127.0.0.1:${server.port}`, { kind: "project", project: "harbor-api" }, layout);
+    await pendingRequest;
+    await waitForFrameText(page, { id: "board", requiredText: ["Seeded row ready"] }, 3_000);
+    expect(release).toBeDefined();
+    expect(new URL(page.url()).hash).toBe("#p=fixture");
+  } finally {
+    release?.(new Response("done"));
+    server.stop(true);
+    await browser?.close();
+  }
+}, 30_000);
+
 test.skipIf(!process.env.CHROME_BIN)("board preparation waits for the orchestrator fold control to mount", async () => {
   const { chromium } = await import("playwright-core");
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });

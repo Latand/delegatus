@@ -963,7 +963,9 @@ export async function openTarget(page: Page, baseUrl: string, target: Target, la
   }
   // Put the target in the initial URL. A later hash-only navigation can land
   // between the Viewer's first render and its hashchange listener mounting.
-  await page.goto(`${baseUrl}/${fragment}`, { waitUntil: "networkidle" });
+  // Background requests may stay open after the frame is ready. Its content
+  // and preparation controls below provide their own bounded readiness waits.
+  await page.goto(`${baseUrl}/${fragment}`, { waitUntil: "domcontentloaded" });
 }
 
 /** Wait for the whole frame before freezing its clock: network idle and elapsed
