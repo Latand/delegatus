@@ -88,7 +88,7 @@ export type DismissalSubject =
   | { kind: "conversation"; conversationId: string }
   | { kind: "pipeline"; pipelineId: string }
   | { kind: "report"; seq: number }
-  | { kind: "prototype"; taskId: string; reviewId: string };
+  | { kind: "prototype"; taskId: string | null; reviewId: string };
 
 /** What the caller asks to clear. A task expands to the subjects its card
     drew, when the caller names them, and otherwise to everything on it. */
@@ -96,7 +96,7 @@ export type DismissalTarget =
   | { kind: "conversation"; conversationId?: string; path?: string; reasonId?: string | null }
   | { kind: "pipeline"; pipelineId: string; laneMovedAt?: number | null }
   | { kind: "report"; seq: number }
-  | { kind: "prototype"; taskId: string; reviewId: string }
+  | { kind: "prototype"; taskId: string | null; reviewId: string }
   | { kind: "task"; taskId: string; subjects?: DismissalSubjectRequest[] }
   /** A card no task owns: the subjects it drew, and nothing else. The
       operator's route takes it; the MCP tool names one of the three above. */

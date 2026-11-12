@@ -39,7 +39,7 @@ export function newestDecisionsFirst(decisions: readonly OperatorDecisionView[])
 
 /** How many decisions wait in a project: the page's one poll already counts them. */
 export function useOpenDecisionCount(project: string): number {
-  return usePrototypeNoticesFor(project).filter(notice => !notice.undelivered).length;
+  return usePrototypeNoticesFor(project).length;
 }
 
 export function DecisionList({ project, active = true, focus, touch = false, initial }: {
@@ -113,14 +113,21 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
     body = <p data-decision-list-empty="" className="m-0 px-1 py-2 text-body text-muted">{t("decisions.empty")}</p>;
   } else {
     body = decisions.map((decision) => decision.id === expanded?.id
-      ? decision.decision
+      ? <div key={decision.id} className="flex shrink-0 flex-col gap-2">{decision.decision
         ? <DecisionRecord key={decision.id} decision={decision} onCollapse={() => collapse(decision.id)}
           onRetry={() => void read.answer(decision.id, { retry: true }, decision)}
           retryError={read.error?.reviewId === decision.id && read.error.kind !== "revoke" ? read.error.message : null}
           onRevoke={() => read.answer(decision.id, { chosen: [], comment: "",
           answers: (decision.questions ?? []).map(question => ({ questionId: question.id, options: [0] })) }, decision)}
           revokeError={read.error?.reviewId === decision.id && read.error.kind !== "retry" ? read.error.message : null} />
-        : <DecisionCard key={decision.id} decision={decision} narrow={narrow} columns={columns} onAnswer={read.answer} error={read.error?.reviewId === decision.id ? read.error.message : null} onCollapse={() => collapse(decision.id)} />
+        : <DecisionCard key={decision.id} decision={decision} narrow={narrow} columns={columns} onAnswer={read.answer} error={read.error?.reviewId === decision.id ? read.error.message : null} onCollapse={() => collapse(decision.id)} />}
+      <div className="flex shrink-0 flex-col gap-2 px-3 pb-3">
+        <button type="button" data-decision-withdraw="" disabled={read.withdrawing === decision.id}
+          className="min-h-11 self-start text-ui font-semibold text-muted hover:text-primary"
+          onClick={() => void read.withdraw(decision)}>{t("decisions.withdraw")}</button>
+        {read.withdrawError === decision.id ? <p role="alert" data-decision-withdraw-error="" className="m-0 text-label text-danger">{t("decisions.withdrawFailed")}</p> : null}
+      </div>
+      </div>
       : <DecisionRow key={decision.id} decision={decision} onOpen={() => open(decision.id)} />);
   }
   return (

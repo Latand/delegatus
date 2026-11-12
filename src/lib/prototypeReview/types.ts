@@ -68,7 +68,7 @@ export type PrototypeDeliveryState = "pending" | "sent" | "failed" | "uncertain"
     read: saved and not yet handed to the seat, on its way, delivered, waiting
     for the project to have an orchestrator, or failing long enough to ask for
     the operator's attention. Never crosses to another installation. */
-export type PrototypeDeliveryPhase = "saved" | "delivering" | "delivered" | "waiting-seat" | "attention";
+export type PrototypeDeliveryPhase = "retired" | "saved" | "delivering" | "delivered" | "waiting-seat" | "attention";
 export interface PrototypeDecision {
   /** Telegram owner's words after NFC and Markdown escape normalization. */
   originalReply?: string;
@@ -103,7 +103,7 @@ export interface PrototypeDecision {
     startedAt?: string;
     exhaustedAt?: string;
     /** Local retirement of an obsolete callback; the original receipt keeps its outcome. */
-    settlement?: { at: string; reason: "target-pipeline-closed" | "target-stage-closed" };
+    settlement?: { at: string; reason: "target-pipeline-closed" | "target-stage-closed" | "delivery-expired" };
     /** Local proof that this exact answer reached the current seat in a wake.
         The original operationId remains available with its original outcome. */
     wakeReceipt?: { conversationId: string; seatEpoch: number; itemVersion: string; accountedThrough: string };
@@ -159,7 +159,7 @@ export interface PrototypeRoundView extends Omit<PrototypeReviewRound, "publicat
     frames: Array<Omit<PrototypeFrame, "image" | "original"> & { image: PrototypeMediaView; original?: PrototypeMediaView }>;
     videos: Array<{ media: PrototypeMediaView; caption: string }>;
   }>;
-  decision?: Omit<PrototypeDecision, "delivery" | "decidedBy" | "telegramUserId" | "nativeAssociationApproval" | "revision"> & { delivery: { state: PrototypeDeliveryState; retryable: boolean; phase?: PrototypeDeliveryPhase } };
+  decision?: Omit<PrototypeDecision, "delivery" | "decidedBy" | "telegramUserId" | "nativeAssociationApproval" | "revision"> & { delivery: { state: PrototypeDeliveryState; retryable: boolean; phase?: PrototypeDeliveryPhase; settlement?: PrototypeDecision["delivery"]["settlement"] } };
 }
 /** A read's round. Superseded rounds name the later decided round that retired
     them; the mark is derived on read and never crosses to another installation. */
