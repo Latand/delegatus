@@ -44,7 +44,8 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         if evidence.directory != nil {
             NSApp.appearance = NSAppearance(named: CommandLine.arguments.contains("Dark") ? .darkAqua : .aqua)
         }
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 780), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        let initialSize = CommandLine.arguments.contains("--evidence-minimum-size") ? NSSize(width: 680, height: 500) : NSSize(width: 1100, height: 780)
+        window = NSWindow(contentRect: NSRect(origin: .zero, size: initialSize), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Delegatus"; window.minSize = NSSize(width: 680, height: 500); window.center()
         window.isReleasedWhenClosed = false
         web = Browser(evidence: evidence, window: window)
@@ -52,6 +53,9 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         window.toolbar = toolbar
         buildMenus()
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        if evidence.directory != nil && CommandLine.arguments.contains("--evidence-error") {
+            failed(LauncherError.message("install-failed")); return
+        }
         begin()
     }
     func item(_ menu: NSMenu, _ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
@@ -98,23 +102,23 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         let stack = NSStackView(views: [icon, title, detail, buttons]); stack.orientation = .vertical; stack.spacing = 22; stack.translatesAutoresizingMaskIntoConstraints = false
         status.addSubview(stack); window.contentView = status
         NSLayoutConstraint.activate([stack.centerXAnchor.constraint(equalTo: status.centerXAnchor), stack.centerYAnchor.constraint(equalTo: status.centerYAnchor), stack.widthAnchor.constraint(equalToConstant: 560)])
-        status.layoutSubtreeIfNeeded(); evidence.capture(status, name: next)
+        status.layoutSubtreeIfNeeded(); window.displayIfNeeded(); evidence.capture(window, name: next)
     }
-    func begin() {
+    func begin(using retainedInstall: Installation? = nil) {
         guard !busy else { return }
         generation += 1; let token = generation
         operation?.cancel(); monitor?.cancel()
         busy = true
         operation = Task { defer { if generation == token && setup == nil { busy = false } }
             do {
-                install = try Installations.discover(home)
+                install = try (retainedInstall ?? Installations.discover(home))
                 serviceMenu.state = install?.service == nil ? .off : .on
-                let probe = await Server.probe(home: home, environment: environment)
+                let probe = await Server.probe(home: home, environment: environment, install: install)
                 guard !Task.isCancelled, generation == token else { return }
                 if case .ready(let key) = probe {
-                    let listener = await Server.listener(environment: environment)
+                    let listener = await Server.listener(environment: environment, install: install)
                     guard !Task.isCancelled, generation == token else { return }
-                    if listener.owned { ready(key: key, reused: true); return }
+                    if listener.verified { ready(key: key, reused: true); return }
                     portBusy(listener); return
                 }
                 if probe == .busy || probe == .waiting { portBusy(await Server.listener(environment: environment)); return }
@@ -151,12 +155,12 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         var exitDeadline: Date? = nil
         while Date() < min(deadline, exitDeadline ?? deadline) {
             guard !Task.isCancelled, generation == token else { return }
-            let result = await Server.probe(home: home, environment: environment)
+            let result = await Server.probe(home: home, environment: environment, install: install)
             guard !Task.isCancelled, generation == token else { return }
             if case .ready(let key) = result {
-                let listener = await Server.listener(environment: environment)
+                let listener = await Server.listener(environment: environment, install: install)
                 guard !Task.isCancelled, generation == token else { return }
-                if listener.owned { ready(key: key, reused: false); return }
+                if listener.verified { ready(key: key, reused: false); return }
             }
             if let launcher, !launcher.isRunning, exitDeadline == nil { exitDeadline = Date().addingTimeInterval(30) }
             try await Task.sleep(nanoseconds: 500_000_000)
@@ -171,13 +175,25 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         pageURL = url.url!
         web.view.load(URLRequest(url: pageURL))
         monitor = Task {
+            var failures = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
                 guard !Task.isCancelled else { return }
-                let result = await Server.probe(home: home, environment: environment)
+                let result = await Server.probe(home: home, environment: environment, install: install)
                 guard !Task.isCancelled else { return }
-                if case .ready = result { continue }
-                show("stopped", actions: [("start", #selector(retry)), ("logs", #selector(logs))]); return
+                if case .ready(let key) = result {
+                    failures = 0
+                    if state != "ready" {
+                        state = "ready"; evidence.log("STATE recovered")
+                        window.contentView = web.view
+                        var url = URLComponents(url: Server.address, resolvingAgainstBaseURL: false)!
+                        if let key { url.queryItems = [URLQueryItem(name: "k", value: key)] }
+                        pageURL = url.url!; web.view.load(URLRequest(url: pageURL))
+                    }
+                    continue
+                }
+                failures += 1
+                if failures == 2 { show("stopped", actions: [("start", #selector(retry)), ("logs", #selector(logs))]) }
             }
         }
     }
@@ -268,8 +284,12 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
                 let result = try await Server.run(install.bun.path, [install.cli.path] + args, environment: environment, timeout: 150)
                 evidence.log(result.1)
                 guard result.0 == 0 else { throw LauncherError.message("service-failed") }
-                self.install = try Installations.discover(home); serviceMenu.state = self.install?.service == nil ? .off : .on
-                if install.service != nil { busy = false; begin() }
+                if install.service != nil {
+                    self.install = Installations.withoutService(install)
+                    serviceMenu.state = .off; busy = false; begin(using: self.install)
+                } else {
+                    self.install = try Installations.discover(home); serviceMenu.state = .on
+                }
             } catch { failed(error) }
         }
     }

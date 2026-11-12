@@ -42,7 +42,7 @@ import WebKit
             // Snapshot after the React shell has painted, without granting native authority to JS.
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
-                self.evidence.capture(webView, name: "page")
+                self.evidence.capture(self.window, name: "page")
             }
         }
     }

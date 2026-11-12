@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import WebKit
 
 @MainActor final class Evidence {
@@ -49,19 +50,16 @@ import WebKit
         child.standardOutput = pipe; child.standardError = pipe
         try filter.run(); filters.append(filter)
     }
-    func capture(_ view: NSView, name: String) {
+    func capture(_ window: NSWindow, name: String) {
         guard let directory else { return }
         frame += 1
         let destination = directory.appendingPathComponent(String(format: "%03d-%@.png", frame, name))
-        if let web = view as? WKWebView {
-            web.takeSnapshot(with: nil) { picture, _ in
-                guard let picture, let tiff = picture.tiffRepresentation,
-                      let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]) else { return }
-                try? png.write(to: destination)
-            }
-        } else if let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
-            view.cacheDisplay(in: view.bounds, to: bitmap)
-            try? bitmap.representation(using: .png, properties: [:])?.write(to: destination)
+        // Capture the composited window so AppKit paints text, controls, and
+        // the selected appearance exactly as the user sees them.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.bestResolution]),
+                  let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else { return }
+            try? png.write(to: destination)
         }
     }
 }

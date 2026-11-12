@@ -36,13 +36,16 @@ import Foundation
         expect(privateInstall?.bun == bun, "private install with spaces")
         let service = Installations.serviceFile(home)
         try fm.createDirectory(at: service.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let serviceObject: [String: Any] = ["Label": "org.delegatus.server", "ProgramArguments": [bun.path, package.appendingPathComponent("bin/cli.mjs").path, "--no-open", "--port", "8898"], "EnvironmentVariables": ["LLV_STATE_DIR": home.appendingPathComponent("custom-state").path]]
+        let serviceObject: [String: Any] = ["Label": "org.delegatus.server", "ProgramArguments": [bun.path, package.appendingPathComponent("bin/cli.mjs").path, "--no-open", "--port", "8898"], "EnvironmentVariables": ["LLV_STATE_DIR": home.appendingPathComponent("custom-state").path, "XDG_CONFIG_HOME": home.appendingPathComponent("custom-config").path]]
         let plist = try PropertyListSerialization.data(fromPropertyList: serviceObject, format: .xml, options: 0)
         let xml = String(decoding: plist, as: UTF8.self).replacingOccurrences(of: "<plist", with: Installations.marker + "\n<plist")
         try Data(xml.utf8).write(to: service)
         let owned = try Installations.discover(home)
         expect(owned?.service == service, "owned login service wins discovery")
         expect(owned?.environment["LLV_STATE_DIR"] == home.appendingPathComponent("custom-state").path, "captured service state")
+        let direct = Installations.withoutService(owned!)
+        expect(direct.service == nil && direct.bun == owned?.bun && direct.cli == owned?.cli, "login removal keeps selected installation")
+        expect(direct.environment["LLV_STATE_DIR"] == owned?.environment["LLV_STATE_DIR"] && direct.environment["XDG_CONFIG_HOME"] == owned?.environment["XDG_CONFIG_HOME"], "login removal keeps state and key roots")
         let env = Installations.childEnvironment(home: home, install: owned, language: "uk")
         expect(env["LLV_STATE_DIR"] == owned?.environment["LLV_STATE_DIR"], "service settings reach child")
         try Data(xml.replacingOccurrences(of: Installations.marker, with: "<!-- foreign -->").utf8).write(to: service)
@@ -53,9 +56,11 @@ import Foundation
         let key = String(repeating: "a", count: 32)
         try Data((key + "\n").utf8).write(to: config.appendingPathComponent("token"))
         expect(Server.key(home: home, environment: [:]) == key, "key file resolution")
-        for mode in ["open", "key", "foreign", "redirect"] {
+        let probeInstall = Installation(bun: bun, cli: package.appendingPathComponent("bin/cli.mjs"))
+        let authMarker = home.appendingPathComponent("probe-auth-received")
+        for mode in ["open", "key", "unauthorized", "foreign", "redirect"] {
             let child = Process(); child.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-            child.arguments = ["macos/Tests/ProbeServer.py"]; child.environment = ["PROBE_MODE": mode]
+            child.arguments = ["macos/Tests/ProbeServer.py"]; child.environment = ["PROBE_MODE": mode, "PROBE_AUTH_FILE": authMarker.path]
             let pipe = Pipe(); child.standardOutput = pipe
             try child.run()
             defer { if child.isRunning { child.terminate(); child.waitUntilExit() } }
@@ -63,26 +68,27 @@ import Foundation
             let port = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             guard let number = Int(port), (1...65535).contains(number),
                   let address = URL(string: "http://127.0.0.1:\(number)") else { fatalError("fixture port") }
-            let result = await Server.probe(home: home, environment: [:], address: address)
-            if mode == "key" {
+            let result = await Server.probe(home: home, environment: [:], install: probeInstall, address: address)
+            if mode == "key" || mode == "unauthorized" {
+                expect(result == .busy && !fm.fileExists(atPath: authMarker.path), "refusing listener receives no saved key")
                 try fm.removeItem(at: config.appendingPathComponent("token"))
-                let missing = await Server.probe(home: home, environment: [:], address: address)
+                let missing = await Server.probe(home: home, environment: [:], install: probeInstall, address: address)
                 expect(missing == .busy, "missing key cannot reuse a protected server")
                 try Data(String(repeating: "b", count: 32).utf8).write(to: config.appendingPathComponent("token"))
-                let wrong = await Server.probe(home: home, environment: [:], address: address)
+                let wrong = await Server.probe(home: home, environment: [:], install: probeInstall, address: address)
                 expect(wrong == .busy, "wrong key cannot reuse a protected server")
-                let environmentKey = await Server.probe(home: home, environment: ["LLV_TOKEN": key], address: address)
-                expect(environmentKey == .ready(key), "explicit environment key has precedence")
+                let environmentKey = await Server.probe(home: home, environment: ["LLV_TOKEN": key], install: probeInstall, address: address)
+                expect(environmentKey == .busy && !fm.fileExists(atPath: authMarker.path), "unverified listener receives no environment key")
                 let alternate = home.appendingPathComponent("alternate/agent-log-viewer")
                 try fm.createDirectory(at: alternate, withIntermediateDirectories: true)
                 try Data(key.utf8).write(to: alternate.appendingPathComponent("token"))
-                let legacy = await Server.probe(home: home, environment: ["XDG_CONFIG_HOME": alternate.deletingLastPathComponent().path], address: address)
-                expect(legacy == .ready(key), "captured config root and legacy directory")
+                let legacy = await Server.probe(home: home, environment: ["XDG_CONFIG_HOME": alternate.deletingLastPathComponent().path], install: probeInstall, address: address)
+                expect(legacy == .busy && !fm.fileExists(atPath: authMarker.path), "unverified listener receives no legacy key")
                 try Data(key.utf8).write(to: config.appendingPathComponent("token"))
             }
             child.terminate(); child.waitUntilExit()
-            expect(result == (mode == "open" ? .ready(nil) : mode == "key" ? .ready(key) : .busy), "real HTTP \(mode)")
-            let free = await Server.probe(home: home, environment: [:], address: address)
+            expect(result == (mode == "open" ? .ready(nil) : .busy), "real HTTP \(mode)")
+            let free = await Server.probe(home: home, environment: [:], install: probeInstall, address: address)
             expect(free == .free, "closed fixture is free")
         }
         let timed = try await Server.run("/bin/sleep", ["30"], environment: [:], timeout: 0.1)

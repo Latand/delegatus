@@ -87,8 +87,9 @@ if [ ! -f "$runtime/packages/node_modules/delegatus-cli/bin/cli.mjs" ]; then
   actual="sha512-$(/usr/bin/openssl dgst -sha512 -binary "$stage/delegatus.tgz" | /usr/bin/openssl base64 -A)"
   [ "$actual" = "$expected" ] || { echo 'Delegatus checksum mismatch' >&2; exit 1; }
   mkdir "$stage/packages"
+  mkdir -p "$stage/home"
   printf '{"private":true}\n' > "$stage/packages/package.json"
-  (cd "$stage/packages" && exec "$use_bun" add --exact "$stage/delegatus.tgz") & child=$!
+  (cd "$stage/packages" && HOME="$stage/home" exec "$use_bun" add --exact "$stage/delegatus.tgz") & child=$!
   wait "$child"; child=''
   root="$stage/packages/node_modules/delegatus-cli"
   [ "$(/usr/bin/plutil -extract name raw -o - "$root/package.json")" = delegatus-cli ]

@@ -18,6 +18,7 @@ let mount;
 const owned = new Set();
 let serial = 0;
 let accountPassphrase = "";
+const accessKey = randomBytes(16).toString("hex");
 function redact(value) {
   return String(value).replaceAll(accountPassphrase || "\0", "[redacted]").replaceAll(home || "\0", "$HOME")
     .replaceAll(process.env.HOME || "\0", "$RUNNER_HOME")
@@ -35,10 +36,10 @@ function asUser(command, args = []) {
   return sudo(["-u", user, "-H", "/usr/bin/env", "-i", `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "DELEGATUS_TELEMETRY=0", command, ...args]);
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function until(label, check, timeout = 60_000) {
+async function until(label, check, timeout = 60_000, diagnostics = () => "") {
   const deadline = Date.now() + timeout;
   do { if (await check()) return; await sleep(500); } while (Date.now() < deadline);
-  throw new Error(`Timed out: ${label}`);
+  throw new Error(`Timed out: ${label}${diagnostics() ? `\n${diagnostics()}` : ""}`);
 }
 async function check(name, action) {
   try { await action(); checks.push({ name, exit: 0 }); }
@@ -50,13 +51,30 @@ function logs() {
 function launch(args, label) {
   const pidFile = join(home, `app-${++serial}.pid`);
   const frames = join(home, "Library", "Evidence", label);
-  const process = spawn("sudo", ["-n", "-u", user, "-H", "/usr/bin/env", "-i", `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "DELEGATUS_TELEMETRY=0", "/bin/sh", "-c", 'echo $$ > "$1"; shift; exec "$@"', "sh", pidFile,
-    join(home, "Applications", "Delegatus.app", "Contents", "MacOS", "Delegatus"), "--evidence-dir", frames, ...args], { stdio: ["ignore", "pipe", "pipe"] });
-  process.stdout.on("data", () => {}); process.stderr.on("data", () => {});
-  return { process, pidFile, frames };
+  const process = spawn("sudo", ["-n", "-u", user, "-H", "/usr/bin/env", "-i", `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "DELEGATUS_TELEMETRY=0", `LLV_TOKEN=${accessKey}`, "/bin/sh", "-c", 'echo $$ > "$1"; shift; exec "$@"', "sh", pidFile,
+    join(home, "Applications", "Delegatus.app", "Contents", "MacOS", "Delegatus"), "--evidence-dir", frames, ...args], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, LLV_TOKEN: accessKey } });
+  let stdout = "", stderr = "", exitCode = null, signal = null, spawnError = null;
+  const append = (current, chunk) => (current + redact(chunk.toString("utf8"))).slice(-12_000);
+  process.stdout.on("data", chunk => { stdout = append(stdout, chunk); });
+  process.stderr.on("data", chunk => { stderr = append(stderr, chunk); });
+  process.on("error", error => { spawnError = redact(error.message); });
+  process.on("exit", (code, endedBy) => { exitCode = code; signal = endedBy; });
+  const diagnostics = () => `app launch exit=${exitCode ?? "running"} signal=${signal ?? "none"}${spawnError ? ` spawnError=${spawnError}` : ""}\nstdout:\n${stdout || "(empty)"}\nstderr:\n${stderr || "(empty)"}`;
+  return { process, pidFile, frames, diagnostics };
+}
+async function startViewer(bun, cli) {
+  const pidFile = join(home, `viewer-${++serial}.pid`);
+  const args = ["-n", "-u", user, "-H", "/usr/bin/env", "-i", `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "DELEGATUS_TELEMETRY=0", `LLV_TOKEN=${accessKey}`, "/bin/sh", "-c", 'echo $$ > "$1"; shift; exec "$@"', "sh", pidFile, bun, cli, "--no-open", "--port", "8898"];
+  const child = spawn("sudo", args, { stdio: "ignore" });
+  child.on("error", error => { throw error; });
+  commands.push({ command: redact(["sudo", ...args].join(" ")), exit: "started" });
+  await until("replacement Delegatus PID", () => existsSync(pidFile) || (() => { try { sudo(["test", "-f", pidFile]); return true; } catch { return false; } })());
+  const pid = Number(sudo(["cat", pidFile]).trim());
+  assert(Number.isSafeInteger(pid) && pid > 1); owned.add(pid);
+  return pid;
 }
 async function register(app) {
-  await until("app PID", () => existsSync(app.pidFile) || (() => { try { sudo(["test", "-f", app.pidFile]); return true; } catch { return false; } })());
+  await until("app PID", () => existsSync(app.pidFile) || (() => { try { sudo(["test", "-f", app.pidFile]); return true; } catch { return false; } })(), 60_000, app.diagnostics);
   app.pid = Number(sudo(["cat", app.pidFile]).trim());
   assert(Number.isSafeInteger(app.pid) && app.pid > 1); owned.add(app.pid);
   return app;
@@ -100,11 +118,25 @@ try {
   });
   const before = asUser("/bin/ls", ["-A", home]).trim().split("\n");
   await check("confirm-without-install", async () => {
-    const app = await register(launch(["-AppleLanguages", "(en)"], "confirm-en-light"));
-    await until("confirmation", () => logs().includes("STATE needs-install"));
+    const app = await register(launch(["--evidence-minimum-size", "-AppleLanguages", "(en)"], "confirm-en-light-minimum"));
+    await until("confirmation", () => logs().includes("STATE needs-install"), 60_000, app.diagnostics);
     await sleep(20_000);
     assert.throws(() => asUser("/bin/test", ["-e", join(home, "Library/Application Support/Delegatus/Runtime")]));
     await end(app);
+  });
+  for (const [language, appearance] of [["en", "Dark"], ["uk", "Light"], ["uk", "Dark"]]) {
+    await check(`confirmation-${language}-${appearance}`, async () => {
+      const previous = logs().length;
+      const app = await register(launch(["-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `confirm-${language}-${appearance}-default`));
+      await until("localized confirmation", () => logs().slice(previous).includes("STATE needs-install"), 60_000, app.diagnostics);
+      await sleep(1200); await end(app);
+    });
+  }
+  await check("error-surface", async () => {
+    const previous = logs().length;
+    const app = await register(launch(["--evidence-error", "-AppleLanguages", "(en)", "-AppleInterfaceStyle", "Dark"], "error-en-dark-default"));
+    await until("localized error screen", () => logs().slice(previous).includes("STATE failed"), 60_000, app.diagnostics);
+    await sleep(1200); await end(app);
   });
   let original;
   await check("first-run-http-200", async () => {
@@ -126,6 +158,17 @@ try {
       assert.equal(launcherPID(), original); await sleep(4000); await end(app);
     });
   }
+  await check("transient-restart-recovers", async () => {
+    const previous = logs().length;
+    const app = await register(launch(["-AppleLanguages", "(uk)", "-AppleInterfaceStyle", "Dark"], "recovery-uk-dark"));
+    await until("recovery app attaches", () => logs().slice(previous).includes("STATE reused"), 60_000, app.diagnostics);
+    const runtime = join(home, "Library/Application Support/Delegatus/Runtime");
+    asUser(join(runtime, "bun/bin/bun"), [join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"), "stop", "--all"]);
+    await until("monitor reports stopped", () => logs().slice(previous).includes("STATE stopped"), 90_000, app.diagnostics);
+    await startViewer(join(runtime, "bun/bin/bun"), join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"));
+    await until("monitor restores the web view", async () => logs().slice(previous).includes("STATE recovered") && (await http())?.status === 200, 90_000, app.diagnostics);
+    await sleep(1200); await end(app);
+  });
   await check("busy-port", async () => {
     const runtime = join(home, "Library/Application Support/Delegatus/Runtime");
     asUser(join(runtime, "bun/bin/bun"), [join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"), "stop", "--all"]);

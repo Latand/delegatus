@@ -21,6 +21,9 @@ enum Installations {
     static let marker = "<!-- Written by \"delegatus service install\". \"delegatus service remove\" deletes it. -->"
     static func runtime(_ home: URL) -> URL { home.appendingPathComponent("Library/Application Support/Delegatus/Runtime") }
     static func serviceFile(_ home: URL) -> URL { home.appendingPathComponent("Library/LaunchAgents/org.delegatus.server.plist") }
+    static func withoutService(_ install: Installation) -> Installation {
+        Installation(bun: install.bun, cli: install.cli, environment: install.environment)
+    }
 
     static func valid(_ install: Installation) -> Bool {
         let fm = FileManager.default

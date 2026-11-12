@@ -214,8 +214,9 @@ publish transaction. The changes:
   the manifest.
 - **Delegatus:** `curl` fetches the tarball and checks its sha512 against the
   manifest's `integrity`. Then `bun add --exact <tarball>` runs in a staging
-  folder whose `package.json` is `{"private": true}`, which is the install
-  step the in-product updater uses (`package.ts:98-99`). The script then
+  folder whose `package.json` is `{"private": true}` and a temporary `HOME`
+  inside the staging directory, keeping Bun's default cache out of the user's
+  home. This is the install step the in-product updater uses (`package.ts:98-99`). The script then
   checks that `package.json` names `delegatus-cli` at the manifest version,
   and that `bin/cli.mjs`, `dist/standalone/server.js` and
   `dist/runtime-host.mjs` exist.
@@ -310,8 +311,8 @@ no proxy, no redirect following and a 3 s timeout.
 | Gate on the running Viewer | Answer | App reading |
 | --- | --- | --- |
 | None (fresh install) | `204`, `x-delegatus-diagnostics: 1` | Delegatus |
-| Key on (Phone step, links, `--tailscale`, a non-loopback `--hostname`) | `403` JSON | read `~/.config/delegatus/token`, or `~/.config/agent-log-viewer/token` when only the legacy folder exists; retry with `Authorization: Bearer <key>`; `204` with the marker means Delegatus, and the web view's first load is `/?k=<key>`, which sets the 30-day cookie (`src/proxy.ts:132-135`) |
-| Team install (a team gates only alongside the key) | `401` JSON "sign in required" (`src/lib/team/gate.ts:107-134`) | same as the row above; the key is checked before the team perimeter (`src/proxy.ts:117-146`) |
+| Key on (Phone step, links, `--tailscale`, a non-loopback `--hostname`) | `403` JSON | verify the current listener belongs to this account and its command line names the discovered Bun and Delegatus CLI paths before reading `~/.config/delegatus/token` (or legacy `~/.config/agent-log-viewer/token`) and retrying with `Authorization: Bearer <key>`; `204` with the marker means Delegatus, and the web view's first load is `/?k=<key>`, which sets the 30-day cookie (`src/proxy.ts:132-135`) |
+| Team install (a team gates only alongside the key) | `401` JSON "sign in required" (`src/lib/team/gate.ts:107-134`) | apply the same listener identity check before the retry; the key is checked before the team perimeter (`src/proxy.ts:117-146`) |
 | Self-update handoff (`503` applies to writes only) | `204` (HEAD passes `handoffBlock`) | Delegatus |
 | Foreign server, or a Delegatus whose key this account lacks | anything else, or `401`/`403` after the retry | busy port |
 | Nothing listening | connection refused | free |
@@ -433,13 +434,18 @@ for this surface; later cases are added to it):
   Its environment holds `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, no Bun and
   `DELEGATUS_TELEMETRY=0`. A wrapper writes the app's PID before `exec`, and
   every stop goes by that PID or through `stop --all`.
-- **Case `confirm`.** Launch without `--accept-install`. The log must show
-  `STATE needs-install`, and after 20 s nothing may exist under
-  `~/Library/Application Support/Delegatus/Runtime`. The harness then ends
-  the app by its PID.
+- **Case `confirm`.** Launch without `--accept-install` at the minimum window
+  size, then at the default size in en/uk and light/dark. Each screen must show
+  `STATE needs-install`; after 20 s nothing may exist under
+  `~/Library/Application Support/Delegatus/Runtime`. The harness ends each app
+  by its PID.
+- **Case `error-surface`.** The evidence-only launch flag renders the existing
+  localized failure screen in the default window size for legibility review.
 - **Case `first-run`.** Launch with `--accept-install` and
   `-AppleLanguages (en)`. Within 12 minutes `GET /` must answer **200** and
-  the HEAD probe must answer 204 with the marker. `ps` must show the
+  the protected HEAD probe must answer 204 with the marker. The same temporary
+  access key is supplied on subsequent app launches to exercise protected
+  reuse. `ps` must show the
   listener's launcher as
   `…/Delegatus/Runtime/bun/bin/bun …/Runtime/packages/node_modules/delegatus-cli/bin/cli.mjs`
   owned by `dlgsmoke`. A listing of the new home taken before the first
@@ -450,6 +456,10 @@ for this surface; later cases are added to it):
 - **Case `reuse`.** End the app by its PID. The server must keep answering.
   Relaunch with `-AppleLanguages (uk)`. The log must show `STATE reused` and
   `WEB language=uk…`, and the launcher PID must be unchanged.
+- **Case `transient-restart-recovers`.** Stop the running Delegatus, wait until
+  two monitor samples show the stopped screen, then restart it with the same
+  access key. The running app must log recovery and return to HTTP 200 without
+  a manual Start action.
 - **Case `busy-port`.** Run `stop --all` and require the port to be free
   within 30 s. Start `python3 -m http.server 8898 --bind 127.0.0.1` as
   `dlgsmoke` and record its PID, then launch the app. The log must show
@@ -457,12 +467,11 @@ for this surface; later cases are added to it):
   process may exist. The harness stops the listener and the app by their
   PIDs.
 
-`--accept-install` presses Install for the user, and `--evidence-dir <dir>`
-writes frames. Both work only as launch arguments, which a web page cannot
-set. The app writes each frame from its own views (`cacheDisplay` for native
-views, `WKWebView.takeSnapshot` for the page), which needs no
-screen-recording permission. The frames cover every status-view state the
-cases reach, plus the loaded page, in en and uk, light and dark. Dark comes
+`--accept-install`, `--evidence-error` and `--evidence-dir <dir>` are smoke-only
+launch arguments; a web page cannot set them. The app captures the composited
+native window so painted text and controls
+are included. The frames cover each confirmation layout, recovery and busy
+screens, plus loaded pages in en and uk, light and dark. Dark comes
 from the launch argument `-AppleInterfaceStyle Dark`; if AppKit ignores it
 in the argument domain, `--evidence-dir` also sets `NSApp.appearance` to
 dark for the dark frames. The report, frames and logs (with the home path

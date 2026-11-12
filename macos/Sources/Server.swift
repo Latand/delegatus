@@ -19,7 +19,7 @@ enum Server {
               key.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else { return nil }
         return key
     }
-    static func probe(home: URL, environment: [String: String], address: URL = address) async -> Probe {
+    static func probe(home: URL, environment: [String: String], install: Installation? = nil, address: URL = address) async -> Probe {
         // Ephemeral session, no proxy, redirects, credentials or cookies.
         let configuration = URLSessionConfiguration.ephemeral
         configuration.connectionProxyDictionary = [:]
@@ -34,6 +34,9 @@ enum Server {
             guard var http = response as? HTTPURLResponse else { return .busy }
             var usedKey: String? = nil
             if [401, 403].contains(http.statusCode), let key = key(home: home, environment: environment) {
+                // A refusal alone does not prove that the listener is Delegatus.
+                // Verify the process and its executable paths before sending a key.
+                guard let install, Installations.valid(install), await listener(environment: environment, install: install, port: address.port ?? 8898).verified else { return .busy }
                 request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
                 (data, response) = try await session.data(for: request)
                 guard let retry = response as? HTTPURLResponse else { return .busy }
@@ -70,14 +73,19 @@ enum Server {
             }
         }
     }
-    static func listener(environment: [String: String]) async -> (owned: Bool, description: String) {
-        let result = try? await run("/usr/sbin/lsof", ["-nP", "-a", "-iTCP:8898", "-sTCP:LISTEN", "-Fpcu"], environment: environment)
+    static func listener(environment: [String: String], install: Installation? = nil, port: Int = 8898) async -> (owned: Bool, verified: Bool, description: String) {
+        let result = try? await run("/usr/sbin/lsof", ["-nP", "-a", "-iTCP:\(port)", "-sTCP:LISTEN", "-Fpcu"], environment: environment)
         let lines = (result?.1 ?? "").split(separator: "\n").map(String.init)
         let owner = "u\(getuid())"
         let owned = lines.contains(owner)
         let pid = lines.first(where: { $0.hasPrefix("p") }).map { String($0.dropFirst()) } ?? "?"
         let name = lines.first(where: { $0.hasPrefix("c") }).map { String($0.dropFirst()) } ?? "?"
-        return (owned, "\(name) (PID \(pid))")
+        var verified = false
+        if owned, let install, Installations.valid(install), pid != "?",
+           let args = try? await run("/bin/ps", ["-ww", "-p", pid, "-o", "command="], environment: environment) {
+            verified = args.0 == 0 && args.1.contains(install.bun.path) && args.1.contains(install.cli.path)
+        }
+        return (owned, verified, "\(name) (PID \(pid))")
     }
     static func startService(_ plist: URL, environment: [String: String]) async throws {
         let target = "gui/\(getuid())/org.delegatus.server"
