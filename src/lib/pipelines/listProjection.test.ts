@@ -272,3 +272,20 @@ describe("needs_review rows", () => {
     expect(pipelineListRow(record).stages[1]!.onFail?.maxRounds).toBe(5);
   });
 });
+
+for (const project of [pipelineListRow, pipelineCompactRow]) {
+  test(`${project.name} reports the board's effective dismissal`, () => {
+    const original = corpus[1]!;
+    const dismissedAt = "2026-09-24T10:00:00.000Z";
+    const parked = { ...original, state: "needs_decision", runs: [], dismissedAt } as Pipeline;
+    expect(project(parked)).toMatchObject({ dismissedAt, hiddenFromBoard: true });
+    expect(project({ ...parked, dismissedAt: null })).toMatchObject({ dismissedAt: null, hiddenFromBoard: false });
+    expect(project({ ...parked, dismissedAt: undefined })).toMatchObject({ dismissedAt: null, hiddenFromBoard: false });
+    expect(project({ ...parked, state: "running" })).toMatchObject({ dismissedAt, hiddenFromBoard: false });
+    expect(project({ ...parked, state: "needs_review" })).toMatchObject({ dismissedAt, hiddenFromBoard: true });
+    const moved = { ...parked, runs: [{ stageId: "build", attempts: [{ startedAt: "2026-09-24T10:01:00.000Z" }] }] } as Pipeline;
+    expect(project(moved)).toMatchObject({ dismissedAt, hiddenFromBoard: false });
+    expect(project({ ...parked, dismissedAt: "invalid" })).toMatchObject({ hiddenFromBoard: false });
+    expect(original.dismissedAt).toBeUndefined();
+  });
+}
