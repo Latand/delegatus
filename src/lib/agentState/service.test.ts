@@ -3,9 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { captureProcessIdentity } from "@/lib/processIdentity";
-import { AgentStateService } from "./service";
+import { AgentStateService, startAgentStateService, stopAgentStateService, servingAgentStateService } from "./service";
 import { readStructuredHostRecords } from "@/lib/runtime/structuredHostControl";
 import { observeAgentProcess } from "./process";
 import { cachedAgentObservation, clearAgentObservations } from "./projectionCache";
@@ -272,4 +272,28 @@ test("a predecessor never reads or settles the successor host's conversation bin
   expect(f.entry().structuredHost!.activeTurnRef).toBeNull();
   expect(Object.values(f.registry.readOnlySnapshot().conversations)[0]!.turn.state).toBe("busy");
   expect(settlements).toBe(0);
+});
+
+test("the production startup keeps reconciliation scheduled while publication is unbound", async () => {
+  const f = fixture();
+  setAgentRegistryForTests(f.registry);
+  try {
+    await startAgentStateService();
+    const serving = servingAgentStateService();
+    expect(serving).not.toBeNull();
+    expect(serving!.ports.owns()).toBe(false);
+    await serving!.request();
+    expect(readAgentProjection(f.registry, subjectId(f.entry()))).toBeNull();
+  } finally { stopAgentStateService(); setAgentRegistryForTests(null); }
+});
+
+test("demotion during production startup imports revokes the pending scheduler installation", async () => {
+  const f = fixture();
+  setAgentRegistryForTests(f.registry);
+  try {
+    const starting = startAgentStateService();
+    stopAgentStateService();
+    await starting;
+    expect(servingAgentStateService()).toBeNull();
+  } finally { stopAgentStateService(); setAgentRegistryForTests(null); }
 });

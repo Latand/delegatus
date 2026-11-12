@@ -409,10 +409,11 @@ export class AgentStateService {
   }
 }
 
-const global = process as typeof process & { __llvAgentStateService?: AgentStateService };
+const global = process as typeof process & { __llvAgentStateService?: AgentStateService; __llvAgentStateGeneration?: number };
 export function servingAgentStateService(): AgentStateService | null { return global.__llvAgentStateService ?? null; }
 export async function startAgentStateService(): Promise<void> {
   if (global.__llvAgentStateService) return;
+  const generation = global.__llvAgentStateGeneration ?? 0;
   const controller = await import("@/lib/runtime/structuredDeliveryController");
   const { runtimeHostClient, readRuntimeSession } = await import("@/lib/runtime/client");
   const registry = agentRegistry();
@@ -449,11 +450,15 @@ export async function startAgentStateService(): Promise<void> {
           activeTurnId: projection.facts.turn.value.localRef, writerClaim, reconciliationRevision: projection.revision } });
       return current();
     } });
-  if (!owns()) return;
+  // Publication may still be rebinding when startup installs controllers.
+  // Keep the scheduler armed; each cycle refuses work until serving custody
+  // is ready. A demotion during the imports revokes this pending installation.
+  if ((global.__llvAgentStateGeneration ?? 0) !== generation) return;
   global.__llvAgentStateService = service;
   service.start();
 }
 export function stopAgentStateService(): void {
+  global.__llvAgentStateGeneration = (global.__llvAgentStateGeneration ?? 0) + 1;
   global.__llvAgentStateService?.stop();
   delete global.__llvAgentStateService;
 }
