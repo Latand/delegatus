@@ -362,37 +362,39 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       let dispatchAuthority: AttemptTempAuthority | undefined;
       let dispatchState: AttemptTempState | undefined;
       let dispatchEvidence: AttemptProtection | undefined;
-      const retirementAuthorityCurrent = (directory: string, validateCheckouts = true) => {
-        const current = fs.lstatSync(directory, { throwIfNoEntry: false });
+      const ownerAuthorityCurrent = () => {
         const binding = store.owner(owner.directory);
         requiredExpiry = store.requiredRootExpiry(owner.directory);
         return binding?.identity === owner.identity && binding.pipelineId === owner.pipelineId && binding.launchId === owner.launchId
           && binding.createdAt === owner.createdAt && binding.retainUntilClose === owner.retainUntilClose
           && !recordedRootHeld(owner.directory)
-          && !!current?.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === owner.identity
           && (dispatchAuthority?.isCurrent() ?? true)
           && (dispatchAuthority?.state ?? dispatchState) === dispatchState
           && (dispatchState !== undefined)
-          && expiryCurrent(dispatchState)
-          && (!validateCheckouts || inventory.unchangedAll());
+          && expiryCurrent(dispatchState);
+      };
+      const retirementAuthorityCurrent = (directory: string, validateCheckouts = true) => {
+        const current = fs.lstatSync(directory, { throwIfNoEntry: false });
+        return !!current?.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === owner.identity
+          && (!validateCheckouts || inventory.unchangedAll()) && ownerAuthorityCurrent();
       };
       // The evidence snapshot must match until content deletion dispatches.
       // Its directory metadata and entries change during our own cleanup;
       // the final empty-root fence retains the independent authority checks.
-      const authorityWatches = () => attemptPathWatches([store.filename, store.filename + "-wal", statePath("state.sqlite"),
-        statePath("state.sqlite-wal"), statePath("project-aliases.json")]);
+      const authorityWatches = () => [...attemptPathWatches([store.filename, store.filename + "-wal", statePath("state.sqlite"),
+        statePath("state.sqlite-wal")], "authority"), ...attemptPathWatches([statePath("project-aliases.json")])];
       // Opaque contents are validated inside the namespace. Watching their
       // accessible parent pins the root name and notices mode/rebinding changes
       // without requiring read permission on the root itself.
-      const rootWatches = (directory: string) => namespaceProtection ? attemptPathWatches([directory]) : [directory];
+      const rootWatches = (directory: string) => [...(namespaceProtection ? [] : [directory]), ...attemptPathWatches([directory], false)];
       const mutationDirectories = (directory: string) => [...rootWatches(directory), ...authorityWatches(),
         ...(dispatchEvidence?.mutationDirectories ?? []), ...inventory.mutationDirectories()];
       const dispatchEligible = (directory: string) => attemptMutationCurrent(
         mutationDirectories(directory),
-        () => retirementAuthorityCurrent(directory) && dispatchEvidence?.current() === true, deadline - now());
+        () => retirementAuthorityCurrent(directory) && dispatchEvidence?.current() === true, deadline - now(), ownerAuthorityCurrent);
       const emptyRootEligible = (directory: string) => attemptMutationCurrent(
         [...rootWatches(directory), ...authorityWatches(), ...inventory.mutationDirectories()],
-        () => retirementAuthorityCurrent(directory), deadline - now());
+        () => retirementAuthorityCurrent(directory), deadline - now(), ownerAuthorityCurrent);
       const scan = () => options.scan([owner.directory, currentDirectory]);
       const observeReferences = async (directory: string) => {
         try {

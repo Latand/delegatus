@@ -83,3 +83,55 @@ test.skipIf(process.platform !== "linux")("an expired fence budget refuses befor
   expect(() => attemptMutationCurrent([f.tree], () => { invoked = true; return true; }, 0)).toThrow("time budget exhausted");
   expect(invoked).toBeFalse();
 });
+
+test.skipIf(process.platform !== "linux").each(["content", "link", "mode"])(
+  "structural checkout watches classify %s writes", mutation => {
+    const f = fixture(), log = path.join(f.checkout, "build.log");
+    fs.writeFileSync(log, "before");
+    const admitted = attemptMutationCurrent([{ directory: f.checkout, content: false }], () => {
+      if (mutation === "content") fs.appendFileSync(log, "after");
+      else if (mutation === "link") fs.symlinkSync(f.tree, path.join(f.checkout, "dependency"));
+      else fs.chmodSync(f.checkout, 0o755);
+      return true;
+    });
+    expect(admitted).toBe(mutation === "content");
+  });
+
+test.skipIf(process.platform !== "linux")("overlapping watches retain marker content and structural checkout proofs", () => {
+  const f = fixture(), marker = path.join(f.checkout, ".git"), log = path.join(f.checkout, "build.log");
+  fs.writeFileSync(marker, "before"); fs.writeFileSync(log, "before");
+  for (const watches of [
+    [{ directory: f.checkout, content: false }, ...attemptPathWatches([marker])],
+    [...attemptPathWatches([marker]), { directory: f.checkout, content: false }],
+  ]) {
+    expect(attemptMutationCurrent(watches, () => { fs.appendFileSync(log, "after"); return true; })).toBeTrue();
+    expect(attemptMutationCurrent(watches, () => { fs.appendFileSync(marker, "after"); return true; })).toBeFalse();
+  }
+});
+
+test.skipIf(process.platform !== "linux")("row authority runs after observations and its reads remain inside filesystem proof", () => {
+  const f = fixture();
+  let current = true;
+  expect(() => attemptMutationCurrent([f.tree], () => { current = false; return true; }, 30_000, () => current))
+    .toThrow("fence authority changed");
+  expect(() => attemptMutationCurrent([f.tree], () => true, 30_000, () => {
+    fs.writeFileSync(path.join(f.tree, ".delegatus-keep"), "pin"); return true;
+  })).toThrow("filesystem proof changed");
+});
+
+test.skipIf(process.platform !== "linux").each([false, true])("database traffic rechecks row authority during the final read (revoked=%s)", revoked => {
+  const f = fixture(), database = path.join(f.checkout, "state.sqlite");
+  fs.writeFileSync(database, "before");
+  let current = true, checks = 0;
+  const run = () => attemptMutationCurrent(attemptPathWatches([database], "authority"), () => true, 30_000, () => {
+    const observed = current;
+    if (++checks === 1) {
+      fs.appendFileSync(database, "write during the authority read");
+      if (revoked) current = false;
+    }
+    return observed;
+  });
+  if (revoked) expect(run).toThrow("fence authority changed");
+  else expect(run()).toBeTrue();
+  expect(checks).toBe(2);
+});

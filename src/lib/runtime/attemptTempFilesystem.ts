@@ -295,7 +295,7 @@ export class RepositoryLinkInventory {
   mutationDirectories(): AttemptMutationWatch[] {
     const paths: AttemptMutationWatch[] = [];
     for (const read of this.reads.values()) {
-      for (const directory of read.directories ?? []) paths.push(directory.path);
+      for (const directory of read.directories ?? []) paths.push({ directory: directory.path, content: false });
       paths.push(...attemptPathWatches([...(this.lexicalTargets.get(read) ?? []), ...(read.physicalTargets ?? [])]));
     }
     for (const [cwd, observed] of this.repositoriesOf) {

@@ -12,8 +12,96 @@ import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 import { finishedLane } from "./attemptTempRetention.testSupport";
 import { attemptMutationCurrent } from "./attemptMutationFence";
 import { removeAttemptTree } from "./attemptTempFilesystem";
+import { Database } from "bun:sqlite";
+import { RecordedCheckStore } from "@/lib/recordedChecks/store";
 
 const NOW = Date.parse("2030-01-20T00:00:00Z");
+test.skipIf(process.platform !== "linux")("native removal after the final fence cannot follow a rebound ancestor", async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "review-ancestor-rm-"));
+  const container = path.join(parent, "container"), directory = path.join(container, "llv-stage-expired"), cache = path.join(directory, "cache");
+  const archive = path.join(parent, "archive"), moved = path.join(archive, "held-container"), replacement = path.join(parent, "replacement");
+  fs.mkdirSync(cache, { recursive: true }); fs.writeFileSync(path.join(cache, "payload"), "original expired payload");
+  fs.mkdirSync(archive); fs.mkdirSync(replacement);
+  const store = new AttemptTempStore(path.join(parent, "registry/owners.sqlite"));
+  store.register({ directory, pipelineId: null, launchId: "fixture", retainUntilClose: true, createdAt: 1 });
+  const previousPath = process.env.PATH, bin = path.join(parent, "bin"); fs.mkdirSync(bin);
+  for (const command of ["find", "du"]) fs.symlinkSync("/usr/bin/" + command, path.join(bin, command)); process.env.PATH = bin;
+  const nativeStat = fs.lstatSync.bind(fs), nativeRead = fs.readFileSync.bind(fs);
+  let armed = false, reads = 0, injected = false, trash = "", protectedPath = "";
+  const read = spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) => {
+    const stack = String(new Error().stack);
+    // Arm at the last mount observation before the native removal fence.
+    if (file === "/proc/self/mountinfo" && stack.includes("at assertAttemptMountsClear") && !stack.includes("repairAttemptPermissions")) armed = true;
+    return nativeRead(file as never, options as never);
+  }) as typeof fs.readFileSync);
+  const stat = spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike, options?: unknown) => {
+    const value = nativeStat(file, options as { bigint: false });
+    const stack = String(new Error().stack);
+    if (armed && !injected && String(file).endsWith("/cache") && stack.includes("at attemptMutationCurrent") && ++reads === 2) {
+      trash = JSON.parse(nativeRead(attemptTempJournalPath(directory), "utf8")).trash;
+      const pinned = path.join(replacement, path.basename(trash));
+      fs.mkdirSync(path.join(pinned, "cache"), { recursive: true });
+      fs.writeFileSync(path.join(pinned, "cache", "payload"), "protected replacement");
+      fs.writeFileSync(path.join(pinned, ".delegatus-keep"), "pin");
+      protectedPath = pinned;
+      fs.renameSync(container, moved); fs.symlinkSync(replacement, container, "dir"); injected = true;
+    }
+    return value;
+  }) as typeof fs.lstatSync);
+  try {
+    const report = await sweepAttemptTemps(store, { now: () => Date.parse("2030-01-20T00:00:00Z"), maxRoots: 1, state: async () => "expired",
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
+    const result = { injected, reads, removed: report.removed, outcomes: report.outcomes.map(row => [row.disposition, row.reason]),
+      protectedKept: fs.existsSync(path.join(protectedPath, ".delegatus-keep")), protectedPayload: fs.existsSync(path.join(protectedPath, "cache", "payload")),
+      movedOriginal: fs.existsSync(path.join(moved, path.basename(trash), "cache", "payload")) };
+    console.log(JSON.stringify(result));
+    expect(store.has(directory)).toBeTrue();
+    expect(injected).toBeTrue();
+    expect(result.protectedKept).toBeTrue();
+    expect(result.protectedPayload).toBeTrue();
+    expect(result.movedOriginal).toBeTrue();
+    expect(fs.existsSync(path.join(moved, path.basename(attemptTempJournalPath(directory))))).toBeTrue();
+  } finally {
+    stat.mockRestore(); read.mockRestore(); process.env.PATH = previousPath; store.close();
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+
+test.skipIf(process.platform !== "linux")("a final protection read cannot admit chmod after an ancestor is rebound", async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "review-ancestor-"));
+  const container = path.join(parent,"container"), directory = path.join(container,"llv-stage-expired"), cache = path.join(directory,"cache");
+  const archive = path.join(parent,"archive"), moved = path.join(archive,"held-container"), replacement = path.join(parent,"replacement");
+  fs.mkdirSync(cache,{recursive:true});fs.writeFileSync(path.join(cache,"payload"),"retain mode");fs.chmodSync(cache,0o555);
+  fs.mkdirSync(archive);fs.writeFileSync(path.join(archive,".delegatus-keep"),"permanent pin");
+  fs.mkdirSync(replacement);
+  const store = new AttemptTempStore(path.join(parent,"registry/owners.sqlite"));
+  store.register({directory,pipelineId:null,launchId:"fixture",retainUntilClose:true,createdAt:1});
+  const previousPath = process.env.PATH, bin=path.join(parent,"bin");fs.mkdirSync(bin);
+  for (const command of ["find","du"])fs.symlinkSync("/usr/bin/"+command,path.join(bin,command));process.env.PATH=bin;
+  const nativeStat=fs.lstatSync.bind(fs);let reads=0,injected=false,trash="";
+  const stat=spyOn(fs,"lstatSync").mockImplementation(((file:fs.PathLike,options?:unknown)=>{
+    const value=nativeStat(file,options as {bigint:false});const stack=String(new Error().stack);
+    if(!injected&&String(file).endsWith("/cache")&&stack.includes("at permissionChange")&&stack.includes("at attemptMutationCurrent")&&stack.includes("at current")&&++reads===2){
+      trash=JSON.parse(fs.readFileSync(attemptTempJournalPath(directory),"utf8")).trash;
+      const replacementCache=path.join(replacement,path.basename(trash),"cache");fs.mkdirSync(replacementCache,{recursive:true});fs.writeFileSync(path.join(replacementCache,"payload"),"protected replacement");fs.writeFileSync(path.join(replacement,path.basename(trash),".delegatus-keep"),"pin");
+      fs.renameSync(container,moved);fs.symlinkSync(replacement,container,"dir");injected=true;
+    }
+    return value;
+  }) as typeof fs.lstatSync);
+  try{
+    const report=await sweepAttemptTemps(store,{now:()=>Date.parse("2030-01-20T00:00:00Z"),maxRoots:1,state:async()=>"expired",scan:()=>({ownNamespace:null,processes:[]}),references:async()=>true});
+    const movedCache=path.join(moved,path.basename(trash),"cache");
+    const mode=fs.statSync(movedCache).mode&0o777;
+    console.log(JSON.stringify({injected,reads,mode,report,owner:store.has(directory),journal:fs.existsSync(attemptTempJournalPath(directory)),movedPayload:fs.readFileSync(path.join(movedCache,"payload"),"utf8")}));
+    expect(store.has(directory)).toBeTrue();
+    expect(injected).toBeTrue();expect(report.removed).toBe(0);expect(mode).toBe(0o555);
+  }finally{
+    stat.mockRestore();process.env.PATH=previousPath;store.close();
+    const restore=(dir:string)=>{fs.chmodSync(dir,0o700);for(const entry of fs.readdirSync(dir,{withFileTypes:true}))if(entry.isDirectory())restore(path.join(dir,entry.name));};restore(parent);fs.rmSync(parent,{recursive:true,force:true});
+  }
+});
+
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
   for (const restore of cleanup.splice(0).reverse()) await restore();
@@ -91,8 +179,42 @@ function fixture() {
     sweepAttemptTemps(store, { now: () => NOW, maxRoots: 1, authority,
       state: async (owner, inventory) => (await authority(owner, inventory)).state, scan });
   const journal = () => JSON.parse(fs.readFileSync(attemptTempJournalPath(directory), "utf8")) as { trash: string };
-  return { parent, directory, cache, store, sweep, journal };
+  return { parent, directory, cache, store, sweep, journal, lane };
 }
+
+test.skipIf(process.platform !== "linux").each(["owner", "pipeline", "hold"] as const)(
+  "a relevant database change during the final protection read preserves permissions (%s)", mutation => {
+    return (async () => {
+      const f = fixture();
+      if (mutation === "hold") new RecordedCheckStore().close();
+      const database = new Database(mutation === "owner" ? f.store.filename : statePath("state.sqlite"));
+      cleanup.push(() => database.close());
+      cleanup.push(() => { if (mutation === "hold") database.run("DELETE FROM recorded_check_roots WHERE id='late-hold'"); });
+      const nativeStat = fs.lstatSync.bind(fs);
+      let injected = false, reads = 0;
+      const stat = spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike, options?: unknown) => {
+        const value = nativeStat(file, options as { bigint: false });
+        const stack = String(new Error().stack);
+        if (!injected && String(file).endsWith("/cache") && stack.includes("at permissionChange")
+          && stack.includes("at attemptMutationCurrent") && stack.includes("at current") && ++reads === 2) {
+          if (mutation === "owner") database.run("UPDATE roots SET launchId='replacement' WHERE directory=?", [f.directory]);
+          else if (mutation === "pipeline") database.run("UPDATE state_rows SET row_revision=row_revision+1 WHERE collection='pipelines' AND row_key=?", [f.lane.id]);
+          else database.run("INSERT INTO recorded_check_roots(id,directory,identity,held) VALUES('late-hold',?,'fixture',1)", [f.directory]);
+          injected = true;
+        }
+        return value;
+      }) as typeof fs.lstatSync);
+      cleanup.push(() => { stat.mockRestore(); });
+      const report = await f.sweep();
+      expect(injected).toBeTrue();
+      expect(report).toMatchObject({ removed: 0, errors: 0, deferred: 1 });
+      expect(report.outcomes[0].reason).toContain("authority changed");
+      expect(f.store.has(f.directory)).toBeTrue();
+      const cache = path.join(f.journal().trash, "cache");
+      expect(fs.statSync(cache).mode & 0o777).toBe(0o555);
+      expect(fs.readFileSync(path.join(cache, "payload"), "utf8")).toBe("retained cache");
+    })();
+  });
 
 test.skipIf(process.platform !== "linux").each(["keep", "swap"] as const)(
   "native removal revalidates eligibility after its final mount read (%s)", async mutation => {
