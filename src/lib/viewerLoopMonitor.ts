@@ -20,7 +20,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "memory.import.status" | "memory.import.advance" | "memory.import.sync" | "memory.import.curation" | "memory.import" | "memory.import.backup" | "memory.import.candidates" | "memory.import.retention"
   | "tasks.seat-recovery-cleanup" | "tasks.system-run" | "telegram.report-task-settle" | "memory.curation-cleanup"
   | "delivery.inbox-batch" | "composer.upload"
-  | "http.render" | "links.task-export" | "role-memory.view"
+  | "http.render" | "http.stream" | "links.task-export" | "role-memory.view"
   | "registry.delivery-key" | "orchestrator.relay-recovery" | "orchestrator.authority" | "memory.delivery-evidence"
   | "registry.read" | "registry.write" | "registry.prepare" | "runtime.startup" | "runtime.startup-bind" | "runtime.spawn-recovery" | "agent.deferred-spawn" | "state.rollback-checkpoint"
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
@@ -88,7 +88,7 @@ const boundedDiagnostics = () => process.env[LOOP_DIAGNOSTICS_ENV] === "bounded"
 export const LOOP_MEMORY_RETENTION = { samples: 120, intervalMs: 15_000 } as const;
 type MemorySample = typeof performanceProcess & ReturnType<typeof cacheSizes> & {
   utcMs: number; monotonic: number; role: string;
-  rss: { bytes: number; utcMs: number } | null;
+  rss: { bytes: number; utcMs: number; anonBytes: number | null; fileBytes: number | null } | null;
   memoryUsage: ReturnType<ReturnType<typeof createLoopHeapSignals>["memoryUsage"]>;
   gaps: { count: number; totalMs: number; maxMs: number; operations: string[]; sites: string[]; omitted: number; droppedOperations: number };
 };
@@ -208,6 +208,8 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
             beforeBytes: rssFirst?.rssBytes ?? null, afterBytes: rssFinal?.rssBytes ?? null,
             deltaBytes: rssFirst && rssFinal ? rssFinal.rssBytes - rssFirst.rssBytes : null,
             peakBytes: rss.length ? Math.max(...rss.map(row => row.rssBytes)) : null,
+            afterAnonBytes: rssFinal && rssFinal.rssAnonBytes >= 0 ? rssFinal.rssAnonBytes : null,
+            afterFileBytes: rssFinal && rssFinal.rssFileBytes >= 0 ? rssFinal.rssFileBytes : null,
             sampleFromUtcMs: rssFirst?.rssUtcMs ?? null, sampleToUtcMs: rssFinal?.rssUtcMs ?? null },
           // The worker records this while the main loop is still stale. Its
           // timestamp is not the recovery callback's timestamp. Sequence can

@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
 import { touchedTests } from "./local-gate-tests";
@@ -26,19 +26,25 @@ import { CpuAdmissionQueue, cpuAdmissionFile, cpuCommandOwner } from ${JSON.stri
 test("queued heavy command", async () => {
   const queue = new CpuAdmissionQueue(cpuAdmissionFile());
   queue.check("command:predecessor", false, cpuCommandOwner());
-  const release = setTimeout(() => queue.cancel("command:predecessor"), 8000);
+  const release = setTimeout(() => queue.cancel("command:predecessor"), 12000);
   try {
     const child = Bun.spawn(["bash", ${JSON.stringify(path.join(repo, "scripts/gate-slot.sh"))}, process.execPath, "-e", ""], { stdout: "ignore", stderr: "inherit" });
     expect(await child.exited).toBe(0);
   } finally { clearTimeout(release); queue.cancel("command:predecessor"); queue.close(); }
-}, 20000);`;
-  writeFileSync(path.join(f.dir, "a.test.ts"), source);
-  writeFileSync(path.join(f.dir, "b.test.ts"), 'import { test } from "bun:test"; test("next file", () => {});');
+}, 30000);`;
+  // Fill the head pool so its next file starts after the long admission.
+  // Two files start together and cannot detect a lost comparator credit.
+  const queued = Array.from({ length: 8 }, (_, index) => `a-${index}.test.ts`);
+  for (const file of queued) writeFileSync(path.join(f.dir, file), source);
+  const marker = path.join(f.dir, "next-file");
+  writeFileSync(path.join(f.dir, "b.test.ts"), `import { test } from "bun:test"; import { writeFileSync } from "node:fs";
+test("next file", () => writeFileSync(${JSON.stringify(marker)}, "completed"));`);
   const started = Date.now();
-  const result = await touchedTests(f.dir, f.base, ["a.test.ts", "b.test.ts"], { env: f.env, log: () => {}, budgets: { fileMs: 2000, runMs: 4000 } });
-  expect(Date.now() - started).toBeGreaterThan(8000);
+  const result = await touchedTests(f.dir, f.base, [...queued, "b.test.ts"], { env: { ...f.env, LLV_GATE_TEST_WORKERS: "8" }, log: () => {}, budgets: { fileMs: 4000, runMs: 8000 } });
+  expect(Date.now() - started).toBeGreaterThan(12000);
   expect(result.introduced).toHaveLength(0);
-}, 30000);
+  expect(readFileSync(marker, "utf8")).toBe("completed");
+}, 45000);
 
 test("a touched test cannot leave a synthetic stage head in its outer gate queue", async () => {
   const f = fixture(), repo = path.resolve(import.meta.dir, "..");

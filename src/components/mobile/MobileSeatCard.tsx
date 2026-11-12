@@ -18,6 +18,7 @@ import {
   type SpawnResponseBody,
 } from "../draftSpawn";
 import { draftWorkingDirectory } from "../projectModel";
+import { useOpenDecisionCount } from "@/components/decisions/DecisionColumn";
 import {
   classifySeatFailure,
   deriveOrchestratorPanelState,
@@ -151,6 +152,8 @@ export function MobileSeatCard({
   const projectCwd = useMemo(() => draftWorkingDirectory(files, project), [files, project]);
   const ownSeat = useOrchestratorSeat(seat ? null : project, projectCwd || undefined);
   const { status, failed, refresh } = seat ?? ownSeat;
+  /* A form waiting for the operator turns a finished turn's «done» into «waiting». */
+  const decisionWaiting = useOpenDecisionCount(project) > 0;
   const [submitting, setSubmitting] = useState(false);
   /* The guard is SYNCHRONOUS: two taps in one event batch both read the same
      render's `submitting`, so a state flag alone lets the second through. The
@@ -476,7 +479,7 @@ export function MobileSeatCard({
 
   const clock = now ?? Date.now() / 1000;
   /* The one reading, shared with the sheet this card's ⚙ opens. */
-  const badge = seatBadgeReading(t, view, file, clock);
+  const badge = seatBadgeReading(t, view, file, clock, decisionWaiting);
   /* What the seat is doing this minute, in its own words (README §10 P2-3):
      the plan step it published, else the goal it declared. Never a guess. */
   /* docs/design/ghost-seat.md §6.5: while the parallel self runs, the now

@@ -1151,6 +1151,10 @@ export class RuntimeJournal {
       const row = this.db.query<{ request_json: string; receipt_json: string }, [string]>("SELECT request_json, receipt_json FROM operations WHERE operation_id = ?").get(operationId);
       if (!row) throw new Error("runtime operation is unknown");
       const previous = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
+      if (options.requirePristineAdmission && (previous.revision !== 1
+        || previous.deliveryUnverified === true || previous.reason === "delivery-auto-retry")) {
+        throw new Error("runtime operation is no longer a pristine admission");
+      }
       const command = JSON.parse(row.request_json) as RuntimeOperationCommand;
       const confirming = options.confirmedDelivery === true;
       if (confirming) {

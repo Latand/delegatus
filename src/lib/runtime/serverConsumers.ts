@@ -1,32 +1,10 @@
-import { assertFlowExecution } from "@/lib/flows/retirement";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { agentRegistry } from "@/lib/agent/registry";
-import { isoNow, newRound } from "@/lib/flows/engine";
-import { withFlowMutation } from "@/lib/flows/store";
-import type { Flow } from "@/lib/flows/types";
 import { mutateTasksAsync as mutateTasks } from "@/lib/tasks/store";
+import { isoNow } from "@/lib/tasks/helpers";
 import { recordSpawnNoticeObligation } from "@/lib/spawnNotice/store";
-import { withWorkflowMutation } from "@/lib/workflows/store";
 
 import type { RuntimeConsumerPorts, SpawnTurnEnded } from "./consumers";
-
-const READY = /^REVIEW_READY:\s*(.*)$/m;
-
-function readyNote(value: string | null): string | null {
-  if (!value) return null;
-  const matched = READY.exec(value);
-  return matched ? matched[1]!.trim().slice(0, 2_000) : null;
-}
-
-export function advanceFlowFromRuntime(flow: Flow, note: string | null): boolean {
-  assertFlowExecution();
-  const ready = readyNote(note);
-  if (!ready || (flow.state !== "waiting_ready" && flow.state !== "fixing")) return false;
-  flow.rounds.push(newRound(flow, "marker", ready));
-  flow.state = flow.mode === "manual" ? "spawn_pending" : "spawning";
-  flow.stateDetail = null;
-  return true;
-}
 
 /**
  * Record the notice a settled turn owes its launcher
@@ -56,36 +34,6 @@ export function recordSpawnTurnEnded(
 
 export function createServerRuntimeConsumers(): RuntimeConsumerPorts {
   return {
-    async flowReady(flowId, note) {
-      assertFlowExecution();
-      return withFlowMutation(async (flows, persist) => {
-        const flow = flows.find((item) => item.id === flowId);
-        if (!flow) return undefined;
-        if (advanceFlowFromRuntime(flow, note)) await persist();
-        return flow;
-      });
-    },
-    async workflowStageCompleted(workflowId, stage) {
-      assertFlowExecution();
-      return withWorkflowMutation(async (workflows, persist) => {
-        const workflow = workflows.find((item) => item.id === workflowId);
-        if (!workflow) return undefined;
-        if (workflow.stageIndex !== stage) return workflow;
-        const run = workflow.stageRuns[stage];
-        if (!run || run.doneAt) return workflow;
-        run.doneAt = isoNow();
-        const next = workflow.template.stages[stage + 1];
-        if (next) {
-          workflow.stageIndex = stage + 1;
-          workflow.state = next.kind === "review-loop" ? "reviewing" : "implementing";
-        } else {
-          workflow.state = "finishing";
-        }
-        workflow.stateDetail = null;
-        await persist();
-        return workflow;
-      });
-    },
     taskDeliveryAcknowledged(taskId, assignmentId) {
       return mutateTasks((tasks) => {
         const task = tasks.find((item) => item.id === taskId);

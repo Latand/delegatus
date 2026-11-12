@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 import { afterAll, beforeEach, expect, test } from "bun:test";
 
@@ -18,11 +19,17 @@ afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 const { createPipelineFromRequest, defaultPipelinePorts, patchPipeline } = await import("./engine");
 const { pipelineAcknowledgement } = await import("@/lib/mcp/compactAnswers");
 const { savePipelines } = await import("./store");
+const { ROLE_DEFAULTS } = await import("@/lib/roles/defaults");
 type PipelinePorts = import("./engine").PipelinePorts;
 type LaunchRuntime = import("@/lib/roles/sizing").LaunchRuntime;
 
 const REPO = path.join(sandbox, "repo");
 fs.mkdirSync(REPO, { recursive: true });
+execFileSync("git", ["init", "--quiet", "-b", "main", REPO]);
+execFileSync("git", ["commit", "--allow-empty", "--no-gpg-sign", "-m", "fixture"], {
+  cwd: REPO,
+  env: { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture", GIT_COMMITTER_EMAIL: "fixture", GIT_AUTHOR_DATE: "2026-11-11T00:00:00Z", GIT_COMMITTER_DATE: "2026-11-11T00:00:00Z" },
+});
 
 /* Two seats, told apart by the transcript they create from. */
 const SONNET_SEAT = { src: path.join(sandbox, "sonnet-seat.jsonl"), conversationId: "conversation_sonnet_seat" };
@@ -50,19 +57,82 @@ type CreatePipelineRequest = import("./types").CreatePipelineRequest;
 type StageInput = CreatePipelineRequest["stages"][number];
 
 function trivialLane(src: string | undefined, overrides: { build?: Partial<StageInput>; review?: Partial<StageInput> } = {}): CreatePipelineRequest {
+  const build: StageInput = { id: "build", kind: "run", role: { roleId: "builder", params: { size: "trivial", domain: "frontend" } }, prompt: "Change the label to Save", next: "review", ...overrides.build };
   return {
     task: "Fix the label on the settings button",
     repoDir: REPO,
     autoStart: false as const,
     ...(src ? { src } : {}),
     stages: [
-      { id: "build", kind: "run" as const, role: { roleId: "builder" as const, params: { size: "trivial", domain: "frontend" } }, ["prompt"]: "Change the label to Save", next: "review", ...overrides.build },
-      { id: "review", kind: "review-loop" as const, role: { roleId: "reviewer" as const, params: { size: "trivial" } }, ["prompt"]: "Review the label change", next: null, ...overrides.review },
+      build,
+      { id: "review", kind: "run", role: { roleId: "reviewer", params: { size: "trivial" } }, prompt: "Review the label change", next: null, onFail: { to: "review-fix", maxRounds: 1, onExhausted: "park" }, ...overrides.review },
+      { id: "review-fix", kind: "run", role: { roleId: "builder", params: { ...build.role?.params, mode: "apply-fixes" } }, prompt: "Address the review findings", next: "review" },
     ],
   };
 }
 
 beforeEach(() => savePipelines([]));
+
+/* #3902: the seat's short shape uses the normal runtime rows. These tests
+   exercise creation and graph edits through the real controller; the durable
+   creation-class fields belong to #3900. No stage is launched here. */
+function narrowLane(ui: boolean): CreatePipelineRequest {
+  const builder = ROLE_DEFAULTS.find((role) => role.id === "builder")!.config;
+  return {
+    task: "Correct the settings label",
+    spec: "Class: narrow. Exact label and acceptance pinned; few expected lines; no money, access or data migration.",
+    repoDir: REPO,
+    autoStart: false,
+    src: SONNET_SEAT.src,
+    stages: [
+      { id: "build", kind: "run", role: { roleId: "builder", params: { size: "normal", domain: ui ? "frontend" : "general" } }, ...builder, serviceTier: "standard", prompt: "Change the requested label and check its acceptance.", next: "review" },
+      { id: "review", kind: "run", role: { roleId: "reviewer", params: { size: "normal" } }, ...(ui ? { engine: "claude" as const, model: "opus", effort: "high" } : {}), prompt: "Review the change against its acceptance.", next: ui ? "visual" : null },
+      ...(ui ? [{ id: "visual", kind: "run" as const, role: { roleId: "visual-critic" as const }, prompt: "Lane declared narrow before launch. Check the changed label state on the phone in Ukrainian dark and desktop in English light.", next: null }] : []),
+    ],
+  };
+}
+
+for (const ui of [false, true]) {
+  test(`a narrow ${ui ? "UI" : "non-UI"} shape keeps the standard builder and full reviewer without adding a brief or fix`, async () => {
+    const created = await createPipelineFromRequest(narrowLane(ui), ports(), { briefer: { kind: "agent", conversationId: SONNET_SEAT.conversationId } });
+    expect(created.error).toBeUndefined();
+    const stages = created.pipeline!.stages;
+    expect(stages.map((stage) => stage.role?.roleId)).toEqual(ui ? ["builder", "reviewer", "visual-critic"] : ["builder", "reviewer"]);
+    expect(stages.map((stage) => stage.next)).toEqual(ui ? ["review", "visual", null] : ["review", null]);
+    const builder = ROLE_DEFAULTS.find((role) => role.id === "builder")!.config;
+    expect(stages[0]!.effectiveRole).toMatchObject({ ...builder, serviceTier: "standard", access: "read-write" });
+    expect(stages[1]!.effectiveRole).toMatchObject(ui ? { engine: "claude", model: "opus", effort: "high", access: "read-only" } : { ...ROLE_DEFAULTS.find((role) => role.id === "reviewer")!.config, access: "read-only" });
+    expect(stages.every((stage) => !stage.onFail)).toBe(true);
+    if (ui) expect(stages[2]!.effectiveRole.access).toBe("read-only");
+  });
+}
+
+test("shortening a lane does not admit a Sonnet normal-size reviewer", async () => {
+  const request = narrowLane(false);
+  Object.assign(request.stages[1]!, { engine: "claude", model: "sonnet", effort: "high" });
+  const created = await createPipelineFromRequest(request, ports(), { briefer: { kind: "agent", conversationId: SONNET_SEAT.conversationId } });
+  expect(created.pipeline).toBeUndefined();
+  expect(created.status).toBe(400);
+  expect(created.violations?.map((violation) => violation.field)).toEqual(["stages[1].role"]);
+});
+
+test("the seat can add the normal fix loop to the same short lane without a successor", async () => {
+  const created = await createPipelineFromRequest(narrowLane(false), ports(), { briefer: { kind: "agent", conversationId: SONNET_SEAT.conversationId } });
+  expect(created.error).toBeUndefined();
+  const id = created.pipeline!.id;
+  const actor = { kind: "agent" as const, role: "orchestrator", conversationId: OPUS_SEAT.conversationId };
+  const added = await patchPipeline(id, {
+    action: "add-stage",
+    stage: { id: "fix", kind: "run", role: { roleId: "builder", params: { size: "normal", mode: "apply-fixes" } }, prompt: "Address the review findings.", next: "review" },
+  }, ports(), actor);
+  expect(added.error).toBeUndefined();
+  const escalated = await patchPipeline(id, { action: "set-edge", stageId: "review", edge: "fail", to: "fix", maxRounds: 2, onExhausted: "park" }, ports(), actor);
+  expect(escalated.error).toBeUndefined();
+  expect(escalated.pipeline!.id).toBe(id);
+  expect(escalated.pipeline!.stages.map((stage) => stage.id)).toEqual(["build", "review", "fix"]);
+  expect(escalated.pipeline!.stages[1]!.onFail).toEqual({ to: "fix", maxRounds: 2, onExhausted: "park" });
+  expect(escalated.pipeline!.stages[2]!.next).toBe("review");
+});
 
 test("a trivial lane briefed by a Sonnet-run agent is refused at create, its fix stage with it", async () => {
   const created = await createPipelineFromRequest(trivialLane(SONNET_SEAT.src), ports(), { briefer: { kind: "agent", conversationId: null } });
@@ -72,7 +142,7 @@ test("a trivial lane briefed by a Sonnet-run agent is refused at create, its fix
   expect(created.violations?.[0]?.message).toBe("stage build: size=trivial runs a light model and needs a brief written by a large model (Claude Opus or Fable, or a large Codex model); this brief comes from claude/claude-sonnet-5.");
 });
 
-test("an Opus-run agent's trivial lane is admitted, its fix stage inherits size=trivial, and the answer states each runtime", async () => {
+test("an Opus-run agent's trivial lane is admitted with size=trivial on its fix, and the answer states each runtime", async () => {
   const created = await createPipelineFromRequest(trivialLane(OPUS_SEAT.src), ports(), { briefer: { kind: "agent", conversationId: OPUS_SEAT.conversationId } });
   if (!created.pipeline) throw new Error(`create refused: ${created.error}`);
   const stages = created.pipeline.stages;
@@ -102,7 +172,7 @@ test("an explicit Sonnet builder runs at any size on a large model's brief and n
   expect(admitted.error).toBeUndefined();
   expect(admitted.pipeline?.stages.find((stage) => stage.id === "build")?.effectiveRole).toMatchObject({ engine: "claude", model: "sonnet" });
 
-  /* The converted fix stage runs its own fix row and copies no explicit
+  /* The explicit fix stage runs its own fix row and copies no explicit
      runtime (docs/design/agent-prompt-contract.md §3 (a)), so only the
      builder that set Sonnet by hand is judged. */
   const lightBrief = await createPipelineFromRequest(trivialLane(SONNET_SEAT.src, sonnetBuilder), ports(), { briefer: { kind: "agent", conversationId: null } });
