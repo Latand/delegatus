@@ -1931,8 +1931,14 @@ const execFileAsync = promisify(execFile);
 function localLaneDelivery(pipeline: Pipeline, cache: ForgeCacheView): "none" | "merged" | "pending" {
   if (pipeline.delivery?.disposition === "comparison") return "none";
   if (pipeline.merge?.state === "merged") return "merged";
+  // Only the explicitly recorded delivery PR proves the lane's delivery.
+  // pipelineWorkLinks also includes manual links, provenance, and cached PRs
+  // from a reused branch; their merge state cannot settle this lane.
   const prs = pipelineWorkLinks(pipeline, cache).links.filter(link => link.kind === "pr");
-  if (prs.some(pr => pr.state === "merged")) return "merged";
+  const deliveryPr = pipeline.delivery?.target.pr;
+  if (deliveryPr && prs.some(link => link.kind === "pr"
+    && link.number === deliveryPr && link.state === "merged"
+    && (!pipeline.delivery?.target.prRepository || link.repository.toLowerCase() === pipeline.delivery.target.prRepository.toLowerCase()))) return "merged";
   if (prs.length || pipeline.delivery?.target.pr || pipeline.publication === "remote-branch") return "pending";
   if (pipeline.publication === "internal") return "none";
   if (!pipeline.delivery?.target.remote && pipeline.stages.length

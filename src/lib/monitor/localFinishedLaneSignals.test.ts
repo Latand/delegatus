@@ -83,6 +83,7 @@ test.each([...scenarios])("finished lane delivery: %s", async scenario => {
     if (scenario === "remote-readonly") lane.publication = "remote-branch";
   }
   if (scenario === "cached-fork") lane.delivery!.target.prRepository = "acme/upstream";
+  if (scenario === "unrelated-merged") lane.workLinks = [{ repository: "acme/widgets", number: 99, kind: "pr" }];
   if (scenario === "comparison") lane.delivery!.disposition = "comparison";
   if (scenario === "merged-record" || scenario === "archived-merged") lane.merge = { state: "merged", reviewedHead: base, mergedHead: base, chain: [base] } as never;
   updateForgeCache(data => {
@@ -93,6 +94,8 @@ test.each([...scenarios])("finished lane delivery: %s", async scenario => {
       entry.prs[String(number)] = { url: `https://github.com/acme/widgets/pull/${number}`, headRefName: scenario === "unrelated-merged" ? "other-lane" : "finished-lane",
         state: scenario === "cached-open" ? "open" : scenario === "cached-closed" ? "closed" : "merged",
         createdAt: scenario === "reused-branch" ? "2020-01-01T00:00:00Z" : "2026-08-27T10:00:00Z", closes: [], checkedAt: "2026-08-28T12:00:00Z" };
+      if (scenario === "unrelated-merged") entry.prs["17"] = { url: "https://github.com/acme/widgets/pull/17", headRefName: "finished-lane",
+        state: "open", createdAt: "2026-08-27T10:00:00Z", closes: [], checkedAt: "2026-08-28T12:00:00Z" };
     }
   });
   resetForgeCacheForTests();
@@ -123,6 +126,6 @@ test.each([...scenarios])("finished lane delivery: %s", async scenario => {
   }
   const pending = observation!.signals.filter(signal => signal.id.startsWith("local-unmerged-lane:"));
   const expected = ["unlanded", "partial", "cached-open", "cached-closed", "unrelated-merged", "reused-branch", "local-base",
-    "internal-with-pr", "remote-readonly", "wrong-path", "unlanded-no-pr"].includes(scenario);
+    "internal-with-pr", "remote-readonly", "wrong-path", "unlanded-no-pr", "cached-branch"].includes(scenario);
   expect(pending.map(signal => signal.id)).toEqual(expected ? [`local-unmerged-lane:${lane.id}`] : []);
 });
