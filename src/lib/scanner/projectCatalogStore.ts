@@ -5,6 +5,7 @@ import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { displayNameFromProjectIdentity } from "@/lib/projects/identity";
 import { fsyncPath } from "@/lib/state/durableJson";
+import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import {
   lazyReconcileAllowed,
@@ -653,6 +654,15 @@ function sha256(bytes: Buffer): string {
   return crypto.createHash("sha256").update(bytes).digest("hex");
 }
 
+/** The importing release, for the import evidence, as the shared helper records it. */
+function importingRelease(directory: string): string | null {
+  try {
+    return hotStateWriterRevision(directory)?.slice(0, 12) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Import `project-catalog.json` into the collection, creating the collection
  * (empty when there is no file), then delete the file. A file that does not
@@ -683,7 +693,7 @@ export function importLegacyProjectCatalog(
     if (held) return { state: "already-imported", record: held, incident: null };
     const { record } = importStateCollection(database, {
       collection: PROJECT_CATALOG_COLLECTION, schemaVersion: 1, migrationId: MIGRATION_ID, rows: [],
-      sourceName: PROJECT_CATALOG_FILE_NAME, sourceSha256: null, sourceBytes: 0, gap: null, release: null,
+      sourceName: PROJECT_CATALOG_FILE_NAME, sourceSha256: null, sourceBytes: 0, gap: null, release: importingRelease(directory),
     });
     return { state: "imported", record, incident: null };
   }
@@ -703,7 +713,7 @@ export function importLegacyProjectCatalog(
     sourceSha256: sha256(bytes),
     sourceBytes: bytes.length,
     gap: body ? null : "legacy-unreadable",
-    release: null,
+    release: importingRelease(directory),
   };
   const outcome: LegacyImportOutcome = held
     ? { state: "reimported", record: reimportStateCollection(database, input).record, incident: null }
