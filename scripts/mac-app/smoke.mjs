@@ -26,6 +26,10 @@ const visualCases = [
 ];
 let accountPassphrase = "";
 const accessKey = randomBytes(16).toString("hex");
+if (run("/usr/bin/uname", ["-m"]).trim() === "x86_64") {
+  assert.equal(process.arch, "x64", "Intel smoke driver runs as x86_64");
+  assert.equal(run("/usr/sbin/sysctl", ["-n", "sysctl.proc_translated"]).trim(), "0", "Intel smoke is native, not translated by Rosetta");
+}
 function redact(value) {
   return String(value).replaceAll(accountPassphrase || "\0", "[redacted]").replaceAll(home || "\0", "$HOME")
     .replaceAll(process.env.HOME || "\0", "$RUNNER_HOME")
@@ -224,7 +228,8 @@ try {
     const authorized = await fetch("http://127.0.0.1:8898/", { headers: { Authorization: `Bearer ${accessKey}` }, signal: AbortSignal.timeout(2000) });
     assert.equal(authorized.status, 200, "the saved key opens the protected Viewer");
     const app = await register(launch(["-AppleLanguages", "(uk)", "-AppleInterfaceStyle", "Dark"], "protected-reuse-uk-dark"));
-    await until("protected saved-key reuse", () => processLog(app.pid).includes("STATE reused") && /WEB language=uk/.test(processLog(app.pid)));
+    await until("protected saved-key reuse", () => processLog(app.pid).includes("STATE reused") && /WEB language=uk/.test(processLog(app.pid)), 60_000,
+      () => `${app.diagnostics()}\napp log:\n${processLog(app.pid) || "(empty)"}`);
     assert.equal(launcherPID(), original);
     await sleep(900); await end(app);
   });

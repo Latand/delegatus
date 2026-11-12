@@ -21,9 +21,12 @@ cp -R macos/Resources/. "$app/Contents/Resources/"
 cp LICENSE "$app/Contents/Resources/LICENSE"
 printf APPL???? > "$app/Contents/PkgInfo"
 for arch in arm64 x86_64; do
-  swiftc -swift-version 5 -O -target "$arch-apple-macos13.0" -framework AppKit -framework WebKit macos/Sources/*.swift -o "$stage/Delegatus-$arch"
+  cpu=()
+  if [ "$arch" = x86_64 ]; then cpu=(-Xllvm -mcpu=x86-64); fi
+  swiftc -swift-version 5 -O -target "$arch-apple-macos13.0" "${cpu[@]}" -framework AppKit -framework WebKit macos/Sources/*.swift -o "$stage/Delegatus-$arch"
 done
 lipo -create "$stage/Delegatus-arm64" "$stage/Delegatus-x86_64" -output "$app/Contents/MacOS/Delegatus"
+lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/Delegatus"
 swiftc -swift-version 5 macos/Sources/Install.swift macos/Sources/Server.swift macos/Tests/CoreChecks.swift -o "$stage/core-checks"
 "$stage/core-checks"
 node scripts/mac-app/installer-checks.mjs "$app/Contents/Resources"
