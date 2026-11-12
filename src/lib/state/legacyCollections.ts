@@ -44,6 +44,12 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     importAtActivation: async () => (await import("@/lib/bridge/store")).importLegacyBridgeChannels(stateDir(), { reconcile: true }),
     checkpointMirrorForDemotion: async () => (await import("@/lib/bridge/store")).checkpointBridgeChannelsRollbackMirrorForDemotion(stateDir()),
   },
+  // Slice 4: the orchestrator seat record; layout in src/lib/orchestrator/seatStore.ts.
+  {
+    collection: "orchestrator_seats",
+    importAtActivation: async () => (await import("@/lib/orchestrator/seatStore")).importLegacyOrchestratorSeats(statePath("orchestrator-seats.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/orchestrator/seatStore")).checkpointOrchestratorSeatRollbackMirrorForDemotion(statePath("orchestrator-seats.json")),
+  },
   {
     collection: "accounts",
     importAtActivation: async () => (await import("@/lib/accounts/accountsStore")).importLegacyAccounts(undefined, { reconcile: true }),

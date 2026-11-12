@@ -79,9 +79,6 @@ const PROJECTION_STATE_FILES = [
      scan and no other store. */
   "operator-asks.json",
   "asks-you-settings.json",
-  /* Who answers a worker's ask is the project's designated seat
-     (docs/design/attention-auto-resolve.md): a rotation moves no scan. */
-  "orchestrator-seats.json",
 ] as const;
 const projectionCacheStore = globalThis as typeof globalThis & {
   __llvFilesProjectionCache?: Map<string, CachedProjection>;
@@ -237,6 +234,9 @@ function projectionBaseKey(
       `seat-decisions:${readStateCollectionRevision(statePath("state.sqlite"), SEAT_DECISIONS_COLLECTION) ?? "none"}`,
       /* A tick switched off hands its project's routed asks back to the operator. */
       hotStateSignature("seat_tick_settings", "seat-tick-settings.json"),
+      /* Who answers a worker's ask is the project's designated seat
+         (docs/design/attention-auto-resolve.md): a rotation moves no scan. */
+      hotStateSignature("orchestrator_seats", "orchestrator-seats.json"),
     ],
   })).digest("hex");
 }
