@@ -29,7 +29,7 @@ export function seatTickReportRows(project: string): SeatTickReportRow[] {
 // invalidate it; legacy stores use their atomic file identities instead.
 const unchanged = new MeasuredCache<string, string>("revisions", "monitor/seatTickReports");
 function reportInputRevision(project: string, seat: string): string {
-  const collections = ["tasks", "pipelines", "board_maintenance_runs", "attention_dismissals", "bridge_reports", "project_aliases", "worktree_map"];
+  const collections = ["tasks", "pipelines", "board_maintenance_runs", "attention_dismissals", "bridge_reports", "project_aliases", "worktree_map", "orchestrator_seats"];
   const revisions = readStateCollectionRevisions(statePath("state.sqlite"), collections);
   const files = ["orchestrator-seats.json", "operator-settings.json", "project-aliases.json", "tasks.json", "pipelines.json", "attention-dismissals.json", "bridge-reports.json", "worktree-map.json"];
   const identity = (filename: string, versioned = true) => {

@@ -17,7 +17,8 @@ import { buildPipeline } from "@/lib/pipelines/store";
 import { conversationWorkspacePrincipal } from "@/lib/team/workspacePrincipal";
 import { createPipelineFromRequest, defaultPipelinePorts, patchPipeline } from "@/lib/pipelines/engine";
 import { findPipelineRecord } from "@/lib/pipelines/store";
-import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
+import { writeStoredSeatRecord } from "@/lib/orchestrator/seatStoreFixture";
 import { queuePipelineCreation, admitQueuedPipelineCreations, queuedPipelineCreationStatus } from "@/lib/pipelines/creationQueue";
 import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { MEMBER_COOKIE, mintSession } from "@/lib/team/sessions";
@@ -430,7 +431,7 @@ test("a durable member binding stays fenced when its authority store disappears"
 });
 
 test("an unreadable seat file refuses an unbound caller without revealing foreign tasks", async () => {
-  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json"), "{");
+  writeStoredSeatRecord("{");
   expect((await call("get_task", { taskId: "task_0" })).ok).toBe(true);
   snapshot.conversations.conversation_member = conversation("conversation_member", own, false) as never;
   const result = await call("get_task", { taskId: "task_1" });
@@ -945,11 +946,10 @@ test("a fenced seat keeps the Telegram tools its record grants; no other fenced 
   snapshot.conversations[seat] = conversation(seat, own, false) as never;
   await served();
   // An unreadable seat record and a lost project both end the grant.
-  const seats = path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json");
-  const saved = fs.readFileSync(seats, "utf8");
-  fs.writeFileSync(seats, "{");
+  const saved = readOrchestratorSeatFile();
+  writeStoredSeatRecord("{");
   for (const answer of await tools()) expect(answer.ok).toBe(false);
-  fs.writeFileSync(seats, saved);
+  writeStoredSeatRecord(saved);
   await served();
   store.removeWorkspaceMember(W1, member.id);
   await refused();

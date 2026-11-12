@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { statePath } from "@/lib/configDir";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { closeAgentRegistryForTests, type RegistryConversation } from "@/lib/agent/registry";
 import type { ViewerMcpDomainDependencies } from "@/lib/mcp/bindings";
@@ -17,7 +16,8 @@ import { createWorkspace } from "@/lib/team/workspaces";
 import { seatAuthRotationKey } from "@/lib/monitor/seatAuthRecovery";
 
 import { executeOrchestratorRotation, executeOrchestratorSeatRequest, type SeatCommandDependencies, type SeatLaunchAdmission } from "./seatCommand";
-import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "./seats";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor, readOrchestratorSeatFile } from "./seats";
+import { damageStoredSeatRecord, writeStoredSeatRecord } from "./seatStoreFixture";
 
 /**
  * The reach of a project's orchestrator seat across member input and rotation.
@@ -215,10 +215,9 @@ test("a seat stamped by an agent's rotation before the fix answers to the owner'
     workspace: scope, triggeredBy: { kind: "agent", conversationId: SEAT, seatEpoch: 1 }, now: AT });
   completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "stamped_000001", conversationId: stamped, path: `${stamped}.jsonl`, now: AT });
   // The record as the earlier release wrote it: no word on where the binding came from.
-  const file = statePath("orchestrator-seats.json");
-  const seats = JSON.parse(fs.readFileSync(file, "utf8"));
-  delete seats.seats[PROJECT].workspaceFromMessage;
-  fs.writeFileSync(file, JSON.stringify(seats));
+  const seats = readOrchestratorSeatFile();
+  delete seats.seats[PROJECT]!.workspaceFromMessage;
+  writeStoredSeatRecord(seats);
   launched.set(stamped, { workspace: scope, parent: SEAT });
   writes(member, SEAT);
   expect(await reach(stamped)).toEqual(MEMBER_REACH);
@@ -228,11 +227,10 @@ test("a seat stamped by an agent's rotation before the fix answers to the owner'
 
 /** The record an earlier release left: no word on where the binding came from. */
 function asEarlierRelease(change: (seat: Record<string, unknown>) => void = () => {}): void {
-  const file = statePath("orchestrator-seats.json");
-  const seats = JSON.parse(fs.readFileSync(file, "utf8"));
-  delete seats.seats[PROJECT].workspaceFromMessage;
-  change(seats.seats[PROJECT]);
-  fs.writeFileSync(file, JSON.stringify(seats));
+  const seats = readOrchestratorSeatFile();
+  delete seats.seats[PROJECT]!.workspaceFromMessage;
+  change(seats.seats[PROJECT] as unknown as Record<string, unknown>);
+  writeStoredSeatRecord(seats);
 }
 
 test("an automatic rotation carries a member's message as message authority, and an earlier automatic stamp heals", async () => {
@@ -306,7 +304,7 @@ test("a message-authority seat keeps answering to the latest person after it lea
   await personRotates(owner, next);
   // No longer the seat: the launch profile alone says the fence came from a message.
   expect(await reach(fenced)).toEqual(MEMBER_REACH);
-  fs.writeFileSync(statePath("orchestrator-seats.json"), "{");
+  damageStoredSeatRecord();
   expect(await reach(fenced)).toEqual(MEMBER_REACH);
   writes(owner, fenced);
   expect(await reach(fenced)).toEqual(OWNER_REACH);
