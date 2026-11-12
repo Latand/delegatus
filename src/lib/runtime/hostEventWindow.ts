@@ -23,6 +23,10 @@ export const HOST_EVENT_WINDOW = 2048;
 export const HOST_EVENT_WINDOW_BYTES = 6 * 1024 * 1024;
 export const HOST_EVENT_PREVIEW_BYTES = 4096;
 
+// Keep the latest observed sequence even when byte eviction removes every
+// payload. Weak keys give the watermark the same lifetime as its window.
+const windowWatermarks = new WeakMap<readonly RuntimeEvent[], number>();
+
 export function hostEventWindowByteLimit(value = process.env.LLV_HOST_EVENT_WINDOW_BYTES): number {
   const bytes = Number(value);
   return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : HOST_EVENT_WINDOW_BYTES;
@@ -80,9 +84,11 @@ export class HostEventWindow {
   constructor(byteLimit = hostEventWindowByteLimit()) {
     if (!Number.isSafeInteger(byteLimit) || byteLimit <= 0) throw new Error("host event byte limit must be a positive safe integer");
     this.byteLimit = byteLimit;
+    windowWatermarks.set(this.events, 0);
   }
 
   append(event: RuntimeEvent): void {
+    windowWatermarks.set(this.events, Math.max(windowWatermarks.get(this.events) ?? 0, event.seq));
     const preview = event.kind === "item" ? previewItem(event.item) : { value: null, trimmed: false };
     const retained = preview.trimmed && event.kind === "item" ? { ...event, item: preview.value } : event;
     const bytes = Buffer.byteLength(JSON.stringify(retained));
@@ -106,6 +112,7 @@ export class HostEventWindow {
     this.sizes.length = 0;
     this.bytes = 0;
     this.trimmed = 0;
+    windowWatermarks.set(this.events, 0);
     for (const event of newest) this.append(event);
   }
 
@@ -129,6 +136,9 @@ export function runtimeEventsAfter(
   if (first === undefined) {
     const available = ledger().filter(event => event.seq > afterSeq);
     if (available[0] && available[0].seq > afterSeq + 1) throw new RuntimeReplayGapError(afterSeq, available[0].seq);
+    if (!available.length && (windowWatermarks.get(window) ?? 0) > afterSeq) {
+      throw new RuntimeReplayGapError(afterSeq, afterSeq + 1);
+    }
     return available;
   }
   if (afterSeq + 1 >= first) return newer;

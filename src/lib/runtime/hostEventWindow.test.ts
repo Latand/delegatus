@@ -73,6 +73,14 @@ test("a request older than the ledger is still a replay gap", () => {
   expect(() => runtimeEventsAfter(host.window, 0, () => [])).toThrow(RuntimeReplayGapError);
 });
 
+test("byte eviction keeps replay gap evidence after the ledger is lost", () => {
+  const window = new HostEventWindow(500);
+  window.append({ kind: "delta", turnId: "turn", text: "x".repeat(1000), seq: 1 });
+  expect(window.events).toEqual([]);
+  expect(() => runtimeEventsAfter(window.events, 0, () => [])).toThrow(RuntimeReplayGapError);
+  expect(() => runtimeEventsAfter(new HostEventWindow(500).events, 0, () => [])).not.toThrow();
+});
+
 test("a stream returned before its first read leaves the host at once", async () => {
   const host = source(10);
   const stream = attachRuntimeEvents(0, host.events)[Symbol.asyncIterator]();
