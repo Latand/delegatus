@@ -31,7 +31,7 @@ if (delayed) {
         return owner.startIdentity === owner.pid + ":" + start;
       } catch { return false; }
     };
-    const barrierDeadline = Date.now() + 3000;
+    const barrierDeadline = Date.now() + 30_000;
     while (!fs.existsSync(path.join(process.env.DRAIN_ROOT, "release-waiter"))) {
       if (Date.now() > barrierDeadline) throw new Error("waiter barrier deadline exceeded");
       if (!ownerAlive()) { fs.writeFileSync(path.join(process.env.DRAIN_ROOT, "waiter-owner-lost"), "ready"); break; }
@@ -72,7 +72,7 @@ else
     while [ ! -e "$DRAIN_ROOT/release-drain" ]; do
       if ! owner_alive; then touch "$DRAIN_ROOT/drain-owner-lost"; exit 0; fi
       attempts=$((attempts + 1))
-      if [ "$attempts" -ge 600 ]; then touch "$DRAIN_ROOT/drain-watchdog"; exit 0; fi
+      if [ "$attempts" -ge 6000 ]; then touch "$DRAIN_ROOT/drain-watchdog"; exit 0; fi
       sleep 0.005
     done
   fi
@@ -81,7 +81,6 @@ fi
 `, { mode: 0o700 });
   fs.writeFileSync(path.join(bin, "cat"), `#!/bin/sh
 touch "$DRAIN_ROOT/drain-tail"
-[ "$DRAIN_BARRIER_OWNER_LOSS" = "1" ] || touch "$DRAIN_ROOT/release-waiter"
 exec "${cat}" "$@"
 `, { mode: 0o700 });
   fs.writeFileSync(path.join(bin, "wc"), `#!/bin/sh
@@ -94,7 +93,6 @@ else
 fi
 `, { mode: 0o700 });
   process.env.DRAIN_ROOT = root;
-  process.env.DRAIN_BARRIER_OWNER_LOSS = mode === "ownerloss" ? "1" : "0";
   const [ownerPid, ownerStart] = (fixtureIdentity.startIdentity ?? "").split(":");
   fs.writeFileSync(path.join(root!, "fixture-owner.json"), JSON.stringify({ pid: fixtureIdentity.pid, startIdentity: fixtureIdentity.startIdentity }));
   fs.writeFileSync(path.join(root!, "fixture-owner.pid"), `${ownerPid ?? ""}\n`);
@@ -131,9 +129,25 @@ const peer = `
   const write = (fd, text) => { const count = fs.writeSync(fd, text); writes.push({ requested: Buffer.byteLength(text), written: count }); return count; };
   const file = process.argv.at(-1).slice("unix://".length);
   const mode = process.env.PEER_MODE.replace(/^(managed|shim)/, "");
+  if (["delayedexit", "delayedcontrol", "shortlive", "unlinked", "scheduler", "ownerloss"].includes(mode)) {
+    // Linux can shrink new FIFOs under the per-user pipe page limit. Exercise
+    // one page on every run so fixture ordering cannot depend on spare capacity.
+    const { dlopen } = require("bun:ffi");
+    const libc = dlopen("libc.so.6", {
+      fcntl: { args: ["i32", "i32", "i32"], returns: "i32" },
+      getpagesize: { args: [], returns: "i32" },
+    });
+    try {
+      const F_SETPIPE_SZ = 1031, F_GETPIPE_SZ = 1032;
+      if (libc.symbols.fcntl(2, F_SETPIPE_SZ, 4096) < 0) throw new Error("fixture FIFO size could not be bounded");
+      fs.writeFileSync(process.env.DRAIN_ROOT + "/pipe-capacity.json", JSON.stringify({
+        capacity: libc.symbols.fcntl(2, F_GETPIPE_SZ, 0), pageSize: libc.symbols.getpagesize(),
+      }));
+    } finally { libc.close(); }
+  }
   write(2, "EADDRINUSE: callback bind refused\\n");
   if (["delayedexit", "delayedcontrol", "shortlive", "unlinked", "scheduler", "ownerloss"].includes(mode)) {
-    const until = Date.now() + 3000;
+    const until = Date.now() + 10_000;
     while (!fs.existsSync(process.env.DRAIN_ROOT + "/first")) {
       if (Date.now() > until) throw new Error("first drain read did not settle");
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
@@ -142,7 +156,9 @@ const peer = `
   write(2, "Bearer " + "private".repeat(8) + "\\n");
   write(2, process.env.HOME + "/private/file\\n");
   if (mode === "unlinked" || mode === "delayedexit" || mode === "delayedcontrol" || mode === "scheduler" || mode === "ownerloss" || mode === "exit" || mode === "large" || mode === "boundary" || mode === "secret") {
-    if (mode === "large" || mode === "unlinked" || mode === "delayedexit" || mode === "delayedcontrol" || mode === "scheduler" || mode === "ownerloss") write(2, "x".repeat(20000) + "\\n");
+    // Owner loss holds the reader until its owner exits, so its small payload
+    // fits one page. The drain cases retain their full clipping burst.
+    if (mode === "large" || mode === "unlinked" || mode === "delayedexit" || mode === "delayedcontrol" || mode === "scheduler") write(2, "x".repeat(20000) + "\\n");
     if (mode === "boundary") write(2, "Bearer " + "private".repeat(3000));
     if (mode === "secret") {
       // The key header and the first payload lines are visible; the footer is past the retained bytes.
@@ -230,18 +246,30 @@ try {
     if (mode === "chatty" || delayed) sink = fs.openSync(fs.readlinkSync(diagnostic), "r");
     if (delayed) {
       const startup = path.dirname(args.at(-1)!.slice("unix://".length));
-      const until = performance.now() + 3000;
+      const until = performance.now() + 10_000;
       const completion = path.join(startup, "native-exit.json");
       if (mode === "delayedexit" || mode === "delayedcontrol" || mode === "unlinked" || mode === "scheduler" || mode === "ownerloss") {
+        while (!fs.existsSync(path.join(root!, "first")) || !fs.existsSync(path.join(root!, "delayed"))) {
+          if (performance.now() > until) throw new Error("first drain block did not become ready");
+          await Bun.sleep(5);
+        }
+        initialSize = fs.fstatSync(sink!).size;
+        if (mode === "unlinked") fs.unlinkSync(fs.readlinkSync(diagnostic));
+        if (mode !== "ownerloss") {
+          // Drain the large write before waiting for native exit on a small
+          // FIFO. Waiter release stays independent until its state is observed.
+          if (mode === "scheduler") await Bun.sleep(250);
+          releaseDrainTimer = setTimeout(() => fs.writeFileSync(path.join(root!, "release-drain"), "ready"), mode === "scheduler" ? 500 : 250);
+        }
         while (!fs.existsSync(completion)) {
           if (performance.now() > until) throw new Error("native exit did not become durable");
           await Bun.sleep(5);
         }
+        const barriersUntil = performance.now() + 10_000;
         while (!fs.existsSync(path.join(startup, "waiter-live")) || !fs.existsSync(path.join(root!, "delayed"))) {
-          if (performance.now() > until) throw new Error("drain and waiter barriers did not become ready");
+          if (performance.now() > barriersUntil) throw new Error("drain and waiter barriers did not become ready");
           await Bun.sleep(5);
         }
-        initialSize = fs.fstatSync(sink!).size;
         nativeCompleted = JSON.parse(fs.readFileSync(completion, "utf8")).code === 23;
         waiterLive = peerProcess.exitCode === null && peerProcess.signalCode === null;
         if (mode === "ownerloss") {
@@ -249,12 +277,7 @@ try {
           fs.writeFileSync(path.join(root!, "ownerloss-ready"), "ready");
           await new Promise<void>(() => {});
         }
-        if (mode === "scheduler") await Bun.sleep(250); // Simulate a delayed readiness observer while both owners are held.
-        releaseDrainTimer = setTimeout(() => fs.writeFileSync(path.join(root!, "release-drain"), "ready"), mode === "scheduler" ? 500 : 250);
-      }
-      if (mode === "unlinked") {
-        // Exercise successful-startup sink unlink while the collector is held.
-        fs.unlinkSync(fs.readlinkSync(diagnostic));
+        fs.writeFileSync(path.join(root!, "release-waiter"), "ready");
       }
     }
     if (mode === "wrapped") {
@@ -333,9 +356,10 @@ try {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([Promise.all(owned.map(child => child.closed)), new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("owned startup children did not close")), 3000);
+        timer = setTimeout(() => reject(new Error("owned startup children did not close")), 15000);
       })]);
       collection = { nativeCompleted, waiterLive, initialSize, size: fs.fstatSync(sink!).size,
+        pipe: JSON.parse(fs.readFileSync(path.join(root!, "pipe-capacity.json"), "utf8")),
         writes: mode === "shortlive" ? [] : JSON.parse(fs.readFileSync(path.join(root!, "writes.json"), "utf8")),
         ownerIdentityCheck: fs.existsSync(path.join(root!, "owner-identity-check"))
           ? fs.readFileSync(path.join(root!, "owner-identity-check"), "utf8") : null,

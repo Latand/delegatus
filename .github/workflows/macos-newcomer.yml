@@ -29,7 +29,8 @@ jobs:
   newcomer:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: macos-latest
-    timeout-minutes: 15
+    # A healthy run takes about 14 minutes; the limit leaves room for slow hosted runners.
+    timeout-minutes: 30
     steps:
       - name: Determine whether npm publication succeeded
         if: github.event_name == 'workflow_run'

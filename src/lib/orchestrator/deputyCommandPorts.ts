@@ -13,7 +13,7 @@ import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { commitTaskMembership } from "@/lib/tasks/membership";
-import { loadTasks } from "@/lib/tasks/store";
+import { loadTasksForList } from "@/lib/tasks/store";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 
@@ -100,7 +100,7 @@ export function productionDeputyCommandPorts(dependencies: { registry?: AgentReg
           stage: pipeline.cursor?.stageId ?? null,
         }));
       const since = Date.now() - RECENT_TASK_MS;
-      const recentTasks = loadTasks()
+      const recentTasks = loadTasksForList()
         .filter((task) => canonicalOrchestratorProject(task.project) === canonical && Date.parse(task.updatedAt) >= since)
         .map((task) => ({ id: task.id, title: task.text.split(/\r?\n/, 1)[0] ?? "", status: task.status }));
       return { openLanes, recentTasks };

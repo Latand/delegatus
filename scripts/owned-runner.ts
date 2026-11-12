@@ -1,4 +1,5 @@
 import { ownGateSandboxes } from "./gateSandboxRecords";
+import { timedCommand, observeCommandExecution } from "../src/lib/recordedChecks/commandTiming";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -96,9 +97,10 @@ if (args[0] === "--namespace-guardian") {
   // A test preload can consequently accept this run without attempting to
   // re-enter another runner.
   const portableCommand = process.platform === "linux"
-    ? ["/bin/bash", "-c", 'export LLV_PORTABLE_TEST_RUNNER_PID=$$; exec "$@"', "owned-command", ...command]
+    ? timedCommand(command, 'export LLV_PORTABLE_TEST_RUNNER_PID=$$; ')
     : command;
-  const child = spawn(portableCommand[0]!, portableCommand.slice(1), { stdio: "inherit", env: budget.env });
+  const child = spawn(portableCommand[0]!, portableCommand.slice(1), { stdio: ["inherit", "inherit", "inherit", "pipe"], env: budget.env });
+  const execution = observeCommandExecution(child);
   if (child.pid) fs.appendFileSync(ledger, `${JSON.stringify(captureProcessIdentity(child.pid))}\n`);
   const commandIdentity = producerCommandIdentity(child.pid);
   producerReport("portable", commandIdentity);
@@ -144,7 +146,7 @@ if (args[0] === "--namespace-guardian") {
     } catch { guardianConfirmed = false; }
   }
   fs.rmSync(directory, { recursive: true, force: true });
-  producerReport("portable", commandIdentity, { phase: "close", commandExit, commandSignal, cancellation, cleanup: cleanupFailed || !guardianConfirmed ? "unknown" : "confirmed" });
+  producerReport("portable", commandIdentity, { ...await execution(), phase: "close", commandExit, commandSignal, cancellation, cleanup: cleanupFailed || !guardianConfirmed ? "unknown" : "confirmed" });
   process.exit(cleanupFailed ? 1 : interrupted || code || guardian.exitCode || 0);
 } else if (args[0] === "--service") {
   const file = args[1]!;
@@ -198,9 +200,10 @@ if (args[0] === "--namespace-guardian") {
   const members = () => fs.readFileSync(path.join("/sys/fs/cgroup", cgroup, "cgroup.procs"), "utf8").trim().split(/\s+/).map(Number).filter(pid => pid > 0 && pid !== process.pid && !procBackend.processExited(pid));
   // exec preserves the shell's kernel start identity and binds the admission
   // token to this command's PID. A nested test cannot reuse its parent's token.
-  const shell = ["/bin/bash", "-c", 'export LLV_OWNED_TEST_RUNNER_PID=$$; exec "$@"', "owned-command", ...launch.command];
+  const shell = timedCommand(launch.command, 'export LLV_OWNED_TEST_RUNNER_PID=$$; ');
   const argv = launch.namespace ? sandboxGateEntryCommand(launch.owner, launch.cwd, shell) : shell;
-  const child = spawn(argv[0]!, argv.slice(1), { cwd: launch.cwd, env: { ...budget.env, INVOCATION_ID: invocation, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, stdio: "inherit" });
+  const child = spawn(argv[0]!, argv.slice(1), { cwd: launch.cwd, env: { ...budget.env, INVOCATION_ID: invocation, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, stdio: ["inherit", "inherit", "inherit", "pipe"] });
+  const execution = observeCommandExecution(child);
   // Capture before any await; systemd owns every fork in the cgroup from birth.
   const identity = producerCommandIdentity(child.pid);
   producerReport("service", identity, { service: serviceEvidence, boundary: launch.namespace ? "namespace" : "direct" });
@@ -222,7 +225,7 @@ if (args[0] === "--namespace-guardian") {
     if (survivors.length) console.error(`owned runner: ${code === 124 ? "processes awaiting deadline cleanup" : "surviving owned processes"}: ${survivors.map(pid => `${pid} (${procBackend.processIdentity(pid)})`).join(", ")}`);
     // Exit of the service main process invokes systemd's control-group TERM,
     // followed by KILL after TimeoutStopSec, including detached descendants.
-    producerReport("service", identity, { service: serviceEvidence, boundary: launch.namespace ? "namespace" : "direct", phase: "close", commandExit, commandSignal, cancellation, cleanup: "pending" });
+    producerReport("service", identity, { ...await execution(), service: serviceEvidence, boundary: launch.namespace ? "namespace" : "direct", phase: "close", commandExit, commandSignal, cancellation, cleanup: "pending" });
     process.exit(survivors.length && code === 0 ? 1 : code);
   };
   child.once("error", error => { console.error(`owned runner: command could not start: ${error.message}`); void finish(1); });

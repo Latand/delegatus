@@ -1,6 +1,19 @@
 import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, touchedTests, writeFileSync } from "./local-gate-tests.fixture";
 import { existsSync } from "node:fs";
 import { GATE_TASKS_MAX } from "./gate-tasks";
+import { BudgetExhausted, comparatorEnding } from "./local-gate-tests";
+
+test("only an exhausted comparator budget returns no verdict", () => {
+  const message = "head: test run exceeded its 15 minute budget; 8 of 12 files completed";
+  expect(comparatorEnding(new BudgetExhausted(message))).toEqual({
+    line: `touched-tests: no verdict: ${message}; nothing was judged`, code: 75,
+  });
+  for (const error of [new Error(message), new Error("baseline setup failed"), "unknown failure"]) {
+    expect(comparatorEnding(error)).toEqual({
+      line: `touched-tests: ${error instanceof Error ? error.message : error}; gate error (blocking)`, code: 1,
+    });
+  }
+});
 
 
 test("review evidence names the exact base and head without changing repository refs", async () => {

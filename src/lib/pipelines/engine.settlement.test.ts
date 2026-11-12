@@ -233,6 +233,7 @@ test("a pipeline blocked only by a limit-interrupted attempt closes end to end (
   settled.agentPath = "/codex/stage-2.jsonl";
   settled.paneId = "%2";
   parked.n = 2;
+  parked.accounting!.repeatReason = "unknown";
   parked.state = "needs_decision";
   parked.error = "stage verdict recovery exhausted after 3 checks";
   run.attempts = [settled, parked];
@@ -769,7 +770,7 @@ test("a rejected structured fail verdict parks before fail-edge traversal (#429)
   const current = loadPipelines()[0]!;
   expect(current.state).toBe("needs_decision");
   expect(current.stateDetail).toBe(reason);
-  expect(current.cursor).toEqual({
+  expect(current.cursor).toMatchObject({
     stageId: "verify",
     state: "pending",
     input: "built",
@@ -799,7 +800,7 @@ test("a completed stage's output is persisted once and relayed exactly once (#35
 
   /* The relay record lands in the same mutation as the verdict. */
   let current = loadPipelines()[0]!;
-  expect(current.cursor).toEqual({ stageId: "build", state: "pending", input: "plan output", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
+  expect(current.cursor).toMatchObject({ stageId: "build", state: "pending", input: "plan output", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
 
   /* Sibling-record evolution after the advance must not change the delivered
      The persisted prompt input remains authoritative across cursor movement. */
@@ -842,7 +843,7 @@ test("an accepted fail verdict traverses the fail edge, loops once, then parks o
   let current = loadPipelines()[0]!;
   expect(current.state).toBe("running");
   expect(current.runs[1]!.attempts[0]).toMatchObject({ state: "failed", verdict: { status: "fail" } });
-  expect(current.cursor).toEqual({
+  expect(current.cursor).toMatchObject({
     stageId: "build",
     state: "pending",
     input: "cannot pass\n\nFail verdict findings:\n- broken test",

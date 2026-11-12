@@ -233,6 +233,10 @@ export interface SpawnResponseBody {
       structured receipt is the trigger for the instant receipt-keyed attach. */
   transport?: "structured";
   error?: string;
+  /** `project_account_refused` is the server's answer that the project's account
+      list does not allow the choice; `reason` says which way (workspaces W1). */
+  code?: string;
+  reason?: string;
 }
 
 /** What the POST outcome means for the draft card. */
@@ -254,7 +258,7 @@ export type SpawnOutcome =
     }
   /** Proven retry-safe failure: the server has released worker ownership, so
       the draft re-enables send and shows the reason. */
-  | { kind: "failed-preflight"; message: string | null }
+  | { kind: "failed-preflight"; message: string | null; reason?: string }
   /** A pane opened, then positive launch verification found a terminal screen. */
   | { kind: "failed-launch"; message: string; target: string; conversationId: string | null; launchId: string | null }
   /** The client cannot prove whether a worker exists (transport loss, opaque
@@ -324,6 +328,12 @@ export function classifySpawnResponse(status: number, ok: boolean, body: SpawnRe
       state: body.state ?? null,
       initialMessage: body.initialMessage ?? null,
     };
+  }
+  /* The project's account list refused the choice before any receipt or worker
+     existed: the body names no launch, so nothing is left behind and the draft
+     may be edited and sent again. */
+  if (status === 409 && body?.code === "project_account_refused" && !body.launchId) {
+    return { kind: "failed-preflight", message: body.error ?? null, ...(body.reason ? { reason: body.reason } : {}) };
   }
   /* A conflicting attempt (same key, different request) can leave the
      original worker alive. Send stays disabled. */

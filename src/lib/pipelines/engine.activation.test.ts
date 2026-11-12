@@ -86,7 +86,7 @@ test("failed stages park and retry without discarding checkout work", async () =
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail", "blocked")], h.ports);
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
-  expect(parked.cursor).toEqual({ stageId: "plan", state: "pending", input: null, activatedBy: null });
+  expect(parked.cursor).toEqual({ stageId: "plan", state: "pending", input: null, activatedBy: null, admittedAt: pipeline.createdAt });
   expect(parked.runs[0]!.attempts[0]).toMatchObject({ state: "failed", verdict: { status: "fail" } });
   await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports);
   expect(h.calls.some((call) => call.includes("reset --hard") || call.includes("clean -fd"))).toBe(false);
@@ -477,6 +477,8 @@ test("retry and skip recover a completed pane-hosted semantic contradiction", as
     expect(recovered.error).toBeUndefined();
     expect(recovered.pipeline?.state).toBe("running");
     expect(recovered.pipeline?.cursor).toEqual({
+      admittedAt: expect.any(String),
+      ...(action === "retry-stage" ? { repeatReason: "unknown" } : {}),
       stageId: action === "retry-stage" ? "plan" : "build",
       state: "pending",
       input: action === "retry-stage" ? null : "Skipped by operator.",
@@ -547,7 +549,7 @@ test("closing probes every host the pipeline launched, settled rounds included (
   const template = stored[0]!.runs[0]!.attempts[0]!;
   buildRun.attempts.push(
     { ...structuredClone(template), n: 1, state: "passed", verdict: { status: "pass" }, conversationId: "conversation_stage_settled", agentPath: "/codex/stage-settled.jsonl", completedAt: h.ports.now() },
-    { ...structuredClone(template), n: 2, state: "running", conversationId: "conversation_stage_2", agentPath: "/codex/stage-2.jsonl" },
+    { ...structuredClone(template), accounting: { ...template.accounting!, repeatReason: "unknown" }, n: 2, state: "running", conversationId: "conversation_stage_2", agentPath: "/codex/stage-2.jsonl" },
   );
   savePipelines(stored);
   h.setStageHost("conversation_stage_1", { outcome: "stopped" });
@@ -730,6 +732,7 @@ test("an adopted stage child is stopped and counted, never silently left running
   const run = stored[0]!.runs[0]!;
   run.attempts.push({
     ...structuredClone(run.attempts[0]!),
+    accounting: { ...run.attempts[0]!.accounting!, repeatReason: "unknown" },
     n: 2,
     historical: true,
     state: "running",
@@ -790,6 +793,7 @@ test("an adopted child that cannot be stopped keeps the lane visible (#670)", as
   const run = stored[0]!.runs[0]!;
   run.attempts.push({
     ...structuredClone(run.attempts[0]!),
+    accounting: { ...run.attempts[0]!.accounting!, repeatReason: "unknown" },
     n: 2,
     historical: true,
     state: "running",

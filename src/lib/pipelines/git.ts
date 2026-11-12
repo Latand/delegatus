@@ -5,7 +5,7 @@ import { dependencyInstallFailure, prepareLockedDependencies } from "./lockedDep
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
 export { preparePipelineSetup } from "./setupRecipe";
-import { publicationEnvironmentFailure, publicationFailurePhase } from "./publicationHistory";
+import { publicationEnvironmentFailure, publicationFailurePhase, publicationPrivacyConfigurationFault, publicationPrivacyRefusal } from "./publicationHistory";
 export { publicationFailurePhase } from "./publicationHistory";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -28,7 +28,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
-import { publicationApp403, publicationDeadlineKind, publicationFrozenInstallFailure, publicationTransportLine } from "./publication";
+import { decisiveRefusal, publicationApp403, publicationDeadlineKind, publicationFrozenInstallFailure, publicationTransportLine } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { recordWorktreeProvenance } from "./worktreeProvenance";
@@ -1694,6 +1694,7 @@ export function hookBudgetStop(output: string): { ms: number; check: string } | 
     ended it and which phase the hook had announced. Evidence is absent when
     the Viewer itself died with the push. */
 export function publicationInterruptionCause(failure?: PipelinePublicationFailure): string {
+  if (failure?.privacyConfigurationFault) return "the privacy gate could not read its own configuration (configuration_error) and judged nothing; the push did not reach the remote";
   const phase = failure ? publicationFailurePhase(failure) : null;
   const runner = failure ? runnerNoVerdict(failure.outputTail) : null;
   // The hook's last phase marker is its admission line when the checks ran remotely.
@@ -2085,6 +2086,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         const rawOutput = `${executed.stdout}\n${executed.stderr}`;
         const deadlineKind = preparingDependencies ? null : publicationDeadlineKind(rawOutput);
         const rawPhase = preparingDependencies ? null : publicationFailurePhase({ outputTail: rawOutput });
+        const privacyConfigurationFault = rawPhase === "privacy" && publicationPrivacyConfigurationFault(rawOutput)
+          && !rawOutput.split("\n").some(line => !publicationPrivacyRefusal(line) && decisiveRefusal(line.trim()));
         const dependencyFailure = preparingDependencies || publicationFrozenInstallFailure(rawOutput);
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.
@@ -2116,6 +2119,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
           retryableDeadline: deadlineKind !== null,
           ...(deadlineKind === "admission" ? { admissionDeadline: true } : {}),
+          ...(privacyConfigurationFault ? { privacyConfigurationFault: true } : {}),
           ...(!preparingDependencies && rawPhase !== "privacy" && publicationApp403(output) ? { retryableApp403: true, observedAt: now() } : {}),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
       }
@@ -2129,6 +2133,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (failureEvidence && !result.ok) {
         const changed = await publicationChangedPaths(reservation.pipeline, request.acceptedSha, fencedExec);
         if (changed !== null) failureEvidence = { ...failureEvidence, changedFiles: changed.length };
+        if (changed === null || changed.some(file => /^scripts\/(?:privacy-|generate-privacy-)/.test(file))) delete failureEvidence.privacyConfigurationFault;
       }
     }
     catch (error) { result = writeStarted
@@ -2148,6 +2153,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       // A hook that stopped at its budget judged nothing: retried like a push
       // its time limit killed, never parked as the stage's own refusal.
       if (!result.ok && failureEvidence.hookBudgetMs && failureEvidence.retryableDeadline) result = { ...result, outcome: "not-landed" };
+      if (!result.ok && failureEvidence.privacyConfigurationFault) result = { ...result, outcome: "not-landed" };
     }
     clearInterval(watch); watch = undefined;
     // Retain the actual child outcome before trying the kernel fence again.

@@ -1,3 +1,4 @@
+import { observeCheckProducer } from "./timing";
 // Standalone producer protocol. Bundled into the gate; never resolves Viewer state.
 import fs from "node:fs";
 import path from "node:path";
@@ -45,6 +46,8 @@ export const reportSchema = z.object({ version: z.literal(1), runId: hash, descr
   boundary: z.enum(["direct", "namespace"]).default("direct"),
   cancellation: cancellationSchema.nullable().default(null),
   service: z.object({ unit: z.string().max(256), invocation: z.string().max(128), cgroup: z.string().max(2048) }).nullable(),
+  executionStartedAt: z.number().finite().optional(),
+  executionEndedAt: z.number().finite().optional(),
   commandExit: z.number().int().min(0).max(255).nullable(), commandSignal: z.string().max(64).nullable(),
   cleanup: z.enum(["pending", "confirmed", "unknown"]), phase: z.enum(["dispatch", "close"]), at: z.number(), atUptimeMs: z.number().positive(),
 }).strict();
@@ -52,6 +55,7 @@ export type ProducerReport = z.infer<typeof reportSchema>;
 export const terminalSchema = z.object({ version: z.literal(1), runId: hash, descriptorDigest: hash,
   wrapperExit: z.number().int().min(0).max(255), wrapperSignal: z.string().max(64).nullable(),
   cancellation: cancellationSchema.nullable(),
+  queueSpans: z.array(z.object({ start: z.number().finite(), end: z.number().finite() }).strict()).max(256).optional(),
   closedAt: z.number(), closedUptimeMs: z.number().positive(), report: reportSchema.nullable(), reports: z.array(reportSchema).max(4).default([]),
   dispatch: z.enum(["started", "not-started"]).optional() }).strict();
 export type Terminal = z.infer<typeof terminalSchema>;
@@ -292,14 +296,24 @@ export function recordedSupervisorRefusal(obligation: RecordedSupervisorObligati
   return cpuOwnerStatus(obligation.recorder) !== "alive" || cpuOwnerExited(obligation.recorder) ? "owner" : null;
 }
 export function producerReport(kind: ProducerReport["kind"], command: ProcessIdentity | null, fields: Partial<ProducerReport> = {}): ProducerReport | null {
+  try { observeCheckProducer(kind, fields, digest(cpuOwnerIdentity(process.pid))); }
+  catch { /* Optional timing cannot replace the command's primary result. */ }
   const directory = process.env.LLV_RECORDED_CHECK_DIRECTORY;
   if (!directory) return null;
   const descriptor = descriptorSchema.parse(readEnvelope(path.join(directory, "descriptor.json")));
   if (physical(directory) !== descriptor.directoryIdentity || descriptor.runId !== process.env.LLV_RECORDED_CHECK_ID) throw new Error("recorded check producer binding changed");
   const cgroup = process.env.LLV_OWNED_TEST_RUN_CGROUP, invocation = process.env.INVOCATION_ID;
   const service = cgroup && invocation ? { unit: path.basename(cgroup), cgroup, invocation } : null;
-  const report = reportSchema.parse({ version: 1, runId: descriptor.runId, descriptorDigest: descriptor.descriptorDigest,
-    supervisor: cpuOwnerIdentity(process.pid), command, kind, service, commandExit: null, commandSignal: null,
+  let previous: ProducerReport | null = null;
+  try { previous = reportSchema.parse(readEnvelope(path.join(directory, `${kind}.json`))); }
+  catch { /* Missing or unreadable dispatch time remains unknown on close. */ }
+  const supervisor = cpuOwnerIdentity(process.pid);
+  const sameDispatch = previous?.runId === descriptor.runId && previous.descriptorDigest === descriptor.descriptorDigest
+    && digest(previous.supervisor) === digest(supervisor);
+  const executionStartedAt = sameDispatch ? previous!.executionStartedAt : undefined;
+  const executionEndedAt = sameDispatch ? previous!.executionEndedAt : undefined;
+  const report = reportSchema.parse({ executionStartedAt, executionEndedAt, version: 1, runId: descriptor.runId, descriptorDigest: descriptor.descriptorDigest,
+    supervisor, command, kind, service, commandExit: null, commandSignal: null,
     cleanup: "pending", phase: "dispatch", at: Date.now(), atUptimeMs: custodyClock(), ...fields });
   writeEnvelope(path.join(directory, `${kind}.json`), report);
   writeEnvelope(path.join(directory, "supervisor.json"), report);

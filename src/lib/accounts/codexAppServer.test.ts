@@ -370,6 +370,26 @@ test("successor thread methods use the structured fork, resume, read, name, and 
   client.close();
 });
 
+test.each([false, true])("account fork and validation resume preserve skills policy (delegated=%s)", async (delegated) => {
+  const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const { start } = clientWith((fake, message) => {
+    if (message.method === "initialized") return;
+    if (message.method === "config/read") return fake.respond(requestId(message), { config: { mcp_servers: {} } });
+    if (message.method === "initialize") return fake.respond(requestId(message), {});
+    requests.push(message as typeof requests[number]);
+    fake.respond(requestId(message), { thread: { id: "skills-thread" } });
+  });
+  const client = await start({ protocolProfile: "thread-control" });
+  try {
+    const options = { omitSkillsInstructions: delegated };
+    await client.forkThread("source", options);
+    await client.resumeThread("skills-thread", options);
+    expect(requests.map(row => row.method)).toEqual(["thread/fork", "thread/resume"]);
+    for (const row of requests) expect((row.params.config as Record<string, unknown> | undefined)?.skills)
+      .toEqual(delegated ? { include_instructions: false } : undefined);
+  } finally { client.close(); }
+});
+
 test("account thread resume reads all five memory states on the same client", async () => {
   const previous = process.env.LLV_STATE_DIR;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "account-memory-source-")); process.env.LLV_STATE_DIR = root;

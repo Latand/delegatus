@@ -1,7 +1,7 @@
 {
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
   "block": "team workspaces slice (a)",
-  "frames": 368,
+  "frames": 432,
   "failures": [],
   "readings": [
     {
@@ -318,6 +318,46 @@
       "file": "en-light-1440-D7-empty.png"
     },
     {
+      "tag": "en-light-1440",
+      "state": "D8-owner",
+      "defining": [
+        "Members can't choose a Claude or Codex account in Acme Ledger, Harbor Docs until an account list is set there. Until then Delegatus picks the account."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1440-D8-owner.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D8-manager",
+      "defining": [
+        "Members can't choose a Claude or Codex account in Acme Ledger, Harbor Docs until an account list is set there. Until then Delegatus picks the account."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1440-D8-manager.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D8-member",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1440-D8-member.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D8-unreadable",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1440-D8-unreadable.png"
+    },
+    {
       "tag": "en-light-1000",
       "state": "D1-client",
       "defining": [
@@ -629,6 +669,46 @@
       "popover": null,
       "box": null,
       "file": "en-light-1000-D7-empty.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D8-owner",
+      "defining": [
+        "Members can't choose a Claude or Codex account in Acme Ledger, Harbor Docs until an account list is set there. Until then Delegatus picks the account."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1000-D8-owner.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D8-manager",
+      "defining": [
+        "Members can't choose a Claude or Codex account in Acme Ledger, Harbor Docs until an account list is set there. Until then Delegatus picks the account."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1000-D8-manager.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D8-member",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1000-D8-member.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D8-unreadable",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1000-D8-unreadable.png"
     },
     {
       "tag": "en-light-820",
@@ -944,6 +1024,46 @@
       "file": "en-light-820-D7-empty.png"
     },
     {
+      "tag": "en-light-820",
+      "state": "D8-owner",
+      "defining": [
+        "Members can't choose a Claude or Codex account in Acme Ledger, Harbor Docs until an account list is set there. Until then Delegatus picks the account."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-820-D8-owner.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D8-manager",
+      "defining": [
+        "Members can't choose a Claude or Codex account in Acme Ledger, Harbor Docs until an account list is set there. Until then Delegatus picks the account."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-820-D8-manager.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D8-member",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-820-D8-member.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D8-unreadable",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-820-D8-unreadable.png"
+    },
+    {
       "tag": "en-light-390",
       "state": "D4-owner",
       "defining": [
@@ -1151,6 +1271,46 @@
       "popover": null,
       "box": null,
       "file": "en-light-390-D7-empty.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D8-owner",
+      "defining": [
+        "Members can't choose a Claude or Codex account in Acme Ledger, Harbor Docs until an account list is set there. Until then Delegatus picks the account."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-390-D8-owner.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D8-manager",
+      "defining": [
+        "Members can't choose a Claude or Codex account in Acme Ledger, Harbor Docs until an account list is set there. Until then Delegatus picks the account."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-390-D8-manager.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D8-member",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-390-D8-member.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D8-unreadable",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-390-D8-unreadable.png"
     },
     {
       "tag": "en-dark-1440",
@@ -1466,6 +1626,46 @@
       "file": "en-dark-1440-D7-empty.png"
     },
     {
+      "tag": "en-dark-1440",
+      "state": "D8-owner",
+      "defining": [
+        "Members can't choose a Claude or Codex account in Acme Ledger, Harbor Docs until an account list is set there. Until then Delegatus picks the account."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1440-D8-owner.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D8-manager",
+      "defining": [
+        "Members can't choose a Claude or Codex account in Acme Ledger, Harbor Docs until an account list is set there. Until then Delegatus picks the account."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1440-D8-manager.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D8-member",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1440-D8-member.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D8-unreadable",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1440-D8-unreadable.png"
+    },
+    {
       "tag": "en-dark-1000",
       "state": "D1-client",
       "defining": [
@@ -1777,6 +1977,46 @@
       "popover": null,
       "box": null,
       "file": "en-dark-1000-D7-empty.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D8-owner",
+      "defining": [
+        "Members can't choose a Claude or Codex account in Acme Ledger, Harbor Docs until an account list is set there. Until then Delegatus picks the account."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1000-D8-owner.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D8-manager",
+      "defining": [
+        "Members can't choose a Claude or Codex account in Acme Ledger, Harbor Docs until an account list is set there. Until then Delegatus picks the account."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1000-D8-manager.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D8-member",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1000-D8-member.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D8-unreadable",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1000-D8-unreadable.png"
     },
     {
       "tag": "en-dark-820",
@@ -2092,6 +2332,46 @@
       "file": "en-dark-820-D7-empty.png"
     },
     {
+      "tag": "en-dark-820",
+      "state": "D8-owner",
+      "defining": [
+        "Members can't choose a Claude or Codex account in Acme Ledger, Harbor Docs until an account list is set there. Until then Delegatus picks the account."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-820-D8-owner.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D8-manager",
+      "defining": [
+        "Members can't choose a Claude or Codex account in Acme Ledger, Harbor Docs until an account list is set there. Until then Delegatus picks the account."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-820-D8-manager.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D8-member",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-820-D8-member.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D8-unreadable",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-820-D8-unreadable.png"
+    },
+    {
       "tag": "en-dark-390",
       "state": "D4-owner",
       "defining": [
@@ -2299,6 +2579,46 @@
       "popover": null,
       "box": null,
       "file": "en-dark-390-D7-empty.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D8-owner",
+      "defining": [
+        "Members can't choose a Claude or Codex account in Acme Ledger, Harbor Docs until an account list is set there. Until then Delegatus picks the account."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-390-D8-owner.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D8-manager",
+      "defining": [
+        "Members can't choose a Claude or Codex account in Acme Ledger, Harbor Docs until an account list is set there. Until then Delegatus picks the account."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-390-D8-manager.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D8-member",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-390-D8-member.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D8-unreadable",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-390-D8-unreadable.png"
     },
     {
       "tag": "uk-light-1440",
@@ -2614,6 +2934,46 @@
       "file": "uk-light-1440-D7-empty.png"
     },
     {
+      "tag": "uk-light-1440",
+      "state": "D8-owner",
+      "defining": [
+        "Учасники не можуть обрати акаунт Claude чи Codex у Acme Ledger, Harbor Docs, доки там не задано списку акаунтів. До того акаунт обирає Delegatus."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1440-D8-owner.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D8-manager",
+      "defining": [
+        "Учасники не можуть обрати акаунт Claude чи Codex у Acme Ledger, Harbor Docs, доки там не задано списку акаунтів. До того акаунт обирає Delegatus."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1440-D8-manager.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D8-member",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1440-D8-member.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D8-unreadable",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1440-D8-unreadable.png"
+    },
+    {
       "tag": "uk-light-1000",
       "state": "D1-client",
       "defining": [
@@ -2925,6 +3285,46 @@
       "popover": null,
       "box": null,
       "file": "uk-light-1000-D7-empty.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D8-owner",
+      "defining": [
+        "Учасники не можуть обрати акаунт Claude чи Codex у Acme Ledger, Harbor Docs, доки там не задано списку акаунтів. До того акаунт обирає Delegatus."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1000-D8-owner.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D8-manager",
+      "defining": [
+        "Учасники не можуть обрати акаунт Claude чи Codex у Acme Ledger, Harbor Docs, доки там не задано списку акаунтів. До того акаунт обирає Delegatus."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1000-D8-manager.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D8-member",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1000-D8-member.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D8-unreadable",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1000-D8-unreadable.png"
     },
     {
       "tag": "uk-light-820",
@@ -3240,6 +3640,46 @@
       "file": "uk-light-820-D7-empty.png"
     },
     {
+      "tag": "uk-light-820",
+      "state": "D8-owner",
+      "defining": [
+        "Учасники не можуть обрати акаунт Claude чи Codex у Acme Ledger, Harbor Docs, доки там не задано списку акаунтів. До того акаунт обирає Delegatus."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-820-D8-owner.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D8-manager",
+      "defining": [
+        "Учасники не можуть обрати акаунт Claude чи Codex у Acme Ledger, Harbor Docs, доки там не задано списку акаунтів. До того акаунт обирає Delegatus."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-820-D8-manager.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D8-member",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-820-D8-member.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D8-unreadable",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-820-D8-unreadable.png"
+    },
+    {
       "tag": "uk-light-390",
       "state": "D4-owner",
       "defining": [
@@ -3447,6 +3887,46 @@
       "popover": null,
       "box": null,
       "file": "uk-light-390-D7-empty.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D8-owner",
+      "defining": [
+        "Учасники не можуть обрати акаунт Claude чи Codex у Acme Ledger, Harbor Docs, доки там не задано списку акаунтів. До того акаунт обирає Delegatus."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-390-D8-owner.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D8-manager",
+      "defining": [
+        "Учасники не можуть обрати акаунт Claude чи Codex у Acme Ledger, Harbor Docs, доки там не задано списку акаунтів. До того акаунт обирає Delegatus."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-390-D8-manager.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D8-member",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-390-D8-member.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D8-unreadable",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-390-D8-unreadable.png"
     },
     {
       "tag": "uk-dark-1440",
@@ -3762,6 +4242,46 @@
       "file": "uk-dark-1440-D7-empty.png"
     },
     {
+      "tag": "uk-dark-1440",
+      "state": "D8-owner",
+      "defining": [
+        "Учасники не можуть обрати акаунт Claude чи Codex у Acme Ledger, Harbor Docs, доки там не задано списку акаунтів. До того акаунт обирає Delegatus."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1440-D8-owner.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D8-manager",
+      "defining": [
+        "Учасники не можуть обрати акаунт Claude чи Codex у Acme Ledger, Harbor Docs, доки там не задано списку акаунтів. До того акаунт обирає Delegatus."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1440-D8-manager.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D8-member",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1440-D8-member.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D8-unreadable",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1440-D8-unreadable.png"
+    },
+    {
       "tag": "uk-dark-1000",
       "state": "D1-client",
       "defining": [
@@ -4073,6 +4593,46 @@
       "popover": null,
       "box": null,
       "file": "uk-dark-1000-D7-empty.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D8-owner",
+      "defining": [
+        "Учасники не можуть обрати акаунт Claude чи Codex у Acme Ledger, Harbor Docs, доки там не задано списку акаунтів. До того акаунт обирає Delegatus."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1000-D8-owner.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D8-manager",
+      "defining": [
+        "Учасники не можуть обрати акаунт Claude чи Codex у Acme Ledger, Harbor Docs, доки там не задано списку акаунтів. До того акаунт обирає Delegatus."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1000-D8-manager.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D8-member",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1000-D8-member.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D8-unreadable",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1000-D8-unreadable.png"
     },
     {
       "tag": "uk-dark-820",
@@ -4388,6 +4948,46 @@
       "file": "uk-dark-820-D7-empty.png"
     },
     {
+      "tag": "uk-dark-820",
+      "state": "D8-owner",
+      "defining": [
+        "Учасники не можуть обрати акаунт Claude чи Codex у Acme Ledger, Harbor Docs, доки там не задано списку акаунтів. До того акаунт обирає Delegatus."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-820-D8-owner.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D8-manager",
+      "defining": [
+        "Учасники не можуть обрати акаунт Claude чи Codex у Acme Ledger, Harbor Docs, доки там не задано списку акаунтів. До того акаунт обирає Delegatus."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-820-D8-manager.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D8-member",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-820-D8-member.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D8-unreadable",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-820-D8-unreadable.png"
+    },
+    {
       "tag": "uk-dark-390",
       "state": "D4-owner",
       "defining": [
@@ -4595,6 +5195,46 @@
       "popover": null,
       "box": null,
       "file": "uk-dark-390-D7-empty.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D8-owner",
+      "defining": [
+        "Учасники не можуть обрати акаунт Claude чи Codex у Acme Ledger, Harbor Docs, доки там не задано списку акаунтів. До того акаунт обирає Delegatus."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-390-D8-owner.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D8-manager",
+      "defining": [
+        "Учасники не можуть обрати акаунт Claude чи Codex у Acme Ledger, Harbor Docs, доки там не задано списку акаунтів. До того акаунт обирає Delegatus."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-390-D8-manager.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D8-member",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-390-D8-member.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D8-unreadable",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-390-D8-unreadable.png"
     }
   ]
 }

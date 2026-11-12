@@ -52,8 +52,8 @@ test("a finished child kill settles as a typed branch result without entering ei
           receipt: { operationId: "child-kill", status: "queued" },
         },
       };
-    }, 
-    resumeConversation: async () => ({ ok: true, target: "%1" }),  
+    },
+    resumeConversation: async () => ({ ok: true, target: "%1" }),
   });
 
   expect(result).toEqual({
@@ -102,8 +102,8 @@ test("a viewer-spawned child with its own host remains explicitly terminable", a
           receipt: { operationId: "child-owned-kill", status: "queued" },
         },
       };
-    },  
-    resumeConversation: async () => ({ ok: true, target: "%1" }),  
+    },
+    resumeConversation: async () => ({ ok: true, target: "%1" }),
   });
 
   expect(result).toMatchObject({
@@ -138,8 +138,8 @@ test("conversation actions reject a transcript path owned by another durable con
       conversationForPath: (pathname: string) => pathname === "/sessions/second.jsonl" ? second : first,
     } as never),
     structuredEnabled: () => true,
-    dispatchStructuredControl: async () => { dispatched = true; return null; },  
-    resumeConversation: async () => ({ ok: true, target: "%1" }),  
+    dispatchStructuredControl: async () => { dispatched = true; return null; },
+    resumeConversation: async () => ({ ok: true, target: "%1" }),
   });
 
   expect(result).toEqual({ status: 409, body: { error: "conversation identity does not own transcript path" } });
@@ -160,8 +160,8 @@ test("conversation actions reject a supplied path that has no durable owner", as
       conversationForPath: () => null,
     } as never),
     structuredEnabled: () => true,
-    dispatchStructuredControl: async () => { dispatched = true; return null; },  
-    resumeConversation: async () => ({ ok: true, target: "%1" }),  
+    dispatchStructuredControl: async () => { dispatched = true; return null; },
+    resumeConversation: async () => ({ ok: true, target: "%1" }),
   });
 
   expect(result).toEqual({ status: 409, body: { error: "conversation identity does not own transcript path" } });
@@ -254,7 +254,7 @@ test("current and continuity selectors remain valid, and a control with no struc
           dispatches += 1;
           return { status: 200, body: { ok: true, structured: true, target: owner.id, outcome: "delivered" } };
         },
-        resumeConversation: async () => ({ ok: true, target: "%1" }),  
+        resumeConversation: async () => ({ ok: true, target: "%1" }),
       });
 
       /* With the structured channel off no host can take the control. */
@@ -281,8 +281,8 @@ test("an explicit root kill carries the stable operation id through the structur
     dispatchStructuredControl: async (request) => {
       controls.push(request);
       return { status: 202, body: { ok: true, structured: true, target: owner.id, operationId: request.operationId!, receipt: { operationId: request.operationId!, status: "queued" } } };
-    },  
-    resumeConversation: async () => ({ ok: true, target: "%1" }),  
+    },
+    resumeConversation: async () => ({ ok: true, target: "%1" }),
   });
 
   expect(controls).toEqual([{
@@ -322,8 +322,8 @@ test("a seat deputy is never resumed or compacted, and can still be interrupted"
       dispatchStructuredControl: async (input) => {
         dispatched.push(input.action);
         return { status: 202, body: { ok: true, structured: true, target: ghost.id, operationId: "op", receipt: { operationId: "op", status: "queued" } } };
-      },  
-      resumeConversation: async () => ({ ok: true, target: "%1" }),  
+      },
+      resumeConversation: async () => ({ ok: true, target: "%1" }),
     });
 
     expect(await act("resume")).toMatchObject({ status: 409, body: { code: "deputy_conversation_closed", seatConversationId: "conversation_seat" } });
@@ -388,8 +388,8 @@ test("answer reaches the asking conversation's pending question as its chosen la
     dispatchStructuredControl: async (request: Record<string, unknown>) => {
       controls.push(request);
       return { status: 200 as const, body: { ok: true as const, structured: true as const, target: worker.id, operationId: "op-1", receipt: { operationId: "op-1", status: "answered" } } };
-    },  
-    resumeConversation: async () => ({ ok: true as const, target: "%1" }),  
+    },
+    resumeConversation: async () => ({ ok: true as const, target: "%1" }),
     pendingQuestion: async () => pending,
   });
   const answer = (extra: Record<string, unknown>, structured = true) => applyConversationAction({
@@ -418,7 +418,7 @@ for (const engine of ["claude", "codex"] as const) test(`canonical ${engine} res
     registry: () => ({ conversation: () => value, conversationForPath: () => value } as never),
     structuredEnabled: () => true, dispatchStructuredControl: async () => null,
     resumeConversation: async () => ({ ok: true, structured: true, target: value.id, outcome: "resumed", spawned: true }),
-    onResumed: id => { wakes.push(id); },    
+    onResumed: id => { wakes.push(id); },
   });
   expect(result).toMatchObject({ status: 200, body: { outcome: "resumed" } });
   expect(wakes).toEqual([value.id]);
@@ -433,7 +433,7 @@ for (const outcome of ["held", "failed"] as const) test(`canonical ${outcome} re
     resumeConversation: async () => outcome === "failed"
       ? { ok: false, outcome: "failed", status: 503, error: "recovery unavailable" }
       : { ok: true, structured: true, target: value.id, outcome: "held", spawned: false },
-    onResumed: id => { wakes.push(id); },    
+    onResumed: id => { wakes.push(id); },
   });
   expect(wakes).toEqual([]);
 });

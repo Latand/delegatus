@@ -293,6 +293,22 @@ function git(root: string, args: string[]): string {
   if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.trim()}`);
   return result.stdout.trimEnd();
 }
+/** A pending merge includes published main history from its incoming parent.
+ * Judge lint against that shared history; incoming feature errors remain new. */
+function preCommitComparisonBase(root: string): string {
+  const base = git(root, ["merge-base", "HEAD", "origin/main"]);
+  const pending = spawnSync("git", ["rev-parse", "--verify", "--quiet", "MERGE_HEAD^{commit}"], { cwd: root, encoding: "utf8" });
+  if (pending.status === 1) return base;
+  if (pending.status !== 0) throw new Error(`git merge parent failed: ${pending.stderr.trim()}`);
+  const parent = pending.stdout.trim();
+  // Ambiguous merge-parent output keeps the existing comparison.
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(parent)) return base;
+  const shared = spawnSync("git", ["merge-base", parent, "origin/main"], { cwd: root, encoding: "utf8" });
+  if (shared.status === 1) return base;
+  if (shared.status !== 0) throw new Error(`git incoming comparison failed: ${shared.stderr.trim()}`);
+  return shared.stdout.trim();
+}
+
 export function pinnedBunVersion(dockerfile: string): string {
   const pins = new Set([...dockerfile.matchAll(/npm install -g bun@(\d+\.\d+\.\d+)/g)].map(match => match[1]!));
   if (pins.size !== 1) throw new Error("Dockerfile must carry exactly one Bun pin");
@@ -949,7 +965,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     if (!sameTree || !onMain) throw new Error("pushed head differs from checkout");
     publishedTree = pushed;
   }
-  let base = mode === "pre-commit" ? git(root, ["merge-base", "HEAD", "origin/main"]) : "HEAD";
+  let base = mode === "pre-commit" ? preCommitComparisonBase(root) : "HEAD";
   const until = deadline?.at ?? Infinity;
   if (mode === "pre-push" && !admitted && !transport) {
     const fetch = await fetchMain(root, until, deadline ?? undefined);
@@ -970,7 +986,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     ].filter(Boolean))];
   const context = discover(root, base, files);
   // Pre-commit privacy retains its staged-only base. ESLint compares against
-  // origin/main's merge base in both modes, including earlier branch commits.
+  // published main history present in the candidate, including a pending merge.
   const privacyBase = mode === "pre-commit" ? "HEAD" : base;
   for (const file of context.skippedMedia) console.warn(`${mode}: media OCR deferred to required CI (tesseract/ffmpeg/ffprobe unavailable): ${file}`);
   const steps = plan(mode, files, { ...context, base: privacyBase, lintBase: base });

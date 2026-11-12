@@ -144,7 +144,7 @@ test("hosted launch pins model, effort, permissions, ASB configuration and publi
   expect(f.frames.filter(frame => frame.method).map(frame => frame.method)).toEqual(["initialize", "initialized", "thread/start", "command/exec", "turn/start"]);
   expect(f.frames.find(frame => frame.method === "thread/start")!.params).toMatchObject({ model, allowProviderModelFallback: false,
     ephemeral: false, sandbox: "danger-full-access", approvalPolicy: "never", deferredEnvironment: true,
-    config: { model_reasoning_effort: "xhigh" }, environments: [{ environmentConfigId: environmentId, cwd: environment.cwd }] });
+    config: { "skills.include_instructions": false, model_reasoning_effort: "xhigh" }, environments: [{ environmentConfigId: environmentId, cwd: environment.cwd }] });
   expect(f.frames.find(frame => frame.method === "command/exec")!.params).toMatchObject({ environmentId: environment.environmentId, processId: "command-fixture", outputBytesCap: 8192 });
   expect(String((f.frames.find(frame => frame.method === "command/exec")!.params!.command as string[])[2])).toContain("'refs/heads/pipeline/fixture'");
   expect(f.frames.find(frame => frame.method === "turn/start")!.params).toMatchObject({ threadId: thread.id, model,

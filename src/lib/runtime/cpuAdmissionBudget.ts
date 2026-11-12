@@ -43,17 +43,22 @@ export function cpuInheritedWaitMs(env = process.env): number {
 }
 /** Heartbeats end stale intervals even if a waiting process is hard-killed. */
 export function reportCpuWait(env = process.env) {
-  const files = roots(env).map(dir => path.join(dir, `${randomUUID()}.json`));
+  const requiredRoots = roots(env);
+  const directories = [...new Set([...requiredRoots, ...(env.LLV_RECORDED_CHECK_WAIT_ROOT ? [env.LLV_RECORDED_CHECK_WAIT_ROOT] : [])])];
+  const files = directories.map(dir => path.join(dir, `${randomUUID()}.json`));
   const start = Date.now();
-  const write = (end: number) => {
+  const write = (end: number, closed = false) => {
     for (const file of files) {
-      try { fs.writeFileSync(`${file}.next`, JSON.stringify({ start, end }), { mode: 0o600 }); fs.renameSync(`${file}.next`, file); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      try { fs.writeFileSync(`${file}.next`, JSON.stringify({ start, end, closed }), { mode: 0o600 }); fs.renameSync(`${file}.next`, file); }
+      catch (error) {
+        const optionalAccounting = path.dirname(file) === env.LLV_RECORDED_CHECK_WAIT_ROOT && !requiredRoots.includes(path.dirname(file));
+        if (!optionalAccounting && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
     }
   };
   write(start);
   const timer = setInterval(() => write(Date.now()), 25);
-  return () => { clearInterval(timer); write(Date.now()); };
+  return () => { clearInterval(timer); write(Date.now(), true); };
 }
 
 /** Execution time excludes queue waits, without disabling finite deadlines. */

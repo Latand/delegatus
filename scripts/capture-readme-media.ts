@@ -40,7 +40,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-import type { Browser, Page } from "playwright-core";
+import { errors, type Browser, type Page } from "playwright-core";
 
 import { createCaptureDirectory } from "./capture-directory";
 import { inspectPaths, sensitiveClasses } from "./privacy-publication-gate";
@@ -95,8 +95,10 @@ const clickText = (page: Page, text: string) => page.getByText(text, { exact: fa
    the board shots fold it to its one-line bar. A screen too short for the
    chat opens with it folded already. */
 const foldOrchestrator = async (page: Page) => {
+  await page.locator("[data-orchestrator-panel] [data-seat-collapse]").first().waitFor({ state: "visible" });
   const fold = page.locator('[aria-label="Collapse the orchestrator chat (O)"]');
   if (await fold.count()) await fold.first().click();
+  await page.locator('[data-orchestrator-panel] [data-seat-collapse][aria-expanded="false"]').first().waitFor({ state: "visible" });
 };
 /* The frame ends at the element's border box. Its corners go square, since
    the frame's own edge is now its edge: a rounded corner would show the
@@ -950,16 +952,50 @@ async function main(): Promise<void> {
 
 type Layout = Awaited<ReturnType<typeof materialize>>;
 
-async function openTarget(page: Page, baseUrl: string, target: Target, layout: Layout): Promise<void> {
-  await page.goto(`${baseUrl}/`, { waitUntil: "networkidle" });
-  if (target.kind === "overview") return;
+export async function openTarget(page: Page, baseUrl: string, target: Target, layout: Layout): Promise<void> {
+  let fragment = "";
   if (target.kind === "project") {
-    await page.goto(`${baseUrl}/#p=${encodeURIComponent(layout.ids[target.project])}`, { waitUntil: "networkidle" });
-    return;
+    fragment = `#p=${encodeURIComponent(layout.ids[target.project])}`;
+  } else if (target.kind === "conversation") {
+    const file = layout.files[target.key];
+    if (!file) throw new Error(`no transcript seeded for ${target.key}`);
+    fragment = `#f=${encodeURIComponent(file.path)}`;
   }
-  const file = layout.files[target.key];
-  if (!file) throw new Error(`no transcript seeded for ${target.key}`);
-  await page.goto(`${baseUrl}/#f=${encodeURIComponent(file.path)}`, { waitUntil: "networkidle" });
+  // Put the target in the initial URL. A later hash-only navigation can land
+  // between the Viewer's first render and its hashchange listener mounting.
+  // Background requests may stay open after the frame is ready. Its content
+  // and preparation controls below provide their own bounded readiness waits.
+  await page.goto(`${baseUrl}/${fragment}`, { waitUntil: "domcontentloaded" });
+}
+
+/** Wait for the whole frame before freezing its clock: network idle and elapsed
+ * time do not prove that React has painted the seeded board. All required text
+ * shares one deadline, including frames whose preparation opens more content. */
+export async function waitForFrameText(page: Page, shot: Pick<ReadmeShot, "id" | "requiredText">, timeout = 30_000): Promise<void> {
+  if (!shot.requiredText.length) return;
+  try {
+    const ready = await page.waitForFunction((required) => {
+      const text = document.body.innerText;
+      return required.every(value => text.includes(value));
+    }, shot.requiredText, { timeout });
+    await ready.dispose();
+  } catch (error) {
+    if (error instanceof errors.TimeoutError) {
+      const text = await page.evaluate(() => document.body.innerText);
+      const missing = shot.requiredText.find(value => !text.includes(value));
+      if (missing !== undefined) throw new Error(`${shot.id}: missing text ${JSON.stringify(missing)}`);
+    }
+    throw error;
+  }
+}
+
+/** Pin Date before pausing timers so a slow browser cannot overtake the pause
+ * target between reading its clock and delivering the pause command. */
+export async function freezeFrameClock(page: Page): Promise<number> {
+  const moment = await page.evaluate(() => Date.now() + 1_000);
+  await page.clock.setFixedTime(moment);
+  await page.clock.pauseAt(moment);
+  return moment;
 }
 
 /** Use the same prepared page and crop as the README capture. Never scroll a
@@ -1042,11 +1078,11 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
       await openTarget(page, baseUrl, shot.target, layout);
       await page.waitForTimeout(2_500);
       if (shot.prepare) await shot.prepare(page);
-      await page.waitForTimeout(1_000);
+      await waitForFrameText(page, shot);
       /* The print is taken seconds after the PNG, and a live timer or a
          pulsing dot would read differently in each: stop the page's clock and
          every animation where they stand, so both show one frame. */
-      await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000));
+      await freezeFrameClock(page);
       await page.evaluate(() => {
         for (const animation of document.getAnimations()) animation.pause();
       });

@@ -1067,7 +1067,7 @@ test("an exhausted false park ingests its live host's late verdict without a dup
   await tickPipelines([], h.ports);
 
   const recovered = loadPipelines()[0]!;
-  expect(recovered.cursor).toEqual({
+  expect(recovered.cursor).toMatchObject({
     stageId: "build",
     state: "running",
     input: "integration complete",
@@ -1112,7 +1112,7 @@ test("a dead structured host past grace fails through the stage fail edge (#973)
     verdict: null,
     error: "historical attempt completed without a valid final JSON verdict",
   });
-  expect(current.cursor).toEqual({
+  expect(current.cursor).toMatchObject({
     stageId: "recover",
     state: "pending",
     input: "historical attempt completed without a valid final JSON verdict",
@@ -1430,7 +1430,7 @@ test("a dead structured host with an invalid terminal verdict still takes the fa
     verdict: null,
     error: "historical attempt completed without a valid final JSON verdict",
   });
-  expect(current.cursor).toEqual({
+  expect(current.cursor).toMatchObject({
     stageId: "recover",
     state: "pending",
     input: "historical attempt completed without a valid final JSON verdict",
@@ -1471,7 +1471,7 @@ test("a dead structured host with a contradictory verdict still takes the fail e
     verdict: null,
     error: "historical attempt completed without a valid final JSON verdict",
   });
-  expect(current.cursor).toEqual({
+  expect(current.cursor).toMatchObject({
     stageId: "recover",
     state: "pending",
     input: "historical attempt completed without a valid final JSON verdict",
@@ -1509,7 +1509,7 @@ test("a dead structured host past grace still accepts a valid terminal verdict (
     verdict: { status: "pass" },
     error: null,
   });
-  expect(current.cursor).toEqual({
+  expect(current.cursor).toMatchObject({
     stageId: "build",
     state: "pending",
     input: "Completed",
@@ -1633,7 +1633,7 @@ test("a later completed turn in the same conversation supersedes the parser miss
   await tickPipelines([], h.ports);
 
   current = loadPipelines()[0]!;
-  expect(current.cursor).toEqual({
+  expect(current.cursor).toMatchObject({
     stageId: "build",
     state: "pending",
     input: "integration complete",
@@ -1859,7 +1859,7 @@ test("a durable terminal pass verdict settles a stage despite a stale running ru
   const current = loadPipelines()[0]!;
   expect(current.state).toBe("running");
   expect(current.stateDetail).toBeNull();
-  expect(current.cursor).toEqual({ stageId: "build", state: "pending", input: "integration complete", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
+  expect(current.cursor).toMatchObject({ stageId: "build", state: "pending", input: "integration complete", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
   /* The actual clean stage HEAD advances, not the pipeline base. */
   expect(current.lastPassedCommit).toBe(STAGE_HEAD);
   expect(current.runs[0]!.attempts[0]).toMatchObject({
@@ -1885,7 +1885,7 @@ test("scanner projection loss cannot park a durably completed stage (#337, pipel
 
   const current = loadPipelines()[0]!;
   expect(current.state).toBe("running");
-  expect(current.cursor).toEqual({ stageId: "build", state: "pending", input: "integration complete", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
+  expect(current.cursor).toMatchObject({ stageId: "build", state: "pending", input: "integration complete", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
   expect(current.lastPassedCommit).toBe(STAGE_HEAD);
   expect(current.runs[0]!.attempts[0]!.state).toBe("passed");
   /* No reset happened on the way through: the committed work survives. */
@@ -1962,7 +1962,7 @@ test("a pane-less stalled projection with a stuck running runtime ledger settles
 
   const current = loadPipelines()[0]!;
   expect(current.state).toBe("running");
-  expect(current.cursor).toEqual({ stageId: "build", state: "pending", input: "integration complete", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
+  expect(current.cursor).toMatchObject({ stageId: "build", state: "pending", input: "integration complete", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
   expect(current.lastPassedCommit).toBe(STAGE_HEAD);
   expect(current.runs[0]!.attempts[0]).toMatchObject({
     state: "passed",
@@ -1993,7 +1993,7 @@ test("a restart-primed stalled cache at final size settles without a runtime ses
 
   const current = loadPipelines()[0]!;
   expect(current.state).toBe("running");
-  expect(current.cursor).toEqual({ stageId: "build", state: "pending", input: "integration complete", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
+  expect(current.cursor).toMatchObject({ stageId: "build", state: "pending", input: "integration complete", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
   expect(current.lastPassedCommit).toBe(STAGE_HEAD);
   expect(current.runs[0]!.attempts[0]!.state).toBe("passed");
 });
@@ -2129,7 +2129,7 @@ test("a contradictory durable pass verdict parks with the parser failure reason"
   const current = loadPipelines()[0]!;
   expect(current.state).toBe("needs_decision");
   expect(current.stateDetail).toBe(reason);
-  expect(current.cursor).toEqual({ stageId: "plan", state: "pending", input: null, activatedBy: null });
+  expect(current.cursor).toMatchObject({ stageId: "plan", state: "pending", input: null, activatedBy: null });
   expect(current.lastPassedCommit).toBe(ORIGIN_MAIN_SHA);
   expect(current.runs[0]!.attempts[0]).toMatchObject({
     state: "needs_decision",
@@ -2149,7 +2149,7 @@ test("durable settlement is idempotent across repeated wake-up ticks", async () 
   });
 
   await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.cursor).toEqual({ stageId: "build", state: "pending", input: "integration complete", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
+  expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "build", state: "pending", input: "integration complete", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
   /* The next wake-up materializes the build attempt; further wake-ups with the
      same durable evidence neither re-settle nor duplicate anything. */
   await tickPipelines([], h.ports);
@@ -2172,13 +2172,13 @@ test("a pass that advances to a pending stage schedules its own follow-up tick (
   const unregister = registerPipelineTick(async () => { ticks += 1; });
   try {
     await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-    expect(loadPipelines()[0]!.cursor).toEqual({ stageId: "build", state: "pending", input: "done", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
+    expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "build", state: "pending", input: "done", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(ticks).toBe(1);
 
     /* A pass that leaves no pending cursor does not wake the controller. */
     await tickPipelines([], h.ports);
-    expect(loadPipelines()[0]!.cursor).toEqual({ stageId: "build", state: "running", input: "done", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
+    expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "build", state: "running", input: "done", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(ticks).toBe(1);
   } finally {

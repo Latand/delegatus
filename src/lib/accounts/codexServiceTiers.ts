@@ -75,6 +75,14 @@ export function codexServiceTierRefusal(accounts: readonly { id: string; home: s
   })), model, tier, accountId, selection);
 }
 
+/** The same refusal for a caller who may not see which accounts exist: a
+ *  member on a project with no account list. It names the model and the tier
+ *  and nothing about the accounts evaluated, their labels, ids, number or
+ *  catalogs. */
+export function hiddenAccountsTierRefusal(model: string, tier: string): string {
+  return `no account offers serviceTier ${tier} for model ${model}`;
+}
+
 export function tierOffers(accounts: readonly { id: string; home: string }[], model: string, tier: string) {
   const offering: string[] = [], lacking: string[] = [];
   const offered = new Set<string>();

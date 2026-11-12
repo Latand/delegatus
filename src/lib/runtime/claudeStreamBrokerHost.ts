@@ -280,6 +280,8 @@ export interface ClaudeStreamBrokerHostOptions {
   initialEventCursor?: number;
   onEventCursorRecovery?: RuntimeEventCursorRecoveryReporter;
   memoryCell?: AgentMemoryCell | null;
+  /** Rechecked at native exec admission and after asynchronous preparation. */
+  assertCurrent?: () => void;
   spawnProcess?: (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
   signalProcess?: ProcessSignal;
   processIdentity?: (pid: number) => string | null;
@@ -995,7 +997,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         cwd: options.cwd,
         env: telegram.env,
         detached: true,
-      }, options.memoryCell, options.spawnProcess, options.env ?? process.env);
+      }, options.memoryCell, options.spawnProcess, options.env ?? process.env, undefined, options.assertCurrent);
     } catch (error) {
       relay?.close();
       options.releaseCleanup?.();
@@ -1181,7 +1183,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (!this.activeTurnId) {
       this.activeTurnId = entry.id;
       this.armDeliveryConfirmation(entry.id);
-      this.emit({ kind: "turn-started", turnId: entry.id });
+      this.emit({ kind: "turn-started", turnId: entry.id, accountingAt: new Date().toISOString() });
     } else {
       this.notifyStateListeners();
     }
@@ -1688,7 +1690,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         }
       }
       const attachedAt = echoOperationId ? new Date().toISOString() : undefined;
-      this.emit({ kind: "item", turnId: this.activeTurnId, item: sanitizedUserReplay(message, content), phase: "completed",
+      this.emit({ kind: "item", turnId: this.activeTurnId, item: sanitizedUserReplay(message, content), phase: "completed", accountingAt: receivedAt,
         ...(echoOperationId ? { deliveryEcho: { operationId: echoOperationId, at: receivedAt, attachedAt,
           ...(delivery?.entry.parts ? { memberOperationIds: delivery.entry.parts.map(part => part.operationId) } : {}) } } : {}) });
       return;
@@ -1729,7 +1731,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       if (text && (!this.activeTurnId || !this.partialTurns.has(this.activeTurnId))) {
         this.emit({ kind: "delta", turnId: this.activeTurnId ?? "unknown", text });
       }
-      this.emit({ kind: "item", turnId: this.activeTurnId, item: message, phase: "completed" });
+      this.emit({ kind: "item", turnId: this.activeTurnId, item: message, phase: "completed", accountingAt: new Date().toISOString() });
       return;
     }
     if (type === "control_request") {
@@ -1813,7 +1815,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     const digest = crypto.createHash("sha256").update(JSON.stringify([this.identity.sessionId, token])).digest("hex");
     this.activeTurnId = `${CLAUDE_BACKGROUND_TURN_PREFIX}${digest}`;
     this.activeUserUuid = userUuid;
-    this.emit({ kind: "turn-started", turnId: this.activeTurnId });
+    this.emit({ kind: "turn-started", turnId: this.activeTurnId, accountingAt: new Date().toISOString() });
   }
 
   private acceptResult(message: JsonObject): void {
@@ -1846,7 +1848,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     const status = interrupted || message.subtype === "interrupted"
       ? "interrupted"
       : message.subtype === "success" && message.is_error !== true ? "completed" : "error";
-    this.emit({ kind: "turn-ended", turnId, status, ...(resultUuid ? { claudeResultUuid: resultUuid } : {}) });
+    this.emit({ kind: "turn-ended", turnId, status, accountingAt: new Date().toISOString(), ...(resultUuid ? { claudeResultUuid: resultUuid } : {}) });
     if (this.ledgerFailed) return;
     this.lastResultUuid = resultUuid;
     if (this.turnQueue[0] === turnId) this.turnQueue.shift();

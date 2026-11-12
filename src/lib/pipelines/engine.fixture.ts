@@ -2208,6 +2208,7 @@ async function publicationInterruptedReview(access: "read-only" | "read-write", 
   const run = pipeline.runs.find((item) => item.stageId === "review")!;
   const attempt = {
     ...structuredClone(pipeline.runs[0]!.attempts[0]!), n: 2,
+    accounting: { ...pipeline.runs[0]!.attempts[0]!.accounting!, repeatReason: "unknown" },
     state: parked ? "needs_decision" : "pending", effectiveRole: stage.effectiveRole,
     launchId: parked ? "launch-publication-cut" : null,
     conversationId: parked ? "conversation_publication_cut" : null,

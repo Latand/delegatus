@@ -8,6 +8,8 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { classifyArtifact } from "@/lib/artifact/classify";
 import { frameUrl, mintFrameScope } from "@/lib/artifact/frameScope";
+import { requestSession } from "@/lib/team/sessions";
+import { existingTeamStore } from "@/lib/team/store";
 import { artifactEtag, artifactLimits, artifactResponseHeaders, parseByteRange, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
 import { admittedAs, lexicalAllowedRoots, keptPictureProject, openAdmitted, readablePlace, realAllowedRoots, realpathAdmitted, resolveLocal, streamWindow } from "@/lib/artifact/localFile";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -140,7 +142,10 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
       /* An HTML report is shown as a browser would show it, in a sandboxed
          frame fed by the frame route; the scope minted here is the only way
          to reach that route, and it covers this report's directory alone. */
-      const frame = /\.html?$/i.test(real) ? frameUrl(mintFrameScope(path.dirname(real)), path.basename(real)) : undefined;
+      const live = requestSession(req);
+      if (/\.html?$/i.test(real) && existingTeamStore()?.hasActiveOwner() && !live)
+        return NextResponse.json({ error: "sign in to open a report frame", code: "member_required" }, { status: 401 });
+      const frame = /\.html?$/i.test(real) ? frameUrl(mintFrameScope(path.dirname(real), Date.now(), live?.session.id ?? null), path.basename(real)) : undefined;
       return NextResponse.json(
         { name, kind, mime, size: stat.size, mtimeMs: Math.round(stat.mtimeMs), etag, ...(frame ? { frame } : {}) },
         { headers: { "cache-control": "private, no-store" } },

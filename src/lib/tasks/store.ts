@@ -1,3 +1,4 @@
+import { taskAccountingSchema, retainAccountingHold } from "./accounting";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { retainProactiveScope, validProactiveProvenance } from "./proactiveScope";
 import { waitForStateLock } from "@/lib/state/lockWait";
@@ -88,6 +89,7 @@ function committedRows(drafts: BoardTask[], before: ReturnType<typeof snapshotTa
     task.project = canonical(task.project);
     const prior = before.get(task.id);
     retainProactiveScope(task, prior ? (persistedRows.get(prior.ref) as BoardTask | undefined) ?? prior.ref : undefined);
+    retainAccountingHold(task);
     const completed = withTaskCompletion(task, prior ? { ...task, status: prior.status } : task);
     Object.assign(task, completed);
     /* A writer that moved the task without naming itself leaves the earlier
@@ -276,6 +278,7 @@ function coerceTask(value: unknown, canonical = canonicalProject): BoardTask | n
     createdAt: raw.createdAt!,
     updatedAt: raw.updatedAt!,
   };
+  if (task.accounting !== undefined && !taskAccountingSchema.safeParse(task.accounting).success) delete task.accounting;
   if (task.findingKey !== undefined) {
     const key = readFindingKey(task.findingKey);
     if (!key.ok || key.key === undefined) delete task.findingKey;

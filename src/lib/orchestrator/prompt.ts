@@ -115,7 +115,9 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
 // v64 combines task progress estimates with terminal review, due dates and report handling.
 // v65 makes a quick scope check the default for a vague ask: the seat chooses direct work, a pipeline or research itself, and a form is for what stays materially ambiguous.
 // v66 promotes contract preparation and recovery guidance while preserving rotation headroom.
-export const ORCHESTRATOR_PROMPT_VERSION = 66;
+// Review scope and dependency-based evidence renewal ship with the shared working rules.
+// v68 declares narrow lanes before launch and gives them one sizing rule.
+export const ORCHESTRATOR_PROMPT_VERSION = 68;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -604,6 +606,15 @@ const SHIPPED_REVIEW_POLICY = `Review: read-only reviewer, onFail:{to:"<fix stag
 const SHIPPED_HOW_WORK_RUNS_OPENING = "Every piece of accepted work runs as a pipeline on its board task: find or create the task, compose the stages, call create_pipeline with taskIds and autoStart, and bring the result to the merge bar. Attach a useful GitHub issue with pipeline_action attach-link; no step waits for an issue.\n- Start by default. When the operator asks for work, assess complexity, compose the stages and roles, and call create_pipeline with autoStart: true, with no confirmation step or draft. Create a draft only when the operator explicitly asks for a draft or to review the plan first in that request: create_pipeline with autoStart: false, report the draft id, and wait for the operator to press Start on the board. That request may come in your own conversation or through the gateway; both channels carry the same authority. Proactive means carrying accepted work to its merge bar and its owed reports unasked; new work you see is a proposal, started when the operator says so.";
 const ORCHESTRATOR_HOW_WORK_RUNS_OPENING = "Accepted work needing agents runs as a pipeline on its task: find or create the task, compose the stages, call create_pipeline with taskIds and autoStart, and bring the result to the merge bar. Attach a useful GitHub issue with pipeline_action attach-link; no step waits on it.\n- Start by default. A vague ask gets a quick bounded scope check first; then choose alone: a small permitted step directly, a pipeline, or read-only research first. Routine technical choices within authority are yours; a form is only for intent, scope or trade-offs still materially ambiguous. A pipeline starts with autoStart: true, no confirmation step or draft. Draft only on an explicit request for one or to review the plan first: create_pipeline with autoStart: false, report the draft id, wait for Start on the board. Proactive means carrying accepted work to its merge bar and its owed reports unasked; work you spot waits for the operator's word.";
 
+export const ORCHESTRATOR_LANE_SIZING_HEADING = "## Lane sizing";
+export const ORCHESTRATOR_LANE_SIZING_DIRECTIVE = `${ORCHESTRATOR_LANE_SIZING_HEADING}
+At creation, pin class/reason in the spec. Narrow: exact change/acceptance, few expected lines/files, no money/access/data migration; unknowns use normal. Retain the declaration across retries/escalation; never classify by final diff.
+Narrow: requirement direct to one builder, base builder model on standard tier (pin runtime across domains); builder/reviewer size=normal. One independent review at normal reviewer model, effort and rubric. UI adds visual-critic of changed states on a representative render set pinned in its brief. No brief or other stages. First-review P0/P1: park, convert this graph to normal via pipeline_action, retry; retain narrow accounting, no successor. Other review failures park.
+Normal: role rows, routine effort low/medium; architect for design/options. UI: Opus read-only brief, builder domain=frontend, Opus review/fix, full visual check. Others: builder, review/fix. Legacy size=trivial or explicit Sonnet needs a large briefer, no extra stage. Public prose: builder domain=docs.`;
+
+const SHIPPED_LANE_COMPOSITION = "- Size the lane first, then compose it from the role table: an architect stage first when the work needs options or a plan, then a builder, then a reviewer stage whose fail edge leads to a fix stage (builder mode=apply-fixes with the implementer's domain and size, which returns to a fresh reviewer); add stages when the task needs them. A fix stage's self-fail without blocked:true and with a new head proceeds to review as reviewer notes; a fail with no new head parks.";
+const ORCHESTRATOR_LANE_COMPOSITION = "- Compose lanes by Lane sizing. Fix stages use builder mode=apply-fixes with the implementer's domain and size and return to a fresh reviewer. A fix self-fail with a new head and without blocked:true proceeds to review as notes; no new head parks.";
+
 export const ORCHESTRATOR_SYSTEM_PROMPT = `You are this project's orchestrator in Delegatus and own its board. Act only through its MCP tools (key \`viewer\`), with no direct process or runtime manipulation. Working rules govern you and every agent; this mandate adds seat duties.
 
 ${ORCHESTRATOR_PERSONALITY}
@@ -634,7 +645,7 @@ ${ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE}
 ## How work runs
 ${ORCHESTRATOR_HOW_WORK_RUNS_OPENING}
 - Keep no more workers running at once than the worker limit each wake and get_orchestrator state, in every mode: each running lane and each live spawned agent counts as one.
-- Size the lane first, then compose it from the role table: an architect stage first when the work needs options or a plan, then a builder, then a reviewer stage whose fail edge leads to a fix stage (builder mode=apply-fixes with the implementer's domain and size, which returns to a fresh reviewer); add stages when the task needs them. A fix stage's self-fail without blocked:true and with a new head proceeds to review as reviewer notes; a fail with no new head parks.
+${ORCHESTRATOR_LANE_COMPOSITION}
 - The brief says what to do, where, the acceptance, and the fences: the files or areas other open lanes are changing. It never says how to end. Delegatus tells every agent how to report, and the words are pass, fail and needs_decision; never write REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES or NO FINDINGS into a brief.
 - Quote the operator's originating requirement verbatim, with its date, at the top of the pinned specification. When the project names its required checks, name them; otherwise write "the project's own checks". The pinned specification is what the whole lane must achieve and every stage reads it. Steps for one stage (where to branch, whether to open a pull request, which checks that stage runs) go in that stage's prompt.
 ${ORCHESTRATOR_OUTPUTS_BULLET}
@@ -643,6 +654,8 @@ ${ORCHESTRATOR_MAINTENANCE_PRACTICE}
 - Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. ${ORCHESTRATOR_REVIEW_READY_BAR} Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. ${ORCHESTRATOR_AUTOMATIC_MERGE_BAR}; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating, refreshing or merging), and act on merge.state blocked: fix its reason or ask the operator, then pipeline_action retry-merge. Red checks hold merging; unverified, assumed or synthetic premises go to the operator. Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent; exclude held merge.state. needs-review → independent git show --remerge-diff review, then next batch. culprit → lane finding.
 - Releases run only when seat_tick_settings.release enables them or requestNow asks for one. Hold releases during known production incidents.
 ${ORCHESTRATOR_TASK_CURRENT_BULLET}
+
+${ORCHESTRATOR_LANE_SIZING_DIRECTIVE}
 
 ## Pipeline stage contract
 Stages form a graph; array order is presentation. Shape: {id (unique, URL-safe), kind: "run", prompt, next: <stage id> | null, onFail?: {to, maxRounds?, onExhausted?: "advance" | "stop-after-fix" | "park"}, outputs?: [repository-relative paths], role: {roleId, params?}}. Runtime overrides (engine, model, effort, access) belong on the stage. next defaults to null. add-stage preserves edges; after:<stageId> splices that stage's pass edge; index sets display order.
@@ -717,10 +730,7 @@ export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string 
     ...roles.map(roleTableRow),
     `- ${registryStatus}`,
     "- override-stage sets the runtime on the stage from the NEXT attempt, or now with applyNow:true.",
-    "- Size each lane first. trivial (few UI/copy lines, one flag/label; brief pins exact change and acceptance): builder and reviewer size=trivial, one review round. normal: rows, effort low or medium. design (options, architecture, proposals, design issues): architect first.",
-    "- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, an Opus reviewer stage with its fix stage, then a visual-critic stage last.",
-    "- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploys and the project's critical runtime, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.",
-    "- size=trivial and a hand-set Sonnet builder need a brief from a large model (Opus, Fable, large Codex). Sonnet never orchestrates, architects or reviews above size=trivial. README, docs, public text: builder domain=docs.",
+    "- Sonnet 5.5: scoped build, fix, docs, verification, repeated work. Opus 5.5: design, orchestration, hard or high-risk work (runtime, deploys, accounts, migrations, security, cross-cutting refactors). Backend review: Codex; frontend: Opus.",
     "- create_pipeline returns runtimeLine (spawn_agent: runtime): check before attempt 1; quote runtime, size and reason.",
     ...(overriddenNote ? [overriddenNote] : []),
   ].join("\n");
@@ -799,16 +809,32 @@ const SHIPPED_PROMOTION_OBSERVATION_BULLETS = "- A spec never states an external
 const SHIPPED_PROMOTION_WORKING_RULE_2 = "2. Read the project's instruction files first; its required checks are those they or its CI name, or say which you ran and why.";
 const SHIPPED_PROMOTION_WORKING_RULE_15 = "15. A reply is no proof: before retrying, read the state the action should have changed; retry with the same key if it may have landed.";
 
+/** Exact shipped working rules; bespoke evidence and scope instructions survive. */
+const SHIPPED_REVIEW_WORKING_RULES = [
+  "6. Every claim carries its evidence (command and output, file:line, measurement and conditions, time bounds); keep observation apart from inference; say where you looked for what you could not confirm. Hand-over evidence comes from the final state, names revision, time and command, and is redone after any later change; look at every output you cite. Speed, memory or cost claims need repeated before/after runs on identical data and load, the load recorded.",
+  "8. Stay in the brief's scope; leave what other open work changes alone, read open changes on the same files, and recheck the base before you finish.",
+];
+
 /** The mandate upgrades, idempotent. A seat request applies them to its mandate
     before preflight and before it records a new intent, so the intent stores
-    the upgraded text. They stay out of `orchestratorMandateWithRoleTable`: a
+    the upgraded text, including lane sizing for a custom mandate. They stay
+    out of `orchestratorMandateWithRoleTable`: a
     pending intent recorded by an earlier release replays its first attempt's
     bytes under the same clientAttemptId, and a spawn receipt matched by
     request digest refuses any other text. */
 export function orchestratorMandateUpgraded(mandate: string): string {
+  mandate = mandate.split(SHIPPED_LANE_COMPOSITION).join(ORCHESTRATOR_LANE_COMPOSITION);
+  if (mandate.includes(ORCHESTRATOR_LANE_COMPOSITION) && !mandate.includes(ORCHESTRATOR_LANE_SIZING_DIRECTIVE)) {
+    mandate = mandate.replace("\n\n## Pipeline stage contract", `\n\n${ORCHESTRATOR_LANE_SIZING_DIRECTIVE}\n\n## Pipeline stage contract`);
+  }
   mandate = mandate.split(SHIPPED_REVIEW_POLICY).join(ORCHESTRATOR_REVIEW_POLICY)
     .split("A PR is ready when reviews passed its final head or the last budget fix passed, required checks are green and its body is read.").join(ORCHESTRATOR_REVIEW_READY_BAR)
     .split("Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks settle green").join(ORCHESTRATOR_AUTOMATIC_MERGE_BAR);
+  for (const previous of SHIPPED_REVIEW_WORKING_RULES) {
+    const prefix = previous.slice(0, previous.indexOf(" ") + 1);
+    const current = WORKING_RULES_SHORT.split("\n").find(line => line.startsWith(prefix))!;
+    mandate = mandate.split(previous).join(current);
+  }
   const oldRule13 = "13. Read the newest answer first: it replaces only the decision it names; recheck answers since the brief before you publish or ask, and never re-ask a settled question.";
   const rule13 = WORKING_RULES_SHORT.split("\n").find((line) => line.startsWith("13. "))!;
   mandate = mandate.split(`${oldRule13} ${OPERATOR_CORRECTION_RULE}`).join(rule13);
@@ -824,7 +850,8 @@ export function orchestratorMandateUpgraded(mandate: string): string {
   mandate = mandate.split(SHIPPED_PROMOTION_WORKING_RULE_15).join("15. Error, timeout or status proves nothing. Read affected state before retry. If uncertain, reuse key and arguments or its recovery read. On proved no-effect refusal, refresh and correct with a new key. Keep each key's arguments. Delivery needs destination proof; unresolved stays unknown.");
   for (const previous of SHIPPED_TASK_CURRENT_BULLETS) mandate = mandate.split(previous).join(ORCHESTRATOR_TASK_CURRENT_BULLET);
   if (!mandate.includes(ORCHESTRATOR_MAINTENANCE_PRACTICE)) mandate = mandate.replace(ORCHESTRATOR_OUTPUTS_BULLET, `${ORCHESTRATOR_OUTPUTS_BULLET}\n${ORCHESTRATOR_MAINTENANCE_PRACTICE}`);
-  return mandate.includes(OPERATOR_CORRECTION_RULE) ? mandate : `${mandate}\n\n${OPERATOR_CORRECTION_RULE}`;
+  if (!mandate.includes(OPERATOR_CORRECTION_RULE)) mandate = `${mandate}\n\n${OPERATOR_CORRECTION_RULE}`;
+  return mandate.includes(ORCHESTRATOR_LANE_SIZING_DIRECTIVE) ? mandate : `${mandate}\n\n${ORCHESTRATOR_LANE_SIZING_DIRECTIVE}`;
 }
 
 /** Delivery with an already rendered role table. A pending seat intent replays
