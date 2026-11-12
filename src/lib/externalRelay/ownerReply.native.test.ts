@@ -9,6 +9,25 @@ const probe = process.env.LLV_RELAY_REPLY_PROBE === "1" ? test : test.skip;
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-reply-probe-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
+function hasInlineCitations(reply: string): boolean {
+  const links = [...reply.matchAll(/\[[^\]]+\]\(https?:\/\/[^)]+\)/gu)];
+  if (links.length === 0 || reply.split(/\n\s*\n/u).length !== 1) return false;
+  return links.every((link) => {
+    const lineStart = reply.lastIndexOf("\n", link.index) + 1;
+    const lineEndIndex = reply.indexOf("\n", link.index);
+    const lineEnd = lineEndIndex === -1 ? reply.length : lineEndIndex;
+    const line = reply.slice(lineStart, lineEnd);
+    const before = line.slice(0, link.index - lineStart).trim();
+    const after = line.slice(link.index - lineStart + link[0].length).trim();
+    return before.length > 0 && !/^(?:[-*+]\s|\d+[.)]\s|.*:\s*$)/u.test(before) && /[.!?…]["'”’)]*$/u.test(after);
+  });
+}
+
+test("inline citation structure accepts ordinary linked prose", () => {
+  expect(hasInlineCitations("IANA зберігає ці імена для прикладів ([IANA](https://www.iana.org/help/example-domains)).")).toBe(true);
+  expect(hasInlineCitations("IANA зберігає ці імена для прикладів.\n\nSources:\n- [IANA](https://www.iana.org/help/example-domains)")).toBe(false);
+});
+
 probe("native chat reply and continuation address the chat with inline web citations", async () => {
   // The project preload replaces CLAUDE_CONFIG_DIR. Pin the private probe
   // config separately, keeping every ordinary test home isolated.
@@ -39,10 +58,7 @@ probe("native chat reply and continuation address the chat with inline web citat
     console.log(JSON.stringify({ turn: index + 1, turns: response.num_turns, reply }));
     if (index === 0) expect(response.num_turns).toBeGreaterThan(1);
     expect(reply).toMatch(/[іїєґ]/iu);
-    expect(reply).toMatch(/\[[^\]]+\]\(https?:\/\//);
-    expect(reply.split(/(?<=[.!?])\s+/u).some((sentence) =>
-      /(?:example\.(?:com|org)|домен|зареєстр|признач|документ|правил)/iu.test(sentence) && /\[[^\]]+\]\(https?:\/\//u.test(sentence),
-    )).toBe(true);
+    expect(hasInlineCitations(reply)).toBe(true);
     expect(reply).not.toMatch(/^\s*(?:Sources:|Відповіла в чат|Розповіла .+ про)/mi);
     expect(reply.split(/\n\s*\n/)).toHaveLength(1);
   }
