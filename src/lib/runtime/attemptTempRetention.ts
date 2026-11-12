@@ -278,7 +278,7 @@ export type AttemptTempSweepOptions = {
   runBudgetMs?: number;
   capBytes?: number;
   retentionMs?: number;
-  remove?: (directory: string, guard: () => Promise<boolean>, dispatch: () => boolean) => Promise<void>;
+  remove?: (directory: string, guard: () => Promise<boolean>, dispatch: () => boolean, mutationStarted: () => void) => Promise<void>;
   mode?: "on" | "dry-run";
   onRetired?: (count: number, bytes: number) => void;
   /** Checkout reads kept by a caller that lives across ticks. Passing it also
@@ -600,7 +600,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         eligible, maxAgeMs: 0, maxRemovals: 1, mode: options.mode, disposable: true,
         dispatchGuard: dispatchEligible,
         remove: (directory, mutationStarted) => options.remove
-          ? (mutationStarted(), options.remove(directory, () => eligible(directory), () => dispatchEligible(directory)))
+          ? options.remove(directory, () => eligible(directory), () => dispatchEligible(directory), mutationStarted)
           : removeAttemptTree(directory, owner.directory, () => eligible(directory), namespaceOnly,
             () => dispatchEligible(directory), () => emptyRootEligible(directory), dispatchState === "expired", namespaceProtection,
             { budgetMs: deadline - now(), bytes,

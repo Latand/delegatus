@@ -12,10 +12,32 @@ import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 import { finishedLane } from "./attemptTempRetention.testSupport";
 import { attemptMutationCurrent } from "./attemptMutationFence";
 import { removeAttemptTree } from "./attemptTempFilesystem";
+import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
 import { Database } from "bun:sqlite";
 import { RecordedCheckStore } from "@/lib/recordedChecks/store";
 
 const NOW = Date.parse("2030-01-20T00:00:00Z");
+
+test("a removal callback fence refusal restores quarantine before returning", async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-remove-callback-fence-"));
+  cleanup.push(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const directory = path.join(parent, "llv-stage-expired"); fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "payload"), "retained");
+  const store = new AttemptTempStore(path.join(parent, "registry/owners.sqlite"));
+  cleanup.push(() => store.close());
+  store.register({ directory, pipelineId: null, launchId: "fixture", retainUntilClose: true, createdAt: 1 });
+  const report = await sweepAttemptTemps(store, { now: () => NOW, maxRoots: 1, state: async () => "expired",
+    scan: () => ({ ownNamespace: null, processes: [] }),
+    remove: async (trash, _eligible, dispatch, mutationStarted) => removeAttemptTree(trash, directory, undefined, false,
+      () => { dispatch(); throw new AttemptTempBudgetDeferred("attempt mutation fence filesystem proof changed"); },
+      undefined, false, undefined, { mutationStarted }),
+  });
+  expect(report).toMatchObject({ removed: 0, errors: 0, deferred: 1 });
+  expect(report.outcomes[0].reason).toContain("attempt mutation fence filesystem proof changed");
+  expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("retained");
+  expect(fs.existsSync(attemptTempJournalPath(directory))).toBeFalse();
+  expect(fs.readdirSync(parent).filter(name => name.startsWith(".delegatus-trash-"))).toEqual([]);
+});
 
 test.skipIf(process.platform !== "linux").each([false, true])(
   "a post-quarantine fence refusal restores consumer links in the same tick (recreate=%s)", async recreate => {
