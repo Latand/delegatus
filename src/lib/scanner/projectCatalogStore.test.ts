@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { HOT_STATE_BACKEND } from "@/lib/state/hotStateAuthority";
 import { ensureLegacyCollectionsImported } from "@/lib/state/legacyCollections";
+import * as sqliteState from "@/lib/state/sqliteStateStore";
 import { readStateImport, resetStateReadonlyReaderForTests, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import {
   checkpointHotStateRollbackMirrorsForDemotion,
@@ -123,12 +124,13 @@ test("a scan writes only the rows that changed, and a moved resolution state rew
   expect(view.files.get(paths[0]!)?.stateKey).toBeUndefined();
 });
 
-test("the folder readers and the recovery's one-shot read decode no record and keep none", () => {
+test("the folder readers decode no record, and follow another process's scans through the changed rows alone", () => {
   const body = syntheticProjectCatalog(500);
   seedProjectCatalogForTests(body, catalogFile());
   const expected = readProjectCatalog(catalogFile()).folders();
   resetProjectCatalogStoreForTests();
   const decoded = spyOn(SqliteStateCollection.prototype, "loadReadonly");
+  const extracted = spyOn(sqliteState, "readStateCollectionFields");
   try {
     const folders = readProjectCatalogFolders(catalogFile());
     expect(folders.paths).toEqual(expected.paths);
@@ -136,14 +138,39 @@ test("the folder readers and the recovery's one-shot read decode no record and k
     expect(readProjectCatalogFolders(catalogFile())).toBe(folders);
     const records = readProjectCatalogRecords(catalogFile())!;
     expect(records.size).toBe(500);
-    const [first] = Object.keys(body.files);
-    expect(records.get(first!)).toMatchObject({ project: body.files[first!]!.project, cwd: body.files[first!]!.cwd });
+    const [first, second] = Object.keys(body.files) as [string, string];
+    /* A record in a worktree of its own, so its folder leaves with it. */
+    const third = Object.keys(body.files)[20]!;
+    expect(records.get(first)).toMatchObject({ project: body.files[first]!.project, cwd: body.files[first]!.cwd });
+
+    /* The scanning process writes: one record moves to a new folder, one is
+       added in another, one is gone. */
+    const store = path.join(import.meta.dir, "projectCatalogStore.ts");
+    const child = Bun.spawnSync([process.execPath, "-e", `
+      const store = await import(${JSON.stringify(store)});
+      const view = store.readProjectCatalog(${JSON.stringify(catalogFile())});
+      const files = Object.fromEntries([...view.files].map(([p, f]) => [p, { ...f, stateKey: view.stateKey }]));
+      files[${JSON.stringify(first)}] = { ...files[${JSON.stringify(first)}], cwd: "/srv/agents/moved-checkout" };
+      files["/srv/agents/.codex/sessions/2026/11/12/rollout-added.jsonl"] = { ...files[${JSON.stringify(second)}], cwd: "/srv/agents/added-checkout" };
+      delete files[${JSON.stringify(third)}];
+      console.log(JSON.stringify(store.writeProjectCatalog({ resolutionVersion: 10, stateKey: view.stateKey, files }, ${JSON.stringify(catalogFile())})));
+    `], { env: { ...process.env, LLV_STATE_DIR: sandbox }, stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    expect(JSON.parse(child.stdout.toString().trim().split("\n").at(-1)!)).toMatchObject({ upserted: 2, deleted: 1 });
+
+    const followed = readProjectCatalogFolders(catalogFile());
+    expect(extracted).toHaveBeenCalledTimes(1);
     expect(decoded).not.toHaveBeenCalled();
-  } finally { decoded.mockRestore(); }
-  // A write moves the folders a reader sees.
-  const files = { ...body.files, "/srv/agents/.codex/sessions/2026/11/12/rollout-moved.jsonl": { ...Object.values(body.files)[0]!, cwd: "/srv/agents/new-checkout" } };
-  scanWrite(files);
-  expect(readProjectCatalogFolders(catalogFile()).paths).toContain("/srv/agents/new-checkout");
+    expect(followed.paths).toContain("/srv/agents/moved-checkout");
+    expect(followed.paths.at(-1)).toBe("/srv/agents/added-checkout");
+    expect(followed.paths).not.toContain(body.files[third]!.cwd);
+    decoded.mockRestore();
+    resetProjectCatalogStoreForTests();
+    expect(followed).toEqual(readProjectCatalog(catalogFile()).folders());
+  } finally {
+    decoded.mockRestore();
+    extracted.mockRestore();
+  }
 });
 
 test("a write in one process is read by another through its own connection, and back", () => {

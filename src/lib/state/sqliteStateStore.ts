@@ -1789,7 +1789,7 @@ export function readStateCollectionSelection(filename: string, collection: strin
  */
 export function readStateCollectionFields(filename: string, collection: string, prefix: string, fields: readonly string[]): {
   revision: number;
-  rows: (string | number | null)[][];
+  rows: { key: string; values: (string | number | null)[] }[];
 } | null {
   if (!fs.existsSync(filename) || fields.length === 0) return null;
   const db = sharedStateReadonlyDatabase(filename);
@@ -1804,9 +1804,10 @@ export function readStateCollectionFields(filename: string, collection: string, 
     }
     const columns = fields.map((_, index) => `CASE WHEN json_valid(value_json) THEN json_extract(value_json, ?${index + 4}) END AS f${index}`).join(", ");
     const rows = db.query<Record<string, string | number | null>, SQLQueryBindings[]>(`
-      SELECT ${columns} FROM state_rows
+      SELECT row_key, ${columns} FROM state_rows
       WHERE collection = ?1 AND row_key >= ?2 AND row_key < ?3 ORDER BY row_order, row_key
-    `).all(collection, prefix, prefixUpperBound(prefix), ...fields).map((row) => fields.map((_, index) => row[`f${index}`] ?? null));
+    `).all(collection, prefix, prefixUpperBound(prefix), ...fields)
+      .map((row) => ({ key: String(row.row_key), values: fields.map((_, index) => row[`f${index}`] ?? null) }));
     db.exec("COMMIT");
     return { revision: meta.revision, rows };
   } catch (error) {

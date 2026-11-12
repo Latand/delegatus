@@ -383,7 +383,7 @@ const holder = globalThis as typeof globalThis & {
     collections: Map<string, { identity: string | null; collection: SqliteStateCollection<CatalogRow> }>;
     views: Map<string, { ordered: readonly CatalogRow[]; view: HeldView }>;
     legacy: Map<string, { signature: string; view: ProjectCatalogView }>;
-    folders: Map<string, { signature: string; folders: CatalogFolders }>;
+    folders: Map<string, FolderIndex>;
   };
 };
 const runtime = holder.__delegatusProjectCatalogStoreV1__ ??= { collections: new Map(), views: new Map(), legacy: new Map(), folders: new Map() };
@@ -500,36 +500,108 @@ export function readProjectCatalog(filePath = projectCatalogLegacyPath()): Proje
   return collection ? collectionView(database, collection) : legacyView(filePath);
 }
 
-/**
- * The folders the stored records name, for the readers that want nothing
- * else (directory suggestions, the separate-Git-directory owner search).
- * SQLite extracts the two fields, so such a reader neither decodes the
- * records nor keeps them: a process that does not scan never holds the
- * catalog. A process that does answers from the catalog it already holds.
- */
-export function readProjectCatalogFolders(filePath = projectCatalogLegacyPath()): CatalogFolders {
-  const database = legacyDatabasePath(filePath);
-  settleLegacyFile(filePath, database);
-  if (!openCatalog(database)) return legacyView(filePath).folders();
-  const revision = readStateCollectionRevision(database, PROJECT_CATALOG_COLLECTION);
-  const signature = `${databaseIdentity(database)}:${revision}`;
-  const held = runtime.views.get(database)?.view;
-  if (held && held.revision === revision) return held.folders();
-  const cached = runtime.folders.get(database);
-  if (cached?.signature === signature) return cached.folders;
-  const selection = readStateCollectionFields(database, PROJECT_CATALOG_COLLECTION, FILE_PREFIX, ["$.value.cwd", "$.value.projectRoot"]);
+/** Each record's working directory and project root, in row order: what a
+    process that does not scan keeps to answer the folder readers. */
+interface FolderIndex {
+  identity: string | null;
+  revision: number;
+  byPath: Map<string, [cwd: string | null, projectRoot: string | null]>;
+  folders: CatalogFolders | null;
+}
+
+const CHANGE_PAGE = 2_048;
+
+function folderFields(value: unknown): [string | null, string | null] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [null, null];
+  const { cwd, projectRoot } = value as { cwd?: unknown; projectRoot?: unknown };
+  return [typeof cwd === "string" ? cwd : null, typeof projectRoot === "string" ? projectRoot : null];
+}
+
+function foldersOf(byPath: FolderIndex["byPath"]): CatalogFolders {
   const paths = new Set<string>();
   const projectRoots = new Set<string>();
-  for (const [cwd, projectRoot] of selection?.rows ?? []) {
-    if (typeof cwd === "string" && cwd.trim()) paths.add(cwd);
-    if (typeof projectRoot === "string" && projectRoot.trim()) {
+  for (const [cwd, projectRoot] of byPath.values()) {
+    if (cwd?.trim()) paths.add(cwd);
+    if (projectRoot?.trim()) {
       paths.add(projectRoot);
       projectRoots.add(projectRoot);
     }
   }
-  const folders: CatalogFolders = { paths: [...paths], projectRoots };
-  if (selection) runtime.folders.set(database, { signature: `${databaseIdentity(database)}:${selection.revision}`, folders });
-  return folders;
+  return { paths: [...paths], projectRoots };
+}
+
+/** Every record's two fields, extracted by SQLite in one snapshot. */
+function loadFolderIndex(database: string, identity: string | null): FolderIndex | null {
+  const selection = readStateCollectionFields(database, PROJECT_CATALOG_COLLECTION, FILE_PREFIX, ["$.value.cwd", "$.value.projectRoot"]);
+  if (!selection) return null;
+  const byPath: FolderIndex["byPath"] = new Map();
+  for (const { key, values: [cwd, projectRoot] } of selection.rows) {
+    byPath.set(key.slice(FILE_PREFIX.length), [typeof cwd === "string" ? cwd : null, typeof projectRoot === "string" ? projectRoot : null]);
+  }
+  return { identity, revision: selection.revision, byPath, folders: null };
+}
+
+/** Bring the index to the collection's revision from the change log: only the
+    rows written or deleted since are read. False when the log no longer
+    reaches back that far (a re-import, or a reader idle past its retention). */
+function advanceFolderIndex(index: FolderIndex, collection: SqliteStateCollection<CatalogRow>): boolean {
+  let after = index.revision;
+  let afterKey = "";
+  let changed = false;
+  for (;;) {
+    const page = collection.changesAfter(after, afterKey, CHANGE_PAGE);
+    if (page.changeFloor > index.revision) return false;
+    for (const entry of page.entries) {
+      if (!entry.key.startsWith(FILE_PREFIX)) continue;
+      const pathname = entry.key.slice(FILE_PREFIX.length);
+      changed = true;
+      if (entry.valueJson === null) {
+        index.byPath.delete(pathname);
+        continue;
+      }
+      let value: unknown = null;
+      try { value = (JSON.parse(entry.valueJson) as { value?: unknown }).value; } catch { value = null; }
+      /* A new key goes to the end, as its row does; a rewritten one keeps its place. */
+      index.byPath.set(pathname, folderFields(value));
+    }
+    if (page.entries.length < CHANGE_PAGE) {
+      index.revision = page.revision;
+      if (changed) index.folders = null;
+      return true;
+    }
+    const last = page.entries.at(-1)!;
+    after = last.revision;
+    afterKey = last.key;
+  }
+}
+
+/**
+ * The folders the stored records name, for the readers that want nothing
+ * else (directory suggestions, artifact roots, the separate-Git-directory
+ * owner search). These run on the Viewer's request thread, apart from the
+ * scanning process. Such a process keeps each record's two folder fields,
+ * read once by SQLite without decoding a record, and afterwards reads only the
+ * rows the change log names: a scan that changed twenty records costs it
+ * twenty rows. The process that scans answers from the catalog it holds.
+ */
+export function readProjectCatalogFolders(filePath = projectCatalogLegacyPath()): CatalogFolders {
+  const database = legacyDatabasePath(filePath);
+  settleLegacyFile(filePath, database);
+  const collection = openCatalog(database);
+  if (!collection) return legacyView(filePath).folders();
+  const revision = collection.revision();
+  const held = runtime.views.get(database)?.view;
+  if (held && held.revision === revision) return held.folders();
+  const identity = databaseIdentity(database);
+  let index = runtime.folders.get(database);
+  if (index && (index.identity !== identity || (index.revision !== revision && !advanceFolderIndex(index, collection)))) index = undefined;
+  if (!index) {
+    const loaded = loadFolderIndex(database, identity);
+    if (!loaded) return emptyView(`sqlite:${database}:empty`).folders();
+    index = loaded;
+    runtime.folders.set(database, index);
+  }
+  return index.folders ??= foldersOf(index.byPath);
 }
 
 /**
