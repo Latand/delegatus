@@ -18,7 +18,7 @@ import { sandboxGateEntryCommand } from "../src/lib/runtime/sandboxGateEntry";
 import { gateServiceProperties } from "../src/lib/runtime/cpuPlacement";
 import { GateTasks, GATE_TASKS_MAX, GATE_TASK_LIMIT_EXIT, gateTaskProperties, gateTaskResult, gateTaskFailure, warnGateTaskFallback, type GateTaskSnapshot } from "./gate-tasks";
 import { producerReport, producerCommandIdentity, recordedSupervisorObligation, recordedSupervisorRefusal, supervisorCancellation, reportSchema, readEnvelope, writeEnvelope, digest, type ProducerReport } from "../src/lib/recordedChecks/wire";
-import { CheckAdmission, acquireCheckSlot, admittedCheckAncestor, checkAdmissionFile, isTestCommand, isTypecheckCommand, withTestAdmission } from "./check-admission";
+import { openCheckAdmission, acquireCheckSlot, admittedCheckAncestor, isTestCommand, isTypecheckCommand, withTestAdmission } from "./check-admission";
 import { admissionLockWait } from "./cpu-admission-lock";
 
 /** `namespace` marks a caller inside an agent signal domain. Its identities
@@ -35,7 +35,7 @@ if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("owned ru
 // budget and binds the permit to the compiler itself before yielding.
 const offset = ["--portable", "--namespace"].includes(args[0] ?? "") ? 1 : 0;
 if (!process.env.DELEGATUS_CHECK_ADMISSION_OWNER) {
-  const owner = admittedCheckAncestor(process.pid);
+  const owner = await admittedCheckAncestor(process.pid);
   if (owner) process.env.DELEGATUS_CHECK_ADMISSION_OWNER = JSON.stringify(owner);
 }
 if (!args[offset]?.startsWith("--")) args.splice(offset, args.length - offset, ...withTestAdmission(args.slice(offset), path.join(import.meta.dir, "check-test-preload.ts")));
@@ -64,7 +64,7 @@ if (args[0] === "--check-process") {
     let validated = false;
     try {
       const owner = JSON.parse(inheritedOwner) as ProcessIdentity;
-      const queue = new CheckAdmission(checkAdmissionFile());
+      const queue = await openCheckAdmission();
       try { validated = queue.holds(owner); }
       finally { queue.close(); }
     } catch { delete process.env.DELEGATUS_CHECK_ADMISSION_OWNER; }
@@ -73,7 +73,7 @@ if (args[0] === "--check-process") {
   }
   if (!isTestCommand(command)) delete process.env.DELEGATUS_CHECK_ADMISSION_OWNER;
   if (!process.env.DELEGATUS_CHECK_ADMISSION_OWNER && isTestCommand(command)) {
-    const ancestor = admittedCheckAncestor(process.pid);
+    const ancestor = await admittedCheckAncestor(process.pid);
     if (ancestor) process.env.DELEGATUS_CHECK_ADMISSION_OWNER = JSON.stringify(ancestor);
   }
   if (!process.env.DELEGATUS_CHECK_ADMISSION_OWNER) {

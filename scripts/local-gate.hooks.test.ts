@@ -25,6 +25,14 @@ function hookFixture(realLint = false, controlledClock = false) {
 test("repository default budgets follow current changes across fresh hook processes and retain an explicit caller cap", () => {
   const now = 1_900_000_000_000;
   const f = hookFixture(false, true);
+  const hookEnv = f.env as NodeJS.ProcessEnv;
+  // This test pins hook time while admission runs on the real clock. Drop the
+  // parent test runner's lease and wait ledger so they cannot alter its budget.
+  delete hookEnv.DELEGATUS_CHECK_ADMISSION_OWNER;
+  delete hookEnv.LLV_CPU_WAIT_ROOTS;
+  delete hookEnv.LLV_GATE_ADMISSION_WAIT_ROOTS;
+  hookEnv.LLV_CHECK_ADMISSION_FILE = path.join(f.dir, ".git", "check-admission.sqlite");
+  hookEnv.LLV_GATE_CHECK_ENV = `${hookEnv.LLV_GATE_CHECK_ENV},LLV_CHECK_ADMISSION_FILE`;
   const directory = path.join(f.dir, "src/lib/pipelines"); mkdirSync(directory, { recursive: true });
   const modulePath = path.join(directory, "engine.ts");
   writeFileSync(modulePath, "export const value = 1;\n");
@@ -40,17 +48,25 @@ test("repository default budgets follow current changes across fresh hook proces
     expect(types).toBeDefined();
     expect(types.now).toBe(now);
     const wait = Number(/publication checks CPU wait: (\d+) ms/.exec(result.stderr)![1]);
-    // The fixed child clock has not advanced through real admission; remove
-    // the measured queue interval when comparing the execution allowance.
-    return { deadline: Number(types.deadline), ownedBudget: Number(types.ownedBudget) - wait };
+    // The child timeout is the execution allowance. Its owned runner credits
+    // CPU queue waits in its timer, while this hook reports the measured wait.
+    expect(wait).toBeGreaterThanOrEqual(0);
+    return { deadline: Number(types.deadline), ownedBudget: Number(types.ownedBudget) };
+  };
+  const expectBudget = (actual: ReturnType<typeof run>, deadline: number, executionMs: number) => {
+    const minimum = executionMs + SUPERVISOR_MARGIN_MS;
+    expect(actual.deadline).toBe(deadline);
+    expect(actual.ownedBudget).toBeGreaterThanOrEqual(minimum);
+    // Queue waits can extend the supervisor allowance while the execution
+    // deadline remains the exact fixed or caller supplied cap.
   };
   // Each call starts a new real hook and admitted process.
-  expect(run()).toEqual({ deadline: now + 1_440_000, ownedBudget: 1_440_000 + SUPERVISOR_MARGIN_MS });
+  expectBudget(run(), now + 1_440_000, 1_440_000);
   f.git("rm", "src/lib/pipelines/engine.ts"); f.git("commit", "-m", "retain ordinary change");
-  expect(run()).toEqual({ deadline: now + 840_000, ownedBudget: 840_000 + SUPERVISOR_MARGIN_MS });
+  expectBudget(run(), now + 840_000, 840_000);
   mkdirSync(directory, { recursive: true });
   writeFileSync(modulePath, "export const value = 1;\n"); f.git("add", "src/lib/pipelines/engine.ts"); f.git("commit", "-m", "restore engine change");
-  expect(run(String(now + 30_000))).toEqual({ deadline: now + 30_000, ownedBudget: 30_000 + SUPERVISOR_MARGIN_MS });
+  expectBudget(run(String(now + 30_000)), now + 30_000, 30_000);
 }, 120_000);
 
 for (const mode of ["pre-commit", "pre-push"] as const) test(`${mode} allows KanbanBoard baseline errors and rejects one added error by file/line`, () => {

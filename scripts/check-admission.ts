@@ -121,32 +121,43 @@ export async function acquireCheckSlot(env = process.env, signal?: AbortSignal) 
   }
 }
 
+/** Opening the shared WAL can briefly contend with another runner creating or
+ * configuring it. Keep those read-only ownership probes on the same bounded
+ * SQLite retry path as admission itself. */
+export async function openCheckAdmission(env = process.env): Promise<CheckAdmission> {
+  const endWait = reportCpuWait(env);
+  try {
+    return await admissionLockWait()(() => new CheckAdmission(checkAdmissionFile(env)));
+  } finally { endWait(); }
+}
+
 const testSlot = Symbol.for("delegatus.checkAdmission.test");
 const globals = globalThis as typeof globalThis & { [testSlot]?: Promise<void> };
 export function admitTestProcess(): Promise<void> {
   return globals[testSlot] ??= (async () => {
+    const env = process.env;
+    const queue = await openCheckAdmission(env);
+    try {
       const inherited = process.env.DELEGATUS_CHECK_ADMISSION_OWNER;
       if (inherited) {
         try {
-          const owner = JSON.parse(inherited) as ProcessIdentity, queue = new CheckAdmission(checkAdmissionFile());
-          try { if (queue.holds(owner)) return; } finally { queue.close(); }
+          const owner = JSON.parse(inherited) as ProcessIdentity;
+          if (queue.holds(owner)) return;
         } catch { /* A stale or malformed inherited ticket must reacquire. */ }
       }
-      const env = process.env, queue = new CheckAdmission(checkAdmissionFile(env));
-      try {
         // Child suites are part of the parent's admitted gate tree. Detect the
         // live ownership chain from process identities so isolated child envs
         // cannot turn a saturated parent/child wait into a queue cycle.
-        if (queue.hasAdmittedAncestor(process.pid)) return;
-      } finally { queue.close(); }
-      const slot = await acquireCheckSlot(env);
-      process.env.DELEGATUS_CHECK_ADMISSION_OWNER = JSON.stringify(slot.owner);
+      if (queue.hasAdmittedAncestor(process.pid)) return;
+    } finally { queue.close(); }
+    const slot = await acquireCheckSlot(env);
+    process.env.DELEGATUS_CHECK_ADMISSION_OWNER = JSON.stringify(slot.owner);
     slot.queue.close();
-    })();
+  })();
 }
 
-export function admittedCheckAncestor(pid: number, env = process.env): ProcessIdentity | undefined {
-  const queue = new CheckAdmission(checkAdmissionFile(env));
+export async function admittedCheckAncestor(pid: number, env = process.env): Promise<ProcessIdentity | undefined> {
+  const queue = await openCheckAdmission(env);
   try {
     const parents = procBackend.ppidMap(), ancestors = new Set<number>();
     let parent = parents.get(pid);

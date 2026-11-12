@@ -111,6 +111,24 @@ test("nested test children share their admitted parent suite ticket", async () =
   } finally { child.kill(); await child.exited; queue.close(); f.close(); }
 });
 
+test("concurrent ancestor probes retry admission database initialization", async () => {
+  const f = fixture();
+  const env = withoutInheritedGate<NodeJS.ProcessEnv>({ ...process.env, LLV_CHECK_ADMISSION_FILE: f.file });
+  const source = `import { admittedCheckAncestor } from ${JSON.stringify(path.join(import.meta.dir, "check-admission.ts"))};
+    if (await admittedCheckAncestor(process.pid)) process.exit(2); console.log("probe-ready");`;
+  const children = Array.from({ length: 8 }, () => spawn(process.execPath, ["-e", source], { env, stdio: ["ignore", "pipe", "pipe"] }));
+  try {
+    const results = await Promise.all(children.map(child => new Promise<{ code: number | null; output: string; error: string }>(resolve => {
+      let output = "", error = "";
+      child.stdout!.on("data", chunk => { output += String(chunk); });
+      child.stderr!.on("data", chunk => { error += String(chunk); });
+      child.once("close", code => resolve({ code, output, error }));
+      child.once("error", cause => resolve({ code: -1, output, error: String(cause) }));
+    })));
+    for (const result of results) expect(result, result.error).toMatchObject({ code: 0, output: "probe-ready\n" });
+  } finally { await Promise.all(children.map(child => stopFixtureProcess(child))); f.close(); }
+});
+
 async function until(check: () => boolean) {
   const deadline = performance.now() + 15_000;
   while (!check()) {
