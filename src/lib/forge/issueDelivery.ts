@@ -164,7 +164,9 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
       let landing = laneLanding(lane, landings, prOf);
       const pr = prOf(lane);
       if (!landing && pr && snapshot.view.repository(pr.repository)?.pr(pr.number)?.state === "closed" && date(lane.closedAt)) {
-        landing = { repository: pr.repository, pr: pr.number, at: lane.closedAt };
+        // Closing a work PR can precede its carrier landing and rollout.
+        // The authoritative merge time below decides whether it is backfill.
+        landing = { repository: pr.repository, pr: pr.number, at: new Date(Math.max(Date.parse(lane.closedAt!), since)).toISOString() };
       }
       return landing && Date.parse(landing.at) >= since ? [{ lane, landing, repository }] : [];
     });
@@ -283,7 +285,7 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
         }
         if (receipt.batch && !verifiedCarried && (!isMergeBatchHead(primary.head?.ref ?? "") || !parseMergeBatchTitle(primary.title).includes(receipt.pr))) throw new Error("Batch membership unconfirmed");
         if (!date(primary.merged_at) || !primary.base?.ref || !primary.base?.repo?.default_branch) throw new Error("Invalid landing record");
-        if (Date.parse(primary.merged_at) < since) continue;
+        if (Date.parse(primary.merged_at) < since) { receipt.state = "skipped"; await save(); continue; }
         if (primary.base.ref !== primary.base.repo.default_branch) {
           const rawCommit = primary.merge_commit_sha;
           if (typeof rawCommit !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(rawCommit)) throw new Error("Invalid batch merge commit");

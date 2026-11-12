@@ -493,3 +493,18 @@ test("a merged carrier without patch proof exhausts its durable retries and rais
   expect(issueDeliverySeatSignals([p], "fixture")).toHaveLength(1);
   await f.sweep(); expect(proofs).toBe(3); expect(f.writes).toEqual([]);
 });
+
+
+test.each([false, true])("a carrier landing controls rollout even when its work PR closed earlier: backfill=%s", async backfill => {
+  const f = fixture(), p = f.lanes[0]!; p.merge = undefined;
+  p.closedAt = "2026-10-31T12:00:00.000Z"; cached(f, 3909, "closed");
+  f.primary.merged_at = null; f.primary.base.ref = "integration/widgets";
+  const mergedAt = backfill ? "2026-10-31T13:00:00.000Z" : AT;
+  const read = f.ports.run;
+  f.ports.run = async args => args[1]!.endsWith("/pulls/4000")
+    ? JSON.stringify({ ...f.primary, number: 4000, merged_at: mergedAt, base: { ref: "main", repo: { default_branch: "main" } } }) : read(args);
+  f.ports.carriedLanding = async () => ({ state: "landed", batch: 4000, mergedAt, commit: "c".repeat(40) });
+  await f.sweep(); expect(p.issueDelivery?.[0]?.state).toBe(backfill ? "skipped" : "closed");
+  expect(f.writes).toHaveLength(backfill ? 0 : 2);
+  const calls = f.reads.length; await f.sweep(); expect(f.reads.length).toBe(calls);
+});

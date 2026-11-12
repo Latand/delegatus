@@ -255,7 +255,9 @@ closed cached PR is eligible for proof. Commit references in PR comments are
 hints regardless of their language or author. The verifier checks the reviewed
 patch with native Git, finds the carrying PR, proves both ancestry links to
 the default branch, verifies that the reviewed change survives there, and
-rechecks the default tip. A hint may name a batch tip containing companion
+rechecks the default tip. The carrier merge time controls rollout even when
+the work PR closed before rollout; earlier carrier landings are skipped
+without issue writes. A hint may name a batch tip containing companion
 changes. Native batch receipts retain their stricter exact-patch rule.
 
 At most five commit hints are checked per attempt. A persisted cursor, verified
