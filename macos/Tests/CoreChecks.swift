@@ -25,6 +25,14 @@ import Foundation
             requested.append(pid); return processRows[pid]
         }
         expect(verified && requested == [42, 43], "long Unicode process commands retain identity and query only needed PIDs")
+        let hostRows = [42: "42 43 /fixture/bun /fixture/runtime-host.mjs", 43: "43 1 /fixture/bun /fixture/cli.mjs"]
+        let verifiedHost = await Server.verifyAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js",
+            runtimeHost: "/fixture/runtime-host.mjs", cli: "/fixture/cli.mjs") { hostRows[$0] }
+        expect(verifiedHost, "runtime host stable listener follows its installed release and CLI ancestry")
+        let foreignHost = [42: "42 43 /foreign/bun /fixture/runtime-host.mjs", 43: "43 1 /fixture/bun /fixture/cli.mjs"]
+        let refusedHost = await Server.verifyAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js",
+            runtimeHost: "/fixture/runtime-host.mjs", cli: "/fixture/cli.mjs") { foreignHost[$0] }
+        expect(!refusedHost, "a foreign runtime host cannot borrow the installed CLI ancestry")
         for rows in [[42: "42 1 /foreign/server"], [42: "42 43 /fixture/bun /fixture/server.js", 43: "43 42 /unrelated"], [42: "99 1 /fixture/bun /fixture/server.js /fixture/cli.mjs"], [:]] {
             let refused = await Server.verifyAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs") { rows[$0] }
             expect(!refused, "foreign, cyclic, changed and missing process identities refuse reuse")

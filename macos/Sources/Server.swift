@@ -83,10 +83,13 @@ enum Server {
         var verified = false
         if owned, let install, Installations.valid(install), let listenerPID = Int(pid) {
             // The CLI owns a child Viewer process. Verify that listener's executable
-            // and its ancestry back to this installation before reusing it or sending a key.
+            // (or the runtime host's stable listener) and its ancestry back to this
+            // installation before reusing it or sending a key.
             let packageRoot = Installations.serverPackageRoot(home: URL(fileURLWithPath: environment["HOME"] ?? NSHomeDirectory()), environment: environment, install: install)
             verified = await verifyAncestry(listenerPID: listenerPID, bun: install.bun.path,
-                server: packageRoot.appendingPathComponent("dist/standalone/server.js").path, cli: install.cli.path) { pid in
+                server: packageRoot.appendingPathComponent("dist/standalone/server.js").path,
+                runtimeHost: packageRoot.appendingPathComponent("dist/runtime-host.mjs").path,
+                cli: install.cli.path) { pid in
                 await processRow(pid, environment: environment)
             }
         }
@@ -97,7 +100,7 @@ enum Server {
             environment: environment, timeout: 2, outputLimit: nil)
         return row?.0 == 0 ? row?.1 : nil
     }
-    static func verifyAncestry(listenerPID: Int, bun: String, server: String, cli: String,
+    static func verifyAncestry(listenerPID: Int, bun: String, server: String, runtimeHost: String? = nil, cli: String,
         readProcess: (Int) async -> String?) async -> Bool {
         var cursor = listenerPID
         var visited = Set<Int>()
@@ -111,7 +114,9 @@ enum Server {
             let fields = row.split(maxSplits: 2, whereSeparator: \.isWhitespace)
             guard fields.count == 3, Int(fields[0]) == cursor, let parent = Int(fields[1]) else { return false }
             let command = String(fields[2])
-            if command.contains(bun), command.contains(server) { foundViewer = true }
+            if command.contains(bun) && (command.contains(server) || runtimeHost.map { command.contains($0) } == true) {
+                foundViewer = true
+            }
             if command.contains(bun), command.contains(cli) { foundLauncher = true }
             if foundViewer && foundLauncher { return true }
             cursor = parent

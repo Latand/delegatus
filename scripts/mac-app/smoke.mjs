@@ -1,6 +1,6 @@
 // One driver for the native launcher. Runs only on disposable macOS CI machines.
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
@@ -9,6 +9,7 @@ const [image, reportArg] = process.argv.slice(2);
 if (process.platform !== "darwin" || !image || !reportArg || process.env.CI !== "true") throw new Error("Usage on disposable macOS CI: node smoke.mjs DMG REPORT");
 const report = resolve(reportArg);
 mkdirSync(report, { recursive: true });
+const startedAt = Date.now();
 const checks = [];
 const commands = [];
 let home = "";
@@ -268,8 +269,14 @@ finally {
         writeFileSync(join(report, "macos-diagnostics.log"), redact(diagnostic.slice(-200_000)));
       } catch (error) { writeFileSync(join(report, "macos-diagnostics.log"), redact(error.message)); }
       try {
-        const crashes = asUser("/bin/sh", ["-c", 'for f in "$HOME"/Library/Logs/DiagnosticReports/Delegatus*; do [ -f "$f" ] && cat "$f"; done']);
-        if (crashes) writeFileSync(join(report, "crash-reports.log"), redact(crashes.slice(-200_000)));
+        const crashDirectory = join(process.env.HOME, "Library/Logs/DiagnosticReports");
+        const crashes = readdirSync(crashDirectory)
+          .filter(name => name.startsWith("Delegatus-") && name.endsWith(".ips"))
+          .map(name => join(crashDirectory, name))
+          .filter(file => statSync(file).mtimeMs >= startedAt)
+          .sort((a, b) => statSync(a).mtimeMs - statSync(b).mtimeMs)
+          .map(file => readFileSync(file, "utf8"));
+        if (crashes.length) writeFileSync(join(report, "crash-reports.log"), redact(crashes.join("\n").slice(-200_000)));
       } catch { /* crash reports are optional on runners that use unified logging only */ }
     }
     for (const pid of owned) { try { sudo(["kill", "-TERM", String(pid)]); } catch { /* already exited */ } }

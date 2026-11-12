@@ -50,35 +50,49 @@ import WebKit
         child.standardOutput = pipe; child.standardError = pipe
         try filter.run(); filters.append(filter)
     }
-    func capture(_ window: NSWindow, name: String) {
+    func capture(_ window: NSWindow, name: String, completion: (() -> Void)? = nil) {
         guard let directory else { return }
         frame += 1
         let destination = directory.appendingPathComponent(String(format: "%03d-%@.png", frame, name))
-        // Capture the composited window so AppKit paints text, controls, and
-        // the selected appearance exactly as the user sees them.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.bestResolution]),
-                  let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else { return }
-            try? png.write(to: destination)
+        scheduleCapture(name: name, completion: completion) {
+            self.writeWindow(CGWindowID(window.windowNumber), to: destination, name: name)
         }
     }
-    func captureScreen(name: String, completion: (() -> Void)? = nil) {
+    func captureMenu(name: String, completion: (() -> Void)? = nil) {
         guard let directory else { return }
         frame += 1
         let destination = directory.appendingPathComponent(String(format: "%03d-%@.png", frame, name))
-        // Menus and runModal use nested run loops. Capture while that loop is
-        // active, then let the caller close the real presenter under control.
+        // Menus use their own WindowServer window. Capture that app-owned
+        // window while tracking runs, avoiding a whole-screen capture and its
+        // Screen Recording permission prompt.
+        scheduleCapture(name: name, completion: completion) {
+            let windows = (CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]]) ?? []
+            let menuWindow = windows.first { row in
+                (row[kCGWindowOwnerPID as String] as? Int) == getpid()
+                    && (row[kCGWindowLayer as String] as? Int ?? 0) > 0
+                    && (row[kCGWindowNumber as String] as? Int) != nil
+            }?[kCGWindowNumber as String] as? Int
+            guard let menuWindow else { self.log("CAPTURE failed \(name)"); return }
+            self.writeWindow(CGWindowID(menuWindow), to: destination, name: name)
+        }
+    }
+    private func scheduleCapture(name: String, completion: (() -> Void)?, capture: @escaping () -> Void) {
         let timer = Timer(timeInterval: 0.5, repeats: false) { _ in
             MainActor.assumeIsolated {
                 defer { completion?() }
-                guard let image = CGWindowListCreateImage(.null, .optionOnScreenOnly, kCGNullWindowID, [.bestResolution]),
-                      let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else { return }
-                do {
-                    try png.write(to: destination)
-                    self.log("CAPTURED \(name)")
-                } catch { self.log("CAPTURE failed \(name)") }
+                capture()
             }
         }
         for mode in [RunLoop.Mode.common, .eventTracking, .modalPanel] { RunLoop.main.add(timer, forMode: mode) }
+    }
+    private func writeWindow(_ window: CGWindowID, to destination: URL, name: String) {
+        guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, window, [.bestResolution]),
+              let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
+            log("CAPTURE failed \(name)"); return
+        }
+        do {
+            try png.write(to: destination)
+            log("CAPTURED \(name)")
+        } catch { log("CAPTURE failed \(name)") }
     }
 }

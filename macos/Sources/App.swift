@@ -71,7 +71,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         case "cancelling": presentCancellation()
         case "menu":
             guard let menu = NSApp.mainMenu?.item(at: 0)?.submenu else { return }
-            evidence.captureScreen(name: "menu") { menu.cancelTracking() }
+            evidence.captureMenu(name: "menu") { menu.cancelTracking() }
             menu.popUp(positioning: nil, at: NSPoint(x: 18, y: window.frame.height - 42), in: window.contentView)
             evidence.log("SURFACE-CLOSED menu")
         case "stop", "login", "update", "quit":
@@ -107,7 +107,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         let alert = NSAlert(); alert.messageText = text(title); alert.informativeText = detail.isEmpty ? "" : text(detail)
         for button in buttons { alert.addButton(withTitle: text(button)) }
         if capture {
-            evidence.captureScreen(name: "dialog-\(surface)") {
+            evidence.capture(alert.window, name: "dialog-\(surface)") {
                 alert.buttons.last?.performClick(nil)
             }
         }
