@@ -593,7 +593,7 @@ test.each([0, 1000])("the internal phase never builds a full returned snapshot w
     const peer = structuredClone(lane); peer.id = `settled-${n}`;
     Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
     peer.state = "closed"; peer.closedAt = h.ports.now(); peer.cursor = null; peer.runs = peer.runs.map(run => ({ ...run, attempts: Array.from({ length: 8 }, (_, index) => ({ ...structuredClone(run.attempts[0]!), n: index + 1,
-      accounting: { ...run.attempts[0]!.accounting!, repeatReason: index ? "unknown" : null },
+      accounting: { ...run.attempts[0]!.accounting!, repeatReason: index ? "unknown" as const : null },
       state: "failed", launchId: null, verdict: { status: "fail" }, completedAt: peer.closedAt, output: "retained evidence ".repeat(256) })) })); peer.delivery = undefined; peer.publication = "internal";
     peer.terminalReap = { rounds: 1, stopped: 0, lastAt: peer.closedAt!, settledAt: peer.closedAt!,
       settledAttempts: peer.runs.flatMap(run => run.attempts.map(attempt => `${run.stageId}:${attempt.n}`)) };
@@ -643,7 +643,7 @@ test("a paused lane rotates a bounded historical-attempt window and preserves it
   current.state = "running"; current.verdict = null; current.n = 34;
   current.accounting!.repeatReason = "unknown";
   const history = Array.from({ length: 33 }, (_, index) => ({ ...structuredClone(current), n: index + 1, historical: true,
-    accounting: { ...current.accounting!, repeatReason: index ? "unknown" : null },
+    accounting: { ...current.accounting!, repeatReason: index ? "unknown" as const : null },
     conversationId: `historical-${index}`, agentPath: `/codex/history-${index}.jsonl`, launchId: null, paneId: null }));
   lane.runs[0]!.attempts = [...history, current];
   savePipelines([lane]);
@@ -666,7 +666,7 @@ test("a large completed lane reaps at most sixteen hosts per phase and reaches t
   lane.state = "completed"; lane.cursor = null;
   const original = lane.runs[0]!.attempts[0]!;
   lane.runs[0]!.attempts = Array.from({ length: 65 }, (_, index) => ({ ...structuredClone(original), n: index + 1,
-    accounting: { ...original.accounting!, repeatReason: index ? "unknown" : null },
+    accounting: { ...original.accounting!, repeatReason: index ? "unknown" as const : null },
     state: "passed", completedAt: h.ports.now(), conversationId: `finished-${index}`, agentPath: `/codex/finished-${index}.jsonl`,
     paneId: null, launchId: null }));
   let probes = 0;
@@ -808,7 +808,7 @@ test("continuation failures cannot starve later cancellation or host teardown ac
   const { h, lane } = await committing();
   const original = lane.runs[0]!.attempts[0]!;
   lane.runs[0]!.attempts = Array.from({ length: 17 }, (_, index) => ({ ...structuredClone(original), n: index + 1,
-    accounting: { ...original.accounting!, repeatReason: index ? "unknown" : null },
+    accounting: { ...original.accounting!, repeatReason: index ? "unknown" as const : null },
     conversationId: `close-${index}`, launchId: null, paneId: null, agentPath: null, state: "running", verdict: null, completedAt: null }));
   lane.state = "closed"; lane.closedAt = h.ports.now(); lane.cursor = null;
   const pending = lane.runs[0]!.attempts.map(attempt => ({ stageId: "build", attempt: attempt.n,
@@ -893,11 +893,11 @@ test.each([64, 4096])("a closed lane with leftover review-flow cleanup ids keeps
   const original = lane.runs[0]!.attempts[0]!;
   lane.state = "closed"; lane.cursor = null; lane.closedAt = h.ports.now();
   lane.runs[0]!.attempts = Array.from({ length: history }, (_, index) => ({ ...structuredClone(original), n: index + 1,
-    accounting: { ...original.accounting!, repeatReason: index ? "unknown" : null },
+    accounting: { ...original.accounting!, repeatReason: index ? "unknown" as const : null },
     historical: true, state: "failed", verdict: { status: "fail" }, completedAt: lane.closedAt,
     conversationId: null, agentPath: null, paneId: null, launchId: null }));
   lane.runs[0]!.attempts.push({ ...structuredClone(original), n: history + 1,
-    accounting: { ...original.accounting!, repeatReason: "unknown" }, historical: true,
+    accounting: { ...original.accounting!, repeatReason: "unknown" as const }, historical: true,
     state: "running", verdict: null, completedAt: null, conversationId: "late-host", agentPath: "late-host-transcript", launchId: null });
   for (const attempt of lane.runs[0]!.attempts) delete attempt.activation;
   lane.terminalReap = { rounds: 0, stopped: 0, lastAt: lane.closedAt!, settledAt: null,
@@ -933,11 +933,11 @@ test.each(["paused", "running"] as const)("complete warmed %s phases keep attemp
   const original = lane.runs[0]!.attempts[0]!;
   for (const history of [32,4096]) {
     lane.runs[0]!.attempts = Array.from({ length: history }, (_, index) => ({ ...structuredClone(original), n: index + 1,
-    accounting: { ...original.accounting!, repeatReason: index ? "unknown" : null },
+    accounting: { ...original.accounting!, repeatReason: index ? "unknown" as const : null },
       historical: true, state: "failed", verdict: { status: "fail" }, completedAt: h.ports.now(),
       conversationId: `retained-${index}`, agentPath: `retained-path-${index}`, paneId: null, launchId: null }));
     if (state === "running") lane.runs[0]!.attempts.push({ ...structuredClone(original), n: history + 1,
-    accounting: { ...original.accounting!, repeatReason: "unknown" },
+    accounting: { ...original.accounting!, repeatReason: "unknown" as const },
       state: "running", verdict: null, completedAt: null });
     lane.terminalReap = { rounds:1,stopped:history,lastAt:h.ports.now(),settledAt:h.ports.now(),
       settledAttempts:Array.from({ length:history },(_,n) => `build:${n+1}`) };
@@ -1002,7 +1002,7 @@ test("new terminal batches retain five failed-stop opportunities across windows 
   lane.state = "paused"; lane.cursor = null;
   const original = lane.runs[0]!.attempts[0]!;
   lane.runs[0]!.attempts = Array.from({ length: 18 },(_,index) => ({ ...structuredClone(original), n: index+1,
-    accounting: { ...original.accounting!, repeatReason: index ? "unknown" : null },
+    accounting: { ...original.accounting!, repeatReason: index ? "unknown" as const : null },
     historical: true, state: "failed", verdict: { status: "fail" }, completedAt: h.ports.now(),
     conversationId: `terminal-${index}`, agentPath: `terminal-path-${index}`, paneId: null, launchId: null }));
   lane.terminalReap = { rounds: 4, stopped: 1, settledAt: h.ports.now(), lastAt: h.ports.now(), settledAttempts: ["build:1"] };
@@ -1039,11 +1039,11 @@ test("off-window survivor evidence prevents a fresh activation until a peer clea
   const lane = loadPipelines()[0]!, original = lane.runs[0]!.attempts[0]!;
   lane.state = "running"; lane.cursor!.state = "pending";
   const history = Array.from({ length: 65 },(_,n) => ({ ...structuredClone(original),n: n+1,historical: true,
-    accounting: { ...original.accounting!, repeatReason: n ? "unknown" : null },
+    accounting: { ...original.accounting!, repeatReason: n ? "unknown" as const : null },
     state: "failed" as const,verdict: { status: "fail" as const },completedAt: h.ports.now(),
     conversationId: null,agentPath: null,paneId: null,launchId: null }));
   history[64]!.unresolvedTermination = { recordedAt: h.ports.now(),error: "unverified descendant",survivors: [captureProcessIdentity(process.pid)!] };
-  lane.runs[0]!.attempts = [...history,{ ...original,n: 66,accounting: { ...original.accounting!, repeatReason: "unknown" },state: "pending",conversationId: null,agentPath: null,paneId: null,launchId: null }];
+  lane.runs[0]!.attempts = [...history,{ ...original,n: 66,accounting: { ...original.accounting!, repeatReason: "unknown" as const },state: "pending",conversationId: null,agentPath: null,paneId: null,launchId: null }];
   savePipelines([lane]);
   let spawns = 0;
   const spawnAgent = h.ports.spawnAgent;
@@ -1062,7 +1062,7 @@ test("lazy controller copies isolate discarded edits and checkpoint the whole re
   const original = lane.runs[0]!.attempts[0]!;
   const samples: { history: number;wallMs: number;holdMs: number }[] = [];
   for (const history of [32,1024,4096]) {
-    lane.runs[0]!.attempts = Array.from({ length: history },(_,n) => ({ ...structuredClone(original),n:n+1,accounting: { ...original.accounting!, repeatReason: n ? "unknown" : null },historical:true,
+    lane.runs[0]!.attempts = Array.from({ length: history },(_,n) => ({ ...structuredClone(original),n:n+1,accounting: { ...original.accounting!, repeatReason: n ? "unknown" as const : null },historical:true,
       conversationId:null,agentPath:null,paneId:null,launchId:null,state:"failed",verdict:{status:"fail"},completedAt:h.ports.now() }));
     savePipelines([lane]);
     const refs = new Map([[lane.id,(await controllerAttemptWindow(lane.id,-1,"")).window]]);
@@ -1089,13 +1089,13 @@ test("an off-window activation keeps its custody while the current attempt waits
   const h = await reserveActivationOnly();
   const lane = loadPipelines()[0]!, original = lane.runs[0]!.attempts[0]!;
   const history = Array.from({ length: 65 },(_,n) => {
-    const attempt = { ...structuredClone(original),n:n+1,accounting: { ...original.accounting!, repeatReason: n ? "unknown" : null },historical:true,state:"failed" as const,
+    const attempt = { ...structuredClone(original),n:n+1,accounting: { ...original.accounting!, repeatReason: n ? "unknown" as const : null },historical:true,state:"failed" as const,
       verdict:{status:"fail" as const},completedAt:h.ports.now() };
     delete attempt.activation;
     return attempt;
   });
   history[64]!.activation = structuredClone(original.activation!);
-  const current = { ...structuredClone(original),n:66,accounting: { ...original.accounting!, repeatReason: "unknown" },state:"pending" as const };
+  const current = { ...structuredClone(original),n:66,accounting: { ...original.accounting!, repeatReason: "unknown" as const },state:"pending" as const };
   delete current.activation;
   lane.runs[0]!.attempts = [...history,current];
   savePipelines([lane]);
@@ -1115,8 +1115,8 @@ test("indexed fallback membership preserves off-window conversation, launch and 
     { conversationId:null,launchId:"older-launch",agentPath:"older-path" },
     { conversationId:null,launchId:null,agentPath:"older-path" },
   ]) {
-    lane.runs[0]!.attempts = [...Array.from({ length:64 },(_,n) => ({ ...structuredClone(original),n:n+1,accounting: { ...original.accounting!, repeatReason: n ? "unknown" : null },
-      conversationId:null,launchId:null,agentPath:null })),{ ...structuredClone(original),n:65,accounting: { ...original.accounting!, repeatReason: "unknown" },...identity }];
+    lane.runs[0]!.attempts = [...Array.from({ length:64 },(_,n) => ({ ...structuredClone(original),n:n+1,accounting: { ...original.accounting!, repeatReason: n ? "unknown" as const : null },
+      conversationId:null,launchId:null,agentPath:null })),{ ...structuredClone(original),n:65,accounting: { ...original.accounting!, repeatReason: "unknown" as const },...identity }];
     for (const conversationId of [null,"older-conversation","other-conversation"]) for (const launchId of [null,"older-launch","other-launch"]) {
       const tasks = [{ id:"inherited-task",project:lane.project,assignments:[{ state:"linked",conversationId,launchId,path:"older-path" }] }];
       const expected = structuredClone(lane); expected.taskIds = [];
@@ -1275,9 +1275,9 @@ test("nested controller jobs retain their bounded attempt selection", async () =
   const { h, lane } = await committing();
   const original = lane.runs[0]!.attempts[0]!;
   lane.runs[0]!.attempts = Array.from({ length: 1024 }, (_, n) => ({ ...structuredClone(original), n: n + 1,
-    accounting: { ...original.accounting!, repeatReason: n ? "unknown" : null },
+    accounting: { ...original.accounting!, repeatReason: n ? "unknown" as const : null },
     historical: true, state: "failed", output: "x".repeat(4096), launchId: null, verdict: { status: "fail" } }));
-  lane.runs[0]!.attempts.push({ ...original, n: 1025, accounting: { ...original.accounting!, repeatReason: "unknown" } });
+  lane.runs[0]!.attempts.push({ ...original, n: 1025, accounting: { ...original.accounting!, repeatReason: "unknown" as const } });
   savePipelines([lane]);
   const refs = await controllerAttemptWindow(lane.id, 0, "build");
   const references = new Map([[lane.id, [...refs.window, ...refs.current]]]);
@@ -1297,9 +1297,9 @@ test("settlement polling reads revisions without cloning retained lane history",
   const { h, lane } = await committing();
   const original = lane.runs[0]!.attempts[0]!;
   lane.runs[0]!.attempts = Array.from({ length: 1024 }, (_, n) => ({ ...structuredClone(original), n: n + 1,
-    accounting: { ...original.accounting!, repeatReason: n ? "unknown" : null },
+    accounting: { ...original.accounting!, repeatReason: n ? "unknown" as const : null },
     historical: true, state: "failed", output: "x".repeat(4096), launchId: null, verdict: { status: "fail" } }));
-  lane.runs[0]!.attempts.push({ ...original, n: 1025, accounting: { ...original.accounting!, repeatReason: "unknown" } });
+  lane.runs[0]!.attempts.push({ ...original, n: 1025, accounting: { ...original.accounting!, repeatReason: "unknown" as const } });
   const peers = Array.from({ length: 16 }, (_, n) => {
     const peer = structuredClone(lane); peer.id = `poll-peer-${n}`;
     Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
