@@ -39,6 +39,11 @@ compatibility raises the major version.
 ### Changed
 - A launch an older release left in flight on the terminal transport ends
   failed with a reason; launch it again.
+- **A `state.sqlite` write costs a fraction of what it did.** Each process
+  keeps one writer connection per database instead of opening three per
+  write, and only the write's own commit waits for the disk, not the two that
+  take and release its lease. A one-row write went from about 14 ms to 0.7 ms
+  on tmpfs and from about 45 ms to 5 ms on a busy ext4 disk (#3890).
 - **Orchestrator seats are stored in `state.sqlite`** (collection
   `orchestrator_seats`) instead of `orchestrator-seats.json`: one row per
   seat, pending intent, revocation, lineage entry and history entry, and each
