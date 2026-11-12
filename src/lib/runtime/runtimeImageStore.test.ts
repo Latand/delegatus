@@ -15,6 +15,7 @@ import {
   MAX_STRUCTURED_IMAGE_ENCODED_BYTES,
   collectRuntimeImageReachableDigests,
   RuntimeImageStore,
+  RuntimeImageWriterBusyError,
 } from "./runtimeImageStore";
 
 const WRITER_FIXTURE = path.join(import.meta.dir, "fixtures", "runtimeImageStoreWriter.ts");
@@ -610,7 +611,6 @@ test("a queued legacy reader can share the atomically published gate with a new 
     expect(fs.statSync(path.join(root, blobs[0]!)).size).toBeLessThanOrEqual(maxBytes);
     expect(fs.readdirSync(path.join(root, ".writer-lock-gate.queue"))).toEqual([]);
     expect(fs.existsSync(path.join(root, ".writer-lock-gate"))).toBe(false);
-    expect(fs.readdirSync(root).filter(name => name.startsWith(".writer-lock-gate.") && name.endsWith(".partial"))).toEqual([]);
   } finally {
     fs.writeFileSync(path.join(controls, "publication-release"), "go");
     fs.writeFileSync(path.join(controls, "gate-owner-release"), "go");
@@ -646,41 +646,60 @@ test("an interrupted image ticket publication permits another process and its pa
   }
 }, 20_000);
 
-test.each([false, true])("gate staging recovery protects a live publisher and retires an interrupted one (kill=%s)", async interrupted => {
+test("an earlier queue head leaves a fresh gate alone until its owner links", async () => {
   const root = sandbox();
   const controls = sandbox();
-  // The cleaner's earlier ticket can enter while publication is held.
-  const publisher = imageWriter(root, controls, "a", 4 * 1024 * 1024 + 128, "gate-stage", 20_000);
+  const maxBytes = 4 * 1024 * 1024 + 128;
+  const earlier = imageWriter(root, controls, "a", maxBytes, "delayed-gate-head", 1_000);
+  const writers = [earlier];
   fs.writeFileSync(path.join(controls, "start"), "go");
   try {
-    await writerMilestone(path.join(controls, "gate-owner-paused"), publisher);
-    const staging = fs.readFileSync(path.join(controls, "gate-stage-path"), "utf8");
-    const ownerFile = path.join(staging, "owner.json");
-    const owner = fs.readFileSync(ownerFile, "utf8");
-    expect(JSON.parse(owner).pid).toBe(publisher.child.pid);
-    expect(fs.existsSync(path.join(root, ".writer-lock-gate"))).toBe(false);
-    if (interrupted) {
-      publisher.child.kill("SIGKILL");
-      await publisher.result;
-    }
-    const clean = () => new RuntimeImageStore(root, { now: () => 10_000, abandonedPartialMaxAgeMs: 1_000 });
-    fs.utimesSync(staging, new Date(9_500), new Date(9_500));
-    clean();
-    expect(fs.readFileSync(ownerFile, "utf8")).toBe(owner);
-    fs.utimesSync(staging, new Date(1_000), new Date(1_000));
-    clean();
-    expect(fs.existsSync(staging)).toBe(!interrupted);
-    if (!interrupted) {
-      expect(fs.readFileSync(ownerFile, "utf8")).toBe(owner);
-      fs.writeFileSync(path.join(controls, "gate-owner-release"), "go");
-      expect(await publisher.result).toEqual({ exit: 0, stdout: "", stderr: "" });
-      expect(fs.existsSync(staging)).toBe(false);
-      expect(fs.readdirSync(root).filter(name => name.endsWith(".png"))).toHaveLength(1);
-    }
-    clean();
+    await writerMilestone(path.join(controls, "publication-paused"), earlier);
+    const publisher = imageWriter(root, controls, "b", maxBytes, "gate-unowned", 2_000);
+    writers.push(publisher);
+    await writerMilestone(path.join(controls, "gate-unowned-paused"), publisher);
+    const gate = path.join(root, ".writer-lock-gate");
+    expect(fs.readdirSync(gate)).toEqual([]);
+    fs.writeFileSync(path.join(controls, "publication-release"), "go");
+    // The earlier ticket now heads the queue and inspects the ownerless gate.
+    await writerMilestone(path.join(controls, "gate-evaluated"), earlier);
+    expect(fs.existsSync(gate)).toBe(true);
+    expect(earlier.child.exitCode).toBeNull();
+    fs.writeFileSync(path.join(controls, "gate-unowned-release"), "go");
+    const results = await Promise.all(writers.map(writer => writer.result));
+    expect(results.map(result => result.exit).sort(), JSON.stringify(results)).toEqual([0, 2]);
+    expect(results).toEqual(results.map(result => ({ ...result, stdout: "", stderr: "" })));
+    expect(fs.existsSync(gate)).toBe(false);
+    expect(fs.readdirSync(path.join(root, ".writer-lock-gate.queue"))).toEqual([]);
+  } finally {
+    fs.writeFileSync(path.join(controls, "publication-release"), "go");
+    fs.writeFileSync(path.join(controls, "gate-unowned-release"), "go");
+    await stopImageWriters(writers);
+  }
+}, 20_000);
+
+test("a gate left ownerless by a killed writer is retired once stale", async () => {
+  const root = sandbox();
+  const controls = sandbox();
+  const maxBytes = 4 * 1024 * 1024 + 128;
+  const publisher = imageWriter(root, controls, "a", maxBytes, "gate-unowned");
+  fs.writeFileSync(path.join(controls, "start"), "go");
+  try {
+    await writerMilestone(path.join(controls, "gate-unowned-paused"), publisher);
+    publisher.child.kill("SIGKILL");
+    await publisher.result;
+    const gate = path.join(root, ".writer-lock-gate");
+    expect(fs.readdirSync(gate)).toEqual([]);
+    // A fresh ownerless gate may still be mid-publication: the next writer waits.
+    expect(() => new RuntimeImageStore(root, { maxBytes, writerLockWaitMs: 100 })).toThrow(RuntimeImageWriterBusyError);
+    fs.utimesSync(gate, new Date(1_000), new Date(1_000));
+    const refs = new RuntimeImageStore(root, { maxBytes }).putMany([{ base64: PNG.toString("base64"), mime: "image/png" }]);
+    expect(refs).toHaveLength(1);
+    expect(fs.existsSync(gate)).toBe(false);
+    expect(fs.readdirSync(path.join(root, ".writer-lock-gate.queue"))).toEqual([]);
     expect(fs.readdirSync(root).filter(name => name.endsWith(".partial"))).toEqual([]);
   } finally {
-    fs.writeFileSync(path.join(controls, "gate-owner-release"), "go");
+    fs.writeFileSync(path.join(controls, "gate-unowned-release"), "go");
     await stopImageWriters([publisher]);
   }
 }, 20_000);
@@ -844,92 +863,6 @@ test("runtime image store startup removes aged abandoned partials and keeps fres
 
   expect(fs.existsSync(oldPartial)).toBe(false);
   expect(fs.existsSync(freshPartial)).toBe(true);
-});
-
-test.each([
-  "owned", "foreign-name", "empty-token", "mismatched-owner", "missing-owner",
-  "malformed-owner", "owner-link", "directory-link", "unexpected-child", "live-owner",
-] as const)("gate staging cleanup confines deletion to proven abandoned store paths (%s)", kind => {
-  const root = sandbox();
-  const outside = sandbox();
-  const token = "00000000-0000-0000-0000-000000000000";
-  const name = kind === "foreign-name" ? ".foreign.partial"
-    : kind === "empty-token" ? ".writer-lock-gate..partial" : `.writer-lock-gate.${token}.partial`;
-  const staging = path.join(root, name);
-  const directory = kind === "directory-link" ? outside : staging;
-  if (directory === staging) fs.mkdirSync(staging, { mode: 0o700 });
-  else fs.symlinkSync(outside, staging);
-  // A deliberately out-of-range OS pid supplies deterministic absent-owner evidence.
-  const deadPid = 2_147_483_647;
-  expect(procBackend.pidAlive(deadPid)).toBe(false);
-  const owner = JSON.stringify({
-    pid: kind === "live-owner" ? process.pid : deadPid,
-    startIdentity: null,
-    token: kind === "mismatched-owner" ? "different-token" : token,
-  });
-  const outsideFile = path.join(outside, "sentinel");
-  fs.writeFileSync(outsideFile, owner);
-  const ownerFile = path.join(directory, "owner.json");
-  if (kind === "owner-link") fs.symlinkSync(outsideFile, ownerFile);
-  else if (kind !== "missing-owner") fs.writeFileSync(ownerFile, kind === "malformed-owner" ? "{" : owner);
-  if (kind === "unexpected-child") fs.symlinkSync(outside, path.join(staging, "unexpected"));
-  fs.utimesSync(directory, new Date(1_000), new Date(1_000));
-
-  new RuntimeImageStore(root, { now: () => 10_000, abandonedPartialMaxAgeMs: 1_000 });
-
-  expect(fs.existsSync(staging)).toBe(kind !== "owned");
-  expect(fs.readFileSync(outsideFile, "utf8")).toBe(owner);
-  if (kind === "unexpected-child") expect(fs.readlinkSync(path.join(staging, "unexpected"))).toBe(outside);
-});
-
-test.each(["outside-link", "live-owner-directory"] as const)("gate staging retirement is safe when its path changes before quarantine (%s)", kind => {
-  const root = sandbox();
-  const outside = sandbox();
-  const token = "00000000-0000-0000-0000-000000000000";
-  const staging = path.join(root, `.writer-lock-gate.${token}.partial`);
-  fs.mkdirSync(staging, { mode: 0o700 });
-  fs.writeFileSync(path.join(staging, "owner.json"), JSON.stringify({
-    pid: 2_147_483_647, startIdentity: null, token,
-  }));
-  fs.utimesSync(staging, new Date(1_000), new Date(1_000));
-  const outsideFile = path.join(outside, "owner.json");
-  const liveReplacement = path.join(root, ".replacement-live-owner");
-  if (kind === "outside-link") fs.writeFileSync(outsideFile, "outside owner");
-  else {
-    fs.mkdirSync(liveReplacement, { mode: 0o700 });
-    fs.writeFileSync(path.join(liveReplacement, "owner.json"), JSON.stringify({
-      pid: process.pid, startIdentity: currentProcessIdentity(), token,
-    }));
-    fs.utimesSync(liveReplacement, new Date(1_000), new Date(1_000));
-  }
-
-  const renameSync = fs.renameSync;
-  let swapped = false;
-  fs.renameSync = ((from: fs.PathLike, to: fs.PathLike) => {
-    if (!swapped && path.basename(String(from)) === path.basename(staging)
-      && String(to).includes(".writer-lock-retire.")) {
-      swapped = true;
-      const displaced = `${staging}.displaced`;
-      renameSync(from, displaced);
-      if (kind === "outside-link") fs.symlinkSync(outside, staging);
-      else renameSync(liveReplacement, staging);
-    }
-    return renameSync(from, to);
-  }) as typeof fs.renameSync;
-  try {
-    new RuntimeImageStore(root, { now: () => 10_000, abandonedPartialMaxAgeMs: 1_000 });
-  } finally {
-    fs.renameSync = renameSync;
-  }
-
-  expect(swapped).toBe(true);
-  expect(fs.existsSync(staging)).toBe(true);
-  if (kind === "outside-link") {
-    expect(fs.readlinkSync(staging)).toBe(outside);
-    expect(fs.readFileSync(outsideFile, "utf8")).toBe("outside owner");
-  } else {
-    expect(fs.readFileSync(path.join(staging, "owner.json"), "utf8")).toContain(`"pid":${process.pid}`);
-  }
 });
 
 test("runtime image storage requires a real private root owned by the current user", () => {

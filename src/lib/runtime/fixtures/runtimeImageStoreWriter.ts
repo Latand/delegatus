@@ -41,24 +41,27 @@ if (publicationMode === "maintenance" && controls) {
       return Reflect.apply(target, receiver, args);
     },
   });
-} else if ((publicationMode === "gate-owner" || publicationMode === "gate-stage") && controls) {
+} else if ((publicationMode === "gate-owner" || publicationMode === "gate-unowned") && controls) {
+  // gate-owner holds after the owner link lands in the gate; gate-unowned
+  // holds after mkdir(gate) and before the owner link.
   const writeFile = fs.writeFileSync;
-  const rename = fs.renameSync;
+  const link = fs.linkSync;
   let paused = false;
-  fs.renameSync = (from, to) => {
-    const source = String(from);
+  fs.linkSync = (from, to) => {
     const target = String(to);
-    const beforePublication = publicationMode === "gate-stage";
-    const result = beforePublication ? undefined : rename(from, to);
-    if (!paused && path.basename(source).startsWith(".writer-lock-gate.")
-      && path.basename(source).endsWith(".partial")
-      && path.basename(target) === ".writer-lock-gate") {
-      paused = true;
-      if (beforePublication) writeFile(path.join(controls, "gate-stage-path"), fs.realpathSync(source));
+    const gateOwner = path.basename(target) === "owner.json"
+      && path.basename(path.dirname(target)) === ".writer-lock-gate";
+    const hold = !paused && gateOwner;
+    if (hold) paused = true;
+    if (hold && publicationMode === "gate-unowned") {
+      writeFile(path.join(controls, "gate-unowned-paused"), "ready");
+      waitForRelease(path.join(controls, "gate-unowned-release"));
+    }
+    link(from, to);
+    if (hold && publicationMode === "gate-owner") {
       writeFile(path.join(controls, "gate-owner-paused"), "ready");
       waitForRelease(path.join(controls, "gate-owner-release"));
     }
-    return beforePublication ? rename(from, to) : result;
   };
 } else if (publicationMode && controls) {
   // Reproduce the actual open/write cut in writeFileSync. Hold this process
@@ -68,9 +71,23 @@ if (publicationMode === "maintenance" && controls) {
   fs.renameSync = (from, to) => {
     rename(from, to);
     if (path.dirname(String(to)).endsWith(".writer-lock-gate.queue")) {
-      writeFile(path.join(controls, "ticket-published"), String(to));
+      // Publish the milestone whole: the test reads its contents on sight.
+      const milestone = path.join(controls, "ticket-published");
+      writeFile(`${milestone}.partial`, String(to));
+      rename(`${milestone}.partial`, milestone);
     }
   };
+  const lstat = fs.lstatSync;
+  // Signal on the second inspection of an existing gate: by then one full
+  // inspection has run and decided whether to retire it.
+  let inspections = 0;
+  fs.lstatSync = ((file: fs.PathLike, options?: fs.StatSyncOptions) => {
+    const result = lstat(file, options);
+    if (path.basename(String(file)) === ".writer-lock-gate" && ++inspections === 2) {
+      writeFile(path.join(controls, "gate-evaluated"), "ready");
+    }
+    return result;
+  }) as typeof fs.lstatSync;
   let paused = false;
   fs.writeFileSync = (file, contents, options) => {
     const filename = String(file);

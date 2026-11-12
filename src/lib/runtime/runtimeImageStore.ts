@@ -8,7 +8,6 @@ import type { Database as BunDatabase } from "bun:sqlite";
 import { publishedRegistryBackendMode } from "@/lib/agent/registryBackendIdentity";
 import { stateDir, statePath } from "@/lib/configDir";
 import { procBackend } from "@/lib/proc";
-import { processIdentityProvenDead } from "@/lib/processIdentity";
 
 import {
   normalizeStructuredImageMime,
@@ -496,17 +495,6 @@ function readWriterLockOwner(lock: string): WriterLockOwner | null {
   return readOwnerFile(path.join(lock, "owner.json"));
 }
 
-function readAcquisitionGateOwner(gate: string): WriterLockOwner | null {
-  try {
-    const stat = fs.lstatSync(gate);
-    if (stat.isDirectory() && !stat.isSymbolicLink()) return readWriterLockOwner(gate);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-  return readOwnerFile(gate);
-}
-
 function writerLockOwnerIsAlive(owner: WriterLockOwner | null): boolean {
   if (owner === null) return false;
   if (!procBackend.pidAlive(owner.pid)) return false;
@@ -694,7 +682,6 @@ export class RuntimeImageStore {
       queue,
       `${String(this.now()).padStart(16, "0")}-${process.pid}-${crypto.randomUUID()}.json`,
     );
-    const gateStage = path.join(root.path, `.writer-lock-gate.${owner.token}.partial`);
     // Queue readers retire invalid tickets. Publish only complete owner JSON:
     // writeFileSync creates an empty file before writing its contents, and a
     // peer can otherwise unlink our live ticket in that interval. Keep the
@@ -704,11 +691,6 @@ export class RuntimeImageStore {
     try {
       fs.writeFileSync(partial, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
       fs.renameSync(partial, ticket);
-      // Keep the directory gate layout used by older writers. Populate its
-      // owner before publishing the directory so legacy readers never observe
-      // a gate without the owner.json path they expect.
-      fs.mkdirSync(gateStage, { mode: 0o700 });
-      fs.writeFileSync(path.join(gateStage, "owner.json"), JSON.stringify(owner), { flag: "wx", mode: 0o600 });
       while (!acquired) {
         this.assertRootPinned(root);
         const liveTickets: string[] = [];
@@ -722,21 +704,34 @@ export class RuntimeImageStore {
           liveTickets.push(candidate);
         }
         if (liveTickets[0] === ticket) {
+          let created = false;
           try {
-            // Rename the complete directory into place. Legacy writers read
-            // gate/owner.json, and no reader can see a partially published
-            // owner. A live gate is non-empty, so rename cannot replace it.
-            fs.renameSync(gateStage, gate);
-            acquired = true;
+            fs.mkdirSync(gate, { mode: 0o700 });
+            created = true;
           } catch (error) {
-            const code = (error as NodeJS.ErrnoException).code;
-            if (code !== "EEXIST" && code !== "ENOTEMPTY" && code !== "EISDIR") throw error;
-            const gateOwner = readAcquisitionGateOwner(gate);
+            if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          }
+          if (created) {
+            try {
+              // The published ticket already holds this owner's complete JSON.
+              // A hard link places it at gate/owner.json in one step, so no
+              // reader sees an empty owner and no owner is ever replaced.
+              fs.linkSync(ticket, path.join(gate, "owner.json"));
+              acquired = true;
+            } catch (error) {
+              // ENOENT: an older writer retired the gate before the link.
+              // EEXIST: another writer's owner landed first. Both retry.
+              const code = (error as NodeJS.ErrnoException).code;
+              if (code !== "ENOENT" && code !== "EEXIST") throw error;
+            }
+          } else {
+            const gateOwner = readWriterLockOwner(gate);
             let gateAgeMs = 0;
             try { gateAgeMs = this.now() - fs.lstatSync(gate).mtimeMs; }
             catch (statError) {
               if ((statError as NodeJS.ErrnoException).code !== "ENOENT") throw statError;
             }
+            // An ownerless gate can be mid-publication; retire it only once stale.
             if (!writerLockOwnerIsAlive(gateOwner)
               && (gateOwner !== null || gateAgeMs > this.writerLockStaleMs)) {
               fs.rmSync(gate, { recursive: true, force: true });
@@ -750,10 +745,9 @@ export class RuntimeImageStore {
       }
       return run();
     } finally {
-      if (acquired && readAcquisitionGateOwner(gate)?.token === owner.token) {
+      if (acquired && readWriterLockOwner(gate)?.token === owner.token) {
         fs.rmSync(gate, { recursive: true, force: true });
       }
-      fs.rmSync(gateStage, { recursive: true, force: true });
       fs.rmSync(partial, { force: true });
       fs.rmSync(ticket, { force: true });
     }
@@ -792,56 +786,6 @@ export class RuntimeImageStore {
   private removeAgedPartials(root: OpenRoot): void {
     this.assertRootPinned(root);
     for (const entry of fs.readdirSync(root.path, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        // Only the UUID staging layout published by this store owns a
-        // directory partial. Unknown or incomplete owners remain protected.
-        const token = /^\.writer-lock-gate\.([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\.partial$/.exec(entry.name)?.[1];
-        if (!token) continue;
-        const staging = path.join(root.path, entry.name);
-        const stat = fs.lstatSync(staging, { throwIfNoEntry: false });
-        if (!stat?.isDirectory() || stat.isSymbolicLink()
-          || this.now() - stat.mtimeMs < this.abandonedPartialMaxAgeMs) continue;
-        const owner = readWriterLockOwner(staging);
-        if (!owner || owner.token !== token || !processIdentityProvenDead(owner)) continue;
-        const contents = fs.readdirSync(staging);
-        if (contents.length !== 1 || contents[0] !== "owner.json") continue;
-        this.assertRootPinned(root);
-        // Move the candidate out of the attacker-controlled staging name first.
-        // Subsequent deletion uses only this store-created quarantine name;
-        // a swap at `staging` can therefore never redirect unlink outside root.
-        const quarantine = path.join(root.path, `.writer-lock-retire.${crypto.randomUUID()}`);
-        try {
-          fs.renameSync(staging, quarantine);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-          throw error;
-        }
-        let retired = false;
-        try {
-          const moved = fs.lstatSync(quarantine, { throwIfNoEntry: false });
-          if (!moved?.isDirectory() || moved.isSymbolicLink()
-            || moved.dev !== stat.dev || moved.ino !== stat.ino) continue;
-          const movedOwner = readWriterLockOwner(quarantine);
-          const movedContents = fs.readdirSync(quarantine);
-          if (!movedOwner || movedOwner.token !== token || !processIdentityProvenDead(movedOwner)
-            || movedContents.length !== 1 || movedContents[0] !== "owner.json") continue;
-          this.assertRootPinned(root);
-          fs.unlinkSync(path.join(quarantine, "owner.json"));
-          this.assertRootPinned(root);
-          fs.rmdirSync(quarantine);
-          retired = true;
-        } finally {
-          // If the candidate changed during the move, put that exact entry back
-          // when its original name is still vacant. Never recursively remove it.
-          if (!retired && fs.existsSync(quarantine) && !fs.existsSync(staging)) {
-            try { fs.renameSync(quarantine, staging); }
-            catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-            }
-          }
-        }
-        continue;
-      }
       if (!entry.isFile() || !entry.name.endsWith(".partial")) continue;
       const filename = path.join(root.path, entry.name);
       // A competing writer can publish its ticket after this directory scan.
