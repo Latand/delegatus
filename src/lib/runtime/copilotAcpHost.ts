@@ -1,3 +1,5 @@
+import { readNativePromptAnchor } from "@/lib/agentState/transcript";
+import type { NativePromptAnchor } from "@/lib/agentState/model";
 import { heapAttribution } from "@/lib/heapAttribution";
 import { hostExitProcess, observeHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
@@ -518,6 +520,8 @@ export class CopilotAcpHost implements EngineHost {
       }
     }
     this.identity = { sessionId, path: copilotTranscriptPath(this.options.copilotHome, sessionId) };
+    this.agentStateNativePromptAnchor = await readNativePromptAnchor(this.identity.path, !resumeSessionId);
+    this.options.assertCurrent?.();
     this.restore();
     this.emit({ kind: "session-status", status: "idle" });
   }
@@ -559,6 +563,7 @@ export class CopilotAcpHost implements EngineHost {
     boundMap(this.sentEntries, COPILOT_SENT_ENTRY_MEMORY);
     let settle!: () => void;
     const running: RunningPrompt = { turnId, entryId: normalized.id, settled: new Promise((resolve) => { settle = resolve; }) };
+    this.agentStateTurnStartedAt = Date.now();
     this.running = running;
     this.emit({ kind: "turn-started", turnId });
     const request = this.request("session/prompt", { sessionId: this.identity.sessionId, prompt }, null);
@@ -732,6 +737,21 @@ export class CopilotAcpHost implements EngineHost {
     try { return this.writerFence?.() === false; } catch { return true; }
   }
 
+  reconcileAgentStateTerminal(turnRef: string, _nativeId: string | null, _at: number, outcome: "completed" | "interrupted" | "error" = "completed"): boolean {
+    const running = this.running;
+    if (!running || running.turnId !== turnRef || this.writerFence?.() === false) return false;
+    this.finishTurn(running, outcome);
+    return this.running !== running;
+  }
+
+  agentStateMemory() {
+    return { activeTurnRef: this.running?.turnId ?? null, pendingAttention: [...this.attentions.keys()], eventCursor: this.cursor,
+      promptOrdinal: this.agentStateNativePromptAnchor === null ? null : this.turnCounter, startedAt: this.agentStateTurnStartedAt };
+  }
+
+  private agentStateTurnStartedAt: number | null = null;
+  private agentStateNativePromptAnchor: NativePromptAnchor | null = null;
+
   private currentState(): HostState {
     const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
     const status: HostState["status"] = this.dead ? "dead"
@@ -751,6 +771,10 @@ export class CopilotAcpHost implements EngineHost {
       eventCursor: this.cursor,
       protocolVersion: this.protocolVersion,
       activeTurnRef: this.running?.turnId ?? null,
+      agentStateTurnStartedAt: this.agentStateTurnStartedAt,
+      agentStateNativePromptAnchor: this.agentStateNativePromptAnchor,
+      agentStateNativePromptOrdinal: this.agentStateNativePromptAnchor === null ? null : this.turnCounter,
+      agentStateAttention: { pending: [...this.attentions.keys()], unverified: false },
       pendingAttention: [...this.attentions.keys()],
       ...memoryField(this.memoryCell),
       activeFlags: [...this.launchFlags],

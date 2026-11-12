@@ -1188,6 +1188,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     markTiming("claude-write-end");
     this.turnQueue.push(entry.id);
     if (!this.activeTurnId) {
+      this.agentStateTurnStartedAt = Date.now();
       this.activeTurnId = entry.id;
       this.armDeliveryConfirmation(entry.id);
       this.emit({ kind: "turn-started", turnId: entry.id, accountingAt: new Date().toISOString() });
@@ -1414,6 +1415,22 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     try { return this.writerFence?.() === false; } catch { return true; }
   }
 
+  reconcileAgentStateTerminal(turnRef: string, nativeId: string | null, _at: number, outcome: "completed" | "interrupted" | "error" = "completed"): boolean {
+    if (this.activeTurnId !== turnRef || this.writerFence?.() === false || this.activeUserUuid && nativeId !== this.activeUserUuid && !this.joinedUserUuids.has(nativeId ?? "")) return false;
+    this.acceptResult({ type: "result", subtype: outcome === "completed" ? "success" : outcome, ...(this.activeUserUuid ? { user_message_uuid: this.activeUserUuid } : {}) });
+    return this.activeTurnId !== turnRef;
+  }
+
+  agentStateMemory() {
+    return { activeTurnRef: this.activeTurnId, pendingAttention: [...this.attentions.keys()], eventCursor: this.cursor,
+      nativeTurnId: this.activeTurnId ? this.agentStateNativePromptId : null, startedAt: this.agentStateTurnStartedAt,
+      attentionUnverified: [...this.attentions.values()].some(request => !this.agentStateLiveAttentions.has(request)) };
+  }
+
+  private agentStateTurnStartedAt: number | null = null;
+  private agentStateNativePromptId: string | null = null;
+  private readonly agentStateLiveAttentions = new WeakSet<object>();
+
   private currentState(): HostState {
     const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
     const status: HostState["status"] = this.dead ? "dead"
@@ -1433,6 +1450,9 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       eventCursor: this.cursor,
       protocolVersion: this.protocolVersion,
       activeTurnRef: this.activeTurnId,
+      agentStateTurnStartedAt: this.agentStateTurnStartedAt,
+      agentStateNativeTurnId: this.activeTurnId ? this.agentStateNativePromptId : null,
+      agentStateAttention: { pending: [...this.attentions.keys()], unverified: this.agentStateMemory().attentionUnverified },
       pendingAttention: [...this.attentions.keys()],
       pendingPermissions: this.pendingPermissions(),
       pendingQuestions: this.pendingQuestions(),
@@ -1701,6 +1721,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         }
       }
       const attachedAt = echoOperationId ? new Date().toISOString() : undefined;
+      if (this.activeTurnId) this.agentStateNativePromptId = stringField(message, "uuid");
       this.emit({ kind: "item", turnId: this.activeTurnId, item: sanitizedUserReplay(message, content), phase: "completed", accountingAt: receivedAt,
         ...(echoOperationId ? { deliveryEcho: { operationId: echoOperationId, at: receivedAt, attachedAt,
           ...(delivery?.entry.parts ? { memberOperationIds: delivery.entry.parts.map(part => part.operationId) } : {}) } } : {}) });
@@ -1749,6 +1770,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       const requestId = stringField(message, "request_id");
       if (!requestId) return this.fail(new Error("Claude control request had no request id"));
       const request = record(message.request) ?? {};
+      this.agentStateLiveAttentions.add(request);
       this.attentions.set(requestId, request);
       this.attentionSince.set(requestId, new Date().toISOString());
       this.emit({ kind: "attention", id: requestId, method: stringField(request, "subtype") ?? "control_request", attention: request });
@@ -1824,8 +1846,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     }
     const token = messageId ? `message:${messageId}` : `sequence:${this.cursor + 1}`;
     const digest = crypto.createHash("sha256").update(JSON.stringify([this.identity.sessionId, token])).digest("hex");
+    this.agentStateTurnStartedAt = Date.now();
     this.activeTurnId = `${CLAUDE_BACKGROUND_TURN_PREFIX}${digest}`;
     this.activeUserUuid = userUuid;
+    this.agentStateNativePromptId = userUuid;
     this.emit({ kind: "turn-started", turnId: this.activeTurnId, accountingAt: new Date().toISOString() });
   }
 
@@ -1885,6 +1909,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     }
     this.attentions.clear();
     this.activeTurnId = this.turnQueue[0] ?? null;
+    this.agentStateTurnStartedAt = this.activeTurnId ? Date.now() : null;
+    this.agentStateNativePromptId = this.activeTurnId ? this.deliveries.find(delivery => delivery.entry.id === this.activeTurnId)?.engineMessageId ?? null : null;
     if (this.activeTurnId) this.armDeliveryConfirmation(this.activeTurnId);
     if (this.activeTurnId) this.emit({ kind: "turn-started", turnId: this.activeTurnId });
     else this.emit({ kind: "session-status", status: "idle" });

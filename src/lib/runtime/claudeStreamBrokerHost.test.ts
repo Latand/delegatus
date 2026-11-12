@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { readNativeTiming } from "./attemptTiming";
 import { splitAttemptTime } from "@/lib/pipelines/accounting";
 import { readHostExit, withHostStopOrigin } from "./hostExit";
@@ -3171,7 +3172,7 @@ describe("ClaudeStreamBrokerHost", () => {
     });
   });
 
-  test("boot adoption reaps a surviving orphaned Claude child before resume", async () => {
+  test("boot adoption preserves a live orphaned Claude child without preparing a competing resume", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-orphan-adoption-"));
     const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
     const sessionId = "orphaned-claude-session";
@@ -3233,6 +3234,10 @@ describe("ClaudeStreamBrokerHost", () => {
         },
         { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
       );
+      expect(adopted).toHaveLength(0);
+      expect(optionsCalls).toBe(0);
+      expect(procBackend.processIdentity(orphan.pid)).toBe(startIdentity);
+      expect(registry.hostEntry({ engine: "claude", sessionId })!.structuredHost!.process).toEqual(orphanIdentity);
     } finally {
       if (procBackend.processIdentity(orphan.pid) === startIdentity) {
         try { orphan.kill("SIGKILL"); } catch { /* already exited */ }
@@ -3240,18 +3245,14 @@ describe("ClaudeStreamBrokerHost", () => {
       await Promise.race([orphanExit, Bun.sleep(2_000)]);
     }
 
-    expect(adopted).toHaveLength(1);
-    expect(optionsCalls).toBe(1);
-    expect(procBackend.processIdentity(orphan.pid)).not.toBe(startIdentity);
-    await adopted[0]!.host.release();
   }, 10_000);
 
   /* #2790: the host publishes `dead` when its stream fails and reaps the child
      about a second later. A Viewer generation that ends inside that window
      leaves a terminal row whose recorded engine process is still running in
-     the worktree, and whose claim owner is gone. Startup must stop that
-     process by its recorded identity before anything resumes the session or
-     forgets the identity: a successor engine beside it is two writers. */
+     the worktree, and whose claim owner is gone. Startup preserves that
+     process and identity for central reconciliation and idle retirement.
+     A successor cannot start while the old writer can still run. */
   async function terminalRowOverLiveOrphan(status: "dead" | "unhosted", sessionId: string) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-terminal-orphan-"));
     const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
@@ -3302,7 +3303,7 @@ describe("ClaudeStreamBrokerHost", () => {
   }
 
   for (const status of ["dead", "unhosted"] as const) {
-    test(`boot adoption stops a live engine process under a ${status} row before it resumes the session`, async () => {
+    test(`boot adoption preserves a live engine process under a ${status} row and refuses competing resume`, async () => {
       const sessionId = `terminal-orphan-adoption-${status}`;
       const fixture = await terminalRowOverLiveOrphan(status, sessionId);
       const ledger = new RecordingDeliveryLedger();
@@ -3325,9 +3326,10 @@ describe("ClaudeStreamBrokerHost", () => {
           }),
           { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
         );
-        expect(orphanAliveAtResume).toEqual([false]);
-        expect(adopted).toHaveLength(1);
-        expect(fixture.orphanAlive()).toBe(false);
+        expect(orphanAliveAtResume).toEqual([]);
+        expect(adopted).toHaveLength(0);
+        expect(fixture.orphanAlive()).toBe(true);
+        expect(fixture.registry.hostEntry({ engine: "claude", sessionId })!.structuredHost!.process).toEqual(fixture.orphanIdentity);
       } finally {
         await fixture.stop();
         for (const item of adopted) await item.host.release();
@@ -3335,18 +3337,17 @@ describe("ClaudeStreamBrokerHost", () => {
     }, 10_000);
   }
 
-  test("startup demotion stops a live engine process under a dead row before it forgets the identity", async () => {
+  test("startup demotion preserves a live engine process and its terminal-row identity", async () => {
     const sessionId = "terminal-orphan-demotion";
     const fixture = await terminalRowOverLiveOrphan("dead", sessionId);
     try {
       await demoteSkippedStructuredRegistryHosts(fixture.registry, () => false);
       /* A row that no longer names the process can never stop it again, so
          the identity may be dropped only once that process is gone. */
-      expect(fixture.orphanAlive()).toBe(false);
+      expect(fixture.orphanAlive()).toBe(true);
       expect(fixture.registry.snapshot().entries[`claude:${sessionId}`]).toMatchObject({
         status: "dead",
-        claimOwner: null,
-        structuredHost: { endpoint: "stdio:released", process: null },
+        structuredHost: { process: fixture.orphanIdentity },
       });
     } finally {
       await fixture.stop();
@@ -3454,16 +3455,17 @@ describe("ClaudeStreamBrokerHost", () => {
   }
 
   for (const engineIgnoresTerm of [false, true]) {
-    test(`boot adoption ends an orphan's detached writer before it resumes the session${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
+    test(`boot adoption preserves an orphan's detached writer and starts no successor${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
       const fixture = await terminalRowOverWriterTree(`orphan-tree-adoption-${engineIgnoresTerm}`, { engineIgnoresTerm });
       const resumed: Array<{ engine: boolean; tool: boolean }> = [];
       let adopted: Awaited<ReturnType<typeof adoptClaudeRegistryHosts>> = [];
       try {
         adopted = await adoptClaudeRegistryHosts(fixture.registry, adoptionOptions(fixture, resumed),
           { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" });
-        expect(resumed).toEqual([{ engine: false, tool: false }]);
-        expect(adopted).toHaveLength(1);
-        expect(await fixture.tree.stillWriting()).toBe(false);
+        expect(resumed).toEqual([]);
+        expect(adopted).toHaveLength(0);
+        expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: true, tool: true });
+        expect(fixture.row().structuredHost?.process).toEqual(fixture.tree.engine);
       } finally {
         for (const item of adopted) await item.host.release();
         await fixture.stop();
@@ -3471,7 +3473,7 @@ describe("ClaudeStreamBrokerHost", () => {
     }, 15_000);
   }
 
-  test("boot adoption resumes nothing while an orphan's writer outlives its stop", async () => {
+  test("boot adoption leaves an orphan's live writer for evidence-based idle retirement", async () => {
     const fixture = await terminalRowOverWriterTree("orphan-tree-adoption-incomplete", { toolIgnoresTerm: true });
     const resumed: Array<{ engine: boolean; tool: boolean }> = [];
     let adopted: Awaited<ReturnType<typeof adoptClaudeRegistryHosts>> = [];
@@ -3482,7 +3484,8 @@ describe("ClaudeStreamBrokerHost", () => {
       expect(resumed).toEqual([]);
       expect(fixture.tree.toolAlive()).toBe(true);
       expect(fixture.row()).toMatchObject({ status: "dead", claimEpoch: 1, structuredHost: { process: fixture.tree.engine } });
-      expect(fixture.row().structuredTerminationSurvivors).toContainEqual(fixture.tree.tool);
+      expect(fixture.tree.engineAlive()).toBe(true);
+      expect(fixture.row().structuredTerminationSurvivors).toBeUndefined();
     } finally {
       for (const item of adopted) await item.host.release();
       await fixture.stop();
@@ -3490,13 +3493,12 @@ describe("ClaudeStreamBrokerHost", () => {
   }, 15_000);
 
   for (const engineIgnoresTerm of [false, true]) {
-    test(`startup demotion ends an orphan's detached writer before it forgets the identity${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
+    test(`startup demotion preserves an orphan's live tree and recorded identity${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
       const fixture = await terminalRowOverWriterTree(`orphan-tree-demotion-${engineIgnoresTerm}`, { engineIgnoresTerm });
       try {
         await demoteSkippedStructuredRegistryHosts(fixture.registry, () => false);
-        expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: false, tool: false });
-        expect(await fixture.tree.stillWriting()).toBe(false);
-        expect(fixture.row()).toMatchObject({ status: "dead", claimOwner: null, structuredHost: { endpoint: "stdio:released", process: null } });
+        expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: true, tool: true });
+        expect(fixture.row()).toMatchObject({ status: "dead", structuredHost: { process: fixture.tree.engine } });
       } finally {
         await fixture.stop();
       }
@@ -3509,7 +3511,8 @@ describe("ClaudeStreamBrokerHost", () => {
       await demoteSkippedStructuredRegistryHosts(fixture.registry, () => false, undefined, incompleteCleanup);
       expect(fixture.tree.toolAlive()).toBe(true);
       expect(fixture.row()).toMatchObject({ status: "dead", claimEpoch: 1, structuredHost: { process: fixture.tree.engine } });
-      expect(fixture.row().structuredTerminationSurvivors).toContainEqual(fixture.tree.tool);
+      expect(fixture.tree.engineAlive()).toBe(true);
+      expect(fixture.row().structuredTerminationSurvivors).toBeUndefined();
     } finally {
       await fixture.stop();
     }
@@ -3782,7 +3785,7 @@ describe("ClaudeStreamBrokerHost", () => {
     }, 20_000);
   }
 
-  test("startup demotion reaps a surviving skipped Claude child", async () => {
+  test("startup demotion retains a skipped live Claude child and its unresolved attention", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-skipped-orphan-"));
     const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
     const sessionId = "skipped-orphaned-claude-session";
@@ -3827,16 +3830,16 @@ describe("ClaudeStreamBrokerHost", () => {
 
     try {
       await demoteSkippedStructuredRegistryHosts(registry, () => false);
-      expect(procBackend.processIdentity(orphan.pid)).not.toBe(startIdentity);
+      expect(procBackend.processIdentity(orphan.pid)).toBe(startIdentity);
       expect(registry.snapshot().entries[`claude:${sessionId}`]).toMatchObject({
-        status: "dead",
+        status: "live",
         claimOwner: null,
         structuredHost: {
-          endpoint: "stdio:released",
-          process: null,
-          activeTurnRef: null,
-          pendingAttention: [],
-          activeFlags: [],
+          endpoint: `stdio:${orphan.pid}`,
+          process: orphanIdentity,
+          activeTurnRef: "stale-turn",
+          pendingAttention: ["stale-attention"],
+          activeFlags: ["working"],
         },
       });
     } finally {
@@ -5042,4 +5045,28 @@ test("heap counters observe events and subscriber queues without consuming them"
     stop();
     expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
   } finally { stop(); await stream.return?.(); await host.release(); }
+});
+
+
+test("central Claude session completion releases the local queue reference and admits a subsequent message", async () => {
+  const ledger = new RecordingDeliveryLedger(), child = new FakeClaude(ledger);
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), deliveryLedger: ledger,
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }), spawnProcess: fakeSpawn(child, {}) });
+  try {
+    const first = host.send({ id: "central-first", text: "first" });
+    await child.userFrameWritten;
+    child.emitJson({ type: "user", isReplay: true, session_id: host.identity.sessionId, uuid: "native-central-first",
+      message: { role: "user", content: [{ type: "text", text: "first" }] } });
+    await first;
+    expect(host.reconcileAgentStateTerminal("older-ref", "older-uuid", 1000)).toBe(false);
+    expect(host.reconcileAgentStateTerminal("central-first", "native-central-first", 1000)).toBe(true);
+    expect(host.agentStateMemory().activeTurnRef).toBeNull();
+    const second = host.send({ id: "central-second", text: "second" });
+    while (child.inputs.filter(input => input.type === "user").length < 2) await once(child.stdin, "data");
+    child.emitJson({ type: "user", isReplay: true, session_id: host.identity.sessionId, uuid: "native-central-second",
+      message: { role: "user", content: [{ type: "text", text: "second" }] } });
+    expect(await second).toMatchObject({ outcome: "turn-started", turnId: "central-second" });
+    expect(host.reconcileAgentStateTerminal("central-first", "native-central-first", 1000)).toBe(false);
+    expect(host.agentStateMemory().activeTurnRef).toBe("central-second");
+  } finally { await host.release(); }
 });

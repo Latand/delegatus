@@ -172,6 +172,11 @@ export function normalizeViewerMcpObservation(value: unknown): ViewerMcpObservat
 }
 
 export interface HostState {
+  agentStateAttention?: { pending: string[]; unverified: boolean };
+  agentStateTurnStartedAt?: number | null;
+  agentStateNativeTurnId?: string | null;
+  agentStateNativePromptOrdinal?: number | null;
+  agentStateNativePromptAnchor?: import("@/lib/agentState/model").NativePromptAnchor | null;
   viewerMcp?: ViewerMcpObservation;
   exitProcess?: import("@/lib/processIdentity").ProcessIdentity;
   signalDomain?: AgentSignalDomain;
@@ -258,6 +263,8 @@ export interface EngineHost {
   steer?(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<RuntimeSteerOutcome>;
   interrupt(turnRef: string): Promise<void>;
   answer(attentionRef: string, value: unknown): Promise<void>;
+  reconcileAgentStateTerminal?(turnRef: string, nativeId: string | null, at: number, outcome?: "completed" | "interrupted" | "error"): boolean;
+  agentStateMemory?(): { activeTurnRef: string | null; pendingAttention: string[]; eventCursor: number; nativeTurnId?: string | null; promptOrdinal?: number | null; startedAt?: number | null; attentionUnverified?: boolean };
   health(): Promise<HostState>;
   /** Current owner memory, synchronously read under its fence at automatic wake dispatch. */
   readViewerMcpObservation?(): ViewerMcpObservation | undefined;

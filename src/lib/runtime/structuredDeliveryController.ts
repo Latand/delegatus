@@ -2979,6 +2979,7 @@ export async function handOverHostForDemotion(
 export async function releaseStructuredDeliveryHostsForDemotion(
   options: DemotionInterruptionOptions = {},
 ): Promise<void> {
+  (await import("@/lib/agentState/service")).stopAgentStateService();
   const registered = state.activeRegistrations?.() ?? [];
   const ids = new Set(registered.map(({ key }) => sessionKeyId(key)));
   const registrations = [...registered, ...[...unpublishedLaunchHosts.values()].filter(({ key }) => !ids.has(sessionKeyId(key)))];

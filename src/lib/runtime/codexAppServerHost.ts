@@ -3585,6 +3585,18 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (this.viewerMcp) event.viewerMcp = structuredClone(this.viewerMcp);
   }
 
+  reconcileAgentStateTerminal(turnRef: string, nativeId: string | null, at: number, outcome: "completed" | "interrupted" | "error" = "completed"): boolean {
+    if (this.activeTurnId !== turnRef || nativeId !== turnRef || !this.writerFenceAllowsActuation()) return false;
+    this.acceptNotification("turn/completed", { threadId: this.identity.threadId, turn: { id: turnRef, status: outcome === "error" ? "failed" : outcome } }, false, new Date(at).toISOString());
+    return this.activeTurnId !== turnRef;
+  }
+
+  agentStateMemory() {
+    return { activeTurnRef: this.activeTurnId,
+      pendingAttention: [...this.attentions].filter(([, attention]) => attention.isBlocking !== false).map(([id]) => id),
+      attentionUnverified: [...this.attentions.values()].some(attention => attention.isBlocking !== false && attention.origin === "restored"), eventCursor: this.cursor };
+  }
+
   private currentState(): HostState {
     const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
     const processStartIdentity = pid && this.childProcessOwnership() === "owned"
@@ -3608,6 +3620,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       eventCursor: this.cursor,
       protocolVersion: this.protocolVersion,
       activeTurnRef: this.activeTurnId,
+      agentStateAttention: { pending: this.agentStateMemory().pendingAttention, unverified: this.agentStateMemory().attentionUnverified },
       pendingAttention: [...this.attentions.keys()],
       nativeQueueRevision: this.nativeQueueRevision,
       ...memoryField(this.memoryCell),

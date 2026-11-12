@@ -1,3 +1,7 @@
+import { invalidateAgentState } from "@/lib/agentState/invalidation";
+import type { AgentProjection, AgentStateJournal, AgentStateMetrics } from "@/lib/agentState/model";
+import { validNativePromptAnchor } from "@/lib/agentState/model";
+import { normalizeAgentStateRows } from "@/lib/agentState/store";
 import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "@/lib/runtime/engineHost";
 import { recordedAgentScope, recordedScopeProcess, normalizeAgentScope, sameAgentScope, type AgentScopeIdentity } from "@/lib/runtime/agentScope";
 import { registryWriterDetail } from "./registryWriter";
@@ -175,6 +179,12 @@ export interface StructuredHostColumns {
   protocolVersion: string | null;
   writerClaimEpoch: number;
   activeTurnRef: string | null;
+  attentionVerified?: boolean;
+  agentStateAttention?: { pending: string[]; unverified: boolean };
+  agentStateTurnStartedAt?: number | null;
+  agentStateNativeTurnId?: string | null;
+  agentStateNativePromptOrdinal?: number | null;
+  agentStateNativePromptAnchor?: import("@/lib/agentState/model").NativePromptAnchor | null;
   pendingAttention: string[];
   /** The pending attentions that are tool permission requests (#2215). */
   pendingPermissions?: PendingPermissionRequest[];
@@ -972,6 +982,9 @@ export interface DeliveryEvidenceCompaction {
 
 export interface RegistryFile {
   version: 2;
+  agentStates: Record<string, AgentProjection>;
+  agentStateJournal: Record<string, AgentStateJournal>;
+  agentStateMetrics: Record<string, AgentStateMetrics>;
   entries: Record<string, AgentRegistryEntry>;
   receipts: Record<string, SpawnReceipt>;
   lineageEdges: Record<string, SpawnLineageEdge>;
@@ -2591,6 +2604,7 @@ function emptyPolicy(restartedAt = now()): AutoBalancePolicy {
 
 const EMPTY: RegistryFile = {
   version: 2,
+  agentStates: {}, agentStateJournal: {}, agentStateMetrics: {},
   entries: {},
   receipts: {},
   lineageEdges: {},
@@ -2791,6 +2805,14 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
     protocolVersion: typeof host.protocolVersion === "string" ? host.protocolVersion : null,
     writerClaimEpoch: Number.isSafeInteger(host.writerClaimEpoch) && (host.writerClaimEpoch ?? -1) >= 0 ? host.writerClaimEpoch! : 0,
     activeTurnRef: typeof host.activeTurnRef === "string" ? host.activeTurnRef : null,
+    attentionVerified: host.attentionVerified ?? Array.isArray(host.pendingAttention),
+    ...(host.agentStateAttention && Array.isArray(host.agentStateAttention.pending) && typeof host.agentStateAttention.unverified === "boolean"
+      ? { agentStateAttention: { pending: host.agentStateAttention.pending.filter(ref => typeof ref === "string" && ref.length <= 128).slice(0, 32),
+          unverified: host.agentStateAttention.unverified || host.agentStateAttention.pending.length > 32 || host.agentStateAttention.pending.some(ref => typeof ref !== "string" || ref.length > 128) } } : {}),
+    agentStateNativePromptAnchor: validNativePromptAnchor(host.agentStateNativePromptAnchor) ? host.agentStateNativePromptAnchor : null,
+    agentStateNativeTurnId: typeof host.agentStateNativeTurnId === "string" ? host.agentStateNativeTurnId.slice(0, 256) : null,
+    agentStateNativePromptOrdinal: Number.isSafeInteger(host.agentStateNativePromptOrdinal) && host.agentStateNativePromptOrdinal! > 0 ? host.agentStateNativePromptOrdinal : null,
+    agentStateTurnStartedAt: typeof host.agentStateTurnStartedAt === "number" && Number.isFinite(host.agentStateTurnStartedAt) ? host.agentStateTurnStartedAt : null,
     pendingAttention: Array.isArray(host.pendingAttention)
       ? host.pendingAttention.filter((item): item is string => typeof item === "string")
       : [],
@@ -4970,6 +4992,9 @@ export function normalizeRegistry(
     : {};
   const normalized = backfillMaterializedSpawnArtifacts({
       version: 2,
+      agentStates: normalizeAgentStateRows(parsed.agentStates, "projection"),
+      agentStateJournal: normalizeAgentStateRows(parsed.agentStateJournal, "journal"),
+      agentStateMetrics: normalizeAgentStateRows(parsed.agentStateMetrics, "metrics"),
       entries: Object.fromEntries(Object.entries(parsed.entries).map(([id, entry]) => [id, normalizeEntry(entry, policy)])),
       receipts: Object.fromEntries(Object.entries(parsed.receipts).map(([id, receipt]) => [id, normalizeReceipt(receipt, policy)])),
       lineageEdges: parsed.lineageEdges && typeof parsed.lineageEdges === "object"
@@ -7013,6 +7038,14 @@ export class AgentRegistry {
           .findLast(row => row.key?.engine === key.engine && row.artifactPath === entry?.artifactPath);
       return receipt ? clone(receipt) : null;
     });
+  }
+
+  agentStateRead<T>(read: (file: RegistryFile) => T): T {
+    return this.readKeyed(read);
+  }
+
+  agentStateWrite<T>(write: (file: RegistryFile) => T): T {
+    return this.mutate(write, { deliveryOnly: true });
   }
 
   /** Revocation inspects current hosted rows without loading cold history. */
@@ -9079,6 +9112,7 @@ export class AgentRegistry {
     structuredHost: StructuredHostColumns | null,
     status?: AgentHostStatus,
   ): AgentRegistryEntry {
+    invalidateAgentState(this.filename, key);
     return this.mutateHostExit(key, (file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
@@ -9427,6 +9461,7 @@ export class AgentRegistry {
     claimEpoch: number,
     releaseClaim = false,
   ): AgentRegistryEntry | null {
+    invalidateAgentState(this.filename, key);
     return this.mutateHostExit(key, (file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
@@ -9474,6 +9509,7 @@ export class AgentRegistry {
       prevents an old registration from appointing a replacement that took the
       same session key concurrently. */
   markStructuredHostHandoff(key: SessionKey, expected: Readonly<ProcessIdentity>): boolean {
+    invalidateAgentState(this.filename, key);
     return this.mutate((file) => {
       const entry = file.entries[sessionKeyId(key)];
       const structuredHost = entry?.structuredHost;
@@ -9533,6 +9569,7 @@ export class AgentRegistry {
       setupEntry?: Pick<AgentRegistryEntry, "artifactPath" | "cwd" | "accountId" | "launchProfile">;
     } = {},
   ): AgentRegistryEntry | null {
+    invalidateAgentState(this.filename, key);
     return this.mutate((file) => {
       const keyId = sessionKeyId(key);
       const existing = file.entries[keyId];
@@ -9642,6 +9679,7 @@ export class AgentRegistry {
 
   /** Releases a structured writer only while both ownership fences still match. */
   releaseStructuredHostClaim(key: SessionKey, owner: string, claimEpoch: number): boolean {
+    invalidateAgentState(this.filename, key);
     return this.mutate((file) => {
       const entry = file.entries[sessionKeyId(key)];
       if (!entry?.structuredHost

@@ -132,6 +132,12 @@ export function codexHostColumns(state: HostState, writerClaimEpoch: number): St
     protocolVersion: state.protocolVersion,
     writerClaimEpoch,
     activeTurnRef: state.activeTurnRef,
+    attentionVerified: true,
+    ...(state.agentStateAttention ? { agentStateAttention: state.agentStateAttention } : {}),
+    agentStateTurnStartedAt: state.agentStateTurnStartedAt ?? null,
+    agentStateNativeTurnId: state.agentStateNativeTurnId ?? null,
+    agentStateNativePromptOrdinal: state.agentStateNativePromptOrdinal ?? null,
+    agentStateNativePromptAnchor: state.agentStateNativePromptAnchor ?? null,
     pendingAttention: state.pendingAttention,
     ...(state.memory ? { memory: state.memory } : {}),
     ...(state.scope ? { scope: state.scope } : {}),
@@ -151,6 +157,12 @@ export function claudeHostColumns(state: HostState, writerClaimEpoch: number): S
     protocolVersion: state.protocolVersion,
     writerClaimEpoch,
     activeTurnRef: state.activeTurnRef,
+    attentionVerified: true,
+    ...(state.agentStateAttention ? { agentStateAttention: state.agentStateAttention } : {}),
+    agentStateTurnStartedAt: state.agentStateTurnStartedAt ?? null,
+    agentStateNativeTurnId: state.agentStateNativeTurnId ?? null,
+    agentStateNativePromptOrdinal: state.agentStateNativePromptOrdinal ?? null,
+    agentStateNativePromptAnchor: state.agentStateNativePromptAnchor ?? null,
     pendingAttention: state.pendingAttention,
     ...(state.pendingPermissions?.length ? { pendingPermissions: state.pendingPermissions } : {}),
     ...(state.pendingQuestions?.length ? { pendingQuestions: state.pendingQuestions } : {}),
@@ -175,6 +187,12 @@ export function copilotHostColumns(state: HostState, writerClaimEpoch: number): 
     protocolVersion: state.protocolVersion,
     writerClaimEpoch,
     activeTurnRef: state.activeTurnRef,
+    attentionVerified: true,
+    ...(state.agentStateAttention ? { agentStateAttention: state.agentStateAttention } : {}),
+    agentStateTurnStartedAt: state.agentStateTurnStartedAt ?? null,
+    agentStateNativeTurnId: state.agentStateNativeTurnId ?? null,
+    agentStateNativePromptOrdinal: state.agentStateNativePromptOrdinal ?? null,
+    agentStateNativePromptAnchor: state.agentStateNativePromptAnchor ?? null,
     pendingAttention: state.pendingAttention,
     ...(state.memory ? { memory: state.memory } : {}),
     ...(state.scope ? { scope: state.scope } : {}),
@@ -1048,6 +1066,7 @@ export async function demoteSkippedStructuredRegistryHosts(
       await registry.withOperationLock(entry.key, owner, async () => {
         const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
         if (!current?.structuredHost || shouldAdopt(current)) return;
+        if (current.structuredHost.process && processIdentityStatus(current.structuredHost.process) !== "dead") return;
         /* A PID-only claim cannot prove ownership across reboot. Runtime and
            transcript signals already excluded this row from adoption, so the
            startup demotion may replace that unverifiable owner and settle the
@@ -1150,21 +1169,9 @@ export async function adoptCodexRegistryHosts(
           ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process, signalDomain: current.structuredHost.signalDomain, signalBoundary: current.structuredHost.signalBoundary } : undefined;
         const recordedConversation = registryConversationsForEntryKey(startupHostSnapshot(registry, entry.key), sessionKeyId(entry.key))[0];
         if (recordedConversation && recordedHostHeld(recordedConversation.id) && !socketOwner) return;
-        let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner }))));
-        if (!claimed && !socketOwner) {
-          const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
-          const orphan = current?.structuredHost?.kind === "codex-app-server"
-            ? current.structuredHost.process
-            : null;
-          if (orphan
-            && current
-            && candidate(current)
-            && await terminateVerifiedStructuredOrphan(registry, entry.key, orphan, current.claimOwner ?? null, dependencies.orphanStop)) {
-            const retry = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
-            if (!retry?.structuredHost || !candidate(retry)) return;
-            claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
-          }
-        }
+        const claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner }))));
+        // Lost stdio is observed until native completion and the ordinary
+        // retirement rule. A resume cannot reconnect those pipes.
         if (!claimed?.structuredHost) return;
         if (!candidate(claimed)) {
           (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
@@ -1318,21 +1325,9 @@ export async function adoptClaudeRegistryHosts(
         if (!eligible?.structuredHost || !shouldAdopt(eligible)) return;
         if (!await recoverMemberAdoption(registry, eligible.key, dependencies.assertActive)) return;
         dependencies.assertActive?.();
-        let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
-        if (!claimed) {
-          const current = startupHostSnapshot(registry, entry.key).entries[`claude:${entry.key.sessionId}`];
-          const orphan = current?.structuredHost?.kind === "claude-broker"
-            ? current.structuredHost.process
-            : null;
-          if (orphan
-            && current
-            && shouldAdopt(current)
-            && await terminateVerifiedStructuredOrphan(registry, entry.key, orphan, current.claimOwner ?? null, dependencies.orphanStop)) {
-            const retry = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
-            if (!retry?.structuredHost || !shouldAdopt(retry)) return;
-            claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
-          }
-        }
+        const claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
+        // Lost stdio is observed until native completion and the ordinary
+        // retirement rule. A resume cannot reconnect those pipes.
         if (!claimed?.structuredHost) return;
         if (!shouldAdopt(claimed)) {
           (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));

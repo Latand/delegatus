@@ -1572,3 +1572,10 @@ test("an unsettled own launch explains the unknown turn as a determined retireme
   state.receipts[launchId]!.state = "completed";
   await refusedBy("turn-settled", { snapshot: () => state }, "undetermined");
 });
+
+
+test("serving retirement requires a central projection and refuses legacy fallback while reconciliation is incomplete", async () => {
+  const probe = await sweep({ requireAgentState: true });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.refused).toEqual([expect.objectContaining({ clause: "turn-settled", reason: "central agent state is unavailable" })]);
+});

@@ -1,3 +1,10 @@
+import { cachedAgentObservation } from "@/lib/agentState/projectionCache";
+import { observeAgentProcess } from "@/lib/agentState/process";
+import { AGENT_STATE_POLICY } from "@/lib/agentState/model";
+import { entryRevision, subjectId } from "@/lib/agentState/store";
+import { fileSignature } from "@/lib/agentState/transcript";
+import { servingAgentStateService } from "@/lib/agentState/service";
+import { structuredClaimIdentity } from "@/lib/agent/registry";
 import { agentScopeCommand, differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, type AgentScopeIdentity } from "./agentScope";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
@@ -81,7 +88,7 @@ import { realtimeBoundConversationIds } from "./voiceViewBinding";
 
 /** Conservative default: well past the 2 h the resources dialog offers by
     hand, well inside the 16–25 h the manual sweeps found hosts sitting at. */
-const DEFAULT_RETIREMENT_IDLE_HOURS = 6;
+const DEFAULT_RETIREMENT_IDLE_HOURS = AGENT_STATE_POLICY.idleMs / 3_600_000;
 /** How long a host may take to honour SIGTERM before its tree is force-killed.
     An unattended sweep can afford to wait far longer than the interactive kill
     does, so a host that is flushing its ledger gets to finish. */
@@ -156,7 +163,7 @@ function readRetirementCursor(): string | null {
 function parseRetirementCursor(value: unknown): string | null {
   const cursor = value as { version?: unknown; afterKey?: unknown } | null;
   if (cursor?.version !== 1 || !(cursor.afterKey === null
-    || typeof cursor.afterKey === "string" && /^(claude|codex):[0-9a-f-]{36}$/i.test(cursor.afterKey))) {
+    || typeof cursor.afterKey === "string" && /^(claude|codex|copilot):[0-9a-f-]{36}$/i.test(cursor.afterKey))) {
     throw new Error("retirement cursor is invalid");
   }
   return cursor.afterKey;
@@ -287,6 +294,7 @@ export interface StructuredHostRetirementSubject {
       receipt is missing or there is no stamp. */
   structuredHostOperationReceiptState: SpawnReceipt["state"] | null;
   structuredHostOperationReceiptAbandoned: boolean;
+  nativeTurnSettled?: boolean;
   /** Undetermined when the handoff queue could not be read: an unreadable
       queue is not a drained one. */
   undeliveredHandoffEntries: Determinable<number>;
@@ -435,7 +443,8 @@ const CLAUSE_CHECKS: Record<
     if (subject.pendingAction !== null) return refuses(`a ${subject.pendingAction} action is pending`);
     if (subject.structuredHostOperationId !== null
       && !TERMINAL_RECEIPT_STATES.has(subject.structuredHostOperationReceiptState ?? "")
-      && !subject.structuredHostOperationReceiptAbandoned) {
+      && !subject.structuredHostOperationReceiptAbandoned
+      && !(subject.nativeTurnSettled && subject.structuredHostOperationReceiptState === null)) {
       return refuses("a structured host operation is still in flight");
     }
     return subject.openOperations > 0
@@ -650,6 +659,7 @@ type GoneHostReconciliation =
   | { status: "failed"; reason: string };
 
 export interface StructuredHostRetirementDependencies {
+  requireAgentState?: boolean;
   publicationState?: () => "ready" | "rebinding" | "unbound";
   snapshot?: () => RegistryFile;
   /** Undetermined when the queue could not be read: silence is not a drained
@@ -987,6 +997,7 @@ function openOperationIndex(file: RegistryFile, nowMs: number): RetirementWorkIn
  */
 interface RetirementInputs {
   nowMs: number;
+  requireAgentState: boolean;
   file: RegistryFile;
   conversationsBySession: Map<string, RegistryFile["conversations"][string]>;
   undelivered: Determinable<RetirementWorkIndex>;
@@ -1001,6 +1012,7 @@ interface RetirementInputs {
 
 /** Per-host facts that come from a durable read the whole pass shares. */
 interface RetirementSources {
+  requireAgentState?: boolean;
   snapshot: () => RegistryFile;
   handoffRows: () => Determinable<readonly HandoffRow[]>;
   seatConversations: () => Determinable<ReadonlySet<string>>;
@@ -1019,6 +1031,7 @@ function retirementInputs(sources: RetirementSources, nowMs: number, keys: reado
   }
   return {
     nowMs,
+    requireAgentState: sources.requireAgentState ?? false,
     file,
     conversationsBySession,
     undelivered: undeliveredHandoffIndex(sources.handoffRows(), file),
@@ -1043,7 +1056,7 @@ interface RetirementReaders {
 function retirementCandidates(file: RegistryFile) {
   return registryLivenessRows(file).entries
     .filter((entry) => Boolean(recordedScopeProcess(entry.structuredHost))
-      && (entry.key.engine === "claude" || entry.key.engine === "codex"))
+      && (entry.key.engine === "claude" || entry.key.engine === "codex" || entry.key.engine === "copilot"))
     .sort((left, right) => {
       const a = sessionKeyId(left.key), b = sessionKeyId(right.key);
       return a < b ? -1 : a > b ? 1 : 0;
@@ -1090,7 +1103,7 @@ function retirementSubject(
 ): StructuredHostRetirementSubject {
   const columns = entry.structuredHost!;
   const hostProcess = recordedScopeProcess(columns)!;
-  const key = entry.key as SessionKey & { engine: "claude" | "codex" };
+  const key = entry.key;
   const keyId = sessionKeyId(key);
   const conversation = inputs.conversationsBySession.get(keyId) ?? null;
   const conversationId = conversation?.id ?? null;
@@ -1099,6 +1112,27 @@ function retirementSubject(
   const generation = conversation?.generations.find((candidate) => candidate.id === key.sessionId) ?? null;
   const launchId = entry.structuredHostOperationId ?? null;
   const launchReceipt = launchId === null ? null : inputs.file.receipts[launchId] ?? null;
+
+  const central = cachedAgentObservation(subjectId(entry)) ?? inputs.file.agentStates?.[subjectId(entry)];
+  let centralSettled: boolean | null = null;
+  let currentAttention: readonly string[] | null = null;
+  let centralWhy = "central projection unavailable";
+  if (central && central.facts.revision === entryRevision(entry)) {
+    const facts = central.facts;
+    if (facts.turn.determined && facts.transcript.determined && facts.owner.determined && facts.attention.determined && facts.obligations.determined) {
+      try {
+        const owner = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
+        const ownerValid = facts.owner.value === "held" ? hasStructuredDeliveryHost(entry.key)
+          : facts.owner.value === "absent" && (entry.claimOwner === null || owner !== null && observeAgentProcess(owner) === "dead");
+        if (ownerValid && fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })) === facts.transcript.value.signature) {
+          const memory = conversationId ? structuredDeliveryHostForConversation(conversationId)?.agentStateMemory?.() : null;
+          centralSettled = memory ? memory.activeTurnRef === null : facts.turn.value.state !== "open";
+          currentAttention = memory?.pendingAttention ?? facts.attention.value;
+          if (memory?.attentionUnverified) { centralSettled = null; centralWhy = "current attention cannot be verified"; }
+        } else centralWhy = "central owner or transcript evidence changed";
+      } catch { centralWhy = "central transcript identity unavailable"; }
+    } else centralWhy = "central turn, transcript or ownership unverified";
+  }
 
   return {
     key,
@@ -1112,18 +1146,21 @@ function retirementSubject(
     process: hostProcess,
     scope: recordedAgentScope(columns),
     observedProcessDead: !procBackend.pidAlive(hostProcess.pid),
-    status: entry.status,
-    activeTurnRef: columns.activeTurnRef,
-    turnBusy: conversation === null
+    status: centralSettled === true ? "idle" : entry.status,
+    activeTurnRef: centralSettled === true ? null : columns.activeTurnRef,
+    turnBusy: !central && inputs.requireAgentState ? undetermined("central agent state is unavailable") : central ? centralSettled === null ? undetermined(centralWhy) : determined(!centralSettled) : conversation === null
       ? undetermined("no conversation record establishes this host's turn state")
       : conversation.turn.state === "unknown"
         ? undetermined("the conversation's turn state is unknown")
         : determined(conversation.turn.state === "busy"),
-    pendingAttention: columns.pendingAttention,
+    pendingAttention: currentAttention ?? columns.pendingAttention,
     activeFlags: columns.activeFlags,
     pendingAction: entry.pendingAction,
     structuredHostOperationId: launchId,
     structuredHostOperationReceiptState: launchReceipt?.state ?? null,
+    nativeTurnSettled: centralSettled === true && central?.facts.turn.determined === true
+      && central.facts.turn.value.state === "closed" && central.facts.turn.evidence.source === "native-transcript"
+      && central.facts.obligations.determined && central.facts.obligations.value.length === 0,
     structuredHostOperationReceiptAbandoned: launchReceipt !== null
       && receiptAbandoned(launchReceipt.createdAt, inputs.nowMs),
     undeliveredHandoffEntries: mapDeterminable(inputs.undelivered,
@@ -1219,6 +1256,9 @@ function refuse(
 export async function runStructuredHostRetirementSweep(
   dependencies: StructuredHostRetirementDependencies = {},
 ): Promise<StructuredHostRetirementReport> {
+  // The serving owner joins the same bounded reconciliation before selecting
+  // unowned actions. Isolated callers can supply their own recorded snapshot.
+  if (!dependencies.snapshot) await servingAgentStateService()?.request();
   const now = dependencies.now ?? Date.now;
   const startedAtMs = now();
   /* An off switch must never read as "retire anything idle at all": a direct
@@ -1234,6 +1274,7 @@ export async function runStructuredHostRetirementSweep(
     catch (error) { return undetermined(`the handoff queue could not be read: ${safeReason(error)}`); }
   });
   const sources: RetirementSources = {
+    requireAgentState: dependencies.requireAgentState ?? !dependencies.snapshot,
     snapshot,
     handoffRows,
     seatConversations: dependencies.orchestratorSeatConversations ?? defaultOrchestratorSeatConversations,
@@ -1298,6 +1339,7 @@ export async function runStructuredHostRetirementSweep(
   const pidAlive = dependencies.pidAlive ?? observedPidAlive;
   const measurePss = dependencies.treePss ?? treePss;
   const processStatus = (process: ProcessIdentity, alive = pidAlive(process.pid)) => {
+    if (!dependencies.pidAlive && !dependencies.processIdentity && !dependencies.bootEpoch) return observeAgentProcess(process);
     if (!alive.determined) return "unverified";
     if (!alive.value) return "dead";
     const start = readers.processIdentity(process.pid);

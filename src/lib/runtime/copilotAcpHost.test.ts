@@ -800,3 +800,22 @@ test("heap counters observe events and subscriber queues without consuming them"
     expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
   } finally { stop(); await stream.return?.(); await host.release(); }
 });
+
+
+test("central Copilot completion releases the prompt while a late prior ACP reply preserves its successor", async () => {
+  const child = new FakeCopilot();
+  const host = await CopilotAcpHost.start(options(child));
+  try {
+    await host.send({ id: "central-first", text: "first" });
+    const first = host.agentStateMemory().activeTurnRef!;
+    expect(host.reconcileAgentStateTerminal("older-ref", null, 1000)).toBe(false);
+    expect(host.reconcileAgentStateTerminal(first, "native-prompt", 1000)).toBe(true);
+    expect(await host.send({ id: "central-second", text: "second" })).toMatchObject({ outcome: "turn-started" });
+    const second = host.agentStateMemory().activeTurnRef;
+    expect(second).not.toBe(first);
+    child.reply(child.prompts[0]!.id!, { stopReason: "end_turn" });
+    await until(() => child.prompts.length === 2, "successor prompt");
+    expect(host.agentStateMemory().activeTurnRef).toBe(second);
+    expect(host.reconcileAgentStateTerminal(first, "native-prompt", 1000)).toBe(false);
+  } finally { await host.release(); }
+});
