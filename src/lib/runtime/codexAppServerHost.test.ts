@@ -8498,3 +8498,22 @@ test("a Codex host keeps a bounded event window, replays older events from its l
   expect(adopted.tierCutEvidence("turn-first")).toBe("turn-ended");
   await adopted.release();
 });
+
+test("heap counters observe events and subscriber queues without consuming them", async () => {
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(new FakeAppServer("heap-counter-thread")) });
+  const before = host.heapAttribution();
+  const stop = host.onStateChange(() => {});
+  const stream = host.attach(0)[Symbol.asyncIterator]();
+  try {
+    expect(before.engine).toBe("codex");
+    expect(before.events).toBeGreaterThan(0);
+    expect(host.heapAttribution()).toMatchObject({ events: before.events,
+      eventSubscribers: before.eventSubscribers + 1, stateSubscribers: before.stateSubscribers + 1,
+      queuedEvents: before.queuedEvents + before.events });
+    await stream.next();
+    expect(host.heapAttribution().queuedEvents).toBe(before.queuedEvents + before.events - 1);
+    await stream.return?.();
+    stop();
+    expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
+  } finally { stop(); await stream.return?.(); await host.release(); }
+});
