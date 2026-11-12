@@ -747,3 +747,161 @@ dependency input, compiler setting or test command. The checked program and
 test inputs remain byte-identical to the final `adfbb880` overlay, so those
 compiler, lint and test results carry forward. The publication privacy scan
 reads the additional merge metadata and this explanation.
+
+
+## Committed-tree campaign
+
+The complete 87-path selection was renewed from a fresh immutable export of
+commit `5a5bb8da`, after the guarded delivery commit and its publication privacy
+check. This section supersedes the earlier mixed-snapshot selection totals.
+The comparison base is `a00b2189`; its program/test inputs are identical to
+`f97d31b9`, used for the recorded matching baseline samples. No later main
+change was mixed into this campaign.
+
+Every file ran sequentially with its own owned runner, native Git first,
+fresh HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR, and the closed Viewer
+control endpoint. Initial files used the 300000 ms owned-run limit and
+60000 ms Bun test limit. Three files hit the owned-run limit without complete
+counts. All fourteen process identities in their cleanup diagnostics were
+confirmed gone before a fresh recovery. Those files and the spawn-retry
+stderr assertion then ran in full on both main and head, with a 900000 ms
+diagnostic owned-run allowance. The Bun test limit stayed 60000 ms. The
+campaigns had three hours of execution headroom each; no publication budget
+changed. Each record was awaited once through admission, execution and cleanup.
+
+Across the latest complete observations for all 87 files: 3728 pass, 13 baseline failed
+tests, 2 skips and 30534 reported parent-runner assertions. All failed
+test identifiers have recorded main matches; no new failed identifier or
+incomplete file result was adopted. The final code/test SHA-256 is unchanged
+from the 20-file repair fingerprint above. The later ledger-only commit
+changes no compiler or test input.
+
+| Command | Exit | Pass / fail / skip | Assertions | Seconds | Invoked UTC |
+|---|---:|---|---:|---:|---|
+| `T bun test --timeout=60000 bin/forge-app-token.test.ts` | 0 | 192 / 0 / 0 | 637 | 1.955 | 2026-11-12T16:23:10+00:00 |
+| `T bun test --timeout=60000 src/lib/forge/appWrite.test.ts` | 0 | 19 / 0 / 0 | 70 | 2.712 | 2026-11-12T16:23:11+00:00 |
+| `T bun test --timeout=60000 src/lib/forge/autoMerge.test.ts` | 0 | 176 / 0 / 0 | 2879 | 49.068 | 2026-11-12T16:23:14+00:00 |
+| `T bun test --timeout=60000 src/lib/forge/issueDelivery.app.test.ts` | 0 | 5 / 0 / 0 | 26 | 2.231 | 2026-11-12T16:24:03+00:00 |
+| `T bun test --timeout=60000 src/lib/forge/issueDelivery.test.ts` | 0 | 55 / 0 / 0 | 117 | 1.122 | 2026-11-12T16:24:06+00:00 |
+| `T bun test --timeout=60000 src/lib/forge/issueDeliveryStore.test.ts` | 0 | 9 / 0 / 0 | 64 | 9.983 | 2026-11-12T16:24:07+00:00 |
+| `T bun test --timeout=60000 src/lib/forge/postMerge.taskBinding.test.ts` | 0 | 10 / 0 / 0 | 55 | 7.339 | 2026-11-12T16:24:17+00:00 |
+| `T bun test --timeout=60000 src/lib/forge/workLinks.test.ts` | 0 | 40 / 0 / 0 | 112 | 1.678 | 2026-11-12T16:24:24+00:00 |
+| `T bun test --timeout=60000 src/lib/mcp/server.test.ts` | 0 | 103 / 0 / 0 | 2612 | 47.606 | 2026-11-12T16:24:26+00:00 |
+| `T bun test --timeout=60000 src/lib/mcp/workLinks.test.ts` | 0 | 3 / 0 / 0 | 23 | 2.861 | 2026-11-12T16:25:13+00:00 |
+| `T bun test --timeout=60000 src/lib/monitor/seatTickSources.test.ts` | 0 | 166 / 0 / 0 | 1051 | 57.183 | 2026-11-12T16:25:16+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.accountGuard.test.ts` | 0 | 31 / 0 / 0 | 161 | 104.724 | 2026-11-12T16:26:13+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.accounting.test.ts` | 0 | 8 / 0 / 0 | 66 | 19.5 | 2026-11-12T16:27:58+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.activation.test.ts` | 1 | 52 / 1 / 0 | 332 | 73.241 | 2026-11-12T16:28:18+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.capacity.test.ts` | 0 | 25 / 0 / 0 | 410 | 50.533 | 2026-11-12T16:29:31+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.claudeCloud.test.ts` | 0 | 11 / 0 / 0 | 93 | 14.206 | 2026-11-12T16:30:21+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.closeAttempts.test.ts` | 0 | 50 / 0 / 0 | 323 | 16.202 | 2026-11-12T16:30:36+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.cloud.test.ts` | 124 | not reported / not reported / 0 | not reported | 300.615 | 2026-11-12T16:30:52+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.containment.test.ts` | 0 | 55 / 0 / 0 | 402 | 81.852 | 2026-11-12T16:35:52+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.controllerPass.test.ts` | 0 | 74 / 0 / 0 | 732 | 105.199 | 2026-11-12T16:37:14+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.controllerSnapshot.test.ts` | 0 | 2 / 0 / 0 | 7 | 8.038 | 2026-11-12T16:38:59+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.cpuAdmissionPolling.test.ts` | 0 | 15 / 0 / 0 | 112 | 84.295 | 2026-11-12T16:39:07+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.cpuQueue.test.ts` | 0 | 2 / 0 / 0 | 36 | 10.903 | 2026-11-12T16:40:32+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.creation.test.ts` | 0 | 113 / 0 / 0 | 722 | 109.836 | 2026-11-12T16:40:43+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.dependencies.test.ts` | 0 | 4 / 0 / 0 | 19 | 5.838 | 2026-11-12T16:42:32+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.fencedMessage.test.ts` | 0 | 24 / 0 / 0 | 229 | 68.7 | 2026-11-12T16:42:38+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.historyWrites.test.ts` | 0 | 10 / 0 / 0 | 108 | 16.533 | 2026-11-12T16:43:47+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.launchLease.test.ts` | 0 | 15 / 0 / 0 | 15 | 59.43 | 2026-11-12T16:44:04+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.mechanicalRecovery.test.ts` | 0 | 42 / 0 / 0 | 822 | 224.694 | 2026-11-12T16:45:03+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.missingWorktree.test.ts` | 0 | 35 / 0 / 0 | 352 | 79.646 | 2026-11-12T16:48:48+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.pauseMetadata.test.ts` | 0 | 19 / 0 / 0 | 47 | 10.006 | 2026-11-12T16:50:07+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.ports.part2.test.ts` | 0 | 51 / 0 / 0 | 426 | 114.175 | 2026-11-12T16:50:17+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.ports.part3.test.ts` | 0 | 18 / 0 / 0 | 658 | 184.685 | 2026-11-12T16:52:11+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.ports.test.ts` | 0 | 81 / 0 / 0 | 1735 | 224.072 | 2026-11-12T16:55:16+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.privacyCorrelation.test.ts` | 0 | 1 / 0 / 0 | 5 | 5.383 | 2026-11-12T16:59:00+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.proactive.part2.test.ts` | 124 | not reported / not reported / 0 | not reported | 300.599 | 2026-11-12T16:59:06+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.proactive.test.ts` | 0 | 41 / 0 / 0 | 170 | 163.546 | 2026-11-12T17:04:06+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudget.test.ts` | 0 | 42 / 0 / 0 | 172 | 71.334 | 2026-11-12T17:06:50+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetChains.part2.test.ts` | 0 | 18 / 0 / 0 | 82 | 143.199 | 2026-11-12T17:08:01+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetChains.part3.test.ts` | 0 | 26 / 0 / 0 | 94 | 116.994 | 2026-11-12T17:10:24+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetChains.test.ts` | 0 | 18 / 0 / 0 | 82 | 70.849 | 2026-11-12T17:12:21+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetKinds.test.ts` | 0 | 28 / 0 / 0 | 147 | 44.332 | 2026-11-12T17:13:32+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts` | 0 | 5 / 0 / 0 | 15 | 71.02 | 2026-11-12T17:14:16+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts` | 0 | 6 / 0 / 0 | 18 | 164.674 | 2026-11-12T17:15:27+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetOutput.test.ts` | 0 | 5 / 0 / 0 | 15 | 124.33 | 2026-11-12T17:18:12+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts` | 0 | 5 / 0 / 0 | 15 | 81.79 | 2026-11-12T17:20:17+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts` | 0 | 6 / 0 / 0 | 18 | 72.585 | 2026-11-12T17:21:38+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts` | 0 | 5 / 0 / 0 | 15 | 63.873 | 2026-11-12T17:22:51+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.providerChains.part2.test.ts` | 0 | 32 / 0 / 0 | 304 | 30.755 | 2026-11-12T17:23:55+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.providerChains.test.ts` | 0 | 16 / 0 / 0 | 96 | 59.082 | 2026-11-12T17:24:26+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.providerReset.part2.test.ts` | 0 | 5 / 0 / 0 | 25 | 93.72 | 2026-11-12T17:25:25+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.providerReset.part3.test.ts` | 0 | 27 / 0 / 0 | 177 | 112.786 | 2026-11-12T17:26:58+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.providerReset.test.ts` | 0 | 18 / 0 / 0 | 96 | 86.97 | 2026-11-12T17:28:51+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.providerSignals.test.ts` | 0 | 28 / 0 / 0 | 128 | 42.127 | 2026-11-12T17:30:18+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.provisioning.test.ts` | 0 | 73 / 0 / 0 | 388 | 56.974 | 2026-11-12T17:31:00+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.publication.test.ts` | 0 | 36 / 0 / 0 | 454 | 72.367 | 2026-11-12T17:31:57+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.recoveredPending.test.ts` | 0 | 43 / 0 / 0 | 622 | 33.953 | 2026-11-12T17:33:10+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.recovery.part2.test.ts` | 0 | 85 / 0 / 0 | 605 | 147.642 | 2026-11-12T17:33:43+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.recovery.test.ts` | 0 | 67 / 0 / 1 | 521 | 123.138 | 2026-11-12T17:36:11+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.recoveryAdmission.part2.test.ts` | 0 | 116 / 0 / 0 | 306 | 123.171 | 2026-11-12T17:38:14+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.recoveryAdmission.test.ts` | 0 | 65 / 0 / 0 | 411 | 93.352 | 2026-11-12T17:40:17+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.recoveryAuthority.part2.test.ts` | 0 | 86 / 0 / 0 | 478 | 124.399 | 2026-11-12T17:41:51+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.recoveryAuthority.test.ts` | 0 | 98 / 0 / 0 | 388 | 125.328 | 2026-11-12T17:43:55+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.restoreContinuation.test.ts` | 0 | 78 / 0 / 0 | 296 | 62.175 | 2026-11-12T17:46:01+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.roleMemoryDispatch.test.ts` | 124 | not reported / not reported / 0 | not reported | 300.679 | 2026-11-12T17:47:03+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.rolePrivacy.test.ts` | 0 | 20 / 0 / 1 | 178 | 124.245 | 2026-11-12T17:52:03+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.rolePrivacyEffects.part2.test.ts` | 0 | 26 / 0 / 0 | 26 | 183.543 | 2026-11-12T17:54:08+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.rolePrivacyEffects.part3.test.ts` | 0 | 26 / 0 / 0 | 26 | 159.968 | 2026-11-12T17:57:11+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.rolePrivacyEffects.test.ts` | 0 | 27 / 0 / 0 | 27 | 137.76 | 2026-11-12T17:59:51+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.routing.test.ts` | 1 | 99 / 8 / 0 | 700 | 154.604 | 2026-11-12T18:02:09+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.settlement.test.ts` | 0 | 121 / 0 / 0 | 1016 | 257.346 | 2026-11-12T18:04:44+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.settlementAuthority.test.ts` | 0 | 1 / 0 / 0 | 15 | 4.385 | 2026-11-12T18:09:01+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.settlementPreparation.test.ts` | 0 | 31 / 0 / 0 | 544 | 75.025 | 2026-11-12T18:09:05+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.setupRecipe.test.ts` | 0 | 7 / 0 / 0 | 52 | 9.319 | 2026-11-12T18:10:20+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.spawnRetry.test.ts` | 1 | 102 / 1 / 0 | 1074 | 128.699 | 2026-11-12T18:10:30+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.spawnSilence.test.ts` | 0 | 25 / 0 / 0 | 132 | 63.121 | 2026-11-12T18:12:38+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.succession.part2.test.ts` | 0 | 99 / 0 / 0 | 651 | 151.034 | 2026-11-12T18:13:41+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.succession.part3.test.ts` | 0 | 105 / 0 / 0 | 530 | 90.284 | 2026-11-12T18:16:12+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.succession.test.ts` | 0 | 32 / 0 / 0 | 149 | 72.473 | 2026-11-12T18:17:43+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.suspendedRetry.test.ts` | 0 | 21 / 0 / 0 | 193 | 27.562 | 2026-11-12T18:18:55+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.terminalBudget.test.ts` | 0 | 11 / 0 / 0 | 136 | 44.26 | 2026-11-12T18:19:23+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/engine.watchdogRegression.test.ts` | 0 | 5 / 0 / 0 | 17 | 5.506 | 2026-11-12T18:20:07+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/store.archiveText.test.ts` | 0 | 3 / 0 / 0 | 36 | 1.456 | 2026-11-12T18:20:13+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/store.cooperativeFreeze.test.ts` | 0 | 2 / 0 / 0 | 20 | 3.278 | 2026-11-12T18:20:14+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/store.reads.test.ts` | 0 | 4 / 0 / 0 | 71 | 2.49 | 2026-11-12T18:20:17+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/store.schemaCompatibility.test.ts` | 0 | 13 / 0 / 0 | 45 | 2.032 | 2026-11-12T18:20:20+00:00 |
+| `T bun test --timeout=60000 src/lib/pipelines/store.test.ts` | 0 | 61 / 0 / 0 | 382 | 9.826 | 2026-11-12T18:20:22+00:00 |
+
+The three interrupted original results above remain unadopted. The recovery
+commands below run with the diagnostic 900000 ms owned-run allowance; the
+comparison base is a00b2189 and the head is the same 5a5bb8da source.
+
+| Side | Command | Exit | Pass / fail / skip | Assertions | Seconds | Invoked UTC |
+|---|---|---:|---|---:|---:|---|
+| base | `T bun test --timeout=60000 src/lib/pipelines/engine.cloud.test.ts` | 1 | 132 / 2 / 0 | 1301 | 179.619 | 2026-11-12T18:23:47+00:00 |
+| head | `T bun test --timeout=60000 src/lib/pipelines/engine.cloud.test.ts` | 1 | 132 / 2 / 0 | 1301 | 306.782 | 2026-11-12T18:26:47+00:00 |
+| base | `T bun test --timeout=60000 src/lib/pipelines/engine.proactive.part2.test.ts` | 1 | 50 / 2 / 0 | 445 | 247.436 | 2026-11-12T18:31:53+00:00 |
+| head | `T bun test --timeout=60000 src/lib/pipelines/engine.proactive.part2.test.ts` | 1 | 50 / 2 / 0 | 445 | 230.558 | 2026-11-12T18:36:01+00:00 |
+| base | `T bun test --timeout=60000 src/lib/pipelines/engine.roleMemoryDispatch.test.ts` | 0 | 110 / 0 / 0 | 1155 | 193.913 | 2026-11-12T18:39:51+00:00 |
+| head | `T bun test --timeout=60000 src/lib/pipelines/engine.roleMemoryDispatch.test.ts` | 0 | 110 / 0 / 0 | 1155 | 364.68 | 2026-11-12T18:43:05+00:00 |
+| base | `T bun test --timeout=60000 src/lib/pipelines/engine.spawnRetry.test.ts` | 0 | 103 / 0 / 0 | 1091 | 153.962 | 2026-11-12T18:49:10+00:00 |
+| head | `T bun test --timeout=60000 src/lib/pipelines/engine.spawnRetry.test.ts` | 0 | 103 / 0 / 0 | 1091 | 141.156 | 2026-11-12T18:51:44+00:00 |
+
+The guarded commit also passed `bun scripts/local-gate.ts pre-commit`: staged
+whitespace was clean, and lint of its six staged code/test files introduced
+zero errors. No hook override was used.
+
+| Command | Exit | Counts | Seconds | Invoked UTC |
+|---|---:|---|---:|---|
+| `G bun run privacy:check` at 5a5bb8da | 0 | 23 changed paths plus commit metadata; zero findings | 15.097 | 2026-11-12T16:19:23+00:00 |
+
+The same publication command is run after the ledger-only commit. Its
+terminal status and the final commit identity are retained with the handoff.
+
+The spawn-retry failure in the original campaign was an unexpected timing
+diagnostic on stderr from a child that exited successfully. Its fresh full-file
+main and head observations both pass all 103 tests and 1091 assertions. No
+product or test change was made to obtain those results. The Cloud and
+proactive files have matching full-file failed test identifiers on main and
+head. Role-memory dispatch passes all 110 tests on each side.
+
+The final ledger and exact stage-report preview also passed whole-file
+privacy with zero findings.
+
+| Command | Exit | Counts | Seconds | Invoked UTC |
+|---|---:|---|---:|---|
+| `G bun scripts/privacy-publication-gate.ts --require-known-values --paths docs/verification/issue-delivery.md docs/verification/stage-report-preview.txt` | 0 | 2 files; zero findings | 2.571 | 2026-11-12T18:55:39+00:00 |
