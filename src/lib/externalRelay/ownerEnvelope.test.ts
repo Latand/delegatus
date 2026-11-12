@@ -10,12 +10,34 @@ import { ownerTierFor } from "./profile";
 import { ownerContinuationPrompt, ownerFailureAnswer, ownerRunPrompt, runOwnerAgent } from "./ownerRun";
 import { json } from "./prompt";
 import { RelayMandatoryPromptTooLargeError } from "./promptBudget";
+import * as promptBudget from "./promptBudget";
 import { richRequest } from "./rich.fixture";
 import { prepareOwnerPrompt } from "./ownerRun";
 import { ownerTurnDiagnostic } from "./diagnostic";
 import { runClaimedRequest } from "./runner";
 import { updateRelayStore, type PairedRelay } from "./store";
 import { startTestRelay } from "./testRelay";
+import { projectForCwd } from "@/lib/scanner/describe";
+import { resetProjectDirectoryCacheForTests } from "@/lib/scanner/projectDirectories";
+import { checkEnvironment } from "../../../scripts/gate-cache";
+import { ownerRunRoot } from "./runDirectory";
+
+function measuredCore(total: number, compose: () => ReturnType<typeof prepareOwnerPrompt>) {
+  const realBudget = promptBudget.boundedRelayPrompt;
+  let mandatoryBytes = 0;
+  const observed = spyOn(promptBudget, "boundedRelayPrompt").mockImplementation(((...args: Parameters<typeof realBudget>) => {
+    try { return realBudget(...args); }
+    catch (error) {
+      if (error instanceof RelayMandatoryPromptTooLargeError) mandatoryBytes = error.mandatoryBytes;
+      throw error;
+    }
+  }) as typeof realBudget);
+  try {
+    const prepared = compose();
+    expect(mandatoryBytes).toBe(total);
+    return prepared;
+  } finally { observed.mockRestore(); }
+}
 
 const at = "2026-11-05T12:00:00.000Z";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-envelope-"));
@@ -158,7 +180,9 @@ for (const mode of ["fresh", "resumed"] as const) {
     expect(Buffer.byteLength(exact.prompt)).toBe(MAX_STRUCTURED_TEXT_BYTES);
     expect(section(exact.prompt, "service_instructions")).toBe(r.input.instructions);
     r.input.instructions += "x";
-    expect(() => compose(r, owner)).toThrow(RelayMandatoryPromptTooLargeError);
+    const overflow = compose(r, owner);
+    expect(section(overflow.context!, "service_instructions")).toBe(r.input.instructions);
+    assertStructuredTextEnvelope(overflow.prompt);
   });
 
   for (const conversationBytes of [47353, 45186])
@@ -212,7 +236,7 @@ for (const mode of ["fresh", "resumed"] as const) {
   });
 
   for (const kind of ["quote", "report", "intent", "service", "owner", "document", "media"] as const)
-  test(`${mode} oversized mandatory ${kind} refuses without truncation or dispatch`, async () => {
+  test(`${mode} oversized ${kind} preserves all text in context except an uncarryable instruction`, () => {
     const r = request(); const huge = "<я\\\"".repeat(3500);
     if (kind === "quote") r.input.conversation[0]!.text = huge;
     if (kind === "intent") r.input.conversation[1]!.text = huge;
@@ -222,7 +246,13 @@ for (const mode of ["fresh", "resumed"] as const) {
     const owner = ownerTierFor(target, r)!;
     if (kind === "report") owner.bridgeReport = { project: "project-b", sourceSeat: "seat-b", reportId: "report-b", reportText: huge };
     const original = JSON.stringify({ r, owner });
-    expect(() => compose(r, owner, { mandatory: kind === "media" ? huge.repeat(2) : "" })).toThrow(RelayMandatoryPromptTooLargeError);
+    if (kind === "intent") expect(() => compose(r, owner)).toThrow(RelayMandatoryPromptTooLargeError);
+    else {
+      const prepared = compose(r, owner, { mandatory: kind === "media" ? huge.repeat(2) : "" });
+      assertStructuredTextEnvelope(prepared.prompt);
+      expect(prepared.context).toContain(kind === "media" ? huge.repeat(2) : json(huge));
+      expect(prepared.seen).toEqual([owner.messageId]);
+    }
     expect(JSON.stringify({ r, owner })).toBe(original);
   });
 
@@ -234,6 +264,133 @@ for (const mode of ["fresh", "resumed"] as const) {
     expect(result.prompt).not.toContain("x".repeat(32000));
   });
 }
+
+for (const mode of ["fresh", "resumed"] as const)
+for (const shape of ["long-chain", "refusal-reply", "measured-core", "large-parent"] as const)
+test(`${mode} ${shape} delivers full Cyrillic context and answers within the envelope`, async () => {
+  const r = request("я".repeat(shape === "large-parent" ? 16000 : 4096));
+  r.input.conversation[1]!.text = "Поясни потрібний факт";
+  if (shape === "long-chain") r.input.conversation[1]!.text += " [Request-local context is attached before dispatch]";
+  const ancestors = Array.from({ length: 5 }, (_, i) => ({ ...r.input.conversation[0]!,
+    id: `ancestor-${i}`, text: "ю".repeat(4096), reply_to: i ? `ancestor-${i - 1}` : null }));
+  r.input.conversation[0]!.reply_to = ancestors.at(-1)!.id;
+  r.input.conversation.unshift(...ancestors);
+  if (shape === "refusal-reply") {
+    r.input.conversation.splice(-1, 0, { ...r.input.conversation.at(-2)!, id: "failure-reply",
+      text: "Запит не завершено. Спробуйте знову.", reply_to: "quote" });
+    r.input.conversation.at(-1)!.reply_to = "failure-reply";
+  }
+  if (shape === "measured-core") {
+    r.input.conversation = r.input.conversation.slice(-2);
+    r.input.conversation[0]!.reply_to = null;
+    r.input.conversation[0]!.text = "я".repeat(1178) + ".";
+    // Synthetic filler accounts for absent historical hydration/framing while
+    // matching the two measured mandatory totals through the real renderer.
+    r.input.instructions = "s".repeat(mode === "fresh" ? 3192 : 4690);
+    r.input.owner_instructions = "я".repeat(7400) + "<".repeat(100) + "o".repeat(92);
+    r.features = richRequest().features;
+    r.input.format = richRequest().input.format;
+    r.input.tools = Array.from({ length: 80 }, (_, i) => ({ name: `read_${String(i).padStart(32, "0")}`,
+      mode: "direct" as const, summary: "я".repeat(60), effect: "read" as const, audience: "owner" as const }));
+  }
+  const owner = ownerTierFor(target, r)!;
+  const before = JSON.stringify(r);
+  const compose = () => mode === "fresh" ? prepareOwnerPrompt(r, owner, 1, "OPTIONAL_SUFFIX".repeat(5000))
+    : ownerContinuationPrompt(r, owner, 1, { seen: [], staticDigest: null }, "OPTIONAL_SUFFIX".repeat(5000));
+  const prepared = shape === "measured-core" ? measuredCore(mode === "fresh" ? 33474 : 34090, compose) : compose();
+  expect(prepared.context).toBeDefined();
+  expect(prepared.seen).toEqual([owner.messageId]);
+  expect(prepared.context).not.toContain("OPTIONAL_SUFFIX");
+  // Keep the caller-owned path/replacement regression alongside default HOME delivery.
+  const suppliedDirectory = shape === "large-parent" ? path.join(root, `context-${mode}-${shape}-$&`) : undefined;
+  if (suppliedDirectory) fs.mkdirSync(suppliedDirectory, { mode: 0o700 });
+  let directory = "";
+  let launches = 0, continues = 0, received = "";
+  const receive = (prompt: string) => {
+    assertStructuredTextEnvelope(prompt);
+    expect(section(prompt, "owner_request")).toMatchObject({ text: owner.text, request_text: owner.requestText });
+    const file = section(prompt, "relay_context_file") as string;
+    directory = path.dirname(file);
+    if (suppliedDirectory) expect(directory).toBe(suppliedDirectory);
+    else {
+      expect(path.dirname(directory)).toBe(ownerRunRoot());
+      if (process.platform !== "win32") expect(directory.startsWith(path.join(process.env.HOME!, ".cache") + path.sep)).toBe(true);
+    }
+    if (process.platform !== "win32") expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
+    if (process.platform !== "win32") expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    received = fs.readFileSync(file, "utf8");
+    expect(received).toBe(prepared.context!);
+    expect(received).toContain(json(r.input.conversation.find(m => m.id === r.input.conversation.at(-1)!.reply_to)!.text));
+    expect(received).not.toContain("\uFFFD");
+    console.info("Cyrillic context delivery", { mode, shape, envelopeBytes: Buffer.byteLength(prompt), contextBytes: Buffer.byteLength(received) });
+  };
+  const result = await runOwnerAgent({ request: r, owner, target: { ...target }, accountId: null,
+    hardCapMs: 2000, preparedPrompt: prepared,
+    ...(suppliedDirectory ? { contextDirectory: suppliedDirectory } : {}),
+    ...(mode === "resumed" ? { continuation: { conversationId: "conversation_context", prompt: prepared.prompt } } : {}),
+    onConversation: () => {}, ports: {
+      launch: async body => { launches++; receive(String(body.prompt)); return { status: 202, body: { conversationId: "conversation_context", initialMessage: "delivered" } }; },
+      continue: async (turn, prompt, _target, authorize) => { authorize(); continues++; receive(prompt);
+        return { ok: true, structured: true, outcome: "delivered", target: turn.conversationId!, operationId: turn.clientAttemptId,
+          receipt: { operationId: turn.clientAttemptId, idempotencyKey: turn.clientAttemptId, conversationId: turn.conversationId!, kind: "send", status: "delivered", at, revision: 1 } }; },
+      observe: async () => ({ state: "ended", finalText: "Пояснення готове." }), stop: async () => {}, pollMs: 1,
+    } }).done;
+  expect(result).toMatchObject({ status: "done", answer: { text: "Пояснення готове.", reply_to: "m1" } });
+  expect(launches).toBe(mode === "fresh" ? 1 : 0); expect(continues).toBe(mode === "resumed" ? 1 : 0);
+  expect(fs.existsSync(directory)).toBe(!!suppliedDirectory);
+  expect(JSON.stringify(r)).toBe(before);
+});
+
+for (const mode of ["fresh", "resumed"] as const)
+test(`${mode} instruction alone over the byte bound refuses before dispatch`, async () => {
+  const r = request();
+  r.input.conversation[1]!.text = "я".repeat(15999) + "😀";
+  expect(Buffer.byteLength(r.input.conversation[1]!.text)).toBe(32002);
+  const owner = ownerTierFor(target, r)!;
+  let dispatches = 0;
+  const result = await runOwnerAgent({ request: r, owner, target: { ...target }, accountId: null, hardCapMs: 2000,
+    ...(mode === "resumed" ? { continuation: { conversationId: "conversation_large_instruction", prompt: "unused" } } : {}),
+    onConversation: () => {}, ports: {
+      launch: async () => { dispatches++; return { status: 500, body: {} }; },
+      continue: async () => { dispatches++; return null; },
+      observe: async () => ({ state: "failed" }), stop: async () => {}, noExecution: async () => true,
+    } }).done;
+  expect(result.status).toBe("failed");
+  expect(result.diagnostic?.promptBudget?.kind).toBe("mandatory_core_too_large");
+  expect(ownerFailureAnswer(r, owner, result.diagnostic!)?.text).toContain("Скоротіть");
+  expect(dispatches).toBe(0);
+});
+
+for (const mode of ["fresh", "resumed"] as const)
+for (const failure of ["write", "authority"] as const)
+test(`${mode} context ${failure} failure prevents dispatch`, async () => {
+  const r = request("я".repeat(16000));
+  const owner = ownerTierFor(target, r)!;
+  const prepared = prepareOwnerPrompt(r, owner, 1);
+  const directory = path.join(root, `context-failure-${mode}-${failure}`);
+  let dispatches = 0, revoked = false, createdDirectory = "";
+  const write = failure === "authority" ? spyOn(fs.promises, "writeFile").mockImplementation(async (...args: Parameters<typeof fs.promises.writeFile>) => {
+    // The real write completes, then the request loses authority at its await.
+    await originalWrite(...args); createdDirectory = path.dirname(String(args[0])); revoked = true;
+  }) : null;
+  try {
+    const result = await runOwnerAgent({ request: r, owner, target: { ...target }, accountId: null, hardCapMs: 2000,
+      preparedPrompt: prepared, ...(failure === "write" ? { contextDirectory: directory } : {}),
+      authorize: () => { if (revoked) throw new Error("fixture revoked"); },
+      ...(mode === "resumed" ? { continuation: { conversationId: "conversation_context_failure", prompt: prepared.prompt } } : {}),
+      onConversation: () => {}, ports: {
+        launch: async () => { dispatches++; return { status: 500, body: {} }; },
+        continue: async () => { dispatches++; return null; },
+        observe: async () => ({ state: "failed" }), stop: async () => {}, noExecution: async () => true,
+      } }).done;
+    expect(result.status).toBe("failed"); expect(dispatches).toBe(0);
+    if (failure === "authority") {
+      expect(path.dirname(createdDirectory)).toBe(ownerRunRoot());
+      expect(fs.existsSync(createdDirectory)).toBe(false);
+    }
+  } finally { write?.mockRestore(); }
+});
+const originalWrite = fs.promises.writeFile.bind(fs.promises);
 
 for (const language of ["en", "uk"] as const)
 test(`mandatory refusal has a readable ${language} answer and numeric diagnostic`, () => {
@@ -259,7 +416,7 @@ test(`mandatory refusal has a readable ${language} answer and numeric diagnostic
 });
 
 for (const status of ["ok", "outcome_unknown", "confirmation_pending"] as const)
-test(`Cloud size refusal preserves the prior ${status} action and does not dispatch another turn`, async () => {
+test(`Cloud overflow fallback answers with the prior ${status} action result without repeating it`, async () => {
   let posts = 0, cloud = 0, launches = 0;
   const service = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/tool-calls")) {
@@ -272,27 +429,41 @@ test(`Cloud size refusal preserves the prior ${status} action and does not dispa
     return { body: { status: "ok" } };
   });
   const paired = pairedRelay(service.origin);
-  paired.targets[0] = { ...target, engine: "codex-cloud", project: "fixture-project", cloudEnvironmentId: "answer-env" };
+  const cwd = path.join(process.env.LLV_STATE_DIR!, "repository");
+  fs.mkdirSync(cwd, { recursive: true });
+  const gitEnv = checkEnvironment(process.env);
+  const gitBinary = Bun.which("git", { PATH: gitEnv.PATH });
+  if (!gitBinary) throw new Error("native Git unavailable for repository fixture");
+  const git = Bun.spawnSync([gitBinary, "init", "-q", cwd], { env: gitEnv });
+  expect(git.exitCode).toBe(0);
+  const catalog = path.join(process.env.LLV_STATE_DIR!, "project-catalog.json");
+  fs.writeFileSync(catalog, JSON.stringify({ files: { fixture: { cwd } } }));
+  resetProjectDirectoryCacheForTests();
+  paired.targets[0] = { ...target, engine: "codex-cloud", project: projectForCwd(cwd)!, cloudEnvironmentId: "answer-env" };
+  const account = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "fixture", kind: "managed", home: root, transcriptRoot: root, env: { ...process.env },
+  } });
   updateRelayStore(store => ({ ...store, relays: [paired] }));
   const r = request(); r.request_id = `size-after-${status}`;
   r.input.conversation[1]!.text = "Write the requested note";
   r.input.tools = [{ name: "write_note", summary: "Write a note", mode: "direct", effect: "action",
     parameters: { type: "object", properties: {} } }];
+  let contextFile = "";
   try {
     const result = await runClaimedRequest(paired, r, undefined, { leaseWorker: false,
       cloudTransport: async () => { cloud++; return JSON.stringify({ action: "call", text: "", reply_to: null,
         calls: [{ tool: "write_note", arguments: "{}", cursor: null }] }); },
-      ownerPorts: { launch: async () => { launches++; throw new Error("unexpected local fallback"); },
-        observe: async () => ({ state: "failed" }), stop: async () => {} },
+      ownerPorts: { launch: async body => {
+        launches++; const prompt = String(body.prompt); assertStructuredTextEnvelope(prompt);
+        contextFile = section(prompt, "relay_context_file") as string;
+        expect(path.dirname(path.dirname(contextFile))).toBe(ownerRunRoot());
+        const context = fs.readFileSync(contextFile, "utf8");
+        expect(context).toContain("<tool_results>"); expect(context).toContain(status);
+        return { status: 202, body: { conversationId: "conversation_cloud_context", initialMessage: "delivered" } };
+      }, observe: async () => ({ state: "ended", finalText: `Prior action: ${status}.` }), stop: async () => {}, pollMs: 1 },
     });
-    const outcome = status === "ok" ? "completed" : status === "outcome_unknown" ? "unknown" : "confirmation_pending";
-    const answerText = result?.outcome === "answered" ? result.answer.text : "";
-    expect(result?.outcome).toBe("answered");
-    expect(answerText).toContain("Shorten");
-    expect(answerText).toContain(status === "ok" ? "action completed"
-      : status === "outcome_unknown" ? "outcome is unknown" : "awaits confirmation");
-    const { readAnswerRecord } = await import("./answers");
-    expect(readAnswerRecord(paired.id, r.target_id, r.request_id)).toMatchObject({ diagnostic: { promptBudget: { priorAction: outcome } } });
-    expect({ posts, cloud, launches }).toEqual({ posts: 1, cloud: 1, launches: 0 });
-  } finally { await service.close(); }
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: `Prior action: ${status}.` } });
+    expect({ posts, cloud, launches }).toEqual({ posts: 1, cloud: 1, launches: 1 });
+    expect(fs.existsSync(path.dirname(contextFile))).toBe(false);
+  } finally { account.mockRestore(); resetProjectDirectoryCacheForTests(); await service.close(); }
 });

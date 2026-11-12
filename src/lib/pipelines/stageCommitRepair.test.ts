@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { shortId } from "@/lib/shortIds";
 
-import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 import type { ExecPort, ExecResult } from "@/lib/workflows/provision";
 
 // Fixture executors clear inherited Git configuration too; keep the caller's
@@ -626,11 +625,9 @@ function harness(options: { access?: "read-only" | "read-write" } = {}) {
       ? STAGE_CONVERSATION
       : pathname === "/claude/creator.jsonl" ? "conversation_creator" : null,
     pipelineAdoptionCandidates: () => [],
-    createFlow: async (request: CreateFlowRequest) => ({ flow: { id: "flow-1", implementerPath: request.implementerPath } as unknown as Flow }),
     patchFlow: () => ({}),
     closeFlow: async () => {},
     getFlow: () => null,
-    findFlow: () => null,
     projectForCwd: () => "viewer",
     now: () => new Date(wall).toISOString(),
   };

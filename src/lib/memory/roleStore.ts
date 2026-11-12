@@ -25,6 +25,7 @@ import type { ProfileRulesView } from "./profile";
 import { keepHistory, scopeRowWithEntry } from "./roleHistoryRows";
 import { renderLearnedRulesSelection } from "./roleRender";
 import { closestReadableRuleIds } from "./ruleIds";
+import { buildLessonIndex, lessonPatternsIn, type LessonIndex } from "./lessonMatcher";
 import { roleRowsWithPrefix, scopeMembershipRows, storedRuleTexts } from "./roleViewSource";
 import { deliveredRuleIds } from "./deliveryLedger";
 import {
@@ -865,11 +866,7 @@ export function storedLessonTexts(): string[] {
   return lessonTextsOf(readableRuleTexts());
 }
 
-// Leave headroom under JSC's limit and keep compilation quick on a cache miss.
-const LESSON_MATCHER_SOURCE_LIMIT = 32_000;
-interface LessonMatcher { pattern: RegExp; prefilter: RegExp | null }
-interface LessonSource { source: string; words: string[]; anchor?: string }
-type MatcherCache = { key: string; matchers: LessonMatcher[]; skipped: number; texts: string[]; exact?: RegExp[] };
+type MatcherCache = { key: string; index: LessonIndex };
 const matcherHost = globalThis as typeof globalThis & { __delegatusLessonMatcher?: MatcherCache };
 let privacyPhase: ((phase: "compile" | "match") => void) | undefined;
 /** Installed only by the leased worker; carries static phase names, never text. */
@@ -899,92 +896,39 @@ export function storedLessonRevision(): string {
   } catch (error) { throw unreadableRoleMemory(error); }
 }
 
-/** Bounded alternatives in longest-first order, cached for this store signature. */
-function storedLessonMatchers(): LessonMatcher[] {
+/** The index of every stored lesson's words, cached for this store signature.
+ * Building it compiles no pattern. */
+function storedLessonMatchers(): LessonIndex {
   const signature = storedLessonRevision();
-  if (matcherHost.__delegatusLessonMatcher?.key === signature) return matcherHost.__delegatusLessonMatcher.matchers;
+  if (matcherHost.__delegatusLessonMatcher?.key === signature) return matcherHost.__delegatusLessonMatcher.index;
   return privacyWork("compile", () => compileStoredLessonMatchers(signature));
 }
-function compileStoredLessonMatchers(signature: string): LessonMatcher[] {
+function compileStoredLessonMatchers(signature: string): LessonIndex {
   const all = readableRuleTexts();
   if (matcherHost.__delegatusLessonMatcher?.key !== signature) {
-    const matchers: LessonMatcher[] = [];
-    let skipped = 0;
-    const sources: LessonSource[] = [];
-    const frequency = new Map<string, number>();
-    const texts = lessonTextsOf(all);
-    for (const text of texts) {
-      const source = lessonPatternSource(text);
-      if (!source) continue;
-      const wrapped = `(?:${source})`;
-      if (wrapped.length > LESSON_MATCHER_SOURCE_LIMIT) { skipped += 1; continue; }
-      const words = [...new Set(text.normalize("NFKC").match(/[\p{L}\p{N}]+/gu) ?? [])];
-      sources.push({ source: wrapped, words });
-      for (const word of words) {
-        const key = word.toLowerCase();
-        frequency.set(key, (frequency.get(key) ?? 0) + 1);
-      }
-    }
-    for (const source of sources) {
-      source.anchor = source.words.sort((a, b) => frequency.get(a.toLowerCase())! - frequency.get(b.toLowerCase())! || b.length - a.length)[0];
-    }
-    const compile = (sources: LessonSource[]) => {
-      if (!sources.length) return;
-      try {
-        // Every alternative requires its anchor word. Use the same Unicode
-        // case folding and word boundaries as lessonPattern; string lowercasing
-        // alone would miss matches such as long s, Kelvin sign or final sigma.
-        const anchors = [...new Set(sources.map(source => source.anchor))];
-        const prefilter = anchors.includes(undefined) ? null
-          : new RegExp(`(?<![\\p{L}\\p{N}])(?:${anchors.join("|")})(?![\\p{L}\\p{N}])`, "iu");
-        matchers.push({ pattern: new RegExp(sources.map(source => source.source).join("|"), "giu"), prefilter });
-      } catch (error) {
-        if (!(error instanceof SyntaxError)) throw error;
-        // Engine limits also depend on pattern complexity. Split a refused
-        // batch again; only an individually uncompilable lesson is skipped.
-        if (sources.length === 1) { skipped += 1; return; }
-        const middle = Math.floor(sources.length / 2);
-        compile(sources.slice(0, middle));
-        compile(sources.slice(middle));
-      }
-    };
-    let chunk: LessonSource[] = [];
-    let length = 0;
-    for (const source of sources) {
-      const added = source.source.length + Number(chunk.length > 0);
-      if (length + added > LESSON_MATCHER_SOURCE_LIMIT) {
-        compile(chunk);
-        chunk = [];
-        length = 0;
-      }
-      length += source.source.length + Number(chunk.length > 0);
-      chunk.push(source);
-    }
-    compile(chunk);
+    const index = buildLessonIndex(lessonTextsOf(all));
     if (storedLessonRevision() !== signature) throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE, { cause: new PrivacyWorkError("store-changed") });
-    matcherHost.__delegatusLessonMatcher = { key: signature, matchers, skipped, texts };
-    if (skipped) console.warn(`stored-lesson matcher skipped ${skipped} oversized or uncompilable lesson text(s)`);
+    matcherHost.__delegatusLessonMatcher = { key: signature, index };
+    if (index.skipped) console.warn(`stored-lesson matcher skipped ${index.skipped} oversized or uncompilable lesson text(s)`);
   }
-  return matcherHost.__delegatusLessonMatcher.matchers;
+  return matcherHost.__delegatusLessonMatcher.index;
 }
 
-/** Exact per-lesson occurrences preserve report hint ordering and overlaps.
- * These patterns and replacement chunks share one revision and one cache slot. */
-export function storedLessonPatterns(): readonly RegExp[] {
-  storedLessonMatchers();
-  const held = matcherHost.__delegatusLessonMatcher!;
-  return held.exact ??= privacyWork("compile", () => held.texts.flatMap(text => {
-    const source = lessonPatternSource(text);
-    return source === null ? [] : [new RegExp(source, "giu")];
-  }));
+/** The exact per-lesson patterns that can occur in `text`: every stored
+ * lesson whose words are all there, longest first. Report hints scan these
+ * one by one and keep their ordering and overlaps. */
+export function storedLessonPatternsIn(text: string): readonly RegExp[] {
+  const index = storedLessonMatchers();
+  return privacyWork("match", () => lessonPatternsIn(index, text));
 }
 
 /** Merge matches on the original text: earliest start wins, and a tie goes
-    to the first (longest-first) chunk. Replacing chunk by chunk would change
-    overlapping matches and could match across an inserted placeholder. */
-function withholdLessons(text: string, chunks: readonly LessonMatcher[]): string {
-  const matchers = chunks.filter(chunk => !chunk.prefilter || chunk.prefilter.test(text)).map(chunk => chunk.pattern);
-  if (!text || !matchers.length) return text;
+    to the first (longest-first) lesson. Replacing lesson by lesson would
+    change overlapping matches and could match across an inserted placeholder. */
+function withholdLessons(text: string, index: LessonIndex): string {
+  if (!text) return text;
+  const matchers = lessonPatternsIn(index, text);
+  if (!matchers.length) return text;
   const matches = matchers.map(matcher => {
     matcher.lastIndex = 0;
     return matcher.exec(text);
@@ -1011,29 +955,29 @@ function withholdLessons(text: string, chunks: readonly LessonMatcher[]): string
 
 /** Class-only reports need existence, including a lesson equal to the marker. */
 export function hasStoredLesson(text: string): boolean {
-  const chunks = storedLessonMatchers();
-  return privacyWork("match", () => chunks.some(chunk => {
-    if (chunk.prefilter && !chunk.prefilter.test(text)) return false;
-    chunk.pattern.lastIndex = 0;
-    return chunk.pattern.test(text);
+  const index = storedLessonMatchers();
+  return privacyWork("match", () => lessonPatternsIn(index, text).some(pattern => {
+    pattern.lastIndex = 0;
+    return pattern.test(text);
   }));
 }
 
 /** The text with every stored lesson it quotes withheld. */
 export function withoutStoredLessons(text: string): string {
   if (!text) return text;
-  const chunks = storedLessonMatchers();
-  return privacyWork("match", () => withholdLessons(text, chunks));
+  const index = storedLessonMatchers();
+  return privacyWork("match", () => withholdLessons(text, index));
 }
 
 /** withoutStoredLessons over every text a record holds, however deep; the
     record itself when none quotes a lesson. */
 export function withoutStoredLessonsIn<T>(value: T, options: { requireComplete?: boolean } = {}): T {
   const matchers = storedLessonMatchers();
-  if (options.requireComplete && matcherHost.__delegatusLessonMatcher?.skipped) {
-    throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", "a stored lesson could not be compiled by the privacy matcher; nothing was sent");
-  }
-  if (!matchers.length) return value;
+  const incomplete = () => {
+    if (options.requireComplete && matchers.skipped) throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", "a stored lesson could not be compiled by the privacy matcher; nothing was sent");
+  };
+  incomplete();
+  if (!matchers.lessons.length) return value;
   const walk = (item: unknown): unknown => {
     if (typeof item === "string") return withholdLessons(item, matchers);
     if (Array.isArray(item)) {
@@ -1051,7 +995,10 @@ export function withoutStoredLessonsIn<T>(value: T, options: { requireComplete?:
     }
     return item;
   };
-  return privacyWork("match", () => walk(value) as T);
+  const filtered = privacyWork("match", () => walk(value) as T);
+  // A pattern is compiled when its lesson first comes up; one the engine refuses is found here.
+  incomplete();
+  return filtered;
 }
 
 /** Where the stored lessons are kept as the publication gate's known values:

@@ -4,6 +4,7 @@ import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/st
 import { IncompatibleSchemaError, schemaCompileFailure } from "./schemaCompatibility";
 import { blockingWaitRole, type StateLockHolder } from "@/lib/blockingWaits";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
+import { applySqliteMemoryMap } from "@/lib/sqliteMemoryMap";
 import { performanceSpans } from "@/lib/performanceSpans";
 import crypto from "node:crypto";
 import { viewerLoopMonitor, withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -389,6 +390,7 @@ function connectRawDatabase(filename: string): Database {
       db.exec("PRAGMA synchronous = FULL");
       db.exec("PRAGMA journal_size_limit = 67108864");
       db.exec("PRAGMA foreign_keys = ON");
+      applySqliteMemoryMap(db);
       return db;
     } catch (error) { db.close(); throw error; }
   });
@@ -404,6 +406,7 @@ function connectRawReadonlyDatabase(filename: string): Database {
   const db = observeSqlite(new Database(filename, { readonly: true, strict: true }), "state");
   db.exec("PRAGMA busy_timeout = 0");
   db.exec("PRAGMA foreign_keys = ON");
+  applySqliteMemoryMap(db);
   return db;
 }
 
@@ -1226,12 +1229,9 @@ export function recordStateImportMirror(filename: string, collection: string, mi
 export function stateDatabaseSignature(filename: string): string {
   const parts = [filename];
   for (const candidate of [filename, `${filename}-wal`]) {
-    try {
-      const stat = fs.statSync(candidate, { bigint: true });
-      parts.push(`${path.basename(candidate)}:${stat.mtimeNs}:${stat.size}`);
-    } catch {
-      parts.push(`${path.basename(candidate)}:missing`);
-    }
+    let stat: fs.BigIntStats | undefined;
+    try { stat = fs.statSync(candidate, { bigint: true, throwIfNoEntry: false }); } catch { /* unreadable reads as missing */ }
+    parts.push(stat ? `${path.basename(candidate)}:${stat.mtimeNs}:${stat.size}` : `${path.basename(candidate)}:missing`);
   }
   return parts.join("|");
 }
@@ -1940,7 +1940,9 @@ export class SqliteStateCollection<T> {
   }
 
   snapshot(): T[] {
-    return this.loadReadonly().map((record) => this.options.clone(record));
+    const records = this.loadReadonly();
+    // A whole-collection copy is synchronous work on the caller's thread: name it.
+    return performanceSpans.sync("state.copy", () => records.map((record) => this.options.clone(record)), records.length);
   }
 
   async snapshotAsync(): Promise<T[]> {

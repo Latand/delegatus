@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, expect, spyOn, test } from "bun:test";
+import { afterAll, expect, setSystemTime, spyOn, test } from "bun:test";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { statePath } from "@/lib/configDir";
 
@@ -5214,3 +5214,86 @@ test.each([false, true])("only a newly committed journal receipt grants an immed
     expect(wakes).toEqual(replayed ? [undefined] : [true]);
   } finally { journal.close(); }
 });
+
+
+test("a proven dead stage fails its held follow-up once without rearming later drains", async () => {
+  const { isolatedStageRegistry, stageFollowup } = await import("./deadStageDelivery.fixture");
+  setSystemTime(new Date("2026-11-01T00:00:00Z"));
+  const directory = fs.mkdtempSync(path.join(sandbox, "dead-stage-"));
+  const { registry, conversation } = isolatedStageRegistry(directory);
+  const f = stageFollowup(registry, conversation.id);
+  try {
+    await f.drain();
+    const failed = registry.snapshot().heldDeliveries[f.held.id]!;
+    expect(failed.state).toBe("failed");
+    expect(failed.error).toContain("stage host is gone");
+    expect(failed.error).toContain("retry the stage");
+    expect(failed).toMatchObject({ text: f.held.text, command: f.held.command, clientMessageId: f.held.clientMessageId });
+    expect(sendReceiptFor(registry.snapshot(), f.held.command.operationId)).toMatchObject({ state: "failed", duplicateRisk: false, resend: "safe" });
+    expect(registry.snapshot().deliveryOperationOwners[f.held.command.operationId]).toMatchObject({ terminalState: "failed", terminalDisposition: "lost" });
+    for (const minutes of [1, 5, 11]) {
+      setSystemTime(new Date(Date.parse(f.held.createdAt) + minutes * 60_000));
+      await f.drain();
+      expect(registry.snapshot().heldDeliveries[f.held.id]).toEqual(failed);
+    }
+    expect(f.commands()).toBe(0);
+    expect(f.recoveries()).toBe(0);
+  } finally { registry.close(); setSystemTime(); }
+});
+
+
+test.each(["live", "unknown", "unreadable", "publishing", "first-prompt", "journaled", "journal-unreadable", "reconciling", "replaced-attempt", "replaced-generation", "republished-after-read", "replaced-after-read"] as const)(
+  "dead-stage refusal retains the existing deferral for %s evidence", async mode => {
+    const { isolatedStageRegistry, stageFollowup } = await import("./deadStageDelivery.fixture");
+    const { loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
+    const { procBackend } = await import("@/lib/proc");
+    setSystemTime(new Date("2026-11-01T00:00:00Z"));
+    const directory = fs.mkdtempSync(path.join(sandbox, `stage-evidence-${mode}-`));
+    const { registry, conversation } = isolatedStageRegistry(directory);
+    const generation = conversation.generations.at(-1)!;
+    const key = { engine: conversation.engine, sessionId: generation.id };
+    const entry = registry.hostEntry(key)!;
+    const f = stageFollowup(registry, conversation.id);
+    let identityRead: ReturnType<typeof spyOn> | undefined;
+    try {
+      if (mode === "live" || mode === "unknown" || mode === "unreadable") {
+        registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: {
+          ...captureProcessIdentity(process.pid), ...(mode === "unknown" ? { startIdentity: null } : {}) } } });
+        if (mode === "unreadable") identityRead = spyOn(procBackend, "processIdentity").mockReturnValue(null);
+      }
+      if (mode === "publishing") registry.upsert({ ...entry, status: "starting", pendingAction: "spawn",
+        structuredHost: { ...entry.structuredHost!, process: null } });
+      if (mode === "first-prompt") {
+        registry.recordDeliveryOutcome(f.held.id, "failed", "replaced fixture operation", "lost");
+        f.held = registry.holdDelivery(conversation.id, "Stage initial work", "stage-initial-key", "text", [], null,
+          { operationId: "spawn_message_stage-fixture-launch", kind: "send", policy: "queue", turnId: null });
+      }
+      if (mode === "journaled") f.client.operationStatus = async () => ({ operationId: f.held.command.operationId,
+        receipt: { status: "delivering" } } as never);
+      if (mode === "journal-unreadable") f.client.operationStatus = async () => { throw new Error("journal unavailable"); };
+      if (mode === "republished-after-read" || mode === "replaced-after-read") f.client.operationStatus = async () => {
+        if (mode === "republished-after-read") registry.upsert({ ...entry, structuredHost: {
+          ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+        else {
+          const pipelines = loadPipelines();
+          pipelines.find(row => row.id === "dead-stage-fixture")!.runs[0]!.attempts[0]!.conversationId = "conversation_replaced";
+          savePipelines(pipelines);
+        }
+        return null;
+      };
+      if (mode === "replaced-attempt" || mode === "replaced-generation") {
+        const pipelines = loadPipelines();
+        const attempt = pipelines.find(row => row.id === "dead-stage-fixture")!.runs[0]!.attempts[0]!;
+        if (mode === "replaced-attempt") attempt.conversationId = "conversation_other-stage";
+        else attempt.sessionId = "replacement-generation";
+        savePipelines(pipelines);
+      }
+      const result = await deliverHeldStructuredMessage({ conversationId: conversation.id, path: generation.path,
+        deliveryId: f.held.id, clientMessageId: f.held.clientMessageId!, text: f.held.text, command: f.held.command,
+        reconcileUncertain: mode === "reconciling" }, f.dependencies);
+      expect(typeof result === "object" && result?.outcome === "rejected").toBe(false);
+      if (["journaled", "journal-unreadable"].includes(mode)) expect(result).toBe("delivery-uncertain");
+      expect(f.commands()).toBe(0);
+      expect(registry.snapshot().heldDeliveries[f.held.id]!.state).toBe("assigned");
+    } finally { identityRead?.mockRestore(); registry.close(); setSystemTime(); }
+  });
