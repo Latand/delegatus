@@ -212,3 +212,26 @@ test("an import that stopped after its commit finishes on the next pass and reti
   // An older writer meets the tombstone before any line counts as journaled.
   expect(() => fs.appendFileSync(file, "{}\n")).toThrow(/EISDIR/);
 });
+
+test("in the Viewer an async append runs on the journal worker thread, and the Viewer thread reads what it wrote", async () => {
+  const { seatTickJournalWorkersStartedForTests, stopSeatTickJournalWorkerForTests } = await import("./seatTickJournalWorker");
+  const { appendSeatTickRecordAsync } = await import("./journalStore");
+  const file = seatTickJournalPath();
+  const previous = process.env.LLV_SEAT_TICK_JOURNAL_WORKER;
+  process.env.LLV_SEAT_TICK_JOURNAL_WORKER = "1";
+  const started = seatTickJournalWorkersStartedForTests();
+  try {
+    await appendSeatTickRecordAsync(check("repo-a", "first"), file);
+    await Promise.all([appendSeatTickRecordAsync(check("repo-a", "second"), file), appendSeatTickRecordAsync(check("repo-b", "third"), file)]);
+    expect(seatTickJournalWorkersStartedForTests()).toBe(started + 1);
+    expect(readSeatTickRecords(10, file, "repo-a").map((row) => row.detail)).toEqual(["first", "second"]);
+    expect(readSeatTickRecords(10, file).map((row) => row.detail).sort()).toEqual(["first", "second", "third"]);
+    // A record no reader would show is refused there as it is here.
+    await appendSeatTickRecordAsync({ ...check("repo-a", "bad"), verdict: "nonsense" } as unknown as SeatTickRunRecord, file);
+    expect(readSeatTickRecords(10, file, "repo-a")).toHaveLength(2);
+  } finally {
+    await stopSeatTickJournalWorkerForTests();
+    if (previous === undefined) delete process.env.LLV_SEAT_TICK_JOURNAL_WORKER;
+    else process.env.LLV_SEAT_TICK_JOURNAL_WORKER = previous;
+  }
+});

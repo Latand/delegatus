@@ -24,6 +24,7 @@ import {
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { readStateRowsPage, type SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { compactSeatTickTiming, sanitizeSeatTickTiming } from "./seatTickTiming";
+import { appendThroughSeatTickJournalWorker } from "./seatTickJournalWorker";
 
 import {
   SEAT_TICK_WAKE_REASON_KINDS,
@@ -438,25 +439,39 @@ function seatTickAppendPatch(
   return { records, deleteKeys };
 }
 
+/** The synchronous append, for settlement and refusal lines written where
+ * they happen. Its commit does not wait for the disk, as the legacy append did
+ * not; see `appendSeatTickRecordOnThisThread`. */
 export function appendSeatTickRecord(record: SeatTickRunRecord, filePath = seatTickJournalPath()): void {
   const stored = storedSeatTickRun(record);
   if (!stored) return;
   const location = seatTickLocation(filePath);
   withViewerOperation("seat-tick.audit", () => {
     const collection = writableJournal(location);
-    collection.patchSync(() => seatTickAppendPatch(location, collection, stored));
+    collection.patchSync(() => seatTickAppendPatch(location, collection, stored), { durability: "process" });
   });
 }
 
-/** The check awaits durability; a busy database is waited for off the
- * Viewer thread, up to a second, as the legacy file lock was. */
+/** The check awaits the append. In the Viewer it runs on the seat tick
+ * journal's worker thread (`seatTickJournalWorker.ts`), so the transaction
+ * never blocks the Viewer thread; elsewhere it runs here. */
 export async function appendSeatTickRecordAsync(record: SeatTickRunRecord, filePath = seatTickJournalPath()): Promise<void> {
+  const offThread = appendThroughSeatTickJournalWorker(record, filePath);
+  if (offThread) return offThread;
+  return appendSeatTickRecordOnThisThread(record, filePath);
+}
+
+/** The append on the calling thread. A busy database is waited for up to a
+ * second, as the legacy file lock was, yielding between attempts. The commit
+ * survives the process and does not wait for the disk: the legacy rings were
+ * appended and trimmed without an fsync. */
+export async function appendSeatTickRecordOnThisThread(record: SeatTickRunRecord, filePath = seatTickJournalPath()): Promise<void> {
   const stored = storedSeatTickRun(record);
   if (!stored) return;
   const location = seatTickLocation(filePath);
   await waitForStateLock("seat-tick.audit", () => {
     const collection = writableJournal(location);
-    collection.patchSync(() => seatTickAppendPatch(location, collection, stored));
+    collection.patchSync(() => seatTickAppendPatch(location, collection, stored), { durability: "process" });
   }, { waitMs: 1_000, subject: location.collection });
 }
 
