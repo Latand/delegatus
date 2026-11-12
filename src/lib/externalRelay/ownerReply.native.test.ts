@@ -17,7 +17,7 @@ probe("native chat reply and continuation address the chat with inline web citat
   const request = richRequest();
   request.input.instructions = "Відповідай українською, від першої особи жіночого роду, як учасниця чату.";
   request.input.owner_instructions = "Короткі відповіді, один абзац.";
-  const owner = { messageId: request.input.respond_to,
+  const owner = { messageId: request.input.respond_to!,
     text: "Поясни нам у чаті, для чого існує example.com. Перевір офіційне джерело через вебпошук та додай посилання поруч із поясненням.", requestText: null };
   const initial = prepareOwnerPrompt(request, owner, 3);
   const prompts = [initial.prompt, ownerContinuationPrompt(request, { ...owner, text: "А example.org має таке саме призначення? Перевір джерело й поясни нам з посиланням." }, 3,

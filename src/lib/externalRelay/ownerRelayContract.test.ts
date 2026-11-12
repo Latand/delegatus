@@ -8,7 +8,7 @@ import { richRequest } from "./rich.fixture";
 for (const text of ["**Вітаю**", "*Вітаю*", "[Опис](https://example.com/)", "- **Перший**\n- *Другий*", "Звичайна відповідь", "x".repeat(4001)])
 test(`owner chat replies preserve negotiated Markdown without selecting answer parts (${text.length} chars)`, async () => {
   const request = richRequest();
-  const owner = { messageId: request.input.respond_to, text: "Привіт", requestText: null };
+  const owner = { messageId: request.input.respond_to!, text: "Привіт", requestText: null };
   const result = await runOwnerAgent({ request, owner, accountId: "fixture",
     target: { id: "target", name: "Target", answered_by: "install", fallback: "service", enabled: true, engine: "claude", model: "auto", effort: "low", project: null, concurrency: 1, hardCapMinutes: 3 },
     hardCapMs: 2000, onConversation: () => {}, ports: {
@@ -22,7 +22,7 @@ test(`owner chat replies preserve negotiated Markdown without selecting answer p
 
 test("the default rich reply retains the existing bounded fallback for unsupported content", () => {
   const request = richRequest();
-  const owner = { messageId: request.input.respond_to, text: "Привіт", requestText: null };
+  const owner = { messageId: request.input.respond_to!, text: "Привіт", requestText: null };
   const text = "<b>unsupported</b>" + "x".repeat(4000);
   expect(ownerAnswer(text, request, owner)).toMatchObject({ format: "plain", text: text.slice(0, 3999) + "…" });
 });

@@ -16,8 +16,8 @@ const cases = [
 for (const [source, text, entities] of cases)
 render(`owner reply renders Telegram entities: ${entities.map(entity => entity.type).join(", ")}`, async () => {
   const request = richRequest();
-  const answer = ownerAnswer(source, request, { messageId: request.input.respond_to, text: "Привіт", requestText: null });
-  expect(answer?.format).toBe("rich_markdown");
+  const answer = ownerAnswer(source, request, { messageId: request.input.respond_to!, text: "Привіт", requestText: null });
+  expect(answer).toMatchObject({ action: "reply", format: "rich_markdown" });
   const child = Bun.spawn([process.env.LLV_RELAY_RENDER_PYTHON!, "-c", `
 import json, sys
 from application.usecase.clones.relay_output import validate_answer, fallback_html
