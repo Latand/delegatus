@@ -58,3 +58,9 @@ export function clearStoredSeatRecord(): void {
   }
   orchestratorSeatCollectionForTests().replaceSync([]);
 }
+
+/** Store rows exactly as given, beside the record: a damaged store whose
+    tolerant read drops them and whose strict read refuses the record. */
+export function addStoredSeatRows(rows: readonly { key: string; value: unknown }[]): void {
+  orchestratorSeatCollectionForTests().patchSync(() => ({ records: rows.map((row) => ({ key: row.key, value: row.value })) }));
+}

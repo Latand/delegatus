@@ -725,11 +725,15 @@ export function readOrchestratorSeatStoreStrict(): OrchestratorSeatFile {
 
 /* --------------------------------------------------------------- writes */
 
-const seatCollections = new Map<string, SqliteStateCollection<SeatRow>>();
+/* One open collection per database file. A database replaced under the same
+   path (a restore, a test sandbox made again) opens a new one. */
+const seatCollections = new Map<string, { identity: string | null; collection: SqliteStateCollection<SeatRow> }>();
 
 function openSeatCollection(database: string): SqliteStateCollection<SeatRow> {
+  const identity = databaseIdentity(database);
   const held = seatCollections.get(database);
-  if (held) return held;
+  if (held && held.identity === identity) return held.collection;
+  held?.collection.close();
   const collection = new SqliteStateCollection<SeatRow>(database, {
     collection: ORCHESTRATOR_SEAT_COLLECTION,
     schemaVersion: 1,
@@ -740,7 +744,7 @@ function openSeatCollection(database: string): SqliteStateCollection<SeatRow> {
     strictDecode: true,
     decodeError: (error) => new Error("invalid orchestrator seat row", { cause: error }),
   });
-  seatCollections.set(database, collection);
+  seatCollections.set(database, { identity, collection });
   return collection;
 }
 
@@ -1177,7 +1181,7 @@ export function checkpointOrchestratorSeatRollbackMirrorForDemotion(filePath = o
 /** Test seam: forget every cached read and open collection, the way a
     restarted process would. */
 export function resetOrchestratorSeatStoreForTests(): void {
-  for (const collection of seatCollections.values()) collection.close();
+  for (const { collection } of seatCollections.values()) collection.close();
   seatCollections.clear();
   const cache = caches();
   cache.snapshots.clear();

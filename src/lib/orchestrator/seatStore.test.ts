@@ -171,6 +171,19 @@ test("a damaged stored record reads as unknown until the next designation rewrit
   expect(activeOrchestratorSeatsOrUnknown()?.map((seat) => seat.conversationId)).toEqual(["conversation_b"]);
 });
 
+test("a store read that fails answers unknown to the guarded readers and empty to authority, and the next read recovers", () => {
+  designate("proj-a", "first", "conversation_a");
+  resetOrchestratorSeatStoreForTests();
+  const failing = spyOn(sqliteState, "readStateCollectionSelection").mockImplementation(() => { throw new Error("disk I/O error"); });
+  const quiet = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    expect(activeOrchestratorSeatsOrUnknown()).toBeNull();
+    expect(activeOrchestratorSeats()).toEqual([]);
+    expect(orchestratorSeatFor("proj-a").active).toBeNull();
+  } finally { failing.mockRestore(); quiet.mockRestore(); }
+  expect(activeOrchestratorSeatsOrUnknown()?.map((seat) => seat.conversationId)).toEqual(["conversation_a"]);
+});
+
 /* The release path (#1870 §6.4): an unpromoted release reads the legacy file
    and refuses writes, the activation imports, the demotion checkpoint writes
    the rollback mirror, and what the older release changes in that file folds
