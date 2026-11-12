@@ -6432,7 +6432,7 @@ async function retryOutOfMemoryStage(pipeline: Pipeline, stage: PipelineStage, a
   pipeline.state = "running";
   pipeline.stateDetail = `${error}; retrying once memory recovers`;
   setCursorState(pipeline, stage.id, "pending");
-  const retry = await newAttempt(pipeline, stage, ports.now());
+  const retry = await newAttempt(pipeline, stage, ports.now(), "unknown");
   if (!retry) return;
   retry.input = renderOutOfMemoryRetryInput(attempt.input, attempt.n, kill);
   retry.memoryWait = { startedAt: ports.now(), rounds: 0, retryAfter: new Date(unixMs(ports.now()) + 60_000).toISOString(), budgetMs: MEMORY_WAIT_BUDGET.budgetMs, retryMaxMs: MEMORY_WAIT_BUDGET.retryMaxMs };

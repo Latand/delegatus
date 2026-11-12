@@ -88,7 +88,7 @@ test("reopening an attempt clears its old split and a later completion records i
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accounting!.time!.intervalMs).toBe(4000);
 });
 
-for (const finding of [true, false]) test(`first fix preserves the review cause when findings are ${finding}`, async () => {
+for (const [finding, interrupted] of [[true, false], [false, false], [true, true]]) test(`first fix preserves the review cause: finding=${finding}, OOM=${interrupted}`, async () => {
   const h = harness();
   await create(h.ports, [
     { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "build", next: "review" },
@@ -105,8 +105,25 @@ for (const finding of [true, false]) test(`first fix preserves the review cause 
   h.messages.get(review.agentPath!)!.text = `Review completed\n\n\`\`\`json\n${JSON.stringify({ status: "fail", findings })}\n\`\`\``;
   await tickPipelines([failed], h.ports); await tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.verdict!.findings).toEqual(findings);
-  const fix = loadPipelines()[0]!.runs[2]!.attempts[0]!;
+  let fix = loadPipelines()[0]!.runs[2]!.attempts[0]!;
   expect(fix.accounting!.repeatReason).toBeNull();
+  if (interrupted) {
+    h.setConversationActive(false);
+    const killAt = h.ports.now();
+    h.ports.conversationHostUnavailableSince = async () => killAt;
+    h.ports.conversationOutOfMemory = async () => ({ at: killAt, limitBytes: 15 * 2 ** 30, limit: "agent", fatal: true, process: null });
+    h.ports.memoryHeadroom = () => ({ availableBytes: 20 * 2 ** 30, requiredBytes: 15 * 2 ** 30 });
+    await tickPipelines([], h.ports);
+    const attempts = loadPipelines()[0]!.runs[2]!.attempts;
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1]!.accounting!.repeatReason).toBe("unknown");
+    h.ports.conversationHostUnavailableSince = async () => null;
+    h.ports.conversationOutOfMemory = async () => null;
+    h.advanceWallClock(60_001); h.setConversationActive(true);
+    await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+    fix = loadPipelines()[0]!.runs[2]!.attempts[1]!;
+    expect(fix.state).toBe("running");
+  }
   await tickPipelines([finishReported(h, fix.agentPath!, "pass", "fixed")], h.ports);
   await tickPipelines([], h.ports);
   const attempts = loadPipelines()[0]!.runs[1]!.attempts;
