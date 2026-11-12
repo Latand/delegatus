@@ -99,7 +99,13 @@ if (args[0] === "--namespace-guardian") {
   const portableCommand = process.platform === "linux"
     ? timedCommand(command, 'export LLV_PORTABLE_TEST_RUNNER_PID=$$; ')
     : command;
-  const child = spawn(portableCommand[0]!, portableCommand.slice(1), { stdio: ["inherit", "inherit", "inherit", "pipe"], env: budget.env });
+  // Only timedCommand's Linux shell writes and closes fd 3. Native Windows
+  // commands have no marker writer; an unused inherited pipe can remain open
+  // after the command exits and strand the verdict in execution() below.
+  const child = spawn(portableCommand[0]!, portableCommand.slice(1), {
+    stdio: process.platform === "linux" ? ["inherit", "inherit", "inherit", "pipe"] : "inherit",
+    env: budget.env,
+  });
   const execution = observeCommandExecution(child);
   if (child.pid) fs.appendFileSync(ledger, `${JSON.stringify(captureProcessIdentity(child.pid))}\n`);
   const commandIdentity = producerCommandIdentity(child.pid);
