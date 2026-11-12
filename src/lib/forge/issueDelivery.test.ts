@@ -282,3 +282,21 @@ test("a repository rename preserves final delivery when a person reopens the iss
   const calls = f.reads.length; await f.sweep();
   expect(f.reads).toHaveLength(calls); expect(f.writes).toHaveLength(2); expect(f.issue.state).toBe("open");
 });
+
+
+test.each(["git-only", "ordinary", "issue", "refresh"])("creation reads only the needed context for %s", kind => {
+  const f = fixture(); const p = f.lanes[0]!;
+  p.task = kind === "issue" ? "Issue #3900: Widget controls" : "Widget controls";
+  const reads = { cache: 0, lanes: 0, predecessor: 0 };
+  const links = creationIssueLinks(p, {
+    repository: kind === "git-only" ? null : REPO,
+    cache: () => { reads.cache++; return forgeViewOf(f.data); },
+    lanes: () => { reads.lanes++; throw new Error("Creation must not scan unrelated lanes"); },
+    ...(kind === "refresh" ? { predecessorId: "prior" } : {}),
+    predecessor: id => { expect(id).toBe("prior"); reads.predecessor++; return { ...p, id, workLinks: [link(3900, true)] }; },
+    pullRequestOf: f.ports.pullRequestOf,
+  });
+  expect(reads).toEqual({ cache: ["issue", "refresh"].includes(kind) ? 1 : 0, lanes: 0, predecessor: kind === "refresh" ? 1 : 0 });
+  expect(links).toHaveLength(["issue", "refresh"].includes(kind) ? 1 : 0);
+  if (kind === "refresh") expect(links[0]?.part).toBe(true);
+});

@@ -177,3 +177,28 @@ Repair checks use the same isolated, recorded wrapper procedure above:
 
 The durable-store run and the full pre-push rehearsal are retained with their
 terminal exit status in the publication-repair handoff.
+
+
+### Further repair verification
+
+The monitoring-scope change alone did not resolve publication. The first
+full-hook rehearsal exited 1 after the head phase completed 63 of 84 files
+before its fifteen-minute deadline. An unchanged rerun reused 58 qualified
+green files and exited 1 with three new runner failures, 36 pre-existing
+failures and three flaky observations. The three new failures were file
+execution deadlines and owned-child cleanup diagnostics in `engine.cloud`,
+`engine.roleMemoryDispatch` and `engine.settlement`; all three complete
+baseline files passed. Privacy, types and lint passed in both rehearsals.
+
+Creation now defers forge-cache and lane-registry reads until a title or
+predecessor reference requires them. Git-only and ordinary creation perform
+neither read. An explicit refresh reads only its named predecessor. Issue
+and successor resolution retain the same links and partial markers.
+
+| Command | Exit | Counts |
+|---|---:|---|
+| `G bun test --timeout=60000 src/lib/forge/issueDelivery.test.ts` | 0 | 55 pass, 0 fail, 117 assertions |
+| `G bun test --timeout=60000 src/lib/pipelines/engine.settlement.test.ts` | 0 | 121 pass, 0 fail, 1016 assertions |
+
+The final full-hook result is recorded in the publication-repair handoff.
+No execution-budget or check-selection override was introduced.

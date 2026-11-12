@@ -42,17 +42,21 @@ type PullRequestOf = (lane: Pipeline) => { repository: string; number: number } 
 
 /** Pure creation rule. A cache-known PR can only name a predecessor. */
 export function creationIssueLinks(lane: Pipeline, options: {
-  repository: string | null; cache: ForgeCacheView; lanes: readonly Pipeline[];
-  predecessorId?: string; pullRequestOf: PullRequestOf;
+  repository: string | null; cache: ForgeCacheView | (() => ForgeCacheView);
+  lanes: readonly Pipeline[] | (() => readonly Pipeline[]);
+  predecessorId?: string; predecessor?: (id: string) => Pipeline | null; pullRequestOf: PullRequestOf;
 }): StoredWorkLink[] {
-  const { repository, cache, lanes } = options;
+  const { repository } = options;
   if (!repository) return [];
-  const repo = canonical(repository, cache);
   const raw = titleReference(lane.task);
+  if (!raw && !options.predecessorId) return [];
+  const cache = typeof options.cache === "function" ? options.cache() : options.cache;
+  const lanes = () => typeof options.lanes === "function" ? options.lanes() : options.lanes;
+  const repo = canonical(repository, cache);
   const normalized = raw ? normalizeWorkLinkInput(raw, { repository, kindOf: (r, n) => cache.repository(r)?.pr(n) ? "pr" : cache.repository(r)?.isIssue(n) ? "issue" : null }) : null;
   const link = normalized?.ok ? normalized.link : null;
-  const predecessor = options.predecessorId ? lanes.find(p => p.id === options.predecessorId)
-    : link?.kind === "pr" ? lanes.find(p => p.taskIds.some(id => lane.taskIds.includes(id)) && (() => {
+  const predecessor = options.predecessorId ? (options.predecessor ? options.predecessor(options.predecessorId) : lanes().find(p => p.id === options.predecessorId))
+    : link?.kind === "pr" ? lanes().find(p => p.taskIds.some(id => lane.taskIds.includes(id)) && (() => {
       const pr = options.pullRequestOf(p);
       return pr?.number === link.number && canonical(pr.repository, cache) === canonical(link.repository, cache);
     })()) : undefined;

@@ -14935,8 +14935,8 @@ export async function createPipelineFromRequest(
     if (!pushRepository || canonical(pushRepository).toLowerCase() !== requested) prRepository = requested;
   }
   const issueLinks = creationIssueLinks(pipeline, {
-    repository: prRepository ?? githubRepositoryOfRemote(origin), cache: forgeCacheView(),
-    lanes: options.refreshOf ? [findPipelineRecord(options.refreshOf.pipelineId), ...loadPipelinesForList()].filter((lane): lane is Pipeline => !!lane) : loadPipelinesForList(),
+    repository: prRepository ?? githubRepositoryOfRemote(origin), cache: forgeCacheView,
+    lanes: loadPipelinesForList, predecessor: findPipelineRecord,
     predecessorId: options.refreshOf?.pipelineId,
     pullRequestOf: lanePullRequest,
   });
