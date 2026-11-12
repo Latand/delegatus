@@ -57,10 +57,12 @@ compatibility raises the major version.
   lineage are stored in `state.sqlite`** (collections `limits_history`,
   `reaper` and `handoff_lineage`) instead of `limits-history.json`,
   `reaper-state.json` and `handoff-lineage.json`, which were rewritten whole
-  (about 1.4 MB, 3 MB and 0.2 MB on a busy installation). Each is one row per
-  series, transcript path or edge. A limits poll writes only the series it
-  extends, and nothing inside the five-minute gap; a reaper cycle writes only
-  the paths whose evidence changed, and nothing when none did. Readers keep
+  (about 1.4 MB, 3 MB and 0.2 MB on a busy installation). The limits history
+  is one row per series and day, the reaper's evidence one row per transcript
+  path and the lineage one row per edge. A limits poll writes only the current
+  day of the series it extends, and nothing inside the five-minute gap; a
+  reaper cycle writes only the paths whose evidence changed, and nothing when
+  none did. Readers keep
   the rows and follow only what changed, so the board's authorship check and
   the burndown no longer parse a whole file on every request. An edge one
   process records is now seen by the others. On first start each file is

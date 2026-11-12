@@ -50,7 +50,7 @@ legacy edits to other rows.
 
 | Portion | Current source and remaining work |
 |---|---|
-| Limits history | Shipped: collection `limits_history` (`src/lib/limitsHistoryStore.ts`), one row per series plus `meta` and the quarantined `unattributed:` series. A poll writes only the series it extends and nothing inside the five-minute gap; a roll-forward merges samples by timestamp. |
+| Limits history | Shipped: collection `limits_history` (`src/lib/limitsHistoryStore.ts`), one row per series and UTC day plus `meta` and the quarantined `unattributed:` series. A poll writes only the current day of the series it extends and nothing inside the five-minute gap; a roll-forward merges samples by timestamp. |
 | Reaper state | Shipped: collection `reaper` (`src/lib/reaperState.ts`), one row per transcript path with its sticky authorship and path-scoped stamp. A cycle writes only the paths whose evidence changed; the board and the files projection key read the collection revision. The always-empty `firstObservedAt` and the file-mtime `observedAtSec` signal had no reader and are gone. |
 | Handoff lineage | Shipped: collection `handoff_lineage` (`src/lib/handoffLineage.ts`), one row per pane, transcript or conversation edge. Every process reads the same rows; the oldest child edges past 20,000 and exited panes are removed at the next write. |
 | Lifecycle events | `src/lib/lifecycle/journal.ts` still stores `lifecycle-journal.json`. Move sequence, events, retired ids and permanent spawn-failure receipts together. Preserve the atomic recovery rows projected by `src/lib/projects/worktreeRecoveryStore.ts` and replay refusal after trimming. Digest cursors are migrated by this change. |
