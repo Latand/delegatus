@@ -777,22 +777,29 @@ roots). Five defects explained most of it.
    clock at all; an unreadable clock, and a completed attempt without one,
    still keep the lane open, and so do activations, unresolved terminations
    and unconfirmed hosts.
-2. **An expired root with a directory written by another user failed on
-   every visit.** Container runs leave root-owned directories (database data,
-   browser profiles, lock directories) inside scratch. The expiry snapshot
-   (`snapshotAttemptProtection`) threw `EACCES` on `opendir`, so such a root
-   could never take the expired path. The snapshot now keeps a directory it
-   cannot list as a leaf versioned by its own metadata; the namespace removal
-   that such a tree needs already repeats the keep-marker classification
-   inside the tree right before it deletes.
+2. **A root holding a directory written by another user failed on every
+   visit.** Container runs leave root- or container-owned directories
+   (database data, browser profiles, lock directories) inside scratch: 25
+   roots that day, owned by three container uids. The expiry snapshot threw
+   `EACCES` on them, and the namespace proof and removal failed. Removing
+   such a directory needs privileges the Viewer does not have and is an
+   operator action. The sweep now finds every directory under a retirable
+   root that this user cannot list or empty, holds the whole root as
+   "held for the operator", records each such directory with its path, owner
+   uid, mode and readable size in the ledger, and lists all of them under
+   `blocked` in every report. It retries the root hourly, so the root retires
+   on the first visit after the operator has removed them. The fallbacks that
+   ran a cleanup container as uid 0 to inspect, measure, prove or remove such
+   a tree are gone; the read-only check for running containers that mount a
+   root stays.
 3. **`du` exiting 1 recorded a tree as four kilobytes.** `du` totals what it
-   can read and exits 1 when a subtree is unreadable; the fallback after a
-   failed namespace measurement kept only the root inode. The largest root
-   (51 GiB: a settled attempt of a paused lane holding twelve rehearsal copies
-   of a vendored application source tree and their container-owned database
-   files) counted 4 KiB, so it never weighed on the cap or on any ranking.
-   The partial total is now the lower bound, raised by the namespace
-   measurement when that succeeds.
+   can read and exits 1 when a subtree is unreadable; the fallback kept only
+   the root inode. The largest root (51 GiB: a settled attempt of a paused
+   lane holding twelve rehearsal copies of a vendored application source tree
+   and their container-owned database files) counted 4 KiB, so it never
+   weighed on the cap or on any ranking. The measurement is now what `du`
+   could read, and the outcome is flagged `unreadable` when part of the tree
+   was not.
 4. **Paging had no order across pages.** Rows were visited round robin by
    `checkedAt` with three quarters of a pressure page reserved for released
    rows; "outside this page" was simply every row not in the current 32. The
@@ -816,14 +823,40 @@ roots). Five defects explained most of it.
    the scan is gone from `/proc`; a process the scan did not read from `/proc`
    cannot be proven gone and still holds. The reason now carries the path.
 
+6. **Every image in a scratch tree counted as evidence.** Preservation copied
+   each `.artifacts` file and each picture anywhere in a root, including the
+   static images of checked-out source trees, and a symbolic link with a
+   picture's name held the root until its lane retention ended (28 finished
+   roots, 29.3 GB that day). Evidence is now what the evidence ledger links:
+   a picture that a stage report, a bridge report or a task named by its path
+   in the root (the report picture index) and whose kept copy is missing.
+   Recorded-check evidence keeps its own custody and holds its root. A linked
+   picture that a report named still holds the root; an unreadable index
+   refuses preservation.
+
 The hourly temp sweep reported the ledger-owned scratch roots it skips as
 `inUse` with zero bytes (508 on that day); they are counted as `ledger` now,
 and `inUse` again means a process holds the directory.
 
-Holds that remain by design, each waiting on an operator's decision:
-roots of lanes left `paused` or waiting on a decision whose stage declares
-outputs, or whose attempt is still marked running (about 25 GB that day);
-lanes whose close left unconfirmed hosts (66 roots, 23.3 GB, most from the same
-day, two since earlier in the month); keep markers that this repository's own
-test fixtures left inside stage scratch; and settled roots of open lanes whose
-tree holds media that the namespace proof cannot copy.
+Expected effect of the first full pass on that day's numbers (by `du`,
+308.6 GB in 524 roots):
+
+| Outcome | Roots | GB |
+|---|---:|---:|
+| Retired: finished lanes (closed or completed, including the 134 parked ones) | 140 | 87.0 |
+| Retired: settled attempts of open lanes, unless their checkout links in | 26 | 11.2 |
+| Retired: lanes past their seven days | 3 | 2.0 |
+| Retired: unowned roots older than a day | 60 | 1.2 |
+| Held for the operator: directories this user cannot remove | 25 | 74.9 |
+| Held: Git worktree links to other repositories, empty `.git` files | 33 | 39.9 |
+| Held: keep markers, nearly all left by this repository's test fixtures | 29 | 37.7 |
+| Held: completed lanes whose close left unconfirmed hosts | 66 | 23.3 |
+| Held: open lanes (outputs declared, attempt marked running) | 51 | 25.5 |
+| Held: unowned roots younger than a day | 92 | 4.4 |
+
+About 101 GB becomes reclaimable on the first pass. The holds that remain are
+by design, each waiting on an operator's decision: removing the blocked
+directories (they are listed with path, owner and size under `blocked`),
+closing paused or waiting lanes, clearing the stale unconfirmed hosts (an
+engine reconcile issue outside this sweep), the fixture keep markers, and the
+worktrees that agents registered in other repositories.
