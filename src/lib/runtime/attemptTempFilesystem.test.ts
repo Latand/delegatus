@@ -7,8 +7,8 @@ import { promisify } from "node:util";
 import { statePath } from "@/lib/configDir";
 import { execFile } from "node:child_process";
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
-  RETAINED_CHECKOUT_READ_MAX_AGE_MS, snapshotAttemptProtection, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+import { attemptReferencesClear, blockedSubtrees, measureAttemptAllocation, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
+  RETAINED_CHECKOUT_READ_MAX_AGE_MS, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 import type { ProcessScan } from "@/lib/tempSweep";
 const exec = promisify(execFile);
@@ -27,27 +27,25 @@ function foreignSubtree(directory: string) {
 }
 const listsAsOwner = process.platform === "win32" || process.getuid?.() === 0;
 
-test.skipIf(listsAsOwner)("the protection snapshot keeps a directory it cannot list as a versioned leaf", async () => {
-  const directory = path.join(root(), "llv-stage-foreign"); fs.mkdirSync(directory);
-  const locked = foreignSubtree(directory);
-  const snapshot = await snapshotAttemptProtection(directory);
-  expect(snapshot.current()).toBeTrue();
-  // An entry made directly in it, here a keep marker, moves its own timestamps.
-  fs.chmodSync(locked, 0o700); fs.writeFileSync(path.join(locked, ".delegatus-keep"), "operator pin"); fs.chmodSync(locked, 0);
-  expect(snapshot.current()).toBeFalse();
-});
-
-test.skipIf(listsAsOwner)("a tree with a subtree this user cannot list is measured by what du could read", async () => {
+test.skipIf(listsAsOwner)("a tree with a subtree this user cannot list is measured by what du could read and flagged", async () => {
   const parent = root(), directory = path.join(parent, "llv-stage-measured"), bin = path.join(parent, "bin");
   fs.mkdirSync(directory); fs.mkdirSync(bin);
   fs.writeFileSync(path.join(directory, "payload"), Buffer.alloc(4 * 1024 ** 2, 1));
-  foreignSubtree(directory);
-  // No namespace measurement is available; the partial total is the lower bound.
-  fs.writeFileSync(path.join(bin, "docker"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+  const locked = foreignSubtree(directory);
+  // Nothing is read with privileges: a container run would leave this log.
+  const log = path.join(parent, "docker.log");
+  fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh\necho "$@" >> ${JSON.stringify(log)}\nexit 1\n`, { mode: 0o700 });
   const previousPath = process.env.PATH;
   process.env.PATH = bin + path.delimiter + (previousPath ?? "");
-  try { expect(await allocatedAttemptBytes(directory)).toBeGreaterThanOrEqual(4 * 1024 ** 2); }
-  finally { if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath; }
+  try {
+    const measured = await measureAttemptAllocation(directory);
+    expect(measured.unreadable).toBeTrue(); expect(measured.bytes).toBeGreaterThanOrEqual(4 * 1024 ** 2);
+    expect(await blockedSubtrees(directory)).toMatchObject({ count: 1, entries: [{ path: locked, uid: process.getuid!(), unreadable: true }] });
+    fs.chmodSync(locked, 0o700);
+    expect(await measureAttemptAllocation(directory)).toMatchObject({ unreadable: false });
+    expect(await blockedSubtrees(directory)).toEqual({ count: 0, entries: [] });
+    expect(fs.existsSync(log)).toBeFalse();
+  } finally { if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath; }
 });
 
 test.skipIf(process.platform !== "linux")("a consumer cwd removed after its process exited no longer holds the root; a live one still does", async () => {

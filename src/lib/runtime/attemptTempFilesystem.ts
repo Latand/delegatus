@@ -642,8 +642,6 @@ export async function inspectAttemptTree(directory: string, original = directory
   }
 }
 
-const unlistable = (error: unknown) => ["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "");
-
 /** An independent directory snapshot protects new markers even when expired
  * evidence is deliberately discarded. Check it synchronously after every
  * awaited observation and again at removal dispatch. Never follow links. */
@@ -657,22 +655,14 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
     const current = pending.pop()!, stat = fs.lstatSync(current, { bigint: true });
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("attempt protection directory changed");
     directories.set(current, signature(stat));
-    // A container that ran as another user leaves directories this user cannot
-    // list. Each stays in the snapshot as a leaf, versioned by its own metadata:
-    // an entry made directly in it changes that signature, and the namespace
-    // removal that such a tree needs repeats the keep-marker classification
-    // inside the tree immediately before it deletes anything.
-    let entries: fs.Dir;
-    try { entries = fs.opendirSync(current); }
-    catch (error) { if (unlistable(error)) continue; throw error; }
+    const entries = fs.opendirSync(current);
     try {
       for (let entry; (entry = entries.readSync());) {
         if (performance.now() >= until || pending.length + directories.size >= 10000)
           throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
         if (entry.isDirectory()) pending.push(path.join(current, entry.name));
       }
-    } catch (error) { if (!unlistable(error)) throw error; }
-    finally { entries.closeSync(); }
+    } finally { entries.closeSync(); }
   }
   return { current: () => {
     try {
@@ -704,26 +694,69 @@ export async function removeAttemptTree(directory: string, original = directory,
   }
 }
 
-export async function allocatedAttemptBytes(directory: string): Promise<number> {
-  if (process.platform === "win32") return measureTempBytes(directory);
-  const kibibytes = (output: string | undefined) => {
-    const field = output?.trim().split(/\s+/)[0];
-    const value = field ? Number(field) : NaN;
-    return Number.isFinite(value) && value >= 0 ? value * 1024 : null;
-  };
-  let measured: number | null;
-  try { measured = kibibytes((await run("du", ["-skx", "--", directory])).stdout); }
-  catch (error) {
-    // `du` still totals what it could read when a subtree is unreadable, and
-    // exits 1. That total is a lower bound; the root's own four kilobytes,
-    // the old fallback, recorded a 51 GiB tree as 4 KiB and hid it from the cap.
-    measured = kibibytes((error as { stdout?: string }).stdout);
-    if (process.platform === "linux") {
-      try {
-        const namespace = kibibytes((await containerCommand(directory, "measure")).stdout);
-        if (namespace !== null) measured = Math.max(measured ?? 0, namespace);
-      } catch { /* Preserve a lower bound if namespace measurement is unavailable. */ }
-    }
+const kibibytes = (output: string | undefined) => {
+  const field = output?.trim().split(/\s+/)[0];
+  const value = field ? Number(field) : NaN;
+  return Number.isFinite(value) && value >= 0 ? value * 1024 : null;
+};
+
+/** What `du` can read, and whether part of the tree was unreadable. `du`
+ * totals what it can read and exits 1 when a subtree is unreadable; that total
+ * is the measurement, flagged. The old fallback kept only the root's own
+ * inode and recorded a 51 GiB tree as 4 KiB. Nothing is read with privileges. */
+export async function measureAttemptAllocation(directory: string): Promise<{ bytes: number; unreadable: boolean }> {
+  if (process.platform === "win32") return { bytes: await measureTempBytes(directory), unreadable: false };
+  try {
+    const bytes = kibibytes((await run("du", ["-skx", "--", directory])).stdout);
+    if (bytes !== null) return { bytes, unreadable: false };
+  } catch (error) {
+    const bytes = kibibytes((error as { stdout?: string }).stdout);
+    if (bytes !== null) return { bytes, unreadable: true };
   }
-  return measured ?? fs.lstatSync(directory).blocks * 512;
+  return { bytes: fs.lstatSync(directory).blocks * 512, unreadable: true };
+}
+
+export async function allocatedAttemptBytes(directory: string): Promise<number> {
+  return (await measureAttemptAllocation(directory)).bytes;
+}
+
+/** A directory inside an attempt tree that this user cannot list or empty.
+ * Containers that ran as another user leave them: database data, browser
+ * profiles, lock directories. Removing one needs privileges the sweep does not
+ * use, so it is reported for the operator. `bytes` is what du could read in it. */
+export type BlockedSubtree = { path: string; uid: number; mode: string; bytes: number; unreadable: boolean };
+/** Entries one root reports in full; `count` still counts every one. */
+export const BLOCKED_SUBTREE_REPORT_LIMIT = 16;
+
+/** Every directory under `directory` that native removal would fail on, each
+ * reported once at its top: it is not listable, not searchable or not
+ * writable for this user, and not empty. */
+export async function blockedSubtrees(directory: string, limit = BLOCKED_SUBTREE_REPORT_LIMIT): Promise<{ count: number; entries: BlockedSubtree[] }> {
+  if (process.platform === "win32") return { count: 0, entries: [] };
+  let output: string;
+  try {
+    output = (await run("find", [directory, "-xdev", "-mindepth", "1", "-type", "d",
+      "(", "!", "-readable", "-o", "!", "-writable", "-o", "!", "-executable", ")", "-prune", "-printf", "%U\\0%m\\0%p\\0"])).stdout;
+  } catch (error) {
+    // find exits 1 when something below vanished or refused; what it printed
+    // stands, and a refused directory is pruned above before it is entered.
+    const stdout = (error as { stdout?: unknown }).stdout;
+    if (typeof stdout !== "string") throw error;
+    output = stdout;
+  }
+  const fields = output.split("\0");
+  const found: Array<{ path: string; uid: number; mode: string }> = [];
+  for (let index = 0; index + 2 < fields.length; index += 3) {
+    const [uid, mode, file] = [Number(fields[index]), fields[index + 1]!, fields[index + 2]!];
+    if (!file || !Number.isInteger(uid)) continue;
+    // An empty directory is removed by its parent however it is owned.
+    try { if (fs.readdirSync(file).length === 0) continue; } catch { /* Not listable: it stays reported. */ }
+    found.push({ path: file, uid, mode });
+  }
+  const entries: BlockedSubtree[] = [];
+  for (const entry of found.slice(0, limit)) {
+    const measured = await measureAttemptAllocation(entry.path).catch(() => ({ bytes: 0, unreadable: true }));
+    entries.push({ ...entry, ...measured });
+  }
+  return { count: found.length, entries };
 }
