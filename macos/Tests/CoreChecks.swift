@@ -18,6 +18,27 @@ import Foundation
         expect(Server.classify(status: 204, marker: nil, key: nil) == .busy, "foreign HEAD")
         expect(Server.classify(status: 200, marker: "1", key: nil) == .busy, "wrong status")
         expect(Server.classify(status: 403, marker: nil, key: nil) == .busy, "unmatched access key")
+        let longCommand = String(repeating: "довгий аргумент ", count: 4000)
+        let processRows = [42: "42 43 /fixture/bun /fixture/server.js \(longCommand)", 43: "43 1 /fixture/bun /fixture/cli.mjs"]
+        var requested: [Int] = []
+        let verified = await Server.verifyAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs") { pid in
+            requested.append(pid); return processRows[pid]
+        }
+        expect(verified && requested == [42, 43], "long Unicode process commands retain identity and query only needed PIDs")
+        for rows in [[42: "42 1 /foreign/server"], [42: "42 43 /fixture/bun /fixture/server.js", 43: "43 42 /unrelated"], [42: "99 1 /fixture/bun /fixture/server.js /fixture/cli.mjs"], [:]] {
+            let refused = await Server.verifyAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs") { rows[$0] }
+            expect(!refused, "foreign, cyclic, changed and missing process identities refuse reuse")
+        }
+        do {
+            let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            process.arguments = ["-c", "import sys; print('ready', flush=True); sys.stdin.read()", String(repeating: "x", count: 40000), "перевірка"]
+            let input = Pipe(), output = Pipe(); process.standardInput = input; process.standardOutput = output
+            try process.run()
+            defer { try? input.fileHandleForWriting.close(); process.waitUntilExit() }
+            expect(!output.fileHandleForReading.availableData.isEmpty, "owned process is ready before reading its identity")
+            let row = await Server.processRow(Int(process.processIdentifier), environment: ["LC_ALL": "en_US.UTF-8"])
+            expect(row?.split(whereSeparator: \.isWhitespace).first == Substring(String(process.processIdentifier)) && row!.utf8.count > 32768 && row!.contains("перевірка"), "real targeted ps preserves PID and Unicode beyond diagnostic tail limits")
+        }
         let absent = try Installations.discover(home)
         expect(absent == nil, "fresh account needs confirmation")
         let root = Installations.runtime(home)
@@ -47,10 +68,11 @@ import Foundation
         try fm.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
         let published = ["kind": "package", "version": "2.1.0", "sha": String(repeating: "a", count: 40), "baseVersion": "2.0.0", "dir": activePackage.path]
         try JSONSerialization.data(withJSONObject: published).write(to: pointer)
-        expect(Installations.serverPackageRoot(home: home, environment: ["LLV_STATE_DIR": state.path], install: privateInstall!) == activePackage, "process verification follows the validated installed release pointer")
+        let resolvedPackage = Installations.serverPackageRoot(home: home, environment: ["LLV_STATE_DIR": state.path], install: privateInstall!)
+        expect(resolvedPackage.standardizedFileURL.path == activePackage.standardizedFileURL.path, "process verification follows the validated installed release pointer (actual: \(resolvedPackage.path), expected: \(activePackage.path))")
         var untrustedPointer = published; untrustedPointer["dir"] = home.appendingPathComponent("foreign-package").path
         try JSONSerialization.data(withJSONObject: untrustedPointer).write(to: pointer)
-        expect(Installations.serverPackageRoot(home: home, environment: ["LLV_STATE_DIR": state.path], install: privateInstall!) == package, "release pointer cannot redirect process verification outside the private release tree")
+        expect(Installations.serverPackageRoot(home: home, environment: ["LLV_STATE_DIR": state.path], install: privateInstall!).standardizedFileURL.path == package.standardizedFileURL.path, "release pointer cannot redirect process verification outside the private release tree")
         let service = Installations.serviceFile(home)
         try fm.createDirectory(at: service.deletingLastPathComponent(), withIntermediateDirectories: true)
         let serviceObject: [String: Any] = ["Label": "org.delegatus.server", "ProgramArguments": [bun.path, package.appendingPathComponent("bin/cli.mjs").path, "--no-open", "--port", "8898"], "EnvironmentVariables": ["LLV_STATE_DIR": home.appendingPathComponent("custom-state").path, "XDG_CONFIG_HOME": home.appendingPathComponent("custom-config").path]]

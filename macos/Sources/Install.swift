@@ -45,7 +45,7 @@ enum Installations {
               let baseVersion = packageVersion(base), pointer["baseVersion"] as? String == baseVersion,
               let directory = pointer["dir"] as? String,
               let expectedDirectory = releaseDirectory(cache: cache, installID: installID, version: version),
-              URL(fileURLWithPath: directory).standardizedFileURL == expectedDirectory,
+              URL(fileURLWithPath: directory, isDirectory: true).standardizedFileURL.path == expectedDirectory.path,
               packageVersion(expectedDirectory) == version,
               packageName(expectedDirectory) == "delegatus-cli",
               FileManager.default.fileExists(atPath: expectedDirectory.appendingPathComponent("dist/standalone/server.js").path),

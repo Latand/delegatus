@@ -62,14 +62,23 @@ import WebKit
             try? png.write(to: destination)
         }
     }
-    func captureScreen(name: String) {
+    func captureScreen(name: String, completion: (() -> Void)? = nil) {
         guard let directory else { return }
         frame += 1
         let destination = directory.appendingPathComponent(String(format: "%03d-%@.png", frame, name))
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            guard let image = CGWindowListCreateImage(.null, .optionOnScreenOnly, kCGNullWindowID, [.bestResolution]),
-                  let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else { return }
-            try? png.write(to: destination)
+        // Menus and runModal use nested run loops. Capture while that loop is
+        // active, then let the caller close the real presenter under control.
+        let timer = Timer(timeInterval: 0.5, repeats: false) { _ in
+            MainActor.assumeIsolated {
+                defer { completion?() }
+                guard let image = CGWindowListCreateImage(.null, .optionOnScreenOnly, kCGNullWindowID, [.bestResolution]),
+                      let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else { return }
+                do {
+                    try png.write(to: destination)
+                    self.log("CAPTURED \(name)")
+                } catch { self.log("CAPTURE failed \(name)") }
+            }
         }
+        for mode in [RunLoop.Mode.common, .eventTracking, .modalPanel] { RunLoop.main.add(timer, forMode: mode) }
     }
 }

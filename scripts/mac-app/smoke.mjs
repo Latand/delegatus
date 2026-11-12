@@ -17,6 +17,7 @@ let created = false;
 let mount;
 const owned = new Set();
 let serial = 0;
+const surfaces = ["install", "installing", "cancelling", "menu", "stop", "login", "update", "quit"];
 const visualCases = [
   ...["en", "uk"].flatMap(language => ["Light", "Dark"].flatMap(appearance => [
     ["minimum", ["--evidence-minimum-size"]], ["intermediate", ["--evidence-intermediate-size"]], ["default", []]
@@ -161,11 +162,19 @@ try {
     assert.throws(() => asUser("/bin/test", ["-e", join(home, "Library/Application Support/Delegatus/Runtime")]));
     await end(app);
   });
-  for (const surface of ["install", "installing", "menu", "stop", "login", "update", "quit"]) {
+  for (const surface of surfaces) {
     for (const { language, appearance, size, args } of visualCases) await check(`surface-${surface}-${language}-${appearance}-${size}`, async () => {
       const frames = join(home, "Library", "Evidence", `surface-${surface}-${language}-${appearance}-${size}`);
       const app = await register(launch([...args, "--evidence-surface", surface, "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `surface-${surface}-${language}-${appearance}-${size}`));
-      await until(`render ${surface}`, () => processLog(app.pid).includes(`SURFACE ${surface}`) && capturedFrames(frames) > 0, 60_000, app.diagnostics);
+      await until(`render ${surface}`, () => {
+        const log = processLog(app.pid);
+        if (!log.includes(`SURFACE ${surface}`) || capturedFrames(frames) === 0) return false;
+        if (["menu", "stop", "login", "update", "quit"].includes(surface)) {
+          const name = surface === "menu" ? "menu" : `dialog-${surface}`;
+          return log.includes(`CAPTURED ${name}`) && log.includes(`SURFACE-CLOSED ${surface}`);
+        }
+        return true;
+      }, 60_000, app.diagnostics);
       await end(app);
     });
   }
@@ -281,7 +290,7 @@ finally {
     `recovery-${language}-${appearance}-${size}`,
     `busy-${language}-${appearance}-${size}`,
   ]);
-  for (const surface of ["install", "installing", "menu", "stop", "login", "update", "quit"]) {
+  for (const surface of surfaces) {
     expectedEvidence.push(...visualCases.map(({ language, appearance, size }) => `surface-${surface}-${language}-${appearance}-${size}`));
   }
   const missingEvidence = expectedEvidence.filter(label => !frameNames.some(name => name.toLowerCase().includes(label.toLowerCase())));

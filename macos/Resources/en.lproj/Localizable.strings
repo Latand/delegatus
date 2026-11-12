@@ -54,3 +54,4 @@
 "keep-running" = "Keep Running and Quit";
 "app-update" = "A newer Delegatus app is available";
 "download" = "Download";
+"cancel-cleanup" = "Cancelling installation and restoring the previous runtime…";

@@ -30,6 +30,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
     var generation = 0
     var busy = false
     var quittingAfterSetup = false
+    var cancellingSetup = false
     var environment: [String: String] { Installations.childEnvironment(home: home, install: install, language: language) }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -65,29 +66,52 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
     func presentEvidenceSurface(_ surface: String) {
         evidence.log("SURFACE \(surface)")
         switch surface {
-        case "install":
-            show("needs-install", message: text("install-question"), actions: [("install", #selector(installRuntime)), ("quit", #selector(quit))])
+        case "install": presentInstallation()
         case "installing": show("installing", actions: [("cancel", #selector(cancelInstall)), ("logs", #selector(logs))])
+        case "cancelling": presentCancellation()
         case "menu":
             guard let menu = NSApp.mainMenu?.item(at: 0)?.submenu else { return }
+            evidence.captureScreen(name: "menu") { menu.cancelTracking() }
             menu.popUp(positioning: nil, at: NSPoint(x: 18, y: window.frame.height - 42), in: window.contentView)
-            evidence.captureScreen(name: "menu")
+            evidence.log("SURFACE-CLOSED menu")
         case "stop", "login", "update", "quit":
-            let title: String
-            let detail: String
-            let buttons: [String]
-            switch surface {
-            case "stop": title = text("stop-question"); detail = text("stop-warning"); buttons = ["stop", "cancel"]
-            case "login": title = text("login-remove-question"); detail = ""; buttons = ["ok", "cancel"]
-            case "update": title = text("app-update"); detail = ""; buttons = ["download", "cancel"]
-            default: title = text("quit-question"); detail = text("quit-detail"); buttons = ["keep-running", "cancel"]
-            }
-            let alert = NSAlert(); alert.messageText = title; alert.informativeText = detail
-            for button in buttons { alert.addButton(withTitle: text(button)) }
-            alert.beginSheetModal(for: window) { _ in }
-            evidence.captureScreen(name: "dialog-\(surface)")
+            _ = confirm(surface, capture: true)
+            evidence.log("SURFACE-CLOSED \(surface)")
         default: show("failed", message: text("operation-failed"))
         }
+    }
+    func presentInstallation() {
+        #if arch(arm64)
+        let bunBytes = manifest.bun.arm64.bytes
+        #else
+        let bunBytes = manifest.bun.x86_64.bytes
+        #endif
+        let mb = (bunBytes + manifest.delegatus.bytes) / 1_000_000
+        show("needs-install", message: String(format: text("install-question"), manifest.bun.version, manifest.delegatus.version, mb),
+            actions: [("install", #selector(installRuntime)), ("quit", #selector(quit))])
+    }
+    func presentCancellation() {
+        show("installing", message: text("cancel-cleanup"), actions: [("logs", #selector(logs))])
+    }
+    func confirm(_ surface: String, capture: Bool = false) -> Bool {
+        let title: String
+        let detail: String
+        let buttons: [String]
+        switch surface {
+        case "stop": title = "stop-question"; detail = "stop-warning"; buttons = ["stop", "cancel"]
+        case "login": title = "login-remove-question"; detail = ""; buttons = ["ok", "cancel"]
+        case "update": title = "app-update"; detail = ""; buttons = ["download", "cancel"]
+        case "quit": title = "quit-question"; detail = "quit-detail"; buttons = ["keep-running", "cancel"]
+        default: return false
+        }
+        let alert = NSAlert(); alert.messageText = text(title); alert.informativeText = detail.isEmpty ? "" : text(detail)
+        for button in buttons { alert.addButton(withTitle: text(button)) }
+        if capture {
+            evidence.captureScreen(name: "dialog-\(surface)") {
+                alert.buttons.last?.performClick(nil)
+            }
+        }
+        return alert.runModal() == .alertFirstButtonReturn
     }
     func item(_ menu: NSMenu, _ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
         let item = NSMenuItem(title: text(title), action: action, keyEquivalent: key); item.target = self; menu.addItem(item); return item
@@ -154,8 +178,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
                 }
                 if probe == .busy || probe == .waiting { portBusy(await Server.listener(environment: environment)); return }
                 guard let install else {
-                    let mb = (manifest.bun.arm64.bytes + manifest.delegatus.bytes) / 1_000_000
-                    show("needs-install", message: String(format: text("install-question"), manifest.bun.version, manifest.delegatus.version, mb), actions: [("install", #selector(installRuntime)), ("quit", #selector(quit))])
+                    presentInstallation()
                     if CommandLine.arguments.contains("--accept-install") { busy = false; installRuntime() }
                     return
                 }
@@ -252,6 +275,10 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
                 guard let self else { return }
                 self.setup = nil; self.busy = false
                 if self.quittingAfterSetup { NSApp.reply(toApplicationShouldTerminate: true); return }
+                if self.cancellingSetup {
+                    self.cancellingSetup = false
+                    self.show("stopped", actions: [("start", #selector(self.retry))]); return
+                }
                 if child.terminationStatus == 0 { self.begin() }
                 else if self.state == "installing" { self.failed(LauncherError.message("install-failed")) }
             }
@@ -276,13 +303,15 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
             }
         } catch { setup = nil; busy = false; failed(error) }
     }
-    @objc func cancelInstall() { setup?.terminate(); show("stopped", actions: [("start", #selector(retry))]) }
+    @objc func cancelInstall() {
+        guard let setup, setup.isRunning, !cancellingSetup else { return }
+        cancellingSetup = true; setup.terminate()
+        presentCancellation()
+    }
     @objc func retry() { begin() }
     @objc func stop() {
         guard !busy, let install else { return }
-        let alert = NSAlert(); alert.messageText = text("stop-question"); alert.informativeText = text("stop-warning")
-        alert.addButton(withTitle: text("stop")); alert.addButton(withTitle: text("cancel"))
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard confirm("stop") else { return }
         busy = true; generation += 1; operation?.cancel(); monitor?.cancel()
         Task { defer { busy = false }
             do {
@@ -304,9 +333,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
     @objc func toggleLogin() {
         guard !busy, let install else { return }
         if install.service != nil {
-            let alert = NSAlert(); alert.messageText = text("login-remove-question")
-            alert.addButton(withTitle: text("ok")); alert.addButton(withTitle: text("cancel"))
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            guard confirm("login") else { return }
         }
         busy = true
         let token = generation
@@ -339,8 +366,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
                       let version = Version(String(tag.dropFirst())), let current = Version(manifest.delegatus.version), version > current,
                       let assets = value["assets"] as? [[String: Any]], let asset = assets.first(where: { $0["name"] as? String == "Delegatus-\(tag.dropFirst())-mac.dmg" }),
                       let link = asset["browser_download_url"] as? String, let download = URL(string: link), download.scheme == "https", download.host == "github.com" else { return }
-                let alert = NSAlert(); alert.messageText = text("app-update"); alert.addButton(withTitle: text("download")); alert.addButton(withTitle: text("cancel"))
-                if alert.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(download) }
+                if confirm("update") { NSWorkspace.shared.open(download) }
             } catch { evidence.log("UPDATE check unavailable") }
         }
     }
@@ -353,9 +379,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
     @objc func quit() { NSApp.terminate(nil) }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if let setup, setup.isRunning { quittingAfterSetup = true; setup.terminate(); return .terminateLater }
-        let alert = NSAlert(); alert.messageText = text("quit-question"); alert.informativeText = text("quit-detail")
-        alert.addButton(withTitle: text("keep-running")); alert.addButton(withTitle: text("cancel"))
-        return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+        return confirm("quit") ? .terminateNow : .terminateCancel
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         window.makeKeyAndOrderFront(nil); return true

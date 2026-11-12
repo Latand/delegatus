@@ -9,7 +9,32 @@ runtime=$1
 manifest=$2
 if [[ ${1:-} != --locked ]]; then
   mkdir -p "$runtime"
-  if ! /usr/bin/lockf -k -t 0 "$runtime/.install-lock-v2" /bin/bash "$0" --locked "$runtime" "$manifest"; then
+  supervision=$(mktemp -d "$runtime/.supervisor.XXXXXXXX")
+  cancelled=0
+  trap 'cancelled=130' INT
+  trap 'cancelled=143' TERM
+  /usr/bin/lockf -k -t 0 "$runtime/.install-lock-v2" /bin/bash "$0" --locked "$runtime" "$manifest" "$supervision" &
+  lock_owner=$!
+  status=0
+  if [ "$cancelled" = 0 ]; then wait "$lock_owner" || status=$?; fi
+  if [ "$cancelled" != 0 ]; then
+    # lockf releases its lock on TERM without waiting for its child. Signal
+    # only the inner installer, whose handshake is published after its traps.
+    trap '' TERM INT
+    while kill -0 "$lock_owner" 2>/dev/null; do
+      if [ -s "$supervision/pid" ]; then
+        read -r inner < "$supervision/pid"
+        kill -TERM "$inner" 2>/dev/null || true
+        break
+      fi
+      sleep 0.05
+    done
+    wait "$lock_owner" 2>/dev/null || true
+    rm -rf "$supervision"
+    exit "$cancelled"
+  fi
+  rm -rf "$supervision"
+  if [ "$status" != 0 ]; then
     echo 'An installation is already in progress or could not complete. Check Open Logs.' >&2
     exit 1
   fi
@@ -18,10 +43,41 @@ fi
 shift
 runtime=$1
 manifest=$2
+stage=''
+child=''
+published_bun=0
+published_packages=0
+committed=0
+cleanup() {
+  status=$?
+  trap - EXIT
+  trap '' TERM INT
+  if [ -n "$child" ]; then
+    kill -TERM -- "-$child" 2>/dev/null || true
+    for ((attempt=0; attempt<50; attempt++)); do
+      kill -0 -- "-$child" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -KILL -- "-$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+  fi
+  if [ "$committed" = 0 ]; then
+    if [ "$published_packages" = 1 ]; then rm -rf "$runtime/packages"; fi
+    if [ "$published_bun" = 1 ]; then rm -rf "$runtime/bun"; fi
+    if [ -n "$stage" ] && [ -d "$stage/previous-bun" ]; then mv "$stage/previous-bun" "$runtime/bun"; fi
+  fi
+  if [ -n "$stage" ]; then rm -rf "$stage"; fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+# Atomic readiness: the outer supervisor may now request rollback safely.
+printf '%s\n' "$$" > "$3/pid.tmp"
+mv "$3/pid.tmp" "$3/pid"
 resources=$(cd "$(dirname "$manifest")" && pwd)
 read_manifest() { /usr/bin/plutil -extract "$1" raw -o - "$manifest"; }
 case $(uname -m) in arm64) architecture=arm64 ;; x86_64) architecture=x86_64 ;; *) echo 'Unsupported architecture' >&2; exit 1 ;; esac
-mkdir -p "$runtime"
 legacy_lock="$runtime/.install-lock"
 if [[ -d "$legacy_lock" ]]; then
   legacy_owner=$(cat "$legacy_lock/pid" 2>/dev/null || true)
@@ -36,33 +92,6 @@ if [[ -d "$legacy_lock" ]]; then
   rm -rf "$legacy_lock"
 fi
 stage=$(mktemp -d "$runtime/.stage.XXXXXXXX")
-child=''
-published_bun=0
-published_packages=0
-committed=0
-cleanup() {
-  status=$?
-  trap - EXIT TERM INT
-  if [ -n "$child" ]; then
-    kill -TERM -- "-$child" 2>/dev/null || true
-    for ((attempt=0; attempt<50; attempt++)); do
-      kill -0 -- "-$child" 2>/dev/null || break
-      sleep 0.1
-    done
-    kill -KILL -- "-$child" 2>/dev/null || true
-    wait "$child" 2>/dev/null || true
-  fi
-  if [ "$committed" = 0 ]; then
-    if [ "$published_packages" = 1 ]; then rm -rf "$runtime/packages"; fi
-    if [ "$published_bun" = 1 ]; then rm -rf "$runtime/bun"; fi
-    if [ -d "$stage/previous-bun" ]; then mv "$stage/previous-bun" "$runtime/bun"; fi
-  fi
-  rm -rf "$stage"
-  exit "$status"
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
 run_child() { "$@" & child=$!; wait "$child"; child=''; }
 download() {
   case "$1" in
@@ -120,12 +149,12 @@ fi
 echo 'SETUP 3/3 Publishing the private runtime'
 if [ "$use_bun" != "$runtime/bun/bin/bun" ]; then
   if [ -e "$runtime/bun" ]; then mv "$runtime/bun" "$stage/previous-bun"; fi
-  mv "$stage/bun" "$runtime/bun"; published_bun=1
+  published_bun=1; mv "$stage/bun" "$runtime/bun"
 fi
 if [ -d "$stage/packages" ]; then
   # Never replace a package root: its absolute path is the install identity.
   [ ! -e "$runtime/packages" ] || { echo 'Incomplete private package. Open Logs before repairing it.' >&2; exit 1; }
-  mv "$stage/packages" "$runtime/packages"; published_packages=1
+  published_packages=1; mv "$stage/packages" "$runtime/packages"
 fi
 committed=1
 echo 'SETUP 3/3 Ready'

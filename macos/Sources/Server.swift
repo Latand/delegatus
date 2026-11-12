@@ -47,7 +47,7 @@ enum Server {
             return error.code == .cannotConnectToHost ? .free : .waiting
         } catch { return .waiting }
     }
-    static func run(_ executable: String, _ arguments: [String], environment: [String: String], output: FileHandle? = nil, timeout: Double = 15) async throws -> (Int32, String) {
+    static func run(_ executable: String, _ arguments: [String], environment: [String: String], output: FileHandle? = nil, timeout: Double = 15, outputLimit: Int? = 32768) async throws -> (Int32, String) {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global().async {
                 let process = Process()
@@ -68,7 +68,7 @@ enum Server {
                     }
                     process.waitUntilExit()
                     let bytes = (try? Data(contentsOf: temporary)) ?? Data()
-                    continuation.resume(returning: (process.terminationStatus, String(data: bytes.suffix(32768), encoding: .utf8) ?? ""))
+                    continuation.resume(returning: (process.terminationStatus, String(decoding: outputLimit.map { Data(bytes.suffix($0)) } ?? bytes, as: UTF8.self)))
                 } catch { continuation.resume(throwing: error) }
             }
         }
@@ -84,32 +84,39 @@ enum Server {
         if owned, let install, Installations.valid(install), let listenerPID = Int(pid) {
             // The CLI owns a child Viewer process. Verify that listener's executable
             // and its ancestry back to this installation before reusing it or sending a key.
-            let rows = try? await run("/bin/ps", ["-ww", "-axo", "pid=,ppid=,command="], environment: environment)
-            if let rows, rows.0 == 0 {
-                var processes: [Int: (parent: Int, command: String)] = [:]
-                for row in rows.1.split(separator: "\n") {
-                    let fields = row.split(maxSplits: 2, whereSeparator: \.isWhitespace)
-                    if fields.count == 3, let process = Int(fields[0]), let parent = Int(fields[1]) {
-                        processes[process] = (parent, String(fields[2]))
-                    }
-                }
-                let packageRoot = Installations.serverPackageRoot(home: URL(fileURLWithPath: environment["HOME"] ?? NSHomeDirectory()), environment: environment, install: install)
-                let serverPath = packageRoot.appendingPathComponent("dist/standalone/server.js").path
-                var cursor = listenerPID
-                var visited = Set<Int>()
-                var foundViewer = false
-                var foundLauncher = false
-                while visited.insert(cursor).inserted, let process = processes[cursor] {
-                    let command = process.command
-                    if command.contains(install.bun.path), command.contains(serverPath) { foundViewer = true }
-                    if command.contains(install.bun.path), command.contains(install.cli.path) { foundLauncher = true }
-                    if cursor == 1 { break }
-                    cursor = process.parent
-                }
-                verified = foundViewer && foundLauncher
+            let packageRoot = Installations.serverPackageRoot(home: URL(fileURLWithPath: environment["HOME"] ?? NSHomeDirectory()), environment: environment, install: install)
+            verified = await verifyAncestry(listenerPID: listenerPID, bun: install.bun.path,
+                server: packageRoot.appendingPathComponent("dist/standalone/server.js").path, cli: install.cli.path) { pid in
+                await processRow(pid, environment: environment)
             }
         }
         return (owned, verified, "\(name) (PID \(pid))")
+    }
+    static func processRow(_ pid: Int, environment: [String: String]) async -> String? {
+        let row = try? await run("/bin/ps", ["-ww", "-p", String(pid), "-o", "pid=,ppid=,command="],
+            environment: environment, timeout: 2, outputLimit: nil)
+        return row?.0 == 0 ? row?.1 : nil
+    }
+    static func verifyAncestry(listenerPID: Int, bun: String, server: String, cli: String,
+        readProcess: (Int) async -> String?) async -> Bool {
+        var cursor = listenerPID
+        var visited = Set<Int>()
+        var foundViewer = false
+        var foundLauncher = false
+        let deadline = Date().addingTimeInterval(10)
+        // Query only this listener and its parents. Diagnostic tail limits must
+        // never discard process identity, even for a long Unicode command.
+        while cursor > 1, visited.count < 64, visited.insert(cursor).inserted, Date() < deadline {
+            guard let row = await readProcess(cursor), Date() < deadline else { return false }
+            let fields = row.split(maxSplits: 2, whereSeparator: \.isWhitespace)
+            guard fields.count == 3, Int(fields[0]) == cursor, let parent = Int(fields[1]) else { return false }
+            let command = String(fields[2])
+            if command.contains(bun), command.contains(server) { foundViewer = true }
+            if command.contains(bun), command.contains(cli) { foundLauncher = true }
+            if foundViewer && foundLauncher { return true }
+            cursor = parent
+        }
+        return false
     }
     static func startService(_ plist: URL, environment: [String: String]) async throws {
         let target = "gui/\(getuid())/org.delegatus.server"
