@@ -32,8 +32,8 @@ function run(command, args, options = {}) {
   finally { commands.push({ command: redact([command, ...args].join(" ")), exit: status }); }
 }
 const sudo = args => run("sudo", ["-n", ...args]);
-function asUser(command, args = []) {
-  return sudo(["-u", user, "-H", "/usr/bin/env", "-i", `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "DELEGATUS_TELEMETRY=0", command, ...args]);
+function asUser(command, args = [], options = {}) {
+  return sudo(["-u", user, "-H", "/usr/bin/env", "-i", `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "DELEGATUS_TELEMETRY=0", command, ...args], options);
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(label, check, timeout = 60_000, diagnostics = () => "") {
@@ -51,8 +51,8 @@ function logs() {
 function launch(args, label) {
   const pidFile = join(home, `app-${++serial}.pid`);
   const frames = join(home, "Library", "Evidence", label);
-  const process = spawn("sudo", ["-n", "-u", user, "-H", "/usr/bin/env", "-i", `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "DELEGATUS_TELEMETRY=0", `LLV_TOKEN=${accessKey}`, "/bin/sh", "-c", 'echo $$ > "$1"; shift; exec "$@"', "sh", pidFile,
-    join(home, "Applications", "Delegatus.app", "Contents", "MacOS", "Delegatus"), "--evidence-dir", frames, ...args], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, LLV_TOKEN: accessKey } });
+  const process = spawn("sudo", ["-n", "-u", user, "-H", "/usr/bin/env", "-i", `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "DELEGATUS_TELEMETRY=0", "/bin/sh", "-c", 'echo $$ > "$1"; shift; exec "$@"', "sh", pidFile,
+    join(home, "Applications", "Delegatus.app", "Contents", "MacOS", "Delegatus"), "--evidence-dir", frames, ...args], { stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "", stderr = "", exitCode = null, signal = null, spawnError = null;
   const append = (current, chunk) => (current + redact(chunk.toString("utf8"))).slice(-12_000);
   process.stdout.on("data", chunk => { stdout = append(stdout, chunk); });
@@ -64,7 +64,7 @@ function launch(args, label) {
 }
 async function startViewer(bun, cli) {
   const pidFile = join(home, `viewer-${++serial}.pid`);
-  const args = ["-n", "-u", user, "-H", "/usr/bin/env", "-i", `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "DELEGATUS_TELEMETRY=0", `LLV_TOKEN=${accessKey}`, "/bin/sh", "-c", 'echo $$ > "$1"; shift; exec "$@"', "sh", pidFile, bun, cli, "--no-open", "--port", "8898"];
+  const args = ["-n", "-u", user, "-H", "/usr/bin/env", "-i", `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "DELEGATUS_TELEMETRY=0", "/bin/sh", "-c", 'echo $$ > "$1"; shift; exec "$@"', "sh", pidFile, bun, cli, "--no-open", "--port", "8898"];
   const child = spawn("sudo", args, { stdio: "ignore" });
   child.on("error", error => { throw error; });
   commands.push({ command: redact(["sudo", ...args].join(" ")), exit: "started" });
@@ -116,6 +116,11 @@ try {
     asUser("/bin/mkdir", ["-p", join(home, "Applications")]);
     asUser("/usr/bin/ditto", [join(mount, "Delegatus.app"), join(home, "Applications", "Delegatus.app")]);
   });
+  const tokenPath = join(home, ".config", "delegatus", "token");
+  asUser("/bin/mkdir", ["-p", join(home, ".config", "delegatus")]);
+  asUser("/usr/bin/tee", [tokenPath], { input: `${accessKey}\n` });
+  asUser("/bin/chmod", ["600", tokenPath]);
+  asUser("/bin/chmod", ["700", join(home, ".config", "delegatus")]);
   const before = asUser("/bin/ls", ["-A", home]).trim().split("\n");
   await check("confirm-without-install", async () => {
     const app = await register(launch(["--evidence-minimum-size", "-AppleLanguages", "(en)"], "confirm-en-light-minimum"));

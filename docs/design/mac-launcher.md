@@ -444,8 +444,8 @@ for this surface; later cases are added to it):
 - **Case `first-run`.** Launch with `--accept-install` and
   `-AppleLanguages (en)`. Within 12 minutes `GET /` must answer **200** and
   the protected HEAD probe must answer 204 with the marker. The same temporary
-  access key is supplied on subsequent app launches to exercise protected
-  reuse. `ps` must show the
+  access key is stored in the new account's mode-0600 token file to exercise
+  protected reuse without putting it in process arguments or logs. `ps` must show the
   listener's launcher as
   `…/Delegatus/Runtime/bun/bin/bun …/Runtime/packages/node_modules/delegatus-cli/bin/cli.mjs`
   owned by `dlgsmoke`. A listing of the new home taken before the first
