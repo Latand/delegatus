@@ -713,18 +713,18 @@ test("a fresh failure from a retired seat writes no wake event for its successor
   const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
   const { readSpawnNoticeTurn } = await import("@/lib/spawnNotice/store");
   const { ORCHESTRATOR_SEATS_SCHEMA_VERSION } = await import("@/lib/orchestrator/seats");
-  const seatsFile = path.join(stateDir, "orchestrator-seats.json");
+  const { clearStoredSeatRecord, writeStoredSeatRecord } = await import("@/lib/orchestrator/seatStoreFixture");
   const registry = registryAt("retired-launcher");
   const begun = registry.beginSpawnRequest({ engine: "codex", cwd: stateDir, explicitProject: project, transport: "structured",
     clientAttemptId: "retired-launcher", launcher: { conversationId: "conversation_retired_seat", notify: true },
     launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Retired launcher work" }) });
   if (begun.kind !== "created") throw new Error("expected launch");
-  fs.writeFileSync(seatsFile, JSON.stringify({ schemaVersion: ORCHESTRATOR_SEATS_SCHEMA_VERSION, seats: {},
-    revocations: [{ project, conversationId: "conversation_retired_seat", seatEpoch: 1, revokedAt: new Date().toISOString(), successorConversationId: "conversation_current_seat" }] }));
+  writeStoredSeatRecord({ schemaVersion: ORCHESTRATOR_SEATS_SCHEMA_VERSION, seats: {},
+    revocations: [{ project, conversationId: "conversation_retired_seat", seatEpoch: 1, revokedAt: new Date().toISOString(), successorConversationId: "conversation_current_seat" }] });
   try {
     registry.failStructuredSpawn(begun.receipt.launchId, "host vanished");
     await terminalizeStaleStructuredSpawns(registryAt("retired-launcher"), null);
     expect(queryLifecycleEvents({ conversationId: begun.receipt.conversationId, type: "spawn_failed" }).events).toEqual([]);
     expect(readSpawnNoticeTurn(begun.receipt.conversationId, `launch:${begun.receipt.launchId}`)).toBeNull();
-  } finally { fs.rmSync(seatsFile, { force: true }); }
+  } finally { clearStoredSeatRecord(); }
 });

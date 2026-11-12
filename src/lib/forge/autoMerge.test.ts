@@ -66,6 +66,11 @@ function lane(id: string, extra: { closedAt?: number; reviews?: Attempt[]; build
   } as unknown as Pipeline;
 }
 
+function completedDelivery(record: Pipeline): NonNullable<Pipeline["delivery"]> {
+  return { target: { repository: record.project, remote: `https://github.com/${REPO}.git`, branch: "refs/heads/delivery", pr: 11 },
+    disposition: "owner", ownerId: record.id, epoch: 1, active: false, publish: "disabled", journal: [] };
+}
+
 type Check = { name: string; status?: string; conclusion?: string; startedAt?: string };
 type PullRequest = {
   number: number;
@@ -994,7 +999,7 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     completed.stages[1]!.access = "read-write";
     completed.stages[1]!.effectiveRole = BUILDER as Pipeline["stages"][number]["effectiveRole"];
     completed.runs[1]!.attempts[0]!.effectiveRole = BUILDER as Pipeline["runs"][number]["attempts"][number]["effectiveRole"];
-    completed.delivery = { target: { remote: "https://github.com/acme/widgets.git" } } as Pipeline["delivery"];
+    completed.delivery = completedDelivery(completed);
     completed.runs[1]!.attempts[0]!.report = { provenance: { pullRequest: { number: 11 } } } as Pipeline["runs"][number]["attempts"][number]["report"];
     expect(lanePullRequest(completed)).toEqual({ repository: REPO, number: 11 });
     const h = harness({ lanes: [completed], prs: [openPr(11)], tasks: ["task-1"] });
@@ -1007,7 +1012,7 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
 
   test("a terminal read-only declared output keeps the reported PR head for merging", async () => {
     const completed = lane("L1", { head: HEAD_B });
-    completed.delivery = { publish: "disabled", target: { remote: "https://github.com/acme/widgets.git" } } as Pipeline["delivery"];
+    completed.delivery = completedDelivery(completed);
     completed.stages.push({ id: "critique", kind: "run", prompt: "critique", next: null, outputs: ["docs/critique.md"], onFail: { to: "build", maxRounds: 2 }, effectiveRole: REVIEWER } as Pipeline["stages"][number]);
     completed.runs.push({ stageId: "critique", attempts: [{ n: 1, state: "passed", completedAt: completed.closedAt, effectiveRole: REVIEWER, report: { provenance: { head: HEAD_A } } }] } as unknown as Pipeline["runs"][number]);
     const h = harness({ lanes: [completed], prs: [openPr(11, { head: HEAD_A })] });
@@ -1122,7 +1127,7 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
       git("commit", "-am", "local output");
       const completed = lane("L1", { head: git("rev-parse", "HEAD") });
       completed.repoDir = repo;
-      completed.delivery = { publish: "disabled", target: { remote: "https://github.com/acme/widgets.git" } } as Pipeline["delivery"];
+      completed.delivery = completedDelivery(completed);
       completed.runs[1]!.attempts[0]!.reviewHeadSha = reviewedHead;
       completed.runs[1]!.attempts[0]!.completedAt = completed.closedAt;
       completed.runs[1]!.attempts[0]!.report = { provenance: { head: reviewedHead } } as typeof completed.runs[1]["attempts"][number]["report"];
@@ -2009,4 +2014,97 @@ test.each(["UNKNOWN", "", "UNRECOGNIZED"])("uncertain merge receipt retains pace
   expect(h.merge(record.id)).toMatchObject({ state: "blocked", effectUncertain: true, nextReadAt: iso(h.now() + MERGE_POLL_MS) });
   expect(h.calls.slice(calls).map(args => args.slice(0, 2))).toEqual([["pr", "view"]]);
   expect(h.writes).toHaveLength(0);
+});
+
+
+describe("merge withdrawal", () => {
+  function ownedLane() {
+    const record = lane("withdrawn");
+    record.delivery = completedDelivery(record);
+    return record;
+  }
+
+  test.each(["closed", "successor", "completed-successor", "comparison", "foreign-owner"] as const)(
+    "%s withdraws a retained queue entry before forge work", async change => {
+      const h = harness({ lanes: [ownedLane()], prs: [openPr(11)] });
+      await h.sweep();
+      const record = h.pipeline("withdrawn");
+      if (change === "closed") record.state = "closed";
+      else if (change === "comparison") record.delivery!.disposition = "comparison";
+      else if (change === "foreign-owner") record.delivery!.ownerId = "successor";
+      else {
+        const successor = ownedLane();
+        successor.id = "successor";
+        successor.state = change === "successor" ? "running" : "completed";
+        successor.delivery = { ...successor.delivery!, ownerId: successor.id, epoch: 2, active: change === "successor" };
+        const load = h.ports.loadPipelines;
+        h.ports.loadPipelines = () => [...load(), successor];
+      }
+      const reads = h.calls.length;
+      h.advance(MERGE_SETTLE_MS);
+      await h.sweep();
+      expect(h.merge(record.id)).toMatchObject({ state: "cancelled", nextReadAt: null });
+      expect(h.calls.slice(reads)).toEqual([]);
+      expect(h.writes).toHaveLength(0);
+      const stamp = h.merge(record.id)!.updatedAt;
+      let writes = 0;
+      const mutate = h.ports.mutate;
+      h.ports.mutate = async (id, change) => { if (id === record.id) writes += 1; return mutate(id, change); };
+      await h.sweep();
+      expect(writes).toBe(0);
+      expect(h.merge(record.id)!.updatedAt).toBe(stamp);
+    });
+
+  test.each(["pr", "reviews", "contexts", "method", "reservation"] as const)(
+    "delivery loss after awaiting %s prevents dispatch", async boundary => {
+      const h = harness({ lanes: [ownedLane()], prs: [openPr(11)] });
+      await h.sweep();
+      h.advance(MERGE_SETTLE_MS);
+      resetAutoMergeForTests();
+      let revoked = false;
+      const revoke = () => { revoked = true; h.pipeline("withdrawn").delivery!.ownerId = "successor"; };
+      const run = h.ports.run;
+      h.ports.run = async args => {
+        const result = await run(args);
+        if (boundary === "pr" && args[0] === "pr" && args[1] === "view"
+          || boundary === "reviews" && args[1]?.includes("/reviews")
+          || boundary === "contexts" && args[1]?.includes("/branches/")
+          || boundary === "method" && args[0] === "repo") revoke();
+        return result;
+      };
+      if (boundary === "reservation") h.afterMutation(async record => {
+        if (record.merge?.state === "merging") { await Promise.resolve(); revoke(); }
+      });
+      await h.sweep();
+      expect(revoked).toBe(true);
+      expect(h.writes).toHaveLength(0);
+      expect(h.merges()).toHaveLength(0);
+      await h.sweep();
+      expect(h.merge("withdrawn")).toMatchObject({ state: "cancelled", nextReadAt: null });
+    });
+
+  test.each(["unchanged", "closed", "successor", "epoch", "target", "missing", "cleared-receipt", "replaced-receipt"] as const)(
+    "the writer rechecks %s delivery after credential acquisition", async change => {
+      const h = harness({ lanes: [ownedLane()], prs: [openPr(11)] });
+      await h.sweep();
+      h.advance(MERGE_SETTLE_MS);
+      const write = h.ports.write;
+      h.ports.write = async (args, repository, beforeDispatch) => {
+        await Promise.resolve();
+        const record = h.pipeline("withdrawn");
+        if (change === "closed") record.state = "closed";
+        if (change === "successor") record.delivery!.ownerId = "successor";
+        if (change === "epoch") record.delivery!.epoch += 1;
+        if (change === "target") record.delivery!.target.branch = "refs/heads/replacement";
+        if (change === "missing") h.ports.loadPipelines = () => [];
+        if (change === "cleared-receipt") delete record.merge;
+        if (change === "replaced-receipt") record.merge = { ...record.merge!, updatedAt: iso(h.now() + 1_000) };
+        return write(args, repository, beforeDispatch);
+      };
+      await h.sweep();
+      expect(h.writes).toHaveLength(change === "unchanged" ? 1 : 0);
+      expect(h.merges()).toHaveLength(change === "unchanged" ? 1 : 0);
+      if (change === "cleared-receipt") expect(h.merge("withdrawn")).toBeUndefined();
+      if (change === "replaced-receipt") expect(h.merge("withdrawn")).toMatchObject({ state: "merging", updatedAt: iso(h.now() + 1_000) });
+    });
 });
