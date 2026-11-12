@@ -115,11 +115,10 @@ function processFixture() {
   env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
   // A baseline-style checkout with no admission preload of its own.
   fs.writeFileSync(path.join(f.root, "bunfig.toml"), "[test]\n");
-  const source = `import fs from "node:fs";
-    fs.writeFileSync(process.env.START, String(process.pid));
+  const source = `fs.writeFileSync(process.env.START, String(process.pid));
     while (!fs.existsSync(process.env.RELEASE)) await Bun.sleep(10);`;
-  fs.writeFileSync(path.join(f.root, "tsc"), source);
-  fs.writeFileSync(path.join(f.root, "worker.test.ts"), `import { test } from "bun:test"; test("held worker", async () => { ${source} }, 30_000);`);
+  fs.writeFileSync(path.join(f.root, "tsc"), `import fs from "node:fs"; ${source}`);
+  fs.writeFileSync(path.join(f.root, "worker.test.ts"), `import fs from "node:fs"; import { test } from "bun:test"; test("held worker", async () => { ${source} }, 30_000);`);
   new CheckAdmission(f.file).close();
   const db = new Database(f.file);
   const children: ReturnType<typeof spawn>[] = [];
@@ -139,6 +138,11 @@ function processFixture() {
   const started = (id: string) => fs.existsSync(path.join(f.root, `${id}.start`));
   const release = (id: string) => fs.writeFileSync(path.join(f.root, `${id}.release`), "release");
   return { ...f, env, db, records, rows, start, started, release,
+    waitStarted: async (id: string) => {
+      const record = records.find(record => record.id === id)!;
+      await until(() => started(id) || record.child.exitCode !== null || record.child.signalCode !== null);
+      expect(started(id), record.stderr()).toBe(true);
+    },
     close: async () => {
       for (const record of records) release(record.id);
       await Promise.all(children.map(child => stopFixtureProcess(child)));
@@ -149,8 +153,8 @@ function processFixture() {
 test.skipIf(process.platform === "win32")("separate gates count branch, baseline and compiler workers together in FIFO order", async () => {
   const f = processFixture();
   try {
-    f.start("branch"); await until(() => f.started("branch"));
-    f.start("base"); await until(() => f.started("base"));
+    f.start("branch"); await f.waitStarted("branch");
+    f.start("base"); await f.waitStarted("base");
     f.start("types", true); await until(() => f.rows().length === 3 || f.started("types"));
     // Original runners start this third workload while both tests are held.
     expect(f.started("types")).toBe(false);
@@ -180,7 +184,7 @@ test.skipIf(process.platform === "win32")("a compiler failure preserves its exit
     fs.writeFileSync(path.join(f.root, "tsc"), "process.exit(7);");
     f.start("failure", true);
     expect(await f.records[0]!.code, f.records[0]!.stderr()).toBe(7);
-    f.start("successor"); await until(() => f.started("successor"));
+    f.start("successor"); await f.waitStarted("successor");
     expect(f.rows().filter(row => row.held)).toHaveLength(1);
     f.release("successor");
     expect(await f.records[1]!.code, f.records[1]!.stderr()).toBe(0);
@@ -225,9 +229,9 @@ test("cancellation after a durable enqueue removes its FIFO ticket", async () =>
   try {
     expect(queue.claim(owner, 1)).toBe(true);
     const pending = acquireCheckSlot(env, controller.signal);
-    const rejected = expect(pending).rejects.toThrow();
+    const observed = pending.then(() => ({ admitted: true }), error => ({ error }));
     await until(() => (queue.db.query("SELECT * FROM checks").all().length === 2));
-    controller.abort(); await rejected;
+    controller.abort(); expect(await observed).toHaveProperty("error");
     expect(queue.db.query("SELECT owner FROM checks").all()).toEqual([{ owner: JSON.stringify(owner) }]);
   } finally { queue.close(); f.close(); }
 });
