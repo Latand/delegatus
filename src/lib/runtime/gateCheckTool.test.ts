@@ -39,7 +39,8 @@ function missedNotifications(directory: string) {
     return timer;
   }) as typeof setTimeout);
   const cancellations = spyOn(globalThis, "clearTimeout").mockImplementation(timer => {
-    pending.delete(timer as ReturnType<typeof setTimeout>); cancel(timer);
+    const ownedTimer = timer as ReturnType<typeof setTimeout>;
+    pending.delete(ownedTimer); cancel(ownedTimer);
   });
   const notifications = spyOn(fs, "watch").mockImplementation(((...args: Parameters<typeof fs.watch>) => {
     if (args[0] === directory) {
