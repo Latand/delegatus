@@ -74,9 +74,7 @@ const PROJECTION_STATE_FILES = [
   /* A state database fallback or a refused backup (#1870 slice 10) shows in
      `systemHealth.storage` on the next poll, not after some other store moves. */
   "storage-incidents.json",
-  /* A new ask ("Asks you") and the switch that shows or hides them move no
-     scan and no other store. */
-  "operator-asks.json",
+  /* The switch that shows or hides asks moves no scan and no other store. */
   "asks-you-settings.json",
 ] as const;
 const projectionCacheStore = globalThis as typeof globalThis & {
@@ -236,6 +234,8 @@ function projectionBaseKey(
       /* Who answers a worker's ask is the project's designated seat
          (docs/design/attention-auto-resolve.md): a rotation moves no scan. */
       hotStateSignature("orchestrator_seats", "orchestrator-seats.json"),
+      /* A new ask ("Asks you") moves no scan and no other store. */
+      hotStateSignature("operator_asks", "operator-asks.json"),
       /* The reaper's authorship evidence pins owner-touched workers and clears
          freshly scanned ones (#112). */
       hotStateSignature("reaper", "reaper-state.json"),
