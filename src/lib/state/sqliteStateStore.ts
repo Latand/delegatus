@@ -1701,6 +1701,85 @@ export function readStateCollectionRevisions(
   }
 }
 
+/** Rows of one collection as one read snapshot answered them. */
+export interface StateCollectionSelection {
+  revision: number;
+  /** The gap the collection's legacy import recorded, or null. */
+  importGap: string | null;
+  /** Selected rows: each prefix's rows in collection order, then the named keys. */
+  rows: { key: string; valueJson: string; rowRevision: number }[];
+  /** Keys under each `keysOnly` prefix, in key order, with no value read. */
+  keys: string[];
+}
+
+function prefixUpperBound(prefix: string): string {
+  if (!prefix) throw new Error("a state key prefix must not be empty");
+  return prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+}
+
+/**
+ * Selected rows of one collection in one read snapshot of the shared
+ * read-only connection: every row whose key starts with one of `prefixes`,
+ * every row named in `keys`, and the bare keys under each `keysOnly` prefix.
+ * A reader that needs a few keyed parts of a collection reads only those
+ * parts, and the revision names exactly the snapshot it read. Values stay
+ * JSON text for the caller to decode. Null until the collection exists.
+ */
+export function readStateCollectionSelection(filename: string, collection: string, selection: {
+  prefixes?: readonly string[];
+  keys?: readonly string[];
+  keysOnly?: readonly string[];
+}): StateCollectionSelection | null {
+  if (!fs.existsSync(filename)) return null;
+  const db = sharedStateReadonlyDatabase(filename);
+  let begun = false;
+  try {
+    db.exec("BEGIN");
+    begun = true;
+    const meta = db.query<{ revision: number }, [string]>("SELECT revision FROM state_collections WHERE collection = ?").get(collection);
+    if (!meta) {
+      db.exec("COMMIT");
+      return null;
+    }
+    let importGap: string | null = null;
+    try {
+      importGap = db.query<{ gap: string | null }, [string]>("SELECT gap FROM state_imports WHERE collection = ?").get(collection)?.gap ?? null;
+    } catch (error) {
+      // A database no import ever ran in has no evidence table, and no gap.
+      if (!/no such table/i.test(error instanceof Error ? error.message : String(error))) throw error;
+    }
+    const rows: StateCollectionSelection["rows"] = [];
+    const range = db.query<{ row_key: string; value_json: string; row_revision: number }, [string, string, string]>(`
+      SELECT row_key, value_json, row_revision FROM state_rows
+      WHERE collection = ? AND row_key >= ? AND row_key < ? ORDER BY row_order, row_key
+    `);
+    for (const prefix of selection.prefixes ?? []) {
+      for (const row of range.all(collection, prefix, prefixUpperBound(prefix))) rows.push({ key: row.row_key, valueJson: row.value_json, rowRevision: row.row_revision });
+    }
+    const named = [...new Set(selection.keys ?? [])];
+    for (let start = 0; start < named.length; start += CHANGE_READ_CHUNK) {
+      const chunk = named.slice(start, start + CHANGE_READ_CHUNK);
+      for (const row of db.query<{ row_key: string; value_json: string; row_revision: number }, SQLQueryBindings[]>(`
+        SELECT row_key, value_json, row_revision FROM state_rows WHERE collection = ? AND row_key IN (${chunk.map(() => "?").join(", ")})
+        ORDER BY row_key
+      `).all(collection, ...chunk)) rows.push({ key: row.row_key, valueJson: row.value_json, rowRevision: row.row_revision });
+    }
+    const keys: string[] = [];
+    const keyRange = db.query<{ row_key: string }, [string, string, string]>(`
+      SELECT row_key FROM state_rows WHERE collection = ? AND row_key >= ? AND row_key < ? ORDER BY row_key
+    `);
+    for (const prefix of selection.keysOnly ?? []) {
+      for (const row of keyRange.all(collection, prefix, prefixUpperBound(prefix))) keys.push(row.row_key);
+    }
+    db.exec("COMMIT");
+    return { revision: meta.revision, importGap, rows, keys };
+  } catch (error) {
+    if (begun) rollbackQuietly(db);
+    if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return null;
+    throw error;
+  }
+}
+
 export function resetStateReadonlyConnectionCountForTests(): void {
   readonlyConnectionCount = 0;
 }
