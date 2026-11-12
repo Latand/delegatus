@@ -1596,3 +1596,39 @@ for (const engine of ["codex", "claude", "copilot"] as const) {
     });
   }
 }
+
+test("the persisted cursor round-trips Copilot after mixed and protected retirement candidates", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-retirement-copilot-cursor-"));
+  const previousStateDir = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = root;
+  try {
+    const file = snapshot();
+    const template = file.entries[`claude:${SESSION}`]!;
+    delete file.entries[`claude:${SESSION}`];
+    for (const engine of ["claude", "codex", "copilot"] as const) {
+      const host = structuredClone(template);
+      host.key = { engine, sessionId: SESSION };
+      host.structuredHost!.kind = engine === "codex" ? "codex-app-server"
+        : engine === "copilot" ? "copilot-acp" : "claude-broker";
+      host.structuredHost!.activeFlags = [];
+      if (engine === "copilot") host.structuredHost!.pendingAttention = ["open-question"];
+      file.entries[`${engine}:${SESSION}`] = host;
+    }
+
+    const persistence = { readCursor: undefined, writeCursor: undefined,
+      snapshot: () => file, owned: () => false, batch: 10 };
+    const first = await sweep(persistence);
+    expect(first.terminated.map(host => host.engine)).toEqual(["claude", "codex"]);
+    expect(first.report.refused.map(item => item.clause)).toEqual(["attention-settled"]);
+    expect(fs.readFileSync(path.join(root, "host-retirement-cursor.json"), "utf8"))
+      .toContain(`copilot:${SESSION}`);
+
+    const second = await sweep(persistence);
+    expect(second.terminated.map(host => host.engine)).toEqual(["claude", "codex"]);
+    expect(second.report.refused.map(item => item.clause)).toEqual(["attention-settled"]);
+  } finally {
+    if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousStateDir;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
