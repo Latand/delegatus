@@ -2,6 +2,7 @@ import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
 import { CloudFailure, cloudEnvironment, cloudTransport, runCloudRelay, type CloudTransport } from "./cloud";
 import { scrubOwnerReply } from "./ownerOutput";
 import { cloudOwnerDirectory, CloudOwnerDirectoryError } from "./ownerRun";
+import { createOwnerRunDirectory } from "./runDirectory";
 import { hasInboundMedia, prepareInboundMedia, writeInboundAgentInput } from "./mediaInput";
 import { isInboundImage } from "./mediaInputValidation";
 import { validateAnswerComposition } from "./composition";
@@ -735,9 +736,8 @@ export async function runClaimedRequest(
       selection.kind === "exhausted" && selection.resetsAt ? Math.max(0, selection.resetsAt - Math.floor(Date.now() / 1000)) : null) : null;
     const earlyCapacityDecline = capacityDecline();
     if (earlyCapacityDecline) return await finish(earlyCapacityDecline);
-    runDir = recovery?.runDir ?? await fs.promises.mkdtemp(
-      path.join(externalRelayTempRoot(), "llv-external-relay-"),
-    );
+    runDir = recovery?.runDir ?? (owner && !prototype ? await createOwnerRunDirectory()
+      : await fs.promises.mkdtemp(path.join(externalRelayTempRoot(), "llv-external-relay-")));
     const ownerIdentity = procBackend.processIdentity(process.pid);
     if (!ownerIdentity) throw new Error("viewer process identity unavailable");
     const record = {
@@ -929,6 +929,15 @@ export async function runClaimedRequest(
         let preparedOwner = owner && !prototype ? (conversation?.conversationId && !usingCloud
           ? ownerContinuationPrompt(request, owner, ownerTarget.hardCapMinutes, conversation, ownerAdditions)
           : prepareOwnerPrompt(request, owner, ownerTarget.hardCapMinutes, ownerAdditions)) : null;
+        if (usingCloud && !cloudFailed && preparedOwner?.context !== undefined) {
+          // A remote environment cannot read request-local context files.
+          // No Cloud turn has started for this prompt; use the native fallback.
+          cloudOwnerDirectory(target.project);
+          selection = accountManager.resolveHeadlessSpawn(target.engine!, null, [], target.project, target.model);
+          const unavailable = capacityDecline();
+          if (unavailable) return await finish(unavailable);
+          cloudFailed = true;
+        }
         if (conversation && rounds === 1) turn = preparedOwner ?? conversationTurnPrompt(request, conversation, frame);
         const persistentPrompt = preparedOwner?.prompt ?? (conversation ? rounds === 1 ? turn!.prompt
           : conversationRoundPrompt(loop!.results.filter((r) => r.round === rounds - 1), frame) : roundPrompt);
@@ -977,6 +986,8 @@ export async function runClaimedRequest(
             onDiagnostic: recordDiagnostic,
             rawDeadlineAt: rawRequest.deadline_at,
             preparedPrompt: preparedOwner!,
+            contextDirectory: localRunDir,
+            onPromptBytes: bytes => { if (chain) chain = { ...chain, promptBytes: chain.promptBytes + bytes - Buffer.byteLength(persistentPrompt) }; },
             request, owner, target: { ...ownerTarget, engine: configuredTarget!.engine }, deadline, admissionDeadlineAt: executionDeadline, accountId: selectedAccount().accountId,
             hardCapMs: Math.min(cloud ? Math.max(0, executionDeadline - Date.now()) : target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
             onConversation: async (conversationId, initialPrompt) => {
