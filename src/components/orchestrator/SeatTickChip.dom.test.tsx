@@ -1550,3 +1550,44 @@ test("reopening the panel after another writer moved the cadence, a failed panel
     expect(form === null || form === "10").toBe(true);
   } finally { globalThis.fetch = served; }
 });
+
+
+test("a seat's own note write seen first by the summary poll keeps the open panel form and the operator's draft", async () => {
+  getAnswer = configured();
+  const served = globalThis.fetch;
+  const panelGets: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("/api/monitor/seat-tick/settings") && (!init?.method || init.method === "GET")) {
+      if (url.includes("view=summary")) return json({ ...getAnswer, at: new Date().toISOString(), view: "summary", maintenance: undefined, curation: undefined });
+      panelGets.push(url);
+      return json({ ...getAnswer, at: new Date().toISOString() });
+    }
+    return served(input, init);
+  }) as typeof fetch;
+  const realSetInterval = globalThis.setInterval;
+  const polls: Array<() => void> = [];
+  globalThis.setInterval = ((fn: () => void, ms?: number, ...rest: unknown[]) => {
+    if (ms === 60_000) polls.push(fn);
+    return realSetInterval(fn as never, ms, ...(rest as []));
+  }) as typeof setInterval;
+  try {
+    const { root } = await mount();
+    const closedPolls = polls.length;
+    await open(root);
+    expect(field<HTMLInputElement>("[data-seat-tick-interval]").value).toBe("30");
+    type(field<HTMLInputElement>("[data-seat-tick-interval]"), "45");
+    expect(save()).not.toBeNull();
+    const panelGetsBefore = panelGets.length;
+    // The seat appends a line to its own monitor note: the schedule is unchanged, updatedAt moves.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const at = new Date().toISOString();
+    getAnswer = configured({ settings: { ...configured().settings, monitorPrompt: "lane ledger line", updatedAt: at }, effective: { ...configured().effective, updatedAt: at }, monitorPromptLength: 16 });
+    // The closed control's summary poll (registered at mount) answers before the panel's own poll.
+    for (const poll of polls.slice(0, closedPolls)) poll();
+    await settle(root);
+    const interval = field<HTMLInputElement>("[data-seat-tick-interval]")?.value ?? null;
+    expect(interval).toBe("45");
+    expect(save()).not.toBeNull();
+  } finally { globalThis.setInterval = realSetInterval; globalThis.fetch = served; }
+});

@@ -247,11 +247,29 @@ export function useSeatTickSettings(project: string, enabled: boolean, view: "pa
      the record, and the loser would put a superseded reading on screen. */
   const inFlight = useRef(false);
   const flight = useRef<Promise<boolean> | null>(null);
+  /* The answer this hook instance received while it was enabled. The
+     overtaken-record rule exists for a record cached from an EARLIER open; an
+     answer the current open received is the panel's own and stays, whatever
+     the closed control's summary poll sees meanwhile (a monitor note or a
+     reason line moves `updatedAt` without touching the form). Cleared when the
+     hook is disabled, so the next open starts from the rule again. */
+  const [ownShown, setOwnShown] = useState<SeatTickSettingsAnswer | null>(null);
+  const own = useRef<SeatTickSettingsAnswer | null>(null);
+  const setOwn = useCallback((answer: SeatTickSettingsAnswer | null) => {
+    own.current = answer;
+    setOwnShown(answer);
+  }, []);
+  /* For the save paths, which run outside render and read the newest answer. */
+  const kept = useCallback((): SeatTickSettingsAnswer | null => {
+    const cached = readings.get(key) ?? null;
+    return cached && cached === own.current ? cached : keptReading(key);
+  }, [key]);
 
   /* Answers carry the project they answered for, so a project switch drops the
      previous project's reading HERE, in render — never a frame of another
      project's schedule under this project's name. */
-  const current = readings.has(key) ? keptReading(key) : (stored && stored.project === key ? stored.answer : null);
+  const cachedNow = readings.get(key) ?? null;
+  const current = readings.has(key) ? (cachedNow && cachedNow === ownShown ? cachedNow : keptReading(key)) : (stored && stored.project === key ? stored.answer : null);
   const shown = pending && pending.project === key ? pending.answer : current;
 
   const settle = useCallback((target: string, answer: SeatTickSettingsAnswer) => {
@@ -261,9 +279,10 @@ export function useSeatTickSettings(project: string, enabled: boolean, view: "pa
     if (answer.view !== "summary") readings.set(`${target}:summary`, answer);
     else if (answer.changed) readings.set(`${target}:panel`, null);
     while (readings.size > 64) readings.delete(readings.keys().next().value!);
+    if (view === "panel" && enabled) setOwn(answer);
     setStored({ project: `${target}:${view}`, answer });
     setFailed(false);
-  }, [view]);
+  }, [view, enabled, setOwn]);
 
   const refresh = useCallback(async () => {
     try {
@@ -291,15 +310,16 @@ export function useSeatTickSettings(project: string, enabled: boolean, view: "pa
     return () => {
       clearInterval(timer);
       controller.abort();
+      setOwn(null);
     };
-  }, [project, enabled, view, settle]);
+  }, [project, enabled, view, settle, setOwn]);
 
   const write = useCallback(async (change: SeatTickChange): Promise<boolean> => {
     inFlight.current = true;
     setError(null);
     const only = (scope: string) => Object.keys(change).length > 0 && Object.keys(change).every((key) => key === scope);
     setErrorScope(only("turbo") ? "turbo" : Object.keys(change).length > 0 && Object.keys(change).every((key) => key === "autoRotate") ? "autoRotate" : Object.keys(change).length > 0 && Object.keys(change).every((key) => key === "maintenance") ? "maintenance" : "tick");
-    const before = keptReading(key);
+    const before = kept();
     if (before) setPending({ project: key, answer: optimistic(before, change) });
     try {
       const response = await fetch(`${SETTINGS_URL}${view === "summary" ? "?view=summary" : ""}`, {
@@ -337,7 +357,7 @@ export function useSeatTickSettings(project: string, enabled: boolean, view: "pa
     } finally {
       inFlight.current = false;
     }
-  }, [project, key, view, refresh, settle]);
+  }, [project, key, view, kept, refresh, settle]);
 
   const save = useCallback((change: SeatTickChange): Promise<boolean> => {
     if (inFlight.current) return Promise.resolve(false);
@@ -350,10 +370,10 @@ export function useSeatTickSettings(project: string, enabled: boolean, view: "pa
     /* A save that settles has already put its read-back in `readings`, so the
        record handed over is the one that write came back with. */
     while (inFlight.current) await flight.current;
-    const record = keptReading(key);
+    const record = kept();
     const change = record ? build(record) : null;
     return change ? save(change) : null;
-  }, [key, save]);
+  }, [kept, save]);
 
   return {
     project,

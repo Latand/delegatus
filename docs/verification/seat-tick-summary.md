@@ -23,7 +23,11 @@ control; a summary cannot populate the editable form. A cached panel record is
 ignored once a summary read at or after its own time shows a different
 schedule, so reopening the panel never shows or edits a record older than the
 closed control: while the panel read is pending or fails, the face keeps the
-summary's cadence and the form is absent until a panel answer arrives. A refused closed-control
+summary's cadence and the form is absent until a panel answer arrives. The rule
+covers only a record cached from an earlier open. An answer the current open
+received stays, so a write that moves `updatedAt` without changing the schedule
+(a monitor note, a reason line) never removes an open form or its unsaved draft.
+A refused closed-control
 write keeps its reason in the pending and loaded desktop panel; its next write
 clears that earlier refusal. Closing a reader aborts
 its pending GET. The original full HTTP and MCP consumers retain their default
