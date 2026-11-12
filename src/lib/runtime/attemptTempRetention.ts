@@ -623,7 +623,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         restoreRefusedAttemptTrash(owner.directory, owner.identity);
       report.removed += result.removed.length + (result.trashFinished ?? 0);
       report.removedBytes += result.removedBytes + (result.trashFinished ? owner.bytes : 0);
-      const failures = result.errors.filter(error => !error.includes("attempt temp deferred:"));
+      // Sweeper errors carry a deferred refusal after their candidate path.
+      // A separate acquired-path failure may include that refusal as context;
+      // only classify the deferred prefix itself as non-failing.
+      const failures = result.errors.filter(error => !/(?:^|: )attempt temp deferred:/.test(error));
       if (failures.length && failures.every(privilegedCleanupUnavailable) && !result.removed.length && !result.trashFinished) {
         await holdForOperator(bytes, failures.join("; "));
         continue;

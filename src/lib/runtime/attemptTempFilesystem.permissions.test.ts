@@ -81,6 +81,31 @@ test.skipIf(process.platform !== "linux").each([0o000, 0o444, 0o555])(
     } finally { rm.mockRestore(); fs.chmodSync(payload, 0o600); }
   });
 
+test.skipIf(process.platform !== "linux").each([1, 2])(
+  "a refusal after chmod restores every read-only directory and preserves its reason (changed=%i)", async changedAt => {
+    const f = fixture(), nested = path.join(f.cache, "nested");
+    fs.chmodSync(f.cache, 0o755);
+    fs.mkdirSync(nested); fs.writeFileSync(path.join(nested, "payload"), "retained");
+    fs.chmodSync(nested, 0o555); fs.chmodSync(f.cache, 0o555);
+    const refusal = new Error(`proof refused after chmod ${changedAt}`);
+    let changes = 0, observed: unknown;
+    try {
+      await removeAttemptTree(f.directory, f.directory, async () => true, false, allowed, allowed, true, undefined, {
+        permissionChange: (_file, _mode, apply) => {
+          apply();
+          if (++changes === changedAt) throw refusal;
+        },
+      });
+    } catch (error) { observed = error; }
+    expect(changes).toBe(changedAt);
+    expect(observed).toBeInstanceOf(Error);
+    expect((observed as Error).message).toContain(refusal.message);
+    expect((observed as Error).cause).toBe(refusal);
+    expect(fs.statSync(f.cache).mode & 0o777).toBe(0o555);
+    expect(fs.statSync(nested).mode & 0o777).toBe(0o555);
+    expect(fs.readFileSync(path.join(nested, "payload"), "utf8")).toBe("retained");
+  });
+
 test.skipIf(process.platform !== "linux").each(["owner", "device", "symlink", "hardlink"] as const)(
   "permission repair respects the %s boundary", async boundary => {
     const f = fixture(), outside = path.join(f.parent, "outside");

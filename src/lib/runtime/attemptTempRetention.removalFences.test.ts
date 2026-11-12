@@ -39,6 +39,35 @@ test("a removal callback fence refusal restores quarantine before returning", as
   expect(fs.readdirSync(parent).filter(name => name.startsWith(".delegatus-trash-"))).toEqual([]);
 });
 
+test("an acquired original during a deferred refusal is recorded as a failed retirement", async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-acquired-deferred-retention-"));
+  cleanup.push(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const directory = path.join(parent, "llv-stage-acquired"); fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "payload"), "original");
+  const store = new AttemptTempStore(path.join(parent, "registry/owners.sqlite"));
+  cleanup.push(() => store.close());
+  store.register({ directory, pipelineId: null, launchId: "fixture", retainUntilClose: true, createdAt: 1 });
+  const refusal = new AttemptTempBudgetDeferred("watch changed at removal fence");
+  const report = await sweepAttemptTemps(store, { now: () => NOW, maxRoots: 1, state: async () => "expired",
+    scan: () => ({ ownNamespace: null, processes: [] }),
+    remove: async () => {
+      fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "replacement"), "preserve");
+      throw refusal;
+    },
+  });
+  expect(report).toMatchObject({ removed: 0, errors: 1, deferred: 0 });
+  expect(report.outcomes[0]).toMatchObject({ disposition: "failed" });
+  expect(report.outcomes[0].reason).toContain("original path was acquired while removal was refused");
+  expect(report.outcomes[0].reason).toContain(refusal.message);
+  const inspect = new Database(store.filename, { readonly: true });
+  try {
+    const row = inspect.query<{ failure: string | null }, [string]>("SELECT failure FROM root_retention WHERE directory=?").get(directory);
+    expect(row?.failure).toContain("original path was acquired while removal was refused");
+  } finally { inspect.close(); }
+  expect(fs.readFileSync(path.join(directory, "replacement"), "utf8")).toBe("preserve");
+  expect(fs.existsSync(attemptTempJournalPath(directory))).toBeTrue();
+});
+
 test("an acquired original path keeps the named refusal as its cause", async () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-trash-refusal-cause-"));
   cleanup.push(() => fs.rmSync(parent, { recursive: true, force: true }));

@@ -924,21 +924,36 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
       validate();
       stack.push({ ...entry, entries: fs.opendirSync(pinned) });
       keepDescriptor = true;
-    } finally { if (!keepDescriptor) fs.closeSync(fd); }
+    } finally { if (!keepDescriptor && !retainedFds.has(fd)) fs.closeSync(fd); }
   };
+  const cleanupFailures: unknown[] = [];
   const close = () => {
     const frame = stack.pop()!;
-    try { frame.entries.closeSync(); } finally { if (!retainedFds.has(frame.fd)) fs.closeSync(frame.fd); }
-  };
-  const release = () => { for (const entry of changed.splice(0)) { retainedFds.delete(entry.fd); fs.closeSync(entry.fd); } };
-  const rollback = () => {
-    let failure: unknown;
-    for (const entry of changed.splice(0).reverse()) {
-      try { fs.chmodSync(`/proc/self/fd/${entry.fd}`, entry.mode); }
-      catch (error) { failure ??= error; }
-      finally { retainedFds.delete(entry.fd); fs.closeSync(entry.fd); }
+    try { frame.entries.closeSync(); } catch (error) { cleanupFailures.push(error); }
+    if (!retainedFds.has(frame.fd)) {
+      try { fs.closeSync(frame.fd); } catch (error) { cleanupFailures.push(error); }
     }
-    if (failure) throw failure;
+  };
+  const closeRetained = (entries: Array<{ fd: number; mode: number }>) => {
+    for (const { fd } of entries) {
+      retainedFds.delete(fd);
+      try { fs.closeSync(fd); } catch (error) { cleanupFailures.push(error); }
+    }
+  };
+  const release = () => {
+    closeRetained(changed.splice(0));
+    if (cleanupFailures.length) throw new AggregateError(cleanupFailures.splice(0), "attempt permission descriptor cleanup failed");
+  };
+  const rollback = () => {
+    const failures: unknown[] = [];
+    const entries = changed.splice(0).reverse();
+    for (const entry of entries) {
+      try { fs.chmodSync(`/proc/self/fd/${entry.fd}`, entry.mode); }
+      catch (error) { failures.push(error); }
+    }
+    closeRetained(entries);
+    failures.push(...cleanupFailures.splice(0));
+    if (failures.length) throw new AggregateError(failures, "attempt permission rollback failed");
   };
   try {
     enter(directory, physicalRoot, true);
@@ -952,7 +967,9 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
     }
   } catch (error) {
     while (stack.length) close();
-    try { rollback(); } catch (rollbackError) { throw new Error("attempt permission repair failed and original modes could not be restored", { cause: rollbackError }); }
+    try { rollback(); } catch (rollbackError) {
+      throw new Error(`${attemptTempFailureDetail(error)}; attempt permission rollback or descriptor cleanup failed: ${attemptTempFailureDetail(rollbackError)}`, { cause: error });
+    }
     throw error;
   } finally { while (stack.length) close(); }
   return { rollback, release };
