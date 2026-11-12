@@ -1,5 +1,6 @@
 import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { Database } from "bun:sqlite";
@@ -7,7 +8,8 @@ import { stageGeneratedAttachments, stageOwnerAttachments, uploadAnswerAttachmen
 import { answerCapabilities, type AnswerDrop } from "./answerV2";
 import { richRequest } from "./rich.fixture";
 import { startTestRelay } from "./testRelay";
-const root = fs.mkdtempSync(path.join("/tmp", "relay-attachments-"));
+import { readSqliteMemory } from "@/lib/sqliteMemoryDiagnostics";
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-attachments-"));
 const MiB=1024*1024;
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 const caps = answerCapabilities(richRequest(true), "codex");
@@ -114,6 +116,13 @@ test("generated media staging survives attribution messages and cancellation cle
   setTimeout(()=>controller.abort(new DOMException("test cancelled","AbortError")),0);
   await expect(pending).rejects.toMatchObject({name:"AbortError"});
   expect(new Set(fs.readdirSync(root).filter(name=>name.startsWith("relay-job-")))).toEqual(before);
+});
+test("parallel SQLite memory requests do not become attachment job results", async () => {
+  const { dir, refs } = await generated();
+  const sampling = (async () => { for (let i = 0; i < 8; i++) await readSqliteMemory(); })();
+  const staged = await stageGeneratedAttachments(refs, dir, new Set(["exec-1.png"]), root, caps, []);
+  await sampling;
+  expect(staged).toHaveLength(1);
 });
 test("generated staging refuses outside files, symlinks, hardlinks and old files", async () => {
   const { dir, refs } = await generated();
