@@ -8,7 +8,7 @@ import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { attemptReferencesClear, repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
 import * as filesystem from "./attemptTempFilesystem";
 import type { ProcessScan } from "@/lib/tempSweep";
-import { AttemptTempStore, sweepAttemptTemps, type AttemptTempState, type AttemptTempOwner } from "./attemptTempRetention";
+import { AttemptTempStore, EXPIRED_HOLD_RETRY_MS, sweepAttemptTemps, type AttemptTempState, type AttemptTempOwner } from "./attemptTempRetention";
 import { attemptTempAuthority, attemptTempState } from "./attemptTempProduction";
 import { holdFinishedRoot } from "./attemptTempRetention.testSupport";
 import { recordedRootHeld, RecordedCheckStore } from "@/lib/recordedChecks/store";
@@ -774,13 +774,16 @@ test("a settled attempt removes its scratch without waiting for host release", a
 
 type NamespacePath = "namespace-only" | "permission-fallback";
 type NamespaceChange = "control" | "producer-changed" | "checkout-unreadable" | "root-replaced";
-async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceChange = "control", expired = false) {
+async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceChange = "control", expired = false, foreignSubtree = false) {
   const f = fixture(), directory = f.make(`namespace-${kind}`), bin = path.join(f.root, "bin");
   const checkout = path.join(f.root, "checkout"), completion = path.join(f.root, "cleanup-complete");
   fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
   fs.mkdirSync(path.join(directory, "private")); fs.mkdirSync(bin);
   fs.writeFileSync(path.join(directory, "private", "payload"), "reclaim me");
   if (expired) fs.writeFileSync(path.join(directory, "frame.png"), "expired evidence");
+  // A container that ran as another user leaves a directory this user cannot list.
+  const locked = path.join(directory, "private", "pgdata");
+  if (foreignSubtree) { fs.mkdirSync(locked); fs.writeFileSync(path.join(locked, "base"), "database files"); fs.chmodSync(locked, 0); }
   f.store.measure(directory, 8192); f.store.release(directory);
   fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}
 import fs from "node:fs";
@@ -792,6 +795,9 @@ if (!source || !source.startsWith(${JSON.stringify(f.root + path.sep)})) process
 const script = args[args.indexOf("-c") + 1];
 if (script.includes("-delete")) {
   if (script.includes("found=$(find") && fs.existsSync(source + "/frame.png")) process.exit(75);
+  // The cleanup namespace holds DAC_OVERRIDE: it lists what this user cannot.
+  const grant = (file) => { const stat = fs.lstatSync(file); if (!stat.isDirectory()) return; fs.chmodSync(file, 0o700); for (const entry of fs.readdirSync(file)) grant(file + "/" + entry); };
+  grant(source);
   for (const entry of fs.readdirSync(source)) fs.rmSync(source + "/" + entry, { recursive: true, force: true });
   if (${JSON.stringify(change)} === "checkout-unreadable") fs.chmodSync(${JSON.stringify(checkout)}, 0);
   if (${JSON.stringify(change)} === "root-replaced") {
@@ -847,6 +853,9 @@ if (script.includes("-delete")) {
     expect(f.store.bytes()).toBe(0);
   } finally {
     opendir.mockRestore(); rm.mockRestore(); f.store.close(); fs.chmodSync(checkout, 0o700);
+    for (const name of fs.readdirSync(f.root)) {
+      try { fs.chmodSync(path.join(f.root, name, "private", "pgdata"), 0o700); } catch { /* Removed or never made. */ }
+    }
     if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
     if (previousImage === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
   }
@@ -854,6 +863,10 @@ if (script.includes("-delete")) {
 
 test.skipIf(process.platform !== "linux")("expired evidence also retires through the permission-denied namespace fallback", async () => {
   await integratedNamespaceSweep("permission-fallback", "control", true);
+});
+
+test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)("an expired root with a subtree this user cannot list retires through the namespace", async () => {
+  await integratedNamespaceSweep("permission-fallback", "control", true, true);
 });
 
 test.skipIf(process.platform !== "linux").each(["namespace-only", "permission-fallback"] as const)(
@@ -1317,19 +1330,54 @@ test("an incomplete real checkout inventory defers roots with their bytes instea
   } finally { clock.mockRestore(); f.store.close(); }
 });
 
-test("pressure retires the largest released settled roots first and reserves fair visits", async () => {
+test("pressure retires the oldest released settled roots first and reserves fair visits", async () => {
   const f = fixture();
   const oldest = f.make("oldest-unreleased", 10 * 86400000);
-  const small = f.make("a-small"), large = f.make("z-large");
-  fs.writeFileSync(path.join(large, "data"), Buffer.alloc(16 * 1024 ** 2));
-  f.store.measure(small, 4096); f.store.measure(large, 16 * 1024 ** 2);
-  f.store.release(small); f.store.release(large);
+  const older = f.make("z-older-small", 2 * 86400000), newer = f.make("a-newer-large", 86400000);
+  fs.writeFileSync(path.join(newer, "data"), Buffer.alloc(16 * 1024 ** 2));
+  f.store.measure(older, 4096); f.store.measure(newer, 16 * 1024 ** 2);
+  f.store.release(older); f.store.release(newer);
   try {
     const first = await f.sweep("closed", { maxRoots: 1, capBytes: 0 });
-    expect(first.removed).toBe(1); expect(fs.existsSync(large)).toBeFalse();
-    expect(first.removedBytes).toBeGreaterThanOrEqual(16 * 1024 ** 2);
+    expect(first.removed).toBe(1); expect(fs.existsSync(older)).toBeFalse(); expect(fs.existsSync(newer)).toBeTrue();
     const second = await f.sweep("closed", { maxRoots: 2, capBytes: 0 });
-    expect(second.removed).toBe(2); expect(fs.existsSync(oldest)).toBeFalse();
+    expect(second.removed).toBe(2); expect(fs.existsSync(oldest)).toBeFalse(); expect(fs.existsSync(newer)).toBeFalse();
+  } finally { f.store.close(); }
+});
+
+test("roots whose lane retention ended lead every page across the ledger, oldest finish first", async () => {
+  const f = fixture();
+  // Rows the round robin would visit first: they were checked longest ago.
+  const round = Array.from({ length: 12 }, (_, n) => f.make(`round-${String(n).padStart(2, "0")}`, 30 * 86400000));
+  const newer = f.make("expired-newer", 1000), older = f.make("expired-older", 2000), pending = f.make("expires-tomorrow", 3000);
+  f.store.retainRoot(newer, NOW - 1000); f.store.retainRoot(older, NOW - 2 * 86400000); f.store.retainRoot(pending, NOW + 86400000);
+  const page = (limit: number, pressure = false, at = NOW) => f.store.due(at, limit, pressure).map(row => row.directory);
+  try {
+    for (const pressure of [false, true]) {
+      expect(page(4, pressure).slice(0, 2)).toEqual([older, newer]);
+      expect(page(4, pressure).slice(2)).toEqual(round.slice(0, 2));
+      expect(page(4, pressure)).not.toContain(pending);
+    }
+    // At most half of a page, so the round robin keeps moving.
+    expect(page(2)).toEqual([older, round[0]]);
+    // Held past its retention, the oldest steps back and the next one leads.
+    const report = await f.sweep("live", { maxRoots: 2 });
+    expect(report.outcomes.map((row: { directory: string }) => row.directory)).toEqual([older, round[0]]);
+    expect(page(2, false, NOW + 60_000)).toEqual([newer, round[1]]);
+    expect(f.store.owner(older)!.checkedAt).toBe(NOW + EXPIRED_HOLD_RETRY_MS);
+  } finally { f.store.close(); }
+});
+
+test("a root the run budget never reached keeps its place for the next tick", async () => {
+  const f = fixture();
+  const first = f.make("budget-first", 3000), second = f.make("budget-second", 2000), third = f.make("budget-third", 1000);
+  let now = NOW;
+  try {
+    const report = await f.sweep("closed", { maxRoots: 3, now: () => now, onRetired: () => { now += 40_001; } });
+    expect(report).toMatchObject({ removed: 1, deferred: 2, errors: 0 });
+    expect(fs.existsSync(first)).toBeFalse();
+    expect(f.store.owner(second)!.checkedAt).toBe(NOW - 2000); expect(f.store.owner(third)!.checkedAt).toBe(NOW - 1000);
+    expect(f.store.due(now, 2).map(row => row.directory)).toEqual([second, third]);
   } finally { f.store.close(); }
 });
 

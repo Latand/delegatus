@@ -57,6 +57,17 @@ export async function attemptTempAuthority(owner: AttemptTempOwner, inventory = 
 export async function attemptTempState(owner: AttemptTempOwner, inventory = new RepositoryLinkInventory()): Promise<AttemptTempState> {
   return (await attemptTempAuthority(owner, inventory)).state;
 }
+/** The sweep's state port. Every read that finds the lane finished also
+ * records when its retention ends, including for a root that a later
+ * observation holds, so the ledger can order expired roots across pages. */
+export function recordingAttemptTempState(store: AttemptTempStore,
+  authority: (owner: AttemptTempOwner, inventory: RepositoryLinkInventory) => Promise<AttemptTempAuthority> = attemptTempAuthority) {
+  return async (owner: AttemptTempOwner, inventory = new RepositoryLinkInventory()): Promise<AttemptTempState> => {
+    const observed = await authority(owner, inventory);
+    store.noteRetentionEnd(owner.directory, observed);
+    return observed.state;
+  };
+}
 function setting(raw: string | undefined, fallback: number) {
   const value = raw?.trim() ? Number(raw) : fallback;
   return Number.isFinite(value) && value >= 0 ? value : fallback;
@@ -81,7 +92,7 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
   const store = new AttemptTempStore();
   try {
     const options: AttemptTempSweepOptions = {
-      state: attemptTempState, authority: attemptTempAuthority, mode, scan: ports.scan, checkoutReads,
+      state: recordingAttemptTempState(store), authority: attemptTempAuthority, mode, scan: ports.scan, checkoutReads,
       maxRoots: (() => {
         try { return JSON.parse(fs.readFileSync(statePath("disk-pressure-report.json"), "utf8")).episode ? 32 : undefined; }
         catch { return undefined; }

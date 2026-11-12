@@ -28,6 +28,8 @@ type Row = AttemptTempOwner & { identity: string; released: number; checkedAt: n
 export type EvidenceCopy = { destination: string; pipelineId: string | null; launchId: string; kind: "lane" | "agent" | "unattributed";
   createdAt: number; expiresAt: number | null; checkedAt: number; bytes: number };
 export const DEFAULT_ATTEMPT_TEMP_CAP_BYTES = 100 * 1024 ** 3;
+/** How long a root held past its lane's retention waits for its next visit. */
+export const EXPIRED_HOLD_RETRY_MS = 30 * 60_000;
 
 const attemptTempIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS roots_launch ON roots(launchId,pipelineId,directory)",
@@ -124,18 +126,32 @@ export class AttemptTempStore {
   owner(directory: string): Row | null { return this.db.query<Row, [string]>("SELECT * FROM roots WHERE directory=?").get(directory); }
   release(directory: string) { this.db.query("UPDATE roots SET released=1,checkedAt=0 WHERE directory=?").run(directory); }
   due(now: number, limit: number, pressure = false): Row[] {
+    // A root whose lane retention ended has the first claim on every page,
+    // across the whole ledger and oldest lane finish first. Up to half of the
+    // page, so a run of held expired roots cannot starve the other visits; a
+    // held one is moved back by `EXPIRED_HOLD_RETRY_MS` after its visit.
+    const expired = this.db.query<Row, [number, number, number]>(`SELECT r.* FROM root_retention t JOIN roots r ON r.directory=t.directory
+      WHERE t.expiresAt IS NOT NULL AND t.expiresAt<=? AND r.checkedAt<=? ORDER BY t.expiresAt,r.createdAt,r.directory LIMIT ?`)
+      .all(now, now, Math.ceil(limit / 2));
+    const selected = new Set(expired.map(row => row.directory));
+    const rest = (query: string, count: number) => count <= 0 ? [] : this.db.query<Row, [number, number]>(query)
+      .all(now, count + selected.size).filter(row => !selected.has(row.directory)).slice(0, count);
     if (pressure) {
       // Release is a scheduling hint, never deletion authority. Reserve a
       // quarter of each page for the oldest observations, including unreleased
       // and refused roots. checkedAt persists this progress through restarts.
-      const priority = this.db.query<Row, [number, number]>("SELECT * FROM roots WHERE released=1 AND checkedAt<=? ORDER BY checkedAt,bytes DESC,createdAt,directory LIMIT ?")
-        .all(now, Math.max(1, limit - Math.ceil(limit / 4)));
-      const selected = new Set(priority.map(row => row.directory));
-      const fair = this.db.query<Row, [number, number]>("SELECT * FROM roots WHERE checkedAt<=? ORDER BY CASE WHEN checkedAt=0 THEN createdAt ELSE checkedAt END,createdAt,directory LIMIT ?")
-        .all(now, limit + priority.length).filter(row => !selected.has(row.directory));
-      return [...priority, ...fair.slice(0, limit - priority.length)];
+      const priority = rest("SELECT * FROM roots WHERE released=1 AND checkedAt<=? ORDER BY checkedAt,createdAt,directory LIMIT ?",
+        Math.max(1, limit - Math.ceil(limit / 4)) - expired.length);
+      for (const row of priority) selected.add(row.directory);
+      const fair = rest("SELECT * FROM roots WHERE checkedAt<=? ORDER BY CASE WHEN checkedAt=0 THEN createdAt ELSE checkedAt END,createdAt,directory LIMIT ?",
+        limit - expired.length - priority.length);
+      return [...expired, ...priority, ...fair];
     }
-    return this.db.query<Row, [number, number]>("SELECT * FROM roots WHERE checkedAt<=? ORDER BY checkedAt,createdAt,directory LIMIT ?").all(now, limit);
+    return [...expired, ...rest("SELECT * FROM roots WHERE checkedAt<=? ORDER BY checkedAt,createdAt,directory LIMIT ?", limit - expired.length)];
+  }
+  /** The recorded end of the root's lane retention, or null when none is known. */
+  retentionExpiry(directory: string): number | null {
+    return this.db.query<{ expiresAt: number | null }, [string]>("SELECT expiresAt FROM root_retention WHERE directory=?").get(directory)?.expiresAt ?? null;
   }
   defer(directory: string, until: number) { this.db.query("UPDATE roots SET checkedAt=? WHERE directory=?").run(until, directory); }
   forget(directory: string) {
@@ -147,6 +163,14 @@ export class AttemptTempStore {
   }
   retainRoot(directory: string, expiresAt: number | null) {
     this.db.query("INSERT INTO root_retention(directory,expiresAt) VALUES(?,?) ON CONFLICT(directory) DO UPDATE SET expiresAt=excluded.expiresAt").run(directory, expiresAt);
+  }
+  /** Records when a finished lane's retention ends as soon as an authority
+   * read knows it, whatever holds the root afterwards, so once that time
+   * passes every page finds the root first. A permanent hold found later in
+   * the same visit clears it again. */
+  noteRetentionEnd(directory: string, authority: Pick<AttemptTempAuthority, "state" | "expiresAt">) {
+    if ((authority.state !== "closed" && authority.state !== "expired") || authority.expiresAt == null || !this.has(directory)) return;
+    if (this.retentionExpiry(directory) !== authority.expiresAt) this.retainRoot(directory, authority.expiresAt);
   }
   requireRootExpiry(directory: string, expiresAt: number) {
     this.db.query(`INSERT INTO root_expiry_admission VALUES(?,?) ON CONFLICT(directory)
@@ -283,20 +307,26 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   // Rank only this bounded page. Release is merely the cheap persistent hint
   // used to find candidates; current lane authority decides their actual rank
   // and is read again at every destructive boundary below.
+  const states = new Map<string, AttemptTempState>();
+  const rank = (owner: Row) => states.get(owner.directory) === "closed" || states.get(owner.directory) === "expired"
+    || states.get(owner.directory) === "settled" && !owner.retainUntilClose ? 0 : 1;
   if (pressure) {
-    const states = new Map<string, AttemptTempState>();
     for (const owner of selected) {
       if (now() >= deadline) break;
       store.defer(owner.directory, now() + 60_000);
       try { states.set(owner.directory, await options.state(owner, inventory)); }
       catch { /* The root path below preserves and classifies the real cause. */ }
     }
-    const rank = (owner: Row) => states.get(owner.directory) === "closed" || states.get(owner.directory) === "expired"
-      || states.get(owner.directory) === "settled" && !owner.retainUntilClose ? 0 : 1;
-    selected.sort((a, b) => rank(a) - rank(b) || (rank(a) === 0 ? b.bytes - a.bytes : 0));
+    // Over the cap, retirable roots go first and the oldest of them first.
+    selected.sort((a, b) => rank(a) - rank(b) || (rank(a) === 0 ? a.createdAt - b.createdAt : 0));
   }
   for (const owner of selected) {
-    if (now() >= deadline) { outcome(owner.directory, "deferred", owner.bytes, "run budget exhausted; retry next tick"); continue; }
+    if (now() >= deadline) {
+      // A root the run never reached keeps its place for the next tick, unless
+      // pressure ranked it held; that one waits for its next turn.
+      if (!states.has(owner.directory) || rank(owner) === 0) store.defer(owner.directory, owner.checkedAt);
+      outcome(owner.directory, "deferred", owner.bytes, "run budget exhausted; retry next tick"); continue;
+    }
     report.checked++;
     let bytes = owner.bytes;
     let disposition: "live" | "evidence" | "held" = "held";
@@ -389,7 +419,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           const code = (error as NodeJS.ErrnoException).code;
           if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
             disposition = "live";
-            reason = "consumer checkout became unreadable during retirement";
+            // The detail names what vanished or refused: a process cwd or a
+            // consumer checkout whose process is still alive.
+            reason = `consumer checkout became unreadable during retirement: ${attemptTempFailureDetail(error)}`.slice(0, 512);
             return false;
           }
           throw error;
@@ -555,6 +587,12 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         const detail = attemptTempFailureDetail(error);
         if (store.rootFailure(owner.directory, detail)) console.error("[attempt temp] retirement claim retained", detail);
       }
+      // A root still held after its retention ended steps back from the
+      // expired share of the page, so the next oldest gets its visit.
+      const last = report.outcomes.at(-1), ended = store.retentionExpiry(owner.directory);
+      if (ended !== null && ended <= now() && store.has(owner.directory)
+        && !(last?.directory === owner.directory && last.disposition === "deferred"))
+        store.defer(owner.directory, Math.max(store.owner(owner.directory)?.checkedAt ?? 0, now() + EXPIRED_HOLD_RETRY_MS));
     }
   }
   report.inventoryWalks = inventory.walks.length;
