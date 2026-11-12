@@ -231,3 +231,42 @@ The hook failed before it could produce a complete head/base comparison. Several
 The hook also printed surviving-owned-process diagnostics. A subsequent read of all 23 exact recorded process/start identities found none still alive; zero processes were stopped by this repair. This reconciles the reported identities after terminal cleanup and does not turn the failed gate into a pass.
 
 The unchanged pre-push procedure remains red. This repair has not established publication acceptance. Finishing it requires a separate investigation of the shared test-runner budget/diagnostics and inherited fixture setup; no gate, hook, timeout policy or accepted feature file was changed to obtain a pass. Raw procedures, manifests, source preservation proof, full logs, command exits, terminal receipts and process-identity reconciliation are retained under the stage evidence directory `brief-publication-refusal/`. No performance gain is claimed.
+
+
+## Current-main refresh after #3940
+
+On November 12, 2026, `git fetch origin main` resolved main to `28a7d038fd12dd582502cb8b00f2c3f7e18d44a0`. `git merge --no-ff --no-commit origin/main` exited 0 without conflicts. Plain `git commit` recorded merge `3fbaed9590687d262cd48d06924082a31f15e51b`, preserving both parents and the accepted feature. Its normal hook exited 0: three TypeScript files, zero introduced lint errors and zero staged whitespace findings. The three merged gate files match main exactly. The refresh adds main's gate change without further gate edits; feature source is unchanged.
+
+Compiler and test commands ran sequentially in scratch exports with the identical installed dependency graph and fresh HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and TMPDIR for each command. Native Git leads the test PATH; inherited Git bindings and spawn capability are removed, account homes are isolated, and Viewer control points to closed loopback port 1. `GATE` denotes the controller-supplied wrapper and `ROOT` the stage-owned `main-refresh` scratch directory. Each recorded invocation received exactly one terminal `wait_for_check` reconciliation. The Python drivers launch one explicit test path per process with a five-minute bound; each failing file receives two fresh main samples.
+
+```sh
+LLV_OWNED_RUN_TIMEOUT_MS=1200000 bash "$GATE" --record "$TMPDIR/refresh-types.log" python3 -B "$ROOT/run.py" types
+LLV_OWNED_RUN_TIMEOUT_MS=2700000 bash "$GATE" --record "$TMPDIR/refresh-tests.log" python3 -B "$ROOT/campaign.py" tests
+LLV_OWNED_RUN_TIMEOUT_MS=1200000 bash "$GATE" --record "$TMPDIR/refresh-route.log" python3 -B "$ROOT/route-campaign.py" route
+```
+
+The compiler command is `bun x tsc --noEmit`: exit 0, zero diagnostics, 496.57 seconds execution. Each table row runs `bun run test <file> --reporter=junit --reporter-outfile=<private report>`. The base exit/counts apply independently to both fresh samples.
+
+| File | Head exit | Head pass/fail | Expectations | Main exit, twice | Main pass/fail | Main expectations |
+| --- | ---: | ---: | ---: | --- | ---: | ---: |
+| `src/lib/pipelines/briefWarnings.test.ts` | 0 | 19/0 | 38 | not needed | — | — |
+| `src/lib/pipelines/briefAdmission.test.ts` | 0 | 5/0 | 34 | not needed | — | — |
+| `src/lib/orchestrator/prompt.test.ts` | 0 | 46/0 | 344 | not needed | — | — |
+| `src/lib/mcp/pipelineRoleFence.test.ts` | 1 | 6/1 | 66 | 1, 1 | 5/1 | 59 |
+| `src/app/api/pipelines/[id]/route.test.ts` | 1 | 19/1 | 67 | 1, 1 | 17/1 | 63 |
+| `src/app/api/pipelines/route.test.ts` | 1 | 5/6 | 23 | 1, 1 | 5/6 | 23 |
+| `src/lib/pipelines/roles.test.ts` | 1 | 32/2 | 494 | 1, 1 | 32/2 | 494 |
+| `src/lib/roles/registry.test.ts` | 1 | 22/1 | 153 | 1, 1 | 22/1 | 153 |
+| `src/lib/pipelines/engineConnectionRefusal.test.ts` | 1 | 0/4 | 0 | 1, 1 | 0/4 | 0 |
+| `scripts/local-gate-tests.test.ts` | 0 | 33/0 | 168 | not needed | — | — |
+| `scripts/local-gate-tests.retry.test.ts` | 0 | 50/0 | 379 | not needed | — | — |
+
+Final reconciliation exits 0: **237 passes, 15 inherited failures, 1,766 expectations, 11 head files and 12 main samples; zero new failures and zero unmatched runner errors**. The two merged hook files contribute 83 passing tests and 547 expectations, including the real pre-push entry test. Every inherited failing test identity matches both main samples. Individual inherited-red commands retain exit 1; they are non-blocking comparison notes.
+
+The initial test campaign wrapper exited 1 because the collection-route file reads Git HEAD before collecting tests and the first exports lacked Git metadata. All three initial observations had 0 passes, 1 failure and 1 between-tests error, without JUnit. Those observations are retained and unadopted. Detached scratch metadata was then added from the exact pinned commits, with origin set to the source upstream. The route-only rerun collected fully and exited 0 as a comparison, with each individual command exiting 1 at 5 passes, 6 matching inherited failures and 23 expectations. No tracked source or compiler/test configuration changed. The other ten files collected fully and retain their complete results.
+
+`git status --porcelain` immediately after the test runs exited 0 and printed nothing. A fresh main fetch was unchanged. An explicit source/export byte comparison exited 0 for all 14 changed paths, with zero mismatches; both required ancestors are preserved. `git diff --check` exited 0 with zero findings. The whole-file privacy command `bun scripts/privacy-publication-gate.ts --require-known-values --base origin/main --paths <all 14 changed paths>`, with the committed fingerprint file and OCR languages `eng+ukr`, exited 0 with zero findings. This final ledger receives another whole-file privacy scan and the final commit receives `bun run privacy:check`; their terminal receipts are handed to the controller.
+
+Raw commands, exits, JUnit, source digests and original failed observations are retained privately under `main-refresh/`. Type and test results apply to the checked merge; this appended evidence changes only documentation. The controller owns push, PR creation and the full publication gate. Keep **Closes #3916** in the PR body.
+
+Evidence read-back: 2026-11-12T12:01:15.726000+00:00.
