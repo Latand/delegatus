@@ -18,6 +18,7 @@ import { FORGE_APP_ISSUE_PERMISSIONS, mintInstallationToken } from "../../../bin
 import { ISSUE_REPORT_QUESTION_ID, issueReportApprovalForm, issueReportApprovalReplies } from "@/lib/issueReports/approvalForm";
 import { issueReportDigest, readIssueReportPreview, recordIssueReportPreview } from "@/lib/issueReports/store";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
+import { writeStoredSeatRecord } from "@/lib/orchestrator/seatStoreFixture";
 import { decidePrototype } from "@/lib/prototypeReview/decision";
 import { resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests } from "@/lib/prototypeReview/deliveryWorker";
 import { decisionsPOST, publishPOST, reviewScopePOST } from "@/lib/prototypeReview/http";
@@ -616,10 +617,9 @@ test("an approval survives another rotation without a new show or question", asy
   const successor = { ...SEAT_CALLER, conversationId: "conversation_third_seat" };
   designate(PROJECT, successor.conversationId!);
   // Exercise the reader for records written before seatLineage was introduced.
-  const file = path.join(privacyState, "orchestrator-seats.json");
-  const legacy = JSON.parse(fs.readFileSync(file, "utf8"));
+  const legacy = readOrchestratorSeatFile();
   delete legacy.seatLineage;
-  fs.writeFileSync(file, JSON.stringify(legacy));
+  writeStoredSeatRecord(legacy);
   expect(await h.call(successor, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
   expect(loadSeatRounds(PROJECT)).toHaveLength(1);
   expect(h.published).toEqual([{ ...REPORT, repository: REPOSITORY }]);
@@ -633,7 +633,7 @@ test.each(["unreadable", "ambiguous"] as const)("%s seat lineage cannot transfer
   tick();
   designate(PROJECT, OTHER_SEAT);
   await h.call(OTHER_SEAT_CALLER, { action: "show", digest });
-  if (kind === "unreadable") fs.writeFileSync(path.join(privacyState, "orchestrator-seats.json"), "{broken");
+  if (kind === "unreadable") writeStoredSeatRecord("{broken");
   else designate("repo-foreign", OTHER_SEAT);
   expect(await h.call(OTHER_SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, details: { reason: "no_form" } });
   expect(h.published).toEqual([]);

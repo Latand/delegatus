@@ -4,6 +4,7 @@ import { repairLinkedTasks } from "./taskRepair";
 import { statePath } from "@/lib/configDir";
 import { stateDatabaseSignature, readStateCollectionRevisions } from "@/lib/state/sqliteStateStore";
 import { taskFeedSource } from "@/lib/tasks/store";
+import { orchestratorSeatStoreSignature } from "@/lib/orchestrator/seatStore";
 import { readLogPage, readScanPage, taskEligibilitySweepPending, type FeedFilter, type FeedFiles, type LogPage, type ScanPage, type Position } from "./taskFeed";
 
 export type PageRequest = { kind: "scan"; after: string } | { kind: "log"; after: Position };
@@ -49,13 +50,12 @@ export class TaskPageBuilder {
     const source = taskFeedSource(request.filter.filePath);
     const startRevision = source?.revision() ?? 0;
     const database = statePath("state.sqlite");
-    const context = () => {
-      const seat = fs.statSync(statePath("orchestrator-seats.json"), { bigint: true, throwIfNoEntry: false });
-      return JSON.stringify([source?.revision(), this.revision(database),
+    /* The seat store's revision, read through the shared read-only
+       connection: this runs in the task page worker, which never writes. */
+    const context = () => JSON.stringify([source?.revision(), this.revision(database),
       source && source.database !== database ? this.revision(source.database) : null,
-      seat ? `${seat.dev}:${seat.ino}:${seat.size}:${seat.mtimeNs}:${seat.ctimeNs}` : "absent",
+      orchestratorSeatStoreSignature() ?? "unreadable",
       projectStoreSignature("project-aliases.json")]);
-    };
     const before = context();
     const key = JSON.stringify([request.kind, request.after, request.filter, this.filesEpoch, before]);
     const held = this.pages.get(key);

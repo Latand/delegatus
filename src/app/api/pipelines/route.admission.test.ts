@@ -11,7 +11,8 @@ import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { getPipelines } from "@/lib/pipelines/engine";
 import { loadTasks } from "@/lib/tasks/store";
 import { executeOrchestratorRotation, executeOrchestratorSeatRequest, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
-import { orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { orchestratorSeatFor, readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
+import { writeStoredSeatRecord } from "@/lib/orchestrator/seatStoreFixture";
 import { createMcpToolService, MemoryMcpReceiptStore } from "@/lib/mcp/server";
 import { productionDomainDependencies, viewerMcpBindings } from "@/lib/mcp/bindings";
 import { projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
@@ -249,13 +250,12 @@ test("rotation revokes A's pipeline control while B, its builder and a live depu
   const deputyCreate = await mcp.callTool("create_pipeline", { clientRequestId: "deputy-create", ...request(deputy, "deputy lane") });
   expect(deputyCreate).toMatchObject({ ok: true });
 
-  const seatFile = path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json");
-  const standingRecord = fs.readFileSync(seatFile, "utf8");
+  const standingRecord = readOrchestratorSeatFile();
   const pipelineCount = getPipelines().pipelines.length;
   actor = a;
   for (const [index, unreadableRecord] of ["{malformed", JSON.stringify({ schemaVersion: 999 })].entries()) {
     const clientRequestId = `unavailable-seat-${index}`;
-    fs.writeFileSync(seatFile, unreadableRecord);
+    writeStoredSeatRecord(unreadableRecord);
     try {
       const mcpCreate = await mcp.callTool("create_pipeline", { clientRequestId, ...request(a, "unavailable store duplicate") });
       expect(mcpCreate).toMatchObject({ ok: false, retryable: true, details: { code: "orchestrator_seat_authority_unavailable" } });
@@ -276,7 +276,7 @@ test("rotation revokes A's pipeline control while B, its builder and a live depu
       expect(await httpAction.json()).toMatchObject({ code: "orchestrator_seat_authority_unavailable", retryable: true });
       expect(getPipelines().pipelines.length).toBe(pipelineCount);
     } finally {
-      fs.writeFileSync(seatFile, standingRecord);
+      writeStoredSeatRecord(standingRecord);
     }
     const afterRecovery = await mcp.callTool("create_pipeline", { clientRequestId, ...request(a, "unavailable store duplicate") });
     expect(afterRecovery).toMatchObject({ ok: false });
