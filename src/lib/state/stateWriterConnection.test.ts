@@ -129,3 +129,15 @@ test("a database replaced at its name between writes receives the next write", (
     ]);
   } finally { db.close(); }
 });
+
+test("a write with process durability commits and leaves the kept connection waiting for the disk again", () => {
+  const store = collection();
+  store.patchSync(() => ({ records: [{ key: "a", value: 1 }] }), { durability: "process" });
+  expect(store.get("a")?.value).toBe(1);
+  expect(stateWriterSynchronousForTests(store.filename)).toBe(FULL);
+  // A failed write of that kind gives its connection up and leaves no setting behind.
+  expect(() => store.patchSync(() => { throw new Error("callback failed"); }, { durability: "process" })).toThrow("callback failed");
+  store.patchSync(() => ({ records: [{ key: "a", value: 2 }] }));
+  expect(stateWriterSynchronousForTests(store.filename)).toBe(FULL);
+  expect(store.get("a")?.value).toBe(2);
+});
