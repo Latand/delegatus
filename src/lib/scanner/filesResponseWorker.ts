@@ -14,6 +14,11 @@ import { statePath } from "@/lib/configDir";
 import type { FileCatalogScan } from "./index";
 
 const FILES_RESPONSE_WORKER_TIMEOUT_MS = 60_000;
+/** A cold pinned scope builds the whole catalog (about 50 MB for a member) and
+    took 50 to 110 s on the installed Viewer under host load. The shorter cap
+    stopped the worker mid-build, threw the work away, and every retry started
+    the same build again. Seat source reads keep the shorter cap. */
+export const FILES_PROJECTION_BUILD_TIMEOUT_MS = 180_000;
 const FILES_RESPONSE_WORKER_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
 const FILES_RESPONSE_WORKER_STDERR_MAX_BYTES = 4 * 1024;
 // Keep one warm projection process for this Viewer generation. RSS after a
@@ -410,6 +415,12 @@ function residentWorker(runtime: FilesResponseWorkerRuntime): ResidentWorker {
   return worker;
 }
 
+/** The cap that stops a worker silent for too long on this request. A runtime
+    that names its own cap (tests) keeps it for every kind of request. */
+export function filesResponseWorkerTimeoutMs(request: WorkerRequest, runtime: FilesResponseWorkerRuntime): number {
+  return runtime.timeoutMs ?? (request.type === "project" ? FILES_PROJECTION_BUILD_TIMEOUT_MS : FILES_RESPONSE_WORKER_TIMEOUT_MS);
+}
+
 function askWorker(
   worker: ResidentWorker,
   request: WorkerRequest,
@@ -477,7 +488,7 @@ async function dispatch(
       await fs.promises.writeFile(previousFile, previous.body, { encoding: "utf8", mode: 0o600 });
       request = { ...request, deltaFrom: { bodyFile: previousFile, etag: previous.etag } };
     }
-    const result = await askWorker(worker, request, runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS, callerDeadlineMs);
+    const result = await askWorker(worker, request, filesResponseWorkerTimeoutMs(request, runtime), callerDeadlineMs);
     const { bodyFile, deltaFile, deltaBase, snapshotEpoch, snapshotGeneration, stateWritesJson, ...metadata } = result;
     const stateWrites = stateWritesJson ? JSON.parse(stateWritesJson) as StateWriteHealth : undefined;
     if (stateWrites && (!record(stateWrites)

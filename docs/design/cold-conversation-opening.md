@@ -508,3 +508,27 @@ comes next. Then the original four cold opens are repeated: both conversations
 at 1440×900 and 390×844, as the saved member, each in a fresh browser. The
 acceptance is the transcript content, rendered and usable.
 This lane does not mark the task done.
+
+## 9. Follow-up: the worker's own deadline
+
+A cold pinned scope for a finished audit's conversation builds the whole
+catalog (about 50 MB for a member). On the installed Viewer, built from the
+change above, three of four cold opens still failed: the id-scope request
+ended in `500` after 51 to 108 s and the link never reached the transcript.
+The Viewer journal names the cause, `[files response worker] retired: timed
+out` with `DeadlineExceededError` and a 60 s cap. The cap stopped the worker
+mid-build and discarded the work, so each retry began the same build again. The
+queue bounds of section 3.1 were not involved.
+
+Two changes, both on the server:
+
+- A `project` build in the files worker has its own cap,
+  `FILES_PROJECTION_BUILD_TIMEOUT_MS` (180 s). Seat source reads keep 60 s. A
+  runtime that names its own `timeoutMs` (tests) keeps it for every kind.
+- `GET` answers a worker deadline for a scope with nothing to serve with the
+  same controlled `503` as a queue refusal (`reason: "build-timeout"`), and a
+  warm scope keeps serving its last body. `getFiles` still throws for the
+  board's internal preparation.
+
+Not changed: the cost of the cold pinned build itself. Deriving a pinned scope
+from the cached plain summary is the deferred 44 MB item.
