@@ -45,8 +45,9 @@ permissions:
 # had already been replaced. One round per ref, and the newest wins. This group
 # is step 1 of the cut order on #1761.
 #
-# Pull requests and main each cancel obsolete runs on their own ref. A
-# cancelled commit stays ineligible until an exact-target gate succeeds.
+# Pull requests cancel obsolete runs on their own ref. Main pushes and manual
+# runs each need their own group so a later run cannot cancel a required
+# runtime verdict, including a matrix leg still waiting for a runner.
 #
 # The two required workflows get no group at all, deliberately. They run on
 # `pull_request_target` and, for the tracker audit, on issue and review events,
@@ -56,7 +57,7 @@ permissions:
 # They finish in 40 to 90 seconds and have never failed, so there is nothing
 # worth saving in cancelling them.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
