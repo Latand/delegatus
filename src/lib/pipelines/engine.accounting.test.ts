@@ -1,7 +1,7 @@
 import { FileRuntimeEventStore } from "@/lib/runtime/eventStore";
 import { statePath } from "@/lib/configDir";
 import fs from "node:fs";
-import { expect, test, harness, create, tickPipelines, loadPipelines, savePipelines, finishReported, BUILD_ONLY, createPipelineFromRequest, patchPipeline } from "./engine.fixture";
+import { expect, test, harness, create, tickPipelines, loadPipelines, savePipelines, finishReported, BUILD_ONLY, createPipelineFromRequest, patchPipeline, providerRecoveryHarness, LIMITED_ACCOUNT } from "./engine.fixture";
 import { isStoredPipeline } from "./store";
 import { REPEAT_REASONS } from "./accounting";
 
@@ -86,4 +86,46 @@ test("reopening an attempt clears its old split and a later completion records i
   lane = loadPipelines()[0]!; attempt = lane.runs[0]!.attempts[0]!;
   attempt.completedAt = new Date(1_004_000).toISOString(); savePipelines([lane]);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accounting!.time!.intervalMs).toBe(4000);
+});
+
+for (const finding of [true, false]) test(`first fix preserves the review cause when findings are ${finding}`, async () => {
+  const h = harness();
+  await create(h.ports, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, engine: "codex", access: "read-only", prompt: "review", next: null, onFail: { to: "fix", maxRounds: 2 } },
+    { id: "fix", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "fix", next: "review" },
+  ] as never);
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  const build = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  await tickPipelines([finishReported(h, build.agentPath!, "pass", "built")], h.ports);
+  await tickPipelines([], h.ports);
+  const review = loadPipelines()[0]!.runs[1]!.attempts[0]!;
+  const failed = finishReported(h, review.agentPath!, "fail", "Review completed");
+  const findings = finding ? ["P2 defect"] : [];
+  h.messages.get(review.agentPath!)!.text = `Review completed\n\n\`\`\`json\n${JSON.stringify({ status: "fail", findings })}\n\`\`\``;
+  await tickPipelines([failed], h.ports); await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.verdict!.findings).toEqual(findings);
+  const fix = loadPipelines()[0]!.runs[2]!.attempts[0]!;
+  expect(fix.accounting!.repeatReason).toBeNull();
+  await tickPipelines([finishReported(h, fix.agentPath!, "pass", "fixed")], h.ports);
+  await tickPipelines([], h.ports);
+  const attempts = loadPipelines()[0]!.runs[1]!.attempts;
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]!.accounting!.repeatReason).toBe(finding ? "review-finding" : "unknown");
+});
+
+test("automatic retry after provider quota retains its known account-limit reason", async () => {
+  const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", 120000, true);
+  const lane = loadPipelines()[0]!;
+  lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now() };
+  savePipelines([lane]);
+  await tickPipelines([], f.h.ports);
+  const parked = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(parked.providerWait?.stageRetry).toBeDefined();
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine: "claude", accountId: LIMITED_ACCOUNT, kind: "managed", home: "/fixture", transcriptRoot: "/fixture/sessions", env: { NODE_ENV: "test" } } });
+  f.advance(210000);
+  await tickPipelines([], f.h.ports); await tickPipelines([], f.h.ports);
+  const attempts = loadPipelines()[0]!.runs[0]!.attempts;
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]!.accounting!.repeatReason).toBe("account-limit");
 });

@@ -393,11 +393,11 @@ test.skipIf(process.platform !== "linux")("a plain recorded foreground gate supp
   const env = portableEnvironment(f);
   for (const key of ["LLV_ATTEMPT_TIMING_ROOT", "LLV_ATTEMPT_TIMING_ROOT_IDENTITY", "TMPDIR"]) env[key] = access.env[key];
   const go = path.join(f.root, "go");
-  const command = `import fs from "node:fs"; import path from "node:path"; const go=process.argv[1]; await new Promise(resolve=>{ const watcher=fs.watch(path.dirname(go),()=>{ if(fs.existsSync(go)){watcher.close();resolve();} }); if(fs.existsSync(go)){watcher.close();resolve();} });`;
+  const command = `import fs from "node:fs"; import path from "node:path"; const go=process.argv[1]; fs.writeFileSync(go+".ready","ready"); await new Promise(resolve=>{ const watcher=fs.watch(path.dirname(go),()=>{ if(fs.existsSync(go)){watcher.close();resolve();} }); if(fs.existsSync(go)){watcher.close();resolve();} });`;
   try {
     const recording = background(["--record", log, process.execPath, "-e", command, go], env);
     await recording.ticketReady;
-    await observe(f.dir, () => fs.readdirSync(f.dir).some(name => name.startsWith("clock-")));
+    await observe(f.root, () => fs.existsSync(go + ".ready"));
     fs.writeFileSync(go, "continue");
     expect(await recording.closed).toBe(0);
     expect(fs.existsSync(path.join(f.dir, "descriptor.json"))).toBe(false);

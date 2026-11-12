@@ -47,6 +47,7 @@ export const reportSchema = z.object({ version: z.literal(1), runId: hash, descr
   cancellation: cancellationSchema.nullable().default(null),
   service: z.object({ unit: z.string().max(256), invocation: z.string().max(128), cgroup: z.string().max(2048) }).nullable(),
   executionStartedAt: z.number().finite().optional(),
+  executionEndedAt: z.number().finite().optional(),
   commandExit: z.number().int().min(0).max(255).nullable(), commandSignal: z.string().max(64).nullable(),
   cleanup: z.enum(["pending", "confirmed", "unknown"]), phase: z.enum(["dispatch", "close"]), at: z.number(), atUptimeMs: z.number().positive(),
 }).strict();
@@ -295,7 +296,7 @@ export function recordedSupervisorRefusal(obligation: RecordedSupervisorObligati
   return cpuOwnerStatus(obligation.recorder) !== "alive" || cpuOwnerExited(obligation.recorder) ? "owner" : null;
 }
 export function producerReport(kind: ProducerReport["kind"], command: ProcessIdentity | null, fields: Partial<ProducerReport> = {}): ProducerReport | null {
-  try { if (command || fields.phase === "close") observeCheckProducer(kind, fields.phase !== "close", digest(cpuOwnerIdentity(process.pid))); }
+  try { observeCheckProducer(kind, fields, digest(cpuOwnerIdentity(process.pid))); }
   catch { /* Optional timing cannot replace the command's primary result. */ }
   const directory = process.env.LLV_RECORDED_CHECK_DIRECTORY;
   if (!directory) return null;
@@ -309,8 +310,9 @@ export function producerReport(kind: ProducerReport["kind"], command: ProcessIde
   const supervisor = cpuOwnerIdentity(process.pid);
   const sameDispatch = previous?.runId === descriptor.runId && previous.descriptorDigest === descriptor.descriptorDigest
     && digest(previous.supervisor) === digest(supervisor);
-  const executionStartedAt = sameDispatch ? previous!.executionStartedAt : fields.phase === "close" ? undefined : Date.now();
-  const report = reportSchema.parse({ executionStartedAt, version: 1, runId: descriptor.runId, descriptorDigest: descriptor.descriptorDigest,
+  const executionStartedAt = sameDispatch ? previous!.executionStartedAt : undefined;
+  const executionEndedAt = sameDispatch ? previous!.executionEndedAt : undefined;
+  const report = reportSchema.parse({ executionStartedAt, executionEndedAt, version: 1, runId: descriptor.runId, descriptorDigest: descriptor.descriptorDigest,
     supervisor, command, kind, service, commandExit: null, commandSignal: null,
     cleanup: "pending", phase: "dispatch", at: Date.now(), atUptimeMs: custodyClock(), ...fields });
   writeEnvelope(path.join(directory, `${kind}.json`), report);

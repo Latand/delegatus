@@ -82,6 +82,41 @@ test("invalid report bounds refuse instead of fabricating a period", () => {
   expect(() => accountingReport([], [], { ...period, asOf: period.from })).toThrow("invalid report period");
 });
 
+test("cohort cutoff clips work and excludes later attempts, starts and corrections", () => {
+  const root = task("original", 2000);
+  const bounds = { from: at(1000), to: at(9000), asOf: at(10000) };
+  const lane = buildPipeline({ id: "lane", task: "Deliver change", taskIds: [root.id], project: "fixture", repoDir: "/repo", stages: [], srcPath: null, srcConversationId: null, now: at(2000) });
+  lane.runs = [{ stageId: "build", attempts: [
+    { n: 1, startedAt: at(3000), completedAt: null, accounting: { admittedAt: at(2000), startedAt: at(3000), repeatReason: null,
+      spans: [{ kind: "tools", start: 4000, end: 20000 }], time: null } },
+    { n: 2, startedAt: null, completedAt: null, accounting: { admittedAt: at(9000), startedAt: null, repeatReason: "unknown", time: null } },
+  ] as PipelineStageAttempt[] }];
+  const correction = task("correction", 6000, { correctsTaskId: root.id });
+  const before = accountingReport([root, correction], [lane], bounds);
+  expect(before.cohort.attempts[0]!.time).toMatchObject({ intervalMs: 7000, toolsMs: 6000, unknownMs: 1000 });
+  expect(before.cohort.attempts[1]).toMatchObject({ startedAt: null, waitBeforeStartMs: null, time: { intervalMs: null, unknownMs: null } });
+  const first = lane.runs[0]!.attempts[0]!;
+  first.completedAt = at(20000);
+  first.accounting!.time = { intervalMs: 17000, modelMs: null, toolsMs: 16000, checkQueueMs: null, checkRunnerMs: null, unknownMs: 1000, toleranceMs: 0 };
+  lane.runs[0]!.attempts[1]!.startedAt = at(21000);
+  lane.runs[0]!.attempts[1]!.accounting!.startedAt = at(21000);
+  lane.runs[0]!.attempts.push({ n: 3, startedAt: at(22000), completedAt: at(23000) } as PipelineStageAttempt);
+  const laterCorrection = task("later-correction", 21000, { correctsTaskId: root.id });
+  const boundaryCorrection = task("boundary-correction", 10000, { correctsTaskId: root.id });
+  expect(accountingReport([root, correction, laterCorrection, boundaryCorrection], [lane], bounds)).toEqual(before);
+  expect(before.cohort.repeatReasons).toEqual({ repeated: 1, unknown: 1, unknownShare: 1 });
+  expect(before.cohort.corrections).toEqual([{ taskId: correction.id, correctsTaskId: root.id }]);
+});
+
+test("an admitted attempt without a start keeps its unknown execution boundary", () => {
+  const root = task("original", 2000);
+  const lane = buildPipeline({ id: "lane", task: "Deliver change", taskIds: [root.id], project: "fixture", repoDir: "/repo", stages: [], srcPath: null, srcConversationId: null, now: at(2000) });
+  lane.runs = [{ stageId: "build", attempts: [{ n: 1, startedAt: null, completedAt: at(8000),
+    accounting: { admittedAt: at(3000), startedAt: null, repeatReason: null, time: null } } as PipelineStageAttempt] }];
+  const report = accountingReport([root], [lane], period);
+  for (const view of [report.calendar, report.cohort]) expect(view.attempts[0]!.time.intervalMs).toBeNull();
+});
+
 
 test("class aggregation uses the first lane declaration made before acceptance", () => {
   const created = createTask([], { project: "fixture", text: "Deliver change", placement: "unplaced", accounting: { criteria: "The example succeeds" } }, [], { now: () => at(2000), id: () => "original" });

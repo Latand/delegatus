@@ -24,16 +24,15 @@ function smallJson(filename: string): unknown {
 }
 
 /** Observation failures never change the command or its exit receipt. */
-export function observeCheckProducer(kind: string, dispatch: boolean, owner: string, env = process.env): void {
+export function observeCheckProducer(kind: string, execution: { executionStartedAt?: number; executionEndedAt?: number }, owner: string, env = process.env): void {
   try {
     if (!["namespace", "portable", "service"].includes(kind) || !/^[a-f0-9]{64}$/.test(owner)) return;
+    const { executionStartedAt: start, executionEndedAt: end } = execution;
+    if (start === undefined || end === undefined || !Number.isFinite(start) || !Number.isFinite(end) || end < start) return;
     const directory = env.LLV_GATE_TIMING_DIRECTORY, identity = env.LLV_GATE_TIMING_DIRECTORY_IDENTITY;
     if (!directory || !identity || !direct(directory, identity)) return;
     const filename = path.join(directory, `clock-${kind}-${owner}.json`);
-    let previous: z.infer<typeof clockSchema> | null = null;
-    try { previous = clockSchema.parse(smallJson(filename)); } catch { /* No earlier dispatch is known. */ }
-    if (!dispatch && previous?.owner !== owner) return;
-    const value = { start: previous?.owner === owner ? previous.start : Date.now(), end: dispatch ? null : Date.now(), owner };
+    const value = { start, end, owner };
     if (!direct(directory, identity)) return;
     fs.writeFileSync(`${filename}.next`, JSON.stringify(value), { mode: 0o600 }); fs.renameSync(`${filename}.next`, filename);
   } catch { /* An unavailable clock leaves time unknown. */ }

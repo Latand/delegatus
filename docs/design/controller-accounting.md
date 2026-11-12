@@ -38,6 +38,8 @@ side by side:
   work to the period, including attempts still open at the end.
 - `cohort` selects original tasks created during the period and includes all
   their lanes known by AS_OF, including lanes linked through child tasks.
+  Attempt admissions and correction tasks must precede that cutoff; crossing
+  work ends at AS_OF. A later start supplies no completed queue wait at the cutoff.
 - Class aggregation uses the first related lane declaration recorded before
   acceptance; tasks with no such lane use their creation declaration. Later
   lanes and defect corrections cannot reclassify an earlier acceptance.
@@ -66,8 +68,10 @@ measurement. Reconstructed history carries no clock. An unfinished turn can
 contribute only through its last observed boundary. A different process cannot
 join a lost owner's open interval to its own observations.
 
-Foreground and custody-backed checks retain closed CPU/slot wait observations and the producer's command
-dispatch and close times. Unobserved setup, cleanup, missing dispatch, malformed
+Foreground and custody-backed checks retain closed CPU/slot wait observations and separate command
+execution boundaries. A shell marker immediately before exec supplies the start;
+the command's exit event supplies the end, before producer cleanup. Older records
+without both execution boundaries supply no runner interval. Unobserved setup, cleanup, malformed
 boundaries and gaps remain unknown. A deadline and a test runner's printed
 duration are never substituted for observations. Foreground `gate-slot.sh --record` checks write observations under the launch's
 registered scratch root without requiring a custody manifest. Other tools

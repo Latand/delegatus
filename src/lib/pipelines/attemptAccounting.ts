@@ -11,9 +11,10 @@ export function checkTimeSpans(row: CheckRow): TimeSpan[] {
   const spans: TimeSpan[] = (terminal?.queueSpans ?? []).filter(span => span.start >= row.descriptor.startedAt
     && span.end >= span.start && span.end <= terminal!.closedAt).map(span => ({ kind: "checkQueue", ...span }));
   const report = terminal?.report;
-  if (report?.executionStartedAt !== undefined && report.phase === "close"
-    && report.executionStartedAt >= row.descriptor.startedAt && report.at >= report.executionStartedAt)
-    spans.push({ kind: "checkRunner", start: report.executionStartedAt, end: report.at });
+  if (report?.executionStartedAt !== undefined && report.executionEndedAt !== undefined && report.phase === "close"
+    && report.executionStartedAt >= row.descriptor.startedAt && report.executionEndedAt >= report.executionStartedAt
+    && report.executionEndedAt <= report.at && report.at <= terminal!.closedAt)
+    spans.push({ kind: "checkRunner", start: report.executionStartedAt, end: report.executionEndedAt });
   return spans;
 }
 

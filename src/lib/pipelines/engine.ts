@@ -4033,10 +4033,19 @@ function latestAcceptedRun(pipeline: Pipeline, stageId: string): PipelineStageAt
 }
 
 function repeatReasonForActivation(pipeline: Pipeline, stage: PipelineStage): RepeatReason {
-  const edge = pipeline.cursor?.activatedBy;
-  const source = edge && pipeline.runs.find(run => run.stageId === edge.stageId)?.attempts.find(a => a.n === edge.attempt);
-  if ((source?.verdict?.status === "fail" || source?.verdict?.status === "needs_decision") && source.verdict.findings?.length) return "review-finding";
-  if (source?.accounting?.repeatReason === "review-finding" && edge?.edge === "pass") return "review-finding";
+  let edge = pipeline.cursor?.activatedBy;
+  const seen = new Set<string>();
+  while (edge) {
+    const key = `${edge.stageId}:${edge.attempt}`;
+    if (seen.has(key)) break;
+    seen.add(key);
+    const source = pipeline.runs.find(run => run.stageId === edge!.stageId)?.attempts.find(a => a.n === edge!.attempt);
+    if ((source?.verdict?.status === "fail" || source?.verdict?.status === "needs_decision") && source.verdict.findings?.length) return "review-finding";
+    // Follow successful first-time fix stages back to the finding that
+    // activated them. Do not inherit the cause across unrelated retries.
+    if (edge.edge !== "pass" || source?.verdict?.status !== "pass") break;
+    edge = source.activatedBy;
+  }
   const prior = runFor(pipeline, stage.id)?.attempts.at(-1);
   if (prior?.suspension?.reason === "account") return "account-limit";
   return "unknown";
@@ -11780,7 +11789,7 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
   delete wait.stageRetry;
   delete attempt.controllerWait;
   resetStageForRetry(pipeline, stage);
-  const next = await newAttempt(pipeline, stage, ports.now());
+  const next = await newAttempt(pipeline, stage, ports.now(), wait.condition.kind === "usage_limit" ? "account-limit" : "unknown");
   if (next) {
     const fallback = !target && (retry.fallback ?? (wait.resetsAt === null));
     next.providerFallbackRetries = (attempt.providerFallbackRetries ?? 0) + (fallback ? 1 : 0);

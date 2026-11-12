@@ -16,7 +16,7 @@ export function accountingReport(tasks: readonly BoardTask[], pipelines: readonl
   const inPeriod = (at: string | null | undefined) => time(at) >= from && time(at) < to;
   const roots = [...new Map(tasks.filter(original).map(task => [task.id, task])).values()].sort((a, b) => a.id.localeCompare(b.id));
   const lanes = [...new Map(pipelines.filter(lane => time(lane.createdAt) <= asOf).map(pipeline => [pipeline.id, pipeline])).values()].sort((a, b) => a.id.localeCompare(b.id));
-  const taskById = new Map(tasks.map(task => [task.id, task]));
+  const taskById = new Map(tasks.filter(task => time(task.createdAt) <= asOf).map(task => [task.id, task]));
   const rootId = (id: string) => {
     const seen = new Set<string>();
     while (!seen.has(id)) {
@@ -44,13 +44,14 @@ export function accountingReport(tasks: readonly BoardTask[], pipelines: readonl
   };
   const attempts = lanes.flatMap(lane => lane.runs.flatMap(run => run.attempts.filter(a => !a.historical).map(attempt => ({ lane, stage: run.stageId, attempt }))));
   const view = (cohort: boolean) => {
+    const cutoff = cohort ? asOf : to;
     const selected = cohort ? roots.filter(task => inPeriod(task.createdAt)) : roots.filter(task => time(task.createdAt) < to);
     const ids = new Set(selected.map(task => task.id));
     const selectedLanes = lanes.filter(lane => [...laneRoots.get(lane.id)!].some(id => ids.has(id)));
     const laneIds = new Set(selectedLanes.map(lane => lane.id));
     const selectedAttempts = attempts.filter(row => laneIds.has(row.lane.id)
-      && (cohort || (!row.attempt.completedAt || time(row.attempt.completedAt) > from)
-        && time(row.attempt.startedAt ?? row.attempt.accounting?.admittedAt) < to));
+      && time(row.attempt.accounting?.admittedAt ?? row.attempt.accounting?.startedAt ?? row.attempt.startedAt) < cutoff
+      && (cohort || (!row.attempt.completedAt || time(row.attempt.completedAt) > from)));
     const accepted = selected.filter(task => task.accounting?.accepted
       && time(task.accounting.accepted.at) <= (cohort ? asOf : to - 1)
       && (cohort || inPeriod(task.accounting.accepted.at)));
@@ -58,7 +59,6 @@ export function accountingReport(tasks: readonly BoardTask[], pipelines: readonl
       const delta = time(task.accounting!.accepted!.at) - time(task.accounting!.readyAt);
       return Number.isFinite(delta) && delta >= 0 ? [delta] : [];
     });
-    const cutoff = cohort ? asOf : to;
     const remainder = selected.filter(task => !task.accounting?.accepted || (cohort ? time(task.accounting.accepted.at) > cutoff : time(task.accounting.accepted.at) >= cutoff))
       .map(task => ({ taskId: task.id, ageMs: Math.max(0, cutoff - time(task.createdAt)),
         readyAgeMs: task.accounting?.readyAt && time(task.accounting.readyAt) <= cutoff ? cutoff - time(task.accounting.readyAt) : null,
@@ -86,17 +86,21 @@ export function accountingReport(tasks: readonly BoardTask[], pipelines: readonl
       p50ReadyToAcceptedMs: percentile(durations, .5), p90ReadyToAcceptedMs: percentile(durations, .9),
       acceptanceTimeUnknown: accepted.length - durations.length, remainder, holds,
       repeatReasons: { repeated: repeated.length, unknown, unknownShare: repeated.length ? unknown / repeated.length : null },
-      corrections: tasks.filter(task => task.accounting?.correctsTaskId && ids.has(rootId(task.id)))
+      corrections: tasks.filter(task => time(task.createdAt) < cutoff && task.accounting?.correctsTaskId && ids.has(rootId(task.id)))
         .map(task => ({ taskId: task.id, correctsTaskId: task.accounting!.correctsTaskId })).sort((a, b) => a.taskId.localeCompare(b.taskId)),
       lanes: selectedLanes.map(lane => ({ id: lane.id, taskIds: lane.taskIds, declaredClass: lane.taskClass ?? null })),
-      attempts: selectedAttempts.map(({ lane, stage, attempt }) => ({ pipelineId: lane.id, stageId: stage, attempt: attempt.n,
-        admittedAt: attempt.accounting?.admittedAt ?? null, startedAt: attempt.accounting?.startedAt ?? attempt.startedAt,
-        waitBeforeStartMs: attempt.accounting?.admittedAt && attempt.accounting.startedAt
-          ? Math.max(0, time(attempt.accounting.startedAt) - time(attempt.accounting.admittedAt)) : null,
-        repeatReason: attempt.n > 1 ? attempt.accounting?.repeatReason ?? "unknown" : null,
-        time: cohort ? attempt.accounting?.time ?? splitAttemptTime(attempt.startedAt, attempt.completedAt)
-          : splitAttemptTime(new Date(Math.max(from, time(attempt.accounting?.startedAt ?? attempt.startedAt ?? attempt.accounting?.admittedAt))).toISOString(),
-            new Date(Math.min(to, attempt.completedAt ? time(attempt.completedAt) : to)).toISOString(), attempt.accounting?.spans) })),
+      attempts: selectedAttempts.map(({ lane, stage, attempt }) => {
+        const observed = (at: string | null | undefined) => time(at) < cutoff ? at! : null;
+        const admittedAt = observed(attempt.accounting?.admittedAt);
+        const startedAt = observed(attempt.accounting?.startedAt ?? attempt.startedAt);
+        const start = startedAt && (cohort ? startedAt : new Date(Math.max(from, time(startedAt))).toISOString());
+        const end = new Date(Math.min(cutoff, attempt.completedAt ? time(attempt.completedAt) : cutoff)).toISOString();
+        return { pipelineId: lane.id, stageId: stage, attempt: attempt.n, admittedAt, startedAt,
+          waitBeforeStartMs: admittedAt && startedAt ? Math.max(0, time(startedAt) - time(admittedAt)) : null,
+          repeatReason: attempt.n > 1 ? attempt.accounting?.repeatReason ?? "unknown" : null,
+          time: cohort && startedAt && time(attempt.completedAt) <= cutoff && attempt.accounting?.time
+            ? attempt.accounting.time : splitAttemptTime(start, end, attempt.accounting?.spans) };
+      }),
     };
   };
   return { period, calendar: view(false), cohort: view(true) };

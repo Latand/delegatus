@@ -22,8 +22,8 @@ test("foreground producer clocks persist without custody and resolve only throug
   const clock = spyOn(Date, "now").mockReturnValue(3000);
   try {
     expect(producerReport("portable", cpuOwnerIdentity(process.pid))).toBeNull();
-    clock.mockReturnValue(6000);
-    expect(producerReport("portable", cpuOwnerIdentity(process.pid), { phase: "close", commandExit: 0, cleanup: "confirmed" })).toBeNull();
+    clock.mockReturnValue(10000);
+    expect(producerReport("portable", cpuOwnerIdentity(process.pid), { executionStartedAt: 3000, executionEndedAt: 6000, phase: "close", commandExit: 0, cleanup: "confirmed" })).toBeNull();
     retainForegroundCheckTiming(directory, [{ start: 2000, end: 2500 }]);
     const expected = [{ kind: "checkQueue" as const, start: 2000, end: 2500 }, { kind: "checkRunner" as const, start: 3000, end: 6000 }];
     expect(readAttemptCheckTiming("timing-launch", "timing-lane")).toEqual(expected);

@@ -8,7 +8,7 @@ import { RecordedCheckStore, rowSchema } from "@/lib/recordedChecks/store";
 import { checkTimeSpans } from "./attemptAccounting";
 import { splitAttemptTime } from "./accounting";
 
-test("real check producer retains dispatch time through close, serialization and archival", async () => {
+test("real check producer retains execution boundaries through close, serialization and archival", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "check-accounting-"));
   fs.writeFileSync(path.join(root, "source.ts"), "export const fixture = true;\n");
   const identity = identitySchema.parse(cpuOwnerIdentity(process.pid));
@@ -25,13 +25,14 @@ test("real check producer retains dispatch time through close, serialization and
   const clock = spyOn(Date, "now").mockReturnValue(3000);
   try {
     producerReport("portable", identity);
-    clock.mockReturnValue(6000);
-    producerReport("portable", identity, { phase: "close", commandExit: 0, cleanup: "confirmed" });
+    clock.mockReturnValue(10000);
+    producerReport("portable", identity, { executionStartedAt: 3000, executionEndedAt: 6000, phase: "close", commandExit: 0, cleanup: "confirmed" });
     const report = readEnvelope(path.join(root, "portable.json"));
     const terminal = terminalSchema.parse({ version: 1, runId: descriptor.runId, descriptorDigest: descriptor.descriptorDigest,
-      wrapperExit: 0, wrapperSignal: null, cancellation: null, closedAt: 6100, closedUptimeMs: custodyClock(), report,
+      wrapperExit: 0, wrapperSignal: null, cancellation: null, closedAt: 10100, closedUptimeMs: custodyClock(), report,
       queueSpans: [{ start: 2000, end: 2500 }] });
     expect(terminal.report?.executionStartedAt).toBe(3000);
+    expect(terminal.report?.executionEndedAt).toBe(6000);
     const row = rowSchema.parse({ id: descriptor.runId, request: "request", binding: { project: "fixture", pipeline: "lane", stage: "build", attempt: 1,
       launch: "launch", conversation: "conversation", session: "session", runtimeFence: "fence", endpoint: "http://127.0.0.1:1", host: identity },
       log: path.join(root, "check.log"), descriptor, revision: 1, admission: "accepted", reason: "check",
@@ -47,6 +48,11 @@ test("real check producer retains dispatch time through close, serialization and
       expect(retained).toHaveLength(1);
       const split = splitAttemptTime(new Date(1000).toISOString(), new Date(7000).toISOString(), checkTimeSpans(retained[0]!));
       expect(split).toMatchObject({ intervalMs: 6000, checkQueueMs: 500, checkRunnerMs: 3000, unknownMs: 2500 });
+      for (const executionEndedAt of [undefined, 2000, 11000]) {
+        const legacy = rowSchema.parse({ ...retained[0]!, result: { ...retained[0]!.result!,
+          terminal: { ...terminal, report: { ...terminal.report, executionEndedAt } } } });
+        expect(checkTimeSpans(legacy)).toEqual([{ kind: "checkQueue", start: 2000, end: 2500 }]);
+      }
       expect(checkTimeSpans({ ...retained[0]!, result: null })).toEqual([]);
       expect(checkTimeSpans({ ...retained[0]!, result: { ...retained[0]!.result!, terminal: { ...retained[0]!.result!.terminal!, report: null } } }))
         .toEqual([{ kind: "checkQueue", start: 2000, end: 2500 }]);
