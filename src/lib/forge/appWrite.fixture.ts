@@ -37,9 +37,10 @@ globalThis.fetch = async (url, options) => {
   } else if (target === "/app/installations/42/access_tokens") {
     const request = JSON.parse(options.body);
     fs.appendFileSync(process.env.FIXTURE_TOKEN_REQUESTS, JSON.stringify(request) + "\\n");
-    fs.writeFileSync(process.env.FIXTURE_ISSUED_PERMISSIONS, JSON.stringify(request.permissions));
+    const landingRead = request.permissions.contents === "read" && !request.permissions.issues && !request.permissions.pull_requests;
+    fs.writeFileSync(process.env.FIXTURE_ISSUED_PERMISSIONS + (landingRead ? ".landing" : ""), JSON.stringify(request.permissions));
     if (request.repositories.length !== 1 || request.repositories[0].toLowerCase() !== "widgets") throw new Error("unexpected repository scope");
-    body = { token: "fixture", expires_at: "2030-01-01T01:00:00Z", permissions: request.permissions };
+    body = { token: landingRead ? "fixture-landing" : "fixture", expires_at: "2030-01-01T01:00:00Z", permissions: request.permissions };
   } else if (target === "/installation/repositories") {
     body = { total_count: 1, repositories: [{ id: 99, full_name: "Acme/Widgets" }] };
   } else throw new Error("unexpected API request");

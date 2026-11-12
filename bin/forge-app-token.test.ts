@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  FORGE_APP_API_WRITES, FORGE_APP_GH_COMMANDS, FORGE_APP_ISSUE_PERMISSIONS, FORGE_APP_ISSUE_DELIVERY_PERMISSIONS, FORGE_APP_PERMISSIONS, FORGE_PUSH_BASE, FORGE_REPOSITORIES_ENV, ForgeAppRefusal, classifyGh, declaredRepositories, gitCredential,
+  FORGE_APP_API_WRITES, FORGE_APP_GH_COMMANDS, FORGE_APP_ISSUE_PERMISSIONS, FORGE_APP_ISSUE_DELIVERY_PERMISSIONS, FORGE_APP_ISSUE_LANDING_PERMISSIONS, FORGE_APP_PERMISSIONS, FORGE_PUSH_BASE, FORGE_REPOSITORIES_ENV, ForgeAppRefusal, classifyGh, declaredRepositories, gitCredential,
   isDeclaredRepository, mintInstallationToken, parseRepository, productionPorts, revokeInstallationToken, runGh, runGit, FORGE_PUSH_MINT_MARKER,
 } from "./forge-app-token.mjs";
 
@@ -229,6 +229,27 @@ describe("minting", () => {
     expect(github.calls[1]!.body).toEqual({ repositories: ["widgets"], permissions: { issues: "write", pull_requests: "read", metadata: "read" } });
     expect(FORGE_APP_ISSUE_PERMISSIONS).toEqual({ issues: "write", metadata: "read" });
     expect(FORGE_APP_PERMISSIONS).toEqual({ contents: "write", pull_requests: "write", metadata: "read" });
+  });
+
+  test("batch ancestry has its separate contents-read token without issue or PR writes", async () => {
+    const github = githubWithPermissions(FORGE_APP_ISSUE_LANDING_PERMISSIONS, FORGE_APP_ISSUE_LANDING_PERMISSIONS);
+    await mintInstallationToken(REPO, ports({ github }), FORGE_APP_ISSUE_LANDING_PERMISSIONS);
+    expect(github.calls[1]!.body).toEqual({ repositories: ["widgets"], permissions: { contents: "read", metadata: "read" } });
+  });
+
+  test("a missing contents grant refuses batch ancestry before minting", async () => {
+    const github = githubWithPermissions({ metadata: "read" }, FORGE_APP_ISSUE_LANDING_PERMISSIONS);
+    await expect(mintInstallationToken(REPO, ports({ github }), FORGE_APP_ISSUE_LANDING_PERMISSIONS)).rejects.toBeInstanceOf(ForgeAppRefusal);
+    expect(github.calls.some(call => call.method === "POST")).toBe(false);
+  });
+
+  test.each([
+    { ...FORGE_APP_ISSUE_LANDING_PERMISSIONS, contents: "write" },
+    { ...FORGE_APP_ISSUE_LANDING_PERMISSIONS, issues: "write" },
+  ])("batch ancestry revokes an overbroad returned token %j", async issued => {
+    const github = githubWithPermissions(FORGE_APP_ISSUE_LANDING_PERMISSIONS, issued);
+    await expect(mintInstallationToken(REPO, ports({ github }), FORGE_APP_ISSUE_LANDING_PERMISSIONS)).rejects.toBeInstanceOf(ForgeAppRefusal);
+    expect(github.calls.at(-1)).toMatchObject({ method: "DELETE", target: "installation/token", token: ISSUED });
   });
 
   test.each(["issues", "pull_requests"] as const)("issue delivery refuses a missing %s grant before minting", async missing => {

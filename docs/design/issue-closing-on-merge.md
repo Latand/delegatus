@@ -181,11 +181,13 @@ reopen when another lane landed the same issue with mode `close`.
 
 **Then one read of the primary record** comes before any write:
 `repos/R/pulls/P`, or the batch PR for a batch landing. `merged_at` must be set
-and `base.ref` must equal `base.repo.default_branch`.
+before settlement. A merge into another branch waits until its merge commit is
+an ancestor of the repository default branch; it writes no issue while waiting.
 
 - Not merged means the cache was stale, and the step waits for the next pass.
-- Merged into another base means the entry is final as `skipped/other-base`.
-  GitHub's own keywords act only on the default branch too.
+- A non-default merge is retried after five minutes without counting a failure.
+  The reader accepts historical `skipped/other-base` receipts, but new receipts
+  remain pending until the change reaches the default branch.
 
 ### 4.5 The settlement step
 
@@ -209,6 +211,7 @@ The outcome is recorded on the lane:
 type IssueDelivery = {
   repository: string; number: number; mode: "close" | "part";
   pr: number; batch?: number; at: string;
+  batchCommit?: string; batchAfter?: string; batchHead?: string;
   state: "pending" | "closed" | "already-closed" | "noted" | "reopened" | "skipped" | "refused";
   /** Fixed vocabulary; never GitHub text. */
   reason?: "not-an-issue" | "other-base" | "app-permission" | "github-unavailable";
@@ -233,8 +236,8 @@ type IssueDelivery = {
   `state/issue-delivery.json`. Landings before `since` are never settled, so
   deploying this cannot close a backlog of old issues.
 - **Archive hold.** `pipelineSettledForArchive` (`src/lib/pipelines/store.ts:2438`)
-  keeps a completed lane hot while one of its own issue links has no final
-  entry, for at most 30 days after `closedAt`. This mirrors the task-finish
+  keeps a completed lane hot while an issue link or pending delivery receipt
+  has no final entry, for at most 30 days after `closedAt`. This mirrors the task-finish
   hold at `:2450-2451`.
 - **Cost.** Each controller cycle makes one in-memory pass over the shared lane
   and task lists. GitHub I/O happens only for landed, unsettled issues. No speed
@@ -245,6 +248,22 @@ type IssueDelivery = {
 **Batch merges.** Each lane a batch carries counts as landed through the batch:
 by the runner's receipt, or by the batch title in the cache. It settles its own
 issues, and the comment names both PRs: `Landed in #B (carrying #P).`
+
+A locally squashed work PR can also be closed without GitHub marking it
+merged, as described in `docs/batch-branches.md`. A completed lane with a
+closed cached PR is eligible for proof. Commit references in PR comments are
+hints regardless of their language or author. The verifier checks the reviewed
+patch with native Git, finds the carrying PR, proves both ancestry links to
+the default branch, verifies that the reviewed change survives there, and
+rechecks the default tip. A hint may name a batch tip containing companion
+changes. Native batch receipts retain their stricter exact-patch rule.
+
+At most five commit hints are checked per attempt. A persisted cursor, verified
+commit and reviewed head resume the search after restart. An open carrier
+waits five minutes; a merged carrier lacking proof follows the bounded failure
+policy. Changes to the lane, issue link or reviewed head invalidate an in-flight
+attempt before any issue write. Persisted attempt times let other waiting lanes
+make progress within the ten-issue quota.
 
 `merge-batch.ts` is unchanged. When its forwarded `Closes #N` closes a lane's
 issue first, the lane records `already-closed`. When that issue is marked
@@ -261,7 +280,7 @@ line.
 ### 4.7 Identity, permission, text
 
 **Writer and reader.** Settlement uses `forgeWriter` and `githubRunner` with
-one issue-delivery App token source:
+an issue-delivery App token source and a separate read-only landing source:
 
 - In a repository declared for the Delegatus App, the App writes with
   `issues: write`, `pull_requests: read` and `metadata: read`.
@@ -280,6 +299,14 @@ the closer. `FORGE_APP_ISSUE_DELIVERY_PERMISSIONS` is selected by
 `token --issue-delivery`. Approved issue reports retain their separate
 `--issues` purpose and its issues-only permission set. Ordinary PR and Git
 writes retain `FORGE_APP_PERMISSIONS`.
+
+Default-branch ancestry and closed-PR batch proof use
+`FORGE_APP_ISSUE_LANDING_PERMISSIONS`, requested by `token --issue-landing`:
+`contents: read` and `metadata: read` only. This reader proves its App grant
+before Git may fetch missing objects. A missing grant refuses settlement;
+there is no fallback to personal credentials. The three token purposes are
+mutually exclusive. Private App tests cover the actual scheduler and helper
+with both minimal tokens and a missing landing grant.
 
 `mintForgeAppToken` is the producer of those CLI arguments; the token helper
 validates the installation grant and the exact returned permissions. The
@@ -351,8 +378,10 @@ isolated HOME, XDG_CONFIG_HOME, TMPDIR and `LLV_STATE_DIR`, and with
    carried lanes' issues close.
 6. **Person merge.** There is no merge record and the cache says merged. The
    issue closes.
-7. **Other base.** A merge into a non-default branch ends `skipped/other-base`
-   with no write.
+7. **Other base.** A merge into any non-default branch waits without writes,
+   then settles when its merge commit reaches the default branch. A locally
+   squashed, closed work PR settles through a verified carrier; unrelated,
+   reverted or stale reviewed changes cannot authorize closure.
 8. **No backfill.** A landing before `since` makes no call.
 9. **Git-only.** A project with a non-GitHub origin runs creation, publication,
    completion and the task finish. The `gh` port throws if called, and nothing

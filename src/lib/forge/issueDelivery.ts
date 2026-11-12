@@ -9,6 +9,7 @@ import { githubReadBackoff } from "./githubReadFailure";
 import type { ForgeCacheFile } from "./cache";
 import { landedPullRequests } from "./landedPullRequests";
 import { isMergeBatchHead, parseMergeBatchTitle } from "./mergeBatchTitle";
+import type { CarriedBranchLanding } from "./batchLanding";
 import { normalizeWorkLinkInput, workLinkKey, MAX_WORK_LINKS, boundedRepository, type ForgeCacheView, type StoredWorkLink } from "./workLinks";
 
 /** One durable outcome per lane and issue; no provider text is retained. */
@@ -18,6 +19,7 @@ export type IssueDelivery = {
   state: "pending" | "closed" | "already-closed" | "noted" | "reopened" | "skipped" | "refused";
   reason?: "not-an-issue" | "other-base" | "app-permission" | "github-unavailable";
   failures?: number; retryAt?: string;
+  batchCommit?: string; batchAfter?: string; batchHead?: string;
 };
 const positive = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) > 0;
 const date = (value: unknown): value is string => typeof value === "string" && Number.isFinite(Date.parse(value));
@@ -29,7 +31,10 @@ export function isIssueDelivery(value: unknown): value is IssueDelivery {
     && ["pending", "closed", "already-closed", "noted", "reopened", "skipped", "refused"].includes(row.state)
     && (row.reason === undefined || ["not-an-issue", "other-base", "app-permission", "github-unavailable"].includes(row.reason))
     && (row.failures === undefined || (Number.isSafeInteger(row.failures) && row.failures >= 0))
-    && (row.retryAt === undefined || date(row.retryAt));
+    && (row.retryAt === undefined || date(row.retryAt))
+    && (row.batchCommit === undefined || (typeof row.batchCommit === "string" && /^[0-9a-f]{40}$/i.test(row.batchCommit)))
+    && (row.batchAfter === undefined || (typeof row.batchAfter === "string" && /^[0-9a-f]{40}$/i.test(row.batchAfter)))
+    && (row.batchHead === undefined || (typeof row.batchHead === "string" && /^[0-9a-f]{40}$/i.test(row.batchHead)));
 }
 export const issueDeliveryFinal = (row: IssueDelivery) => row.state !== "pending";
 const canonical = (repo: string, cache: ForgeCacheView) => (cache.repository(repo)?.canonical ?? repo).toLowerCase();
@@ -125,6 +130,9 @@ export interface IssueDeliveryPorts {
   pullRequestOf: PullRequestOf;
   cache(): { data: ForgeCacheFile; view: ForgeCacheView };
   run(args: string[]): Promise<string>;
+  /** Commit graph reads use a separate contents-read App token. */
+  readLanding?(args: string[]): Promise<string>;
+  carriedLanding?(lane: Pipeline, repository: string, pr: number, base: string, head: string, hint: { commit?: string; after?: string }): Promise<CarriedBranchLanding>;
   write: ForgeAppWriter;
   mutate(id: string, change: (live: Pipeline) => boolean): Promise<boolean>;
   inspectTitle(title: string): Promise<boolean>;
@@ -153,14 +161,23 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
     const landed = lanes.flatMap(lane => {
       const repository = ports.repositoryOf(lane);
       if (!repository) return [];
-      const landing = laneLanding(lane, landings, prOf);
+      let landing = laneLanding(lane, landings, prOf);
+      const pr = prOf(lane);
+      if (!landing && pr && snapshot.view.repository(pr.repository)?.pr(pr.number)?.state === "closed" && date(lane.closedAt)) {
+        landing = { repository: pr.repository, pr: pr.number, at: lane.closedAt };
+      }
       return landing && Date.parse(landing.at) >= since ? [{ lane, landing, repository }] : [];
     });
     const tasks = ports.loadTasks(new Set(landed.flatMap(({ lane }) => lane.taskIds)));
     const taskIndex = new Map(tasks.map(task => [task.id, task]));
     const candidates = landed.flatMap(({ lane, landing, repository }) => deliveredIssues(lane, lane.taskIds.flatMap(id => taskIndex.get(id) ?? []), repository, snapshot.view).map(link => ({ lane, landing, link })));
-    // Full deliveries settle first so a partial cannot undo a full close.
-    candidates.sort((a, b) => Number(!!a.link.part) - Number(!!b.link.part));
+    // Oldest attempts go first so waiting full deliveries cannot starve
+    // partials. Full deliveries win ties; completed full receipts guard reopens.
+    const previousAttempt = (candidate: typeof candidates[number]) => {
+      const prior = candidate.lane.issueDelivery?.find(row => identity(row) === keyOf(candidate.link));
+      return prior ? Date.parse(prior.at) : 0;
+    };
+    candidates.sort((a, b) => previousAttempt(a) - previousAttempt(b) || Number(!!a.link.part) - Number(!!b.link.part));
     let work = 0;
     for (const { lane, landing, link } of candidates) {
       const key = keyOf(link);
@@ -168,6 +185,7 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
       if (held && (issueDeliveryFinal(held) || (held.retryAt && Date.parse(held.retryAt) > ports.now()))) continue;
       if (work++ >= 10) break;
       const mode = link.part ? "part" : "close";
+      let headFence: { head: string; fromKnown: boolean } | undefined;
       // Revalidate after every await, including credential minting. No store
       // lock is held across a network call and detached links confer no write.
       const current = () => {
@@ -176,6 +194,10 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
         if (!live || !repo || canonical(repo, snapshot.view) !== canonical(landing.repository, snapshot.view)) throw new DeliveryChanged();
         const pr = ports.pullRequestOf(live);
         if (!pr || pr.number !== landing.pr || canonical(pr.repository, snapshot.view) !== canonical(landing.repository, snapshot.view)) throw new DeliveryChanged();
+        if (headFence) {
+          const known = live.merge?.reviewedHead || live.lastPassedCommit || undefined;
+          if (headFence.fromKnown ? known !== headFence.head : known && known !== headFence.head) throw new DeliveryChanged();
+        }
         const links = deliveredIssues(live, ports.loadTasks(new Set(live.taskIds)), repo, snapshot.view);
         if (!links.some(l => keyOf(l) === key && !!l.part === (mode === "part"))) throw new DeliveryChanged();
         const row = live.issueDelivery?.find(r => identity(r) === key);
@@ -183,6 +205,12 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
         return live;
       };
       let receipt: IssueDelivery = { repository: link.repository, number: link.number, mode, pr: landing.pr, ...(landing.batch ? { batch: landing.batch } : {}), at: new Date(ports.now()).toISOString(), state: "pending", failures: held?.failures ?? 0 };
+      if (!receipt.batch && held?.pr === landing.pr && held.batch) receipt.batch = held.batch;
+      if (held?.pr === landing.pr) {
+        if (held.batchCommit) receipt.batchCommit = held.batchCommit;
+        if (held.batchAfter) receipt.batchAfter = held.batchAfter;
+        if (held.batchHead) receipt.batchHead = held.batchHead;
+      }
       const save = async () => { await ports.mutate(lane.id, live => {
         current();
         live.issueDelivery = [...(live.issueDelivery ?? []).filter(row => identity(row) !== key), { ...receipt }];
@@ -193,6 +221,51 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
       try {
         await save(); current();
         let primary = await read(`repos/${receipt.repository}/pulls/${receipt.batch ?? receipt.pr}`);
+        if (receipt.batch && (receipt.batchHead || !isMergeBatchHead(primary.head?.ref ?? ""))) {
+          const owner = current();
+          const known = owner.merge?.reviewedHead || owner.lastPassedCommit || undefined;
+          const head = known ?? (await read(`repos/${receipt.repository}/pulls/${receipt.pr}`)).head?.sha;
+          if (!receipt.batchHead || head !== receipt.batchHead
+            || primary.state === "closed" && !primary.merged_at) {
+            delete receipt.batch; delete receipt.batchCommit; delete receipt.batchAfter; delete receipt.batchHead;
+            primary = await read(`repos/${receipt.repository}/pulls/${receipt.pr}`);
+          }
+        }
+        let verifiedCarried = false;
+        const carried = async () => {
+          const original = receipt.batch ? await read(`repos/${receipt.repository}/pulls/${receipt.pr}`) : primary;
+          if (original.state !== "closed") throw new Error("Batch work PR is invalid");
+          const owner = current();
+          const known = owner.merge?.reviewedHead || owner.lastPassedCommit || undefined;
+          const head = known ?? original.head?.sha ?? "";
+          if (typeof head !== "string" || !/^[0-9a-f]{40}$/i.test(head)) throw new Error("Reviewed batch head is invalid");
+          headFence = { head, fromKnown: !!known };
+          const found = await ports.carriedLanding?.(owner, receipt.repository, receipt.pr,
+            original.base?.repo?.default_branch ?? "", head, { commit: receipt.batchCommit, after: receipt.batchAfter });
+          current();
+          const live = current();
+          const liveHead = live.merge?.reviewedHead || live.lastPassedCommit || undefined;
+          if (liveHead ? liveHead !== head : (await read(`repos/${receipt.repository}/pulls/${receipt.pr}`)).head?.sha !== head) throw new DeliveryChanged();
+          if (!found || found.state === "waiting") {
+            if (found?.batch) receipt.batch = found.batch;
+            if (found?.commit || found?.batch) receipt.batchHead = head; else delete receipt.batchHead;
+            if (found?.commit) receipt.batchCommit = found.commit; else delete receipt.batchCommit;
+            if (found?.after) receipt.batchAfter = found.after; else delete receipt.batchAfter;
+            if (found?.unproven) throw new Error("Merged batch lacks reviewed delivery proof");
+            receipt.failures = 0; receipt.retryAt = new Date(ports.now() + 300_000).toISOString();
+            await save(); return false;
+          }
+          receipt.batch = found.batch;
+          receipt.batchHead = head;
+          receipt.batchCommit = found.commit; delete receipt.batchAfter;
+          primary = await read(`repos/${receipt.repository}/pulls/${receipt.batch}`);
+          if (primary.number !== found.batch || primary.merged_at !== found.mergedAt) throw new Error("Batch carrier changed");
+          verifiedCarried = true;
+          return true;
+        };
+        if (!primary.merged_at && !receipt.batch && primary.state === "closed") {
+          if (!await carried()) continue;
+        }
         // A runner batch receipt may precede the forge cache. Its verified
         // landing commit identifies the integration PR without scanning history.
         if (!primary.merged_at && !receipt.batch && lane.merge?.mergeCommit) {
@@ -201,12 +274,31 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
           const batch = associated.find(p => p.merged_at && isMergeBatchHead(p.head?.ref ?? "") && parseMergeBatchTitle(p.title).includes(receipt.pr));
           if (batch) { receipt.batch = batch.number; primary = await read(`repos/${receipt.repository}/pulls/${receipt.batch}`); }
         }
-        if (!primary.merged_at) continue;
-        if (receipt.batch && (!isMergeBatchHead(primary.head?.ref ?? "") || !parseMergeBatchTitle(primary.title).includes(receipt.pr))) throw new Error("Batch membership unconfirmed");
+        if (!primary.merged_at) {
+          receipt.retryAt = new Date(ports.now() + 300_000).toISOString();
+          await save(); continue;
+        }
+        if (receipt.batch && !verifiedCarried && !isMergeBatchHead(primary.head?.ref ?? "")) {
+          if (!await carried()) continue;
+        }
+        if (receipt.batch && !verifiedCarried && (!isMergeBatchHead(primary.head?.ref ?? "") || !parseMergeBatchTitle(primary.title).includes(receipt.pr))) throw new Error("Batch membership unconfirmed");
         if (!date(primary.merged_at) || !primary.base?.ref || !primary.base?.repo?.default_branch) throw new Error("Invalid landing record");
         if (Date.parse(primary.merged_at) < since) continue;
         if (primary.base.ref !== primary.base.repo.default_branch) {
-          receipt.state = "skipped"; receipt.reason = "other-base"; await save(); continue;
+          const rawCommit = primary.merge_commit_sha;
+          if (typeof rawCommit !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(rawCommit)) throw new Error("Invalid batch merge commit");
+          const commit = rawCommit.toLowerCase();
+          current();
+          const proof = JSON.parse(await (ports.readLanding ?? ports.run)(["api",
+            `repos/${receipt.repository}/compare/${commit}...${encodeURIComponent(primary.base.repo.default_branch)}?per_page=1`,
+            "--jq", "{base_commit:{sha:.base_commit.sha},merge_base_commit:{sha:.merge_base_commit.sha}}"]));
+          current();
+          if (proof.base_commit?.sha !== commit || typeof proof.merge_base_commit?.sha !== "string"
+            || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(proof.merge_base_commit.sha)) throw new Error("Invalid batch landing proof");
+          if (proof.merge_base_commit.sha !== commit) {
+            receipt.retryAt = new Date(ports.now() + 300_000).toISOString();
+            await save(); continue;
+          }
         }
         const route = `repos/${receipt.repository}/issues/${receipt.number}`;
         let issue;
@@ -277,5 +369,6 @@ export function issueDeliverySeatSignals(lanes: readonly Pipeline[], project: st
 /** Own issue links keep a completed lane hot for at most thirty days. */
 export function issueDeliveryHoldsArchive(lane: Pipeline, now: number): boolean {
   return lane.state === "completed" && !!lane.closedAt && now - Date.parse(lane.closedAt) < 30 * 86400_000
-    && (lane.workLinks ?? []).some(l => l.kind !== "pr" && !lane.issueDelivery?.some(r => keyOf(r) === keyOf(l) && issueDeliveryFinal(r)));
+    && ((lane.issueDelivery ?? []).some(row => !issueDeliveryFinal(row))
+      || (lane.workLinks ?? []).some(l => l.kind !== "pr" && !lane.issueDelivery?.some(r => keyOf(r) === keyOf(l) && issueDeliveryFinal(r))));
 }

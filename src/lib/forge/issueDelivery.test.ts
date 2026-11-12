@@ -25,7 +25,7 @@ function fixture(lanes = [lane()]) {
   const comments: Array<{ body: string; created_at: string }> = [];
   const tasks: BoardTask[] = [];
   const issue = { state: "open", state_reason: null as string | null, pull_request: undefined as unknown };
-  const primary = { number: 3909, merged_at: AT as string | null, base: { ref: "main", repo: { default_branch: "main" } }, title: "Deliver widget controls", head: { ref: "pipeline/lane" } };
+  const primary = { number: 3909, state: "closed", merged_at: AT as string | null, merge_commit_sha: "c".repeat(40), base: { ref: "main", repo: { default_branch: "main" } }, title: "Deliver widget controls", head: { ref: "pipeline/lane", sha: "a".repeat(40) } };
   let closer: { number: number; repository: { nameWithOwner: string } } | null = null;
   const ports: IssueDeliveryPorts = {
     now: () => now, since: () => "2026-11-01T00:00:00.000Z", loadPipelines: () => lanes, loadTasks: ids => tasks.filter(t => ids.has(t.id)),
@@ -36,6 +36,7 @@ function fixture(lanes = [lane()]) {
       reads.push(args);
       const route = args[1]!;
       if (route === "graphql") return JSON.stringify({ data: { repository: { issue: { timelineItems: { nodes: [{ closer }] } } } } });
+      if (route.includes("/compare/")) return JSON.stringify({ base_commit: { sha: primary.merge_commit_sha }, merge_base_commit: { sha: "d".repeat(40) } });
       if (route.includes("/pulls/")) return JSON.stringify(primary);
       if (route.includes("/comments?")) return JSON.stringify(comments);
       if (/\/issues\/\d+$/.test(route)) return JSON.stringify(issue);
@@ -157,7 +158,7 @@ test.each(["stale", "old", "other-base"])("primary landing check handles %s with
   if (kind === "old") f.primary.merged_at = "2026-10-01T00:00:00Z";
   if (kind === "other-base") f.primary.base.ref = "release";
   await f.sweep(); expect(f.writes).toEqual([]);
-  if (kind === "other-base") expect(f.lanes[0]!.issueDelivery?.[0]).toMatchObject({ state: "skipped", reason: "other-base" });
+  if (kind === "other-base") expect(f.lanes[0]!.issueDelivery?.[0]).toMatchObject({ state: "pending", failures: 0 });
 });
 test("old in-memory landings and Git-only lanes make no forge calls", async () => {
   const f = fixture(); f.ports.since = () => "2026-11-02T00:00:00Z"; await f.sweep();
@@ -227,7 +228,7 @@ test("canonical repository names preserve issue delivery after a rename", async 
   await f.sweep(); expect(f.lanes[0]!.issueDelivery?.[0]).toMatchObject({ repository: REPO, state: "closed" });
 });
 test("a warm cache snapshot avoids history rescans and a replacement refines the landing", async () => {
-  const f = fixture(); delete f.lanes[0]!.merge; cached(f, 3909, "closed");
+  const f = fixture(); delete f.lanes[0]!.merge; cached(f, 3909, "open");
   let scans = 0;
   f.data.repositories[REPO]!.prs = new Proxy(f.data.repositories[REPO]!.prs, { ownKeys: object => { scans++; return Reflect.ownKeys(object); } });
   const view = forgeViewOf(f.data); f.ports.cache = () => ({ data: f.data, view });
@@ -235,6 +236,10 @@ test("a warm cache snapshot avoids history rescans and a replacement refines the
   expect(scans).toBe(first); expect(f.reads).toEqual([]);
   const data: ForgeCacheFile = { ...f.data, repositories: { [REPO]: { ...emptyRepositoryEntry(), prs: { "3909": { ...f.data.repositories[REPO]!.prs["3909"]!, state: "merged", mergedAt: AT } } } } };
   f.ports.cache = () => ({ data, view: forgeViewOf(data) });
+  await f.sweep(); expect(f.issue.state).toBe("closed");
+});
+test("an authoritative merge settles a closed cache entry without waiting for cache replacement", async () => {
+  const f = fixture(); f.lanes[0]!.merge = undefined; cached(f, 3909, "closed");
   await f.sweep(); expect(f.issue.state).toBe("closed");
 });
 test.each(["closer", "pending-save"])("a detached link after the %s await cannot write", async point => {
@@ -299,4 +304,192 @@ test.each(["git-only", "ordinary", "issue", "refresh"])("creation reads only the
   expect(reads).toEqual({ cache: ["issue", "refresh"].includes(kind) ? 1 : 0, lanes: 0, predecessor: kind === "refresh" ? 1 : 0 });
   expect(links).toHaveLength(["issue", "refresh"].includes(kind) ? 1 : 0);
   if (kind === "refresh") expect(links[0]?.part).toBe(true);
+});
+
+test("a batch-branch delivery waits for its merge commit to reach the default branch", async () => {
+  const f = fixture(); f.primary.base.ref = "batch/widgets";
+  let landed = false, reads = 0;
+  f.ports.readLanding = async args => {
+    reads++;
+    expect(args[1]).toBe(`repos/${REPO}/compare/${"c".repeat(40)}...main?per_page=1`);
+    return JSON.stringify({ base_commit: { sha: "c".repeat(40) }, merge_base_commit: { sha: (landed ? "c" : "d").repeat(40) } });
+  };
+  await f.sweep();
+  expect(f.lanes[0]!.issueDelivery).toMatchObject([{ state: "pending", failures: 0 }]);
+  expect(f.writes).toEqual([]);
+  await f.sweep(); expect(reads).toBe(1);
+  f.advance(); landed = true; await f.sweep();
+  expect(f.issue.state).toBe("closed");
+  expect(f.lanes[0]!.issueDelivery).toMatchObject([{ state: "closed" }]);
+});
+
+test.each(["batch/widgets", "stage/widgets", "integration/widgets", "release"])("a partial delivery through %s stays open after reaching main", async branch => {
+  const f = fixture(); f.primary.base.ref = branch; f.lanes[0]!.workLinks![0]!.part = true;
+  f.ports.readLanding = async () => JSON.stringify({ base_commit: { sha: "c".repeat(40) }, merge_base_commit: { sha: "c".repeat(40) } });
+  await f.sweep();
+  expect(f.issue.state).toBe("open"); expect(f.comments).toHaveLength(1);
+  expect(f.lanes[0]!.issueDelivery).toMatchObject([{ state: "noted" }]);
+});
+
+test.each(["bad-sha", "wrong-base", "invalid-proof", "offline"])("batch landing refuses %s evidence before an issue write", async mode => {
+  const f = fixture(); f.primary.base.ref = "batch/widgets";
+  if (mode === "bad-sha") f.primary.merge_commit_sha = "../main";
+  let reads = 0;
+  f.ports.readLanding = async () => {
+    reads++;
+    if (mode === "offline") throw new Error("offline");
+    return JSON.stringify({ base_commit: { sha: (mode === "wrong-base" ? "d" : "c").repeat(40) },
+      ...(mode === "invalid-proof" ? {} : { merge_base_commit: { sha: "c".repeat(40) } }) });
+  };
+  await f.sweep(); expect(f.writes).toEqual([]);
+  expect(f.lanes[0]!.issueDelivery).toMatchObject([{ state: "pending", failures: 1, reason: "github-unavailable" }]);
+  expect(reads).toBe(mode === "bad-sha" ? 0 : 1);
+});
+
+test("detaching during the batch comparison prevents every later write", async () => {
+  const f = fixture(); f.primary.base.ref = "batch/widgets";
+  f.ports.readLanding = async () => {
+    f.lanes[0]!.workLinks = [];
+    return JSON.stringify({ base_commit: { sha: "c".repeat(40) }, merge_base_commit: { sha: "c".repeat(40) } });
+  };
+  await f.sweep(); expect(f.writes).toEqual([]);
+});
+
+test("a waiting batch delivery leaves the sweep free to settle a peer", async () => {
+  const first = lane("waiting"), peer = lane("peer", 3910); peer.workLinks = [link(3901)];
+  const f = fixture([first, peer]); f.primary.base.ref = "batch/widgets";
+  const run = f.ports.run;
+  f.ports.run = async args => args[1]!.endsWith("/pulls/3910")
+    ? JSON.stringify({ ...f.primary, base: { ref: "main", repo: { default_branch: "main" } } }) : run(args);
+  f.ports.readLanding = async () => JSON.stringify({ base_commit: { sha: "c".repeat(40) }, merge_base_commit: { sha: "d".repeat(40) } });
+  await f.sweep();
+  expect(first.issueDelivery).toMatchObject([{ state: "pending", failures: 0 }]);
+  expect(peer.issueDelivery).toMatchObject([{ state: "closed" }]);
+  expect(f.writes.every(args => args[1]!.includes("/issues/3901"))).toBe(true);
+});
+
+test("a durable pending task-only issue holds archival until its existing thirty-day bound", () => {
+  const p = lane(); p.workLinks = [];
+  p.issueDelivery = [{ repository: REPO, number: 3900, pr: 3909, mode: "close", state: "pending", at: AT }];
+  expect(issueDeliveryHoldsArchive(p, Date.parse(AT) + 10 * 86400_000)).toBe(true);
+  expect(issueDeliveryHoldsArchive(p, Date.parse(AT) + 31 * 86400_000)).toBe(false);
+});
+
+test.each([false, true])("a locally squashed closed PR waits for its carrier and settles partial=%s", async partial => {
+  const f = fixture(); const p = f.lanes[0]!; p.merge = undefined;
+  cached(f, 3909, "closed"); f.primary.merged_at = null; f.primary.base.ref = "batch/widgets";
+  if (partial) { p.workLinks![0]!.part = true; f.issue.state = "closed"; f.closer(4000); }
+  let merged = false, proofs = 0;
+  const run = f.ports.run;
+  f.ports.run = async args => args[1]!.endsWith("/pulls/4000") ? JSON.stringify({
+    number: 4000, state: merged ? "closed" : "open", merged_at: merged ? AT : null,
+    base: { ref: "main", repo: { default_branch: "main" } }, head: { ref: "batch/widgets" }, title: "Widget batch",
+  }) : run(args);
+  f.ports.carriedLanding = async (_lane, repository, pr, base, head) => {
+    proofs++; expect({ repository, pr, base, head }).toEqual({ repository: REPO, pr: 3909, base: "main", head: "a".repeat(40) });
+    return merged ? { state: "landed", batch: 4000, mergedAt: AT, commit: "c".repeat(40) } : { state: "waiting", batch: 4000 };
+  };
+  await f.sweep(); expect(p.issueDelivery).toMatchObject([{ state: "pending", batch: 4000, failures: 0 }]);
+  expect(f.writes).toEqual([]);
+  f.advance(); await f.sweep(); expect(proofs).toBe(1);
+  f.advance(); merged = true; await f.sweep();
+  expect(p.issueDelivery).toMatchObject([{ state: partial ? "reopened" : "closed", batch: 4000 }]);
+  expect(f.issue.state).toBe(partial ? "open" : "closed");
+  expect(f.comments).toHaveLength(1);
+  expect(f.comments[0]!.body).toContain("#4000 (carrying #3909)");
+});
+
+test("closed batch probes without a receipt never spend the entire sweep on the same lanes", async () => {
+  const lanes = Array.from({ length: 13 }, (_, index) => {
+    const p = lane(`lane-${index}`, 4000 + index); p.merge = undefined; p.workLinks = [link(5000 + index, index === 12)]; return p;
+  });
+  const f = fixture(lanes); f.primary.merged_at = null; f.primary.base.ref = "batch/widgets";
+  for (let index = 0; index < lanes.length; index++) cached(f, 4000 + index, "closed");
+  f.ports.carriedLanding = async () => ({ state: "waiting" });
+  await f.sweep(); expect(lanes.filter(p => p.issueDelivery?.length)).toHaveLength(10);
+  f.advance(); await f.sweep(); expect(lanes.filter(p => p.issueDelivery?.length)).toHaveLength(13);
+  expect(lanes[12]!.issueDelivery?.[0]?.mode).toBe("part");
+  expect(f.writes).toEqual([]);
+});
+
+test("detaching while closed-PR patch verification waits prevents issue writes", async () => {
+  const f = fixture(); f.lanes[0]!.merge = undefined; cached(f, 3909, "closed");
+  f.primary.merged_at = null; f.primary.base.ref = "batch/widgets";
+  f.ports.carriedLanding = async () => {
+    f.lanes[0]!.workLinks = [];
+    return { state: "landed", batch: 4000, mergedAt: AT, commit: "c".repeat(40) };
+  };
+  await f.sweep(); expect(f.writes).toEqual([]);
+});
+
+test.each(["proof", "issue", "comments", "credentials"] as const)("a reviewed head changed during %s prevents later issue writes", async point => {
+  const f = fixture(); const p = f.lanes[0]!; p.merge = undefined; p.lastPassedCommit = "a".repeat(40);
+  cached(f, 3909, "closed"); f.primary.merged_at = null; f.primary.base.ref = "batch/widgets";
+  const run = f.ports.run;
+  f.ports.run = async args => {
+    if (args[1]!.endsWith("/pulls/4000")) return JSON.stringify({ number: 4000, merged_at: AT, head: { ref: "batch/widgets" }, base: { ref: "main", repo: { default_branch: "main" } } });
+    const value = await run(args);
+    if ((point === "issue" && args[1]!.endsWith("/issues/3900")) || (point === "comments" && args[1]!.includes("/issues/3900/comments?"))) p.lastPassedCommit = "b".repeat(40);
+    return value;
+  };
+  f.ports.carriedLanding = async () => {
+    if (point === "proof") p.lastPassedCommit = "b".repeat(40);
+    return { state: "landed", batch: 4000, mergedAt: AT, commit: "c".repeat(40) };
+  };
+  if (point === "credentials") f.ports.write = async (_args, _repository, before) => {
+    p.lastPassedCommit = "b".repeat(40); before?.(); throw new Error("Must not dispatch");
+  };
+  await f.sweep(); expect(f.writes).toEqual([]);
+});
+
+test("a changed reviewed head invalidates a cached open carrier", async () => {
+  const f = fixture(); const p = f.lanes[0]!; p.merge = undefined; p.lastPassedCommit = "a".repeat(40);
+  cached(f, 3909, "closed"); f.primary.merged_at = null; f.primary.base.ref = "batch/widgets";
+  const heads: string[] = [], run = f.ports.run;
+  f.ports.run = async args => args[1]!.endsWith("/pulls/4000")
+    ? JSON.stringify({ state: "open", merged_at: null, head: { ref: "batch/old" } }) : run(args);
+  f.ports.carriedLanding = async (_lane, _repo, _pr, _base, head) => {
+    heads.push(head);
+    return { state: "waiting", batch: head === "a".repeat(40) ? 4000 : 5000, commit: "c".repeat(40) };
+  };
+  await f.sweep(); f.advance(); p.lastPassedCommit = "b".repeat(40); await f.sweep();
+  expect(heads).toEqual(["a".repeat(40), "b".repeat(40)]);
+  expect(p.issueDelivery).toMatchObject([{ state: "pending", batch: 5000, batchHead: "b".repeat(40) }]);
+  expect(f.writes).toEqual([]);
+});
+
+test("a declined cached carrier is replaced only by a fresh verified landing", async () => {
+  const f = fixture(); const p = f.lanes[0]!; p.merge = undefined; p.lastPassedCommit = "a".repeat(40);
+  cached(f, 3909, "closed"); f.primary.merged_at = null; f.primary.base.ref = "batch/widgets";
+  let proofs = 0;
+  const run = f.ports.run;
+  f.ports.run = async args => {
+    if (args[1]!.endsWith("/pulls/4000")) return JSON.stringify({ state: "closed", merged_at: null, head: { ref: "batch/declined" } });
+    if (args[1]!.endsWith("/pulls/5000")) return JSON.stringify({ number: 5000, state: "closed", merged_at: AT, head: { ref: "batch/widgets" }, base: { ref: "main", repo: { default_branch: "main" } } });
+    return run(args);
+  };
+  f.ports.carriedLanding = async () => ++proofs === 1
+    ? { state: "waiting", batch: 4000, commit: "c".repeat(40) }
+    : { state: "landed", batch: 5000, mergedAt: AT, commit: "d".repeat(40) };
+  await f.sweep(); expect(f.writes).toEqual([]);
+  f.advance(); await f.sweep();
+  expect(proofs).toBe(2);
+  expect(p.issueDelivery).toMatchObject([{ state: "closed", batch: 5000, batchCommit: "d".repeat(40) }]);
+});
+
+test("a merged carrier without patch proof exhausts its durable retries and raises attention", async () => {
+  const f = fixture(); const p = f.lanes[0]!; p.merge = undefined; p.lastPassedCommit = "a".repeat(40);
+  cached(f, 3909, "closed"); f.primary.merged_at = null; f.primary.base.ref = "batch/widgets";
+  const run = f.ports.run;
+  f.ports.run = async args => args[1]!.endsWith("/pulls/4000")
+    ? JSON.stringify({ state: "closed", merged_at: AT, head: { ref: "batch/widgets" } }) : run(args);
+  let proofs = 0;
+  f.ports.carriedLanding = async () => {
+    proofs++;
+    return { state: "waiting", batch: 4000, commit: "c".repeat(40), unproven: true };
+  };
+  for (let index = 0; index < 3; index++) { await f.sweep(); f.advance(); }
+  expect(p.issueDelivery).toMatchObject([{ state: "refused", reason: "github-unavailable", failures: 3 }]);
+  expect(issueDeliverySeatSignals([p], "fixture")).toHaveLength(1);
+  await f.sweep(); expect(proofs).toBe(3); expect(f.writes).toEqual([]);
 });

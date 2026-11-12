@@ -26,7 +26,7 @@ import { forgeCacheView, readForgeCache } from "./cache";
 import { checkFailedReason, MERGE_REASONS } from "./mergeReasons";
 import { lanePullRequest, pipelineRepository } from "./resolve";
 import { type PullRequestState } from "./workLinks";
-import { readBatchLanding } from "./batchLanding";
+import { readBatchLanding, readCarriedBranchLanding } from "./batchLanding";
 import { githubReadBackoff, githubReadFailure } from "./githubReadFailure";
 import { issueDeliverySince, sweepIssueDelivery, type IssueDeliveryPorts } from "./issueDelivery";
 
@@ -1899,12 +1899,22 @@ export function scheduleAutoMerge(overrides: Partial<AutoMergePorts> & Pick<Auto
       tokens: new ForgeAppTokenSource(repository => mintForgeAppToken(repository, process.env, "issue-delivery")),
     });
     const issueRead = overrides.run ?? githubRunner(os.tmpdir(), GH_TIMEOUT_MS, { asApp: issueApp });
+    const landingApp = forgeAppWriter(os.tmpdir(), GH_TIMEOUT_MS, {
+      tokens: new ForgeAppTokenSource(repository => mintForgeAppToken(repository, process.env, "issue-landing")),
+    });
+    const landingRead = overrides.run ?? githubRunner(os.tmpdir(), GH_TIMEOUT_MS, { asApp: landingApp });
     const issueRun = sweepIssueDelivery({
       now: ports.now, since: () => issueDeliverySince(ports.now()),
       loadPipelines: ports.loadPipelines, loadTasks: ids => loadTasksByIds(ids),
       repositoryOf: pipelineRepository, pullRequestOf: ports.pullRequestOf,
       cache: () => ({ data: readForgeCache().data, view: forgeCacheView() }),
-      run: issueRead, mutate: ports.mutate, prepareRead: ports.prepareRead,
+      run: issueRead, readLanding: landingRead,
+      carriedLanding: (lane, repository, pr, base, head, hint) => readCarriedBranchLanding(repository, pr, base, {
+        head: lane.merge?.reviewedHead || lane.lastPassedCommit || head,
+        repoDir: lane.delivery?.target.repository ?? lane.repoDir,
+        ...hint,
+      }, issueRead, landingRead),
+      mutate: ports.mutate, prepareRead: ports.prepareRead,
       write: overrides.write ?? forgeWriter(issueRead, issueApp),
       inspectTitle: async title => (await (await import("@/lib/pipelines/stagePullRequest")).inspectPullRequestText("title", title)).ok,
       ...ports.issueDelivery,

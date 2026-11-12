@@ -158,6 +158,11 @@ landing and the issue's closer before closing or reopening an issue. The
 helper's `token --issue-delivery` purpose requests this exact set. Its
 installation must grant both issue access and PR reads; a refusal ends in
 the lane's issue-delivery attention signal.
+For delivery through another branch or a locally squashed batch, the separate
+`token --issue-landing` reader requests only `contents: read` and
+`metadata: read` (`FORGE_APP_ISSUE_LANDING_PERMISSIONS`). It proves the default
+branch ancestry and reviewed patch before settlement. Missing read access
+also refuses settlement without falling back to personal credentials.
 
 One action has one classification in every spelling `gh` accepts: `pr new`
 for `pr create`, a pull request given as its URL (which names the repository
