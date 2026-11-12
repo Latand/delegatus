@@ -68,7 +68,7 @@ import WebKit
         scheduleCapture(name: name, completion: completion) {
             let windows = (CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]]) ?? []
             let menuWindow = windows.first { row in
-                (row[kCGWindowOwnerPID as String] as? Int) == getpid()
+                (row[kCGWindowOwnerPID as String] as? Int) == Int(getpid())
                     && (row[kCGWindowLayer as String] as? Int ?? 0) > 0
                     && (row[kCGWindowNumber as String] as? Int) != nil
             }?[kCGWindowNumber as String] as? Int
