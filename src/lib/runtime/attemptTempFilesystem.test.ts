@@ -10,11 +10,12 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { attemptReferencesClear, blockedSubtrees, measureAttemptAllocation, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
   RETAINED_CHECKOUT_READ_MAX_AGE_MS, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
+import { nameInReport } from "./attemptTempRetention.testSupport";
 import type { ProcessScan } from "@/lib/tempSweep";
 const exec = promisify(execFile);
 const roots: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
 const root = () => { const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-filesystem-")); roots.push(directory); return directory; };
 
 /** A directory left by a container that ran as another user: this user can
@@ -32,7 +33,7 @@ test.skipIf(listsAsOwner)("a tree with a subtree this user cannot list is measur
   fs.mkdirSync(directory); fs.mkdirSync(bin);
   fs.writeFileSync(path.join(directory, "payload"), Buffer.alloc(4 * 1024 ** 2, 1));
   const locked = foreignSubtree(directory);
-  // Nothing is read with privileges: a container run would leave this log.
+  // The cleanup container is unavailable here; the readable total stands.
   const log = path.join(parent, "docker.log");
   fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh\necho "$@" >> ${JSON.stringify(log)}\nexit 1\n`, { mode: 0o700 });
   const previousPath = process.env.PATH;
@@ -44,7 +45,8 @@ test.skipIf(listsAsOwner)("a tree with a subtree this user cannot list is measur
     fs.chmodSync(locked, 0o700);
     expect(await measureAttemptAllocation(directory)).toMatchObject({ unreadable: false });
     expect(await blockedSubtrees(directory)).toEqual({ count: 0, entries: [] });
-    expect(fs.existsSync(log)).toBeFalse();
+    // The namespace measurement was asked and could not run; nothing ran in it.
+    expect((fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "").split("\n").filter(line => line.startsWith("run"))).toEqual([]);
   } finally { if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath; }
 });
 
@@ -849,7 +851,9 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.
     fs.unlinkSync(pin);
     const writeCapture = () => exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
       "--mount", `type=bind,source=${directory},target=/attempt`, "--entrypoint", "/bin/sh", image, "-c",
-      `mkdir -p /attempt/private/deep; printf 'private capture' > /attempt/private/deep/frame.${extension}`], { timeout: 15000 });
+      `mkdir -p /attempt/private/deep; printf 'private capture' > /attempt/private/deep/frame.${extension}`], { timeout: 15000 })
+      // A report named the capture: the evidence ledger links it.
+      .then(result => { nameInReport(path.join(directory, `private/deep/frame.${extension}`)); return result; });
     const readCapture = async () => (await exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
       "--mount", `type=bind,source=${directory},target=/attempt,readonly`, "--entrypoint", "/bin/cat", image,
       `/attempt/private/deep/frame.${extension}`], { timeout: 15000 })).stdout;

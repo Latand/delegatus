@@ -5,7 +5,7 @@ import { statePath } from "@/lib/configDir";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { attemptTempJournalPath, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
-import { allocatedAttemptBytes, attemptReferencesClear, blockedSubtrees, inspectAttemptTree, measureAttemptAllocation, snapshotAttemptProtection, removeAttemptTree, RepositoryLinkInventory, type BlockedSubtree, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+import { allocatedAttemptBytes, attemptReferencesClear, blockedSubtrees, inspectAttemptTree, measureAttemptAllocation, privilegedCleanupUnavailable, snapshotAttemptProtection, removeAttemptTree, RepositoryLinkInventory, type BlockedSubtree, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
 import { recordedRootHeld, recordRootRetirement, expireRecordedRootHolds, type CheckRow } from "@/lib/recordedChecks/store";
@@ -368,6 +368,22 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       if (!retirement.release && owner.pipelineId && options.mode !== "dry-run")
         retirement.release = await claimAttemptRetirement(owner.pipelineId, owner.directory);
     };
+    // The cleanup container is the path for what this user cannot read or
+    // remove. When it cannot run at all, retrying does not help: the whole root
+    // stays, and the report names each such directory for the operator.
+    const holdForOperator = async (bytes: number, detail: string) => {
+      let target = owner.directory;
+      if (!fs.existsSync(target)) {
+        try { target = JSON.parse(fs.readFileSync(attemptTempJournalPath(owner.directory), "utf8")).trash ?? target; }
+        catch { /* No quarantine to read; the original path stands. */ }
+      }
+      const blocked = await blockedSubtrees(target).catch(() => ({ count: 0, entries: [] }));
+      store.recordBlocked(owner.directory, blocked, now());
+      outcome(owner.directory, "operator", bytes, (`${blocked.count} director${blocked.count === 1 ? "y" : "ies"} this user cannot remove; `
+        + `operator action (${detail})`).slice(0, 512));
+      store.defer(owner.directory, Math.max(store.owner(owner.directory)?.checkedAt ?? 0, now() + BLOCKED_SUBTREE_RETRY_MS));
+      if (store.rootFailure(owner.directory, detail)) console.error("[attempt temp] root held for the operator", detail);
+    };
     try {
       const stat = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
       if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || `${stat.dev}:${stat.ino}` !== owner.identity)) { outcome(owner.directory, disposition, bytes, reason); continue; }
@@ -477,18 +493,6 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         const settled = state === "closed" || state === "expired" || state === "settled" && !owner.retainUntilClose
           || state === "orphan" && now() - owner.createdAt >= (options.maxAgeMs ?? 86400000);
         if (!settled) return false;
-        // What this user cannot list or empty, a container's root-owned data
-        // for one, needs privileges the sweep does not use. The whole root
-        // stays, and the report names each such directory for the operator.
-        const blocked = await blockedSubtrees(directory);
-        if (directory === owner.directory) store.recordBlocked(owner.directory, blocked, now());
-        if (blocked.count) {
-          disposition = "operator";
-          reason = `${blocked.count} director${blocked.count === 1 ? "y" : "ies"} this user cannot remove; operator action`;
-          store.defer(owner.directory, Math.max(store.owner(owner.directory)?.checkedAt ?? 0, now() + BLOCKED_SUBTREE_RETRY_MS));
-          return false;
-        }
-        checkBudget();
         if (state === "expired") await claim();
         const protection = state === "expired" || options.mode === "dry-run" ? await snapshotAttemptProtection(directory, deadline - now()) : { current: () => true };
         if (!await inspectAttemptTree(directory, owner.directory)) { store.retainRoot(owner.directory, null); disposition = "evidence"; reason = "tree evidence, mount or Git boundary"; return false; }
@@ -589,6 +593,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       report.removed += result.removed.length + (result.trashFinished ?? 0);
       report.removedBytes += result.removedBytes + (result.trashFinished ? owner.bytes : 0);
       const failures = result.errors.filter(error => !error.includes("attempt temp deferred:"));
+      if (failures.length && failures.every(privilegedCleanupUnavailable) && !result.removed.length && !result.trashFinished) {
+        await holdForOperator(bytes, failures.join("; "));
+        continue;
+      }
       const deferred = result.errors.length > 0 && failures.length === 0;
       report.errors += failures.length;
       const failure = failures.join("; ").slice(0, 1024) || null;
@@ -619,6 +627,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         outcome(owner.directory, "deferred", bytes, error.message);
         continue;
       }
+      if (privilegedCleanupUnavailable(error)) { await holdForOperator(bytes, attemptTempFailureDetail(error)); continue; }
       report.errors++;
       const detail = attemptTempFailureDetail(error);
       outcome(owner.directory, "failed", bytes, detail);
@@ -630,6 +639,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         const detail = attemptTempFailureDetail(error);
         if (store.rootFailure(owner.directory, detail)) console.error("[attempt temp] retirement claim retained", detail);
       }
+      // A root no longer held for the operator leaves the blocked listing.
+      if (!(report.outcomes.at(-1)?.directory === owner.directory && report.outcomes.at(-1)?.disposition === "operator"))
+        store.recordBlocked(owner.directory, null, now());
       // A root still held after its retention ended steps back from the
       // expired share of the page, so the next oldest gets its visit.
       const last = report.outcomes.at(-1), ended = store.retentionExpiry(owner.directory);

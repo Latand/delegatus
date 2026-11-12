@@ -3,7 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { measureTempBytes, resolvePhysicalPath, type ProcessScan, isUvCacheMarker } from "@/lib/tempSweep";
-import { PRESERVED_MEDIA_EXTENSIONS } from "@/lib/artifact/evidenceFormats";
+import { reportMediaIndex, reportMediaRoot } from "@/lib/reportMedia/lookup";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 
 const exec = promisify(execFile);
@@ -568,9 +568,37 @@ export async function attemptTempUtilityImage(): Promise<string> {
   }
   throw new Error("no installed container cleanup utility image");
 }
-const noEvidence = 'found=$(find /attempt -xdev "(" -name .artifacts'
-  + PRESERVED_MEDIA_EXTENSIONS.map(extension => ` -o -iname "*.${extension}"`).join("")
-  + ' ")" -print -quit) || exit; test -z "$found" || exit 75; ';
+/** The files of an attempt root that the evidence ledger links, relative to
+ * it: pictures a stage report, a bridge report or a task named by their path
+ * in the root (the report picture index) and of which no kept copy exists.
+ * Only these count in the namespace's no-evidence proof; an image of a
+ * checked-out source tree is no recorded evidence and no longer blocks a
+ * tree this user cannot read. An unreadable index proves nothing. */
+export function ledgerLinkedEvidence(original: string): string[] {
+  const rows = reportMediaIndex();
+  if (rows === null) throw new Error("report picture index is unreadable; the no-evidence proof cannot run");
+  const roots = [path.resolve(original)];
+  try { roots.push(path.join(fs.realpathSync(path.dirname(original)), path.basename(original))); }
+  catch { /* A quarantined original keeps its lexical name. */ }
+  const linked = new Set<string>();
+  for (const row of rows) {
+    const named = path.resolve(row.path), root = roots.find(candidate => named.startsWith(candidate + path.sep));
+    if (!root || fs.existsSync(path.join(reportMediaRoot(), row.file))) continue;
+    linked.add(path.relative(root, named));
+  }
+  return [...linked];
+}
+/** Consumes the linked paths the command passes first: `linked` is 1 when any
+ * of them exists in the mounted tree. */
+const linkedEvidence = 'count=$1; shift; linked=0; while test "$count" -gt 0; do '
+  + 'if test -e "/attempt/$1" || test -L "/attempt/$1"; then linked=1; fi; shift; count=$((count - 1)); done; ';
+const noEvidence = 'test "$linked" = 0 || exit 75; ';
+/** The cleanup container cannot run at all: no docker, no installed utility
+ * image, or a refusal by the daemon or the image (exit 125 to 127). Retrying
+ * does not help; the sweep holds the root for the operator. */
+export const PRIVILEGED_CLEANUP_UNAVAILABLE = "privileged cleanup unavailable";
+const unavailable = (detail: string) => new Error(`${PRIVILEGED_CLEANUP_UNAVAILABLE}: ${detail}`);
+export const privilegedCleanupUnavailable = (error: unknown) => String((error as Error)?.message ?? error).includes(PRIVILEGED_CLEANUP_UNAVAILABLE);
 
 async function containerCommand(directory: string, operation: "inspect" | "remove" | "measure" | "evidence", original = directory,
   guard?: () => Promise<boolean>, requireNoEvidence = false, dispatchGuard?: () => boolean): Promise<{ identity: string; stdout: string }> {
@@ -580,8 +608,10 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
   // Running containers may hold files through mount aliases that an ordinary
   // proc observer cannot read. Never stop or exec into one for reclamation.
   if (!await containerMountsClear([directory, original])) throw new Error("container ownership could not be cleared for the attempt tree");
-  const image = await attemptTempUtilityImage();
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(image) || directory.includes(",")) throw new Error("invalid container cleanup input");
+  let image: string;
+  try { image = await attemptTempUtilityImage(); }
+  catch (error) { throw unavailable(attemptTempFailureDetail(error)); }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(image) || directory.includes(",")) throw unavailable("invalid container cleanup input");
   const inspection = 'export ORIGINAL=$1; shift; find /attempt -xdev "$@" -print > /tmp/markers || exit; '
     + 'test "$(wc -l < /tmp/markers)" -le 10000 || exit 75; '
     + `find /attempt -xdev "$@" -exec /bin/sh -c ${"'" + containerClassifier.replaceAll("'", "'\\''") + "'"} sh {} + || exit; `;
@@ -589,8 +619,10 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
     : operation === "evidence" ? noEvidence
       : inspection + (requireNoEvidence ? noEvidence : "")
         + (operation === "remove" ? 'exec find /attempt -xdev -depth -mindepth 1 -delete' : 'exit 0');
-  const script = 'identity=$1; shift; test "$(stat -c %d:%i /attempt)" = "$identity" || exit 75; ' + body;
+  const script = 'identity=$1; shift; test "$(stat -c %d:%i /attempt)" = "$identity" || exit 75; ' + linkedEvidence + body;
   if (guard && !await guard()) throw new Error("attempt authority changed before namespace removal");
+  // Read after the guard's awaits, so a picture named meanwhile still counts.
+  const linked = operation === "evidence" || requireNoEvidence ? ledgerLinkedEvidence(original) : [];
   const final = fs.lstatSync(directory);
   if (!final.isDirectory() || final.isSymbolicLink() || `${final.dev}:${final.ino}` !== identity)
     throw new Error("attempt identity changed before namespace dispatch");
@@ -598,10 +630,17 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
     throw new Error("attempt temp deferred: authority changed before namespace removal");
   // Only this owned tree is writable. No pull, network, socket, privileged
   // mode or host namespace is granted to the cleanup container.
-  const result = await run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1m",
-    "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
-    "--mount", `type=bind,source=${directory},target=/attempt${operation !== "remove" ? ",readonly" : ""}`,
-    "--entrypoint", "timeout", image, "12", "/bin/sh", "-c", script, "sh", identity, original, ...markers]);
+  let result: { stdout: string };
+  try {
+    result = await run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1m",
+      "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
+      "--mount", `type=bind,source=${directory},target=/attempt${operation !== "remove" ? ",readonly" : ""}`,
+      "--entrypoint", "timeout", image, "12", "/bin/sh", "-c", script, "sh", identity, String(linked.length), ...linked, original, ...markers]);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException & { code?: unknown }).code;
+    if (code === "ENOENT" || [125, 126, 127].includes(Number(code))) throw unavailable(attemptTempFailureDetail(error));
+    throw error;
+  }
   return { identity, stdout: result.stdout };
 }
 
@@ -638,9 +677,11 @@ export async function inspectAttemptTree(directory: string, original = directory
   catch (error) {
     if (process.platform !== "linux") throw error;
     try { await containerCommand(directory, "inspect", original); return true; }
-    catch { return false; }
+    catch (failure) { if (privilegedCleanupUnavailable(failure)) throw failure; return false; }
   }
 }
+
+const unlistable = (error: unknown) => ["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "");
 
 /** An independent directory snapshot protects new markers even when expired
  * evidence is deliberately discarded. Check it synchronously after every
@@ -655,14 +696,22 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
     const current = pending.pop()!, stat = fs.lstatSync(current, { bigint: true });
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("attempt protection directory changed");
     directories.set(current, signature(stat));
-    const entries = fs.opendirSync(current);
+    // A container that ran as another user leaves directories this user cannot
+    // list. Each stays in the snapshot as a leaf, versioned by its own metadata:
+    // an entry made directly in it changes that signature, and the namespace
+    // removal that such a tree needs repeats the keep-marker classification
+    // inside the tree immediately before it deletes anything.
+    let entries: fs.Dir;
+    try { entries = fs.opendirSync(current); }
+    catch (error) { if (unlistable(error)) continue; throw error; }
     try {
       for (let entry; (entry = entries.readSync());) {
         if (performance.now() >= until || pending.length + directories.size >= 10000)
           throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
         if (entry.isDirectory()) pending.push(path.join(current, entry.name));
       }
-    } finally { entries.closeSync(); }
+    } catch (error) { if (!unlistable(error)) throw error; }
+    finally { entries.closeSync(); }
   }
   return { current: () => {
     try {
@@ -702,18 +751,22 @@ const kibibytes = (output: string | undefined) => {
 
 /** What `du` can read, and whether part of the tree was unreadable. `du`
  * totals what it can read and exits 1 when a subtree is unreadable; that total
- * is the measurement, flagged. The old fallback kept only the root's own
- * inode and recorded a 51 GiB tree as 4 KiB. Nothing is read with privileges. */
+ * is the lower bound, flagged, and the cleanup namespace raises it when it can
+ * measure the whole tree. The old fallback kept only the root's own inode and
+ * recorded a 51 GiB tree as 4 KiB. */
 export async function measureAttemptAllocation(directory: string): Promise<{ bytes: number; unreadable: boolean }> {
   if (process.platform === "win32") return { bytes: await measureTempBytes(directory), unreadable: false };
+  let partial: number | null = null;
   try {
     const bytes = kibibytes((await run("du", ["-skx", "--", directory])).stdout);
     if (bytes !== null) return { bytes, unreadable: false };
-  } catch (error) {
-    const bytes = kibibytes((error as { stdout?: string }).stdout);
-    if (bytes !== null) return { bytes, unreadable: true };
+  } catch (error) { partial = kibibytes((error as { stdout?: string }).stdout); }
+  let bytes = partial ?? fs.lstatSync(directory).blocks * 512;
+  if (process.platform === "linux") {
+    try { bytes = Math.max(bytes, kibibytes((await containerCommand(directory, "measure")).stdout) ?? 0); }
+    catch { /* The readable lower bound stands. */ }
   }
-  return { bytes: fs.lstatSync(directory).blocks * 512, unreadable: true };
+  return { bytes, unreadable: true };
 }
 
 export async function allocatedAttemptBytes(directory: string): Promise<number> {

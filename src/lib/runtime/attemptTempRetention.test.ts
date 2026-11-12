@@ -10,7 +10,7 @@ import * as filesystem from "./attemptTempFilesystem";
 import type { ProcessScan } from "@/lib/tempSweep";
 import { AttemptTempStore, BLOCKED_SUBTREE_RETRY_MS, EXPIRED_HOLD_RETRY_MS, sweepAttemptTemps, type AttemptTempState, type AttemptTempOwner } from "./attemptTempRetention";
 import { attemptTempAuthority, attemptTempState } from "./attemptTempProduction";
-import { holdFinishedRoot } from "./attemptTempRetention.testSupport";
+import { holdFinishedRoot, nameInReport } from "./attemptTempRetention.testSupport";
 import { recordedRootHeld, RecordedCheckStore } from "@/lib/recordedChecks/store";
 import { Database } from "bun:sqlite";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
@@ -19,7 +19,7 @@ import { digest } from "@/lib/recordedChecks/wire";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
 const NOW = Date.parse("2026-10-22T12:00:00Z");
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-attempt-retention-")); roots.push(root);
@@ -774,13 +774,21 @@ test("a settled attempt removes its scratch without waiting for host release", a
 
 type NamespacePath = "namespace-only" | "permission-fallback";
 type NamespaceChange = "control" | "producer-changed" | "checkout-unreadable" | "root-replaced";
-async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceChange = "control", expired = false) {
+type NamespaceTree = { foreign?: boolean; image?: "source" | "named" };
+async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceChange = "control", expired = false, tree: NamespaceTree = {}) {
   const f = fixture(), directory = f.make(`namespace-${kind}`), bin = path.join(f.root, "bin");
   const checkout = path.join(f.root, "checkout"), completion = path.join(f.root, "cleanup-complete");
   fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
   fs.mkdirSync(path.join(directory, "private")); fs.mkdirSync(bin);
   fs.writeFileSync(path.join(directory, "private", "payload"), "reclaim me");
   if (expired) fs.writeFileSync(path.join(directory, "frame.png"), "expired evidence");
+  // A container that ran as another user leaves a directory this user cannot list.
+  const locked = path.join(directory, "private", "pgdata");
+  if (tree.foreign) { fs.mkdirSync(locked); fs.writeFileSync(path.join(locked, "base"), "database files"); fs.chmodSync(locked, 0); }
+  // An image of a checked-out source tree, and whether a report named it.
+  const image = path.join(directory, "private", "vendor", "static", "icon.png");
+  if (tree.image) { fs.mkdirSync(path.dirname(image), { recursive: true }); fs.writeFileSync(image, "source asset"); }
+  if (tree.image === "named") nameInReport(image);
   f.store.measure(directory, 8192); f.store.release(directory);
   fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}
 import fs from "node:fs";
@@ -790,8 +798,15 @@ if (args[0] !== "run") process.exit(61);
 const source = /source=([^,]+)/.exec(args[args.indexOf("--mount") + 1])?.[1];
 if (!source || !source.startsWith(${JSON.stringify(f.root + path.sep)})) process.exit(62);
 const script = args[args.indexOf("-c") + 1];
+// The namespace holds DAC_OVERRIDE: it lists what this user cannot.
+const grant = file => { if (!fs.lstatSync(file).isDirectory()) return; fs.chmodSync(file, 0o700); for (const entry of fs.readdirSync(file)) grant(file + "/" + entry); };
+// The no-evidence proof: the paths the evidence ledger links, passed after
+// the identity, or, before them, every picture anywhere in the tree.
+const at = args.indexOf("-c") + 2, linked = args.slice(at + 3, at + 3 + Number(args[at + 2]));
+const pictures = file => { try { return fs.lstatSync(file).isDirectory() ? fs.readdirSync(file).some(entry => pictures(file + "/" + entry)) : /\.(png|jpe?g|gif|webp|avif|bmp|svg|pdf|mp4|webm)$/i.test(file); } catch { return false; } };
+if (script.includes("found=$(find") ? pictures(source) : script.includes('test "$linked" = 0') && linked.some(file => fs.existsSync(source + "/" + file))) process.exit(75);
 if (script.includes("-delete")) {
-  if (script.includes("found=$(find") && fs.existsSync(source + "/frame.png")) process.exit(75);
+  grant(source);
   for (const entry of fs.readdirSync(source)) fs.rmSync(source + "/" + entry, { recursive: true, force: true });
   if (${JSON.stringify(change)} === "checkout-unreadable") fs.chmodSync(${JSON.stringify(checkout)}, 0);
   if (${JSON.stringify(change)} === "root-replaced") {
@@ -824,6 +839,12 @@ if (script.includes("-delete")) {
       },
       authority: async () => ({ state: expired ? "expired" : "closed", revision: "unchanged",
         isCurrent: () => change !== "producer-changed" || !fs.existsSync(completion) }) });
+    if (tree.image === "named") {
+      // The evidence ledger links a picture in the tree: the proof refuses.
+      expect(report).toMatchObject({ removed: 0, errors: 1 });
+      expect(fs.existsSync(image)).toBeTrue(); expect(fs.existsSync(completion)).toBeFalse();
+      return;
+    }
     expect(fs.existsSync(completion)).toBeTrue();
     if (change !== "control") {
       expect(report.removed).toBe(0);
@@ -847,6 +868,7 @@ if (script.includes("-delete")) {
     expect(f.store.bytes()).toBe(0);
   } finally {
     opendir.mockRestore(); rm.mockRestore(); f.store.close(); fs.chmodSync(checkout, 0o700);
+    try { fs.chmodSync(locked, 0o700); } catch { /* Removed or never made. */ }
     if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
     if (previousImage === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
   }
@@ -856,15 +878,24 @@ test.skipIf(process.platform !== "linux")("expired evidence also retires through
   await integratedNamespaceSweep("permission-fallback", "control", true);
 });
 
-test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a root holding a directory this user cannot remove waits for the operator and is reported", async () => {
+test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)("an expired root with a subtree this user cannot list retires through the namespace", async () => {
+  await integratedNamespaceSweep("permission-fallback", "control", true, { foreign: true });
+});
+
+test.skipIf(process.platform !== "linux").each([["source", "namespace-only"], ["source", "permission-fallback"], ["named", "namespace-only"]] as const)(
+  "the namespace no-evidence proof counts only what the evidence ledger links (%s image, %s)", (image, kind) =>
+    integratedNamespaceSweep(kind, "control", false, { image }));
+
+test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)("a root whose cleanup container cannot run waits for the operator and is reported", async () => {
   const f = fixture(), directory = f.make("blocked", 2 * 86400000), bin = path.join(f.root, "bin");
   // What a container that ran as another user leaves behind: a directory this
   // user can neither list nor empty. Mode 000 on our own directory models it.
   const locked = path.join(directory, "tmp", "pgdata");
   fs.mkdirSync(locked, { recursive: true }); fs.writeFileSync(path.join(locked, "base"), Buffer.alloc(8192)); fs.chmodSync(locked, 0);
   fs.mkdirSync(path.join(directory, "tmp", "empty-foreign")); fs.chmodSync(path.join(directory, "tmp", "empty-foreign"), 0o500);
-  // Nothing may be removed or measured with privileges.
-  fs.mkdirSync(bin); fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh\necho "$@" >> ${JSON.stringify(path.join(f.root, "docker.log"))}\nexit 1\n`, { mode: 0o700 });
+  // Docker answers, but no cleanup image is installed: the namespace cannot run.
+  fs.mkdirSync(bin); fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh\necho "$@" >> ${JSON.stringify(path.join(f.root, "docker.log"))}\n`
+    + 'case "$1" in ps) exit 0 ;; image) exit 0 ;; *) exit 1 ;; esac\n', { mode: 0o700 });
   const previousPath = process.env.PATH;
   process.env.PATH = bin + path.delimiter + (previousPath ?? "");
   try {
@@ -872,6 +903,7 @@ test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a root ho
     expect(held).toMatchObject({ removed: 0, errors: 0, operatorHeld: 1 });
     expect(held.outcomes[0]).toMatchObject({ directory, disposition: "operator", unreadable: true });
     expect(held.outcomes[0].reason).toContain("1 directory this user cannot remove");
+    expect(held.outcomes[0].reason).toContain("no installed container cleanup utility image");
     expect(held.operatorHeldBytes).toBeGreaterThanOrEqual(4096);
     expect(held.blocked).toMatchObject({ roots: 1, listed: [{ directory, count: 1, entries: [{ path: locked, uid: process.getuid!(), unreadable: true }] }] });
     expect(fs.existsSync(path.join(directory, "tmp"))).toBeTrue();
