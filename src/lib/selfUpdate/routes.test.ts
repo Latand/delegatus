@@ -135,6 +135,68 @@ function baseDeps(dir: string, overrides: Partial<ServiceDeps>): ServiceDeps {
   };
 }
 
+describe("administrator self-update policy", () => {
+  for (const env of [
+    { LLV_DISABLE_SELF_UPDATE: "1" },
+    { DELEGATUS_DISABLE_SELF_UPDATE: "1", LLV_DISABLE_SELF_UPDATE: "0" },
+  ]) test(`server refuses built-in mutations with ${Object.keys(env).join(" and ")}`, async () => {
+    const dir = mkdtempSync(join(root, "admin-policy-"));
+    const service = new SelfUpdateService(baseDeps(dir, { env, now: () => Date.parse("2030-01-01T00:00:00Z") }));
+    setSelfUpdateServiceForTests(service);
+    try {
+      for (const [handler, path, input] of [
+        [postUpdate, "/update", { key: "admin-update" }],
+        [postUpdate, "/update", { key: "admin-retry", retry: true }],
+        [postAuto, "/auto", { enabled: true, writer: { kind: "seat", conversationId: "spoofed" } }],
+        [postAuto, "/auto", { enabled: false }],
+        [postAuto, "/auto", { decisionId: "old-decision", choice: "deploy-now" }],
+        [postInstallAction, "/install-action", {}],
+      ] as const) {
+        const response = await handler(post(path, input));
+        expect(response.status).toBe(403);
+        expect(await response.json()).toMatchObject({ code: "updates-disabled", error: expect.stringContaining("administrator"), snapshot: {
+          selfUpdateDisabled: true, auto: { enabled: false, availability: "disabled-by-admin", decision: null },
+        } });
+      }
+      expect(existsSync(join(dir, "apply.json"))).toBe(false);
+      expect(existsSync(join(dir, "auto.json"))).toBe(false);
+      expect(existsSync(join(dir, "managed.json"))).toBe(false);
+    } finally { service.stop(); }
+  });
+
+  test.each([{}, { LLV_DISABLE_SELF_UPDATE: "0" }, { LLV_DISABLE_SELF_UPDATE: "true" },
+    { DELEGATUS_DISABLE_SELF_UPDATE: "0", LLV_DISABLE_SELF_UPDATE: "1" }])("default and non-1 values retain built-in actions: %j", async env => {
+    const service = new SelfUpdateService(baseDeps(mkdtempSync(join(root, "admin-default-")), { env }));
+    setSelfUpdateServiceForTests(service);
+    try {
+      const response = await postUpdate(post("/update", { key: "unchanged-default" }));
+      expect(response.status).toBe(409);
+      expect((await response.json()).code).toBe("no-update");
+      expect((await service.snapshot()).selfUpdateDisabled).toBe(false);
+    } finally { service.stop(); }
+  });
+
+  test("a saved automatic preference stays blocked across real Viewer-service processes", async () => {
+    const dir = mkdtempSync(join(root, "admin-restart-"));
+    const at = "2030-01-01T00:00:00.000Z";
+    writeAuto(join(dir, "auto.json"), { ...initialAuto(), enabled: true, changedAt: at });
+    const run = async (disabled: boolean) => {
+      const child = Bun.spawn([process.execPath, join(import.meta.dir, "__fixtures__/installationPolicy.child.ts")], {
+        cwd: process.cwd(), env: { ...process.env, LLV_DISABLE_SELF_UPDATE: disabled ? "1" : "0", DELEGATUS_DISABLE_SELF_UPDATE: undefined, POLICY_DIR: dir },
+        stdout: "pipe", stderr: "pipe",
+      });
+      const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+      return JSON.parse(stdout);
+    };
+    for (let generation = 0; generation < 2; generation++) {
+      expect(await run(true)).toMatchObject({ disabled: true, enabled: false, availability: "disabled-by-admin", admission: false, update: { ok: false, code: "updates-disabled" }, checks: 0, deployments: 0 });
+    }
+    expect(await run(false)).toMatchObject({ disabled: false, enabled: true });
+    expect(JSON.parse(readFileSync(join(dir, "auto.json"), "utf8"))).toMatchObject({ enabled: true, changedAt: at });
+  });
+});
+
 test("operator drain replies reach the same service and reject stale identities", async () => {
   const dir = mkdtempSync(join(root, "drain-decision-"));
   const target = { sha: tipSha, short: tipSha.slice(0, 7), version: "1", date: "" };
@@ -817,6 +879,25 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     });
   }
 
+  test.each(["operator", "auto"] as const)("disabled built-in updates never resume a ready %s apply from a snapshot", async trigger => {
+    const { ApplyController } = await import("./apply");
+    const h = harness({ relaunch: true });
+    const record = readLauncherRecord(h.recordFile)!;
+    const controller = new ApplyController(h.deps.dir);
+    controller.begin(record, firstSha, trigger);
+    controller.patch({ state: "ready" });
+    h.service.stop();
+    h.deps.env = { ...h.deps.env, LLV_DISABLE_SELF_UPDATE: "1" };
+    h.service = new SelfUpdateService(h.deps);
+    try {
+      expect((await h.service.snapshot()).selfUpdateDisabled).toBe(true);
+      await h.service.autoTick();
+      expect(existsSync(record.requestFile)).toBe(false);
+      expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8")).state).toBe("ready");
+      expect(h.spawned).toEqual([]);
+    } finally { h.service.stop(); }
+  });
+
   test("real launcher and runtime-host identity readers settle a healthy apply", async () => {
     const { procBackend } = await import("@/lib/proc");
     const { ApplyController } = await import("./apply");
@@ -838,12 +919,13 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     } finally { h.service.stop(); }
   });
 
-  test.each([40, 9])("a checkout exact deploy is idempotent, applies once and settles its seat receipt (%s characters)", async length => {
+  test.each([[40, false], [9, false], [40, true], [9, true]] as const)("a checkout exact deploy is idempotent, applies once and settles its seat receipt (%s characters, built-in disabled: %s)", async (length, disabled) => {
     const h = harness();
     const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
     record.launcher.relaunch = 1;
     writeFileSync(h.recordFile, JSON.stringify(record));
     h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    h.deps.env = { ...h.deps.env, LLV_DISABLE_SELF_UPDATE: disabled ? "1" : "0" };
     h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
     const body = { revision: tipSha.slice(0, length), idempotencyKey: "checkout-exact-press" };
     const response = await deployPost(post("/runtime/deployments", body));
