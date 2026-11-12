@@ -40,7 +40,8 @@ test.skipIf(process.platform !== "linux").each([false, true])(
     const stat = spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike, options?: unknown) => {
       const value = nativeStat(file, options as { bigint: false });
       if (!injected && String(file).includes(".delegatus-trash-") && String(file).endsWith("/cache")
-        && String(new Error().stack).includes("at attemptMutationCurrent")) {
+        && String(new Error().stack).includes("at attemptMutationCurrent")
+        && String(new Error().stack).includes("at removeAttemptTree")) {
         injected = true;
         fs.symlinkSync(path.join(directory, "cache"), dependency);
       }
@@ -264,7 +265,8 @@ function fixture() {
     sweepAttemptTemps(store, { now: () => NOW, maxRoots: 1, authority,
       state: async (owner, inventory) => (await authority(owner, inventory)).state, scan });
   const journal = () => JSON.parse(fs.readFileSync(attemptTempJournalPath(directory), "utf8")) as { trash: string };
-  return { parent, directory, cache, store, sweep, journal, lane };
+  const retainedRoot = () => fs.existsSync(attemptTempJournalPath(directory)) ? journal().trash : directory;
+  return { parent, directory, cache, store, sweep, journal, retainedRoot, lane };
 }
 
 test.skipIf(process.platform !== "linux").each(["owner", "pipeline", "hold"] as const)(
@@ -295,7 +297,7 @@ test.skipIf(process.platform !== "linux").each(["owner", "pipeline", "hold"] as 
       expect(report).toMatchObject({ removed: 0, errors: 0, deferred: 1 });
       expect(report.outcomes[0].reason).toContain("authority changed");
       expect(f.store.has(f.directory)).toBeTrue();
-      const cache = path.join(f.journal().trash, "cache");
+      const cache = path.join(f.retainedRoot(), "cache");
       expect(fs.statSync(cache).mode & 0o777).toBe(0o555);
       expect(fs.readFileSync(path.join(cache, "payload"), "utf8")).toBe("retained cache");
     })();
@@ -354,12 +356,12 @@ test.skipIf(process.platform !== "linux").each(["mountinfo", "fdinfo", "protecti
     const nativeOpen = fs.openSync.bind(fs), nativeRead = fs.readFileSync.bind(fs), nativeStat = fs.lstatSync.bind(fs);
     let pinned: number | undefined, reads = 0, injected = false, checked = false, refreshes = 0;
     const inject = () => {
-      expect(fs.statSync(path.join(f.journal().trash, "cache")).mode & 0o777).toBe(0o555);
+      expect(fs.statSync(path.join(f.retainedRoot(), "cache")).mode & 0o777).toBe(0o555);
       // The reviewer's reproduction writes from another process while the
       // final protection lstat is returning its earlier observation.
       if (observation === "protection-refresh-keep")
         execFileSync(process.execPath, ["-e", 'require("node:fs").writeFileSync(process.argv[1], "late pin")',
-          path.join(f.journal().trash, ".delegatus-keep")]);
+          path.join(f.retainedRoot(), ".delegatus-keep")]);
       else execFileSync(process.execPath, ["-e", 'require("node:fs").symlinkSync(process.argv[1], process.argv[2], "dir")',
         f.directory, path.join(consumer, "dependency")]);
       injected = true;
@@ -402,10 +404,10 @@ test.skipIf(process.platform !== "linux").each(["mountinfo", "fdinfo", "protecti
     expect(injected).toBeTrue();
     expect(report).toMatchObject({ removed: 0, errors: 0, deferred: 1 });
     expect(f.store.has(f.directory)).toBeTrue();
-    const retained = path.join(f.journal().trash, "cache");
+    const retained = path.join(f.retainedRoot(), "cache");
     expect(fs.statSync(retained).mode & 0o777).toBe(0o555);
     expect(fs.readFileSync(path.join(retained, "payload"), "utf8")).toBe("retained cache");
-    if (observation === "protection-refresh-keep") expect(fs.readFileSync(path.join(f.journal().trash, ".delegatus-keep"), "utf8")).toBe("late pin");
+    if (observation === "protection-refresh-keep") expect(fs.readFileSync(path.join(f.retainedRoot(), ".delegatus-keep"), "utf8")).toBe("late pin");
     else expect(fs.readlinkSync(path.join(consumer, "dependency"))).toBe(f.directory);
   });
 
@@ -426,8 +428,8 @@ test.skipIf(process.platform !== "linux")(
       const stack = String(new Error().stack);
       if (!injected && String(file) === path.join(consumer, ".git")
         && stack.includes("at permissionChange") && stack.includes("at unchangedAll")) {
-        expect(fs.statSync(path.join(f.journal().trash, "cache")).mode & 0o777).toBe(0o555);
-        fs.writeFileSync(path.join(f.journal().trash, ".delegatus-keep"), "late checkout pin");
+        expect(fs.statSync(path.join(f.retainedRoot(), "cache")).mode & 0o777).toBe(0o555);
+        fs.writeFileSync(path.join(f.retainedRoot(), ".delegatus-keep"), "late checkout pin");
         injected = true;
       }
       return value;
@@ -439,8 +441,8 @@ test.skipIf(process.platform !== "linux")(
     expect(injected).toBeTrue();
     expect(report).toMatchObject({ removed: 0, deferred: 1, errors: 0 });
     expect(f.store.has(f.directory)).toBeTrue();
-    const trash = f.journal().trash;
-    expect(fs.readFileSync(path.join(trash, ".delegatus-keep"), "utf8")).toBe("late checkout pin");
-    expect(fs.readFileSync(path.join(trash, "cache/payload"), "utf8")).toBe("retained cache");
-    expect(fs.statSync(path.join(trash, "cache")).mode & 0o777).toBe(0o555);
+    const retained = f.retainedRoot();
+    expect(fs.readFileSync(path.join(retained, ".delegatus-keep"), "utf8")).toBe("late checkout pin");
+    expect(fs.readFileSync(path.join(retained, "cache/payload"), "utf8")).toBe("retained cache");
+    expect(fs.statSync(path.join(retained, "cache")).mode & 0o777).toBe(0o555);
   });

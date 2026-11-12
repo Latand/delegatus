@@ -309,7 +309,7 @@ export type TempSweepOptions = {
   mountPoints?: (directory: string, via: string) => string[];
   currentScan?: () => ProcessScan;
   conversationCwds?: () => readonly string[];
-  remove?: (directory: string) => Promise<void>;
+  remove?: (directory: string, mutationStarted: () => void) => Promise<void>;
   now?: () => number;
   uid?: number | null;
   roots?: TempSweepRoot[];
@@ -408,7 +408,7 @@ export function tempSweepMode(env: NodeJS.ProcessEnv = process.env): "on" | "dry
 
 /** Durable intent precedes the rename; only recorded trash is recoverable. */
 export async function removeTreeViaTrash(directory: string, options: {
-  journal: string; held: (trash: string) => boolean | Promise<boolean>; remove?: (trash: string) => Promise<void>;
+  journal: string; held: (trash: string) => boolean | Promise<boolean>; remove?: (trash: string, mutationStarted: () => void) => Promise<void>;
   context?: { sha: string };
   validate?: (trash: string) => boolean;
   disposable?: boolean;
@@ -445,13 +445,32 @@ export async function removeTreeViaTrash(directory: string, options: {
     if (holdError) throw holdError;
     return false;
   }
-  await (options.remove ?? (target => fs.promises.rm(target, { recursive: true, force: true })))(trash);
+  let mutationStarted = false;
+  const markMutationStarted = () => { mutationStarted = true; };
+  try {
+    await (options.remove ?? ((target, started) => { started(); return fs.promises.rm(target, { recursive: true, force: true }); }))(trash, markMutationStarted);
+  } catch (error) {
+    // A final removal fence can refuse before touching the quarantined tree.
+    // Return its original inode to its owner and discard the now-completed
+    // intent; once any permission write/removal began, keep recovery custody.
+    if (!mutationStarted) {
+      const current = fs.lstatSync(trash);
+      if (current.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === identity && current.uid === uid) {
+        try { fs.lstatSync(directory); throw new Error("original path was acquired while removal was refused; preserved both paths"); }
+        catch (restoreError) { if ((restoreError as NodeJS.ErrnoException).code !== "ENOENT") throw restoreError; }
+        fs.renameSync(trash, directory);
+        fs.unlinkSync(options.journal);
+      }
+    }
+    throw error;
+  }
   fs.unlinkSync(options.journal);
   return true;
 }
 
 /** Replay only a same-parent, same-owner trash path from our durable intent. */
-export async function finishTreeTrash(journal: string, held: (trash: string) => boolean | Promise<boolean>, remove?: (trash: string) => Promise<void>, validate?: (trash: string) => boolean, allowDisposable = false): Promise<boolean> {
+export async function finishTreeTrash(journal: string, held: (trash: string) => boolean | Promise<boolean>,
+  remove?: (trash: string, mutationStarted: () => void) => Promise<void>, validate?: (trash: string) => boolean, allowDisposable = false): Promise<boolean> {
   const row = JSON.parse(fs.readFileSync(journal, "utf8")) as { directory: string; trash: string; uid: number; identity: string; snapshot?: TreeSnapshot; disposable?: boolean };
   const matches = () => row.snapshot ? matchesSnapshot(row.trash, row.snapshot) : allowDisposable && row.disposable === true;
   if (path.dirname(row.directory) !== path.dirname(row.trash)
@@ -469,7 +488,7 @@ export async function finishTreeTrash(journal: string, held: (trash: string) => 
     || `${final.dev}:${final.ino}` !== row.identity || final.uid !== row.uid
     || (process.getuid && final.uid !== process.getuid()) || !matches()
     || mountPointsUnder(row.trash).length) return false;
-  await (remove ?? (target => fs.promises.rm(target, { recursive: true, force: true })))(row.trash);
+  await (remove ?? ((target, started) => { started(); return fs.promises.rm(target, { recursive: true, force: true }); }))(row.trash, () => {});
   fs.unlinkSync(journal);
   return true;
 }

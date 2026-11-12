@@ -518,12 +518,13 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         roots: [{ path: path.dirname(owner.directory), via: "" }], onlyDirectories: [owner.directory],
         eligible, maxAgeMs: 0, maxRemovals: 1, mode: options.mode, disposable: true,
         dispatchGuard: dispatchEligible,
-        remove: directory => options.remove
-          ? options.remove(directory, () => eligible(directory), () => dispatchEligible(directory))
+        remove: (directory, mutationStarted) => options.remove
+          ? (mutationStarted(), options.remove(directory, () => eligible(directory), () => dispatchEligible(directory)))
           : removeAttemptTree(directory, owner.directory, () => eligible(directory), namespaceOnly,
             () => dispatchEligible(directory), () => emptyRootEligible(directory), dispatchState === "expired", namespaceProtection,
             { budgetMs: deadline - now(), bytes,
               permissionAuthority: () => retirementAuthorityCurrent(directory, false),
+              mutationStarted,
               permissionChange: (file, mode, apply) => {
                 if (!dispatchEvidence?.permissionChange) throw new AttemptTempBudgetDeferred("permission protection unavailable");
                 dispatchEvidence.permissionChange(file, mode, apply);

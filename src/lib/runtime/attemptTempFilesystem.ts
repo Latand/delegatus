@@ -565,6 +565,8 @@ const namespaceSnapshot = "find /attempt -xdev -type d -exec stat -c '%d:%i:%f:%
 export type AttemptNamespaceProtection = { digest: string };
 type NamespaceBudget = { budgetMs?: number; bytes?: number };
 type AttemptRemovalSettings = NamespaceBudget & {
+  /** Called immediately before the first permission write or removal dispatch. */
+  mutationStarted?: () => void;
   /** Synchronous entry authority; full checkout validation brackets repair. */
   permissionAuthority?: () => boolean;
   permissionChange?: AttemptProtection["permissionChange"];
@@ -579,7 +581,7 @@ function namespaceTimeout(settings: NamespaceBudget): number {
 
 async function containerCommand(directory: string, operation: "inspect" | "remove" | "measure" | "evidence" | "snapshot", original = directory,
   guard?: () => Promise<boolean>, requireNoEvidence = false, dispatchGuard?: () => boolean,
-  settings: NamespaceBudget = {}, protection?: AttemptNamespaceProtection): Promise<{ identity: string; stdout: string }> {
+  settings: NamespaceBudget = {}, protection?: AttemptNamespaceProtection, mutationStarted?: () => void): Promise<{ identity: string; stdout: string }> {
   // A measurement has no trustworthy size yet: use the remaining maximum.
   const until = performance.now() + namespaceTimeout(operation === "measure" ? { budgetMs: settings.budgetMs } : settings);
   const remaining = () => {
@@ -616,10 +618,13 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
   // mode or host namespace is granted to the cleanup container.
   const timeout = remaining();
   let result: { stdout: string };
-  try { result = await run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=4m",
+  try {
+    if (operation === "remove") mutationStarted?.();
+    result = await run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=4m",
     "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
-    "--mount", `type=bind,source=${directory},target=/attempt${operation !== "remove" ? ",readonly" : ""}`,
-    "--entrypoint", "timeout", image, String(Math.max(1, Math.floor(timeout / 1000))), "/bin/sh", "-c", script, "sh", identity, original, ...markers], timeout); }
+      "--mount", `type=bind,source=${directory},target=/attempt${operation !== "remove" ? ",readonly" : ""}`,
+      "--entrypoint", "timeout", image, String(Math.max(1, Math.floor(timeout / 1000))), "/bin/sh", "-c", script, "sh", identity, original, ...markers], timeout);
+  }
   catch (error) { throw new Error(attemptTempFailureDetail(error), { cause: error }); }
   return { identity, stdout: result.stdout };
 }
@@ -770,7 +775,7 @@ const descriptorMount = (fd: number) => {
  * following a symlink, then chmod directory descriptors. O_PATH opens mode 000;
  * the proc descriptor names that inode even if its directory entry changes.
  * All child paths are relative to a held parent, on the root's device. */
-function repairAttemptPermissions(directory: string, authority: () => boolean, budgetMs: number, permissionChange?: AttemptProtection["permissionChange"], dispatchGuard?: () => boolean) {
+function repairAttemptPermissions(directory: string, authority: () => boolean, budgetMs: number, permissionChange?: AttemptProtection["permissionChange"], dispatchGuard?: () => boolean, mutationStarted?: () => void) {
   // Descendant lookup through these pinned descriptors requires Linux procfs.
   // Other platforms keep their existing native removal path.
   if (process.platform !== "linux") return;
@@ -827,6 +832,7 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
           // Complete descriptor/mount/protection observations before it;
           // no filesystem read may follow admission before this write.
           if (dispatchGuard && !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed before permission repair");
+          mutationStarted?.();
           fs.chmodSync(pinned, mode & 0o7777);
         };
         if (permissionChange) permissionChange(path.join(directory, path.relative(physicalRoot, expected)), mode & 0o7777, apply);
@@ -865,13 +871,15 @@ export async function removeAttemptTree(directory: string, original = directory,
   protection?: AttemptNamespaceProtection, settings: AttemptRemovalSettings = {}): Promise<void> {
   try {
     if (requireNoEvidence || protection) {
-      const { identity } = await containerCommand(directory, "remove", original, guard, requireNoEvidence || !discardExpiredEvidence, dispatchGuard, settings, protection);
+      const { identity } = await containerCommand(directory, "remove", original, guard, requireNoEvidence || !discardExpiredEvidence, dispatchGuard, settings, protection,
+        settings.mutationStarted);
       removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
       return;
     }
     if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before native removal");
     if (discardExpiredEvidence && guard && dispatchGuard && postDeleteGuard) {
-      repairAttemptPermissions(directory, settings.permissionAuthority ?? postDeleteGuard, settings.budgetMs ?? 30_000, settings.permissionChange, dispatchGuard);
+      repairAttemptPermissions(directory, settings.permissionAuthority ?? postDeleteGuard, settings.budgetMs ?? 30_000, settings.permissionChange, dispatchGuard,
+        settings.mutationStarted);
       // Repeat all observations after repair, including checkout references,
       // and reauthorize after the last await.
       if (!await guard() || !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed after permission repair");
@@ -880,6 +888,7 @@ export async function removeAttemptTree(directory: string, original = directory,
     // Mount and physical-path reads may observe a changed root or protection.
     // Admit from the final synchronous snapshots immediately before native rm.
     if (dispatchGuard && !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed before native removal");
+    settings.mutationStarted?.();
     try { await fs.promises.rm(directory, { recursive: true, force: true }); }
     catch (error) {
       if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;

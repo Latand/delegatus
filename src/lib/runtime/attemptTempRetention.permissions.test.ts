@@ -25,7 +25,11 @@ function fixture() {
   const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
   store.register({ directory, pipelineId: null, launchId: "fixture", retainUntilClose: true, createdAt: NOW - 20 * 86400000 });
   fs.chmodSync(cache, 0o555);
-  return { parent, directory, cache, store };
+  const retainedRoot = () => {
+    try { return JSON.parse(fs.readFileSync(attemptTempJournalPath(directory), "utf8")).trash as string; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return directory; throw error; }
+  };
+  return { parent, directory, cache, store, retainedRoot };
 }
 const emptyScan = () => ({ ownNamespace: null, processes: [] });
 
@@ -212,9 +216,7 @@ test.skipIf(process.platform !== "linux").each(["move", "keep", "revision"] as c
       expect(report).toMatchObject({ checked: 1, removed: 0, errors: 0 });
       expect(report.outcomes[0]).toMatchObject({ disposition: "deferred" });
       expect(f.store.has(f.directory)).toBeTrue();
-      const journal = JSON.parse(fs.readFileSync(attemptTempJournalPath(f.directory), "utf8"));
-      expect(fs.statSync(journal.trash).isDirectory()).toBeTrue();
-      const retained = mutation === "move" ? outside : path.join(journal.trash, "module-cache");
+      const retained = mutation === "move" ? outside : path.join(f.retainedRoot(), "module-cache");
       expect(fs.readFileSync(path.join(retained, "payload"), "utf8")).toBe("cache");
       expect(fs.statSync(retained).mode & 0o777).toBe(0o555);
       if (mutation === "keep") expect(fs.readFileSync(path.join(retained, ".delegatus-keep"), "utf8")).toBe("pin");
@@ -295,8 +297,7 @@ test.skipIf(process.platform !== "linux").each(["move-child", "move-ancestor", "
       const report = await sweepAttemptTemps(f.store, { now: () => NOW, maxRoots: 1, state: async () => "expired", scan: emptyScan, references: async () => true });
       expect(injected).toBeTrue(); expect(report.removed).toBe(0);
       expect(f.store.has(f.directory)).toBeTrue();
-      const trash = JSON.parse(fs.readFileSync(attemptTempJournalPath(f.directory), "utf8")).trash;
-      const cache = path.join(trash, "module-cache");
+      const cache = path.join(f.retainedRoot(), "module-cache");
       const retained = kind === "keep" ? cache : kind === "move-ancestor" ? path.join(outside, "deep") : outside;
       expect(fs.statSync(retained).mode & 0o777).toBe(0o555);
       expect(fs.readFileSync(path.join(kind === "keep" ? cache : outside, "payload"), "utf8")).toBe("cache");
@@ -321,8 +322,8 @@ test.skipIf(process.platform !== "linux")("permission repair observes a late bin
   try {
     const report = await sweepAttemptTemps(f.store, { now: () => NOW, maxRoots: 1, state: async () => "expired", scan: emptyScan, references: async () => true });
     expect(mountedFd).toBeDefined(); expect(report.removed).toBe(0);
-    const trash = JSON.parse(fs.readFileSync(attemptTempJournalPath(f.directory), "utf8")).trash;
-    expect(fs.statSync(path.join(trash, "module-cache")).mode & 0o777).toBe(0o555);
-    expect(fs.readFileSync(path.join(trash, "module-cache/payload"), "utf8")).toBe("cache");
+    const retained = path.join(f.retainedRoot(), "module-cache");
+    expect(fs.statSync(retained).mode & 0o777).toBe(0o555);
+    expect(fs.readFileSync(path.join(retained, "payload"), "utf8")).toBe("cache");
   } finally { read.mockRestore(); open.mockRestore(); f.store.close(); }
 });
