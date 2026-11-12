@@ -120,7 +120,7 @@ test("production helper returns attempt reports and survives its own abandoned l
 
 test("production maintenance keeps Docker dry and all ledger writes inside its fixture", async () => {
   const { root, env } = productionFixture(), calls = path.join(root, "docker-calls");
-  fs.writeFileSync(path.join(root, "docker"), `#!/usr/bin/python3 -I\nwith open(${JSON.stringify(calls)},'a') as f: f.write('unexpected call\\n')\nraise RuntimeError('unexpected Docker runner')\n`, { mode: 0o700 });
+  fs.writeFileSync(path.join(root, "docker"), `#!/usr/bin/python3 -IB\nwith open(${JSON.stringify(calls)},'a') as f: f.write('unexpected call\\n')\nraise RuntimeError('unexpected Docker runner')\n`, { mode: 0o700 });
   const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "../worktreeSweep.worker.ts")], {
     env: { ...env, PATH: root }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });

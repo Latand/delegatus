@@ -27,7 +27,7 @@ function processFixture(proc: string, pid: number, target: string, namespace = "
 test.each(["complete", "refused", "malformed"])("the fixed sudo observer %s retains uncertainty or supplies a complete read", mode => {
   const f = fixture(); const process = processFixture(f.proc, 100001, "/elsewhere"); fs.unlinkSync(path.join(process, "maps"));
   const sudo = path.join(f.root, "sudo"), calls = path.join(f.root, "calls.json");
-  fs.writeFileSync(sudo, `#!/usr/bin/python3 -I\nimport sys,json\nrequest=json.loads(sys.stdin.read())\nopen(${JSON.stringify(calls)},'w').write(json.dumps([sys.argv[1:],request]))\n`
+  fs.writeFileSync(sudo, `#!/usr/bin/python3 -IB\nimport sys,json\nrequest=json.loads(sys.stdin.read())\nopen(${JSON.stringify(calls)},'w').write(json.dumps([sys.argv[1:],request]))\n`
     + (mode === "refused" ? "sys.exit(1)\n" : mode === "malformed" ? "print('invalid')\n" : "print(json.dumps({'complete':True,'ownNamespace':'mnt:[fixture]','processes':[],'uncertain':[]}))\n"), { mode: 0o700 });
   {
     const invoke: typeof spawnSync = ((command: string, args: string[], options: object) => {
@@ -39,9 +39,9 @@ test.each(["complete", "refused", "malformed"])("the fixed sudo observer %s reta
   }
 });
 
-function pythonScan(proc: string, releases: string) {
-  const observer = path.resolve(import.meta.dir, "../../..", "scripts/delegatus-release-holders.py");
-  return spawnSync("/usr/bin/python3", ["-I", "-c", `import importlib.util,json,sys
+const observerScript = path.resolve(import.meta.dir, "../../..", "scripts/delegatus-release-holders.py");
+function pythonScan(proc: string, releases: string, observer = observerScript) {
+  return spawnSync("/usr/bin/python3", ["-I", "-B", "-c", `import importlib.util,json,sys
 s=importlib.util.spec_from_file_location('observer',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)
 print(json.dumps(m.scan(sys.argv[2],sys.argv[3])))`, observer, releases, proc], { encoding: "utf8" });
 }
@@ -72,4 +72,14 @@ test("a bind-mounted release in another namespace is still a holder", () => {
   fs.writeFileSync(path.join(directory, "mountinfo"), `1 0 8:1 / / rw - ext4 disk rw\n2 1 8:1 ${f.releases}/old /app rw - ext4 disk rw\n`);
   const result = pythonScan(f.proc, f.releases); expect(result.status, result.stderr).toBe(0);
   expect(JSON.parse(result.stdout).processes[0].paths).toContain(path.join(f.releases, "old/main"));
+});
+
+// Import a writable copy so a cached module or a read-only checkout cannot hide writes.
+test("importing the observer leaves its source directory free of Python bytecode", () => {
+  const f = fixture(), observer = path.join(f.root, "observer.py");
+  fs.copyFileSync(observerScript, observer);
+  const result = pythonScan(f.proc, f.releases, observer);
+  expect(result.status, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout).complete).toBe(true);
+  expect(fs.existsSync(path.join(f.root, "__pycache__"))).toBe(false);
 });

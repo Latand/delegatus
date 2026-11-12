@@ -370,3 +370,45 @@ The publisher must carry the incident disclosure, the timestamped read-only
 dry-run report and the exact sudo installation command above into the PR body.
 The successor commits locally; the pipeline owns publication, PR creation,
 published-body read-back and the remaining deletion-review rounds.
+
+
+## Bytecode publication correction
+
+The publication attempt after the refresh passed its check phases, then refused
+because an observer test had recreated `scripts/__pycache__/` in the checkout.
+The clean status recorded above describes the earlier cleanup checkpoint.
+The generated directory has been preserved outside the checkout as evidence.
+
+`src/lib/selfUpdate/releaseObserver.test.ts` now imports the observer with
+`python3 -I -B`. Python isolation remains enabled; bytecode suppression is an
+explicit interpreter flag because `-I` ignores Python environment overrides.
+All Python fixture executables in the changed Docker, worker and observer tests
+also use `-IB`. The new regression imports a writable copy of the real observer
+through the same helper and checks that its directory contains no Python cache.
+Removing only `-B` in a scratch copy makes that regression fail: the isolated
+command `bun test --timeout=60000 src/lib/selfUpdate/releaseObserver.test.ts
+-t "importing the observer leaves"` exits 1 with zero passes, one failure and
+three assertions. Its owned campaign exits 0 after verifying that expected
+failure and restoring the scratch source.
+
+The renewed commands, exits, assertion counts, source digests and final status
+are handed to the publisher in the retained `bytecode-refresh/` evidence.
+Each test file runs in its own isolated owned runner through the installed
+gate wrapper. Docker access is blocked by a rejecting executable and a
+nonexistent fixture socket. This correction changes test launchers and this
+report; it changes no retention policy or deletion implementation.
+
+Before committing the correction, the three Python-executing files passed
+individually, with no cache directory created in the scratch checkout and no
+Docker sentinel calls:
+
+| Command after the gate wrapper | Exit | Pass / fail / assertions |
+|---|---:|---:|
+| `bun test --timeout=60000 src/lib/selfUpdate/releaseObserver.test.ts` | 0 | 8 / 0 / 23 |
+| `bun test --timeout=60000 src/lib/dockerCacheRetention.test.ts` | 0 | 10 / 0 / 36 |
+| `bun test --timeout=60000 src/lib/pipelines/worktreeSweepWorker.test.ts` | 0 | 38 / 0 / 147 |
+
+The post-test status contained only the three intended test edits and this
+report edit, with zero untracked paths. The correction is committed locally
+before the final typecheck and explicit-path test campaign; the publisher
+receives their separate terminal receipts and the clean status read afterward.

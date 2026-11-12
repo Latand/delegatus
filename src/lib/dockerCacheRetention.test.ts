@@ -46,7 +46,7 @@ test("a real process restart preserves the daily attempt", async () => {
 
 test.each(["test", "fixture-production", "production"])("a default Docker call under %s fails before a command or checkpoint", async mode => {
   const file = fixture(), root = path.dirname(file), calls = path.join(root, "calls");
-  fs.writeFileSync(path.join(root, "docker"), `#!/usr/bin/python3 -I\nimport sys,json\nwith open(${JSON.stringify(calls)},'a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')\n`, { mode: 0o700 });
+  fs.writeFileSync(path.join(root, "docker"), `#!/usr/bin/python3 -IB\nimport sys,json\nwith open(${JSON.stringify(calls)},'a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')\n`, { mode: 0o700 });
   const previous = { PATH: process.env.PATH, NODE_ENV: process.env.NODE_ENV,
     LLV_FIXTURE_PARENT_IDENTITY: process.env.LLV_FIXTURE_PARENT_IDENTITY, LLV_TEST_STARTUP_HOME: process.env.LLV_TEST_STARTUP_HOME };
   Object.assign(process.env, { PATH: root, NODE_ENV: mode === "test" ? "test" : "production" });
@@ -63,7 +63,7 @@ test.each(["test", "fixture-production", "production"])("a default Docker call u
 test("an injected executable receives both filtered commands", async () => {
   const file = fixture(), root = path.dirname(file), calls = path.join(root, "calls");
   const executable = path.join(root, "docker");
-  fs.writeFileSync(executable, `#!/usr/bin/python3 -I\nimport sys,json\nwith open(${JSON.stringify(calls)},'a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')\n`, { mode: 0o700 });
+  fs.writeFileSync(executable, `#!/usr/bin/python3 -IB\nimport sys,json\nwith open(${JSON.stringify(calls)},'a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')\n`, { mode: 0o700 });
   expect(await pruneDockerCache({ file, now: () => Date.UTC(2035, 0, 1), run: async (args, timeout) => {
     await promisify(execFile)(executable, [...args], { timeout });
   } })).toMatchObject({ commands: 2, errors: 0 });
