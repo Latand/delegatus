@@ -43,10 +43,10 @@ import type {
 } from "./engineHost";
 import {
   normalizeQueueEntry,
-  RuntimeReplayGapError,
   StructuredCompactError,
   StructuredHostAdoptionCleanupError,
 } from "./engineHost";
+import { attachRuntimeEvents, hostEventWindowOf, trimHostEventWindow, type RuntimeEventSubscriber } from "./hostEventWindow";
 import {
   FileRuntimeEventStore,
   nextRuntimeEventSequence,
@@ -68,7 +68,7 @@ import {
 } from "./structuredContent";
 
 type JsonObject = Record<string, unknown>;
-type Subscriber = { afterSeq: number; queue: RuntimeEvent[]; wake: (() => void) | null; closed: boolean };
+type Subscriber = RuntimeEventSubscriber;
 type UnsequencedEvent = RuntimeEvent extends infer Event
   ? Event extends RuntimeEvent ? Omit<Event, "seq"> : never
   : never;
@@ -409,6 +409,27 @@ function record(value: unknown): JsonObject | null {
 function stringField(value: unknown, key: string): string | null {
   const object = record(value);
   return object && typeof object[key] === "string" ? object[key] as string : null;
+}
+
+/** Two normalized entries carry the same payload: what a resend is compared by. */
+function sameNormalizedEntry(left: NormalizedQueueEntry, right: NormalizedQueueEntry): boolean {
+  return left.id === right.id
+    && left.contentDigest === right.contentDigest
+    && left.expectedTurnId === right.expectedTurnId
+    && JSON.stringify(left.parts) === JSON.stringify(right.parts);
+}
+
+/** A delivery the engine has confirmed keeps only what a resend is compared
+    by and what its echo reports. Its message stays in the delivery ledger on
+    disk; the host kept every message body it had ever sent. */
+function settledDeliveryEntry(entry: NormalizedQueueEntry): NormalizedQueueEntry {
+  return {
+    id: entry.id,
+    content: { text: "", images: [] },
+    contentDigest: entry.contentDigest,
+    ...(entry.expectedTurnId !== undefined ? { expectedTurnId: entry.expectedTurnId } : {}),
+    ...(entry.parts ? { parts: entry.parts } : {}),
+  };
 }
 
 function sameQueueEntry(left: QueueEntry, right: QueueEntry): boolean {
@@ -1060,36 +1081,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   attach(afterSeq: number): AsyncIterable<RuntimeEvent> {
-    if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) throw new Error("afterSeq must be a non-negative integer");
-    const firstAvailable = this.events[0]?.seq;
-    if (firstAvailable !== undefined && afterSeq + 1 < firstAvailable) {
-      throw new RuntimeReplayGapError(afterSeq, firstAvailable);
-    }
-    const subscriber: Subscriber = { afterSeq, queue: this.events.filter((event) => event.seq > afterSeq), wake: null, closed: false };
-    this.subscribers.add(subscriber);
-    const subscribers = this.subscribers;
-    return {
-      async *[Symbol.asyncIterator]() {
-        try {
-          while (true) {
-            const event = subscriber.queue.shift();
-            if (event) {
-              if (event.seq > subscriber.afterSeq) {
-                subscriber.afterSeq = event.seq;
-                yield event;
-              }
-              continue;
-            }
-            if (subscriber.closed) break;
-            await new Promise<void>((resolve) => { subscriber.wake = resolve; });
-            subscriber.wake = null;
-          }
-        } finally {
-          subscriber.closed = true;
-          subscribers.delete(subscriber);
-        }
-      },
-    };
+    return attachRuntimeEvents(afterSeq, {
+      window: () => this.events,
+      ledger: () => this.eventStore.load(this.identity.sessionId),
+      subscribers: this.subscribers,
+    });
   }
 
   async send(entry: QueueEntry, _firstDispatch?: import("./engineHost").FirstDispatchEvidence, authorizeDispatch?: () => void,
@@ -1098,7 +1094,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (!entry.id) throw new Error("queue entry id is required");
     const normalized = normalizeQueueEntry(entry);
     const duplicate = this.deliveries.find((state) => state.entry.id === entry.id);
-    if (duplicate && !sameQueueEntry(duplicate.entry, normalized)) {
+    if (duplicate && !sameNormalizedEntry(duplicate.entry, normalized)) {
       throw new Error("Claude queue entry id belongs to a different payload");
     }
     if (!duplicate && normalized.expectedTurnId !== undefined && normalized.expectedTurnId !== this.activeTurnId) {
@@ -1492,17 +1488,18 @@ export class ClaudeStreamBrokerHost implements EngineHost {
 
   private restore(): void {
     const stored = this.eventStore.load(this.identity.sessionId);
-    this.events.push(...stored);
+    /* The restore below reads the whole ledger once; only the window stays. */
+    for (const event of hostEventWindowOf(stored)) this.events.push(event);
     this.cursor = reconcileRuntimeEventCursor(
       this.identity.sessionId,
       stored.at(-1)?.seq ?? 0,
       this.cursor,
       this.onEventCursorRecovery,
     );
-    this.deliveries.push(...this.deliveryLedger.load(this.identity.sessionId).map((delivery) => ({
-      ...delivery,
-      entry: normalizeQueueEntry(delivery.entry),
-    })));
+    for (const delivery of this.deliveryLedger.load(this.identity.sessionId)) {
+      const entry = normalizeQueueEntry(delivery.entry);
+      this.deliveries.push({ ...delivery, entry: delivery.delivered && delivery.confirmation !== "unverified" ? settledDeliveryEntry(entry) : entry });
+    }
     let restoredTurn: string | null = null;
     for (const event of stored) {
       if (event.kind === "turn-started") restoredTurn = event.turnId;
@@ -1558,6 +1555,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       delivery.delivered = true;
       delivery.engineMessageId = user?.uuid ?? null;
       delivery.confirmation = "inferred";
+      delivery.entry = settledDeliveryEntry(delivery.entry);
       const index = unmatched.findIndex((candidate) => candidate.uuid === user?.uuid);
       if (index >= 0) unmatched.splice(index, 1);
     }
@@ -1583,6 +1581,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       return;
     }
     this.events.push(sequenced);
+    trimHostEventWindow(this.events);
     for (const subscriber of this.subscribers) {
       subscriber.queue.push(sequenced);
       subscriber.wake?.();
@@ -1667,6 +1666,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
           delivery.delivered = true;
           delivery.engineMessageId = stringField(message, "uuid");
           delivery.confirmation = "inferred";
+          delivery.entry = settledDeliveryEntry(delivery.entry);
           /* An echo ahead of the running turn's result means that turn read
              the input at a tool boundary. It owns no turn of its own, so it
              leaves the turn queue and the one result ends the running turn. */

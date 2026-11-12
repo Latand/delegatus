@@ -895,11 +895,26 @@ async function cleanupWorktrees() {
   };
 }
 
+/** Result files the files-response worker and its Viewer left behind, in the
+    same pass and mode, with their own report. A failure here is logged and
+    never stops the temp sweep. */
+async function sweepFilesResponseResultFiles(mode: "on" | "dry-run", now?: () => number): Promise<void> {
+  try {
+    const results = await import("@/lib/scanner/filesResponseResults");
+    const report = results.sweepFilesResponseResults({ mode, ...(now ? { now } : {}) });
+    results.recordFilesResponseSweep(report);
+    console.log(results.filesResponseSweepSummary(report));
+  } catch (error) {
+    console.error("[files response sweep] failed", error instanceof Error ? error.message : String(error));
+  }
+}
+
 /** The production sweep: threshold from the environment, worktrees from the pipelines store. */
 export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env, ports: Pick<TempSweepOptions, "roots" | "scan" | "now" | "inspect" | "mountPoints"> = {}): Promise<TempSweepReport | null> {
   const maxAgeMs = tempSweepMaxAgeMs(env);
   const mode = tempSweepMode(env);
   if (maxAgeMs === null || mode === null) return null;
+  await sweepFilesResponseResultFiles(mode, ports.now);
   let checkouts: Awaited<ReturnType<typeof cleanupWorktrees>>;
   try {
     checkouts = await cleanupWorktrees();
