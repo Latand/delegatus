@@ -1,4 +1,4 @@
-import { HostEventWindow } from "./hostEventWindow";
+import { HostEventWindow, runtimeEventsAfter } from "./hostEventWindow";
 import { describe, expect, test } from "bun:test";
 
 import { assertRuntimeEvent } from "./contracts";
@@ -422,6 +422,36 @@ describe("projectEngineHostEvent", () => {
       seq: 44,
     });
     expect(runtimeLiveTurnItems(projectRuntimeLiveTurnItem(null, "turn-tools", ok?.payload.item, "completed", at))[0]?.tool).toMatchObject({ status: "ok" });
+  });
+
+  test("native dynamic tool content previews retain the ledger and project the same failed tool", () => {
+    const original: RuntimeEvent = {
+      kind: "item", turnId: "turn-native-tool", phase: "completed", seq: 51,
+      item: {
+        type: "dynamicToolCall", id: "call_dynamic_large", tool: "gate_check", status: "completed", success: false,
+        contentItems: [{ type: "inputText", text: "x".repeat(65_536) }],
+      },
+    };
+    const originalJson = JSON.stringify(original);
+    const originalTextBytes = Buffer.byteLength("x".repeat(65_536));
+    const window = new HostEventWindow();
+    window.append(original);
+
+    expect(JSON.stringify(original)).toBe(originalJson);
+    expect(window.heapAttribution().trimmedEvents).toBe(1);
+    const retained = window.events[0]!;
+    const retainedItem = retained.kind === "item" ? retained.item as Record<string, unknown> : {};
+    const contentItems = retainedItem.contentItems as { type: string; text: string }[];
+    expect(contentItems[0]!.text).toContain(`[truncated; original UTF-8 bytes: ${originalTextBytes}; full text in transcript]`);
+    expect(Buffer.byteLength(JSON.stringify(retained))).toBeLessThan(Buffer.byteLength(originalJson));
+    expect(runtimeEventsAfter(window.events, 50, () => [original])).toEqual([retained]);
+
+    const projected = projectEngineHostEvent("conversation_dynamic_tool", "codex:thread-dynamic-tool", retained)!;
+    expect(projected.producer).toEqual({ kind: "codex-app-server", eventKey: "engine-host:codex:thread-dynamic-tool:51" });
+    const live = projectRuntimeLiveTurnItem(null, "turn-native-tool", projected.payload.item, "completed", "2026-11-12T00:00:00.000Z");
+    expect(runtimeLiveTurnItems(live).find(row => row.tool)).toMatchObject({
+      itemId: "call_dynamic_large", tool: { name: "gate_check", status: "err" },
+    });
   });
 
   test("issue 1100: an oversized Codex tool item keeps id, status and a clipped command, never its output", () => {

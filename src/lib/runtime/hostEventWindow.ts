@@ -32,7 +32,7 @@ export function hostEventWindowByteLimit(value = process.env.LLV_HOST_EVENT_WIND
   return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : HOST_EVENT_WINDOW_BYTES;
 }
 
-const payloadFields = new Set(["aggregatedOutput", "output", "stdout", "stderr", "content", "diff", "patch", "text", "input", "arguments", "rawInput", "rawOutput", "changes", "result"]);
+const payloadFields = new Set(["aggregatedOutput", "output", "stdout", "stderr", "content", "contentItems", "diff", "patch", "text", "input", "arguments", "rawInput", "rawOutput", "changes", "result"]);
 const toolTypes = new Set(["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "imageView", "imageGeneration", "tool_call", "tool_call_update", "tool_use", "tool_result"]);
 
 /** Copy only changed payload paths. User echoes, prose, identities, outcomes,
