@@ -41,22 +41,24 @@ if (publicationMode === "maintenance" && controls) {
       return Reflect.apply(target, receiver, args);
     },
   });
-} else if (publicationMode === "gate-owner" && controls) {
+} else if ((publicationMode === "gate-owner" || publicationMode === "gate-stage") && controls) {
   const writeFile = fs.writeFileSync;
   const rename = fs.renameSync;
   let paused = false;
   fs.renameSync = (from, to) => {
     const source = String(from);
     const target = String(to);
-    const result = rename(from, to);
+    const beforePublication = publicationMode === "gate-stage";
+    const result = beforePublication ? undefined : rename(from, to);
     if (!paused && path.basename(source).startsWith(".writer-lock-gate.")
       && path.basename(source).endsWith(".partial")
       && path.basename(target) === ".writer-lock-gate") {
       paused = true;
+      if (beforePublication) writeFile(path.join(controls, "gate-stage-path"), fs.realpathSync(source));
       writeFile(path.join(controls, "gate-owner-paused"), "ready");
       waitForRelease(path.join(controls, "gate-owner-release"));
     }
-    return result;
+    return beforePublication ? rename(from, to) : result;
   };
 } else if (publicationMode && controls) {
   // Reproduce the actual open/write cut in writeFileSync. Hold this process

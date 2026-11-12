@@ -646,6 +646,45 @@ test("an interrupted image ticket publication permits another process and its pa
   }
 }, 20_000);
 
+test.each([false, true])("gate staging recovery protects a live publisher and retires an interrupted one (kill=%s)", async interrupted => {
+  const root = sandbox();
+  const controls = sandbox();
+  // The cleaner's earlier ticket can enter while publication is held.
+  const publisher = imageWriter(root, controls, "a", 4 * 1024 * 1024 + 128, "gate-stage", 20_000);
+  fs.writeFileSync(path.join(controls, "start"), "go");
+  try {
+    await writerMilestone(path.join(controls, "gate-owner-paused"), publisher);
+    const staging = fs.readFileSync(path.join(controls, "gate-stage-path"), "utf8");
+    const ownerFile = path.join(staging, "owner.json");
+    const owner = fs.readFileSync(ownerFile, "utf8");
+    expect(JSON.parse(owner).pid).toBe(publisher.child.pid);
+    expect(fs.existsSync(path.join(root, ".writer-lock-gate"))).toBe(false);
+    if (interrupted) {
+      publisher.child.kill("SIGKILL");
+      await publisher.result;
+    }
+    const clean = () => new RuntimeImageStore(root, { now: () => 10_000, abandonedPartialMaxAgeMs: 1_000 });
+    fs.utimesSync(staging, new Date(9_500), new Date(9_500));
+    clean();
+    expect(fs.readFileSync(ownerFile, "utf8")).toBe(owner);
+    fs.utimesSync(staging, new Date(1_000), new Date(1_000));
+    clean();
+    expect(fs.existsSync(staging)).toBe(!interrupted);
+    if (!interrupted) {
+      expect(fs.readFileSync(ownerFile, "utf8")).toBe(owner);
+      fs.writeFileSync(path.join(controls, "gate-owner-release"), "go");
+      expect(await publisher.result).toEqual({ exit: 0, stdout: "", stderr: "" });
+      expect(fs.existsSync(staging)).toBe(false);
+      expect(fs.readdirSync(root).filter(name => name.endsWith(".png"))).toHaveLength(1);
+    }
+    clean();
+    expect(fs.readdirSync(root).filter(name => name.endsWith(".partial"))).toEqual([]);
+  } finally {
+    fs.writeFileSync(path.join(controls, "gate-owner-release"), "go");
+    await stopImageWriters([publisher]);
+  }
+}, 20_000);
+
 test("concurrent runtime image writers tolerate publication during partial cleanup", async () => {
   const root = sandbox();
   const controls = sandbox();
@@ -805,6 +844,42 @@ test("runtime image store startup removes aged abandoned partials and keeps fres
 
   expect(fs.existsSync(oldPartial)).toBe(false);
   expect(fs.existsSync(freshPartial)).toBe(true);
+});
+
+test.each([
+  "owned", "foreign-name", "empty-token", "mismatched-owner", "missing-owner",
+  "malformed-owner", "owner-link", "directory-link", "unexpected-child", "live-owner",
+] as const)("gate staging cleanup confines deletion to proven abandoned store paths (%s)", kind => {
+  const root = sandbox();
+  const outside = sandbox();
+  const token = "00000000-0000-0000-0000-000000000000";
+  const name = kind === "foreign-name" ? ".foreign.partial"
+    : kind === "empty-token" ? ".writer-lock-gate..partial" : `.writer-lock-gate.${token}.partial`;
+  const staging = path.join(root, name);
+  const directory = kind === "directory-link" ? outside : staging;
+  if (directory === staging) fs.mkdirSync(staging, { mode: 0o700 });
+  else fs.symlinkSync(outside, staging);
+  // A deliberately out-of-range OS pid supplies deterministic absent-owner evidence.
+  const deadPid = 2_147_483_647;
+  expect(procBackend.pidAlive(deadPid)).toBe(false);
+  const owner = JSON.stringify({
+    pid: kind === "live-owner" ? process.pid : deadPid,
+    startIdentity: null,
+    token: kind === "mismatched-owner" ? "different-token" : token,
+  });
+  const outsideFile = path.join(outside, "sentinel");
+  fs.writeFileSync(outsideFile, owner);
+  const ownerFile = path.join(directory, "owner.json");
+  if (kind === "owner-link") fs.symlinkSync(outsideFile, ownerFile);
+  else if (kind !== "missing-owner") fs.writeFileSync(ownerFile, kind === "malformed-owner" ? "{" : owner);
+  if (kind === "unexpected-child") fs.symlinkSync(outside, path.join(staging, "unexpected"));
+  fs.utimesSync(directory, new Date(1_000), new Date(1_000));
+
+  new RuntimeImageStore(root, { now: () => 10_000, abandonedPartialMaxAgeMs: 1_000 });
+
+  expect(fs.existsSync(staging)).toBe(kind !== "owned");
+  expect(fs.readFileSync(outsideFile, "utf8")).toBe(owner);
+  if (kind === "unexpected-child") expect(fs.readlinkSync(path.join(staging, "unexpected"))).toBe(outside);
 });
 
 test("runtime image storage requires a real private root owned by the current user", () => {

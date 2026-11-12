@@ -8,6 +8,7 @@ import type { Database as BunDatabase } from "bun:sqlite";
 import { publishedRegistryBackendMode } from "@/lib/agent/registryBackendIdentity";
 import { stateDir, statePath } from "@/lib/configDir";
 import { procBackend } from "@/lib/proc";
+import { processIdentityProvenDead } from "@/lib/processIdentity";
 
 import {
   normalizeStructuredImageMime,
@@ -791,6 +792,30 @@ export class RuntimeImageStore {
   private removeAgedPartials(root: OpenRoot): void {
     this.assertRootPinned(root);
     for (const entry of fs.readdirSync(root.path, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        // Only the UUID staging layout published by this store owns a
+        // directory partial. Unknown or incomplete owners remain protected.
+        const token = /^\.writer-lock-gate\.([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\.partial$/.exec(entry.name)?.[1];
+        if (!token) continue;
+        const staging = path.join(root.path, entry.name);
+        const stat = fs.lstatSync(staging, { throwIfNoEntry: false });
+        if (!stat?.isDirectory() || stat.isSymbolicLink()
+          || this.now() - stat.mtimeMs < this.abandonedPartialMaxAgeMs) continue;
+        const owner = readWriterLockOwner(staging);
+        if (!owner || owner.token !== token || !processIdentityProvenDead(owner)) continue;
+        const contents = fs.readdirSync(staging);
+        if (contents.length !== 1 || contents[0] !== "owner.json") continue;
+        this.assertRootPinned(root);
+        const current = fs.lstatSync(staging, { throwIfNoEntry: false });
+        if (!current?.isDirectory() || current.isSymbolicLink()
+          || current.dev !== stat.dev || current.ino !== stat.ino) continue;
+        // Remove only the file we created, then require an empty directory;
+        // never recurse into unexpected contents or follow directory links.
+        fs.unlinkSync(path.join(staging, "owner.json"));
+        this.assertRootPinned(root);
+        fs.rmdirSync(staging);
+        continue;
+      }
       if (!entry.isFile() || !entry.name.endsWith(".partial")) continue;
       const filename = path.join(root.path, entry.name);
       // A competing writer can publish its ticket after this directory scan.
