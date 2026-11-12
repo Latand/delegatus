@@ -988,6 +988,9 @@ export function startTempSweep(ports: {
         void import("@/lib/pipelines/worktreeSweepWorker")
           .then(({ runAttemptTempSweepOffThread }) => runAttemptTempSweepOffThread())
           .catch(error => console.error("[attempt temp] tick failed", attemptTempFailureDetail(error)))
+          .then(() => import("@/lib/pipelines/worktreeSweepWorker"))
+          .then(({ runTemporaryDataMaintenanceOffThread }) => sweepHost.__llvAttemptTempTimer === timer ? runTemporaryDataMaintenanceOffThread() : null)
+          .catch(error => console.error("[temporary data] tick failed", attemptTempFailureDetail(error)))
           .finally(() => { attemptRunning = false; if (sweepHost.__llvAttemptTempTimer === timer) attemptArm(); });
       }, delayMs);
       timer.unref?.();

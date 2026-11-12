@@ -411,6 +411,13 @@ test("attempt retirement coalesces through the owned worker", async () => {
   expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("attempt-temp\n");
 });
 
+test("temporary data maintenance coalesces and carries its deadline through the owned worker", async () => {
+  const { root, worker } = fixture(); const before = Date.now(), request = worker.maintenance();
+  expect(worker.maintenance()).toBe(request); expect(await request).toMatchObject({ checked: 0, removed: 0 });
+  expect(Number(fs.readFileSync(path.join(root, "maintenance-deadline"), "utf8"))).toBeGreaterThan(before);
+  expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("maintenance\n");
+});
+
 test("an attempt tick whose queue budget expired defers, then a fresh tick runs", async () => {
   const { root, worker } = fixture("--hold-worktree", 10_000);
   await worker.run("dry-run");

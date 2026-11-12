@@ -11,6 +11,7 @@ import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { claimAttemptRetirement } from "@/lib/pipelines/store";
 import { restoreRefusedAttemptTrash } from "@/lib/pipelines/retirementClaim";
 import { discoverAttemptCopies } from "./attemptCopyDiscovery";
+import { readAttemptEvidenceBinding } from "./attemptEvidenceBinding";
 
 const HOUR = 3600000;
 /** Pin the nearest existing ancestor as well as each absent segment. A missing
@@ -58,7 +59,7 @@ async function adoptCopies(store: AttemptTempStore, now: () => number, deadline:
     const stat = fs.lstatSync(destination, { throwIfNoEntry: false });
     if (!stat?.isDirectory() || stat.isSymbolicLink() || process.getuid && stat.uid !== process.getuid()) continue;
     try {
-      const manifest = readEnvelope(path.join(destination, "manifest.json")) as { pipelineId?: unknown; launchId?: unknown; original?: unknown; identity?: unknown };
+      const manifest = readAttemptEvidenceBinding(path.join(destination, "manifest.json"));
       if (typeof manifest.original !== "string" || typeof manifest.identity !== "string" || !/^\d+:\d+$/.test(manifest.identity)
         || createHash("sha256").update(manifest.original).update("\0").update(manifest.identity).digest("hex") !== name)
         throw new Error("attempt evidence manifest has no matching creation identity");
@@ -90,11 +91,11 @@ async function adoptCopies(store: AttemptTempStore, now: () => number, deadline:
 
 /** Runs after root admission is released. Each removal has its own journal;
  * due-row checkpoints, attribution and errors survive a helper restart. */
-export async function sweepEvidenceCopies(store: AttemptTempStore, options: AttemptTempSweepOptions) {
-  return withFileTransactionAsync(store.filename + ".sweep", "attempt evidence copy admission", () => sweepOwnedCopies(store, options));
+export async function sweepEvidenceCopies(store: AttemptTempStore, options: AttemptTempSweepOptions, policy: { agentCopiesManagedSeparately?: boolean } = {}) {
+  return withFileTransactionAsync(store.filename + ".sweep", "attempt evidence copy admission", () => sweepOwnedCopies(store, options, policy));
 }
 
-async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSweepOptions) {
+async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSweepOptions, policy: { agentCopiesManagedSeparately?: boolean }) {
   const now = options.now ?? Date.now, deadline = now() + 10000;
   const report = { adopted: 0, checked: 0, inspected: 0, removed: 0, removedBytes: 0, errors: 0, unattributed: { count: 0, bytes: 0 } };
   if (options.mode !== "dry-run") {
@@ -113,6 +114,8 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
   }
   const inventory = new RepositoryLinkInventory({ now, budgetMs: 10000 });
   const observe = async (row: EvidenceCopy): Promise<AttemptTempAuthority> => {
+    if (row.kind === "agent" && policy.agentCopiesManagedSeparately) return { state: "unknown", expiresAt: null,
+      revision: "host-ended-retention", isCurrent: () => false };
     if (row.kind === "agent") return { state: row.expiresAt !== null && now() >= row.expiresAt ? "expired" : "closed",
       expiresAt: row.expiresAt, revision: "agent", isCurrent: () => row.expiresAt !== null && now() >= row.expiresAt };
     const owner = { directory: row.destination, pipelineId: row.pipelineId, launchId: row.launchId, createdAt: row.createdAt, retainUntilClose: true };
@@ -133,7 +136,7 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
       if (pending && row.pipelineId && options.mode !== "dry-run")
         releaseClaim = await claimAttemptRetirement(row.pipelineId, row.destination);
       const authority = await observe(row);
-      const expiresAt = row.kind === "agent" ? row.expiresAt : authority.expiresAt ?? null;
+      const expiresAt = authority.expiresAt ?? null;
       store.registerCopy({ ...row, expiresAt, checkedAt: expiresAt && expiresAt > now() ? expiresAt : now() + (authority.state === "expired" ? 60000 : HOUR) });
       if (!parentProof.current()) throw new Error("attempt evidence parent changed after authority");
       let target = row.destination;
