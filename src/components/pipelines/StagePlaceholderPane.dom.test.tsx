@@ -53,6 +53,7 @@ function slot(over: { pipeline?: Partial<Pipeline>; stage?: Partial<PipelineStag
     baseRef: "a",
     lastPassedCommit: "a",
     stages: [theStage],
+    taskIds: [],
     runs: [],
     cursor: null,
     state: "draft",
@@ -232,7 +233,7 @@ test("placeholder runtime controls stay usable at 390px: the row wraps and every
 function draftSlot(stages: PipelineStage[], index: number): StageSlot {
   const pipeline = {
     id: "p1", task: "Ship it", project: "demo", repoDir: "/r", worktreeDir: "/w", branch: "b", baseBranch: "main",
-    baseRef: "a", lastPassedCommit: "a", stages, runs: [], cursor: null, state: "draft", pausedState: null,
+    baseRef: "a", lastPassedCommit: "a", stages, taskIds: [], runs: [], cursor: null, state: "draft", pausedState: null,
     stateDetail: null, srcPath: null, srcConversationId: null, createdAt: "1970", closedAt: null,
   } as unknown as Pipeline;
   const theStage = stages[index]!;
