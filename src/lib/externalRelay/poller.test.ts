@@ -2,6 +2,7 @@ import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { externalRelayTempRoot } from "./runner";
+import { createOwnerRunDirectory } from "./runDirectory";
 import { accountManager } from "@/lib/accounts/manager";
 import { procBackend } from "@/lib/proc";
 import {
@@ -445,7 +446,8 @@ test("the real claim loop adds F4 after descriptor refresh only while the local 
     }
   } finally { setRelaySwitch("relay:owner_tools:enabled", false); updateRelayStore((store) => ({ ...store, relays: previous })); }
 });
-test("boot sweep settles dead owners, keeps live owners, and removes run directories", async () => {
+for (const location of ["temporary", "shared-home"] as const)
+test(`boot sweep settles dead owners, keeps live owners, and removes ${location} run directories`, async () => {
   let completed = 0;
   const server = await startTestRelay(
     () => (completed++, { body: { status: "accepted", duplicate: false } }),
@@ -478,13 +480,14 @@ test("boot sweep settles dead owners, keeps live owners, and removes run directo
         },
       ],
     }));
-    const staleDir = fs.mkdtempSync(
+    const staleDir = location === "shared-home" ? await createOwnerRunDirectory() : fs.mkdtempSync(
       path.join(externalRelayTempRoot(), "llv-external-relay-test-"),
     );
-    const liveDir = fs.mkdtempSync(
+    const liveDir = location === "shared-home" ? await createOwnerRunDirectory() : fs.mkdtempSync(
       path.join(externalRelayTempRoot(), "llv-external-relay-test-"),
     );
     runDirs.push(staleDir, liveDir);
+    for (const directory of [staleDir, liveDir]) fs.writeFileSync(path.join(directory, "owner-context.txt"), "Private quoted data", { mode: 0o600 });
     const row = {
       requestId: "stale",
       leaseId: "lease",

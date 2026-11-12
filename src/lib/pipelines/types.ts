@@ -1066,6 +1066,9 @@ export type PipelinePublicationFailure = {
   retryableDeadline?: boolean;
   /** The proven deadline expired during CPU admission before checks started. */
   admissionDeadline?: true;
+  /** The scanner reported only a configuration fault, and this head changes
+      none of its script inputs. Computed on complete output before redaction. */
+  privacyConfigurationFault?: true;
   /** Git refused HTTP access after its App credential helper verified a fresh mint. */
   retryableApp403?: boolean;
   /** Observation clock captured with the refusal, before recovery can restart. */
