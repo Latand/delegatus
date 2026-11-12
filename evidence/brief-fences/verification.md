@@ -141,3 +141,55 @@ The merged and repaired exports share the exact installed dependency graph read-
 
 
 Repair commit hooks: `git commit -F <stage message file>` exited 0, checking one TypeScript file with zero lint errors and zero whitespace findings. The two repaired files passed the whole-file privacy scan (exit 0, zero findings); `bun run privacy:check` passed after the repair commit (exit 0, zero findings). The final compiler recheck above followed integration of the newer main and retained the same repaired test bytes. The subsequent documentation-only commit retains those compiler/test results and repeats the commit and publication privacy checks. The worktree handover includes the actual terminal receipts.
+
+
+## Current-main successor
+
+On November 12, 2026, this successor fetched `origin/main` at `aae7208f2d0d67e0b4fc176188bf055e0fbd7bc2`. The inherited source was `bad7b57d10c0961546df7589b135f763949bdfac`. `git merge --no-ff --no-commit origin/main` exited 0 with “Already up to date”: existing merge commits `66bc32df90` and `c92583b9e6` already preserve current main. The final fetch and ancestry check also exited 0; no additional merge was available.
+
+The full-file MCP run exposed a new fixture failure: its preceding case opened the process-wide agent registry, then deleted its directory while the connection remained open. The new acknowledgement case subsequently failed with an unavailable database. `src/lib/mcp/pipelineRoleFence.test.ts` now calls the existing registry cleanup helper before deleting each sandbox. All assertions remain; application source is unchanged by this successor. The new case passes both after the earlier cases and alone.
+
+Checks ran in detached scratch exports with the identical installed dependency graph; package manifests, lockfile, Bun configuration, compiler configuration and test preload matched across base and head. Every command received fresh HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and TMPDIR, native Git first in PATH, no inherited spawn capability, and a closed loopback control URL. The stage worktree was used only for editing and committing. No production action or performance gain is claimed.
+
+`GATE` below denotes the installed controller-supplied gate wrapper; `ROOT` denotes the stage-owned `brief-successor` scratch directory. The exact retained `run.sh` selects its export, installs the isolation above, records full output and the actual child exit, and executes its remaining arguments unchanged. Heavy commands ran sequentially in three recorded wrapper invocations (types, file campaign, repair/compiler/lint); each recording received one terminal `wait_for_check` reconciliation, including cleanup. Each wrapper used `LLV_OWNED_RUN_TIMEOUT_MS=1200000`.
+
+```sh
+bash "$GATE" --record "$TMPDIR/successor-types.log" bash "$ROOT/run.sh" head typecheck bun x tsc --noEmit
+bash "$GATE" --record "$TMPDIR/successor-tests.log" python3 "$ROOT/campaign.py"
+bash "$GATE" --record "$TMPDIR/successor-repair.log" bash "$ROOT/repair-checks.sh"
+```
+
+The file campaign invokes `bash "$ROOT/run.sh" "$tree" "$label" bun run test "$file"` once per row. Failing head files receive two full base runs in separate fresh roots. The repair script repeats the MCP file, then its filtered advisory case, then the exact publication compiler, then the twelve-path lint command already listed above. Raw command logs, exits, timestamps, source digests, scripts and reconciliation records are retained in the stage evidence under `brief-successor/`.
+
+| File (argument to `bun run test`) | Final head exit | Passed / failed | Expectations | Base exit, twice | Base passed / failed | Base expectations |
+| --- | ---: | ---: | ---: | --- | ---: | ---: |
+| `src/lib/pipelines/briefWarnings.test.ts` | 0 | 19 / 0 | 38 | not needed | — | — |
+| `src/lib/pipelines/briefAdmission.test.ts` | 0 | 5 / 0 | 34 | not needed | — | — |
+| `src/lib/orchestrator/prompt.test.ts` | 0 | 46 / 0 | 344 | not needed | — | — |
+| `src/lib/mcp/pipelineRoleFence.test.ts` | 1 | 6 / 1 | 66 | 1, 1 | 5 / 1 | 59 |
+| `src/app/api/pipelines/[id]/route.test.ts` | 1 | 19 / 1 | 67 | 1, 1 | 17 / 1 | 63 |
+| `src/app/api/pipelines/route.test.ts` | 1 | 5 / 6 | 23 | 1, 1 | 5 / 6 | 23 |
+| `src/lib/pipelines/roles.test.ts` | 1 | 32 / 2 | 494 | 1, 1 | 32 / 2 | 494 |
+| `src/lib/roles/registry.test.ts` | 1 | 22 / 1 | 153 | 1, 1 | 22 / 1 | 153 |
+| `src/lib/pipelines/engineConnectionRefusal.test.ts` | 1 | 0 / 4 | 0 | 1, 1 | 0 / 4 | 0 |
+
+Final full-file observations total **154 passes, 15 base-matching failures and 1,219 expectations across nine explicit paths**. All fifteen failing test identities match both fresh base observations. The compiler and lint are green; complete test files remain red solely for those inherited assertions. The existing closed-port tick diagnostic appears on both sides. There are zero unmatched runner errors. The same inherited failure categories listed earlier remain, with the MCP file now down to its single reporter-policy assertion. The seat owns any follow-up for those base defects.
+
+| Additional command / procedure | Exit | Counts |
+| --- | ---: | --- |
+| Initial `bun x tsc --noEmit` | 0 | Full project, zero diagnostics |
+| Renewed `bun x tsc --noEmit` after fixture cleanup | 0 | Full project, zero diagnostics |
+| `bun run test src/lib/mcp/pipelineRoleFence.test.ts -t "MCP acknowledges"` | 0 | 1 pass, 0 fail, 6 filtered, 7 expectations |
+| Twelve-path `bun run lint` command listed above | 0 | 12 files, 0 errors, 6 warnings on unchanged bindings |
+| Whole-file privacy scan of all 14 inherited changed paths | 0 | `PRIVACY GATE: PASS`, zero findings |
+| Whole-file privacy renewal of `src/lib/mcp/pipelineRoleFence.test.ts` | 0 | 1 file, zero findings |
+| Whole-file privacy renewal of this final ledger | 0 | 1 file, zero findings |
+| `git diff --check` | 0 | Zero whitespace findings |
+| Final failure/log reconciliation | 0 | 9 head files; every red file matches 2 base samples; 0 new failures or unmatched runner errors |
+| Code/export byte comparison | 0 | 13 code/test/skill files, zero mismatches |
+
+The initial campaign exited 1, with 153 passes, 16 failures and 1,213 expectations over nine head files; it also ran twelve base samples. Its extra failure was the new MCP acknowledgement case described above. Its initial MCP observation was 5 passes, 2 failures and 60 expectations. The repaired full-file rerun exits 1 with 6 passes, 1 inherited failure and 66 expectations. The repair/compiler/lint wrapper exits 0, and final reconciliation classifies every remaining failure against both base runs. These development receipts remain retained.
+
+The privacy command for each whole-file scan is `bun scripts/privacy-publication-gate.ts --require-known-values --base origin/main --paths <listed paths>`, with `LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE=scripts/privacy-known-value-fingerprints.json` and `LLV_PRIVACY_OCR_LANGUAGES=eng+ukr`. The final report receives its own whole-file scan; commit-hook and post-commit `bun run privacy:check` receipts are included in the stage handoff. The controller owns remote publication, PR creation and its publication gates; the PR body must retain `Closes #3916`.
+
+Verification evidence read-back: 2026-11-12T09:35:20Z. This documentation-only handoff retains the checked code and configuration.

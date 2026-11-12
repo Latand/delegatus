@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import * as realEngine from "@/lib/pipelines/engine";
+import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
 
 /*
@@ -43,6 +44,7 @@ beforeEach(() => {
   queued = false;
 });
 afterEach(() => {
+  closeAgentRegistryForTests();
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
   fs.rmSync(sandbox, { recursive: true, force: true });
