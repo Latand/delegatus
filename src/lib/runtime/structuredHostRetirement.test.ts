@@ -1166,7 +1166,7 @@ test("the controller seam sweeps on its own, honours the configured interval and
   });
   expect(disabled).toBeNull();
   expect(structuredHostRetirementIdleMs({ LLV_HOST_RETIREMENT_IDLE_HOURS: "0" })).toBeNull();
-  expect(structuredHostRetirementIdleMs({})).toBe(6 * 3_600_000);
+  expect(structuredHostRetirementIdleMs({})).toBe(3_600_000);
 
   /* A failing sweep never blocks the reconciliation cycle around it. */
   const failed = await reconcileStructuredHostRetirement({
@@ -1188,7 +1188,7 @@ test("an unset and a blank grace are the same statement, and neither is zero", a
   /* An explicit zero is still the operator's word. */
   expect(structuredHostRetirementGraceMs({ LLV_HOST_RETIREMENT_GRACE_MS: "0" })).toBe(0);
   expect(structuredHostRetirementGraceMs({ LLV_HOST_RETIREMENT_GRACE_MS: "999999" })).toBe(60_000);
-  expect(structuredHostRetirementIdleMs({ LLV_HOST_RETIREMENT_IDLE_HOURS: "" })).toBe(6 * 3_600_000);
+  expect(structuredHostRetirementIdleMs({ LLV_HOST_RETIREMENT_IDLE_HOURS: "" })).toBe(3_600_000);
 });
 
 test("the sweep runs on its own timer, once per process", async () => {
@@ -1572,3 +1572,27 @@ test("an unsettled own launch explains the unknown turn as a determined retireme
   state.receipts[launchId]!.state = "completed";
   await refusedBy("turn-settled", { snapshot: () => state }, "undetermined");
 });
+
+for (const engine of ["codex", "claude", "copilot"] as const) {
+  for (const protection of ["none", "recent", "seat", "question"] as const) {
+    test(`unowned ${engine} host: one-hour retirement with ${protection} protection`, async () => {
+      const file = snapshot();
+      const host = file.entries[`claude:${SESSION}`]!;
+      delete file.entries[`claude:${SESSION}`];
+      host.key = { engine, sessionId: SESSION };
+      host.structuredHost!.kind = engine === "codex" ? "codex-app-server" : engine === "claude" ? "claude-broker" : "copilot-acp";
+      host.structuredHost!.activeFlags = [];
+      if (protection === "question") host.structuredHost!.pendingAttention = ["open-question"];
+      file.entries[`${engine}:${SESSION}`] = host;
+      file.conversations[CONVERSATION]!.engine = engine;
+      const probe = await sweep({ snapshot: () => file, owned: () => false,
+        idleMs: structuredHostRetirementIdleMs({})!,
+        transcriptStat: () => determined({ mtimeMs: NOW - (protection === "recent" ? 3_599_999 : 3_600_001) }),
+        orchestratorSeatConversations: () => determined(new Set(protection === "seat" ? [CONVERSATION] : [])),
+      });
+      expect(probe.terminated).toHaveLength(protection === "none" ? 1 : 0);
+      if (protection === "none") expect(probe.terminated[0]).toMatchObject({ owned: false, engine });
+      else expect(probe.report.refused[0]?.clause).toBe(protection === "recent" ? "transcript-idle" : protection === "seat" ? "seat-free" : "attention-settled");
+    });
+  }
+}

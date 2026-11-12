@@ -1,3 +1,4 @@
+import { idleWindowFixture } from "./fixtures/idleEventWindow";
 import { readNativeTiming } from "./attemptTiming";
 import { splitAttemptTime } from "@/lib/pipelines/accounting";
 import { readHostExit, withHostStopOrigin } from "./hostExit";
@@ -5042,4 +5043,32 @@ test("heap counters observe events and subscriber queues without consuming them"
     stop();
     expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
   } finally { stop(); await stream.return?.(); await host.release(); }
+});
+
+test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
+  const ledger = new RecordingDeliveryLedger();
+  const child = new FakeClaude(ledger);
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", sessionId: "idle-window-session", env: { NODE_ENV: "test" },
+    eventStore: new MemoryEventStore(), deliveryLedger: ledger, readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    spawnProcess: fakeSpawn(child, {}) });
+  const idle = idleWindowFixture(host);
+  try {
+    const count = host.heapAttribution().events;
+    expect(count).toBeGreaterThan(0);
+    expect(await host.releaseIdleEventWindow(() => false)).toBeFalse();
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    expect(host.heapAttribution().events).toBe(0);
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    try {
+      expect(host.heapAttribution().events).toBeGreaterThan(0);
+      for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
+    } finally { await stream.return?.(); }
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    const sent = host.send({ id: "next-idle-turn", text: "continue" });
+    const frame = await child.userFrameWritten;
+    child.emitJson({ type: "user", session_id: host.identity.sessionId, uuid: "next-idle-echo", message: frame.message });
+    await sent;
+    expect(host.heapAttribution().events).toBeGreaterThan(0);
+  } finally { idle.cleanup(); await host.release(); }
 });

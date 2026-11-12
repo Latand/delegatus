@@ -1,3 +1,4 @@
+import { idleWindowFixture } from "./fixtures/idleEventWindow";
 import { readHostExit, withHostStopOrigin } from "./hostExit";
 import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import crypto from "node:crypto";
@@ -799,4 +800,24 @@ test("heap counters observe events and subscriber queues without consuming them"
     stop();
     expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
   } finally { stop(); await stream.return?.(); await host.release(); }
+});
+
+test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
+  const host = await CopilotAcpHost.start(options(new FakeCopilot()));
+  const idle = idleWindowFixture(host);
+  try {
+    const count = host.heapAttribution().events;
+    expect(count).toBeGreaterThan(0);
+    expect(await host.releaseIdleEventWindow(() => false)).toBeFalse();
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    expect(host.heapAttribution().events).toBe(0);
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    try {
+      expect(host.heapAttribution().events).toBeGreaterThan(0);
+      for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
+    } finally { await stream.return?.(); }
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    await host.send({ id: "next-idle-turn", text: "continue" });
+    expect(host.heapAttribution().events).toBeGreaterThan(0);
+  } finally { idle.cleanup(); await host.release(); }
 });

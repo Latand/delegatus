@@ -3,9 +3,11 @@ import { expect, test } from "bun:test";
 import { RuntimeReplayGapError, type RuntimeEvent } from "./engineHost";
 import {
   attachRuntimeEvents,
+  assertReleasedHostEventLedger,
   boundMap,
   HOST_EVENT_WINDOW,
   runtimeEventsAfter,
+  releaseHostEventWindow,
   trimHostEventWindow,
   type RuntimeEventSubscriber,
 } from "./hostEventWindow";
@@ -131,4 +133,36 @@ test("a bounded map drops its oldest settled entries and keeps open ones whateve
   for (let index = 0; index < 10; index++) map.set(`settled-${index}`, { open: false });
   boundMap(map, 4, value => !value.open);
   expect([...map.keys()]).toEqual(["open-oldest", "settled-7", "settled-8", "settled-9"]);
+});
+
+for (const afterSeq of [0, 7]) test(`empty-window UI replay and producer cursor ${afterSeq} read the ledger`, async () => {
+  const host = source(12);
+  host.window.length = 0;
+  expect(runtimeEventsAfter(host.window, afterSeq, host.events.ledger)).toEqual(host.ledger.slice(afterSeq));
+  const stream = attachRuntimeEvents(afterSeq, host.events)[Symbol.asyncIterator]();
+  try {
+    expect(await take(stream, 12 - afterSeq)).toEqual(host.ledger.slice(afterSeq).map(event => event.seq));
+    host.emit();
+    expect(await take(stream, 1)).toEqual([13]);
+  } finally { await stream.return?.(); }
+});
+
+test("an emptied window retains replay-gap refusal for a truncated ledger", () => {
+  expect(() => runtimeEventsAfter([], 0, () => [delta(4)])).toThrow(RuntimeReplayGapError);
+});
+
+test("released windows refuse missing and shortened ledgers until the acknowledged cursor", () => {
+  const events = [delta(1), delta(2), delta(3)];
+  releaseHostEventWindow(events);
+  expect(() => runtimeEventsAfter(events, 0, () => [])).toThrow(RuntimeReplayGapError);
+  expect(() => runtimeEventsAfter(events, 0, () => [delta(1)])).toThrow(RuntimeReplayGapError);
+  expect(runtimeEventsAfter(events, 3, () => [])).toEqual([]);
+});
+
+test("refill refuses a shortened ledger and can retry when its tail returns", () => {
+  const events = [delta(1), delta(2)];
+  releaseHostEventWindow(events);
+  expect(() => assertReleasedHostEventLedger(events, [delta(1)])).toThrow(RuntimeReplayGapError);
+  expect(events).toEqual([]);
+  expect(() => assertReleasedHostEventLedger(events, [delta(1), delta(2)])).not.toThrow();
 });
