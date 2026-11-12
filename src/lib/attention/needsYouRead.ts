@@ -280,7 +280,7 @@ export function needsYouAnswer(body: NeedsYouBody, decision: AutoView["decision"
 /** Sources are selected before imports or reads. Each wait shares the route's cutoff. */
 export interface NeedsYouReadSources {
   board(signal: AbortSignal): Promise<NeedsYouBody>;
-  tasks(signal: AbortSignal): Promise<BoardTask[]>;
+  tasks(signal: AbortSignal): Promise<readonly BoardTask[]>;
   pipelines(signal: AbortSignal): Promise<readonly Pipeline[]>;
   dismissals(signal: AbortSignal): Promise<AttentionDismissalV1[]>;
   reports(signal: AbortSignal): Promise<BridgeReportLogV1 | null>;
@@ -292,7 +292,7 @@ export interface NeedsYouReadSources {
 }
 const productionSources: NeedsYouReadSources = {
   board: async signal => (await import("@/app/api/files/operatorProjection")).operatorBoardRepresentation(signal),
-  tasks: async signal => { const store = await import("@/lib/tasks/store"); signal.throwIfAborted(); return store.loadTasks(); },
+  tasks: async signal => { const store = await import("@/lib/tasks/store"); signal.throwIfAborted(); return store.loadTasksForList(); },
   pipelines: async signal => { const store = await import("@/lib/pipelines/store"); signal.throwIfAborted(); return store.loadPipelinesForList(); },
   dismissals: async signal => { const store = await import("./dismissals"); signal.throwIfAborted(); return store.readAttentionDismissals().records; },
   reports: async signal => { const store = await import("@/lib/bridge/store"); signal.throwIfAborted(); return store.readBridgeReportLog(); },
