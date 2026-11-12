@@ -161,7 +161,7 @@ No new table is needed for collections. Each store becomes one collection in `st
 | `accounts` | `claude:<id>`, `codex:<id>`, `active:<engine>`, `retired:<engine>:<id>`, `removal:<id>`, `binding:<project>`, `override:<key>`, `fence:<key>`, `authop:<id>`, `login:<id>` | `account-mutation-revision.json` becomes the collection revision. One transaction covers a removal and its journal step, which #1857 does across two files today. |
 | `account_migration_ops` | `op:<hash>` | |
 | `lifecycle`, `seat_tick_runs`, `reset_credits` | journal shape (§4.4) | |
-| `limits_history`, `reaper`, `handoff_lineage` | one row per series, path or edge, plus `meta` | The reaper's 1 MB-per-cycle rewrite becomes an upsert of changed paths. |
+| `limits_history`, `reaper`, `handoff_lineage` | one row per series, path or edge, plus `meta` | The reaper's 1 MB-per-cycle rewrite becomes an upsert of changed paths. As shipped: `limits_history` holds `meta` (`since`), `series:<engine>\|<account>\|<window>` and `unattributed:<series>`; `reaper` holds `p:<transcript path>` → `{ authored?, scannedAt? }`; `handoff_lineage` holds `pane:<pid>`, `child:<transcript>` and `conversation:<id>`. Rows are `LegacyDocumentStore` rows, so import, mirror and merge are that store's. Readers keep the rows per collection revision and follow the change log (`src/lib/state/keyedRows.ts`); a write names only the rows it changes. |
 
 Each collection carries `schemaVersion: 1` and a `migrationId` of `<file>-json-v1`.
 

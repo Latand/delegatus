@@ -71,7 +71,6 @@ const PERSISTED_PROJECTION_META_FILE = "files-response-cache.json";
 const PERSISTED_PROJECTION_BODY_PREFIX = "files-response-cache-";
 const PERSISTED_PROJECTION_KEY_PREFIX = "persisted:";
 const PROJECTION_STATE_FILES = [
-  "reaper-state.json",
   /* A state database fallback or a refused backup (#1870 slice 10) shows in
      `systemHealth.storage` on the next poll, not after some other store moves. */
   "storage-incidents.json",
@@ -237,6 +236,9 @@ function projectionBaseKey(
       /* Who answers a worker's ask is the project's designated seat
          (docs/design/attention-auto-resolve.md): a rotation moves no scan. */
       hotStateSignature("orchestrator_seats", "orchestrator-seats.json"),
+      /* The reaper's authorship evidence pins owner-touched workers and clears
+         freshly scanned ones (#112). */
+      hotStateSignature("reaper", "reaper-state.json"),
     ],
   })).digest("hex");
 }
