@@ -49,7 +49,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "seat-tick.pause-conditions" | "structured-user.publish" | "structured-user.provenance" | "structured-user.retention"
   | "turbo.sweep" | "turbo.sweep.read" | "turbo.sweep.apply" | "turbo.sweep.settle";
 type Operation = { name: ViewerOperation; start: number; end?: number; lease?: ReturnType<typeof currentOperationLease> };
-const shared = globalThis as typeof globalThis & { __delegatusLoopMonitor?: ReturnType<typeof createViewerLoopMonitor> };
+const shared = process as typeof process & { __delegatusLoopMonitor?: ReturnType<typeof createViewerLoopMonitor> };
 
 /** A slow journal must not grow the heap or block the loop that it measures.
  * Package terminals opt out of log output; the service keeps every line. */
@@ -122,7 +122,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
     }
     writeLog(line);
   };
-  let sequence = 0, activeDropped = 0, completedDropped = 0;
+  let sequence = 0, activeDropped = 0, completedDropped = 0, pendingDropped = 0;
   let watchdog: ReturnType<typeof startLoopWatchdog> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let profiler: ReturnType<typeof createLoopProfiler> | undefined;
@@ -265,6 +265,18 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
     last = at;
   };
   return {
+    pendingOperations() {
+      const at = now();
+      const byName = new Map<string, { name: string; count: number; oldestAgeMs: number }>();
+      const oldest = [...active].map(op => ({ name: op.name, ageMs: Math.max(0, at - op.start) }))
+        .sort((a, b) => b.ageMs - a.ageMs);
+      for (const op of oldest) {
+        const row = byName.get(op.name) ?? { name: op.name, count: 0, oldestAgeMs: op.ageMs };
+        row.count++; byName.set(op.name, row);
+      }
+      return { count: active.size, byName: [...byName.values()], oldest: oldest.slice(0, 32),
+        dropped: pendingDropped, limit: 128 };
+    },
     memorySamples() {
       const cutoff = now() - LOOP_MEMORY_RETENTION.samples * LOOP_MEMORY_RETENTION.intervalMs;
       // Return detached scalar records; a diagnostic reader cannot edit history.
@@ -282,7 +294,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
     },
     run<T>(name: ViewerOperation, work: () => T): T {
       const op: Operation = { name, start: now(), lease: currentOperationLease() };
-      if (active.size < 128) active.add(op); else activeDropped++;
+      if (active.size < 128) active.add(op); else { activeDropped++; pendingDropped++; }
       const finish = () => {
         active.delete(op);
         op.end = now();
