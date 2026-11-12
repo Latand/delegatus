@@ -6560,6 +6560,14 @@ export class AgentRegistry {
     return this.scopedConversationSnapshot({ conversationId }, true, true);
   }
 
+  /** Cheap revision fence for work resumed across controller ticks. */
+  livenessRevision(): string {
+    const sqliteRevision = this.sqliteStore?.revision();
+    if (sqliteRevision !== null && sqliteRevision !== undefined) return `sqlite:${sqliteRevision}`;
+    const stat = fs.statSync(this.filename, { bigint: true });
+    return `file:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`;
+  }
+
   private scopedConversationSnapshot(target: { conversationId?: string | null; path?: string }, activity: boolean, liveness = false): RegistryFile {
     return this.readKeyed(file => {
       const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });

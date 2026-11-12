@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { Database } from "bun:sqlite";
 import { beginLegacySpawnFixture, structuredHostFixture } from "@/lib/agent/registryTestFixtures";
-import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
@@ -107,7 +107,7 @@ test.each(cases.filter(kind => process.platform === "linux" || !kind.startsWith(
     : kind === "other-namespace-start" ? { ...identity, bootEpoch: otherNamespace }
     : kind === "other-namespace-absent" ? { ...identity, pid: MISSING_PID, bootEpoch: otherNamespace } : identity);
   const terminated = ["absent", "reused", "other-boot", "other-boot-unknown-start"].includes(kind);
-  expect(pipelineStageHostTerminated(f.target)).toBe(terminated);
+  expect(await pipelineStageHostTerminated(f.target)).toBe(terminated);
   const record = lane([f]);
   expect(laneFinish(record).finished).toBeFalse();
   savePipelines([record]);
@@ -138,9 +138,49 @@ test.each(["kill accepted as queued but termination was not confirmed", "termina
     expect(authority.isCurrent()).toBeTrue();
   });
 
-test("a missing registry record cannot prove that an addressed host is gone", () => {
-  expect(pipelineStageHostTerminated({ stageId: "build", attempt: 1, conversationId: "conversation_missing",
+test("a missing registry record cannot prove that an addressed host is gone", async () => {
+  expect(await pipelineStageHostTerminated({ stageId: "build", attempt: 1, conversationId: "conversation_missing",
     agentPath: null, paneId: null })).toBeFalse();
+});
+
+test.each(["scope", "legacy memory unit"] as const)("a live or unreadable recorded %s keeps its host unconfirmed", async kind => {
+  const f = host(60 + (kind === "scope" ? 0 : 1), { pid: MISSING_PID, startIdentity: "old-start" });
+  const snapshot = structuredClone(registry.readOnlySnapshot());
+  const hostRecord = snapshot.entries[sessionKeyId(f.key)]!.structuredHost!;
+  if (kind === "scope") hostRecord.scope = { unit: "delegatus-agent-fixture.scope", bootEpoch: systemBootEpoch() };
+  else hostRecord.memory = { mechanism: "scope", unit: "delegatus-agent-fixture.scope", limitBytes: 1, kills: 0, lastKill: null };
+  fs.writeFileSync(registry.filename, JSON.stringify(snapshot));
+  const target = { ...f.target, conversationId: f.target.conversationId! };
+  const unavailable = await probePipelineStageHostTermination(target, { owner: "scope-test", identities: [],
+    scopeState: async () => { throw new Error("scope query unavailable"); } });
+  expect(unavailable.terminated).toBeFalse();
+  const live = await probePipelineStageHostTermination(target, { owner: "scope-test", identities: [],
+    scopeState: async () => "loaded" });
+  expect(live.terminated).toBeFalse();
+  const gone = await probePipelineStageHostTermination(target, { owner: "scope-test", identities: [],
+    scopeState: async () => "not-found" });
+  expect(gone.terminated).toBeTrue();
+});
+
+test("large identity inputs read only the current durable cursor page and reset on a new owner", async () => {
+  const f = host(62, { pid: MISSING_PID, startIdentity: "old-start" });
+  const identities = Array.from({ length: 4096 }, (_, index) => ({ pid: MISSING_PID, startIdentity: `missing-${index}` }));
+  let pidReads = 0;
+  const counted = identities.map(identity => Object.defineProperty({ startIdentity: identity.startIdentity }, "pid", {
+    enumerable: true, get() { pidReads++; return identity.pid; },
+  }) as ProcessIdentity);
+  const target = f.target;
+  const first = await probePipelineStageHostTermination(target, { owner: "large-tree", identities: counted, limit: 16 });
+  expect(first.checked).toBe(16);
+  expect(pidReads).toBeLessThanOrEqual(16 * 8);
+  const restarted = await probePipelineStageHostTermination(target, { owner: "large-tree", identities: counted,
+    progress: first.progress, limit: 16 });
+  expect(restarted.progress?.next).toBe(32);
+  expect(pidReads).toBeLessThanOrEqual(32 * 8);
+  const changedSource = await probePipelineStageHostTermination(target, { owner: "changed-large-tree", identities: counted,
+    progress: restarted.progress, limit: 16 });
+  expect(changedSource.progress?.next).toBe(16);
+  expect(pidReads).toBeLessThanOrEqual(48 * 8);
 });
 
 test("an old lane without delivery custody still reconciles its hosts", async () => {
@@ -199,17 +239,17 @@ test("unreadable kernel identity and registry reads preserve the host", async ()
   const f = host(12, captureProcessIdentity(process.pid));
   const read = spyOn(procBackend, "processIdentity").mockReturnValue(null);
   restores.push(() => read.mockRestore());
-  expect(pipelineStageHostTerminated(f.target)).toBeFalse();
+  expect(await pipelineStageHostTerminated(f.target)).toBeFalse();
   read.mockRestore();
   const snapshot = spyOn(registry, "livenessConversationSnapshot").mockImplementation(() => { throw new Error("read refused"); });
   restores.push(() => snapshot.mockRestore());
-  expect(pipelineStageHostTerminated(f.target)).toBeFalse();
+  expect(await pipelineStageHostTerminated(f.target)).toBeFalse();
   savePipelines([lane([f])]);
   await tickPipelinesController([], ports());
   expect(loadPipelines()[0]!.unconfirmedHosts).toHaveLength(1);
 });
 
-test.skipIf(process.platform !== "linux")("a denied proc read is unknown even when the recorded start token differs", () => {
+test.skipIf(process.platform !== "linux")("a denied proc read is unknown even when the recorded start token differs", async () => {
   const f = host(16, { ...captureProcessIdentity(process.pid), startIdentity: "earlier-start" });
   const stat = fs.statSync;
   const denied = spyOn(fs, "statSync").mockImplementation(((pathname: fs.PathLike, ...args: unknown[]) => {
@@ -217,10 +257,10 @@ test.skipIf(process.platform !== "linux")("a denied proc read is unknown even wh
     return Reflect.apply(stat, fs, [pathname, ...args]);
   }) as typeof fs.statSync);
   restores.push(() => denied.mockRestore());
-  expect(pipelineStageHostTerminated(f.target)).toBeFalse();
+  expect(await pipelineStageHostTerminated(f.target)).toBeFalse();
 });
 
-test.each(["child", "pane", "waiter", "pending-waiter", "exit-process"] as const)("a live %s preserves a host whose native pid is absent", kind => {
+test.each(["child", "pane", "waiter", "pending-waiter", "exit-process"] as const)("a live %s preserves a host whose native pid is absent", async kind => {
   const f = host(30 + ["child", "pane", "waiter", "pending-waiter", "exit-process"].indexOf(kind),
     { pid: MISSING_PID, startIdentity: "old-start" });
   const snapshot = structuredClone(registry.readOnlySnapshot());
@@ -232,7 +272,7 @@ test.each(["child", "pane", "waiter", "pending-waiter", "exit-process"] as const
   if (kind === "pending-waiter") entry.pendingHostExits = [{ process: live, launchId: null }];
   if (kind === "exit-process") entry.structuredHost!.exitProcess = live;
   fs.writeFileSync(registry.filename, JSON.stringify(snapshot));
-  expect(pipelineStageHostTerminated(f.target)).toBeFalse();
+  expect(await pipelineStageHostTerminated(f.target)).toBeFalse();
 });
 
 test("a live shared Viewer writer does not keep its dead native host unconfirmed", async () => {
@@ -279,10 +319,13 @@ test("a later awaited host observation renews earlier termination proofs", async
     return false;
   };
   await tickPipelinesController([], p);
-  expect(loadPipelines()[0]!.unconfirmedHosts?.map(host => host.attempt)).toEqual([earlier.target.attempt]);
+  // The later pane await changed registry evidence for the first host, so the
+  // shared revision fence conservatively retains both proofs for a later tick.
+  expect(loadPipelines()[0]!.unconfirmedHosts?.map(host => host.attempt)).toEqual([earlier.target.attempt, later.target.attempt]);
 });
 
 test.skipIf(process.env.LLV_HOST_RECONCILE_WORKER !== "1")("restart worker", async () => {
+  await tickPipelinesController([], ports());
   await tickPipelinesController([], ports());
 });
 
@@ -369,8 +412,8 @@ test.skipIf(worker)("large retained trees persist bounded proof progress through
   savePipelines([lane([f])]);
   const p = ports();
   let checked = 0;
-  p.stageHostTermination = (target, input) => {
-    const result = probePipelineStageHostTermination(target, input);
+  p.stageHostTermination = async (target, input) => {
+    const result = await probePipelineStageHostTermination(target, input);
     checked += result.checked;
     return result;
   };
@@ -416,7 +459,7 @@ test.skipIf(process.env.LLV_HOST_RECONCILE_WORKER === "1")("bounded windows pass
   savePipelines([lane(hosts)]);
   const p = ports();
   let probes = 0;
-  p.stageHostTermination = (target, input) => { probes++; return probePipelineStageHostTermination(target, input); };
+  p.stageHostTermination = async (target, input) => { probes++; return probePipelineStageHostTermination(target, input); };
   await tickPipelinesController([], p);
   expect(probes).toBeLessThanOrEqual(16);
   expect(loadPipelines()[0]!.unconfirmedHosts).toHaveLength(40);

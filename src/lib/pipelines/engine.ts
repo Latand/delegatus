@@ -39,7 +39,7 @@ import { readRuntimeSnapshot } from "@/lib/runtime/snapshotReads";
 import { pipelinePublishesRemoteBranch, MISSING_DELIVERY_REMOTE, LOCAL_DELIVERY_PUBLISH_REFUSAL } from "./publication";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { controllerSnapshotPorts } from "./controllerSnapshot";
-import { probePipelineStageHostTermination, type HostTerminationInput, type HostTerminationProbe } from "./hostTermination";
+import { pipelineStageHostTerminationSourceCurrent, probePipelineStageHostTermination, type HostTerminationInput, type HostTerminationProbe } from "./hostTermination";
 import { guardHostTerminationCheckpoint, hostTerminationKey } from "./hostTerminationProof";
 import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, pendingRuntimeSwitchRetry, recoverableRuntimeSwitch, parkRuntimeSwitch, requestRuntimeSwitchRetry, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement, runtimeSwitchReconfigureOutcome } from "./runtimeSwitch";
 import { hardenedRedact } from "@/lib/view/compactText";
@@ -431,7 +431,7 @@ export interface PipelinePorts {
   stageHostResident(target: PipelineStageHostRef): Promise<boolean>;
   /** Bounded physical identity proof, with durable progress for a retained
       tree. A zero budget validates its source at the write checkpoint. */
-  stageHostTermination?(target: PipelineStageHostRef, input: HostTerminationInput): HostTerminationProbe;
+  stageHostTermination?(target: PipelineStageHostRef, input: HostTerminationInput): HostTerminationProbe | Promise<HostTerminationProbe>;
   /** What still runs, with no stream, for any registry row of these
       conversations, or null when nothing does (#2790). */
   stageHostTreeStillRunning?(conversationIds: readonly string[]): string | null;
@@ -12476,7 +12476,7 @@ async function reconcileUnconfirmedHosts(pipeline: Pipeline, ports: PipelinePort
     let terminated: boolean;
     if (ports.stageHostTermination) {
       const key = hostTerminationKey(host);
-      const result = ports.stageHostTermination(target, { owner: owner(host), identities, progress: proofs[key] });
+      const result = await ports.stageHostTermination(target, { owner: owner(host), identities, progress: proofs[key] });
       if (result.progress && JSON.stringify(result.progress) !== JSON.stringify(proofs[key])) {
         proofs[key] = result.progress;
         progressChanged = true;
@@ -12484,9 +12484,11 @@ async function reconcileUnconfirmedHosts(pipeline: Pipeline, ports: PipelinePort
       terminated = result.terminated;
       if (terminated) positive.set(host, () => {
         const currentIdentities = extraIdentities(host);
+        // Scope absence was checked asynchronously by the production probe.
+        // The registry revision fence is cheap and synchronous inside the
+        // SQLite write transaction, and detects replacement of any source row.
         return currentIdentities !== null && !attemptFor(host)?.activation
-          && ports.stageHostTermination!(target, { owner: owner(host), identities: [...identities, ...currentIdentities],
-            progress: result.progress, limit: 0 }).terminated;
+          && Boolean(result.sourceRevision && pipelineStageHostTerminationSourceCurrent(result.sourceRevision));
       });
     } else {
       // Injected legacy ports retain their own observation contract. Production
