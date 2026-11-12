@@ -1,3 +1,4 @@
+import { withBriefWarnings, type BriefWarning } from "./briefWarnings";
 import { declaredClassSchema, repeatReasonSchema, type RepeatReason } from "./accounting";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
@@ -14485,6 +14486,8 @@ export type PipelineMutationResult = {
   /** Set with ENGINE_NOT_CONNECTED: the stage, role and engine, and the two
       surfaces that resolve it (#1876). */
   details?: EngineNotConnectedDetails;
+  /** Advisory brief diagnostics for its author; these never refuse admission. */
+  briefWarnings?: BriefWarning[];
   /** A draft created with stages whose engine has nobody signed in: one line
       per stage, so the author sees it before pressing Start (#1876). */
   warnings?: { stageId: string; engine: FlowEngine; reason: Exclude<EngineReadiness, "connected">; message: string }[];
@@ -14640,6 +14643,14 @@ function preflightFailure(result: Extract<PipelineRepoPreflight, { ok: false }>)
 }
 
 export async function createPipelineFromRequest(
+  req: CreatePipelineRequest,
+  ports: PipelinePorts = defaultPipelinePorts(),
+  options: CreatePipelineOptions = {},
+): Promise<PipelineMutationResult> {
+  return withBriefWarnings(await admitPipelineFromRequest(req, ports, options));
+}
+
+async function admitPipelineFromRequest(
   req: CreatePipelineRequest,
   ports: PipelinePorts = defaultPipelinePorts(),
   options: CreatePipelineOptions = {},
@@ -16082,6 +16093,19 @@ function graphEditBriefer(actor: PauseResumeActor | null, pipeline: Pipeline, po
 }
 
 export async function patchPipeline(
+  id: string,
+  req: PatchPipelineRequest,
+  ports: PipelinePorts = defaultPipelinePorts(),
+  actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
+  assertAuthority?: () => void,
+  workspaceMemberId?: string,
+): Promise<PipelinePatchResult> {
+  const result = await applyPipelinePatch(id, req, ports, actor, assertAuthority, workspaceMemberId);
+  return GRAPH_EDIT_ACTIONS.has(req.action) || ["start", "update-draft", "retry-stage", "resolve-decision"].includes(req.action)
+    ? withBriefWarnings(result) : result;
+}
+
+async function applyPipelinePatch(
   id: string,
   req: PatchPipelineRequest,
   ports: PipelinePorts = defaultPipelinePorts(),
