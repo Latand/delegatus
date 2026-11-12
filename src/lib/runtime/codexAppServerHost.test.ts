@@ -64,6 +64,20 @@ import {
 } from "./voicePersona";
 
 const COMPACT_SELECTED: SelectedContextRef = { version: 1, state: "selected", conversationId: "conversation_marker_fixture", capturedAt: "2026-09-22T00:00:00.000Z" };
+test.each([false, true])("launch observations reach fresh and adopted Codex requests with clean memory=%s", async cleanMemory => {
+  const observation = JSON.stringify({ cleanerSandbox: { mode: "unsandboxed", reason: "fixture sandbox unavailable" } });
+  for (const resumed of [false, true]) {
+    const server = new FakeAppServer("cleaner-observation-thread");
+    const options = { cwd: "/repo", cleanMemory, runtimeInstructions: observation,
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) };
+    const host = resumed ? await CodexAppServerHost.adopt("cleaner-observation-thread", options) : await CodexAppServerHost.start(options);
+    try {
+      const params = server.requests.find(r => r.method === (resumed ? "thread/resume" : "thread/start"))!.params as { developerInstructions?: string };
+      expect(params.developerInstructions).toContain(observation);
+    } finally { await host.release(); }
+  }
+});
+
 test("memory source table reaches fresh and adopted Codex argv and thread overrides", async () => {
   for (const cleanMemory of [false, true]) for (const resumed of [false, true]) {
     let original: { args: string[]; config: { features: { memories?: boolean } } } | undefined;

@@ -239,6 +239,8 @@ export interface CodexAppServerHostOptions {
   /** Effective native-memory decision shared with the delivery ledger. */
   nativeMemoryEnabled?: boolean;
   developerInstructions?: string;
+  /** Launch observations must reach the report even when memory is disabled. */
+  runtimeInstructions?: string;
   mcpServers?: string[];
   validateTelegramGrant?: () => void;
   /** Codex plugins granted to this session (issue #687). Empty or absent
@@ -1715,11 +1717,12 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       const noticeIntoHistory = !options.socketOwner && telegram.unavailable && Boolean(threadId) && provisional.supportsNativeHistory() && !learnedInstructions;
       /* The thread parameter replaces the account's own developer
          instructions; keep those before this run's learned rules and notice. */
-      const runInstructions = learnedInstructions || telegram.unavailable && !noticeIntoHistory
+      const runInstructions = learnedInstructions || options.runtimeInstructions || telegram.unavailable && !noticeIntoHistory
         ? {
           developerInstructions: [
             typeof configRead.config?.developer_instructions === "string" ? configRead.config.developer_instructions.trim() : "",
             learnedInstructions,
+            options.runtimeInstructions,
             telegram.unavailable && !noticeIntoHistory ? TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE : "",
           ].filter(Boolean).join("\n\n"),
         }

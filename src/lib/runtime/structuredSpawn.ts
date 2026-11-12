@@ -6,7 +6,8 @@ import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { startupHostSnapshot } from "./startupSnapshot";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
-import { guardedDiskCleanerProfile } from "@/lib/agent/cleanerLaunchPolicy";
+import { guardedDiskCleanerProfile, type CleanerSandboxObservation } from "@/lib/agent/cleanerLaunchPolicy";
+import { assertCleanerSandboxAvailable } from "./cleanerSandboxProbe";
 import { assertStageGitRehostProvable, stageGitEnvironment } from "./stageGitEnvironment";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { DEPLOY_ADMISSION_BUDGET_MS, structuredSetupStartedAt } from "./admissionBudget";
@@ -323,6 +324,9 @@ export function structuredHostWorkingDirectory(
   if (!access.scratchDirectory || access.codex.sandbox !== "workspace-write") throw new Error("disk cleaner scratch is unavailable");
   const cwd = path.join(access.scratchDirectory, "cwd");
   fs.mkdirSync(cwd, { mode: 0o700 });
+  // :workspace also grants the shared /tmp. Disk inventory needs only the
+  // two owned roots, even when its empty cwd happens to live under /tmp.
+  access.codex.permissionProfileConfig = `permissions.llv-stage={extends=":read-only",filesystem={${JSON.stringify(access.scratchDirectory)}="write",${JSON.stringify(access.env.LLV_EVIDENCE_DIR)}="write"}}`;
   return cwd;
 }
 
@@ -2248,7 +2252,7 @@ export async function defaultStartHost(
   const env = access.env;
   if (input.engine === "codex") {
     const nativeMemoryEnabled = await codexNativeMemoryEnabled(input.account.home, profile.allowSubagents, profile.cleanMemory === true);
-    const options = {
+    const options: CodexAppServerHostOptions = {
       cwd: structuredHostWorkingDirectory(input, access),
       codexHome: input.account.home,
       fileAuthCredentials: input.account.kind === "managed",
@@ -2275,6 +2279,28 @@ export async function defaultStartHost(
       assertCurrent: () => assertMemoryPreparedStartCurrent(input),
       ...(memoryCell ? { memoryCell } : {}),
     };
+    if (assertDiskCleanerAccess(input)) {
+      let observation: CleanerSandboxObservation = { mode: "restricted", reason: null };
+      try {
+        await assertCleanerSandboxAvailable({ ...options, env: { ...env, CODEX_HOME: input.account.home } });
+      } catch (error) {
+        observation = { mode: "unsandboxed", reason: hardenedRedact(error instanceof Error ? error.message : String(error)).slice(0, 4096) };
+      }
+      try {
+        assertMemoryPreparedStartCurrent(input);
+        await input.registry.recordCleanerSandboxOffLoop(input.receipt.launchId, observation, input.receipt);
+        assertMemoryPreparedStartCurrent(input);
+        if (observation.mode === "unsandboxed") {
+          options.sandbox = "danger-full-access";
+          options.permissionProfile = undefined;
+          options.permissionProfileConfig = undefined;
+        }
+        options.runtimeInstructions = `Include this runtime observation in your final report: ${JSON.stringify({ cleanerSandbox: observation })}`;
+      } catch (error) {
+        access.cleanup();
+        throw error;
+      }
+    }
     await input.authorize?.();
     assertMemoryPreparedStartCurrent(input);
     return resumeSessionId
