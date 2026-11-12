@@ -31,6 +31,9 @@ test("an explicitly assigned successor owns required regression test edits", () 
   const pipeline = { spec: "Required tests must pass.", stages: [build, tests] };
   expect(conflicts(pipeline)).toEqual([]);
 
+  tests.prompt = "Required tests must pass.";
+  expect(conflicts(pipeline)).toMatchObject([{ stageId: "work", reason: "acceptance-conflict" }]);
+
   pipeline.stages = [build];
   expect(conflicts(pipeline)).toMatchObject([{ stageId: "work", reason: "acceptance-conflict" }]);
 });

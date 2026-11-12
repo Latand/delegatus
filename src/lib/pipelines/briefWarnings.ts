@@ -14,6 +14,7 @@ export type BriefWarning = {
 const restriction = /\b(?:no|never|do not|must not|only|forbid\w*|prohibit\w*|excluded?|read.only|requires? .*approval)\b/i;
 const clauses = (text: string) => text.split(/\n+|(?<=[.!?])\s+(?=[A-Z])/).map(line => line.trim()).filter(Boolean);
 const required = /\b(?:acceptance|must|required|ensure|deliver|implement|update|change|support|complete|pass|verify)\b/i;
+const assignedAction = /\b(?:add|change|create|edit|extend|implement|modify|repair|run|test|update|verify|write)\b/i;
 
 const resources = [
   { name: "tests", subject: /\b(?:tests?|checks?)\b/i, ban: /(?:\bno\b[^\n.]*\btests?|\b(?:do not|never)\s+(?!skip\b|weaken\b)[^\n.]*\btests?|\b(?:forbid\w*|prohibit\w*)\b[^\n.]*\btests?|\btests?\b[^\n.]*\b(?:excluded|forbidden|prohibited)\b)/i },
@@ -24,10 +25,11 @@ const resources = [
 function explicitlyAssignedToSuccessor(block: string, current: PipelineStage | undefined, resource: typeof resources[number], stages: PipelineStage[]): boolean {
   const owner = block.match(/\b(?:owner|continuation)\s*:\s*([^\n;]+)/i)?.[1];
   if (!owner) return false;
+  const ownerTokens = owner.split(/[^a-z0-9_-]+/i);
   return stages.some(candidate => candidate.id !== current?.id
-    && new RegExp(`\\b${candidate.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(owner)
+    && ownerTokens.includes(candidate.id)
     && resource.subject.test(candidate.prompt)
-    && required.test(candidate.prompt));
+    && assignedAction.test(candidate.prompt));
 }
 
 /** Bounded, recomputed from the admitted record, including frozen role access.
