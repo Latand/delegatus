@@ -3469,11 +3469,16 @@ export class SqliteStateCollection<T> {
     const records: T[] = [];
     let order = -1, key = "";
     for (;;) {
+      // The pipeline scheduler already selected these exact keys from its
+      // durable obligation index. Older writers could mark a settled close
+      // inactive while it still held unconfirmed hosts. Do not let that stale
+      // optimization veto its bounded recovery window. Unscoped reads retain
+      // the active-row index; row revisions still fence every checkpoint.
       const rows = withViewerOperation("pipelines.controller-read", () => sharedStateReadonlyDatabase(this.filename).query<
         Pick<CollectionRow, "row_key" | "row_order" | "row_revision">, SQLQueryBindings[]>(`
         SELECT row_key, row_order, row_revision FROM state_rows
         ${keys ? "INDEXED BY sqlite_autoindex_state_rows_1" : ""}
-        WHERE collection = ? AND controller_active = 1 AND row_order >= ?
+        WHERE collection = ? ${keys && this.options.collection === "pipelines" ? "" : "AND controller_active = 1"} AND row_order >= ?
           AND (row_order > ? OR row_key > ?)
           ${keys ? "AND row_key IN (SELECT value FROM json_each(?))" : ""}
         ORDER BY row_order, row_key LIMIT ?
