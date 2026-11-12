@@ -153,7 +153,7 @@ test.each([false, true])("fixed proc observer availability=%s preserves holds an
   const invoke: typeof spawnSync = ((command: string, args: string[]) => {
     expect(command).toBe("/usr/bin/sudo"); expect(args).toEqual(["-n", "--", RELEASE_OBSERVER]);
     return { status: available ? 0 : 1, stdout: JSON.stringify({ ...EMPTY, complete: true, uncertain: [] }), stderr: "", pid: 0, output: [], signal: null };
-  }) as typeof spawnSync;
+  }) as unknown as typeof spawnSync;
   h.ports.scan = () => retentionScanWithObserver(h.record.releasesDir, () => observePrivilegedReleases(h.record.releasesDir, invoke), proc);
   h.inputs.rollbackPointers = [JSON.stringify({ dir: h.dirs[1], sha: h.shas[1] })];
   const report = await h.run(); expect(report.errors).toEqual([]);

@@ -294,3 +294,79 @@ The full final report and installation command are handed to the publisher as
 `pr-body.md`. After publication, read back the new PR body and verify it carries
 this whole report. PR creation, pre-push checks and the three deletion-review
 rounds belong to the remaining pipeline stages.
+
+## Successor refresh and verification
+
+On 2026-11-12, the successor merged `origin/main` at
+`2614b079b3f174eb06bb65d9311460ea57aa6fee` with merge commit
+`140d902f39e7f1a1fe10922a03652899159a11d3` (10:29:26Z), without conflicts or
+rebasing. Typecheck found three errors in the inherited tests: two assignments
+to Next.js's readonly `NODE_ENV` declaration and an incompatible `spawnSync`
+fixture cast. The successor corrects those test typings without changing their
+runtime behavior. Both protected implementation files,
+`src/lib/runtime/attemptTempFilesystem.ts` and
+`src/lib/runtime/attemptTempRetention.ts`, retain their starting contents.
+
+The commands below ran from a scratch export of the combined tree with those
+three fixes. Every test file had its own owned gate runner and fresh private
+HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and TMPDIR. The sequential campaign retained
+one admission while each file received its own runner, log, exit status and
+cleanup. It used Bun 1.4.0, `LLV_GATE_RUNNER=off`, a closed Viewer control URL,
+a nonexistent fixture Docker socket and a rejecting fixture Docker executable.
+All twelve file-level Docker sentinel logs were empty. No command in this
+successor contacted live Docker, installed the observer or deleted live data.
+The machine inventory and incident observations earlier in this report retain
+their original observation times; they were not rerun.
+
+Each command in the table runs through the installed `scripts/gate-slot.sh`
+wrapper. Counts are pass / fail / assertions. The campaign ran from
+10:36:55Z through 10:40:14Z. Raw commands, output, time bounds, runner cleanup
+receipts and source digests are retained in the successor's `refresh-checks/`
+evidence directory.
+
+| Run | Command after the gate wrapper | Exit | Counts |
+|---|---|---:|---|
+| `types` | `bunx tsc --noEmit` | 2 | 3 diagnostics in lane tests |
+| `types-fixed` | `bunx tsc --noEmit` | 0 | 0 diagnostics |
+| `touched-tests` | `/usr/bin/python3 "$TMPDIR/retention-refresh/campaign.py"` | 1 | 0 test files; launcher syntax error before execution, corrected |
+| `test-00` | `bun test --timeout=60000 src/lib/agent/registry.temporaryData.test.ts` | 0 | 3 / 0 / 11 |
+| `test-01` | `bun test --timeout=60000 src/lib/dockerCacheRetention.test.ts` | 0 | 10 / 0 / 36 |
+| `test-02` | `bun test --timeout=60000 src/lib/pipelines/worktreeSweepWorker.test.ts` | 0 | 38 / 0 / 147 |
+| `test-03` | `bun test --timeout=60000 src/lib/retentionTestSafety.test.ts` | 0 | 6 / 0 / 19 |
+| `test-04` | `bun test --timeout=60000 src/lib/runtime/attemptEvidenceBinding.test.ts` | 0 | 8 / 0 / 9 |
+| `test-05` | `bun test --timeout=60000 src/lib/runtime/attemptTempRetention.test.ts` | 0 | 134 / 0 / 927 |
+| `test-06` | `bun test --timeout=60000 src/lib/runtime/temporaryDataProduction.test.ts` | 0 | 24 / 0 / 50 |
+| `test-07` | `bun test --timeout=60000 src/lib/runtime/temporaryDataRetention.test.ts` | 0 | 34 / 0 / 118 |
+| `test-08` | `bun test --timeout=60000 src/lib/selfUpdate/releaseObserver.test.ts` | 0 | 7 / 0 / 20 |
+| `test-09` | `bun test --timeout=60000 src/lib/selfUpdate/retention.test.ts` | 0 | 135 / 0 / 1,144 |
+| `test-10` | `bun test --timeout=60000 src/lib/tempSweep.test.ts` | 0 | 82 / 0 / 357 |
+| `test-11` | `bun test --timeout=60000 src/lib/selfUpdate/retentionWorker.test.ts` | 1 | 31 / 1 / 85 |
+| `touched-tests-fixed` | `/usr/bin/python3 "$TMPDIR/retention-refresh/campaign.py"` (corrected), the twelve explicit paths above | 1 | 512 / 1 / 2,923 |
+| `main-retention-worker` | `bun test --timeout=60000 src/lib/selfUpdate/retentionWorker.test.ts` on `2614b079` | 1 | 31 / 1 / 85 |
+
+All **eleven touched test files pass: 481 tests and 2,838 assertions**. The
+additional worker file fails only
+`the bundled retention entry performs a real byte request under the pinned runtime`.
+Its fresh main comparison has the same failure, counts and unresolved Telegram
+module aliases during `Bun.build`. This is a pre-existing baseline failure.
+No new test failure remains. Typecheck is green after the three fixture fixes.
+
+| Additional command | Exit | Counts |
+|---|---:|---|
+| `bun node_modules/.bin/eslint` with all 29 changed TypeScript paths (complete argv in `refresh-checks/lint/command.json`) | 0 | 29 files; 0 errors; 1 existing warning |
+| `python3 -c 'import ast,pathlib; files=["scripts/delegatus-release-holders.py","scripts/install-release-observer.py"]; [ast.parse(pathlib.Path(f).read_text()) for f in files]; print("2 files parsed")'` | 0 | 2 files |
+| `/usr/bin/python3 -IB -c 'import sys; assert sys.dont_write_bytecode and sys.flags.isolated; print("1 assertion, 2 flag conditions")'` | 0 | 1 assertion; 2 flag conditions |
+| `/usr/sbin/visudo -cf "$TMPDIR/retention-refresh/release-observer.sudoers"` | 0 | 1 fixture rule |
+| `git diff --check` | 0 | 0 whitespace findings |
+| `bun scripts/privacy-publication-gate.ts --repository "$WORKTREE" --base origin/main --require-known-values --paths` with all 33 changed paths (complete argv in `refresh-checks/privacy-files/command.json`) | 0 | 33 files; 0 findings |
+
+The `_completedHandoff` lint warning is also present in main's
+`src/lib/agent/registry.ts`. The static Python and sudoers checks perform no
+installation. Worktree-backup preservation, dry-run behavior,
+restart recovery, authority revocation and the Docker guard all pass in the
+renewed file-level results above.
+
+The publisher must carry the incident disclosure, the timestamped read-only
+dry-run report and the exact sudo installation command above into the PR body.
+The successor commits locally; the pipeline owns publication, PR creation,
+published-body read-back and the remaining deletion-review rounds.

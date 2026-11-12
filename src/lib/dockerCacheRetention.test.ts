@@ -49,7 +49,7 @@ test.each(["test", "fixture-production", "production"])("a default Docker call u
   fs.writeFileSync(path.join(root, "docker"), `#!/usr/bin/python3 -I\nimport sys,json\nwith open(${JSON.stringify(calls)},'a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')\n`, { mode: 0o700 });
   const previous = { PATH: process.env.PATH, NODE_ENV: process.env.NODE_ENV,
     LLV_FIXTURE_PARENT_IDENTITY: process.env.LLV_FIXTURE_PARENT_IDENTITY, LLV_TEST_STARTUP_HOME: process.env.LLV_TEST_STARTUP_HOME };
-  process.env.PATH = root; process.env.NODE_ENV = mode === "test" ? "test" : "production";
+  Object.assign(process.env, { PATH: root, NODE_ENV: mode === "test" ? "test" : "production" });
   if (mode === "fixture-production") process.env.LLV_FIXTURE_PARENT_IDENTITY = "fixture-context";
   if (mode === "production") { delete process.env.LLV_FIXTURE_PARENT_IDENTITY; delete process.env.LLV_TEST_STARTUP_HOME; }
   try {

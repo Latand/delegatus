@@ -40,7 +40,7 @@ test("ledger, discovery, registration and Docker checkpoints reject outside stat
 test("changing test mode and TMPDIR cannot widen the original path boundary", () => {
   const previous = { NODE_ENV: process.env.NODE_ENV, TMPDIR: process.env.TMPDIR };
   try {
-    process.env.NODE_ENV = "production"; process.env.TMPDIR = path.dirname(outside());
+    Object.assign(process.env, { NODE_ENV: "production", TMPDIR: path.dirname(outside()) });
     expect(() => assertRetentionTestPath(outside())).toThrow("outside its private temp root");
   } finally { Object.assign(process.env, previous); }
 });
