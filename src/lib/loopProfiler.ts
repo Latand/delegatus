@@ -134,6 +134,8 @@ function safeFile(sourceURL: string | undefined, root: string, known: Map<string
   return held;
 }
 
+const runtimeModuleSource = /^(?:bun|node):|^builtin:\/\//;
+
 /**
  * Where the sampled time went, by the leaf of each sample: a native function
  * from the fixed list, a regular expression, or the file of the script that
@@ -161,18 +163,25 @@ export function categorizeLoopProfile(raw: LoopProfile, root: string) {
     }
     const name = typeof leaf.name === "string" && nativeNames.has(leaf.name) ? leaf.name : "other";
     native.set(name, (native.get(name) ?? 0) + 1);
-    // The nearest script frame names the caller of this native work.
+    // The nearest script frame names the caller of this native work. Bun's
+    // own modules (`bun:sqlite` wraps prepare and run) are passed over: the
+    // statement that matters is the repository frame that called into them.
+    let position: string | undefined, runtimeModule = false;
     for (let depth = 1; depth < Math.min(depthCap, frames.length); depth++) {
       const caller = frames[depth]!;
       if (!caller.sourceURL) continue;
+      if (runtimeModuleSource.test(caller.sourceURL)) { runtimeModule = true; continue; }
       const file = safeFile(caller.sourceURL, root, known);
-      const position = file && Number.isSafeInteger(caller.line) && caller.line > 0 && caller.line !== 4294967295
+      position = file && Number.isSafeInteger(caller.line) && caller.line > 0 && caller.line !== 4294967295
         && Number.isSafeInteger(caller.column) && caller.column > 0 && caller.column !== 4294967295
         ? `${file}:${caller.line}:${caller.column}` : file ?? "elsewhere";
+      break;
+    }
+    if (position === undefined && runtimeModule) position = "elsewhere";
+    if (position !== undefined) {
       let held = callers.get(name);
       if (!held) callers.set(name, held = new Map());
       if (held.has(position) || held.size < 256) held.set(position, (held.get(position) ?? 0) + 1);
-      break;
     }
   }
   const top = (rows: Map<string, number>, limit: number) =>
