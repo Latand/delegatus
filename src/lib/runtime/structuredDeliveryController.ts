@@ -20,6 +20,7 @@ import { assertProactiveTaskExecution, proactiveConversationContext, proactiveCo
 import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
 import { ownerRelayOperationAuthorized, ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
+import { DEAD_STAGE_HOST_REASON, deadStageHostReason, StructuredStageHostGoneError } from "./structuredRecovery";
 import { findPipelineRecord } from "@/lib/pipelines/store";
 import { pipelineRetirementReader, type RetirementTarget } from "@/lib/pipelines/retirementEvidence";
 import { cancelRecordedHost } from "@/lib/recordedChecks/service";
@@ -1213,10 +1214,13 @@ export async function bindStructuredDeliveryQueue(
             status === "uncertain" ? "failed" : status,
             details?.reason ?? null,
             /* The disposition the record has to keep: actuation began, so a
-               resend can duplicate it. Every other `failed` on a message effect
-               means the send never reached the engine and proves nothing on its
-               own, so it carries none. */
-            status === "uncertain" ? "unverified" : undefined,
+               resend can duplicate it. The dead-stage refusal proves loss only
+               with its queued-only journal fence and no earlier unverified
+               actuation. Other failures carry no new disposition. */
+            status === "uncertain" ? "unverified"
+              : status === "failed" && details?.reason === DEAD_STAGE_HOST_REASON
+                && options?.fromStatuses?.length && options.fromStatuses.every(value => value === "pending" || value === "queued")
+                && result.receipt.deliveryUnverified !== true ? "lost" : undefined,
             /* The journal receipt, not these details: it carries the route the
                delivering transition recorded, whichever executor began it. */
             status === "delivered" ? deliveryRouteOf(result.receipt) : null,
@@ -1476,6 +1480,10 @@ export async function bindStructuredDeliveryQueue(
       const conversation = registry.conversation(conversationId as `conversation_${string}`);
       const generation = conversation?.generations.at(-1);
       if (!conversation || !generation) return false;
+      if (admission.operationId && !admission.operationId.startsWith("spawn_message_")) {
+        const reason = deadStageHostReason(registry, conversation.id, generation.path, generation.id);
+        if (reason) throw new StructuredStageHostGoneError(reason);
+      }
       let startupAdmission: Pick<import("./structuredRecovery").StructuredRecoveryRequest,
         "admissionGuard" | "authorityGuard" | "acceptSuccessorClaim"> = {};
       if (startupPending && !startupRecoveryReady) {

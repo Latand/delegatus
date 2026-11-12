@@ -5,10 +5,11 @@ description: Retired. Implement→review work now runs as pipeline run stages (b
 
 # Review loops moved to pipelines
 
-Review flows are retired (`docs/design/retire-flows.md`). The server refuses
-to start or drive one, so do not call `POST /api/flows`, `PATCH /api/flows/<id>`
-or `flow_action`. Stored flows stay readable as history through `list_flows`,
-`get_flow` and `GET /api/flows`.
+Review flows and workflows are retired (`docs/design/retire-flows.md`), and
+their engines are removed. `/api/flows` and `/api/workflows` answer 410 for
+every method, and the `list_flows`, `get_flow` and `flow_action` tools are gone
+from the tool list. Stored flows stay readable as review history in the
+interface and through `GET /api/review-history?project=<project>`.
 
 Run implement→review work as one pipeline (`create_pipeline`) on the board task:
 
@@ -33,5 +34,5 @@ Read next:
 - `docs/pipelines.md`: the stage contract, edges and actions;
 - the `delegatus-orchestration` and `delegatus-conveyor` skills for spawning and lanes.
 
-This pointer stays for the compatibility window and is removed with the flow
-tools (S9 of the retirement plan).
+This pointer stays while installed copies of the skill set still link it by
+name.

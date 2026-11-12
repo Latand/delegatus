@@ -127,7 +127,11 @@ nothing. A publication stopped only by an execution deadline retries after 1,
 5 and 15 minutes, then parks after those three retries with the cause on its
 first line. CPU admission waits do not spend the check budget, including the
 handoff into the admitted hook process. A named failing assertion, another
-failed check or failed cleanup keeps the refusal decisive. A refused
+failed check or failed cleanup keeps the refusal decisive. Comparator budget
+exhaustion retains green file checkpoints for automatic retries, and a
+privacy report containing only `configuration_error` retries as an interruption
+when changed paths are known and exclude `scripts/privacy-*` and
+`scripts/generate-privacy-*`. A refused
 publication of an unchanged head retries
 after 1, 5 and 15 minutes, then parks with the cause on its first line. A push
 interrupted by a signal or a stopped Viewer before it reached the remote is
