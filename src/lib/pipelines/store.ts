@@ -1,3 +1,4 @@
+import { withdrawPipelineMerge } from "./mergeSuccessor";
 import { settleAttemptAccounting } from "./attemptAccounting";
 import { attemptAccountingSchema, declaredClassSchema, laneClassSchema, repeatReasonSchema } from "./accounting";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
@@ -2165,6 +2166,7 @@ export function deliveryJournal(pipeline: Pipeline, kind: NonNullable<Pipeline["
 }
 
 function releaseTerminalDelivery(pipeline: Pipeline): void {
+  if (pipeline.state === "closed") withdrawPipelineMerge(pipeline, "Lane is closed", pipeline.closedAt ?? new Date().toISOString());
   const delivery = pipeline.delivery;
   // Host teardown keeps its own durable custody. Closing withdraws this
   // lane's right to start a publisher immediately; an existing writer below
@@ -2355,6 +2357,7 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
     }
     pipeline.publicationRecovery = mergePublicationRecovery(old?.publicationRecovery, pipeline.publicationRecovery);
     if (old?.delivery && activeOld) {
+      withdrawPipelineMerge(old, `Merge superseded by delivery owner ${pipeline.id}`, new Date().toISOString());
       old.delivery.active = false;
       old.delivery.publish = "disabled";
       old.delivery.releasedAt = new Date().toISOString();
