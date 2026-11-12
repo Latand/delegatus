@@ -70,7 +70,7 @@ import { loadArchivedPipelinesForList, loadArchivedPipelinesForListAsync, loadPi
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline } from "@/lib/pipelines/types";
 import { forgeCacheView } from "@/lib/forge/cache";
-import { pipelineWorkLinks } from "@/lib/forge/resolve";
+import { canonicalRepository, lanePullRequest, pipelineWorkLinks } from "@/lib/forge/resolve";
 import type { ForgeCacheView } from "@/lib/forge/workLinks";
 import { runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
@@ -1934,11 +1934,12 @@ function localLaneDelivery(pipeline: Pipeline, cache: ForgeCacheView): "none" | 
   // Only the explicitly recorded delivery PR proves the lane's delivery.
   // pipelineWorkLinks also includes manual links, provenance, and cached PRs
   // from a reused branch; their merge state cannot settle this lane.
+  const deliveryPr = pipeline.delivery?.target.pr ? lanePullRequest(pipeline) : null;
+  const canonical = canonicalRepository(cache);
+  if (deliveryPr && pipelineWorkLinks(pipeline, cache).links.some(link => link.kind === "pr"
+    && link.number === deliveryPr.number && canonical(link.repository) === canonical(deliveryPr.repository)
+    && link.state === "merged")) return "merged";
   const prs = pipelineWorkLinks(pipeline, cache).links.filter(link => link.kind === "pr");
-  const deliveryPr = pipeline.delivery?.target.pr;
-  if (deliveryPr && prs.some(link => link.kind === "pr"
-    && link.number === deliveryPr && link.state === "merged"
-    && (!pipeline.delivery?.target.prRepository || link.repository.toLowerCase() === pipeline.delivery.target.prRepository.toLowerCase()))) return "merged";
   if (prs.length || pipeline.delivery?.target.pr || pipeline.publication === "remote-branch") return "pending";
   if (pipeline.publication === "internal") return "none";
   if (!pipeline.delivery?.target.remote && pipeline.stages.length
