@@ -1225,6 +1225,7 @@ test("Cloud account selection skips a missing environment and spreads durable re
   record.state = "running"; record.cursor = { stageId: "review", state: "pending", input: null, activatedBy: null };
   Object.assign(record.delivery!, { active: true, publish: "enabled", disposition: "owner", ownerId: record.id });
   record.runs[0]!.attempts.push({ ...previous, n: 2, state: "pending", startedAt: null, completedAt: null,
+    accounting: { ...previous.accounting!, startedAt: null, repeatReason: "unknown", time: null },
     verdict: null, accountId: null, definition: undefined, cloud: undefined, executionRuntime: undefined });
   savePipelines([record]);
   await submitted(h);
@@ -1430,6 +1431,7 @@ for (const [id, refuseHook, exhaustedWriter, diffOutage, lateWriter] of [["build
       definition: current.definition && { ...structuredClone(current.definition), runtime: "local" as const },
       conversationId: "previous-local-writer", executionRuntime: "local" as const };
     current.n = 2;
+    current.accounting!.repeatReason = "unknown";
     record.runs[0]!.attempts.unshift(previous); savePipelines([record]);
     const base = record.lastPassedCommit;
     let writerAlive = true, writerChecks = 0, stops = 0;

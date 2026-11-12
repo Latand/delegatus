@@ -23,6 +23,7 @@ async function unreservedPark(replacement = true, engine?: "codex" | "claude") {
   const attempt = replacement ? structuredClone(first) : first;
   if (replacement) {
     attempt.n = 2;
+    attempt.accounting!.repeatReason = "unknown";
     attempt.restartContext = { previousAttempt: 1, transcriptPath: null };
     lane.runs[0]!.attempts.push(attempt);
   }

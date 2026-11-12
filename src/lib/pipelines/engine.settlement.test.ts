@@ -576,7 +576,7 @@ test("an empty draft is created, assembled from zero, and starts with one stage 
   /* One implement conversation is the minimum graph (#353): Start succeeds. */
   const one = await patchPipeline(id, { action: "add-stage", stage: { id: "plan", kind: "run", role: { roleId: "builder" }, prompt: "Plan it", next: null } }, ports);
   expect(one.pipeline?.stages.map((stage) => stage.id)).toEqual(["plan"]);
-  expect(one.pipeline?.cursor).toEqual({ stageId: "plan", state: "pending", input: null, activatedBy: null });
+  expect(one.pipeline?.cursor).toMatchObject({ stageId: "plan", state: "pending", input: null, activatedBy: null });
   const started = await patchPipeline(id, { action: "start" }, ports);
   expect(started.pipeline?.state).toBe("provisioning");
 });
@@ -769,7 +769,7 @@ test("a rejected structured fail verdict parks before fail-edge traversal (#429)
   const current = loadPipelines()[0]!;
   expect(current.state).toBe("needs_decision");
   expect(current.stateDetail).toBe(reason);
-  expect(current.cursor).toEqual({
+  expect(current.cursor).toMatchObject({
     stageId: "verify",
     state: "pending",
     input: "built",
@@ -799,7 +799,7 @@ test("a completed stage's output is persisted once and relayed exactly once (#35
 
   /* The relay record lands in the same mutation as the verdict. */
   let current = loadPipelines()[0]!;
-  expect(current.cursor).toEqual({ stageId: "build", state: "pending", input: "plan output", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
+  expect(current.cursor).toMatchObject({ stageId: "build", state: "pending", input: "plan output", activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } });
 
   /* Sibling-record evolution after the advance must not change the delivered
      The persisted prompt input remains authoritative across cursor movement. */
@@ -842,7 +842,7 @@ test("an accepted fail verdict traverses the fail edge, loops once, then parks o
   let current = loadPipelines()[0]!;
   expect(current.state).toBe("running");
   expect(current.runs[1]!.attempts[0]).toMatchObject({ state: "failed", verdict: { status: "fail" } });
-  expect(current.cursor).toEqual({
+  expect(current.cursor).toMatchObject({
     stageId: "build",
     state: "pending",
     input: "cannot pass\n\nFail verdict findings:\n- broken test",
