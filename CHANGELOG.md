@@ -71,6 +71,21 @@ compatibility raises the major version.
   as `runs.ndjson.projects.imported-<release>`), and a directory with a
   README takes the file's place. `conversation-monitor/runs.ndjson` stays a
   file (#1870).
+- **The limits history, the reaper's authorship evidence and the handoff
+  lineage are stored in `state.sqlite`** (collections `limits_history`,
+  `reaper` and `handoff_lineage`) instead of `limits-history.json`,
+  `reaper-state.json` and `handoff-lineage.json`, which were rewritten whole
+  (about 1.4 MB, 3 MB and 0.2 MB on a busy installation). The limits history
+  is one row per series and day, the reaper's evidence one row per transcript
+  path and the lineage one row per edge. A limits poll writes only the current
+  day of the series it extends, and nothing inside the five-minute gap; a
+  reaper cycle writes only the paths whose evidence changed, and nothing when
+  none did. Readers keep
+  the rows and follow only what changed, so the board's authorship check and
+  the burndown no longer parse a whole file on every request. An edge one
+  process records is now seen by the others. On first start each file is
+  imported and verified, then kept as `<file>.imported-<release>`, and a
+  directory with a README takes its place (#1870).
 
 ### Downgrading
 - A version older than this one finds a directory where
@@ -91,6 +106,16 @@ compatibility raises the major version.
   loses what was recorded since the upgrade. Deployed releases rolled back
   through the release fence get the files written back for them
   automatically, and what they append is merged at roll-forward.
+- A version older than this one finds directories where
+  `limits-history.json`, `reaper-state.json` and `handoff-lineage.json` were.
+  It reads each as empty: the burndown shows no recorded history, every
+  finished worker stays pinned as unverified on the board, and older handoffs
+  lose their links. It cannot save new samples, evidence or edges, and its
+  reaper cycle fails at the evidence write. Upgrade again to recover.
+  Replacing a directory with its `<file>.imported-*` copy also works, but
+  loses what was recorded since the upgrade. Deployed releases rolled back
+  through the release fence get the files written back for them
+  automatically, and what they record is merged at roll-forward.
 
 ## [2.0.0] — 2026-10-27
 

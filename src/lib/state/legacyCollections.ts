@@ -166,6 +166,22 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     importAtActivation: async () => (await import("@/lib/lifecycle/digest")).lifecycleDigestStore.importLegacy(statePath("lifecycle-digests.json"), { reconcile: true }),
     checkpointMirrorForDemotion: async () => (await import("@/lib/lifecycle/digest")).lifecycleDigestStore.checkpointRollbackMirror(statePath("lifecycle-digests.json")),
   },
+  // Slice 8: histories; each store module documents its layout.
+  {
+    collection: "limits_history",
+    importAtActivation: async () => (await import("@/lib/limitsHistoryStore")).importLegacyLimitsHistory(statePath("limits-history.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/limitsHistoryStore")).checkpointLimitsHistoryRollbackMirrorForDemotion(statePath("limits-history.json")),
+  },
+  {
+    collection: "reaper",
+    importAtActivation: async () => (await import("@/lib/reaperState")).importLegacyReaperState(statePath("reaper-state.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/reaperState")).checkpointReaperStateRollbackMirrorForDemotion(statePath("reaper-state.json")),
+  },
+  {
+    collection: "handoff_lineage",
+    importAtActivation: async () => (await import("@/lib/handoffLineage")).importLegacyHandoffLineage(statePath("handoff-lineage.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/handoffLineage")).checkpointHandoffLineageRollbackMirrorForDemotion(statePath("handoff-lineage.json")),
+  },
   /* The conversation-migration journal roots: a directory of per-operation
      files rather than one file, so the entry names the root and the store keys
      its collection off the root's basename. */
