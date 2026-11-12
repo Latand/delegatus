@@ -8,7 +8,7 @@ import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { attemptReferencesClear, repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
 import * as filesystem from "./attemptTempFilesystem";
 import type { ProcessScan } from "@/lib/tempSweep";
-import { AttemptTempStore, EXPIRED_HOLD_RETRY_MS, sweepAttemptTemps, type AttemptTempState, type AttemptTempOwner } from "./attemptTempRetention";
+import { AttemptTempStore, BLOCKED_SUBTREE_RETRY_MS, EXPIRED_HOLD_RETRY_MS, sweepAttemptTemps, type AttemptTempState, type AttemptTempOwner } from "./attemptTempRetention";
 import { attemptTempAuthority, attemptTempState } from "./attemptTempProduction";
 import { holdFinishedRoot } from "./attemptTempRetention.testSupport";
 import { recordedRootHeld, RecordedCheckStore } from "@/lib/recordedChecks/store";
@@ -774,16 +774,13 @@ test("a settled attempt removes its scratch without waiting for host release", a
 
 type NamespacePath = "namespace-only" | "permission-fallback";
 type NamespaceChange = "control" | "producer-changed" | "checkout-unreadable" | "root-replaced";
-async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceChange = "control", expired = false, foreignSubtree = false) {
+async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceChange = "control", expired = false) {
   const f = fixture(), directory = f.make(`namespace-${kind}`), bin = path.join(f.root, "bin");
   const checkout = path.join(f.root, "checkout"), completion = path.join(f.root, "cleanup-complete");
   fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
   fs.mkdirSync(path.join(directory, "private")); fs.mkdirSync(bin);
   fs.writeFileSync(path.join(directory, "private", "payload"), "reclaim me");
   if (expired) fs.writeFileSync(path.join(directory, "frame.png"), "expired evidence");
-  // A container that ran as another user leaves a directory this user cannot list.
-  const locked = path.join(directory, "private", "pgdata");
-  if (foreignSubtree) { fs.mkdirSync(locked); fs.writeFileSync(path.join(locked, "base"), "database files"); fs.chmodSync(locked, 0); }
   f.store.measure(directory, 8192); f.store.release(directory);
   fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}
 import fs from "node:fs";
@@ -795,9 +792,6 @@ if (!source || !source.startsWith(${JSON.stringify(f.root + path.sep)})) process
 const script = args[args.indexOf("-c") + 1];
 if (script.includes("-delete")) {
   if (script.includes("found=$(find") && fs.existsSync(source + "/frame.png")) process.exit(75);
-  // The cleanup namespace holds DAC_OVERRIDE: it lists what this user cannot.
-  const grant = (file) => { const stat = fs.lstatSync(file); if (!stat.isDirectory()) return; fs.chmodSync(file, 0o700); for (const entry of fs.readdirSync(file)) grant(file + "/" + entry); };
-  grant(source);
   for (const entry of fs.readdirSync(source)) fs.rmSync(source + "/" + entry, { recursive: true, force: true });
   if (${JSON.stringify(change)} === "checkout-unreadable") fs.chmodSync(${JSON.stringify(checkout)}, 0);
   if (${JSON.stringify(change)} === "root-replaced") {
@@ -853,9 +847,6 @@ if (script.includes("-delete")) {
     expect(f.store.bytes()).toBe(0);
   } finally {
     opendir.mockRestore(); rm.mockRestore(); f.store.close(); fs.chmodSync(checkout, 0o700);
-    for (const name of fs.readdirSync(f.root)) {
-      try { fs.chmodSync(path.join(f.root, name, "private", "pgdata"), 0o700); } catch { /* Removed or never made. */ }
-    }
     if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
     if (previousImage === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
   }
@@ -865,8 +856,38 @@ test.skipIf(process.platform !== "linux")("expired evidence also retires through
   await integratedNamespaceSweep("permission-fallback", "control", true);
 });
 
-test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)("an expired root with a subtree this user cannot list retires through the namespace", async () => {
-  await integratedNamespaceSweep("permission-fallback", "control", true, true);
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a root holding a directory this user cannot remove waits for the operator and is reported", async () => {
+  const f = fixture(), directory = f.make("blocked", 2 * 86400000), bin = path.join(f.root, "bin");
+  // What a container that ran as another user leaves behind: a directory this
+  // user can neither list nor empty. Mode 000 on our own directory models it.
+  const locked = path.join(directory, "tmp", "pgdata");
+  fs.mkdirSync(locked, { recursive: true }); fs.writeFileSync(path.join(locked, "base"), Buffer.alloc(8192)); fs.chmodSync(locked, 0);
+  fs.mkdirSync(path.join(directory, "tmp", "empty-foreign")); fs.chmodSync(path.join(directory, "tmp", "empty-foreign"), 0o500);
+  // Nothing may be removed or measured with privileges.
+  fs.mkdirSync(bin); fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh\necho "$@" >> ${JSON.stringify(path.join(f.root, "docker.log"))}\nexit 1\n`, { mode: 0o700 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = bin + path.delimiter + (previousPath ?? "");
+  try {
+    const held = await f.sweep("expired");
+    expect(held).toMatchObject({ removed: 0, errors: 0, operatorHeld: 1 });
+    expect(held.outcomes[0]).toMatchObject({ directory, disposition: "operator", unreadable: true });
+    expect(held.outcomes[0].reason).toContain("1 directory this user cannot remove");
+    expect(held.operatorHeldBytes).toBeGreaterThanOrEqual(4096);
+    expect(held.blocked).toMatchObject({ roots: 1, listed: [{ directory, count: 1, entries: [{ path: locked, uid: process.getuid!(), unreadable: true }] }] });
+    expect(fs.existsSync(path.join(directory, "tmp"))).toBeTrue();
+    expect(f.store.owner(directory)!.checkedAt).toBe(NOW + BLOCKED_SUBTREE_RETRY_MS);
+    const dockerLog = path.join(f.root, "docker.log");
+    expect((fs.existsSync(dockerLog) ? fs.readFileSync(dockerLog, "utf8") : "").split("\n").filter(line => line.startsWith("run"))).toEqual([]);
+    // Once the operator removed it, the next visit retires the root and the report forgets it.
+    fs.chmodSync(locked, 0o700); fs.rmSync(locked, { recursive: true });
+    const retired = await f.sweep("expired", { now: () => NOW + BLOCKED_SUBTREE_RETRY_MS });
+    expect(retired).toMatchObject({ removed: 1, errors: 0, blocked: { roots: 0, listed: [] } });
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally {
+    try { fs.chmodSync(locked, 0o700); } catch { /* Removed above. */ }
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+    f.store.close();
+  }
 });
 
 test.skipIf(process.platform !== "linux").each(["namespace-only", "permission-fallback"] as const)(
@@ -1524,15 +1545,15 @@ test("a symlink replacement cannot redirect cleanup", async () => {
 
 for (const replacement of ["directory", "symlink"] as const) test(`a ${replacement} swap during measurement keeps the prior accounting and both trees`, async () => {
   const f = fixture(); const directory = f.make("measurement-swap"), saved = `${directory}-saved`;
-  const measure = filesystem.allocatedAttemptBytes;
-  const race = spyOn(filesystem, "allocatedAttemptBytes").mockImplementation(async target => {
-    const bytes = await measure(target);
+  const measure = filesystem.measureAttemptAllocation;
+  const race = spyOn(filesystem, "measureAttemptAllocation").mockImplementation(async target => {
+    const measured = await measure(target);
     if (target === directory) {
       fs.renameSync(directory, saved);
       if (replacement === "symlink") fs.symlinkSync(saved, directory);
       else { fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "keep"), "replacement"); }
     }
-    return bytes;
+    return measured;
   });
   try {
     const report = await f.sweep();

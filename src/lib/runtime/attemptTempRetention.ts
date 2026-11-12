@@ -5,7 +5,7 @@ import { statePath } from "@/lib/configDir";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { attemptTempJournalPath, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
-import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, snapshotAttemptProtection, removeAttemptTree, RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+import { allocatedAttemptBytes, attemptReferencesClear, blockedSubtrees, inspectAttemptTree, measureAttemptAllocation, snapshotAttemptProtection, removeAttemptTree, RepositoryLinkInventory, type BlockedSubtree, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
 import { recordedRootHeld, recordRootRetirement, expireRecordedRootHolds, type CheckRow } from "@/lib/recordedChecks/store";
@@ -30,6 +30,11 @@ export type EvidenceCopy = { destination: string; pipelineId: string | null; lau
 export const DEFAULT_ATTEMPT_TEMP_CAP_BYTES = 100 * 1024 ** 3;
 /** How long a root held past its lane's retention waits for its next visit. */
 export const EXPIRED_HOLD_RETRY_MS = 30 * 60_000;
+/** How long a root waits for the operator to remove what this user cannot. */
+export const BLOCKED_SUBTREE_RETRY_MS = 60 * 60_000;
+/** Roots whose blocked subtrees one report lists in full. */
+const BLOCKED_REPORT_ROOTS = 32;
+export type BlockedRoot = { directory: string; bytes: number; count: number; entries: BlockedSubtree[]; at: number };
 
 const attemptTempIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS roots_launch ON roots(launchId,pipelineId,directory)",
@@ -64,6 +69,7 @@ export class AttemptTempStore {
         createdAt REAL NOT NULL, expiresAt REAL, checkedAt REAL NOT NULL DEFAULT 0, bytes REAL NOT NULL DEFAULT 0)`);
       this.db.exec("CREATE TABLE IF NOT EXISTS root_retention(directory TEXT PRIMARY KEY, expiresAt REAL, failure TEXT)");
       this.db.exec("CREATE TABLE IF NOT EXISTS root_expiry_admission(directory TEXT PRIMARY KEY, expiresAt REAL NOT NULL)");
+      this.db.exec("CREATE TABLE IF NOT EXISTS root_blocked(directory TEXT PRIMARY KEY, count INTEGER NOT NULL, entries TEXT NOT NULL, at REAL NOT NULL)");
       this.db.exec("CREATE TABLE IF NOT EXISTS copy_retention_failures(destination TEXT PRIMARY KEY, failure TEXT NOT NULL)");
       this.db.exec("CREATE TABLE IF NOT EXISTS copy_adoption(id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL, done INTEGER NOT NULL)");
       this.db.exec("CREATE TABLE IF NOT EXISTS copy_inspection(id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL)");
@@ -149,6 +155,20 @@ export class AttemptTempStore {
     }
     return [...expired, ...rest("SELECT * FROM roots WHERE checkedAt<=? ORDER BY checkedAt,createdAt,directory LIMIT ?", limit - expired.length)];
   }
+  /** Subtrees of a root that this user cannot remove, as last observed. */
+  recordBlocked(directory: string, blocked: { count: number; entries: BlockedSubtree[] } | null, at: number) {
+    if (!blocked?.count) this.db.query("DELETE FROM root_blocked WHERE directory=?").run(directory);
+    else this.db.query("INSERT OR REPLACE INTO root_blocked VALUES(?,?,?,?)").run(directory, blocked.count, JSON.stringify(blocked.entries), at);
+  }
+  /** Every root held for the operator, the largest first, with its subtrees. */
+  blockedRoots(limit = BLOCKED_REPORT_ROOTS): { roots: number; bytes: number; listed: BlockedRoot[] } {
+    const totals = this.db.query<{ roots: number; bytes: number | null }, []>(`SELECT count(*) AS roots, sum(r.bytes) AS bytes
+      FROM root_blocked b JOIN roots r ON r.directory=b.directory`).get()!;
+    const listed = this.db.query<{ directory: string; bytes: number; count: number; entries: string; at: number }, [number]>(`SELECT b.directory,r.bytes,b.count,b.entries,b.at
+      FROM root_blocked b JOIN roots r ON r.directory=b.directory ORDER BY r.bytes DESC,b.directory LIMIT ?`).all(limit)
+      .map(row => ({ ...row, entries: JSON.parse(row.entries) as BlockedSubtree[] }));
+    return { roots: totals.roots, bytes: totals.bytes ?? 0, listed };
+  }
   /** The recorded end of the root's lane retention, or null when none is known. */
   retentionExpiry(directory: string): number | null {
     return this.db.query<{ expiresAt: number | null }, [string]>("SELECT expiresAt FROM root_retention WHERE directory=?").get(directory)?.expiresAt ?? null;
@@ -158,6 +178,7 @@ export class AttemptTempStore {
     this.db.transaction(() => {
       this.db.query("DELETE FROM root_retention WHERE directory=?").run(directory);
       this.db.query("DELETE FROM root_expiry_admission WHERE directory=?").run(directory);
+      this.db.query("DELETE FROM root_blocked WHERE directory=?").run(directory);
       this.db.query("DELETE FROM roots WHERE directory=?").run(directory);
     })();
   }
@@ -276,20 +297,26 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   const checkBudget = () => { if (now() >= deadline) throw new AttemptTempBudgetDeferred("run budget exhausted"); };
   const adoption = store.adopt(now());
   const capBytes = options.capBytes ?? DEFAULT_ATTEMPT_TEMP_CAP_BYTES;
-  type Outcome = { directory: string; disposition: "deferred" | "live" | "evidence" | "held" | "failed" | "removed"; bytes: number; reason: string };
+  type Outcome = { directory: string; disposition: "deferred" | "live" | "evidence" | "held" | "operator" | "failed" | "removed"; bytes: number; reason: string;
+    /** Part of the tree could not be read; `bytes` counts the rest. */
+    unreadable?: true };
   const report = { adopted: adoption.adopted, checked: 0, removed: 0, removedBytes: 0,
     deferred: 0, deferredBytes: 0, held: 0, liveHeld: 0, liveHeldBytes: 0,
-    evidenceHeld: 0, evidenceHeldBytes: 0, otherHeldBytes: 0,
+    evidenceHeld: 0, evidenceHeldBytes: 0, operatorHeld: 0, operatorHeldBytes: 0, otherHeldBytes: 0,
     errors: adoption.errors, failedBytes: 0, unexaminedBytes: 0,
-    bytes: store.bytes(), capBytes, overCapBytes: 0, inventoryWalks: 0, outcomes: [] as Outcome[] };
+    bytes: store.bytes(), capBytes, overCapBytes: 0, inventoryWalks: 0, outcomes: [] as Outcome[],
+    /** Every root the ledger holds for the operator, not only this page's. */
+    blocked: { roots: 0, bytes: 0, listed: [] as BlockedRoot[] } };
+  const partiallyRead = new Set<string>();
   const outcome = (directory: string, disposition: Outcome["disposition"], bytes: number, reason: string) => {
-    report.outcomes.push({ directory, disposition, bytes, reason });
+    report.outcomes.push({ directory, disposition, bytes, reason, ...(partiallyRead.has(directory) ? { unreadable: true as const } : {}) });
     if (disposition === "deferred") { report.deferred++; report.deferredBytes += bytes; }
     else if (disposition === "failed") { report.failedBytes += bytes; }
     else if (disposition !== "removed") {
       report.held++;
       if (disposition === "live") { report.liveHeld++; report.liveHeldBytes += bytes; }
       else if (disposition === "evidence") { report.evidenceHeld++; report.evidenceHeldBytes += bytes; }
+      else if (disposition === "operator") { report.operatorHeld++; report.operatorHeldBytes += bytes; }
       else report.otherHeldBytes += bytes;
     }
   };
@@ -329,7 +356,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     }
     report.checked++;
     let bytes = owner.bytes;
-    let disposition: "live" | "evidence" | "held" = "held";
+    let disposition: "live" | "evidence" | "held" | "operator" = "held";
     let reason = "identity changed";
     // Persist fairness before the first await; a killed helper resumes elsewhere.
     store.defer(owner.directory, now() + 60_000);
@@ -352,7 +379,11 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         if (owner.pipelineId && hasAttemptRetirementClaim(owner.pipelineId)) await claim();
         if (stat && options.mode !== "dry-run") restoreRefusedAttemptTrash(owner.directory, owner.identity);
       }
-      bytes = stat ? await allocatedAttemptBytes(owner.directory) : pendingTrash ? owner.bytes : 0;
+      if (stat) {
+        const measured = await measureAttemptAllocation(owner.directory);
+        bytes = measured.bytes;
+        if (measured.unreadable) partiallyRead.add(owner.directory);
+      } else bytes = pendingTrash ? owner.bytes : 0;
       if (!stat && !pendingTrash) store.measure(owner.directory, 0);
       if (stat) {
         const measured = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
@@ -446,6 +477,18 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         const settled = state === "closed" || state === "expired" || state === "settled" && !owner.retainUntilClose
           || state === "orphan" && now() - owner.createdAt >= (options.maxAgeMs ?? 86400000);
         if (!settled) return false;
+        // What this user cannot list or empty, a container's root-owned data
+        // for one, needs privileges the sweep does not use. The whole root
+        // stays, and the report names each such directory for the operator.
+        const blocked = await blockedSubtrees(directory);
+        if (directory === owner.directory) store.recordBlocked(owner.directory, blocked, now());
+        if (blocked.count) {
+          disposition = "operator";
+          reason = `${blocked.count} director${blocked.count === 1 ? "y" : "ies"} this user cannot remove; operator action`;
+          store.defer(owner.directory, Math.max(store.owner(owner.directory)?.checkedAt ?? 0, now() + BLOCKED_SUBTREE_RETRY_MS));
+          return false;
+        }
+        checkBudget();
         if (state === "expired") await claim();
         const protection = state === "expired" || options.mode === "dry-run" ? await snapshotAttemptProtection(directory, deadline - now()) : { current: () => true };
         if (!await inspectAttemptTree(directory, owner.directory)) { store.retainRoot(owner.directory, null); disposition = "evidence"; reason = "tree evidence, mount or Git boundary"; return false; }
@@ -596,6 +639,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     }
   }
   report.inventoryWalks = inventory.walks.length;
+  const blocked = store.blockedRoots();
+  report.blocked = { roots: blocked.roots, bytes: blocked.bytes, listed: blocked.listed };
   report.bytes = store.bytes();
   report.unexaminedBytes = Math.max(0, report.bytes - report.outcomes.filter(row => options.mode === "dry-run" || row.disposition !== "removed").reduce((sum, row) => sum + row.bytes, 0));
   report.overCapBytes = Math.max(0, report.bytes - capBytes);
