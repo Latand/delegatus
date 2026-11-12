@@ -1960,6 +1960,43 @@ export function readStateRowsPage(filename: string, collection: string, page: {
   }
 }
 
+/**
+ * A few JSON fields of every row under one key prefix, in collection order,
+ * extracted by SQLite in one snapshot of the shared read-only connection: a
+ * reader that needs two fields of twenty thousand rows decodes none of them.
+ * `fields` are JSON paths (`$.value.cwd`); a field that is absent, or a row
+ * whose JSON does not parse, reads as null. Null until the collection exists.
+ */
+export function readStateCollectionFields(filename: string, collection: string, prefix: string, fields: readonly string[]): {
+  revision: number;
+  rows: { key: string; values: (string | number | null)[] }[];
+} | null {
+  if (!fs.existsSync(filename) || fields.length === 0) return null;
+  const db = sharedStateReadonlyDatabase(filename);
+  let begun = false;
+  try {
+    db.exec("BEGIN");
+    begun = true;
+    const meta = db.query<{ revision: number }, [string]>("SELECT revision FROM state_collections WHERE collection = ?").get(collection);
+    if (!meta) {
+      db.exec("COMMIT");
+      return null;
+    }
+    const columns = fields.map((_, index) => `CASE WHEN json_valid(value_json) THEN json_extract(value_json, ?${index + 4}) END AS f${index}`).join(", ");
+    const rows = db.query<Record<string, string | number | null>, SQLQueryBindings[]>(`
+      SELECT row_key, ${columns} FROM state_rows
+      WHERE collection = ?1 AND row_key >= ?2 AND row_key < ?3 ORDER BY row_order, row_key
+    `).all(collection, prefix, prefixUpperBound(prefix), ...fields)
+      .map((row) => ({ key: String(row.row_key), values: fields.map((_, index) => row[`f${index}`] ?? null) }));
+    db.exec("COMMIT");
+    return { revision: meta.revision, rows };
+  } catch (error) {
+    if (begun) rollbackQuietly(db);
+    if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return null;
+    throw error;
+  }
+}
+
 export function resetStateReadonlyConnectionCountForTests(): void {
   readonlyConnectionCount = 0;
 }
