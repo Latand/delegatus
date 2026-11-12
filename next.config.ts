@@ -40,6 +40,7 @@ const nextConfig: NextConfig = {
       ".next/server/relay-attachment-stage-worker.js",
       ".next/server/relay-lease-worker.js",
       ".next/server/relay-pdf-validation-worker.js",
+      ".next/server/seat-tick-journal-worker.js",
       ".next/server/mcp-task-worker.js",
       ".next/server/memory-import-worker.js",
       ".next/server/voice-tools-probe-worker.js",
@@ -80,6 +81,7 @@ const nextConfig: NextConfig = {
         "relay-attachment-stage-worker": "./src/lib/externalRelay/attachmentStage.worker.ts",
         "relay-lease-worker": "./src/lib/externalRelay/relayLease.worker.ts",
         "relay-pdf-validation-worker": "./src/lib/externalRelay/pdfValidation.worker.ts",
+        "seat-tick-journal-worker": "./src/lib/monitor/seatTickJournal.worker.ts",
         // The shared MCP graph imports App Router APIs, including after().
         "mcp-task-worker": { import: "./src/lib/mcpTask.worker.ts", layer: "rsc" },
       });
