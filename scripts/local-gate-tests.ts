@@ -645,7 +645,10 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     if (reruns) log(`touched-tests: flaky confirmation ${reruns / 2} round${reruns === 2 ? "" : "s"} per side (maximum ${FLAKY_RERUNS}), ${(performance.now() - retryStarted).toFixed(0)}ms (shared budget ${FLAKY_BUDGET_MS}ms)`);
     for (const site of comparison.flaky) log(`FLAKY ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)} (base ${site.base.pass} pass/${site.base.fail} fail; head ${site.head.pass} pass/${site.head.fail} fail)`);
     for (const [label, sites] of [["NEW", comparison.introduced], ["PRE-EXISTING", comparison.preexisting], ["FIXED", comparison.fixed], ["REMOVED/SKIPPED", comparison.absent]] as const) {
-      for (const site of sites) log(`${label} ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)}${label === "PRE-EXISTING" && site.kind === "error" ? " (the base run of this file is broken the same way)" : ""}`);
+      for (const site of sites) {
+        const evidence = label === "PRE-EXISTING" ? " (base: FAIL; head: FAIL; non-blocking note)" : "";
+        log(`${label} ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)}${label === "PRE-EXISTING" && site.kind === "error" ? " (the base run of this file is broken the same way)" : ""}${evidence}`);
+      }
     }
     logTiming();
     log(`touched-tests: ${comparison.introduced.length} new failures, ${comparison.preexisting.length} pre-existing failures, ${comparison.fixed.length} fixed, ${comparison.absent.length} removed/skipped, ${comparison.flaky.length} flaky`);
