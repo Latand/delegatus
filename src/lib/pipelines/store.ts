@@ -1,3 +1,4 @@
+import { isIssueDelivery, issueDeliveryHoldsArchive } from "@/lib/forge/issueDelivery";
 import { settleAttemptAccounting } from "./attemptAccounting";
 import { attemptAccountingSchema, declaredClassSchema, laneClassSchema, repeatReasonSchema } from "./accounting";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
@@ -1112,6 +1113,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
     (pipeline.reviewGrants === undefined || (Array.isArray(pipeline.reviewGrants) && pipeline.reviewGrants.every(isReviewGrant))) &&
     (pipeline.reviewAcceptances === undefined || (Array.isArray(pipeline.reviewAcceptances) && pipeline.reviewAcceptances.every(isReviewAcceptance))) &&
     (pipeline.merge === undefined || isPipelineMerge(pipeline.merge)) &&
+    (pipeline.issueDelivery === undefined || (Array.isArray(pipeline.issueDelivery) && pipeline.issueDelivery.every(isIssueDelivery))) &&
     (pipeline.finishesTaskIds === undefined || (isStringList(pipeline.finishesTaskIds) && new Set(pipeline.finishesTaskIds).size === pipeline.finishesTaskIds.length)) &&
     (pipeline.taskFinishes === undefined || (Array.isArray(pipeline.taskFinishes) && pipeline.taskFinishes.every(isTaskFinish))) &&
     (pipeline.taskFinishWaits === undefined || (Array.isArray(pipeline.taskFinishWaits) && pipeline.taskFinishWaits.every(isTaskFinishWait))) &&
@@ -2436,6 +2438,7 @@ export function archivedPipelinesRevision(): number {
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
+  if (issueDeliveryHoldsArchive(pipeline, nowMs)) return false;
   // The receipt sweep reads the hot collection, even after closure or hiding.
   if (pipeline.merge?.effectUncertain) return false;
   if (!pipelineActivitySettled(pipeline)) return false;

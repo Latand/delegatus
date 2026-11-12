@@ -13,21 +13,22 @@ import { deliveryOwnership, refreshAdmission, refreshRequest, refreshReservation
 import { realExec } from "@/lib/workflows/provision";
 
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
-import { ForgeAppWriteRefused, forgeAppWriter, forgeWriter, type ForgeAppWriter } from "./appWrite";
+import { ForgeAppWriteRefused, ForgeAppTokenSource, mintForgeAppToken, forgeAppWriter, forgeWriter, type ForgeAppWriter } from "./appWrite";
 import { failEdgeExhaustion } from "@/lib/pipelines/failEdgeBudget";
 import { loadArchivedPipelinesForOwnership, loadPipelinesForList, loadPipelinesForListAsync, pipelineDeliveryLookup, withPipelineMutation } from "@/lib/pipelines/store";
 import { openPipelinesOnTask } from "@/lib/pipelines/taskFinish";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline, type PipelineMerge, type PipelineMergeMethod, type PipelineStage } from "@/lib/pipelines/types";
 import { mergeOnReviewSetting, type MergeOnReviewSetting } from "@/lib/projects/settings";
 import { patchTask } from "@/lib/tasks/commands";
-import { loadTasksForList, mutateTasks, taskSelectionSource } from "@/lib/tasks/store";
+import { loadTasksByIds, loadTasksForList, mutateTasks, taskSelectionSource } from "@/lib/tasks/store";
 
-import { forgeCacheView } from "./cache";
+import { forgeCacheView, readForgeCache } from "./cache";
 import { checkFailedReason, MERGE_REASONS } from "./mergeReasons";
 import { lanePullRequest, pipelineRepository } from "./resolve";
 import { type PullRequestState } from "./workLinks";
 import { readBatchLanding } from "./batchLanding";
 import { githubReadBackoff, githubReadFailure } from "./githubReadFailure";
+import { issueDeliverySince, sweepIssueDelivery, type IssueDeliveryPorts } from "./issueDelivery";
 
 /*
  * "Merge when the review passes" (#2187 §4, docs/design/merge-policy-and-task-finishing.md).
@@ -69,6 +70,8 @@ const PR_FIELDS = "state,isDraft,headRefOid,headRefName,isCrossRepository,baseRe
 export { MERGE_REASONS };
 
 export interface AutoMergePorts {
+  /** Independent issue settlement ports, also used by isolated schedulers. */
+  issueDelivery?: Partial<IssueDeliveryPorts>;
   now: () => number;
   /** Concurrent refreshes and readiness reads per repository, clamped to one or two. */
   refreshConcurrency?: number;
@@ -331,6 +334,8 @@ export function resetAutoMergeForTests(): void {
   scheduleHost.__llvAutoMergeRunning = null;
   scheduleHost.__llvPostMergeRunning = null;
   scheduleHost.__llvAutoMergeStartedAt = undefined;
+  scheduleHost.__llvIssueDeliveryRunning = null;
+  scheduleHost.__llvIssueDeliveryStartedAt = undefined;
 }
 
 /* ── One step of one lane ───────────────────────────────────────────────── */
@@ -1804,7 +1809,7 @@ export function finishBoardTask(taskId: string): TaskFinishOutcome {
 
 /* ── Scheduling from the controller cycle ───────────────────────────────── */
 
-const scheduleHost = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null; __llvAutoMergeStartedAt?: number };
+const scheduleHost = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null; __llvAutoMergeStartedAt?: number; __llvIssueDeliveryRunning?: Promise<unknown> | null; __llvIssueDeliveryStartedAt?: number };
 
 export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pick<AutoMergePorts, "loadPipelines">): AutoMergePorts {
   const run = overrides.run ?? githubRunner(os.tmpdir(), GH_TIMEOUT_MS);
@@ -1848,6 +1853,25 @@ export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pi
  * The controller calls this beside the forge sweep; failures are logged. */
 export function scheduleAutoMerge(overrides: Partial<AutoMergePorts> & Pick<AutoMergePorts, "loadPipelines">): void {
   const ports = productionAutoMergePorts(overrides);
+  if (!scheduleHost.__llvIssueDeliveryRunning && ports.now() - (scheduleHost.__llvIssueDeliveryStartedAt ?? -Infinity) >= MERGE_SCHEDULE_DEBOUNCE_MS) {
+    scheduleHost.__llvIssueDeliveryStartedAt = ports.now();
+    const issueApp = forgeAppWriter(os.tmpdir(), GH_TIMEOUT_MS, {
+      tokens: new ForgeAppTokenSource(repository => mintForgeAppToken(repository, process.env, "issues")),
+    });
+    const issueRead = overrides.run ?? githubRunner(os.tmpdir(), GH_TIMEOUT_MS, { asApp: issueApp });
+    const issueRun = sweepIssueDelivery({
+      now: ports.now, since: () => issueDeliverySince(ports.now()),
+      loadPipelines: ports.loadPipelines, loadTasks: ids => loadTasksByIds(ids),
+      repositoryOf: pipelineRepository, pullRequestOf: ports.pullRequestOf,
+      cache: () => ({ data: readForgeCache().data, view: forgeCacheView() }),
+      run: issueRead, mutate: ports.mutate, prepareRead: ports.prepareRead,
+      write: overrides.write ?? forgeWriter(issueRead, issueApp),
+      inspectTitle: async title => (await (await import("@/lib/pipelines/stagePullRequest")).inspectPullRequestText("title", title)).ok,
+      ...ports.issueDelivery,
+    }).catch(error => ports.log?.("[issue delivery] sweep failed", error))
+      .finally(() => { if (scheduleHost.__llvIssueDeliveryRunning === issueRun) scheduleHost.__llvIssueDeliveryRunning = null; });
+    scheduleHost.__llvIssueDeliveryRunning = issueRun;
+  }
   // Recovery has per-merge ownership and durable polling reservations. Start
   // it on every tick, even while ordinary merge reads or task finishes wait.
   const recovery = sweepPostMerge({

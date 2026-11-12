@@ -159,6 +159,7 @@ import {
 import * as legacyReview from "./legacyReviewDefinition";
 import { laneMovedSince } from "./laneMovement";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus } from "./preflight";
+import { creationIssueLinks } from "@/lib/forge/issueDelivery";
 import { preparePipelineRepository, readRepositoryInitialization } from "./initializeRepository";
 import { classifyProviderCondition, type ProviderCondition } from "./providerConditions";
 import { isStagePromptContext, renderCutRetryInput, renderDecisionInput, renderOutOfMemoryRetryInput } from "./prompts";
@@ -14933,6 +14934,13 @@ export async function createPipelineFromRequest(
     const pushRepository = githubRepositoryOfRemote(origin);
     if (!pushRepository || canonical(pushRepository).toLowerCase() !== requested) prRepository = requested;
   }
+  const issueLinks = creationIssueLinks(pipeline, {
+    repository: prRepository ?? githubRepositoryOfRemote(origin), cache: forgeCacheView(),
+    lanes: options.refreshOf ? [findPipelineRecord(options.refreshOf.pipelineId), ...loadPipelinesForList()].filter((lane): lane is Pipeline => !!lane) : loadPipelinesForList(),
+    predecessorId: options.refreshOf?.pipelineId,
+    pullRequestOf: lanePullRequest,
+  });
+  if (issueLinks.length) pipeline.workLinks = issueLinks;
   const target = { repository, remote: origin, branch: targetInput?.branch ?? `refs/heads/${pipeline.branch}`,
     ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(prRepository ? { prRepository } : {}), ...(rejectedHead ? { rejectedHead } : {}) };
   pipeline.creationRequest = options.creationRequest;
@@ -15660,6 +15668,7 @@ type WorkLinkErrorCode = "WORK_LINK_INVALID" | "WORK_LINK_AUTO" | "WORK_LINK_LIM
  * nudged to read what is still unknown once the lock is gone.
  */
 function editPipelineWorkLinks(pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, now: string): PipelinePatchResult | { changed: true; repositories: string[] } {
+  if (req.part !== undefined && (req.action !== "attach-link" || typeof req.part !== "boolean")) return { error: "part must be a boolean on attach-link", status: 400, code: "WORK_LINK_INVALID" };
   const inputs = workLinkInputs(req.link);
   if (!inputs.length) return { error: "link is required: a pull request or issue as #123, 123, owner/repo#123 or a github.com URL", status: 400, code: "WORK_LINK_INVALID" };
   if (req.kind !== undefined && req.kind !== "pr" && req.kind !== "issue") return { error: "kind must be pr or issue", status: 400, code: "WORK_LINK_INVALID" };
@@ -15675,7 +15684,7 @@ function editPipelineWorkLinks(pipeline: Pipeline, req: PatchPipelineRequest, ac
   const discovered = resolvePipelineLinks({ ...pipeline, workLinks: [] }, repository, cache).links;
   const edit = editStoredWorkLinks(
     pipeline.workLinks,
-    req.action === "attach-link" ? links : [],
+    req.action === "attach-link" ? links.map(link => ({ ...link, ...(req.part !== undefined ? { part: req.part } : {}) })) : [],
     req.action === "detach-link" ? links : [],
     { now, addedBy: actor?.kind === "agent" ? "agent" : "operator", canonical },
     (link) => discovered.find((found) => found.number === link.number && found.repository === canonical(link.repository))?.via ?? null,

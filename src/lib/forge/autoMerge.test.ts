@@ -674,7 +674,7 @@ test("regression: task finishes continue while the optional post-merge forge rea
     }
     return run(args);
   } };
-  const host = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null };
+  const host = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvIssueDeliveryRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null };
   let recovery: Promise<unknown> | null | undefined;
   try {
     scheduleAutoMerge(ports);
@@ -692,7 +692,7 @@ test("regression: task finishes continue while the optional post-merge forge rea
     release();
     await host.__llvAutoMergeRunning;
     await recovery;
-    await host.__llvPostMergeRunning;
+    await host.__llvPostMergeRunning; await host.__llvIssueDeliveryRunning;
   }
   expect(h.pipeline("L1").taskFinishes?.map(finish => finish.taskId)).toEqual(["task-1", "task-2"]);
 });
@@ -731,7 +731,7 @@ test.each(["ordinary", "watched"] as const)("regression: a held %s read cannot d
       return changed;
     },
   };
-  const host = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null };
+  const host = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvIssueDeliveryRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null };
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let firstRecovery: Promise<unknown> | null | undefined;
   try {
@@ -752,7 +752,7 @@ test.each(["ordinary", "watched"] as const)("regression: a held %s read cannot d
     clearTimeout(deadline); release();
     await firstRecovery;
     await host.__llvAutoMergeRunning;
-    await host.__llvPostMergeRunning;
+    await host.__llvPostMergeRunning; await host.__llvIssueDeliveryRunning;
   }
 });
 
@@ -2009,4 +2009,32 @@ test.each(["UNKNOWN", "", "UNRECOGNIZED"])("uncertain merge receipt retains pace
   expect(h.merge(record.id)).toMatchObject({ state: "blocked", effectUncertain: true, nextReadAt: iso(h.now() + MERGE_POLL_MS) });
   expect(h.calls.slice(calls).map(args => args.slice(0, 2))).toEqual([["pr", "view"]]);
   expect(h.writes).toHaveLength(0);
+});
+
+test("held issue delivery owns one slot while later merge and task finish cycles complete", async () => {
+  const completed = lane("issue-owner"); completed.taskIds = ["task-1", "task-2"];
+  const h = harness({ lanes: [completed], prs: [openPr(11)], tasks: ["task-1", "task-2"] });
+  await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
+  h.pipeline("issue-owner").workLinks = [{ repository: REPO, number: 7, kind: "issue", addedAt: iso(T0), addedBy: "agent" }];
+  h.pipeline("issue-owner").finishesTaskIds = ["task-1"];
+  let release!: () => void; let entered!: () => void; let issueReads = 0;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const host = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null; __llvIssueDeliveryRunning?: Promise<unknown> | null };
+  const ports = { ...h.ports, prepareRead: async () => {}, issueDelivery: {
+    repositoryOf: () => REPO, since: () => iso(T0 - 1), loadTasks: () => [],
+    cache: () => ({ data: { schemaVersion: 1 as const, repositories: {} }, view: { repository: () => null } }),
+    run: async () => { issueReads++; entered(); await held; throw new Error("issue read unavailable"); },
+  } };
+  try {
+    scheduleAutoMerge(ports); const owner = host.__llvIssueDeliveryRunning;
+    await started; await host.__llvAutoMergeRunning;
+    expect(h.taskStatus("task-1")).toBe("done");
+    h.pipeline("issue-owner").finishesTaskIds!.push("task-2"); h.advance(60_000);
+    scheduleAutoMerge(ports); await host.__llvAutoMergeRunning;
+    expect(h.taskStatus("task-2")).toBe("done");
+    expect(host.__llvIssueDeliveryRunning).toBe(owner); expect(issueReads).toBe(1);
+  } finally {
+    release(); await host.__llvIssueDeliveryRunning; await host.__llvAutoMergeRunning; await host.__llvPostMergeRunning;
+  }
 });
