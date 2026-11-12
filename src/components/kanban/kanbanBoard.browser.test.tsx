@@ -1279,12 +1279,16 @@ describe("where a stage ran", () => {
     const out = path.resolve(".artifacts/stage-place");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch({ ...LAUNCH, env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env }).catch(error => {
+      server.stop(); sockets.close(); throw error;
+    });
     const failures: string[] = [];
     try {
       for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 1000]) {
         const key = `${lang}-${theme}-${width}`;
-        const words = lang === "uk" ? { cloud: "хмара", local: "локально", cause: "перенесено на цю машину" } : { cloud: "cloud", local: "local", cause: "moved to this machine" };
+        const words = lang === "uk" ? { cloud: "хмара", local: "локально · збій хмари", cause: "після збою" } : { cloud: "cloud", local: "local · cloud failed", cause: "failure" };
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stage-place`, { width, height: 1000 }, theme, lang, "reduce", false);
         try {
           const lane = card("t-stage-place");
@@ -1326,7 +1330,7 @@ describe("where a stage ran", () => {
           if (pageErrors.length) failures.push(`${key} page errors: ${pageErrors.join("; ")}`);
         } finally { await context.close(); }
       }
-    } finally { await browser.close(); server.stop(); }
+    } finally { await browser.close(); server.stop(); sockets.close(); }
     expect(failures).toEqual([]);
   }, 300_000);
 });

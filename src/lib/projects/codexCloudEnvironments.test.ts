@@ -1,3 +1,4 @@
+import { recordCloudEnvironmentConnectFailure } from "./codexCloudEnvironments";
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -649,4 +650,35 @@ test("an alias registered between override admission and persistence cannot let 
   expect(results.filter(result => !result.ok)).toHaveLength(1);
   expect(cloudEnvironmentSelection(f.input.project, "account-a")).toEqual(cloudEnvironmentSelection("repo-successor", "account-a"));
   expect(cloudEnvironmentSelection(f.input.project, "account-a").revision).toBe(1);
+});
+
+test.each(["environment_offline", "environment_connect_failed", "environment_missing"] as const)("a confirmed %s durably removes readiness and its reason survives a real process read", async code => {
+  const f = fixture();
+  f.input.repository = "Sample/Project";
+  f.input.ref = "refs/heads/main";
+  const binding = await f.prepare();
+  expect(binding.state).toBe("ready");
+  if (binding.state !== "ready") throw new Error("expected ready binding");
+  await recordCloudEnvironmentConnectFailure({ ...f.input, ...binding, code });
+  const saved = readCloudEnvironmentBindings(f.input.project).bindings[0]!;
+  expect(saved).toMatchObject({ state: "unavailable", code, validatedAt: null, retries: 3 });
+  expect(saved.reason).toBeTruthy();
+  expect((await restart(f, "read-binding")).rows[0]).toEqual(saved);
+  expect(await restart(f)).toMatchObject({ state: "unavailable", reason: expect.stringContaining(code) });
+  expect(await f.prepare()).toMatchObject({ state: "unavailable", reason: expect.stringContaining(code) });
+});
+
+test.each(["revision", "principal", "selection", "credentials", "account", "environment"] as const)("a late connect failure cannot invalidate a changed %s", async changed => {
+  const f = fixture();
+  const prepared = await f.prepare();
+  if (prepared.state !== "ready") throw new Error("expected ready binding");
+  const input = { ...f.input, ...prepared, code: "environment_offline" as const };
+  if (changed === "revision") { await f.prepare(); }
+  if (changed === "principal") input.principal = "f".repeat(64);
+  if (changed === "selection") input.selection = "different";
+  if (changed === "credentials") fs.writeFileSync(path.join(f.input.account.home, "auth.json"), "changed");
+  if (changed === "account") input.account = { ...input.account, accountId: "account-b" };
+  if (changed === "environment") input.environmentId = "asenvcfg_other";
+  await recordCloudEnvironmentConnectFailure(input).catch(error => { expect(error.code).toBe("preparation_superseded"); });
+  expect(readCloudEnvironmentBindings(f.input.project).bindings[0]!.state).toBe("ready");
 });
