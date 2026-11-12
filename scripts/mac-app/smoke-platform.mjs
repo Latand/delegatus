@@ -11,6 +11,12 @@ export function intelIsTranslated({ status, stdout = "", stderr = "" }) {
   if (status === 1 && namesTranslationKey && missingKey) return false;
   throw new Error(`sysctl.proc_translated failed (${status}): ${message || "(no diagnostic)"}`);
 }
+
+/** @returns {["ignore" | "pipe", "pipe", "pipe"]} */
+export function smokeStdio(input) {
+  return [input === undefined ? "ignore" : "pipe", "pipe", "pipe"];
+}
+
 // asuser selects the bootstrap/audit context; sudo separately drops credentials.
 // Keep both steps for the fresh standard account, including its child servers.
 export function smokeUserArguments({ uid, user, home }, command, args = [], environment = {}) {

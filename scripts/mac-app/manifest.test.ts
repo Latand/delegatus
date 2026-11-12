@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { digest, validatePackage, verifiedBun } from "./manifest";
-import { intelIsTranslated, smokeUserArguments } from "./smoke-platform.mjs";
+import { intelIsTranslated, smokeStdio, smokeUserArguments } from "./smoke-platform.mjs";
 
 describe("Mac runtime manifest", () => {
   const bytes = new TextEncoder().encode("archive fixture");
@@ -29,6 +30,13 @@ describe("Mac runtime manifest", () => {
   });
   test("refuses integrity different from the publisher", () => {
     expect(() => validatePackage(valid, "2.0.0", revision, "sha512-different")).toThrow();
+  });
+});
+
+describe("Mac smoke fixture input", () => {
+  test.each([undefined, "", "fixture input\n"])("preserves supplied stdin and closes absent stdin %#", input => {
+    const result = execFileSync("/bin/cat", [], { encoding: "utf8", stdio: smokeStdio(input), input, timeout: 10_000 });
+    expect(result).toBe(input ?? "");
   });
 });
 

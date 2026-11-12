@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, statSy
 import { dirname, join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
-import { intelIsTranslated, smokeUserArguments } from "./smoke-platform.mjs";
+import { intelIsTranslated, smokeStdio, smokeUserArguments } from "./smoke-platform.mjs";
 
 const [image, reportArg] = process.argv.slice(2);
 if (process.platform !== "darwin" || !image || !reportArg || process.env.CI !== "true") throw new Error("Usage on disposable macOS CI: node smoke.mjs DMG REPORT");
@@ -36,7 +36,7 @@ function redact(value) {
 }
 function run(command, args, options = {}) {
   let status = 0;
-  try { return execFileSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 180_000, ...options }); }
+  try { return execFileSync(command, args, { encoding: "utf8", stdio: smokeStdio(options.input), timeout: 180_000, ...options }); }
   catch (error) { status = error.status ?? 1; throw new Error(`${command} exited ${status}: ${redact(error.stderr ?? error.message)}`); }
   finally { commands.push({ command: redact([command, ...args].join(" ")), exit: status }); }
 }
@@ -175,10 +175,13 @@ try {
     asUser("/usr/bin/ditto", [join(mount, "Delegatus.app"), join(home, "Applications", "Delegatus.app")]);
   });
   const tokenPath = join(home, ".config", "delegatus", "token");
-  asUser("/bin/mkdir", ["-p", join(home, ".config", "delegatus")]);
-  asUser("/usr/bin/tee", [tokenPath], { input: `${accessKey}\n` });
-  asUser("/bin/chmod", ["600", tokenPath]);
-  asUser("/bin/chmod", ["700", join(home, ".config", "delegatus")]);
+  await check("saved-key-fixture", () => {
+    asUser("/bin/mkdir", ["-p", join(home, ".config", "delegatus")]);
+    asUser("/usr/bin/tee", [tokenPath], { input: `${accessKey}\n` });
+    assert.equal(asUser("/bin/cat", [tokenPath]).trim(), accessKey, "saved-key fixture reaches the fresh account");
+    asUser("/bin/chmod", ["600", tokenPath]);
+    asUser("/bin/chmod", ["700", join(home, ".config", "delegatus")]);
+  });
   const before = asUser("/bin/ls", ["-A", home]).trim().split("\n");
   await check("confirm-without-install", async () => {
     const app = await register(launch(["--evidence-minimum-size", "-AppleLanguages", "(en)"], "confirm-en-light-minimum"));
