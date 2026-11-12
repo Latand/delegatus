@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { removeAttemptTree, snapshotAttemptProtection, allocatedAttemptBytes, attemptTempUtilityImage } from "./attemptTempFilesystem";
 import { attemptTempFailureDetail } from "./attemptTempDiagnostics";
+import { attemptMutationCurrent } from "./attemptMutationFence";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -33,6 +34,33 @@ function fixture() {
 const allowed = () => true;
 const repair = (directory: string, dispatch = allowed, authority = allowed) =>
   removeAttemptTree(directory, directory, async () => true, false, dispatch, authority, true);
+
+test.skipIf(process.platform !== "linux").each(["uv/sdists-v9/.git", ".git/worktrees/fixture/gitdir"])(
+  "protection versions marker content independently of directory metadata (%s)", async relative => {
+    const f = fixture(), marker = path.join(f.directory, relative);
+    fs.mkdirSync(path.dirname(marker), { recursive: true }); fs.writeFileSync(marker, "");
+    const protection = await snapshotAttemptProtection(f.directory);
+    expect(protection.current()).toBeTrue();
+    const before = fs.lstatSync(marker, { bigint: true }), nativeStat = fs.lstatSync.bind(fs);
+    fs.writeFileSync(marker, "gitdir: /external\n");
+    // Model a filesystem whose metadata cannot distinguish the rewrite.
+    // The content proof must refuse even with the original marker stat.
+    const stat = spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike, options?: unknown) =>
+      String(file) === marker ? before : nativeStat(file, options as { bigint: false })) as typeof fs.lstatSync);
+    try { expect(protection.current()).toBeFalse(); }
+    finally { stat.mockRestore(); }
+    const alias = path.join(f.parent, "marker-alias");
+    fs.linkSync(marker, alias);
+    const latest = await snapshotAttemptProtection(f.directory);
+    expect(attemptMutationCurrent(latest.mutationDirectories ?? [], () => {
+      const current = latest.current();
+      expect(current).toBeTrue();
+      fs.writeFileSync(alias, "gitdir: /changed-external\n");
+      return current;
+    })).toBeFalse();
+    expect(fs.statSync(f.cache).mode & 0o777).toBe(0o555);
+    expect(fs.readFileSync(path.join(f.cache, "payload"), "utf8")).toBe("cache");
+  });
 
 test.skipIf(process.platform !== "linux")("expired native removal repairs an own read-only cache without a container", async () => {
   const f = fixture(), previous = process.env.PATH;

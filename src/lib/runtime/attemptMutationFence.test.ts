@@ -40,7 +40,28 @@ test.skipIf(process.platform !== "linux")("unchanged reads admit and a fresh fen
 test.skipIf(process.platform !== "linux").each(["absent", "link"] as const)("an unavailable watch (%s) never admits", kind => {
   const f = fixture(), unavailable = path.join(f.root, kind);
   if (kind === "link") fs.symlinkSync(f.tree, unavailable);
-  expect(attemptMutationCurrent([unavailable], () => true)).toBeFalse();
+  expect(() => attemptMutationCurrent([unavailable], () => true)).toThrow("watch unavailable");
+  expect(attemptMutationCurrent([unavailable], () => false)).toBeFalse();
+});
+
+test.skipIf(process.platform !== "linux")("a marker write through an external hardlink invalidates the common fence", () => {
+  const f = fixture(), marker = path.join(f.tree, ".git"), alias = path.join(f.checkout, "marker-alias");
+  fs.writeFileSync(marker, ""); fs.linkSync(marker, alias);
+  expect(attemptMutationCurrent([f.tree, { file: marker }], () => {
+    execFileSync(process.execPath, ["-e", 'require("node:fs").writeFileSync(process.argv[1], "gitdir: /external")', alias]);
+    return true;
+  })).toBeFalse();
+});
+
+test.each(["darwin", "win32"])("an unavailable platform fence refuses before any validation (%s branch)", platform => {
+  const previous = Object.getOwnPropertyDescriptor(process, "platform")!;
+  let invoked = false;
+  Object.defineProperty(process, "platform", { ...previous, value: platform });
+  try {
+    expect(() => attemptMutationCurrent([], () => { invoked = true; return true; })).toThrow("fence unavailable on this platform");
+    expect(invoked).toBeFalse();
+    expect(() => attemptMutationCurrent([], () => true, 0)).toThrow("fence unavailable on this platform");
+  } finally { Object.defineProperty(process, "platform", previous); }
 });
 
 test.skipIf(process.platform !== "linux")("ancestor traffic is independent of a checkout discovery or an absent authority file", () => {

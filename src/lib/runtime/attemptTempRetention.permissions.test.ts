@@ -29,6 +29,78 @@ function fixture() {
 }
 const emptyScan = () => ({ ownNamespace: null, processes: [] });
 
+test.skipIf(process.platform !== "linux").each(["unchanged", "rewrite-before-repair", "rewrite-after-repair"] as const)(
+  "a disposable Git marker is versioned across awaited references (%s)", async kind => {
+    const f = fixture(), uv = path.join(f.cache, "uv/sdists-v9");
+    fs.chmodSync(f.cache, 0o755);
+    fs.mkdirSync(uv, { recursive: true }); fs.writeFileSync(path.join(uv, ".git"), "");
+    fs.chmodSync(f.cache, 0o555);
+    const outside = path.join(f.parent, "external-gitdir"); fs.mkdirSync(outside);
+    let injected = false, retained = f.directory;
+    try {
+      const report = await sweepAttemptTemps(f.store, { now: () => NOW, maxRoots: 1,
+        state: async () => "expired", scan: emptyScan, references: async (_original, current) => {
+          if (!injected && kind !== "unchanged"
+            && (kind === "rewrite-before-repair" || (fs.statSync(path.join(current, "module-cache")).mode & 0o700) === 0o700)) {
+            retained = current;
+            fs.writeFileSync(path.join(current, "module-cache/uv/sdists-v9/.git"), `gitdir: ${outside}\n`);
+            injected = true;
+          }
+          return true;
+        } });
+      expect(report.errors).toBe(0);
+      expect(report.removed).toBe(kind === "unchanged" ? 1 : 0);
+      expect(injected).toBe(kind !== "unchanged");
+      expect(f.store.has(f.directory)).toBe(kind !== "unchanged");
+      if (kind !== "unchanged") {
+        expect(fs.readFileSync(path.join(retained, "module-cache/payload"), "utf8")).toBe("cache");
+        expect(fs.readFileSync(path.join(retained, "module-cache/uv/sdists-v9/.git"), "utf8")).toBe(`gitdir: ${outside}\n`);
+        if (kind === "rewrite-before-repair") expect(fs.statSync(f.cache).mode & 0o777).toBe(0o555);
+        else expect(JSON.parse(fs.readFileSync(attemptTempJournalPath(f.directory), "utf8")).trash).toBe(retained);
+      } else {
+        expect(fs.existsSync(f.directory)).toBeFalse();
+        expect(fs.existsSync(attemptTempJournalPath(f.directory))).toBeFalse();
+      }
+    } finally { f.store.close(); }
+  });
+
+test.skipIf(process.platform !== "linux" || process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.() === 0)
+  .each([0o000, 0o111])("unreadable root mode %o uses parent binding and namespace protection", async mode => {
+    for (const kind of ["remove", "keep", "late-keep", "replace"] as const) {
+      const f = fixture(); fs.chmodSync(f.cache, 0o700);
+      if (kind === "keep") fs.writeFileSync(path.join(f.directory, ".delegatus-keep"), "pin");
+      fs.chmodSync(f.directory, mode);
+      let injected = false, retained = f.directory;
+      try {
+        const report = await sweepAttemptTemps(f.store, { now: () => NOW, maxRoots: 1,
+          state: async () => "expired", scan: emptyScan, references: async (_original, current) => {
+            if (!injected && (kind === "late-keep" || kind === "replace")) {
+              if (kind === "replace") {
+                retained = path.join(f.parent, "moved-root"); fs.renameSync(current, retained);
+                fs.mkdirSync(current); fs.writeFileSync(path.join(current, "replacement"), "protected");
+              } else fs.chmodSync(current, 0o700);
+              fs.writeFileSync(path.join(current, ".delegatus-keep"), "pin");
+              fs.chmodSync(current, mode); injected = true;
+            }
+            return true;
+          } });
+        expect(report).toMatchObject({ removed: kind === "remove" ? 1 : 0, errors: 0 });
+        expect(f.store.has(f.directory)).toBe(kind !== "remove");
+        if (kind === "remove") {
+          expect(fs.existsSync(f.directory)).toBeFalse();
+          expect(fs.existsSync(attemptTempJournalPath(f.directory))).toBeFalse();
+        } else {
+          expect(fs.statSync(retained).mode & 0o777).toBe(mode);
+          fs.chmodSync(retained, 0o700);
+          expect(fs.readFileSync(path.join(retained, "module-cache/payload"), "utf8")).toBe("cache");
+          fs.chmodSync(f.directory, 0o700);
+          expect(fs.readFileSync(path.join(f.directory, ".delegatus-keep"), "utf8")).toBe("pin");
+        }
+        expect(injected).toBe(kind === "late-keep" || kind === "replace");
+      } finally { f.store.close(); }
+    }
+  });
+
 test.skipIf(process.platform !== "linux")("repair keeps checkout validation work independent of its file count", async () => {
   const counts: number[] = [];
   for (const files of [10, 1000]) {

@@ -381,13 +381,17 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       // the final empty-root fence retains the independent authority checks.
       const authorityWatches = () => attemptPathWatches([store.filename, store.filename + "-wal", statePath("state.sqlite"),
         statePath("state.sqlite-wal"), statePath("project-aliases.json")]);
-      const mutationDirectories = (directory: string) => [directory, ...authorityWatches(),
+      // Opaque contents are validated inside the namespace. Watching their
+      // accessible parent pins the root name and notices mode/rebinding changes
+      // without requiring read permission on the root itself.
+      const rootWatches = (directory: string) => namespaceProtection ? attemptPathWatches([directory]) : [directory];
+      const mutationDirectories = (directory: string) => [...rootWatches(directory), ...authorityWatches(),
         ...(dispatchEvidence?.mutationDirectories ?? []), ...inventory.mutationDirectories()];
       const dispatchEligible = (directory: string) => attemptMutationCurrent(
         mutationDirectories(directory),
         () => retirementAuthorityCurrent(directory) && dispatchEvidence?.current() === true, deadline - now());
       const emptyRootEligible = (directory: string) => attemptMutationCurrent(
-        [directory, ...authorityWatches(), ...inventory.mutationDirectories()],
+        [...rootWatches(directory), ...authorityWatches(), ...inventory.mutationDirectories()],
         () => retirementAuthorityCurrent(directory), deadline - now());
       const scan = () => options.scan([owner.directory, currentDirectory]);
       const observeReferences = async (directory: string) => {

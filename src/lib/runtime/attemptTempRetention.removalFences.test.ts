@@ -10,12 +10,48 @@ import { attemptTempJournalPath } from "@/lib/tempSweep";
 import { attemptTempAuthority } from "./attemptTempProduction";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 import { finishedLane } from "./attemptTempRetention.testSupport";
+import { attemptMutationCurrent } from "./attemptMutationFence";
+import { removeAttemptTree } from "./attemptTempFilesystem";
 
 const NOW = Date.parse("2030-01-20T00:00:00Z");
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
   for (const restore of cleanup.splice(0).reverse()) await restore();
 });
+
+test.skipIf(process.platform !== "linux").each(["linux", "darwin", "win32"])(
+  "native removal requires an available common fence (%s branch)", async platform => {
+    for (const mutation of ["link", "keep", "expired"] as const) {
+      const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-portable-fence-"));
+      cleanup.push(() => fs.rmSync(parent, { recursive: true, force: true }));
+      const directory = path.join(parent, "attempt"), checkout = path.join(parent, "checkout");
+      fs.mkdirSync(directory); fs.mkdirSync(checkout);
+      fs.writeFileSync(path.join(directory, "payload"), "protected");
+      const previous = Object.getOwnPropertyDescriptor(process, "platform")!;
+      let observations = 0, error: unknown;
+      Object.defineProperty(process, "platform", { ...previous, value: platform });
+      try {
+        await removeAttemptTree(directory, directory, undefined, false, () => attemptMutationCurrent([directory, checkout], () => {
+          const clear = !fs.existsSync(path.join(checkout, "dependency")) && !fs.existsSync(path.join(directory, ".delegatus-keep"));
+          fs.lstatSync(directory);
+          if (++observations === 2) {
+            if (mutation === "link") execFileSync(process.execPath, ["-e", 'require("node:fs").symlinkSync(process.argv[1], process.argv[2], "dir")',
+              directory, path.join(checkout, "dependency")]);
+            else fs.writeFileSync(path.join(directory, ".delegatus-keep"), "late pin");
+          }
+          return clear;
+        }, mutation === "expired" ? 0 : 30_000));
+      } catch (caught) { error = caught; }
+      finally { Object.defineProperty(process, "platform", previous); }
+      expect(error).toBeDefined();
+      expect(observations).toBe(platform === "linux" && mutation !== "expired" ? 2 : 0);
+      if (platform !== "linux") expect(String(error)).toContain("fence unavailable on this platform");
+      else if (mutation === "expired") expect(String(error)).toContain("time budget exhausted");
+      else if (mutation === "link") expect(fs.readlinkSync(path.join(checkout, "dependency"))).toBe(directory);
+      else expect(fs.readFileSync(path.join(directory, ".delegatus-keep"), "utf8")).toBe("late pin");
+      expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("protected");
+    }
+  });
 
 function fixture() {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-removal-fence-"));

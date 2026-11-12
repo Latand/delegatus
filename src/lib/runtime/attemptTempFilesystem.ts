@@ -492,6 +492,17 @@ async function containerMountsClear(roots: readonly string[], remaining?: () => 
 const markers = ["(", "-name", ".delegatus-keep", "-o", "-path", "*/worktrees/*/gitdir",
   "-o", "-name", ".git", "!", "-type", "d", ")"];
 const MARKER_LIMIT = 10_000;
+const protectionMarker = (file: string, isDirectory: boolean) => path.basename(file) === ".delegatus-keep"
+  || path.basename(file) === ".git" && !isDirectory
+  || path.basename(file) === "gitdir" && /(?:^|\/)worktrees\/.*\/gitdir$/.test(file.replaceAll(path.sep, "/"));
+function markerContent(file: string): Buffer {
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    // Bound the read even if a writer grows or replaces the marker after stat.
+    const content = Buffer.alloc(4097);
+    return content.subarray(0, fs.readSync(fd, content, 0, content.length, 0));
+  } finally { fs.closeSync(fd); }
+}
 function markerHolds(file: string, directory: string, original: string): boolean {
   if (path.basename(file) === ".delegatus-keep") return true;
   const stat = fs.lstatSync(file);
@@ -631,8 +642,7 @@ export async function inspectAttemptTree(directory: string, original = directory
       const current = pending.pop()!;
       for (const entry of await fs.promises.readdir(current, { withFileTypes: true })) {
         const file = path.join(current, entry.name);
-        const marker = entry.name === ".delegatus-keep" || entry.name === ".git" && !entry.isDirectory()
-          || entry.name === "gitdir" && /(?:^|\/)worktrees\/.*\/gitdir$/.test(file.replaceAll(path.sep, "/"));
+        const marker = protectionMarker(file, entry.isDirectory());
         if (marker && (++found > MARKER_LIMIT || markerHolds(file, directory, original))) return false;
         if (entry.isDirectory()) pending.push(file);
       }
@@ -654,18 +664,19 @@ export async function inspectAttemptTree(directory: string, original = directory
 
 export type AttemptProtection = {
   current: () => boolean;
-  mutationDirectories?: readonly string[];
+  mutationDirectories?: readonly AttemptMutationWatch[];
   namespace?: AttemptNamespaceProtection;
   permissionChange?: (file: string, mode: number, apply: () => void) => void;
 };
-/** An independent directory snapshot protects new markers even when expired
- * evidence is deliberately discarded. Native metadata is checked synchronously
+/** An independent directory and marker snapshot protects both new markers and
+ * in-place rewrites even when expired evidence is deliberately discarded. Native metadata is checked synchronously
  * after awaited observations. Opaque descendants also require their digest
  * to be checked inside the removal namespace. Never follow links. */
 export async function snapshotAttemptProtection(directory: string, budgetMs = 30_000, namespaceRemoval = false, bytes?: number):
   Promise<AttemptProtection> {
   const until = performance.now() + Math.max(0, Math.min(30_000, budgetMs));
   const directories = new Map<string, string>();
+  const markerFiles = new Map<string, { version: string; content?: Buffer }>();
   const readableDirectories: string[] = [];
   const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.mtimeNs, stat.ctimeNs].join(":");
   const pending = [directory];
@@ -684,6 +695,13 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
         if (performance.now() >= until || pending.length + directories.size >= 10000)
           throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
         if (entry.isDirectory()) pending.push(path.join(current, entry.name));
+        const file = path.join(current, entry.name);
+        if (protectionMarker(file, entry.isDirectory())) {
+          if (markerFiles.size >= MARKER_LIMIT) throw new AttemptTempBudgetDeferred("attempt protection marker budget exceeded");
+          const marker = fs.lstatSync(file, { bigint: true });
+          markerFiles.set(file, { version: signature(marker),
+            content: marker.isFile() && marker.size <= BigInt(4096) ? markerContent(file) : undefined });
+        }
       }
       // Some runtimes open the directory on the first read. Only a completed
       // iteration proves this directory can also be watched from the host.
@@ -708,10 +726,14 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
     if (namespace && !namespaceRemoval) return false;
     try {
       for (const [file, before] of directories) if (signature(fs.lstatSync(file, { bigint: true })) !== before) return false;
+      for (const [file, before] of markerFiles) {
+        if (signature(fs.lstatSync(file, { bigint: true })) !== before.version
+          || before.content && !markerContent(file).equals(before.content)) return false;
+      }
       return true;
     } catch { return false; }
   };
-  return { namespace, current, mutationDirectories: readableDirectories, permissionChange: (file, mode, apply) => {
+  return { namespace, current, mutationDirectories: [...readableDirectories, ...[...markerFiles.keys()].map(file => ({ file }))], permissionChange: (file, mode, apply) => {
     if (namespace || !current()) throw new AttemptTempBudgetDeferred("protection changed before permission repair");
     const before = fs.lstatSync(file, { bigint: true });
     apply();
