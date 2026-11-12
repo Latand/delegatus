@@ -90,12 +90,18 @@ import type {
 } from "./engineHost";
 import {
   normalizeQueueEntry,
-  RuntimeReplayGapError,
   type SessionMaterializationEvidence,
   StructuredCompactError,
   StructuredHostAdoptionCleanupError,
   StructuredInjectError,
 } from "./engineHost";
+import {
+  attachRuntimeEvents,
+  boundMap,
+  HOST_EVENT_WINDOW,
+  trimHostEventWindow,
+  type RuntimeEventSubscriber,
+} from "./hostEventWindow";
 import {
   FileRuntimeEventStore,
   nextRuntimeEventSequence,
@@ -115,12 +121,8 @@ type PendingRpc = {
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
 };
-type Subscriber = {
-  afterSeq: number;
-  queue: RuntimeEvent[];
-  wake: (() => void) | null;
-  closed: boolean;
-};
+type Subscriber = RuntimeEventSubscriber;
+type TurnBoundary = Extract<RuntimeEvent, { kind: "turn-started" | "turn-ended" }>;
 type PendingAnswer = {
   promise: Promise<void>;
   resolve(): void;
@@ -478,6 +480,16 @@ const MAX_PRE_RESTORE_FRAMES = 256;
 /** How many finished turns a host remembers for the voice ledger's retirement
     check. Beyond this the oldest answers `unknown`, which retires nothing. */
 const MAX_TERMINATED_TURN_MEMORY = 512;
+/* Turn boundaries outlive the event window: tier cuts and delivery evidence
+   ask whether a recent turn ended, and how. */
+const TURN_BOUNDARY_MEMORY = 512;
+/* Confirmed deliveries answer a resend of a recent message without a history
+   read; an older one falls back to the rollout and the thread itself. */
+const CONFIRMED_DELIVERY_MEMORY = 512;
+/* Settled callback receipts keep a late replay of a resolved request from
+   reopening it; open ones are never dropped. */
+const SETTLED_CALLBACK_RECEIPT_MEMORY = 1024;
+const ACKNOWLEDGED_REALTIME_DELIVERY_MEMORY = 256;
 
 /** The app-server notifications that carry the canonical realtime transcript. */
 const CANONICAL_REALTIME_TRANSCRIPT_METHODS: ReadonlySet<string> = new Set([
@@ -1205,6 +1217,11 @@ function utf8Tail(value: string, maxBytes: number): { text: string; truncated: b
   return { text: encoded.subarray(start).toString("utf8"), truncated: true };
 }
 
+/** A request the server resolved, or that recovery ended: it can only be replayed. */
+function settledCallbackReceipt(receipt: CodexRequestReceipt): boolean {
+  return receipt.serverResolution !== undefined || receipt.recovery !== undefined;
+}
+
 function selectRealtimeContext(events: readonly RuntimeEvent[]): RealtimeContextSelection {
   let selected: RealtimeContextCandidate[] = [];
   let truncated = false;
@@ -1324,7 +1341,12 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private readonly replayEnvelopeRequestIds = new Set<number>();
   private replayReduction: CodexReplayFrameReducer | null = null;
   private readonly subscribers = new Set<Subscriber>();
+  /** The newest events (HOST_EVENT_WINDOW); older ones are in the ledger. */
   private readonly events: RuntimeEvent[] = [];
+  /** Newest turn-started and turn-ended events, beyond the event window. */
+  private readonly turnBoundaries: TurnBoundary[] = [];
+  /** Adoption reconciles the thread against the whole ledger it restored. */
+  private restoredHistoryHeld = false;
   private readonly confirmedDeliveries = new Map<string, {
     receipt: DeliveryReceipt;
     text: string | null;
@@ -1764,7 +1786,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       // Capture a previously observed interruption before resume history
       // terminalizes a turn lost with the old process. Only the former records
       // a pause the operator already saw and must keep across adoption.
-      const previousTurn = provisional.events.findLast(event => event.kind === "turn-started" || event.kind === "turn-ended");
+      const previousTurn = provisional.turnBoundaries.at(-1);
       const deliberatelyPaused = previousTurn?.kind === "turn-ended" && previousTurn.status === "interrupted"
         && previousTurn.interruptionSource !== "history";
       provisional.beginBufferedNotificationReconciliation();
@@ -1773,6 +1795,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       if (threadId) provisional.reconcileThreadHistory(result);
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
       provisional.endBufferedNotificationReconciliation();
+      provisional.releaseRestoredHistory();
       await provisional.verifyViewerMcp();
       options.assertCurrent?.();
       provisional.selectModel(provisional.currentImageModel());
@@ -1861,37 +1884,11 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   attach(afterSeq: number): AsyncIterable<RuntimeEvent> {
-    if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) throw new Error("afterSeq must be a non-negative integer");
-    const subscriber: Subscriber = { afterSeq, queue: [], wake: null, closed: false };
-    const firstAvailable = this.events[0]?.seq;
-    if (firstAvailable !== undefined && afterSeq + 1 < firstAvailable) {
-      throw new RuntimeReplayGapError(afterSeq, firstAvailable);
-    }
-    for (const event of this.events) if (event.seq > afterSeq) subscriber.queue.push(event);
-    this.subscribers.add(subscriber);
-    const subscribers = this.subscribers;
-    return {
-      async *[Symbol.asyncIterator]() {
-        try {
-          while (true) {
-            const event = subscriber.queue.shift();
-            if (event) {
-              if (event.seq > subscriber.afterSeq) {
-                subscriber.afterSeq = event.seq;
-                yield event;
-              }
-              continue;
-            }
-            if (subscriber.closed) break;
-            await new Promise<void>((resolve) => { subscriber.wake = resolve; });
-            subscriber.wake = null;
-          }
-        } finally {
-          subscriber.closed = true;
-          subscribers.delete(subscriber);
-        }
-      },
-    };
+    return attachRuntimeEvents(afterSeq, {
+      window: () => this.events,
+      ledger: () => this.storedEvents(),
+      subscribers: this.subscribers,
+    });
   }
 
   /** On-demand retry of capability discovery after a probe fault. A verdict
@@ -2451,7 +2448,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           ? confirmed?.receipt.turnId ?? null
           : null;
         const terminal = turnId
-          ? this.events.findLast((event): event is Extract<RuntimeEvent, { kind: "turn-ended" }> =>
+          ? this.turnBoundaries.findLast((event): event is Extract<RuntimeEvent, { kind: "turn-ended" }> =>
             event.kind === "turn-ended" && event.turnId === turnId)
           : null;
         /* Fresh Codex threads are in-memory placeholders until their first
@@ -2799,8 +2796,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   /** Reconstructed native history survives a Viewer restart and lost RPC acknowledgement. */
   tierCutEvidence(turnId: string): RuntimeTierCut | "armed" | "unknown" {
     if (this.activeTurnId === turnId) return "armed";
-    const terminal = this.events.findLast(event => event.kind === "turn-ended" && event.turnId === turnId);
-    if (terminal && this.events.some(event => event.kind === "turn-started" && event.seq > terminal.seq)) return "turn-ended";
+    const terminal = this.turnBoundaries.findLast(event => event.kind === "turn-ended" && event.turnId === turnId);
+    if (terminal && this.turnBoundaries.some(event => event.kind === "turn-started" && event.seq > terminal.seq)) return "turn-ended";
     return terminal?.kind === "turn-ended" ? terminal.status === "interrupted" ? "cut" : "turn-ended" : "unknown";
   }
 
@@ -3372,6 +3369,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       offset,
       acknowledged: true,
     });
+    boundMap(this.realtimeDeliveries, ACKNOWLEDGED_REALTIME_DELIVERY_MEMORY, state => state.acknowledged);
     const sourceTurnId = this.pendingVoiceChunks.get(delivery.deliveryId);
     if (sourceTurnId) {
       this.pendingVoiceChunks.delete(delivery.deliveryId);
@@ -3458,10 +3456,15 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     return promise;
   }
 
+  private rememberCallbackReceipt(id: string, receipt: CodexRequestReceipt): void {
+    this.callbackReceipts.set(id, receipt);
+    boundMap(this.callbackReceipts, SETTLED_CALLBACK_RECEIPT_MEMORY, settledCallbackReceipt);
+  }
+
   private persistAttention(id: string, attention: PendingAttention): void {
     const receipt = attention.receipt;
     this.emit({ kind: "attention", id, method: attention.method, attention: attention.params, ...(receipt ? { codexReceipt: receipt } : {}) });
-    if (!this.ledgerFailed && receipt) this.callbackReceipts.set(id, receipt);
+    if (!this.ledgerFailed && receipt) this.rememberCallbackReceipt(id, receipt);
   }
 
   readViewerMcpObservation(): ViewerMcpObservation | undefined {
@@ -3934,6 +3937,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       return;
     }
     this.events.push(sequenced);
+    this.rememberTurnBoundary(sequenced);
+    if (!this.restoredHistoryHeld) trimHostEventWindow(this.events);
     if (event.kind === "item" && event.phase === "completed" && event.turnId
       && event.codexItemIdentity?.threadId === this.identity.threadId && event.codexItemIdentity.turnId === event.turnId) {
       const item = record(event.item);
@@ -3967,17 +3972,40 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
   }
 
-  private restoreEvents(): number {
-    const stored = this.eventStore.load(this.identity.threadId).map((event) =>
+  /** The ledger, as the host restores it. */
+  private storedEvents(): RuntimeEvent[] {
+    return this.eventStore.load(this.identity.threadId).map((event) =>
       event.kind === "item" && nativeCodexActivityMethod(event.item) && event.activityAt === undefined
         ? { ...event, activityAt: null } : event);
+  }
+
+  private rememberTurnBoundary(event: RuntimeEvent): void {
+    if (event.kind !== "turn-started" && event.kind !== "turn-ended") return;
+    this.turnBoundaries.push(event);
+    if (this.turnBoundaries.length > TURN_BOUNDARY_MEMORY * 2) this.turnBoundaries.splice(0, this.turnBoundaries.length - TURN_BOUNDARY_MEMORY);
+  }
+
+  /** After adoption has reconciled the thread, keep only the event window. */
+  private releaseRestoredHistory(): void {
+    this.restoredHistoryHeld = false;
+    if (this.events.length > HOST_EVENT_WINDOW) this.events.splice(0, this.events.length - HOST_EVENT_WINDOW);
+  }
+
+  private restoreEvents(): number {
+    const stored = this.storedEvents();
     const currentAttentions = new Map([...this.attentions].filter(([, attention]) => attention.origin === "current"));
     this.attentions.clear();
     this.clearVoiceStreamTimers();
     this.voiceStreams.clear();
     this.pendingVoiceChunks.clear();
     this.cancelledVoiceTurns.clear();
-    this.events.splice(0, this.events.length, ...stored);
+    /* The whole ledger stays in memory until adoption has reconciled the
+       resumed thread's turns and buffered notifications against it. */
+    this.events.length = 0;
+    for (const event of stored) this.events.push(event);
+    this.restoredHistoryHeld = true;
+    this.turnBoundaries.length = 0;
+    for (const event of stored) this.rememberTurnBoundary(event);
     this.cursor = reconcileRuntimeEventCursor(
       this.identity.threadId,
       stored.at(-1)?.seq ?? 0,
@@ -4075,6 +4103,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       }
     }
     for (const [id, attention] of currentAttentions) this.attentions.set(id, attention);
+    boundMap(this.callbackReceipts, SETTLED_CALLBACK_RECEIPT_MEMORY, settledCallbackReceipt);
+    boundMap(this.realtimeDeliveries, ACKNOWLEDGED_REALTIME_DELIVERY_MEMORY, delivery => delivery.acknowledged);
     this.eventLedgerRestored = true;
     return stored.length;
   }
@@ -4265,12 +4295,18 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     const previous = this.confirmedDeliveries.get(clientId);
     const steer = this.pendingSteers.get(clientId);
     const pending = this.pendingDeliveries.get(clientId);
+    /* A digest proves the payload by itself, so the text is kept only for a
+       message without one. Equal digests mean equal text. */
+    const conflicting = previous !== undefined
+      && (previous.contentDigest !== contentDigest || (contentDigest === null && previous.text !== text));
     const confirmed = {
       receipt: previous?.receipt ?? pending?.receipt ?? (steer ? { outcome: "steered" as const, turnId } : { outcome: "turn-started" as const, turnId }),
-      text: previous && (previous.text !== text || previous.contentDigest !== contentDigest) ? null : text,
-      contentDigest: previous && (previous.text !== text || previous.contentDigest !== contentDigest) ? null : contentDigest,
+      text: conflicting || contentDigest !== null ? null : text,
+      contentDigest: conflicting ? null : contentDigest,
     };
+    this.confirmedDeliveries.delete(clientId);
     this.confirmedDeliveries.set(clientId, confirmed);
+    boundMap(this.confirmedDeliveries, CONFIRMED_DELIVERY_MEMORY);
     if (steer) {
       this.pendingSteers.delete(clientId);
       try { this.confirmedReceipt(steer.entry, confirmed); steer.resolve(this.writerFenceAllowsActuation() ? "landed" : "unknown"); }
@@ -4860,7 +4896,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         if (answer) { clearTimeout(answer.timer); answer.reject(new StructuredAnswerError("Codex resolution could not be persisted; delivery is uncertain", "uncertain")); }
         return;
       }
-      if (receipt) this.callbackReceipts.set(resolved[0], receipt);
+      if (receipt) this.rememberCallbackReceipt(resolved[0], receipt);
       if (answer) { clearTimeout(answer.timer); answer.resolve(); }
       return;
     }
