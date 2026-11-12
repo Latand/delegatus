@@ -211,7 +211,7 @@ function numbered(key: string, prefix: string): { name: string; number: string }
 
 /** The cache the rows hold, validated as the legacy file was. */
 function fromRows(rows: readonly DocumentRow[]): ForgeCacheFile {
-  const raw: Record<string, Partial<ForgeRepositoryEntry> & { prs: Record<string, unknown>; issues: Record<string, unknown> }> = {};
+  const raw: Record<string, Omit<Partial<ForgeRepositoryEntry>, "prs" | "issues"> & { prs: Record<string, unknown>; issues: Record<string, unknown> }> = {};
   const entry = (name: string) => raw[name] ??= { ...emptyRepositoryEntry(), prs: {}, issues: {} };
   for (const row of rows) {
     if (row.key.startsWith(REPO_PREFIX)) {
