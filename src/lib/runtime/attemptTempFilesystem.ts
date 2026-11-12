@@ -3,7 +3,8 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { measureTempBytes, resolvePhysicalPath, type ProcessScan, isUvCacheMarker } from "@/lib/tempSweep";
-import { reportMediaIndex, reportMediaRoot } from "@/lib/reportMedia/lookup";
+import { reportMediaIndex } from "@/lib/reportMedia/lookup";
+import { recordedRootHeld } from "@/lib/recordedChecks/store";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 
 const exec = promisify(execFile);
@@ -570,11 +571,13 @@ export async function attemptTempUtilityImage(): Promise<string> {
 }
 /** The files of an attempt root that the evidence ledger links, relative to
  * it: pictures a stage report, a bridge report or a task named by their path
- * in the root (the report picture index) and of which no kept copy exists.
- * Only these count in the namespace's no-evidence proof; an image of a
- * checked-out source tree is no recorded evidence and no longer blocks a
- * tree this user cannot read. An unreadable index proves nothing. */
+ * in the root (the report picture index). A root that recorded-check custody
+ * still holds counts as evidence whole. Only these count in the namespace's
+ * no-evidence proof; an image of a checked-out source tree is no recorded
+ * evidence and no longer blocks a tree this user cannot read. An unreadable
+ * index proves nothing. */
 export function ledgerLinkedEvidence(original: string): string[] {
+  if (recordedRootHeld(original)) throw new Error("recorded-check custody holds this root; the no-evidence proof refuses");
   const rows = reportMediaIndex();
   if (rows === null) throw new Error("report picture index is unreadable; the no-evidence proof cannot run");
   const roots = [path.resolve(original)];
@@ -583,7 +586,7 @@ export function ledgerLinkedEvidence(original: string): string[] {
   const linked = new Set<string>();
   for (const row of rows) {
     const named = path.resolve(row.path), root = roots.find(candidate => named.startsWith(candidate + path.sep));
-    if (!root || fs.existsSync(path.join(reportMediaRoot(), row.file))) continue;
+    if (!root) continue;
     linked.add(path.relative(root, named));
   }
   return [...linked];

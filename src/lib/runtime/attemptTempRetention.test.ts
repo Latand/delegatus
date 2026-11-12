@@ -882,6 +882,20 @@ test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)("an expire
   await integratedNamespaceSweep("permission-fallback", "control", true, { foreign: true });
 });
 
+test("the no-evidence proof counts a picture a report named, kept or not, and a root recorded-check custody holds", async () => {
+  const f = fixture(), directory = f.make("proof-ledger");
+  fs.mkdirSync(path.join(directory, "vendor")); fs.writeFileSync(path.join(directory, "vendor", "icon.png"), "source asset");
+  try {
+    expect(filesystem.ledgerLinkedEvidence(directory)).toEqual([]);
+    nameInReport(path.join(directory, "shots", "frame.png"));
+    const index = JSON.parse(fs.readFileSync(statePath("report-media", "index.json"), "utf8"));
+    fs.writeFileSync(statePath("report-media", index[0].file), "kept copy");
+    expect(filesystem.ledgerLinkedEvidence(directory)).toEqual([path.join("shots", "frame.png")]);
+    await holdFinishedRoot(directory);
+    expect(() => filesystem.ledgerLinkedEvidence(directory)).toThrow("recorded-check custody");
+  } finally { f.store.close(); }
+});
+
 test.skipIf(process.platform !== "linux").each([["source", "namespace-only"], ["source", "permission-fallback"], ["named", "namespace-only"]] as const)(
   "the namespace no-evidence proof counts only what the evidence ledger links (%s image, %s)", (image, kind) =>
     integratedNamespaceSweep(kind, "control", false, { image }));

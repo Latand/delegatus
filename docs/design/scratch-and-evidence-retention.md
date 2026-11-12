@@ -787,8 +787,8 @@ roots). Five defects explained most of it.
    proof exiting 75 over readable source-tree images, none of them named by
    any report. The proof now counts only what the evidence ledger links: a
    picture that a stage report, a bridge report or a task named by its path
-   in the root (the report picture index) and of which no kept copy exists.
-   An unreadable index refuses. The copy step that preserves readable
+   in the root (the report picture index), and the whole root while
+   recorded-check custody holds it. An unreadable index refuses. The copy step that preserves readable
    captures before an ordinary retirement is unchanged. The expiry snapshot
    also threw `EACCES` on such directories; it now keeps each as a leaf
    versioned by its own metadata, since the namespace removal repeats the
