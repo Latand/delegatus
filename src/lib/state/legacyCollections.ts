@@ -165,6 +165,14 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     importAtActivation: async () => (await import("@/lib/forge/cache")).importLegacyForgeLinks(statePath("forge-links.json"), { reconcile: true }),
     checkpointMirrorForDemotion: async () => (await import("@/lib/forge/cache")).checkpointForgeLinksRollbackMirrorForDemotion(statePath("forge-links.json")),
   },
+  /* A cache: the import deletes the file and the demotion writes no mirror,
+     because an older release that finds no catalog rescans once and writes
+     its own (src/lib/scanner/projectCatalogStore.ts). */
+  {
+    collection: "project_catalog",
+    importAtActivation: async () => (await import("@/lib/scanner/projectCatalogStore")).importLegacyProjectCatalog(statePath("project-catalog.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => {},
+  },
   // Slice 8a; inventory: docs/design/state-sqlite-journals.md.
   {
     collection: "lifecycle_digests",

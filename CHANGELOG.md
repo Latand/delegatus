@@ -62,6 +62,14 @@ compatibility raises the major version.
   file is imported and verified, then kept as
   `forge-links.json.imported-<release>`, and a directory with a README takes
   its place (#1870).
+- **The project catalog is stored in `state.sqlite`** (collection
+  `project_catalog`) instead of `project-catalog.json`: one row per
+  catalogued transcript. A scan writes only the records that changed and
+  deletes those of transcripts that are gone; on a catalog shaped like a busy
+  installation's (about 20,000 transcripts, 15.6 MB), a scan that changes 22
+  of them writes about 0.6 MB instead of 15.6 MB, and a reader that has
+  already read the catalog answers an unchanged one without reading a row. On
+  first start the file is imported and then deleted, since it is a cache.
 - **The lifecycle journal, the seat tick's run journal and the reset-credit
   ledger move into `state.sqlite`** (collections `lifecycle`,
   `seat_tick_runs` and `reset_credits`), out of `lifecycle-journal.json`,
@@ -111,6 +119,9 @@ compatibility raises the major version.
   replace the directory with the `forge-links.json.imported-*` copy. Deployed
   releases rolled back through the release fence get the file written back
   for them automatically, and their newer readings are merged at roll-forward.
+- A version older than this one finds no `project-catalog.json`. Its first
+  scan describes every transcript again, which takes longer once, and then
+  writes the file as before. Upgrading again imports that file.
 - A version older than this one finds directories where
   `lifecycle-journal.json`, `seat-tick/runs.ndjson` and
   `codex-reset-credits.ndjson` were. Its lifecycle surfaces (the
