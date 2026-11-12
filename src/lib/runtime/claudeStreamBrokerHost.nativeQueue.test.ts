@@ -72,6 +72,19 @@ test.skipIf(!binary).each([
       for (let i = 0; i < 1200 && !done(); i++) await Bun.sleep(25);
       expect(done()).toBe(true);
     };
+    const driveUntilReceipt = async (deliveryQueue: StructuredDeliveryQueue, operationId: string, expected: string) => {
+      for (let attempt = 0; attempt < 1200; attempt++) {
+        await deliveryQueue.drain();
+        if (journal.operationResult(operationId)?.receipt.status === expected) {
+          // Join one more controller pass before teardown so a lane that
+          // outlived its pass budget cannot still be using the journal.
+          await deliveryQueue.drain();
+          return;
+        }
+        await Bun.sleep(25);
+      }
+      expect(journal.operationResult(operationId)?.receipt.status).toBe(expected);
+    };
     const openHost = (sessionId?: string) => {
       const options = { binary, cwd: directory,
         env: { PATH: process.env.PATH, HOME: directory, TMPDIR: directory, XDG_CONFIG_HOME: path.join(directory, "config"),
@@ -125,6 +138,12 @@ test.skipIf(!binary).each([
               return Reflect.apply(write, child.stdin, [inputs.map(input => JSON.stringify(input) + "\n").join(""), ...rest]);
             }
             wireInputs.push(frame);
+            if (permission && frame.type === "control_response") {
+              // Keep the permission-control lane active beyond its 20 ms
+              // pass budget while still sending the real frame to the CLI.
+              setTimeout(() => Reflect.apply(write, child.stdin, [chunk, ...rest]), 60);
+              return true;
+            }
             return Reflect.apply(write, child.stdin, [chunk, ...rest]);
           }) as typeof child.stdin.write;
           return child;
@@ -184,13 +203,11 @@ test.skipIf(!binary).each([
           if (mode === "permission-cancel") {
             journal.executeOperation({ kind: "interrupt", operationId: "cancel-permission", idempotencyKey: "cancel-permission",
               conversationId, turnId: incumbent.operationId });
-            await queue.drain();
-            expect(journal.operationResult("cancel-permission")?.receipt.status).toBe("interrupted");
+            await driveUntilReceipt(queue, "cancel-permission", "interrupted");
           } else {
             journal.executeOperation({ kind: "answer", operationId: "answer-permission", idempotencyKey: "answer-permission",
               conversationId, attentionId: attention!, resolution: mode === "permission-allow" ? { behavior: "allow" } : { behavior: "deny" } });
-            await queue.drain();
-            expect(journal.operationResult("answer-permission")?.receipt.status).toBe("answered");
+            await driveUntilReceipt(queue, "answer-permission", "answered");
           }
         }
         await wait(() => rawKinds.filter(kind => kind === "result").length === 1);
