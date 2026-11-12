@@ -780,3 +780,23 @@ test("Copilot child environments keep the production scratch and evidence alloca
     expect(fs.statSync(env.LLV_EVIDENCE_DIR!).isDirectory()).toBeTrue();
   } finally { access.cleanup(); }
 });
+
+
+test("heap counters observe events and subscriber queues without consuming them", async () => {
+  const host = await CopilotAcpHost.start(options(new FakeCopilot()));
+  const before = host.heapAttribution();
+  const stop = host.onStateChange(() => {});
+  const stream = host.attach(0)[Symbol.asyncIterator]();
+  try {
+    expect(before.engine).toBe("copilot");
+    expect(before.events).toBeGreaterThan(0);
+    expect(host.heapAttribution()).toMatchObject({ events: before.events,
+      eventSubscribers: before.eventSubscribers + 1, stateSubscribers: before.stateSubscribers + 1,
+      queuedEvents: before.queuedEvents + before.events });
+    await stream.next();
+    expect(host.heapAttribution().queuedEvents).toBe(before.queuedEvents + before.events - 1);
+    await stream.return?.();
+    stop();
+    expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
+  } finally { stop(); await stream.return?.(); await host.release(); }
+});
