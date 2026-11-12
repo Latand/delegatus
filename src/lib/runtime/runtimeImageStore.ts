@@ -703,7 +703,11 @@ export class RuntimeImageStore {
     try {
       fs.writeFileSync(partial, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
       fs.renameSync(partial, ticket);
-      fs.writeFileSync(gateStage, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
+      // Keep the directory gate layout used by older writers. Populate its
+      // owner before publishing the directory so legacy readers never observe
+      // a gate without the owner.json path they expect.
+      fs.mkdirSync(gateStage, { mode: 0o700 });
+      fs.writeFileSync(path.join(gateStage, "owner.json"), JSON.stringify(owner), { flag: "wx", mode: 0o600 });
       while (!acquired) {
         this.assertRootPinned(root);
         const liveTickets: string[] = [];
@@ -718,10 +722,10 @@ export class RuntimeImageStore {
         }
         if (liveTickets[0] === ticket) {
           try {
-            // Publish a complete owner record atomically without replacing an
-            // existing gate. mkdir(gate) followed by owner.json leaves a
-            // window where a queue head can mistake a live gate for debris.
-            fs.linkSync(gateStage, gate);
+            // Rename the complete directory into place. Legacy writers read
+            // gate/owner.json, and no reader can see a partially published
+            // owner. A live gate is non-empty, so rename cannot replace it.
+            fs.renameSync(gateStage, gate);
             acquired = true;
           } catch (error) {
             const code = (error as NodeJS.ErrnoException).code;

@@ -568,7 +568,7 @@ test.each(["empty", "partial"] as const)("concurrent runtime image writers prese
   }
 }, 20_000);
 
-test("a queued head cannot remove a live gate owner during gate publication", async () => {
+test("a queued legacy reader can share the atomically published gate with a new writer", async () => {
   const root = sandbox();
   const controls = sandbox();
   const maxBytes = 4 * 1024 * 1024 + 128;
@@ -589,30 +589,20 @@ test("a queued head cannot remove a live gate owner during gate publication", as
     expect(queued).toHaveLength(1);
     expect(queued[0]).toContain(`0000000000002000-${ownerPublisher.child.pid}-`);
 
+    // This is the path read directly by the older implementation. Keep the
+    // new owner live while the earlier ticket is published and inspected.
+    const legacyOwnerPath = path.join(root, ".writer-lock-gate", "owner.json");
+    const legacyOwner = JSON.parse(fs.readFileSync(legacyOwnerPath, "utf8")) as { pid: number; token: string };
+    expect(legacyOwner.pid).toBe(ownerPublisher.child.pid);
+    expect(legacyOwner.token).toBeTruthy();
     fs.writeFileSync(path.join(controls, "publication-release"), "go");
     await writerMilestone(path.join(controls, "ticket-published"), earlier);
     expect(fs.readFileSync(path.join(controls, "ticket-published"), "utf8"))
       .toContain("0000000000001000-");
-
-    // Let the earlier head inspect the held publication. On the directory
-    // implementation this reaches the exact empty-gate removal; keep the
-    // second process at its owner write until that removal is observed.
-    while (!fs.existsSync(path.join(controls, "gate-retired")) && earlier.child.exitCode === null) await Bun.sleep(2);
-    const retiredGate = fs.existsSync(path.join(controls, "gate-retired"));
-    let results: Array<Awaited<ImageWriter["result"]>>;
-    if (retiredGate) {
-      expect(fs.existsSync(path.join(root, ".writer-lock-gate"))).toBe(false);
-      expect(ownerPublisher.child.exitCode).toBeNull();
-      fs.writeFileSync(path.join(controls, "gate-owner-release"), "go");
-      const ownerResult = await ownerPublisher.result;
-      fs.writeFileSync(path.join(controls, "gate-removal-release"), "go");
-      results = [await earlier.result, ownerResult];
-    } else {
-      expect(await earlier.result).toEqual({ exit: 0, stdout: "", stderr: "" });
-      expect(ownerPublisher.child.exitCode).toBeNull();
-      fs.writeFileSync(path.join(controls, "gate-owner-release"), "go");
-      results = await Promise.all(writers.map(writer => writer.result));
-    }
+    expect(earlier.child.exitCode).toBeNull();
+    expect(fs.readFileSync(legacyOwnerPath, "utf8")).toContain(legacyOwner.token);
+    fs.writeFileSync(path.join(controls, "gate-owner-release"), "go");
+    const results = await Promise.all(writers.map(writer => writer.result));
     expect(results.map(result => result.exit).sort(), JSON.stringify(results)).toEqual([0, 2]);
     expect(results).toEqual(results.map(result => ({ ...result, stdout: "", stderr: "" })));
     const blobs = fs.readdirSync(root).filter(name => name.endsWith(".png"));

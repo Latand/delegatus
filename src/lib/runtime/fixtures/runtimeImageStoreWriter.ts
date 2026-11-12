@@ -43,56 +43,26 @@ if (publicationMode === "maintenance" && controls) {
   });
 } else if (publicationMode === "gate-owner" && controls) {
   const writeFile = fs.writeFileSync;
-  const link = fs.linkSync;
+  const rename = fs.renameSync;
   let paused = false;
-  fs.writeFileSync = (file, contents, options) => {
-    const filename = String(file);
-    if (!paused && path.basename(filename) === "owner.json"
-      && path.basename(path.dirname(filename)) === ".writer-lock-gate") {
+  fs.renameSync = (from, to) => {
+    const source = String(from);
+    const target = String(to);
+    const result = rename(from, to);
+    if (!paused && path.basename(source).startsWith(".writer-lock-gate.")
+      && path.basename(source).endsWith(".partial")
+      && path.basename(target) === ".writer-lock-gate") {
       paused = true;
       writeFile(path.join(controls, "gate-owner-paused"), "ready");
       waitForRelease(path.join(controls, "gate-owner-release"));
     }
-    return writeFile(file, contents, options);
-  };
-  fs.linkSync = (from, to) => {
-    if (!paused && path.basename(String(from)).startsWith(".writer-lock-gate.")
-      && path.basename(String(from)).endsWith(".partial")
-      && path.basename(String(to)) === ".writer-lock-gate") {
-      paused = true;
-      writeFile(path.join(controls, "gate-owner-paused"), "ready");
-      waitForRelease(path.join(controls, "gate-owner-release"));
-    }
-    return link(from, to);
+    return result;
   };
 } else if (publicationMode && controls) {
   // Reproduce the actual open/write cut in writeFileSync. Hold this process
   // with its descriptor open while a peer scans the acquisition queue.
   const writeFile = fs.writeFileSync;
   const rename = fs.renameSync;
-  if (publicationMode === "delayed-gate-head") {
-    const remove = fs.rmSync;
-    let observedForeignRemoval = false;
-    fs.rmSync = (file, options) => {
-      const filename = String(file);
-      let gateOwner: { pid?: number } | null = null;
-      if (path.basename(filename) === ".writer-lock-gate") {
-        try {
-          const stat = fs.lstatSync(filename);
-          const ownerFile = stat.isDirectory() ? path.join(filename, "owner.json") : filename;
-          gateOwner = JSON.parse(fs.readFileSync(ownerFile, "utf8")) as { pid?: number };
-        } catch { /* An empty gate is the publication race under test. */ }
-      }
-      const result = remove(file, options);
-      if (!observedForeignRemoval && path.basename(filename) === ".writer-lock-gate"
-        && (!gateOwner || gateOwner.pid !== process.pid)) {
-        observedForeignRemoval = true;
-        writeFile(path.join(controls, "gate-retired"), "ready");
-        waitForRelease(path.join(controls, "gate-removal-release"));
-      }
-      return result;
-    };
-  }
   fs.renameSync = (from, to) => {
     rename(from, to);
     if (path.dirname(String(to)).endsWith(".writer-lock-gate.queue")) {
