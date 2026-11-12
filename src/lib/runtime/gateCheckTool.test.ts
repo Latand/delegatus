@@ -25,6 +25,127 @@ function finish(dir: string, exit: number) {
   fs.renameSync(path.join(dir, "exit.tmp"), path.join(dir, "exit"));
 }
 
+// Drop only completion notifications, while driving the wait's clock explicitly.
+function missedNotifications(directory: string) {
+  let now = 0;
+  let watcher: fs.FSWatcher;
+  let notify!: () => void;
+  const pending = new Map<ReturnType<typeof setTimeout>, { at: number; callback: () => void }>();
+  const schedule = globalThis.setTimeout, cancel = globalThis.clearTimeout, watch = fs.watch;
+  const clock = spyOn(performance, "now").mockImplementation(() => now);
+  const timers = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
+    const timer = schedule(() => {}, 3_600_000);
+    pending.set(timer, { at: now + ms, callback });
+    return timer;
+  }) as typeof setTimeout);
+  const cancellations = spyOn(globalThis, "clearTimeout").mockImplementation(timer => {
+    pending.delete(timer as ReturnType<typeof setTimeout>); cancel(timer);
+  });
+  const notifications = spyOn(fs, "watch").mockImplementation(((...args: Parameters<typeof fs.watch>) => {
+    if (args[0] === directory) {
+      const listener = args[args.length - 1] as (event: string, filename: string) => void;
+      notify = () => listener("rename", "exit");
+      watcher = watch(directory, () => {}); return watcher;
+    }
+    return watch(...args);
+  }) as typeof fs.watch);
+  return {
+    pending,
+    get watcher() { return watcher; },
+    notify() { notify(); },
+    advance(ms: number) {
+      now += ms;
+      for (const [timer, entry] of [...pending]) if (entry.at <= now) {
+        pending.delete(timer); cancel(timer); entry.callback();
+      }
+    },
+    restore() {
+      for (const timer of pending.keys()) cancel(timer);
+      notifications.mockRestore(); cancellations.mockRestore(); timers.mockRestore(); clock.mockRestore();
+    },
+  };
+}
+
+test.each([0, 37, 124])("a missed completion notification still settles exit %s within one second", async exit => {
+  const f = fixture(), clock = missedNotifications(f.dir), abort = new AbortController();
+  try {
+    let answer: Awaited<ReturnType<typeof f.call>> | undefined;
+    const held = f.call(abort.signal).then(result => { answer = result; });
+    clock.advance(1000); await Promise.resolve();
+    expect(answer).toBeUndefined();
+    finish(f.dir, exit);
+    clock.advance(1000);
+    expect(clock.pending.size).toBe(0);
+    await held;
+    expect(answer?.success).toBe(true);
+    expect(JSON.parse(answer!.contentItems[0].text)).toMatchObject({ terminal: true, code: exit });
+    expect(clock.pending.size).toBe(0);
+  } finally { abort.abort(); clock.restore(); }
+});
+
+test.each(["cancel", "watcher-error", "malformed-exit", "owner", "ticket", "directory"])("missed notifications preserve the %s refusal and release the wait", async fault => {
+  const f = fixture(), clock = missedNotifications(f.dir), abort = new AbortController();
+  try {
+    const held = f.call(abort.signal);
+    const close = spyOn(clock.watcher, "close");
+    try {
+      if (fault === "cancel") abort.abort();
+      if (fault === "watcher-error") clock.watcher.emit("error", new Error("fixture watcher failed"));
+      if (fault === "directory") {
+        fs.renameSync(f.dir, `${f.dir}.retained`);
+        fs.mkdirSync(f.dir);
+        for (const file of ["owner.json", "completion.json"]) fs.copyFileSync(path.join(`${f.dir}.retained`, file), path.join(f.dir, file));
+      }
+      if (fault === "owner") fs.writeFileSync(path.join(f.dir, "owner.json"), JSON.stringify({ ...cpuOwnerIdentity(process.pid), startIdentity: "changed" }));
+      if (fault === "ticket") fs.writeFileSync(path.join(f.dir, "completion.json"), "{}");
+      finish(f.dir, 0);
+      if (fault === "malformed-exit") fs.writeFileSync(path.join(f.dir, "exit"), "partial");
+      clock.advance(1000);
+      expect(clock.pending.size).toBe(0);
+      const answer = await held;
+      expect(answer.success).toBe(false);
+      expect(answer.contentItems[0].text).toContain(fault === "cancel" ? "cancelled"
+        : fault === "watcher-error" ? "fixture watcher failed"
+        : fault === "malformed-exit" ? "invalid gate exit record" : "identity changed");
+      expect(close).toHaveBeenCalledTimes(1);
+      clock.notify();
+      clock.advance(1000);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(clock.pending.size).toBe(0);
+    } finally { close.mockRestore(); }
+  } finally { abort.abort(); clock.restore(); }
+});
+
+test("completion notifications still settle immediately and cancel recovery", async () => {
+  const f = fixture(), clock = missedNotifications(f.dir), abort = new AbortController();
+  try {
+    const held = f.call(abort.signal);
+    finish(f.dir, 0);
+    clock.notify();
+    expect(clock.pending.size).toBe(0);
+    expect((await held).success).toBe(true);
+  } finally { abort.abort(); clock.restore(); }
+});
+
+test("recovery reads no output before completion and keeps the original deadline through progress", async () => {
+  const f = fixture(), clock = missedNotifications(f.dir), abort = new AbortController();
+  const open = spyOn(fs, "openSync");
+  try {
+    const held = f.call(abort.signal);
+    clock.advance(30_000);
+    fs.appendFileSync(f.log, "progress\n");
+    clock.advance(30_000);
+    expect(open.mock.calls.filter(args => args[0] === f.log)).toHaveLength(0);
+    // The fixture pins 60 seconds plus the recorder's 65-second cleanup bound.
+    clock.advance(65_000);
+    expect(clock.pending.size).toBe(0);
+    const answer = await held;
+    expect(JSON.parse(answer.contentItems[0].text)).toMatchObject({ terminal: false, code: 124 });
+    expect(open.mock.calls.filter(args => args[0] === f.log)).toHaveLength(1);
+    expect(fs.existsSync(path.join(f.dir, "exit"))).toBe(false);
+  } finally { abort.abort(); open.mockRestore(); clock.restore(); }
+});
+
 test.each([0, 37, 124])("one callback spans progress and preserves terminal exit %s", async exit => {
   const f = fixture();
   const before = fs.readFileSync(path.join(f.dir, "completion.json"));
@@ -42,6 +163,8 @@ test.each([0, 37, 124])("one callback spans progress and preserves terminal exit
 
 test.each([94, 360])("the original %s-minute deadline expires once and stays nonterminal", async minutes => {
   const f = fixture(); let expire!: () => void, timers = 0, scheduled = 0;
+  let now = 0;
+  const clock = spyOn(performance, "now").mockImplementation(() => now);
   const ticket = JSON.parse(fs.readFileSync(path.join(f.dir, "completion.json"), "utf8"));
   fs.writeFileSync(path.join(f.dir, "completion.json"), JSON.stringify({ ...ticket, deadlineUptimeMs: custodyClock() + minutes * 60_000 }));
   const schedule = globalThis.setTimeout;
@@ -52,13 +175,14 @@ test.each([94, 360])("the original %s-minute deadline expires once and stays non
   try {
     const held = f.call();
     expect(timers).toBe(1);
-    expect(scheduled).toBeGreaterThan((minutes - 1) * 60_000);
+    expect(scheduled).toBe(1000);
+    now = minutes * 60_000 + 65_000;
     expire();
     const result = await held;
     expect(result.success).toBe(true);
     expect(JSON.parse(result.contentItems[0].text)).toMatchObject({ terminal: false, code: 124 });
     expect(fs.existsSync(path.join(f.dir, "exit"))).toBe(false);
-  } finally { clearTimeout(ownedTimer); timer.mockRestore(); }
+  } finally { clearTimeout(ownedTimer); timer.mockRestore(); clock.mockRestore(); }
 });
 
 test("cancellation closes the wait and leaves the original recording intact", async () => {
