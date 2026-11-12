@@ -3,6 +3,13 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { observeCommandExecution, timedCommand } from "./commandTiming";
 
+test("a native command without a timing channel exits with unknown execution time", async () => {
+  const child = spawn(process.execPath, ["-e", "process.exit(7)"], { stdio: "ignore" });
+  const timing = observeCommandExecution(child);
+  expect(await once(child, "close")).toEqual([7, null]);
+  expect(await timing()).toEqual({});
+});
+
 test("exec timing excludes acknowledged setup and later cleanup, preserving argv and stdin", async () => {
   const clock = spyOn(Date, "now").mockReturnValue(0);
   const argv = timedCommand(["/bin/bash", "-c", 'IFS= read -r value; printf "%s|%s" "$1" "$value"; exit 7', "fixture", "a b;$literal"],
