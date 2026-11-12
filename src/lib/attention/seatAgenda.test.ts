@@ -42,12 +42,31 @@ test("a routed lane names the stage's own question, the decision answer path and
   const lane = {
     id: "lane", task: "Fix the panel", project: "project-a", state: "needs_decision", createdAt: at, stateDetail: "stage verdict: needs_decision",
     stages: [{ id: "diagnose", kind: "run" }], cursor: { stageId: "diagnose" },
-    runs: [{ stageId: "diagnose", attempts: [{ n: 1, state: "needs_decision", report: { verdict: { status: "needs_decision" }, summary: "Keep the current behaviour or switch? I recommend switching." } }] }],
+    runs: [{ stageId: "diagnose", attempts: [{ n: 1, state: "needs_decision", verdict: { status: "needs_decision" },
+      report: { verdict: { status: "needs_decision" }, summary: "Keep the current behaviour or switch? I recommend switching." } }] }],
     attentionRoute: { key: "lane:lane:lane-decision:none", owner: "seat", seat: "conversation_seat" },
   } as unknown as Pipeline;
   const [line] = seatAgendaAsks({ files: [], pipelines: [lane] }, now, "project-a");
   expect(line).toMatchObject({ key: "lane:lane:lane-decision:none", id: "lane" });
   expect(line!.label).toContain("stage diagnose asks «Keep the current behaviour or switch? I recommend switching.»");
+  expect(line!.label).toContain("pipeline_action resolve-decision");
+});
+
+test.each(["fail-edge budget exhausted after 2 round(s)", "round limit reached"])("a failed visual gate with %s gets review advice", (detail) => {
+  const lane = {
+    id: "visual", task: "Check the panel", project: "project-a", state: "needs_decision", createdAt: at, stateDetail: detail,
+    stages: [{ id: "visual-critic", kind: "run" }], cursor: { stageId: "visual-critic" },
+    runs: [{ stageId: "visual-critic", attempts: [{ n: 1, state: "failed", verdict: { status: "fail" },
+      report: { verdict: { status: "fail" }, summary: "The panel clips its controls." } }] }],
+    attentionRoute: { key: "lane:visual:lane-decision:none", owner: "seat", seat: "conversation_seat" },
+  } as unknown as Pipeline;
+  const [line] = seatAgendaAsks({ files: [], pipelines: [lane] }, now, "project-a");
+  expect(line!.label).toStartWith("[review]");
+  expect(line!.label).toContain("retained review");
+  expect(line!.label).toContain("pipeline_action close");
+  expect(line!.label).not.toContain("resolve-decision");
+  expect(line!.label).not.toContain("retry-stage");
+  expect(line!.label).not.toContain("asks");
 });
 
 /* docs/design/calm-task-cards-build.md §7.2: a stopped merge's step follows
@@ -88,7 +107,9 @@ test("a parked lane's line names its stop class before the stage's words", () =>
     attentionRoute: { key: "lane:commit:lane-decision:none", owner: "seat", seat: "conversation_seat" },
   } as unknown as Pipeline;
   const [line] = seatAgendaAsks({ files: [], pipelines: [lane] }, now, "project-a");
-  expect(line!.label).toStartWith("[commit] Ship the panel — stage build asks stopped: stage failed");
+  expect(line!.label).toStartWith("[commit] Ship the panel — stage build stopped: stage failed");
+  expect(line!.label).toContain("pipeline_action retry-stage");
+  expect(line!.label).not.toContain("resolve-decision");
 });
 
 test("only the successor delivery owner asks for a shared PR merge", () => {

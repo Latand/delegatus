@@ -1,10 +1,10 @@
 "use client";
 
 import { ChevronRight, Send } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MutableRefObject } from "react";
 
 import { AddChatForm, ChatRow, ERROR_KEYS, TokenForm } from "@/components/TelegramBot";
-import { useTelegramBot } from "@/hooks/useTelegramBot";
+import type { TelegramBotState } from "@/hooks/useTelegramBot";
 import { useLocale } from "@/lib/i18n";
 
 import type { GuideProject } from "./ProjectStep";
@@ -24,6 +24,12 @@ import type { GuideProject } from "./ProjectStep";
  * now is still where the Viewer addresses reports, so it stays in the list,
  * chosen and in use, but it cannot be picked or saved again until the
  * operator allows it or picks another.
+ *
+ * The step is numbered, with "Continue" in the dialog's footer, only when a bot
+ * is already connected: Continue saves what is chosen (the dialog moves on once
+ * the write is kept) and moves on without writing when nothing is. Without a
+ * bot it sits under "Later", where connecting is the step's own action and the
+ * footer's one way out is "Back to setup".
  */
 
 const LOG_ONLY = "\u0000log-only";
@@ -62,14 +68,26 @@ function destinationInUse(settings: ProjectReportSettings): string | null {
   return choice ? choice.chat ?? LOG_ONLY : null;
 }
 
-export function TelegramReportsStep({ project, onSaved, onSkip }: {
+type StepProps = {
   project: GuideProject | null;
+  /** The dialog's one read of the bot, so the step list and this step agree. */
+  bot: TelegramBotState;
+  /** True when the dialog's footer Continue saves the step; false under "Later", where "Use this" is in the body. */
+  numbered: boolean;
+  /** Set to the footer's save: null when nothing is chosen (Continue then moves on), else the write, true once kept. */
+  actionRef?: MutableRefObject<(() => Promise<boolean> | null) | null>;
   /** The destination was written; null is "log only". */
   onSaved: (outcome: TelegramReportsOutcome) => void;
-  onSkip: () => void;
-}) {
+};
+
+export function TelegramReportsStep(props: StepProps) {
   const { t } = useLocale();
-  const bot = useTelegramBot(project !== null);
+  if (!props.project) return <p data-onboarding-telegram="no-project" className="text-body text-secondary">{t("onboarding.telegram.noProject")}</p>;
+  return <TelegramReportsBody {...props} project={props.project} />;
+}
+
+function TelegramReportsBody({ project, bot, numbered, actionRef, onSaved }: StepProps & { project: GuideProject }) {
+  const { t } = useLocale();
   /* What the operator clicked or typed here; until then the step shows what
      is in use now. */
   const [picked, setPicked] = useState<string | null>(null);
@@ -81,7 +99,6 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
   const [settings, setSettings] = useState<ProjectReportSettings | null>(null);
 
   useEffect(() => {
-    if (!project) return;
     let cancelled = false;
     void readSettings(project.project).then((settings) => {
       if (cancelled || !settings) return;
@@ -89,8 +106,6 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
     });
     return () => { cancelled = true; };
   }, [project]);
-
-  if (!project) return <p data-onboarding-telegram="no-project" className="text-body text-secondary">{t("onboarding.telegram.noProject")}</p>;
 
   const status = bot.status;
   const connected = status?.connected === true;
@@ -115,8 +130,8 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
   const nameMissing = (chatChosen || link.trim() !== "") && name.trim() === "";
   const canSave = (link.trim() !== "" || choice !== null && choice !== refused) && !nameMissing && !saving;
 
-  const save = async () => {
-    if (!canSave) return;
+  const save = async (): Promise<boolean> => {
+    if (!canSave) return false;
     setSaving(true);
     setFailed(null);
     const outcome: TelegramReportsOutcome = link.trim() ? { link: link.trim(), name: name.trim() }
@@ -146,13 +161,22 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
       setPicked(updated.reportTelegram?.chat ?? LOG_ONLY);
       setSaved(updated.reportTelegram?.chat ? { chat: updated.reportTelegram.chat, name: updated.reportTelegram.name ?? name.trim(), topicId: updated.reportTelegram.topicId } : null);
       onSaved(outcome);
+      return true;
     } catch (error) {
       if (!outcome || !("link" in outcome)) { setSettings(before.settings); setSaved(before.saved); }
       setFailed(error instanceof Error ? error.message : "");
+      return false;
     } finally {
       setSaving(false);
     }
   };
+  /* Continue saves what is chosen; with nothing chosen it has nothing to write. */
+  const somethingChosen = link.trim() !== "" || (choice !== null && choice !== refused);
+  useEffect(() => {
+    if (!actionRef) return;
+    actionRef.current = connected && somethingChosen ? () => save() : null;
+    return () => { actionRef.current = null; };
+  });
 
   const radio = (value: string, label: string, detail: string | null) => {
     const on = choice === value;
@@ -267,18 +291,15 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
         </p>
       ) : null}
 
-      <div className="flex gap-2">
-        {/* With no bot there is nothing to choose yet: connecting is the step's
-            action, and Skip leaves reports in the log. */}
-        {connected ? (
+      {/* Numbered: the footer's Continue saves. Under "Later" with a bot the
+          body keeps its own filled action; with no bot connecting is the action. */}
+      {connected && !numbered ? (
+        <div className="flex gap-2">
           <button type="button" data-onboarding-telegram-save="" disabled={!canSave} onClick={() => void save()} className={`${action} bg-brand text-on-brand hover:opacity-90`}>
             {t("onboarding.telegram.save")}
           </button>
-        ) : null}
-        <button type="button" data-onboarding-telegram-skip="" onClick={onSkip} className={`${action} border border-border bg-card text-primary hover:bg-sunken`}>
-          {t("onboarding.telegram.skip")}
-        </button>
-      </div>
+        </div>
+      ) : null}
     </div>
   );
 }

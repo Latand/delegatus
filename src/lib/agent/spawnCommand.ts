@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 
-import { codexLaunchTier, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
+import { codexLaunchTier, CodexServiceTierUnavailableError, hiddenAccountsTierRefusal } from "@/lib/accounts/codexServiceTiers";
 import { NextRequest, NextResponse } from "next/server";
 import { deferSpawnWork } from "./spawnDeferral";
 
@@ -64,7 +64,7 @@ import { adoptPipelineAttemptFromSource, pipelineAttemptTargetForSource } from "
 import { loadPipelines } from "@/lib/pipelines/store";
 import { listFiles } from "@/lib/scanner";
 import { projectForCwd } from "@/lib/scanner/describe";
-import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
+import { AccountProjectBindingsUnreadableError, accountsHiddenFromMember, allowedAccountIdsForProject, hiddenAccountsSelectionRefusal, MemberAccountRefusedError } from "@/lib/accounts/projectBindings";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, workspacePrincipalAllows, type WorkspacePrincipal } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
 import { TeamError } from "@/lib/team/members";
@@ -89,6 +89,7 @@ import { conversationRuntime } from "./conversationRuntime";
 import { AGENT_SPAWN_LINEAGE_ERROR, agentSpawnLineageError, authenticatedAgentSpawnCaller, isAgentInitiatedSpawn, mandatoryReviewsError, spawnLineageSelectorForCaller, type AuthenticatedSpawnCaller } from "@/app/api/spawn/admission";
 import { internalServiceClaim } from "@/lib/agent/callerClaims";
 import { spawnAccountErrorResponse } from "@/app/api/spawn/accountError";
+import { NoHealthyClaudeAccountError } from "@/lib/accounts/spawnHealth";
 import { attributeNamedAccountChoice } from "@/lib/accounts/accountOverrides";
 import { machinePassAuthority } from "@/lib/memory/curation/store";
 import { canonicalProject } from "@/lib/projects/aliases";
@@ -113,6 +114,31 @@ export function viewerTitleLocale(chosen: "en" | "uk" | null, acceptLanguage: st
 
 function prefersUkrainian(req: Pick<NextRequest, "headers">): boolean {
   return viewerTitleLocale(operatorLocale(), req.headers.get("accept-language")) === "uk";
+}
+
+/** The one body of a refused account choice. `reason` says whether the project
+    has no account list or the named account is outside it; a refusal for lack
+    of capacity carries none. */
+function projectAccountRefusedResponse(error: ProjectAccountRefusedError | MemberAccountRefusedError, project: string | null, hidden = false): NextResponse<ApiError> {
+  const reason = error instanceof MemberAccountRefusedError ? error.reason
+    : error.resolution.kind === "not_allowed" ? "outside_account_list" : undefined;
+  /* A member's automatic pick on a project with no account list chose among
+     accounts they are not shown: a refusal of capacity or availability names
+     none of them and no limit window, whichever seam raised it. */
+  const concealed = hidden && error instanceof ProjectAccountRefusedError && error.resolution.kind !== "not_allowed";
+  const message = concealed ? hiddenAccountsSelectionRefusal(error.engine, project ?? "") : error.message;
+  const body: ApiError & { code: string; reason?: string } = { error: message, code: "project_account_refused", ...(reason ? { reason } : {}) };
+  return NextResponse.json(body, { status: 409 });
+}
+
+/** The health pass found no Claude account that can launch. Its message names
+    labels, counts and the sign-in repair, which a member who is not shown the
+    project's accounts may not learn: they get the refusal every other
+    automatic choice gives them, with the same status and code. The owner keeps
+    the diagnostic. */
+function hiddenNoHealthyAccountResponse(error: unknown, project: string | null, hidden: boolean): NextResponse<ApiError> | null {
+  if (!hidden || !(error instanceof NoHealthyClaudeAccountError)) return null;
+  return NextResponse.json({ error: hiddenAccountsSelectionRefusal("claude", project ?? ""), code: "project_account_refused" }, { status: 409 });
 }
 
 function isSqliteBusy(error: unknown): boolean {
@@ -951,6 +977,11 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       const named = workspacePrincipal ? requestedAccountId : typeof body.account === "string" ? body.account : null;
       if (!named) return;
       const allowedAccountIds = allowedAccountIdsForProject(spawnProject, engine);
+      /* A member picks from the list they were shown. Where the project has
+         none, naming an account is refused before any account is read. */
+      if (workspacePrincipal && allowedAccountIds === null) {
+        throw new MemberAccountRefusedError({ kind: "no_account_list" }, engine, named, spawnProject ?? "");
+      }
       if (allowedAccountIds !== null && !allowedAccountIds.includes(named)) {
         throw new ProjectAccountRefusedError({ kind: "not_allowed", accountId: named, allowedAccountIds }, engine, spawnProject);
       }
@@ -968,7 +999,12 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
          formed and the state it addresses is what is wrong — the same answer
          the reseat, the binding route and the task launch give for the same
          record, so one repair clears all of them. */
-      if (error instanceof CodexServiceTierUnavailableError) return NextResponse.json({ error: error.message, code: error.code }, { status: 409 });
+      if (error instanceof CodexServiceTierUnavailableError) {
+        /* A member's automatic pick on a project with no account list chooses
+           among accounts they are not shown, so the refusal names none. */
+        const hidden = workspacePrincipal && engine !== "copilot" && selectedModel.model && launchTier && accountsHiddenFromMember(spawnProject, engine);
+        return NextResponse.json({ error: hidden ? hiddenAccountsTierRefusal(selectedModel.model!, launchTier!) : error.message, code: error.code }, { status: 409 });
+      }
       if (error instanceof AccountProjectBindingsUnreadableError) {
         return NextResponse.json({ error: error.message }, { status: 409 });
       }
@@ -976,13 +1012,15 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
          forbids, and the pool with no account left to launch on. Answered
          before any receipt exists, so there is nothing for a retry to replay
          onto an account this project does not allow. */
-      if (error instanceof ProjectAccountRefusedError) {
-        return NextResponse.json({ error: error.message, code: "project_account_refused" }, { status: 409 });
+      if (error instanceof ProjectAccountRefusedError || error instanceof MemberAccountRefusedError) {
+        return projectAccountRefusedResponse(error, spawnProject, !!workspacePrincipal && engine !== "copilot" && accountsHiddenFromMember(spawnProject, engine));
       }
       /* A Copilot launch with no account set up, or naming one that is gone. */
       if (error instanceof NoCopilotAccountError || error instanceof UnknownCopilotAccountError) {
         return NextResponse.json({ error: error.message }, { status: 409 });
       }
+      const concealedHealth = hiddenNoHealthyAccountResponse(error, spawnProject, !!workspacePrincipal && engine === "claude" && accountsHiddenFromMember(spawnProject, engine));
+      if (concealedHealth) return concealedHealth;
       if (requestedAccount === undefined) throw error;
       if (engine === "claude" && requestedAccountId) {
         try {
@@ -1030,6 +1068,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       title: string | null,
     ) => {
       const specBase = freshSpecFor(engine, cwd, {
+        ...(engine === "codex" ? { omitSkillsInstructions: sessionOrigin === "delegated" } : {}),
         model: selectedModel.model,
         effort: reasoning.effort,
         fast: launchTier ? !["default", "standard"].includes(launchTier) : reasoning.fast,
@@ -1512,7 +1551,10 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     if (error instanceof SpawnAdmissionFenceError) return NextResponse.json({ error: error.fence.error, code: "spawn_admission_refused" }, { status: error.fence.status });
     if (error instanceof CuratorSpawnAdmissionError) return NextResponse.json({ error: error.message, code: "curator_admission_refused" }, { status: 409 });
     if (error instanceof AccountProjectBindingsUnreadableError) return NextResponse.json({ error: error.message }, { status: 409 });
-    if (error instanceof ProjectAccountRefusedError) return NextResponse.json({ error: error.message, code: "project_account_refused" }, { status: 409 });
+    if (error instanceof ProjectAccountRefusedError || error instanceof MemberAccountRefusedError) {
+      const refusedProject = explicitProject ?? projectForCwd(cwd);
+      return projectAccountRefusedResponse(error, refusedProject, !!workspacePrincipal && engine !== "copilot" && accountsHiddenFromMember(refusedProject, engine));
+    }
     /* Typed terminal admission rejection (#393): the durable receipt already
        exists and no transcript or process was created. */
     if (error instanceof SpawnAdmissionError) return NextResponse.json(spawnRejectionResponse(error), { status: 403 });

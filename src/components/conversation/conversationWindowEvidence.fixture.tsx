@@ -47,6 +47,8 @@ import { OrchestratorConversation } from "@/components/orchestrator/Orchestrator
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { capabilitiesFor } from "@/components/agentCapabilities";
 
+import { DraftAgentPane, setDraftCwd } from "@/components/DraftAgentPane";
+import { setTeamViewForTests } from "@/components/team/teamClient";
 import { MessageProvenanceProvider, provenanceLookupFor } from "@/components/feed/messageProvenance";
 import { FeedItem } from "@/components/feed/FeedItem";
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
@@ -155,6 +157,7 @@ export type ConversationWindowCase =
   | "own-message-steps"
   | "payload-notice"
   | "memory-cap"
+  | "member-accounts"
   | "mcp-calls";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
@@ -2306,6 +2309,7 @@ if (root && requested === "memory-cap") {
   </main>);
 }
 else if (root && requested === "file-confirmation") mountFileConfirmation(root);
+else if (root && requested === "member-accounts") mountMemberAccounts(root);
 else if (root && requested === "project-setup") {
   /* The running setup started 42 s before this clock. */
   Date.now = () => Date.parse("2026-10-23T10:00:42Z");
@@ -2434,6 +2438,63 @@ function InboxFixture() {
   </main>;
 }
 
+
+/* The new agent's composer as a member of a workspace sees it (workspaces W1), and as the owner does. The
+   production `DraftAgentPane` over the production stylesheet; only the server's answers are stubbed:
+   `?who=member|owner`, `?pool=both|claude|none|signedout|long`, `?refused=1` (the launch answers that the
+   project's account list does not allow it). Accounts are "Account A".. with no real name in them. */
+function mountMemberAccounts(root: HTMLElement) {
+  const who = params.get("who") === "owner" ? "owner" : "member";
+  const pool = params.get("pool") ?? "both";
+  const refused = params.get("refused") === "1";
+  const soon = Math.floor(Date.now() / 1000);
+  const limits = (week: number) => ({ state: "fresh", session: { usedPercent: 12, resetsAt: soon + 3_600 }, weekly: { usedPercent: week, resetsAt: soon + 86_400 }, tiers: [], checkedAt: new Date().toISOString() });
+  const row = (id: string, label: string, week = 31, signedIn = true) => ({ id, label, signedIn,
+    limits: signedIn ? limits(week) : { state: "unavailable", session: null, weekly: null, tiers: [], checkedAt: null } });
+  const LONG = "Account F, the shared research subscription of the whole group";
+  const claudeRows = pool === "signedout" ? [row("acct-c", "Account C", 0, false)]
+    : pool === "long" ? [row("acct-a", "Account A", 31), row("acct-f", LONG, 64)]
+      : [row("acct-a", "Account A", 31), row("acct-c", "Account C", 0, false)];
+  const codexRows = [row("acct-d", "Account D", 8)];
+  const engines = pool === "none" ? { claude: { pool: "none", available: true }, codex: { pool: "none", available: true } }
+    : pool === "claude" ? { claude: { pool: "set", accounts: claudeRows }, codex: { pool: "none", available: false } }
+      : { claude: { pool: "set", accounts: claudeRows }, codex: { pool: "set", accounts: codexRows } };
+  /* The owner's full list, with Account B outside any pool. */
+  const full = (engine: "claude" | "codex") => ({ active: engine === "claude" ? "acct-a" : "acct-d", accounts: (engine === "claude"
+    ? [["acct-a", "Account A", 31], ["acct-b", "Account B", 87], ["acct-c", "Account C", 0]] : [["acct-d", "Account D", 8]] as const).map(([id, label, week]) => ({
+    id, label, authPresent: id !== "acct-c", auth: { state: id === "acct-c" ? "signed_out" : "authenticated" }, limits: limits(Number(week)) })) });
+  const capability = { supported: true, reason: null, formats: ["image/png"], maxImages: 2, maxRawBytesPerImage: 3, maxEncodedBytesPerRequest: 8 };
+  const posts: unknown[] = [];
+  Object.assign(window, { memberAccounts: { posts: () => structuredClone(posts), requests: () => requests.slice() } });
+  const requests: string[] = [];
+  setTeamViewForTests({ mode: "team", me: { id: "m_fixture", name: "Person", color: "teal", initials: "P", role: who === "owner" ? "owner" : "member", status: "active", telegram: null }, members: [], methods: {} } as never);
+  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), location.origin);
+    requests.push(`${init?.method ?? "GET"} ${url.pathname}${url.search}`);
+    if (url.pathname === "/api/accounts") {
+      return who === "owner" ? Response.json({ claude: full("claude"), codex: full("codex"), copilot: { active: "", accounts: [] } }) : Response.json({ error: "owner only" }, { status: 403 });
+    }
+    if (url.pathname === "/api/team/project-accounts") return Response.json({ project: "atlas", engines });
+    if (url.pathname === "/api/spawn" && init?.method === "POST") {
+      posts.push(JSON.parse(String(init.body)));
+      return refused
+        ? Response.json({ error: "claude account acct-a is not allowed", code: "project_account_refused", reason: pool === "none" ? "no_account_list" : "outside_account_list" }, { status: 409 })
+        : Response.json({ ok: true, state: "starting", launched: false, path: null, launchId: "launch-1", conversationId: "conversation-1", initialMessage: "pending" }, { status: 202 });
+    }
+    if (url.pathname === "/api/spawn") return Response.json({ dirs: ["/repo"], cwd: "/repo", cwdExists: true, spawnTransport: "structured", imageInput: { claude: capability, codex: capability } });
+    if (url.pathname === "/api/roles") return Response.json({}, { status: 404 });
+    return Response.json({});
+  }) as typeof window.fetch;
+  setDraftCwd("member-accounts", "/repo");
+  const noop = () => {};
+  createRoot(root).render(
+    <main data-evidence-case="member-accounts" data-who={who} data-pool={pool} className="kb h-dvh bg-canvas p-3 text-primary max-sm:p-0">
+      <div className="agent-drafts mx-auto h-full max-w-[720px]"><div className="agent-draft h-full" data-kanban-draft="member-accounts">
+        <DraftAgentPane draftId="member-accounts" project="atlas" files={[]} onClose={noop} onSpawned={noop} />
+      </div></div>
+    </main>,
+  );
+}
 
 function mountFileConfirmation(root: HTMLElement) {
   Date.now = () => Date.parse("2026-10-22T12:00:00Z");

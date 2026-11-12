@@ -25,6 +25,7 @@ import { claimMessageAuthor, recordConversationEvent, refuseAnonymous, settleMes
 import { teamMode } from "@/lib/team/sessions";
 import { existingTeamStore } from "@/lib/team/store";
 import type { TeamActor } from "@/lib/team/contract";
+import { conversationAccountChoiceRefusal } from "@/lib/team/conversationAccountChoice";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { agentRegistry } from "@/lib/agent/registry";
 import { internalServiceClaim } from "@/lib/agent/callerClaims";
@@ -207,7 +208,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       voiceBinding ? { sessionId: voiceBinding.sessionId as string, proposalId: voiceBinding.proposalId as string } : undefined,
       inProcessPerson);
     if (!admitted.ok) {
-      return NextResponse.json({ error: admitted.error, code: admitted.code, admission: "refused" }, { status: admitted.status });
+      return NextResponse.json({ error: admitted.error, code: admitted.code, ...(admitted.reason ? { reason: admitted.reason } : {}), admission: "refused" }, { status: admitted.status });
     }
     relay = admitted;
     if (body.conversationId !== admitted.recipient) {
@@ -298,6 +299,12 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
      this codebase uses. */
   const caller = callerConversationId(req);
   const actor: AccountChoiceActor = caller ? { kind: "agent", conversationId: caller } : { kind: "operator" };
+  /* A member picks from their project's account list. Checked before the
+     account is looked up, so an unlisted account is refused, not probed. */
+  if (explicitAction === "reconfigure" && typeof body.accountId === "string" && body.accountId.trim()) {
+    const refused = await conversationAccountChoiceRefusal(req, trustedActor, conversationId || filePath, body.accountId);
+    if (refused) return refused as NextResponse<ConversationHostPostBody>;
+  }
   const structuredControl = explicitAction === "reconfigure" && structuredHostsEnabled()
     ? await dependencies.dispatchStructuredControl({
         path: filePath,
@@ -469,10 +476,16 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     await releaseAttachments("refused");
     return NextResponse.json({ error: "conversation authority could not be recorded" }, { status: 503 });
   }
+  // The failed condition behind the stable relay refusal code, when the
+  // guard is what refused; other refusals keep their own code untouched.
+  const relayRefusalReason = (code: unknown) => {
+    const reason = code === "orchestrator_relay_refused" ? relay?.refusalReason?.() : undefined;
+    return reason ? { reason } : {};
+  };
   try { relay?.admissionGuard?.(); }
   catch {
     await releaseAttachments("refused");
-    return NextResponse.json({ error: "relay authority changed before delivery", code: "orchestrator_relay_refused", admission: "refused" }, { status: 403 });
+    return NextResponse.json({ error: "relay authority changed before delivery", code: "orchestrator_relay_refused", ...relayRefusalReason("orchestrator_relay_refused"), admission: "refused" }, { status: 403 });
   }
   const selected = await dispatchConversationMessage({
     ...(relay?.admissionGuard ? { admissionGuard: relay.admissionGuard, recoveryAuthorityGuard: relay.admissionGuard } : {}),
@@ -503,7 +516,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     legacy: async (request): Promise<DeliveryOutcome | NextResponse<ApiError>> => {
       const revoked = actorRejection();
       try { relay?.admissionGuard?.(); }
-      catch { return NextResponse.json({ error: "relay authority changed before delivery", code: "orchestrator_relay_refused", admission: "refused" }, { status: 403 }); }
+      catch { return NextResponse.json({ error: "relay authority changed before delivery", code: "orchestrator_relay_refused", ...relayRefusalReason("orchestrator_relay_refused"), admission: "refused" }, { status: 403 }); }
       return revoked ?? dependencies.deliverConversationMessage(request);
     },
   });
@@ -513,7 +526,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     await releaseAttachments(structuredAttachmentOutcome(structured));
     if (structured.ok) settleMessageAuthor(authorClaim);
     const { status, ...response } = structured.ok ? { ...structured, status: 200 } : structured;
-    return NextResponse.json({ ...response, ...attachmentField() }, { status });
+    return NextResponse.json({ ...response, ...(structured.ok ? {} : relayRefusalReason(structured.code)), ...attachmentField() }, { status });
   }
   const outcome = selected.result;
   if (outcome instanceof NextResponse) return outcome;
@@ -523,7 +536,10 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
   await releaseAttachments(outcome.ok
     ? "accepted"
     : outcome.actuation === "started" ? "uncertain" : "refused");
-  if (!outcome.ok) return respond(outcome);
+  if (!outcome.ok) {
+    const { status, ...failure } = outcome;
+    return NextResponse.json({ ...failure, ...relayRefusalReason(failure.code) }, { status });
+  }
   settleMessageAuthor(authorClaim);
   return NextResponse.json({ ...outcome, ...attachmentField() });
 }

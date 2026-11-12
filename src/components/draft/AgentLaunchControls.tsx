@@ -120,7 +120,7 @@ export function resolveLaunchAccountId(
 }
 
 /** Asks every mounted catalog to read `/api/accounts` again. */
-const CATALOG_REFRESH_EVENT = "llv:launch-accounts-refresh";
+export const CATALOG_REFRESH_EVENT = "llv:launch-accounts-refresh";
 
 /** The stored-account catalog for both engines; null until `/api/accounts`
     answers, and null forever if it never does (the selector simply stays out

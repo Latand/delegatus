@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +10,7 @@ import { applyConversationMigration } from "@/lib/accounts/migration/conversatio
 import { AgentRegistry, setAgentRegistryForTests, type ConversationObservation } from "@/lib/agent/registry";
 
 const { POST } = await import("./route");
+const { createConversationMigrationPOST } = await import("./handlers");
 
 const roots: string[] = [];
 
@@ -289,4 +290,156 @@ test("keep-current acknowledges its durable change while an unrelated queue drai
   ]);
   expect(result?.status).toBe(200);
   expect(registry.switchHold(id)).toBeNull();
+});
+
+describe("a member's explicit account choice on a running conversation", () => {
+  const W = `w_${"d".repeat(32)}`;
+  const previousState = process.env.LLV_STATE_DIR;
+  let stateRoot = "";
+
+  afterEach(async () => {
+    (await import("@/lib/team/store")).resetTeamStoreForTests();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+    if (stateRoot) fs.rmSync(stateRoot, { recursive: true, force: true });
+  });
+
+  async function setup(pool: string[] | null) {
+    stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "llv-member-account-"));
+    process.env.LLV_STATE_DIR = path.join(stateRoot, "state");
+    const { resetTeamStoreForTests, teamStore } = await import("@/lib/team/store");
+    resetTeamStoreForTests();
+    const { claimInstall } = await import("@/lib/team/members");
+    const { createWorkspace } = await import("@/lib/team/workspaces");
+    const { setWorkspaceDefaults } = await import("@/lib/team/workspaceDefaults");
+    const { mintSession, MEMBER_COOKIE } = await import("@/lib/team/sessions");
+    const store = teamStore();
+    const owner = claimInstall(store, "Owner", { surface: "desktop", browser: "chrome" }).member;
+    store.insertMember({ id: "m_member", name: "Member", role: "member", status: "active", color: "teal", telegram: null,
+      createdAt: new Date().toISOString(), createdBy: owner.id, revokedAt: null });
+    createWorkspace(store, owner, { id: W, name: "Alpha", projects: ["repo"] });
+    store.putWorkspaceMember(W, "m_member", "member", owner.id, new Date().toISOString());
+    if (pool) await setWorkspaceDefaults(store, owner, W, { accounts: { codex: pool } });
+    const { registry, id } = seededRegistry(false);
+    registry.reconcileConversations([{ ...observation("/sessions/limited.jsonl", "limited"),
+      launchProfile: emptyLaunchProfile({ cwd: "/repo/checkout", title: "Implementer", project: "repo", role: "worker", model: "gpt-6.1-sol", effort: "high", fast: false }) }]);
+    const cookie = (memberId: string) => `${MEMBER_COOKIE}=${mintSession(store, memberId, "claim", { surface: "desktop", browser: "chrome" }).value}`;
+    return { registry, id, member: cookie("m_member"), owner: cookie(owner.id) };
+  }
+
+  const select = (post: ReturnType<typeof createConversationMigrationPOST>, id: string, cookie: string, accountId: string) =>
+    post(new NextRequest(`http://127.0.0.1/api/conversations/${id}/migration`, {
+      method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json", cookie },
+      body: JSON.stringify({ action: "select-account", accountId }),
+    }), { params: Promise.resolve({ conversationId: id }) });
+
+  test("is refused outside the pool and where there is no pool, the same for an account that exists or not, and reaches no host", async () => {
+    for (const [pool, reason] of [[["limited", "account-a"], "outside_account_list"], [null, "no_account_list"]] as const) {
+      const { registry, id, member } = await setup(pool as string[] | null);
+      let dispatched = 0;
+      const post = createConversationMigrationPOST({ registry: () => registry, dispatchControl: async () => { dispatched++; return { status: 200, body: { ok: true } } as never; } });
+      const answers = [];
+      for (const account of ["account-b", "account-zzz"]) {
+        const response = await select(post, id, member, account);
+        answers.push({ status: response.status, body: await response.json() as { error: string; code: string; reason: string } });
+      }
+      expect(answers[0]).toMatchObject({ status: 409, body: { code: "project_account_refused", reason } });
+      expect(answers[1]!.status).toBe(409);
+      expect(answers[1]!.body.reason).toBe(reason);
+      expect(answers[1]!.body.error.replaceAll("account-zzz", "account-b")).toBe(answers[0]!.body.error);
+      expect(dispatched).toBe(0);
+    }
+  });
+
+  test("is refused for an agent bound to the member, and left alone for an agent bound to nobody", async () => {
+    const { registry, id } = await setup(["account-a"]);
+    const profile = (workspace?: { memberId: string; workspaceId: string }) => emptyLaunchProfile({ cwd: "/repo/checkout", title: "Agent", project: "repo", role: "worker", model: "gpt-6.1-sol", effort: "high", fast: false, ...(workspace ? { workspace } : {}) });
+    registry.reconcileConversations([
+      { ...observation("/sessions/bound-agent.jsonl", "limited"), launchProfile: profile({ memberId: "m_member", workspaceId: W }) },
+      { ...observation("/sessions/free-agent.jsonl", "limited"), launchProfile: profile() },
+    ]);
+    const bound = registry.conversationForPath("/sessions/bound-agent.jsonl")!.id;
+    const free = registry.conversationForPath("/sessions/free-agent.jsonl")!.id;
+    const { conversationAccountChoiceRefusal } = await import("@/lib/team/conversationAccountChoice");
+    const request = new NextRequest("http://127.0.0.1/api/conversation-host", { method: "POST", headers: { host: "127.0.0.1" } });
+    const refused = await conversationAccountChoiceRefusal(request, { kind: "agent", conversationId: bound }, id, "account-b");
+    expect(refused?.status).toBe(409);
+    expect(await refused!.json()).toMatchObject({ code: "project_account_refused", reason: "outside_account_list" });
+    expect(await conversationAccountChoiceRefusal(request, { kind: "agent", conversationId: bound }, id, "account-a")).toBeNull();
+    expect(await conversationAccountChoiceRefusal(request, { kind: "agent", conversationId: free }, id, "account-b")).toBeNull();
+  });
+
+  test("keeps the account the conversation already runs on, an account in the pool, and the owner's choice", async () => {
+    const { registry, id, member, owner } = await setup(["account-a"]);
+    const current = registry.conversation(id)!.generations.at(-1)!.accountId!;
+    const dispatchedFor: string[] = [];
+    const post = createConversationMigrationPOST({ registry: () => registry, dispatchControl: async input => {
+      dispatchedFor.push(input.reconfiguration?.accountId ?? ""); return { status: 200, body: { ok: true } } as never;
+    } });
+    expect((await select(post, id, member, "account-a")).status).toBe(200);
+    expect((await select(post, id, member, current)).status).toBe(200);
+    expect((await select(post, id, owner, "account-b")).status).toBe(200);
+    expect(dispatchedFor).toEqual(["account-a", current, "account-b"]);
+  });
+
+  test("a project moved to another workspace while the choice resolves is refused, and the new workspace's pool is not read", async () => {
+    const { registry, id, member } = await setup(["account-a"]);
+    const { teamStore } = await import("@/lib/team/store");
+    const { setWorkspaceDefaults } = await import("@/lib/team/workspaceDefaults");
+    const { createWorkspace, placeProject } = await import("@/lib/team/workspaces");
+    const routes = await import("@/lib/team/workspaceRoute");
+    const store = teamStore();
+    const owner = store.members().find(candidate => candidate.role === "owner")!;
+    const other = `w_${"7".repeat(32)}`;
+    createWorkspace(store, owner, { id: other, name: "Other", projects: [] });
+    await setWorkspaceDefaults(store, owner, other, { accounts: { codex: ["foreign-account-canary"] } });
+    /* The route's gate resolves the conversation's project once; the handler's
+       own resolution is the second read, and the move lands between the two. */
+    const original = routes.workspaceConversationProject;
+    let reads = 0;
+    const probe = spyOn(routes, "workspaceConversationProject").mockImplementation(async (identity: string) => {
+      const project = await original(identity);
+      if (++reads === 2) placeProject(store, owner, "repo", other);
+      return project;
+    });
+    let dispatched = 0;
+    const handler = createConversationMigrationPOST({ registry: () => registry, dispatchControl: async () => { dispatched++; return { status: 200, body: { ok: true } } as never; } });
+    const wrapped = routes.workspaceRoute("/api/conversations/[conversationId]/migration", handler);
+    try {
+      const response = await select(wrapped, id, member, "account-b");
+      const body = await response.json();
+      expect(reads).toBe(2);
+      expect(response.status).toBe(403);
+      expect(body.code).toBe("workspace_forbidden");
+      expect(JSON.stringify(body)).not.toContain("foreign-account-canary");
+      expect(dispatched).toBe(0);
+    } finally { probe.mockRestore(); }
+  });
+
+  test("a project moved between admission and the pool read refuses a reconfigure through the conversation host the same way", async () => {
+    const { id } = await setup(["account-a"]);
+    const { teamStore } = await import("@/lib/team/store");
+    const { setWorkspaceDefaults } = await import("@/lib/team/workspaceDefaults");
+    const { createWorkspace, placeProject } = await import("@/lib/team/workspaces");
+    const routes = await import("@/lib/team/workspaceRoute");
+    const store = teamStore();
+    const owner = store.members().find(candidate => candidate.role === "owner")!;
+    const other = `w_${"6".repeat(32)}`;
+    createWorkspace(store, owner, { id: other, name: "Other", projects: [] });
+    await setWorkspaceDefaults(store, owner, other, { accounts: { codex: ["foreign-account-canary"] } });
+    const { conversationAccountChoiceRefusal } = await import("@/lib/team/conversationAccountChoice");
+    const original = routes.workspaceConversationProject;
+    const probe = spyOn(routes, "workspaceConversationProject").mockImplementation(async (identity: string) => {
+      const project = await original(identity);
+      placeProject(store, owner, "repo", other);
+      return project;
+    });
+    const request = new NextRequest("http://127.0.0.1/api/conversation-host", { method: "POST", headers: { host: "127.0.0.1" } });
+    try {
+      const refused = await conversationAccountChoiceRefusal(request, { kind: "member", memberId: "m_member" }, id, "account-b");
+      expect(refused?.status).toBe(403);
+      const body = await refused!.json();
+      expect(body.code).toBe("workspace_forbidden");
+      expect(JSON.stringify(body)).not.toContain("foreign-account-canary");
+    } finally { probe.mockRestore(); }
+  });
 });

@@ -26,15 +26,17 @@ function fixture(extra: ConstructorParameters<typeof OfficialVoiceCompanionAdapt
   let usage: import("./contract").CompanionUsage | undefined;
   let contextFailures = 0;
   let pollsFail = false;
+  let pollCount = 0;
   let contextGate: { promise: Promise<Response>; release: (response: Response) => void } | null = null;
   let servedProject: string | null = null;
   let seq = 0;
   const event = (payload: Record<string, unknown>) => ({ ...payload, sessionId: "fixture-session", version: 1, generation: 1, seq: ++seq, eventId: `event-${seq}`, atMs: seq }) as CompanionEvent;
-  const media: CompanionMedia = { open: async () => { opens++; return "v=0"; }, answer: async () => {}, mute: value => { muted = value; },
+  const media: CompanionMedia = { open: async () => { opens++; return "v=0"; }, answer: async () => { callbacks.connection("connected"); }, mute: value => { muted = value; },
     interrupt: () => { interrupts++; }, close: async () => { closes++; } };
   let clock = 0;
   const adapter = new OfficialVoiceCompanionAdapter({ pollMs: 100_000, now: () => clock, media: cb => { callbacks = cb; return media; }, ...extra,
     fetch: (async (_url, init) => {
+      if (!init?.body) pollCount++;
       if (!init?.body && pollsFail) throw new TypeError("Failed to fetch");
       if (!init?.body) return String(_url).includes("view=transcript") ? Response.json({ entries: [], truncated: false, usage }) : Response.json({ events: serverEvents, usage });
       const body = JSON.parse(String(init.body)); requests.push(body);
@@ -52,7 +54,7 @@ function fixture(extra: ConstructorParameters<typeof OfficialVoiceCompanionAdapt
     const promise = new Promise<Response>(resolve => { release = resolve; });
     contextGate = { promise, release };
     return (failed = false) => release(failed ? Response.json({ code: "COMPANION_UNAVAILABLE" }, { status: 503 }) : Response.json({ ok: true }));
-  }, failContextOnce: () => { contextFailures = 1; }, failPolls: () => { pollsFail = true; }, healPolls: () => { pollsFail = false; }, get servedProject() { return servedProject; }, usage: (value: import("./contract").CompanionUsage) => { usage = value; }, push: (value: CompanionEvent) => serverEvents.push(value), advance: (ms: number) => { clock += ms; jest.advanceTimersByTime(ms); }, get callbacks() { return callbacks; },
+  }, failContextOnce: () => { contextFailures = 1; }, failPolls: () => { pollsFail = true; }, healPolls: () => { pollsFail = false; }, get servedProject() { return servedProject; }, usage: (value: import("./contract").CompanionUsage) => { usage = value; }, push: (value: CompanionEvent) => serverEvents.push(value), advance: (ms: number) => { clock += ms; jest.advanceTimersByTime(ms); }, get callbacks() { return callbacks; }, get pollCount() { return pollCount; },
     get opens() { return opens; }, get closes() { return closes; }, get muted() { return muted; }, get interrupts() { return interrupts; } };
 }
 test("media starts on request, mouth follows played output, microphone echo preserves playback, and awaited hangup releases media", async () => {
@@ -258,7 +260,7 @@ async function served() {
     provider, { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
   let callbacks!: MediaCallbacks;
   let clock = 1_000;
-  const media: CompanionMedia = { open: async () => "v=0", answer: async () => {}, mute: () => {}, interrupt: () => {}, close: async () => {} };
+  const media: CompanionMedia = { open: async () => "v=0", answer: async () => { callbacks.connection("connected"); }, mute: () => {}, interrupt: () => {}, close: async () => {} };
   const adapter = new OfficialVoiceCompanionAdapter({ pollMs: 100_000, now: () => clock, media: cb => { callbacks = cb; return media; },
     fetch: (async (url: string, init?: RequestInit) => {
       if (!init?.body) {
@@ -689,6 +691,7 @@ async function reconnecting(options: { lostAnswers?: number; failBeforeMint?: nu
   const cues = { prepare() {}, connect() { sounds.push("connect"); }, disconnect() { sounds.push("disconnect"); }, timer() {}, tick() { sounds.push("tick"); }, giveUp() { sounds.push("give-up"); }, dispose() {} };
   const media: CompanionMedia = { open: async () => { opens++; peers++; return "v=0"; }, restart: async cb => { callbacks = cb; peers++; if (options.holdOffer) await held; return "v=0"; },
     answer: async () => {
+      callbacks.connection("connected");
       if (peers > 1 && (options.audioRefused || options.answerError)) { const code = options.audioRefused ? "AUDIO_REFUSED" : options.answerError; options.audioRefused = false; options.answerError = undefined; throw new Error(code); }
     }, mute: value => { muted = value; }, interrupt() {}, close: async () => {} };
   const adapter = new OfficialVoiceCompanionAdapter({ now: () => now, pollMs: 100_000, media: cb => { callbacks = cb; return media; }, cues,
@@ -979,4 +982,55 @@ test("a resumed SDP answer that cannot be applied closes as a peer drop and the 
     expect(f.service.admission.transcriptRecord(failed.id).entries.find(row => row.kind === "session_end")?.data).toMatchObject({ reason: "transport", cause: "ice-failed" });
     await f.tick(1000); expect(f.store.get().reconnected).toBe(true);
   } finally { await f.dispose(); }
+});
+
+for (const connected of [true, false]) test(`slice 2: resume poll waits for ${connected ? "connected" : "five seconds"} and carries the cut before cleanup`, async () => {
+  const f = fixture();
+  f.media.answer = async () => {};
+  const events: CompanionEvent[] = []; f.adapter.subscribe(event => events.push(event));
+  await f.adapter.start({ project: "fixture", locale: "en" });
+  f.push(f.event({ type: "transcript.snapshot", speaker: "companion", itemId: "live-companion-1", text: "First. Second. Third.", final: true, startMs: 0, endMs: 10_000 }));
+  f.push(f.event({ type: "transcript.snapshot", speaker: "companion", itemId: "live-companion-2", text: "Unheard.", final: true }));
+  f.push(f.event({ type: "transcript.snapshot", speaker: "operator", itemId: "live-operator-3", text: "And", final: false }));
+  await f.adapter.refresh();
+  f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 4250 });
+  f.callbacks.playback({ speaking: false, rms: 0, playedMs: 4500 });
+  f.advance(1500); // lastPlayed holds the cut after the quiet tail.
+  f.callbacks.lost("PROVIDER_ERROR", "ice-failed");
+  for (let i = 0; i < 30; i++) await Promise.resolve();
+  const before = f.pollCount;
+  const start = f.adapter.start({ project: "fixture", locale: "en", resume: "fixture-session" });
+  let done = false; void start.then(() => { done = true; });
+  for (let i = 0; i < 30; i++) await Promise.resolve();
+  const resume = f.requests.filter(row => row.action === "start").at(-1)!;
+  expect(resume.cursor).toEqual({ heard: { itemId: "live-companion-1", playedMs: 4250 }, unplayed: ["live-companion-2"], operatorOpen: "live-operator-3" });
+  expect(done).toBe(false);
+  await f.adapter.refresh();
+  await f.adapter.command({ type: "mute", muted: true });
+  expect(f.pollCount).toBe(before);
+  if (connected) f.callbacks.connection("connected");
+  else { f.advance(4999); await Promise.resolve(); expect(done).toBe(false); f.advance(1); }
+  await start;
+  expect(f.pollCount).toBe(before + 1);
+  expect(events.filter(event => event.type === "session.ready")).toHaveLength(2);
+  await f.adapter.dispose();
+});
+
+for (const serverFinalizes of [true, false]) test(`slice 2: ${serverFinalizes ? "server final snapshot" : "provider completion marker"} preserves operator cut semantics`, async () => {
+  const f = fixture();
+  await f.adapter.start({ project: "fixture", locale: "en" });
+  f.push(f.event({ type: "transcript.snapshot", speaker: "operator", itemId: "live-operator-1", text: "Please finish this", final: false }));
+  await f.adapter.refresh();
+  if (serverFinalizes) {
+    f.push(f.event({ type: "transcript.snapshot", speaker: "operator", itemId: "live-operator-1", text: "Please finish this", final: true }));
+  } else {
+    f.push(f.event({ type: "transcript.snapshot", speaker: "operator", itemId: "live-operator-1", text: "Please finish this", final: true }));
+    f.push(f.event({ type: "transcript.final", speaker: "operator", itemId: "live-operator-1", text: "Please finish this" }));
+  }
+  f.push(f.event({ type: "session.closed", reason: "transport", incomplete: true }));
+  await f.adapter.refresh();
+  await f.adapter.start({ project: "fixture", locale: "en", resume: "fixture-session" });
+  const request = f.requests.filter(row => row.action === "start").at(-1)!;
+  expect(request.cursor).toEqual(serverFinalizes ? { unplayed: [], operatorOpen: "live-operator-1" } : { unplayed: [] });
+  await f.adapter.dispose();
 });

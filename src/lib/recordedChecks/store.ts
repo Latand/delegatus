@@ -84,6 +84,7 @@ const indexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS recorded_checks_pending ON recorded_checks(id)",
   "CREATE INDEX IF NOT EXISTS recorded_checks_pending_recipient ON recorded_checks(json_extract(value,'$.notification.conversation'),id) WHERE json_extract(value,'$.notification.noDispatch')=1",
   "CREATE INDEX IF NOT EXISTS recorded_check_events_revision ON recorded_check_events(revision)",
+  "CREATE INDEX IF NOT EXISTS recorded_checks_history_launch ON recorded_checks_history(json_extract(value,'$.binding.launch'))",
   "CREATE INDEX IF NOT EXISTS recorded_checks_history_pipeline ON recorded_checks_history(pipeline,id)",
   "CREATE INDEX IF NOT EXISTS recorded_check_roots_directory ON recorded_check_roots(directory,id) WHERE held=1",
   "CREATE INDEX IF NOT EXISTS recorded_check_roots_identity ON recorded_check_roots(directory,identity,id)",
@@ -296,6 +297,12 @@ export class RecordedCheckStore {
     const owner = digest({ pid: expected.pid, startIdentity: expected.startIdentity, bootEpoch: expected.bootEpoch });
     const rows = this.db.query<{ value: string }, [string]>("SELECT value FROM recorded_checks WHERE acknowledged=0 AND owner=?").all(owner);
     return rows.some(raw => requiresOwner(rowSchema.parse(JSON.parse(raw.value)), custodyClock()));
+  }
+  /** Retained timing is available after acknowledgement and archival too. */
+  forAttempt(launch: string): CheckRow[] {
+    return this.db.query<{ value: string }, [string, string]>(
+      "SELECT id,value FROM recorded_checks WHERE launch=? UNION ALL SELECT id,value FROM recorded_checks_history history WHERE json_extract(value,'$.binding.launch')=? AND NOT EXISTS (SELECT 1 FROM recorded_checks live WHERE live.id=history.id) ORDER BY id LIMIT 256")
+      .all(launch, launch).map(row => rowSchema.parse(JSON.parse(row.value)));
   }
   forLaunch(launch: string): CheckRow[] {
     return this.db.query<{ value: string }, [string]>("SELECT value FROM recorded_checks WHERE acknowledged=0 AND launch=? ORDER BY id")

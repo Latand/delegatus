@@ -133,6 +133,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       await handle.close();
       return refuse(415, "file content does not match its extension");
     }
+    if (verifyFrameScope(scope) !== directory) {
+      await handle.close();
+      return refuse(403, "this report link has expired; reopen the preview");
+    }
     const headers = new Headers({
       ...HEADERS_BASE,
       ...corsFor(req),

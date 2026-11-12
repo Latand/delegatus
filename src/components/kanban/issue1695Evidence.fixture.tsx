@@ -4188,6 +4188,9 @@ const WORKSPACES = SCENARIO?.startsWith("workspaces") ? workspacesFixture({
   refuseMembership: WORKSPACE_PARAMS.has("membership-refused"),
   refuseInvite: WORKSPACE_PARAMS.has("invite-refused"),
   failMembershipReadOnce: WORKSPACE_PARAMS.has("membership-unavailable"),
+  /* `&nopool=a,b` leaves those projects without an account list; `&poolrefused=a` refuses that project's pool read. */
+  noAccountList: (WORKSPACE_PARAMS.get("nopool") ?? "").split(",").filter(Boolean),
+  refuseAccountList: (WORKSPACE_PARAMS.get("poolrefused") ?? "").split(",").filter(Boolean),
   projects: [{ project: PROJECT, displayName: "Atlas", smt: now - 20 * MIN }, ...railCatalog.map(({ project, displayName, smt }) => ({ project, displayName, smt }))],
   placed: { client: [LEDGER, "harbor-docs"], research: [MESH], long: [RAIL_LONG] },
 }) : null;
@@ -4206,6 +4209,101 @@ const coldLink = {
   release(id: string) { this.released.add(id); this.fail(id); },
 };
 if (COLD_LINK) (window as unknown as { __coldLink: typeof coldLink }).__coldLink = coldLink;
+/* The first-run guide, variant 1 on the real components (docs/design/install-and-onboarding.md): `&firstrun=<state>` over
+   `scenario=orchestrator-first&guide=installer` (the guide on a fresh install) or `scenario=orchestrator-first-walk` (the seat
+   a minute after Create). It answers only the routes each state reads, with invented data: the accounts and the tools of each
+   engine state, the factory role catalog, the bot (`&bot=`), the memory source with or without an orchestrator, and for the
+   form states the seat's transcript, its decision with one question that cannot be skipped, and its "Needs you" notice.
+   States: engines-both|claude-only|codex-only|signed-out|no-cli, orchestrator-one-press|claude-only|codex-only,
+   later-memory-before|memory-after|telegram-later, telegram-numbered, form-greeting|decisions|needs-you,
+   settings-memory-before|memory-after. */
+const FIRST_RUN = params.get("firstrun") ?? "";
+const FIRST_RUN_FORM = FIRST_RUN.startsWith("form-");
+const FIRST_RUN_ENGINES: "both" | "claude-only" | "codex-only" | "signed-out" | "no-cli" =
+  FIRST_RUN === "engines-claude-only" || FIRST_RUN === "orchestrator-claude-only" ? "claude-only"
+  : FIRST_RUN === "engines-codex-only" || FIRST_RUN === "orchestrator-codex-only" ? "codex-only"
+  : FIRST_RUN === "engines-signed-out" ? "signed-out" : FIRST_RUN === "engines-no-cli" ? "no-cli" : "both";
+/* An orchestrator exists for the memory import once the guide was reopened after Create, and on the seat's own board.
+   The driver draws those states over `scenario=orchestrator-first-walk`, so the board behind the dialog carries the seat too. */
+const FIRST_RUN_SEATED = FIRST_RUN_FORM || FIRST_RUN === "later-memory-after" || FIRST_RUN === "settings-memory-after";
+if (FIRST_RUN) { try { sessionStorage.setItem("evidence-walk", "done"); } catch { /* opaque origin */ } }
+const frNB = " ";
+const frWork = L("Work", "Робочий");
+const frPersonal = L("Personal", "Особистий");
+const frSignedIn = (label: string, plan: string, used: number) => ({
+  ...accountRow("default", label, plan, used, 180),
+});
+const frSignedOut = (label: string) => ({
+  id: "default", label, kind: "managed", authPresent: false, loginPending: false, loginState: "idle", deviceAuth: null, auth: { state: "signed_out", plan: null }, limits: null,
+});
+const frEngine = (cli: "found" | "missing", accounts: unknown[]) => ({ active: "default", accounts, cli, mutationLocked: false, migration: null, autoBalance: null });
+const FIRST_RUN_ACCOUNTS = {
+  "both": { claude: frEngine("found", [frSignedIn(frWork, "Max", 18)]), codex: frEngine("found", [frSignedIn(frPersonal, "Pro", 9)]) },
+  "claude-only": { claude: frEngine("found", [frSignedIn(frWork, "Max", 18)]), codex: frEngine("missing", []) },
+  "codex-only": { claude: frEngine("found", [frSignedOut(frWork)]), codex: frEngine("found", [frSignedIn(frPersonal, "Pro", 9)]) },
+  "signed-out": { claude: frEngine("found", [frSignedOut(frWork)]), codex: frEngine("found", [frSignedOut(frPersonal)]) },
+  "no-cli": { claude: frEngine("missing", []), codex: frEngine("missing", []) },
+}[FIRST_RUN_ENGINES];
+/* The factory catalog as `GET /api/roles` answers it, so the Roles row counts what a fresh install would move. */
+const frRoles = () => ({
+  schemaVersion: 2, revision: "rev-evidence",
+  roles: ROLE_DEFAULTS.map(role => {
+    const variants = ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS];
+    return { ...role, ...(variants ? { variants } : {}), promptPreview: role.promptScaffold, shipped: { config: role.config, promptScaffold: role.promptScaffold, ...(variants ? { variants } : {}) } };
+  }),
+});
+const FIRST_RUN_REVIEW_ID = `pr_${"f".repeat(32)}`;
+const FIRST_RUN_TITLE = L("What should I do first?", `Що зробити спершу?`);
+const frUk = (text: string) => text.replace(/(^|[\s(«])([вузіайоясВУЗІАЙОЯ])\s/g, `$1$2${frNB}`);
+const FIRST_RUN_QUESTIONS: PrototypeQuestion[] = [{
+  id: "first",
+  text: L(
+    "I read the README, the file list and the open issues of atlas. Each choice starts agents on your Claude plan; you can also write your own.",
+    frUk("Я прочитав README, список файлів і відкриті задачі atlas. Кожен варіант запускає агентів на вашому плані Claude; можна й написати свій."),
+  ),
+  other: true,
+  skippable: false,
+  options: [
+    { label: L("A tour of the code: how atlas is built and three things worth fixing first — one agent, read-only", frUk("Огляд коду: як побудовано atlas і три речі, які варто виправити першими — один агент, лише читання")), recommended: true },
+    { label: L("Fix issue #12, CSV export drops the last row — a builder and a reviewer, then a pull request", frUk("Виправити задачу #12, експорт у CSV губить останній рядок — розробник і рев’юер, потім пул‑реквест")) },
+    { label: L("Add tests for invoice totals in src/billing — a builder and a reviewer, then a pull request", frUk("Додати тести для підсумків рахунків у src/billing — розробник і рев’юер, потім пул‑реквест")) },
+  ],
+}];
+const FIRST_RUN_GREETING = L(
+  "Ready in atlas.\nTell me what you want done here. I'll turn it into tasks on the board, have agents build and review it, keep it moving and report back. New work starts when you ask; I'll suggest what could come next.",
+  frUk("Готовий працювати в atlas.\nСкажіть, що тут треба зробити. Я перетворю це на задачі на дошці, агенти зроблять і перевірять роботу, я стежитиму за нею і звітуватиму. Нова робота починається, коли ви просите; я підкажу, що можна зробити далі."),
+);
+function firstRunSeatTranscript(): string {
+  const line = (secondsAgo: number, body: Record<string, unknown>) => JSON.stringify({ timestamp: iso(secondsAgo), ...body });
+  const result = { reviewId: FIRST_RUN_REVIEW_ID, taskId: null, project: "atlas", title: FIRST_RUN_TITLE, variants: 0, questions: 1, frames: 0, videos: 0 };
+  return `${[
+    line(150, { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: FIRST_RUN_GREETING }] } }),
+    line(70, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_first_task", name: "mcp__viewer__publish_prototype_review", input: { clientRequestId: "first-task", title: FIRST_RUN_TITLE, questions: FIRST_RUN_QUESTIONS } }] } }),
+    line(68, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_first_task", content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }] } }),
+  ].join("\n")}\n`;
+}
+/* No Telegram channel exists on this install: the first form's post failed for want of a relay. */
+if (FIRST_RUN_FORM) seatRounds.push({ id: FIRST_RUN_REVIEW_ID, taskId: null, project: PROJECT, title: FIRST_RUN_TITLE, createdAt: iso(68), source: { conversationId: orchestrator.conversationId ?? null }, variants: [],
+  questions: FIRST_RUN_QUESTIONS, telegramPost: { key: "first-run", state: "failed", reason: "no_relay", at: iso(68) } });
+/* What the routes behind the guide answer for a first-run state; null falls through to the board fixture. */
+function firstRunAnswer(url: URL, method: string): Response | null {
+  const path = url.pathname;
+  if (path === "/api/onboarding" && !FIRST_RUN_FORM) {
+    /* Once an orchestrator exists, the guide's first three steps are settled: the numbers turn into ticks. */
+    const steps = FIRST_RUN_SEATED ? { engines: "done", project: "done", orchestrator: "done" } : {};
+    const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps, lastHealth: null, walk: "done" };
+    return json(method === "PUT" ? { marker } : { marker, legacyState: false, seatTickCheckMinutes: 5 });
+  }
+  if (path === "/api/accounts" && method === "GET") return json(FIRST_RUN_ACCOUNTS);
+  if (path === "/api/accounts/cli") return json({ claude: FIRST_RUN_ACCOUNTS.claude.cli, codex: FIRST_RUN_ACCOUNTS.codex.cli });
+  if (path === "/api/accounts/copilot" && method === "GET") return json({ cli: { present: false, reason: null }, active: "", accounts: [] });
+  if (path === "/api/roles") return json(frRoles());
+  if (path === "/api/telegram/bot") return json({ bot: TELEGRAM_BOT_STATUS });
+  if (path === "/api/memory/source") return json({ choice: null, phase: null, orchestrator: FIRST_RUN_SEATED });
+  /* Shared memory on the same Settings page: a fresh install with it off. */
+  if (path === "/api/memory/settings" && method === "GET") return json({ enabled: false, reasons: ["projectOff", "noKey"], keySource: null, capUsd: 5, spentUsd: 0, month: "2026-11", counts: { decisions: 0, delivered: 0, skipped: 0, failed: 0, noCandidates: 0, noMatches: 0, prepared: 0 } });
+  return null;
+}
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
 const SPEED_PARAMS_FETCH = new URLSearchParams(location.search);
@@ -4225,6 +4323,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (SCENARIO === "spend-credits" && url.pathname.startsWith("/api/accounts")) return serverFetch(input, init);
   if (SCENARIO === "account-row" && /^\/api\/(?:accounts|transfer\/accounts|account-project-bindings)/.test(url.pathname)) return serverFetch(input, init);
   const method = (init?.method ?? "GET").toUpperCase();
+  if (FIRST_RUN) {
+    const answered = firstRunAnswer(url, method);
+    if (answered) return answered;
+  }
   /* The lane review case answers these from the driver's own server, through
      the real route handlers over a real repository (docs/design/lane-diff-comments.md). */
   if (new URLSearchParams(location.search).has("laneReview")
@@ -4346,7 +4448,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       return json({ ok: true, at, by, undo: !!body.undo, dismissed: [target], alreadyClear: [], changed: [] });
     }
   }
-  if ((DECISIONS || PROTO || REPORT_PREVIEW) && url.pathname === "/api/projects/decisions") {
+  if ((DECISIONS || PROTO || REPORT_PREVIEW || FIRST_RUN_FORM) && url.pathname === "/api/projects/decisions") {
     if (method === "POST") {
       const body = JSON.parse(String(init?.body)) as { reviewId: string; answers?: PrototypeAnswer[]; comment?: string; chosen?: number[]; reject?: true; retry?: true };
       decisionPosts.push(body);
@@ -4539,7 +4641,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       } as unknown as FileEntry))
       : files;
     const seatOnly = ORCH_WALK ? files.filter((file) => file.path === orchestrator.path).map((file) => ({
-      ...file, activity: "idle", proc: null, pid: null, waitingInput: null, pendingQuestion: null, plan: null,
+      ...file, activity: "idle", proc: FIRST_RUN_FORM ? "running" : null, pid: FIRST_RUN_FORM ? 51_234 : null, waitingInput: null, pendingQuestion: null, plan: null,
+      ...(FIRST_RUN_FORM ? { effort: "high" } : {}),
       authoritativeTurn: { state: "idle", source: "lifecycle", terminalAt: iso(MIN) },
       lastTurn: { startedAt: (now - 2 * MIN) * 1_000, endedAt: (now - MIN) * 1_000 },
     } as unknown as FileEntry)) : [];
@@ -4570,7 +4673,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const retiredBoard = SCENARIO === "retired-review" && params.get("surface") === "direct-board"
       ? { files: [orchestrator, ...directFiles], flows: [], pipelines: [], tasks: [], conversationAliases: { "old-direct-subject": "direct-subject" },
         projectCatalog: [{ project: PROJECT, conversations: directFiles.length + 1, smt: now }] } : {};
-    const body = JSON.stringify({ ...scoped, ...retiredBoard, ...((DECISIONS || REPORT_PREVIEW) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
+    const body = JSON.stringify({ ...scoped, ...retiredBoard, ...((DECISIONS || REPORT_PREVIEW || FIRST_RUN_FORM) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
     if (COLD_BOARD) {
       const headers = new Headers(init?.headers);
       const required = headers.get("x-llv-files-generation");
@@ -5040,7 +5143,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         const bytes = new TextEncoder().encode(launchTranscript());
         return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: bytes.length, size: bytes.length }];
       }
-      const data = transcriptOf(req.path);
+      const data = FIRST_RUN_FORM && req.path === orchestrator.path ? firstRunSeatTranscript() : transcriptOf(req.path);
       const bytes = new TextEncoder().encode(data);
       const size = bytes.length;
       /* The first-message window reads a transcript that grows: the route answers from the caller's offset, as the real one does. */

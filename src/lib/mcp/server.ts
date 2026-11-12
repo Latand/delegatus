@@ -1,4 +1,7 @@
+import { declaredClassSchema, repeatReasonSchema } from "@/lib/pipelines/accounting";
+import { taskDeclarationSchema, acceptTaskSchema } from "@/lib/tasks/accounting";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { FLOW_RETIREMENT } from "@/lib/flows/retirement";
 import { ISSUE_REPORT_RESPONSE_RULE } from "@/lib/issueReports/approvalForm";
 import { cloneFileCallBudgetMs } from "@/lib/externalRelay/cloneToolBudget";
 import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
@@ -80,6 +83,16 @@ import { proposalSchema as voiceToolProposalSchema } from "@/lib/voiceTools/cont
 
 export const MCP_SERVER_NAME = "viewer";
 
+/** Flow tools left the tool list with the flow engine. A session that still
+    holds the old list gets one clear answer naming the tools that replace
+    them; nothing is read, written or recorded for the call. */
+export const RETIRED_FLOW_TOOL_NAMES = ["list_flows", "get_flow", "flow_action"] as const;
+/** Names an installed updater from before the candidate-catalog probe still
+    expects in tools/list. Only the health-probe server registers them. */
+export const MCP_UPDATE_BRIDGE_TOOL_NAMES = ["suggest_replies", ...RETIRED_FLOW_TOOL_NAMES] as const;
+const RETIRED_FLOW_TOOL_REPLACEMENT = ["create_pipeline", "list_pipelines", "get_pipeline", "pipeline_action"] as const;
+const RETIRED_FLOW_TOOL_ANSWER = `${FLOW_RETIREMENT.error} Call ${RETIRED_FLOW_TOOL_REPLACEMENT.join(", ")}: a review runs as a reviewer run stage with a fail edge to a fix stage.`;
+
 export const MCP_TOOL_NAMES = [
   "grant_agent_browser_access",
   "voice_tools",
@@ -106,9 +119,6 @@ export const MCP_TOOL_NAMES = [
   "deploy_exact_sha",
   "get_pipeline",
   "board_snapshot",
-  "list_flows",
-  "get_flow",
-  "flow_action",
   "list_pipelines",
   "conversation_action",
   "operator_snapshot",
@@ -177,7 +187,6 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
   "curate_rules",
   "link_task_to_pipeline",
   "deploy_exact_sha",
-  "flow_action",
   "conversation_action",
   "conversation_migration",
   /* Digest polls advance a durable relay cursor, so their receipts must
@@ -252,7 +261,7 @@ export const OPTIONAL_READ_KEY_TOOLS = new Set<McpToolName>([
   "read_prototype_review",
   "message_receipt", "list_conversations", "search_transcripts", "get_conversation",
   "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot",
-  "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task",
+  "list_pipelines", "list_tasks", "get_task",
   "deployment_status", "resources", "get_orchestrator", "account_limits", "agent_fleet",
 ]);
 
@@ -487,8 +496,7 @@ export interface McpBoundedNumericArg {
 /**
  * Agent-facing numeric bounds whose nearest-valid interpretation is harmless.
  *
- * Deliberately absent: flow_action.rounds (operator mutation),
- * operator_snapshot.caller.pid (process identity),
+ * Deliberately absent: operator_snapshot.caller.pid (process identity),
  * conversation_migration.expectedRevision (concurrency identity), and
  * bridge_directive.utterance/ref (durable delivery identity). Those values keep
  * exact validation at the protocol boundary.
@@ -521,9 +529,6 @@ export const MCP_BOUNDED_NUMERIC_ARGS: Partial<Record<McpToolName, readonly McpB
     { path: ["maxChars"], min: 1, max: 16_000, fallback: 4_000 },
   ],
   board_snapshot: [
-    { path: ["limit"], min: 1, max: 200, fallback: 100 },
-  ],
-  list_flows: [
     { path: ["limit"], min: 1, max: 200, fallback: 100 },
   ],
   list_pipelines: [
@@ -2842,6 +2847,10 @@ export function createMcpToolService(
   const service: McpToolService = {
     callTool: async function callTool(toolName: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
       if (!(MCP_TOOL_NAMES as readonly string[]).includes(toolName)) {
+        if ((RETIRED_FLOW_TOOL_NAMES as readonly string[]).includes(toolName)) {
+          return failure(toolName, clientRequestId(args), FLOW_RETIREMENT.code, RETIRED_FLOW_TOOL_ANSWER, false, false,
+            { replacement: [...RETIRED_FLOW_TOOL_REPLACEMENT] });
+        }
         return failure(toolName, clientRequestId(args), "unknown_tool", `Unknown viewer tool: ${toolName}`, false);
       }
       if (args && typeof args === "object" && "nativeCallerProof" in args) {
@@ -2944,24 +2953,6 @@ export function createMcpToolService(
         }
       }
       if (!requestId) return finish(failure(toolName, null, "invalid_request", "clientRequestId is required", false), "failure");
-      /* Agent decisions own an atomic receipt in the flow row. Always enter the
-         binding so caller authority is checked before replay, including after
-         restart; an MCP-cache hit must never disclose another owner's receipt. */
-      if (typedTool === "flow_action" && effectiveArgs.action === "agent-decision") {
-        const verdict = permit();
-        if (verdict && !verdict.allowed) return finish(failure(typedTool, requestId, verdict.code, verdict.error, false), "failure");
-        try {
-          const payload = await bindings[typedTool](effectiveArgs, context);
-          return finish({ ...payload, ok: true, toolName: typedTool, clientRequestId: requestId, replayed: payload.replayed === true }, "success");
-        } catch (error) {
-          // Accepted historical decisions replay above after the binding checks
-          // their owner. New retired operations enter ordinary durable receipts.
-          if (!(error instanceof McpToolRefusal && error.details.code === "FLOW_RETIRED")) {
-            return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), false, false,
-              { outcome: "unknown", nextAction: "original-key-lookup" }), "failure");
-          }
-        }
-      }
       const recoverable = options.recovery?.[typedTool] ?? null;
       const recoveryStore = recoverable && supportsMcpRecovery(receipts) ? receipts : null;
       if (recoverable && !recoveryStore) throw new Error(`MCP receipt store cannot recover ${typedTool}`);
@@ -4002,9 +3993,6 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   deploy_exact_sha: "Deploy the serving Delegatus application by commit SHA or unique prefix of at least 7 characters on the tracked branch. Never a branch name. Only its server-attributed designated seat deploys; other projects cannot deploy through this tool. Idempotent by clientRequestId; deployments serialize at admission. After a control timeout, the first reply returns the accepted id when reconciliation proves admission. Otherwise it answers outcome_unknown: read deployment_status and replay the original clientRequestId to resolve admission. A matching SHA already deploying joins that deployment; a different SHA stays busy. An accepted deploy records wakeOnSettle:true for the seat: end the turn, and its next wake reports the terminal phase and paused lanes.",
   get_pipeline: "Read one pipeline by durable id, with stageDigests and graphDigest for a guarded graph edit. Use full:true for delivery ownership, closeReport, work links and retained bodies. Compact by default; full:true or compact:false returns the whole record, prompts, role scaffolds and attempt transcripts included. `stageId` narrows the answer to that stage and one attempt (the latest by default, or `attempt`): its verdict, findings, reported summary, conversation and error, with no prompts or transcripts. `compact: true` answers the list_pipelines compact row plus the digests.",
   board_snapshot: "Read a bounded, redacted snapshot of the Delegatus board, durable placement, and the selected project's hidden conversation count.",
-  list_flows: "Read retired flow history newest-created first, compact by default, with a 24 KB row budget and cursor pagination. Rows include identity, state, revision, spec title/length and round count. omittedCount counts matching records outside this page; omittedRecordCount counts compacted records. Follow nextCursor with the same filters and a fresh clientRequestId until hasMore is false. full:true or compact:false returns complete records; get_flow(flowId) reads one full record. A single explicit full record can exceed the budget. Unknown states are ignored; limits clamp and invalid or mismatched cursors restart with cursorReset:true.",
-  get_flow: "Read one archived flow by durable id. Flows are retired; the reply grants no execution or current-head approval.",
-  flow_action: "Deprecated: flows are retired. New operations refuse with FLOW_RETIRED; use pipeline run stages with review/fix edges. Replay an already accepted clientRequestId to read its original receipt without execution.",
   list_pipelines: "List durable pipelines newest-created first, compact by default, with cursor pagination and a 24 KB page budget. Follow nextCursor with the same filters. full:true reads complete records; compact:false restores the previous bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated. `state: \"open\"` selects every state a lane can still move from (everything but completed and closed). `compact: true` shrinks each row to id, the title's first line, state, cursor, a clamped stateDetail and per stage its id and latest attempt {n, state, verdict}; get_pipeline with `stageId` then reads one stage's conclusion.",
   conversation_action: "Control or archive Delegatus conversations. speed applies serviceTier in place without cutting a turn; stage conversations use the stage runtime switch. interrupt, kill, resume, compact and permission accept one conversation by id, transcript path, or selected-card reference. A host's tool permission requests are answered with permission and decision allow (once) or deny, optionally naming requestId, and its native question or plan with answer, requestId (the question's reason id) and answers, text, or approve. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
   operator_snapshot: "Read the bounded, secret-redacted Delegatus state currently visible to the operator.",
@@ -4389,6 +4377,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     operationId: z.string().min(1).describe("The operationId a send_message call returned."),
   }).passthrough(),
   create_task: z.object({
+    accounting: taskDeclarationSchema.optional().describe("Freeze acceptance criteria, task class, original-task membership and defect correction link at creation. Unknown fields stay null."),
     progress: z.number().int().min(0).max(100).nullable().optional()
       .describe("Task progress estimate from 0 to 100; omitted or null leaves it absent on creation. On a finding match, omitted preserves it and null clears it. Time and reporter are server-derived. Maintain it whenever you update the task."),
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
@@ -4424,6 +4413,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("The machine that runs the task on a linked board; a new task always runs on the machine that creates it, so the only value is \"here\"."),
   }).passthrough(),
   update_task: z.object({
+    accept: acceptTaskSchema.optional().describe("Record acceptance against creation criteria with evidence. Requires current expectedProject and expectedRevision. Done alone records no acceptance."),
     summary: taskSummaryInputSchema.nullable().optional().describe("The task's Summary panel: headline, two or three sentences, what is left. Replaces it; null clears it. Author and time are server-derived."),
     progress: z.number().int().min(0).max(100).nullable().optional()
       .describe("Task progress estimate from 0 to 100; null clears it, omitted preserves it. Use taskId; cannot combine with refine. Time and reporter are server-derived. Maintain it whenever you update the task."),
@@ -4483,6 +4473,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     }
   }).meta({ dependentRequired: { expectedProject: ["expectedRevision"], expectedRevision: ["expectedProject"], hide: ["expectedProject", "expectedRevision"], restoreHold: ["expectedProject", "expectedRevision"], pos: ["expectedProject", "expectedRevision"], placement: ["expectedProject", "expectedRevision"] } }),
   create_pipeline: z.object({
+    taskClass: declaredClassSchema.optional().describe("Class declared at creation: size and money/access/dataMigration flags. Unknown stays null; project is controller-derived."),
     clientRequestId: clientRequestIdSchema,
     recoveryOnly: recoveryOnlySchema,
     delivery: z.object({
@@ -4516,6 +4507,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     publication: z.enum(["internal", "remote-branch"]).optional().describe("Omitted: publish when the owner delivery target has a remote, local-only when it has none. internal: never push while the lane runs. remote-branch: requires a remote, pushes every accepted revision and fences reviews on the delivery branch. Without baseRef, the controller fetches origin/<baseBranch> time-bounded, or resolves local <baseBranch> when origin is absent."),
   }).passthrough(),
   pipeline_action: z.object({
+    repeatReason: repeatReasonSchema.optional().describe("Why retry-stage or resolve-decision repeats the stage. Omitted stays unknown unless the controller knows the cause."),
     src: z.string().optional().describe("set-src: creator transcript path; required for this action."),
     overwrite: z.boolean().optional().describe("set-src: true authorizes replacing existing creator lineage; defaults to false."),
     resumeCondition: pipelineResumeConditionSchema.optional().describe("pause: remind when this date arrives or fresh cached usage for the named account/window falls below belowPercent. Omit for a reminder after 24 hours. Reminders never resume a lane automatically."),
@@ -4732,38 +4724,6 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     activity: z.enum(["live", "stalled", "recent", "idle"]).optional(),
     liveOnly: z.boolean().optional(),
     limit: boundedNumericInput("board_snapshot", "limit"),
-  }).passthrough(),
-  list_flows: z.object({
-    clientRequestId: clientRequestIdSchema.optional(),
-    project: z.string().optional(),
-    state: z.unknown().optional().describe("A flow state or array of states. Unknown values are ignored."),
-    includeClosed: z.boolean().optional(),
-    limit: boundedNumericInput("list_flows", "limit"),
-    full: z.unknown().optional().describe("true returns complete records; defaults to compact rows."),
-    compact: z.boolean().optional().describe("Compact by default; false restores complete records."),
-    ids: z.unknown().optional().describe("Only these durable ids (array or comma-separated string)."),
-    cursor: z.unknown().optional().describe("Pass nextCursor unchanged with the same filters. Invalid cursors restart with cursorReset:true."),
-  }).passthrough(),
-  get_flow: z.object({
-    clientRequestId: clientRequestIdSchema.optional(),
-    flowId: entityIdSchema,
-  }).passthrough(),
-  flow_action: z.object({
-    clientRequestId: clientRequestIdSchema,
-    flowId: entityIdSchema,
-    action: z.enum(["pause", "resume", "set-mode", "advance", "retry-round", "cancel-round", "set-round-limit", "extend", "another-round", "set-roles", "close", "agent-decision"])
-      .describe("Deprecated compatibility payload. New operations refuse with FLOW_RETIRED; only an original accepted clientRequestId can replay its historical receipt."),
-    decision: z.enum(["submit-review", "continue-fixing", "stop", "completed"]).optional(),
-    reason: z.string().optional(),
-    expectedRevision: z.number().int().nonnegative().optional(),
-    expectedHead: z.string().regex(/^[0-9a-f]{7,40}$/i).optional(),
-    round: z.number().int().nonnegative().optional(),
-    turnId: z.string().optional(),
-    stage: z.object({ pipelineId: z.string(), stageId: z.string(), attempt: z.number().int().positive() }).optional(),
-    mode: z.enum(["auto", "manual"]).optional(),
-    rounds: z.number().int().min(0).max(50).optional(),
-    note: z.string().optional(),
-    roles: z.record(z.string(), z.unknown()).optional(),
   }).passthrough(),
   list_pipelines: z.object({
     statusOnly: z.boolean().optional().describe("true omits per-stage cards from compact rows; full:true and compact:false retain their detailed views."),
@@ -5218,7 +5178,7 @@ export function viewerMcpInstructions(locale?: "en" | "uk" | null): string {
   return `${VIEWER_MCP_BASE_INSTRUCTIONS}${operatorLanguageInstruction(locale === undefined ? readOperatorLocale() : locale)}`;
 }
 
-const VIEWER_MCP_BASE_INSTRUCTIONS = "This server is Delegatus, registered under the MCP key `viewer`, so its tools are named mcp__viewer__*. List tasks newest-first with status sets, openOnly, ids or query and follow nextCursor. Lists are compact by default; full:true retrieves complete records; get_pipeline is compact by default. Use get_task/get_flow for complete records. Writes acknowledge changedFields and revision. Use seat_tick_settings verbose:true to read the complete monitor note. Use clientRequestId on mutations; pure reads may omit it for a fresh observation. Static readMore hints require includeHints:true or full:true. Reuse it only when replaying the same logical operation. Launch admission names new tasks before the agent starts, using the supplied title and a concise launcher brief or a short title derived from the prompt. Refinement is optional: for a legacy placeholder, update_task with refine: { text } supplies a short human title (3–10 words) on the first line and at most two concise sentences. Read-only roles skip refinement. A refine that answers TASK_NOT_FOUND means your conversation holds no task; carry on. Keep an existing meaningful title; the reply says already-named when one exists. Reuse the same text on retry. A task's text is for the human who reviews the board, and refine writes only that; agent-facing context (the prompt, the working notes, the ids, the rules, the state) belongs in the separate details field of create_task and update_task, condensed, which the card shows behind one collapsed Details row. Use agent_fleet first for compact counts by engine, model, effort and account; request detail or filters only when needed. Read the board through these tools rather than curl: list_pipelines with state `open` and compact: true for the open lanes, get_pipeline with stageId for one stage's conclusion, deployment_status and agent_activity with compact: true, and account_limits for each account's usage windows.";
+const VIEWER_MCP_BASE_INSTRUCTIONS = "This server is Delegatus, registered under the MCP key `viewer`, so its tools are named mcp__viewer__*. List tasks newest-first with status sets, openOnly, ids or query and follow nextCursor. Lists are compact by default; full:true retrieves complete records; get_pipeline is compact by default. Use get_task for complete records. Writes acknowledge changedFields and revision. Use seat_tick_settings verbose:true to read the complete monitor note. Use clientRequestId on mutations; pure reads may omit it for a fresh observation. Static readMore hints require includeHints:true or full:true. Reuse it only when replaying the same logical operation. Launch admission names new tasks before the agent starts, using the supplied title and a concise launcher brief or a short title derived from the prompt. Refinement is optional: for a legacy placeholder, update_task with refine: { text } supplies a short human title (3–10 words) on the first line and at most two concise sentences. Read-only roles skip refinement. A refine that answers TASK_NOT_FOUND means your conversation holds no task; carry on. Keep an existing meaningful title; the reply says already-named when one exists. Reuse the same text on retry. A task's text is for the human who reviews the board, and refine writes only that; agent-facing context (the prompt, the working notes, the ids, the rules, the state) belongs in the separate details field of create_task and update_task, condensed, which the card shows behind one collapsed Details row. Use agent_fleet first for compact counts by engine, model, effort and account; request detail or filters only when needed. Read the board through these tools rather than curl: list_pipelines with state `open` and compact: true for the open lanes, get_pipeline with stageId for one stage's conclusion, deployment_status and agent_activity with compact: true, and account_limits for each account's usage windows.";
 
 function shortenSchemaDescriptions<T extends z.ZodType>(schema: T): T {
   const def = (schema as unknown as { _zod?: { def?: { type?: string; element?: z.ZodType } } })._zod?.def;
@@ -5367,9 +5327,9 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
   return server;
 }
 
-/** The retired name exists only for a runtime-host-admitted update probe.
- * Ordinary stdio and HTTP servers never register it, so agents cannot discover
- * the compatibility surface in tools/list. */
+/** The retired names exist only for a runtime-host-admitted update probe.
+ * Ordinary stdio and HTTP servers never register them, so agents cannot
+ * discover the compatibility surface in tools/list. */
 export function createViewerMcpHealthProbeServer(service: McpToolService): McpServer {
   const server = createViewerMcpServer(service);
   // Older installed deployers compare the candidate against their full catalog.
@@ -5386,6 +5346,16 @@ export function createViewerMcpHealthProbeServer(service: McpToolService): McpSe
     };
     return { isError: true, structuredContent: result, content: [{ type: "text", text: result.error }] };
   });
+  for (const name of RETIRED_FLOW_TOOL_NAMES) {
+    server.registerTool(name, {
+      description: "Deprecated update compatibility entry. Always refuses; flows are retired, use the pipeline tools.",
+      inputSchema: z.looseObject({}),
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    }, async () => {
+      const result = { ok: false, code: FLOW_RETIREMENT.code, retryable: false, error: RETIRED_FLOW_TOOL_ANSWER };
+      return { isError: true, structuredContent: result, content: [{ type: "text", text: result.error }] };
+    });
+  }
   return server;
 }
 

@@ -39719,6 +39719,31 @@ describe("team workspaces slice (a)", () => {
             if (pageErrors.length) failures.push(`${tag} D6: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
         }
+        /* D8 (workspaces W1): the line on a workspace's page naming the projects without an account list, one line for both engines here, each name a link.
+           The owner and the workspace's manager read it; a plain member and a page whose pool read fails read nothing. */
+        for (const [who, query, shown] of [["owner", "", true], ["manager", "&manager=1", true], ["member", "&member=1", false], ["unreadable", "&poolrefused=harbor-docs", false]] as const) {
+          const { context, page, pageErrors } = await open(`scenario=workspaces-page&rail=1&page=client&nopool=acme-ledger,harbor-docs${query}`);
+          try {
+            await page.locator("[data-workspace-title]").waitFor();
+            if (shown) {
+              await page.locator("[data-workspace-account-list-note]").first().waitFor();
+              const projects = "Acme Ledger, Harbor Docs";
+              /* Both engines lack a list in the same projects: one line names both, and each project leads to its own view. */
+              if (await page.locator("[data-workspace-account-list-note]").count() !== 1) failures.push(`${tag} D8 ${who}: the engines are not told in one line`);
+              const links = await page.locator("[data-workspace-account-list-note] a").evaluateAll((nodes) => nodes.map((node) => [node.textContent, node.getAttribute("href")]));
+              if (JSON.stringify(links) !== JSON.stringify([["Acme Ledger", "/#p=acme-ledger"], ["Harbor Docs", "/#p=harbor-docs"]])) failures.push(`${tag} D8 ${who}: the project names do not lead to their views ${JSON.stringify(links)}`);
+              await frame(page, tag, `D8-${who}`, [
+                ["[data-workspace-account-list-note='both']", words(lang, "workspaces.page.noAccountListBoth", { projects })],
+              ]);
+            } else {
+              /* Both pool reads have had every chance to answer before the absence is read. */
+              await page.waitForTimeout(600);
+              if (await page.locator("[data-workspace-account-list-note]").count()) failures.push(`${tag} D8 ${who}: a line stands where none belongs`);
+              await frame(page, tag, `D8-${who}`, [["[data-workspace-title]", names[lang].client]]);
+            }
+            if (pageErrors.length) failures.push(`${tag} D8 ${who}: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
       }
       fs.mkdirSync("evidence/team-workspaces", { recursive: true });
       fs.writeFileSync("evidence/team-workspaces/rendered.json", JSON.stringify({
@@ -42465,6 +42490,466 @@ describe("installer guide: old state, project search, newcomer clarity", () => {
     fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, failures }, null, 2) + "\n");
     expect(failures).toEqual([]);
   }, 600_000);
+});
+
+describe("first-run guide: variant 1 on the real components", () => {
+  type Lang = "en" | "uk";
+  /* One frame set per state: the fixture's `firstrun` token, the surface it draws and the lines that define it. */
+  type Spec = { token: string; label: Record<Lang, string>; bot?: "none" | "fallback"; narrowOnly?: boolean; phoneOnly?: boolean };
+  const SPECS: Spec[] = [
+    { token: "engines-both", label: { en: "Engines · both connected", uk: "Рушії · обидва підключені" } },
+    { token: "engines-claude-only", label: { en: "Engines · Claude only, Codex not installed", uk: "Рушії · лише Claude, Codex не встановлено" } },
+    { token: "engines-codex-only", label: { en: "Engines · Codex only, Claude signed out", uk: "Рушії · лише Codex, Claude без входу" } },
+    { token: "engines-signed-out", label: { en: "Engines · both installed, signed out", uk: "Рушії · обидва встановлені, без входу" } },
+    { token: "engines-no-cli", label: { en: "Engines · no agent CLI", uk: "Рушії · жодного CLI" } },
+    { token: "orchestrator-one-press", label: { en: "Orchestrator · one press, both engines", uk: "Оркестратор · одне натискання, обидва рушії" } },
+    { token: "orchestrator-claude-only", label: { en: "Orchestrator · Claude only", uk: "Оркестратор · лише Claude" } },
+    { token: "orchestrator-codex-only", label: { en: "Orchestrator · Codex only", uk: "Оркестратор · лише Codex" } },
+    { token: "later-memory-before", label: { en: "Later · Memory, no orchestrator yet", uk: "Пізніше · Пам’ять, оркестратора ще немає" } },
+    { token: "later-memory-after", label: { en: "Later · Memory, orchestrator exists", uk: "Пізніше · Пам’ять, оркестратор є" } },
+    { token: "later-telegram-later", label: { en: "Later · Telegram, no bot connected", uk: "Пізніше · Telegram, бота не підключено" }, bot: "none" },
+    { token: "telegram-numbered", label: { en: "Telegram step · a bot is connected", uk: "Крок Telegram · бота підключено" }, bot: "fallback" },
+    { token: "form-board", label: { en: "First task · the seat on the phone's board", uk: "Перша задача · місце на дошці телефона" }, phoneOnly: true },
+    { token: "form-greeting", label: { en: "First task · the greeting", uk: "Перша задача · привітання" }, narrowOnly: true },
+    { token: "form-decisions", label: { en: "First task · the Decisions form", uk: "Перша задача · форма в «Рішеннях»" } },
+    { token: "form-needs-you", label: { en: "First task · Needs you", uk: "Перша задача · «Чекають на вас»" } },
+    { token: "settings-memory-before", label: { en: "Settings · Delegatus memory, no orchestrator", uk: "Налаштування · пам’ять Delegatus, без оркестратора" } },
+    { token: "settings-memory-after", label: { en: "Settings · Delegatus memory, orchestrator exists", uk: "Налаштування · пам’ять Delegatus, оркестратор є" } },
+  ];
+  /* The named widths in both languages and themes; 645 and 900 stand between them, in English and Ukrainian, light. */
+  const WIDTHS: Array<{ width: number; themes: Array<"light" | "dark"> }> = [
+    { width: 1440, themes: ["light", "dark"] },
+    { width: 390, themes: ["light", "dark"] },
+    { width: 900, themes: ["light"] },
+    { width: 645, themes: ["light"] },
+  ];
+  /* Names, product words and code a Ukrainian line may keep in Latin letters. */
+  const LATIN = /^(?:Claude|Code|Codex|Copilot|GitHub|Delegatus|Telegram|Opus|GPT-6\.1-Sol|Sol|README|CLI|CSV|API|Max|Pro|atlas|atlas-api|src\/billing|curl|fsSL|https|bash|sh|install\.sh|claude\.ai|chatgpt\.com|codex|Account|A|B|Report|Bot|Team|Reports|OpenCode|Go|Messages|repo|uk|en|low|medium|high|xhigh|BotFather|team-reports)$/;
+
+  /* What one frame reads of the lines that define it, in the page. */
+  const MEASURE = (args: { defining: string[] }) => {
+    const out = { missing: [] as string[], offFirstScreen: [] as string[] };
+    const within = (rect: DOMRect, box: { left: number; right: number; top: number; bottom: number }, slack = 0.5) => rect.left >= box.left - slack && rect.right <= box.right + slack && rect.top >= box.top - slack && rect.bottom <= box.bottom + slack;
+    const screen = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+    const clippers = (node: Element) => {
+      const boxes: DOMRect[] = [];
+      for (let up = node.parentElement; up && up !== document.documentElement; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") boxes.push(up.getBoundingClientRect());
+      }
+      return boxes;
+    };
+    /* Text kept for screen readers only (an sr-only legend) is never drawn. */
+    const unseen = (node: Node, root: Element) => {
+      for (let up = node.parentElement; up && up !== root.parentElement; up = up.parentElement) {
+        const box = up.getBoundingClientRect();
+        if (getComputedStyle(up).clip.startsWith("rect") || box.width <= 1 || box.height <= 1) return true;
+      }
+      return false;
+    };
+    const lines = (element: Element) => {
+      const found: Array<{ node: Text; rect: DOMRect; text: string }> = [];
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode as Text;
+        const text = node.textContent?.trim();
+        if (!text || !(node.parentElement?.getClientRects().length) || unseen(node, element)) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) if (rect.width > 0.5 && rect.height > 0.5) found.push({ node, rect, text });
+      }
+      return found;
+    };
+    for (const selector of args.defining) {
+      const element = document.querySelector(selector);
+      if (!element) { out.missing.push(selector); continue; }
+      const own = lines(element);
+      if (!own.length) { out.missing.push(`${selector} (no text)`); continue; }
+      const boxes = clippers(element);
+      if (!own.every((line) => within(line.rect, screen) && boxes.every((box) => within(line.rect, box)))) out.offFirstScreen.push(selector);
+    }
+    return out;
+  };
+
+  /* The guide's first screen as it opens: the filled buttons a person sees, and
+     every text line a scroll edge, the footer or the window cuts part-way. */
+  const FIRST_SCREEN = () => {
+    const dialog = document.querySelector("[data-onboarding-dialog]");
+    if (!dialog) return { filled: [] as string[], cut: [] as string[] };
+    const screen = new DOMRect(0, 0, innerWidth, innerHeight);
+    const boxesOf = (node: Element) => {
+      const boxes = [screen];
+      for (let up = node.parentElement; up && up !== document.documentElement; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") boxes.push(up.getBoundingClientRect());
+      }
+      return boxes;
+    };
+    const overlap = (a: DOMRect, b: DOMRect) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5;
+    const inside = (a: DOMRect, b: DOMRect) => a.left >= b.left - 0.5 && a.right <= b.right + 0.5 && a.top >= b.top - 0.5 && a.bottom <= b.bottom + 0.5;
+    const filled = [...dialog.querySelectorAll<HTMLElement>("button")].filter((button) => {
+      if (!button.getClientRects().length || !/(^|\s)bg-brand(\s|$)/.test(button.className)) return false;
+      const rect = button.getBoundingClientRect();
+      return boxesOf(button).every((box) => overlap(rect, box));
+    }).map((button) => button.textContent?.trim() ?? "");
+    const cut: string[] = [];
+    const walker = document.createTreeWalker(dialog, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      if (!node.textContent?.trim() || !(node.parentElement?.getClientRects().length)) continue;
+      const style = getComputedStyle(node.parentElement!);
+      if (style.visibility === "hidden" || style.clip.startsWith("rect")) continue;
+      const boxes = boxesOf(node.parentElement!);
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width <= 0.5 || rect.height <= 0.5) continue;
+        /* Seen at all, yet not whole: part of the line is past an edge. */
+        if (boxes.every((box) => overlap(rect, box)) && !boxes.every((box) => inside(rect, box))) cut.push(node.textContent.trim().slice(0, 50));
+      }
+    }
+    return { filled, cut };
+  };
+
+  /* The same lines once each is scrolled into view: cut, covered, the line ends and the targets. */
+  const INSPECT = (args: { selector: string; coarse: boolean; lang: Lang; latin: string }) => {
+    const latinAllowed = new RegExp(args.latin);
+    const report = { cut: [] as string[], covered: [] as string[], ellipsis: [] as string[], small: [] as string[], oneLetterEnds: [] as string[], latin: [] as string[], texts: [] as string[] };
+    const element = document.querySelector(args.selector);
+    if (!element) return report;
+    const within = (rect: DOMRect, box: { left: number; right: number; top: number; bottom: number }, slack = 0.5) => rect.left >= box.left - slack && rect.right <= box.right + slack && rect.top >= box.top - slack && rect.bottom <= box.bottom + slack;
+    const boxes: DOMRect[] = [];
+    for (let up = element.parentElement; up && up !== document.documentElement; up = up.parentElement) {
+      const style = getComputedStyle(up);
+      if (style.overflowX !== "visible" || style.overflowY !== "visible") boxes.push(up.getBoundingClientRect());
+    }
+    const screen = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+    const unseen = (node: Node) => {
+      for (let up = node.parentElement; up && up !== element.parentElement; up = up.parentElement) {
+        const box = up.getBoundingClientRect();
+        if (getComputedStyle(up).clip.startsWith("rect") || box.width <= 1 || box.height <= 1) return true;
+      }
+      return false;
+    };
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    const words: Array<{ text: string; top: number; block: Element }> = [];
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      const value = node.textContent ?? "";
+      if (!value.trim() || !(node.parentElement?.getClientRects().length) || unseen(node)) continue;
+      report.texts.push(value.trim());
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width <= 0.5 || rect.height <= 0.5) continue;
+        if (!within(rect, screen) || boxes.some((box) => !within(rect, box))) report.cut.push(value.trim().slice(0, 60));
+        for (const x of [rect.left + 1, (rect.left + rect.right) / 2, rect.right - 1]) {
+          const hit = document.elementFromPoint(x, (rect.top + rect.bottom) / 2);
+          if (hit && !element.contains(hit) && !hit.contains(element)) { report.covered.push(`${value.trim().slice(0, 40)} under ${hit.tagName.toLowerCase()}.${String(hit.className).slice(0, 40)}`); break; }
+        }
+      }
+      const block = node.parentElement!.closest("p, li, label, span, div, button, h2, code") ?? node.parentElement!;
+      for (const match of value.matchAll(/\S+/g)) {
+        const word = document.createRange();
+        word.setStart(node, match.index!);
+        word.setEnd(node, match.index! + match[0].length);
+        const rect = word.getClientRects()[0];
+        if (rect) words.push({ text: match[0], top: Math.round(rect.top), block });
+        if (args.lang === "uk" && !node.parentElement!.closest("code")) for (const piece of match[0].split(/[\s·,;:()?!«»"—]+/)) {
+          const part = piece.replace(/\.+$/, "");
+          if (/^[A-Za-z][A-Za-z0-9./-]*$/.test(part) && !latinAllowed.test(part)) report.latin.push(part);
+        }
+      }
+    }
+    /* A Ukrainian line never ends on a one-letter word. */
+    if (args.lang === "uk") for (let index = 0; index < words.length - 1; index += 1) {
+      const word = words[index]!, next = words[index + 1]!;
+      if (/^[вузіайоВУЗІАЙО]$/.test(word.text) && next.top > word.top + 2 && next.block === word.block) report.oneLetterEnds.push(`${word.text} ${next.text}`);
+    }
+    for (const node of element.querySelectorAll<HTMLElement>(".truncate")) if (node.scrollWidth > node.clientWidth + 1) report.ellipsis.push(node.textContent?.trim().slice(0, 60) ?? "");
+    if (args.coarse) for (const control of element.querySelectorAll<HTMLElement>("button, a[href], select, input")) {
+      const box = control.getBoundingClientRect();
+      if (box.width && box.height && Math.min(box.width, box.height) < 44) report.small.push(`${(control.textContent || control.getAttribute("aria-label") || "").trim().slice(0, 30)} ${Math.round(box.width)}×${Math.round(box.height)}`);
+    }
+    return report;
+  };
+
+  /* Every visible text line of the surface the frame is about: no two lines from different nodes overlap. */
+  const OVERLAPS = (selector: string) => {
+    const anchor = document.querySelector(selector);
+    const root = anchor?.closest('[role="dialog"], [data-decision-column], [data-orchestrator-panel], [data-mobile2-sheet], [data-attention-panel]') ?? anchor?.parentElement ?? null;
+    if (!root) return { overlaps: [] as string[], sideways: 0 };
+    const rects: Array<{ rect: DOMRect; node: Text }> = [];
+    /* Only what is drawn: a line a clipping ancestor hides, or text kept for screen readers, is not on screen. */
+    const clips = new Map<Element, DOMRect[]>();
+    const clipsOf = (element: Element) => {
+      let found = clips.get(element);
+      if (found) return found;
+      found = [];
+      for (let up: Element | null = element; up && up !== document.documentElement; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        const box = up.getBoundingClientRect();
+        if (box.width <= 1 || box.height <= 1) found.push(new DOMRect(0, 0, 0, 0));
+        else if (up !== element && (style.overflowX !== "visible" || style.overflowY !== "visible")) found.push(box);
+      }
+      clips.set(element, found);
+      return found;
+    };
+    const shown = (rect: DOMRect, element: Element) => clipsOf(element).every((box) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5);
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      if (!node.textContent?.trim() || !(node.parentElement?.getClientRects().length)) continue;
+      const style = getComputedStyle(node.parentElement!);
+      if (style.visibility === "hidden" || Number(style.opacity) === 0 || style.clip.startsWith("rect")) continue;
+      /* The body of a closed <details> keeps its boxes and draws nothing. */
+      if (node.parentElement!.closest("details:not([open])") && !node.parentElement!.closest("summary")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) if (rect.width > 1 && rect.height > 1 && rect.bottom > 0 && rect.top < innerHeight && shown(rect, node.parentElement!)) rects.push({ rect, node });
+    }
+    const overlaps: string[] = [];
+    for (let i = 0; i < rects.length; i += 1) for (let j = i + 1; j < rects.length; j += 1) {
+      const a = rects[i]!, b = rects[j]!;
+      if (a.node === b.node) continue;
+      const x = Math.min(a.rect.right, b.rect.right) - Math.max(a.rect.left, b.rect.left);
+      const y = Math.min(a.rect.bottom, b.rect.bottom) - Math.max(a.rect.top, b.rect.top);
+      if (x > 2 && y > 2) overlaps.push(`«${a.node.textContent!.trim().slice(0, 30)}» × «${b.node.textContent!.trim().slice(0, 30)}»`);
+    }
+    const scrollers = [root, ...root.querySelectorAll<HTMLElement>("*")].filter((node) => { const style = getComputedStyle(node); return style.overflowX === "auto" || style.overflowX === "scroll"; });
+    const sideways = Math.max(document.documentElement.scrollWidth - innerWidth, ...scrollers.map((node) => node.scrollWidth - node.clientWidth));
+    return { overlaps: overlaps.slice(0, 12), sideways };
+  };
+
+  /* Every Ukrainian line of a surface, in or out of view: none ends on a one-letter word. */
+  const LINE_ENDS = (selector: string) => {
+    const root = document.querySelector(selector);
+    if (!root) return [] as string[];
+    const words: Array<{ text: string; top: number; block: Element }> = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      const value = node.textContent ?? "";
+      if (!value.trim() || !(node.parentElement?.getClientRects().length) || node.parentElement.closest("code, [aria-hidden=true]")) continue;
+      const block = node.parentElement!.closest("p, li, label, div, button, h2") ?? node.parentElement!;
+      for (const match of value.matchAll(/\S+/g)) {
+        const range = document.createRange();
+        range.setStart(node, match.index!);
+        range.setEnd(node, match.index! + match[0].length);
+        const rect = range.getClientRects()[0];
+        if (rect) words.push({ text: match[0], top: Math.round(rect.top), block });
+      }
+    }
+    const found: string[] = [];
+    for (let index = 0; index < words.length - 1; index += 1) {
+      const word = words[index]!, next = words[index + 1]!;
+      if (/^[вузіайоясВУЗІАЙОЯС]$/.test(word.text) && next.top > word.top + 2 && next.block === word.block) found.push(`${word.text} ${next.text}`);
+    }
+    return found;
+  };
+
+  /* The defining lines of each state, by selector: the ones the frame is about. */
+  const DEFINING = (token: string, phone: boolean): string[] => {
+    if (token === "engines-both") return ['[data-onboarding-current="engines"] h2 + p', '[data-onboarding-engine="claude"] [data-onboarding-engine-header]', '[data-onboarding-engine="codex"] [data-onboarding-engine-header]'];
+    if (token === "engines-claude-only") return ['[data-onboarding-current="engines"] h2 + p', '[data-onboarding-install="codex"]', "[data-onboarding-recheck]", '[data-onboarding-engine="codex"] [data-onboarding-engine-header]'];
+    if (token === "engines-codex-only") return ['[data-onboarding-engine="claude"] [data-onboarding-engine-header]', "[data-onboarding-claude-signin]"];
+    if (token === "engines-signed-out") return ["[data-onboarding-engines-note]", '[data-onboarding-engine="claude"] [data-onboarding-engine-header]'];
+    if (token === "engines-no-cli") return ["[data-onboarding-engines-note]", '[data-onboarding-install="claude"]', '[data-onboarding-install="codex"]', "[data-onboarding-recheck]", '[data-onboarding-engine="copilot"] [data-onboarding-engine-header]'];
+    if (token === "orchestrator-one-press") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-create]"];
+    if (token === "orchestrator-claude-only") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-roles]", "[data-onboarding-orchestrator-create]"];
+    if (token === "orchestrator-codex-only") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-advice]", "[data-onboarding-orchestrator-roles]", "[data-onboarding-orchestrator-create]"];
+    if (token === "later-memory-before") return ["[data-memory-source-line]", "[data-onboarding-memory-go]"];
+    if (token === "later-memory-after") return ["[data-memory-source-line]"];
+    if (token === "later-telegram-later") return ["[data-onboarding-telegram]", "[data-onboarding-primary]"];
+    if (token === "telegram-numbered") return ["[data-onboarding-report-chat]", "[data-onboarding-primary]"];
+    if (token === "settings-memory-before" || token === "settings-memory-after") return ["[data-memory-source-line]"];
+    if (token === "form-decisions") return phone ? ["[data-prototype-question=first]"] : ["[data-prototype-question=first]"];
+    if (token === "form-needs-you") return ["[data-needs-you-row]"];
+    if (token === "form-board") return ["[data-mobile2-seat-card]"];
+    return phone ? ["[data-mobile2-title-text]", "[data-mobile2-chat-state]"] : ["[data-decision-strip]"];
+  };
+
+  browserTest("every state of the first-run guide is whole at 1440, 390 and between, in English and Ukrainian, light and dark", async () => {
+    const out = path.resolve(path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "first-run-guide"));
+    const only = (process.env.LLV_FIRST_RUN_FRAMES ?? "").split(",").map((term) => term.trim()).filter(Boolean);
+    const wanted = (name: string) => !only.length || only.some((term) => name.includes(term));
+    const frames = path.join(out, "frames");
+    if (!only.length) fs.rmSync(frames, { recursive: true, force: true });
+    fs.mkdirSync(frames, { recursive: true });
+    const served = await serveEvidenceFixture(fs.mkdtempSync(path.join(os.tmpdir(), "first-run-guide-")));
+    let browser: Browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    const notes: string[] = [];
+    try {
+      for (const { width, themes } of WIDTHS) for (const theme of themes) for (const lang of width === 1440 || width === 390 ? ["en", "uk"] as Lang[] : ["en", "uk"] as Lang[]) for (const spec of SPECS) {
+        const name = `${spec.token}-${lang}-${theme}-${width}`;
+        if (!wanted(name)) continue;
+        /* The greeting alone is a frame only where the column cannot stand beside the chat; the board is the phone's. */
+        if (spec.narrowOnly && width >= 1170) continue;
+        if (spec.phoneOnly && width >= 640) continue;
+        if (!browser.isConnected()) browser = await chromium.launch(LAUNCH);
+        const phone = width < 640;
+        const form = spec.token.startsWith("form-");
+        const settings = spec.token.startsWith("settings-");
+        /* Where an orchestrator exists the board behind the dialog carries it; before one, the fresh install. */
+        const seated = spec.token === "later-memory-after" || spec.token === "settings-memory-after";
+        const scenario = form || seated ? "orchestrator-first-walk" : "orchestrator-first&guide=installer";
+        const url = `${served.base}?scenario=${scenario}&firstrun=${spec.token}${spec.bot ? `&bot=${spec.bot}` : ""}#p=atlas`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone, 1, new Date("2026-11-11T10:00:00Z"));
+        const at = name;
+        const file = (suffix = "") => path.join(frames, `${name}${suffix}.png`);
+        try {
+          await page.waitForSelector("[data-kanban-board], [data-mobile-shell], main", { timeout: 60_000 });
+          const goStep = async (step: string) => {
+            const target = page.locator(`[data-onboarding-step=${step}]`);
+            if (!(await target.isVisible())) await page.locator("[data-onboarding-step-list-toggle]").click();
+            await target.click();
+          };
+          const chooseProject = async () => {
+            await goStep("project");
+            await page.locator("[data-onboarding-project]").first().click();
+          };
+          let shell = false;
+          if (!form && !settings) {
+            await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: "engines" } })));
+            await page.waitForSelector("[data-onboarding-dialog]");
+            await page.waitForFunction(() => document.querySelector("[data-onboarding-engine=claude]")?.getAttribute("data-engine-state") !== "loading");
+            if (spec.token.startsWith("orchestrator-")) {
+              await chooseProject();
+              await goStep("orchestrator");
+              await page.waitForSelector("[data-onboarding-orchestrator-create]:not([disabled]), [data-onboarding-orchestrator-signin], [data-onboarding-orchestrator-go]", { timeout: 30_000 });
+              if (spec.token !== "orchestrator-one-press") await page.waitForSelector("[data-onboarding-orchestrator-roles]", { timeout: 30_000 });
+            } else if (spec.token.startsWith("later-memory")) {
+              await goStep("memory");
+              await page.waitForFunction(() => { const row = document.querySelector("[data-memory-source-state]"); return row && row.getAttribute("data-memory-source-state") !== "loading"; });
+            } else if (spec.token === "later-telegram-later") {
+              await chooseProject();
+              await goStep("telegram");
+            } else if (spec.token === "telegram-numbered") {
+              await chooseProject();
+              /* The bot read has answered once the counter reads four steps: Telegram is a numbered step only with a bot. */
+              await page.waitForFunction(() => /\b4\b/.test(document.querySelector("[data-onboarding-dialog] footer span, [data-onboarding-step-list-toggle]")?.textContent ?? ""), null, { timeout: 30_000 });
+              await goStep("telegram");
+              await page.waitForSelector("[data-onboarding-report-chat]", { timeout: 30_000 });
+            }
+          } else if (form) {
+            const mobileShell = (await page.locator("[data-mobile2-open]").count()) > 0;
+            if (spec.token === "form-needs-you") {
+              await page.locator(mobileShell ? '[data-mobile2-open="attention"]' : "button:has([data-attention-chip-label])").first().click();
+              await page.waitForSelector("[data-needs-you-row]", { timeout: 30_000 });
+            } else if (mobileShell && spec.token !== "form-board") {
+              /* The seat card opens the seat's conversation; the strip under its bar opens the form in a sheet. */
+              await page.locator("[data-mobile2-seat-open]").first().click();
+              await page.waitForSelector("[data-mobile2-title-text]", { timeout: 30_000 });
+              if (spec.token === "form-decisions") {
+                await page.locator("[data-decision-strip]").first().click();
+                await page.waitForSelector("[data-prototype-question=first]", { timeout: 30_000 });
+              }
+            } else if (!mobileShell && spec.token === "form-decisions") {
+              /* Wide enough, the column stands beside the chat; narrower, the strip under the seat's bar opens the form. */
+              await page.waitForSelector("[data-prototype-question=first], [data-decision-strip]", { timeout: 30_000 });
+              if (!(await page.locator("[data-prototype-question=first]").count())) await page.locator("[data-decision-strip]").first().click();
+              await page.waitForSelector("[data-prototype-question=first]", { timeout: 30_000 });
+            } else if (!mobileShell && spec.token === "form-greeting") {
+              await page.waitForSelector("[data-decision-strip]", { timeout: 30_000 });
+            }
+            shell = mobileShell;
+          } else if (settings) {
+            await page.evaluate(() => window.dispatchEvent(new CustomEvent("delegatus:open-settings-window", { detail: { section: "memory" } })));
+            await page.waitForSelector("[data-header-menu-memory-source]", { timeout: 30_000 });
+            await page.waitForFunction(() => document.querySelector("[data-memory-source-state]")?.getAttribute("data-memory-source-state") !== "loading");
+          }
+          await page.waitForTimeout(300);
+          const defining = DEFINING(spec.token, shell);
+          const first = await page.evaluate(MEASURE, { defining });
+          for (const selector of first.missing) failures.push(`${name}: ${selector} is missing`);
+          /* Below 860 px the Orchestrator step's facts are whole on the first screen. */
+          if (spec.token.startsWith("orchestrator-") && width < 860) for (const selector of first.offFirstScreen) failures.push(`${name}: ${selector} is not whole on the first screen`);
+          if (!form && !settings) {
+            const firstScreen = await page.evaluate(FIRST_SCREEN);
+            if (firstScreen.filled.length > 1 || (spec.token === "telegram-numbered" && firstScreen.filled.length !== 1)) failures.push(`${name}: ${firstScreen.filled.length} filled buttons on the first screen: ${firstScreen.filled.join(" | ")}`);
+            if (spec.token === "telegram-numbered" && firstScreen.cut.length) failures.push(`${name}: lines cut on the first screen: ${firstScreen.cut.join(" | ")}`);
+            else if (firstScreen.cut.length) notes.push(`${name}: lines cut on the first screen: ${firstScreen.cut.join(" | ")}`);
+          }
+          if (spec.token === "engines-signed-out" || spec.token === "engines-no-cli") {
+            if (first.offFirstScreen.includes("[data-onboarding-engines-note]")) failures.push(`${name}: the no-engine warning is not whole on the first screen`);
+          }
+          if (spec.token === "telegram-numbered") {
+            const contradicted = await page.evaluate((words) => document.body.innerText.includes(words), lang === "uk" ? "Не підключено" : "Not connected");
+            if (contradicted) failures.push(`${name}: the page says Telegram is not connected while a bot is`);
+          }
+          /* Beside the facts the advice starts in the value column, on the line of «Codex»; on a phone and in the middle it keeps the full width. */
+          if (spec.token === "orchestrator-codex-only") {
+            const starts = await page.evaluate(() => {
+              const left = (el: Element | null) => { const r = el?.getBoundingClientRect(); return r ? Math.round(r.left * 10) / 10 : null; };
+              return { advice: left(document.querySelector("[data-onboarding-orchestrator-advice] > span")), value: left(document.querySelector("[data-onboarding-orchestrator-runs-on]")), label: left(document.querySelector("[data-onboarding-orchestrator-runs-on]")?.parentElement?.previousElementSibling ?? null) };
+            });
+            if (starts.advice === null || starts.value === null) failures.push(`${name}: the advice or the Runs on value is missing`);
+            else if (width >= 860 && Math.abs(starts.advice - starts.value) > 1.5) failures.push(`${name}: the advice starts at ${starts.advice}px but the value column at ${starts.value}px`);
+            else if (width < 860 && starts.label !== null && starts.advice > starts.label + 1.5) failures.push(`${name}: the advice is indented to ${starts.advice}px below 860 px (label at ${starts.label}px)`);
+          }
+          /* With an orchestrator the board behind the dialog has it: no draft panel asks to create one, and the guide's first three steps are ticks. */
+          if (seated) {
+            const behind = await page.evaluate((draft) => ({
+              draft: document.body.innerText.includes(draft),
+              none: document.querySelectorAll("[data-orchestrator-badge=draft]").length > 0,
+            }), translate(lang, "orchPanel.draftTitle").replace("{project}", "atlas"));
+            if (behind.draft) failures.push(`${name}: the board behind still asks to create the orchestrator`);
+            if (behind.none) failures.push(`${name}: the board behind says the orchestrator does not exist yet`);
+            if (spec.token === "later-memory-after") {
+              const ticks = await page.evaluate(() => [...document.querySelectorAll("[data-onboarding-dialog] [data-step-mark=done]")].length);
+              if (width >= 640 && ticks < 3) failures.push(`${name}: ${ticks} settled steps in the guide, expected at least 3`);
+            }
+          }
+          if (spec.token === "settings-memory-after") {
+            const line = await page.evaluate(() => document.querySelector("[data-memory-source-line]")?.textContent ?? "");
+            if (!line.includes(translate(lang, "memorySource.limit"))) failures.push(`${name}: the Settings memory line does not say the import spends the plan's limit`);
+          }
+          if (spec.token.startsWith("engines-")) {
+            const rechecks = await page.evaluate((label) => [...document.querySelectorAll<HTMLElement>("[data-onboarding-dialog] button")].filter((button) => button.getClientRects().length && button.textContent?.trim() === label).length, translate(lang, "onboarding.engines.recheck"));
+            if (rechecks > 1) failures.push(`${name}: ${rechecks} Check again buttons`);
+          }
+          await page.screenshot({ path: file() });
+          const reading: Record<string, unknown> = { frame: name, width, lang, theme, token: spec.token, label: spec.label[lang], defining, offFirstScreen: first.offFirstScreen };
+          for (const selector of defining) {
+            if (first.missing.includes(selector)) continue;
+            if (first.offFirstScreen.includes(selector)) {
+              await page.locator(selector).first().evaluate((node) => node.scrollIntoView({ block: "nearest" }));
+              await page.waitForTimeout(150);
+              await page.screenshot({ path: file(`-scrolled-${defining.indexOf(selector) + 1}`) });
+              notes.push(`${name}: ${selector} is off the first screen`);
+            }
+            await page.locator(selector).first().evaluate((node) => node.scrollIntoView({ block: "nearest" }));
+            await page.waitForTimeout(100);
+            const inspected = await page.evaluate(INSPECT, { selector, coarse: phone, lang, latin: LATIN.source });
+            const where = `${name} ${selector}`;
+            if (inspected.cut.length) failures.push(`${where}: cut: ${inspected.cut.join(" | ")}`);
+            if (inspected.covered.length) failures.push(`${where}: covered: ${inspected.covered.join(" | ")}`);
+            if (inspected.ellipsis.length) failures.push(`${where}: ellipsis: ${inspected.ellipsis.join(" | ")}`);
+            if (inspected.small.length) failures.push(`${where}: targets under 44 px: ${inspected.small.join(" | ")}`);
+            if (inspected.oneLetterEnds.length) failures.push(`${where}: a line ends on a one-letter word: ${inspected.oneLetterEnds.join(" | ")}`);
+            if (inspected.latin.length) failures.push(`${where}: Latin words in Ukrainian: ${[...new Set(inspected.latin)].join(", ")}`);
+            reading[selector] = { texts: inspected.texts };
+          }
+          if (lang === "uk") {
+            const ends = await page.evaluate(LINE_ENDS, form ? "main, body" : settings ? "[role=dialog]" : "[data-onboarding-dialog]");
+            if (ends.length) failures.push(`${name}: lines end on a one-letter word: ${ends.join(" | ")}`);
+          }
+          const surfaceCheck = await page.evaluate(OVERLAPS, defining[0]!);
+          if (surfaceCheck.overlaps.length) failures.push(`${name}: text overlaps: ${surfaceCheck.overlaps.join(" | ")}`);
+          if (surfaceCheck.sideways > 1) failures.push(`${name}: scrolls sideways by ${surfaceCheck.sideways}px`);
+          if (pageErrors.length) failures.push(`${name}: page errors: ${pageErrors.join(" | ")}`);
+          readings.push({ ...reading, overlaps: surfaceCheck.overlaps, sideways: surfaceCheck.sideways, pageErrors });
+        } catch (error) {
+          failures.push(`${at}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          await page.screenshot({ path: file("-failed") }).catch(() => {});
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); served.stop(); }
+    fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify({ frames: readings, notes, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 5_400_000);
 });
 
 describe("new task default deadline", () => {

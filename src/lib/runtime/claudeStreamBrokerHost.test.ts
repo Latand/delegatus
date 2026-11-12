@@ -1,3 +1,5 @@
+import { readNativeTiming } from "./attemptTiming";
+import { splitAttemptTime } from "@/lib/pipelines/accounting";
 import { readHostExit, withHostStopOrigin } from "./hostExit";
 import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "@/lib/memory/fixtures/source";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
@@ -965,11 +967,11 @@ describe("ClaudeStreamBrokerHost", () => {
 
     expect(await pendingReceipt).toEqual({ outcome: "turn-started", turnId: "delivery-one" });
 
-    expect(await nextEvent(owner)).toEqual({ kind: "turn-started", turnId: "delivery-one", seq: 2 });
+    expect(await nextEvent(owner)).toEqual({ kind: "turn-started", turnId: "delivery-one", seq: 2, accountingAt: expect.any(String) });
     expect(await nextEvent(owner)).toMatchObject({ kind: "item", turnId: "delivery-one", phase: "completed" });
     expect(await nextEvent(owner)).toEqual({ kind: "delta", turnId: "delivery-one", text: "done", seq: 4 });
     expect(await nextEvent(owner)).toMatchObject({ kind: "item", turnId: "delivery-one", phase: "completed" });
-    expect(await nextEvent(owner)).toEqual({ kind: "turn-ended", turnId: "delivery-one", status: "completed", seq: 6 });
+    expect(await nextEvent(owner)).toEqual({ kind: "turn-ended", turnId: "delivery-one", status: "completed", seq: 6, accountingAt: expect.any(String) });
     expect(await nextEvent(owner)).toEqual({ kind: "session-status", status: "idle", seq: 7 });
     expect(ledger.order).toContain("confirmed:delivery-one");
 
@@ -4752,8 +4754,8 @@ describe("meaningful background turns", () => {
       f.child.emitJson(result());
       f.child.emitJson(result());
       const events = f.store.load(sessionId);
-      expect(events.filter(e => e.kind === "turn-started")).toEqual([{ kind: "turn-started", turnId: active, seq: expect.any(Number) }]);
-      expect(events.filter(e => e.kind === "turn-ended")).toEqual([{ kind: "turn-ended", turnId: active, status: "completed", seq: expect.any(Number) }]);
+      expect(events.filter(e => e.kind === "turn-started")).toEqual([{ kind: "turn-started", turnId: active, seq: expect.any(Number), accountingAt: expect.any(String) }]);
+      expect(events.filter(e => e.kind === "turn-ended")).toEqual([{ kind: "turn-ended", turnId: active, status: "completed", seq: expect.any(Number), accountingAt: expect.any(String) }]);
       for (const event of events) if (event.kind === "delta" || (event.kind === "item" && !event.deliveryEcho)) expect(event.turnId).toBe(active);
       expect((await f.host.health()).status).toBe("idle");
       if (!queued) expect(f.ledger.order).toEqual([]);
@@ -4968,4 +4970,29 @@ describe("meaningful background turns", () => {
       expect((await f.host.health()).status).toBe("dead");
     } finally { await f.host.release(); }
   });
+});
+
+
+test("native accounting clocks reach the retained time reader through the real Claude producer", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-timing-"));
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000000390"].join("-");
+  const ledger = new RecordingDeliveryLedger();
+  const child = new FakeClaude(ledger);
+  const host = await ClaudeStreamBrokerHost.start({ cwd: root, sessionId, claudeConfigDir: root,
+    signalProcess: () => { throw new Error("ESRCH"); }, env: { NODE_ENV: "test" }, readTranscript: () => [],
+    eventStore: new FileRuntimeEventStore(root), deliveryLedger: ledger,
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }), spawnProcess: fakeSpawn(child, {}) });
+  const at = (ms: number) => new Date(ms).toISOString();
+  try {
+    setSystemTime(new Date(1000));
+    child.emitJson({ type: "assistant", session_id: sessionId, message: { id: "model-message", role: "assistant", content: [
+      { type: "tool_use", id: "tool", name: "Bash", input: { command: "true" } },
+    ] } });
+    setSystemTime(new Date(3000));
+    child.emitJson({ type: "user", session_id: sessionId, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool", content: "finished" }] } });
+    setSystemTime(new Date(5000));
+    child.emitJson({ type: "result", subtype: "success", session_id: sessionId, is_error: false });
+    expect(splitAttemptTime(at(1000), at(5000), readNativeTiming(sessionId, root)))
+      .toMatchObject({ modelMs: 2000, toolsMs: 2000, unknownMs: 0 });
+  } finally { setSystemTime(); await host.release(); }
 });

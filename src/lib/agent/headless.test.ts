@@ -1,0 +1,608 @@
+import { captureProcessIdentity } from "@/lib/processIdentity";
+import { signalFixtureIdentity } from "@/lib/testing/fixtureProcess";
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { afterAll, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { setCodexShellPolicyReaderForTest } from "@/lib/git/codexShellPolicy";
+import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
+
+/* The state dir must point at a sandbox before the executor loads. */
+process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-exec-test-"));
+const managedCodexHome = path.join(process.env.LLV_STATE_DIR, "managed-codex");
+const restorePolicyReader = setCodexShellPolicyReaderForTest(() => ({}));
+const restoreFeatures = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable false\nfuture_worker stable true"));
+const { prepareHeadlessPublication, runHeadlessCodexOnce, reviewerCommand, reviewerEnvironment, scanEventStream, terminateHeadlessReviewerGroup, terminateHeadlessReviewerGroupAndWait } = await import("./headless");
+
+afterAll(async () => {
+  restorePolicyReader();
+  restoreFeatures();
+  fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+});
+
+test("headless exec argv carries delegation denial and disables unknown features", () => {
+  const built = reviewerCommand({ engine: "codex", model: null, effort: null }, "Review", "review.txt", process.env.LLV_STATE_DIR!);
+  expect(built.args).toContain("agents.enabled=false");
+  expect(built.args).toContain("features.hooks=true");
+  expect(built.args.some(arg => arg.startsWith("hooks.PreToolUse=["))).toBe(true);
+  expect(built.args).toContain('approvals_reviewer="user"');
+  for (const feature of ["multi_agent", "multi_agent_v2", "future_worker"]) {
+    expect(built.args[built.args.indexOf(feature) - 1]).toBe("--disable");
+  }
+});
+
+test("headless launch asynchronously retains publication fields through restrictive shell filters", async () => {
+  let probes = 0;
+  const restore = setCodexShellPolicyReaderForTest(async () => {
+    probes += 1;
+    await Promise.resolve();
+    return { include_only: ["PATH", "HOME"] };
+  });
+  try {
+    const built = reviewerCommand({ engine: "codex", model: null, effort: null }, "Review", "review.txt", process.env.LLV_STATE_DIR!);
+    expect(probes).toBe(0);
+    const prepared = await prepareHeadlessPublication(built, process.env.LLV_STATE_DIR!);
+    expect(probes).toBe(1);
+    const storageKeys = ["TMPDIR", "LLV_EVIDENCE_DIR"].filter(key => process.env[key] !== undefined);
+    expect(prepared.args).toContain(`shell_environment_policy.include_only=${JSON.stringify([...new Set(["PATH", "HOME", ...Object.keys(agentPublicationIdentityEnv(process.env)), ...storageKeys])])}`);
+  } finally { restore(); }
+});
+
+const EVENTS = [
+  JSON.stringify({ type: "session.created", session_id: "11111111-2222-3333-4444-555555555555" }),
+  "not json",
+  JSON.stringify({ item: { type: "agent_message", text: "VERDICT: APPROVE\n\nLooks good." } }),
+].join("\n");
+
+test.each([
+  ["claude", false], ["codex", false], ["claude", true], ["codex", true],
+] as const)("headless %s command pins the publication identity (configured: %s)", (engine, configured) => {
+  const keys = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+    "LLV_PUBLICATION_NAME", "LLV_PUBLICATION_EMAIL", "DELEGATUS_PUBLICATION_NAME", "DELEGATUS_PUBLICATION_EMAIL"];
+  const previous = keys.map((key) => process.env[key]);
+  const email = [configured ? "no-reply" : "noreply", configured ? "build.example.invalid" : "delegatus.invalid"].join("@");
+  const name = configured ? "Build Agent" : "Delegatus";
+  try {
+    keys.forEach((key) => { delete process.env[key]; });
+    Object.assign(process.env, {
+      GIT_AUTHOR_NAME: "Inherited", GIT_COMMITTER_NAME: "Inherited",
+      GIT_AUTHOR_EMAIL: ["author", "example.invalid"].join("@"),
+      GIT_COMMITTER_EMAIL: ["committer", "example.invalid"].join("@"),
+      ...(configured ? { LLV_PUBLICATION_NAME: name, LLV_PUBLICATION_EMAIL: email } : {}),
+    });
+    const built = reviewerCommand({ engine, model: "fixture", effort: "high" }, "Review", "review.txt", process.env.LLV_STATE_DIR!);
+    expect([built.env.GIT_AUTHOR_NAME, built.env.GIT_AUTHOR_EMAIL, built.env.GIT_COMMITTER_NAME, built.env.GIT_COMMITTER_EMAIL])
+      .toEqual([name, email, name, email]);
+    if (engine === "claude") {
+      const settings = JSON.parse(fs.readFileSync(built.args[built.args.indexOf("--settings") + 1]!, "utf8"));
+      expect(settings.env).toEqual({ ...agentPublicationIdentityEnv(process.env), CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" });
+    } else {
+      expect(built.args).toContain(`shell_environment_policy.set.GIT_AUTHOR_EMAIL=${JSON.stringify(email)}`);
+    }
+    expect(process.env.GIT_AUTHOR_NAME).toBe("Inherited");
+  } finally {
+    keys.forEach((key, index) => {
+      if (previous[index] === undefined) delete process.env[key];
+      else process.env[key] = previous[index];
+    });
+  }
+});
+
+test.each(["ultrafast", "priority", "default", "standard"])("headless reviewer command carries and normalizes admitted service tier %s", (serviceTier) => {
+  const built = reviewerCommand({ engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier }, "Review", "review.txt", process.env.LLV_STATE_DIR!);
+  const tierIndex = built.args.indexOf(`service_tier=${serviceTier === "standard" ? "default" : serviceTier}`);
+  expect(tierIndex).toBeGreaterThan(0);
+  expect(built.args[tierIndex - 1]).toBe("-c");
+  if (serviceTier === "standard") expect(built.args).not.toContain("service_tier=standard");
+});
+
+test("headless and ephemeral environments refuse unsafe publication settings", () => {
+  expect(() => reviewerEnvironment({ NODE_ENV: "test", LLV_PUBLICATION_EMAIL: "invalid" }))
+    .toThrow("Invalid agent publication identity");
+});
+
+test("reviewer group escalation kills a TERM-resistant child after the leader exits", () => {
+  let leaderAlive = true;
+  let childAlive = true;
+  const timers: Array<() => void> = [];
+  const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+  terminateHeadlessReviewerGroup(4242, "4242:start", {
+    graceMs: 1,
+    runtime: {
+      pidAlive: () => leaderAlive,
+      processIdentity: () => "4242:start",
+      signalProcess: (pid, signal) => {
+        signals.push({ pid, signal });
+        if (signal === "SIGTERM") leaderAlive = false;
+        if (signal === "SIGKILL") childAlive = false;
+      },
+      setTimeout: (callback) => {
+        timers.push(callback);
+        return { unref() {} } as unknown as ReturnType<typeof setTimeout>;
+      },
+    },
+  });
+
+  expect(signals).toEqual([{ pid: -4242, signal: "SIGTERM" }]);
+  timers[0]!();
+  expect(signals).toEqual([
+    { pid: -4242, signal: "SIGTERM" },
+    { pid: -4242, signal: "SIGKILL" },
+  ]);
+  expect(childAlive).toBeFalse();
+});
+
+test("reviewer group escalation survives an exited leader owned by its live handle", () => {
+  const timers: Array<() => void> = [];
+  const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+  terminateHeadlessReviewerGroup(4343, null, {
+    ownedByLiveHandle: true,
+    leaderExited: true,
+    runtime: {
+      pidAlive: () => false,
+      signalProcess: (pid, signal) => {
+        signals.push({ pid, signal });
+        if (signal === "SIGTERM") throw new Error("group exited");
+      },
+      setTimeout: (callback) => {
+        timers.push(callback);
+        return { unref() {} } as unknown as ReturnType<typeof setTimeout>;
+      },
+    },
+  });
+
+  timers[0]!();
+  expect(signals).toEqual([
+    { pid: -4343, signal: "SIGTERM" },
+    { pid: -4343, signal: "SIGKILL" },
+  ]);
+});
+
+test("reviewer teardown waits for delayed process-group exit before reporting quiescence", async () => {
+  let groupAlive = true;
+  let polls = 0;
+  const signals: Array<{ pid: number; signal: NodeJS.Signals | 0 }> = [];
+
+  const stopped = await terminateHeadlessReviewerGroupAndWait(4444, "4444:start", {
+    graceMs: 20,
+    killWaitMs: 20,
+    pollMs: 5,
+    runtime: {
+      pidAlive: () => true,
+      processIdentity: () => "4444:start",
+      signalProcess: (pid, signal) => {
+        signals.push({ pid, signal });
+      },
+      processGroupAlive: () => groupAlive,
+      wait: async () => {
+        polls += 1;
+        if (polls === 2) groupAlive = false;
+      },
+    },
+  });
+
+  expect(stopped).toBeTrue();
+  expect(polls).toBe(2);
+  expect(signals).toEqual([{ pid: -4444, signal: "SIGTERM" }]);
+});
+
+test("reviewer teardown trusts its live handle after the identified leader exits", async () => {
+  let groupAlive = true;
+  const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+  const stopped = await terminateHeadlessReviewerGroupAndWait(4545, "4545:start", {
+    ownedByLiveHandle: true,
+    leaderExited: true,
+    pollMs: 1,
+    runtime: {
+      pidAlive: () => false,
+      processIdentity: () => null,
+      processGroupAlive: () => groupAlive,
+      signalProcess: (pid, signal) => {
+        signals.push({ pid, signal });
+        if (signal === "SIGTERM") groupAlive = false;
+      },
+      wait: async () => {},
+    },
+  });
+
+  expect(stopped).toBeTrue();
+  expect(signals).toEqual([{ pid: -4545, signal: "SIGTERM" }]);
+});
+
+test("reviewer group cleanup kills a real descendant after its detached leader exits", async () => {
+  const childPidPath = path.join(process.env.LLV_STATE_DIR!, "exited-leader-child.pid");
+  const leader = spawn("sh", ["-c", "(trap '' HUP TERM; while :; do sleep 1; done) & printf '%s' \"$!\" > \"$CHILD_PID_FILE\""], {
+    detached: true,
+    stdio: "ignore",
+    env: { ...process.env, CHILD_PID_FILE: childPidPath },
+  });
+  const leaderPid = leader.pid!;
+  let orphanIdentity: ReturnType<typeof captureProcessIdentity> | undefined;
+  const leaderClosed = new Promise<void>((resolve) => { leader.once("close", () => resolve()); });
+
+  try {
+    await waitForFile(childPidPath);
+    const childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+    orphanIdentity = captureProcessIdentity(childPid);
+    await leaderClosed;
+    expect(process.kill(childPid, 0)).toBeTrue();
+
+    terminateHeadlessReviewerGroup(leaderPid, null, {
+      ownedByLiveHandle: true,
+      leaderExited: true,
+      graceMs: 20,
+    });
+
+    await waitForDeath(childPid);
+  } finally {
+    if (orphanIdentity) signalFixtureIdentity(orphanIdentity, "SIGKILL");
+    if (leader.exitCode === null && leader.signalCode === null) leader.kill("SIGKILL");
+  }
+});
+
+async function waitForDeath(pid: number): Promise<void> {
+  for (let i = 0; i < 50; i++) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`pid ${pid} refused to die`);
+}
+
+async function waitForFile(filePath: string): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    if (fs.existsSync(filePath)) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`file ${filePath} was not created`);
+}
+
+test("scanEventStream extracts session id and last agent message", () => {
+  const scanned = scanEventStream(EVENTS);
+  expect(scanned.sessionId).toBe("11111111-2222-3333-4444-555555555555");
+  expect(scanned.lastAgentMessage).toContain("VERDICT: APPROVE");
+});
+
+test("headless codex reviewer launches without CLI sandbox blocking", () => {
+  const built = reviewerCommand({ engine: "codex", model: null, effort: "xhigh" }, "review prompt", "/out/review.md", "/repo");
+
+  expect(built.args).toContain("--dangerously-bypass-approvals-and-sandbox");
+  expect(built.args).toContain("--ignore-user-config");
+  expect(built.args).toContain("-");
+  expect(built.args).not.toContain("review prompt");
+  expect(built.stdin).toStartWith("review prompt");
+  expect(built.args).not.toContain("--sandbox");
+  expect(built.args).not.toContain("read-only");
+  expect(built.args).toContain("--disable");
+  expect(built.args).toContain("multi_agent");
+  expect(built.stdin).toContain("review prompt");
+  expect(built.stdin).toContain("Viewer spawn policy:");
+});
+
+test("headless managed Codex reviewer fixes its account home and file credential store at launch", () => {
+  process.env.LLV_TOKEN = "viewer-token";
+  const built = reviewerCommand(
+    { engine: "codex", model: null, effort: null },
+    "review prompt",
+    "/out/review.md",
+    "/repo",
+    { home: managedCodexHome, managed: true },
+    null,
+    "B".repeat(43),
+  );
+
+  expect(built.env.CODEX_HOME).toBe(managedCodexHome);
+  expect(built.args).toContain("cli_auth_credentials_store=file");
+  expect(built.env.LLV_TOKEN).toBeUndefined();
+  expect(built.env.LLV_SPAWN_CAPABILITY).toBe("B".repeat(43));
+  delete process.env.LLV_TOKEN;
+});
+
+test("a headless reviewer never inherits the Viewer's state owner claim", () => {
+  /* The image sets LLV_STATE_OWNER=viewer for the whole container. A reviewer
+     that inherited it ran a NODE_ENV=test fixture against the live task store. */
+  const held = process.env.LLV_STATE_OWNER;
+  process.env.LLV_STATE_OWNER = "viewer";
+  try {
+    for (const engine of ["codex", "claude"] as const) {
+      const built = reviewerCommand({ engine, model: null, effort: null }, "review prompt", "/out/review.md", "/repo");
+      expect(built.env.LLV_STATE_OWNER).toBeUndefined();
+    }
+    const managed = reviewerCommand({ engine: "codex", model: null, effort: null }, "review prompt", "/out/review.md", "/repo", { home: managedCodexHome, managed: true });
+    expect(managed.env.LLV_STATE_OWNER).toBeUndefined();
+  } finally {
+    if (held === undefined) delete process.env.LLV_STATE_OWNER;
+    else process.env.LLV_STATE_OWNER = held;
+  }
+});
+
+test("headless claude reviewer launches with approval-free tool access", () => {
+  const built = reviewerCommand({ engine: "claude", model: null, effort: null }, "review prompt", "/out/review.md", "/repo");
+
+  expect(built.args).toContain("--dangerously-skip-permissions");
+  expect(built.args).not.toContain("--permission-mode");
+  expect(built.args).not.toContain("--disallowedTools");
+});
+
+test("explicitly restricted Claude reviewer uses the restrictive permission mode", () => {
+  const built = reviewerCommand(
+    { engine: "claude", model: null, effort: null },
+    "review prompt",
+    "/out/review.md",
+    "/repo",
+    null,
+    null,
+    undefined,
+    { sandbox: "read-only" },
+  );
+
+  expect(built.args).toContain("--permission-mode");
+  expect(built.args).toContain("plan");
+  expect(built.args).toContain("--disallowedTools");
+  expect(built.args).not.toContain("--dangerously-skip-permissions");
+});
+
+test("headless managed Claude reviewer installs the native sub-agent deny profile and scrubs Viewer auth", () => {
+  const home = path.join(process.env.LLV_STATE_DIR!, "headless-claude-account");
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, "settings.json"), JSON.stringify({ theme: "dark" }));
+  process.env.LLV_TOKEN = "viewer-token";
+
+  const built = reviewerCommand(
+    { engine: "claude", model: null, effort: null },
+    "review prompt",
+    "/out/review.md",
+    "/repo",
+    null,
+    { home, projectsDir: path.join(home, "projects"), managed: true },
+  );
+  const settingsIndex = built.args.indexOf("--settings");
+  const settingsPath = built.args[settingsIndex + 1]!;
+  const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as {
+    hooks: { PreToolUse: Array<{ matcher: string }> };
+  };
+
+  expect(settingsIndex).toBeGreaterThanOrEqual(0);
+  expect(settings.hooks.PreToolUse.some((group) => group.matcher === "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage")).toBe(true);
+  expect(built.env.LLV_TOKEN).toBeUndefined();
+  delete process.env.LLV_TOKEN;
+});
+
+/* Issue #1067: the one-shot summarizer the orchestrator rotation runs shares
+   this runner's account, process-group and artifact discipline. */
+
+test("a headless Claude reviewer is a clean launch on every account path: auto memory off and no shared-memory hook", () => {
+  const settingsOf = (built: ReturnType<typeof reviewerCommand>) => {
+    const value = built.args[built.args.indexOf("--settings") + 1]!;
+    return JSON.parse(value.startsWith("{") ? value : fs.readFileSync(value, "utf8")) as { autoMemoryEnabled?: boolean; env: Record<string, string>; hooks?: { UserPromptSubmit?: unknown[]; PreToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }> } };
+  };
+  /* The hook would install for a launch holding a capability; the port is closed. */
+  const saved = { capability: process.env.LLV_SPAWN_CAPABILITY, port: process.env.LLV_VIEWER_PORT };
+  process.env.LLV_SPAWN_CAPABILITY = "synthetic-capability";
+  process.env.LLV_VIEWER_PORT = "9";
+  try {
+    const launches = [null, false, true].map((managed) => {
+      if (managed === null) return reviewerCommand({ engine: "claude", model: null, effort: null }, "review prompt", "/out/review.md", "/repo", null, null, "synthetic-capability");
+      const home = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "clean-reviewer-"));
+      return reviewerCommand({ engine: "claude", model: null, effort: null }, "review prompt", "/out/review.md", "/repo", null, { home, projectsDir: path.join(home, "projects"), managed }, "synthetic-capability");
+    });
+    for (const built of launches) {
+      const settings = settingsOf(built);
+      expect(settings.autoMemoryEnabled).toBe(false);
+      expect(settings.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
+      expect(JSON.stringify(settings.hooks?.UserPromptSubmit ?? [])).not.toContain("shared-memory-");
+      const cleanup = settings.hooks?.PreToolUse.find(group => group.matcher === "Bash");
+      expect(cleanup?.hooks[0].command.startsWith("LLV_MANAGED_PROCESS_CLEANUP_DENY=1 ")).toBe(true);
+      expect(built.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
+    }
+  } finally {
+    for (const [name, value] of [["LLV_SPAWN_CAPABILITY", saved.capability], ["LLV_VIEWER_PORT", saved.port]] as const) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+  }
+});
+
+test("a read-only one-shot command drops the sandbox bypass and keeps the empty MCP server table", () => {
+  const built = reviewerCommand(
+    { engine: "codex", model: "gpt-5.6-luna", effort: "low" },
+    "digest request",
+    "/out/last-message.md",
+    "/tmp/empty",
+    null,
+    null,
+    undefined,
+    { sandbox: "read-only" },
+  );
+
+  expect(built.args).toContain("-s");
+  expect(built.args).toContain("read-only");
+  expect(built.args).toContain("--skip-git-repo-check");
+  expect(built.args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+  /* Unchanged from the reviewer shape: no user config (so no MCP servers), a
+     single agent, the prompt on stdin, and the model on the command line. */
+  expect(built.args).toContain("--ignore-user-config");
+  expect(built.args).toContain("--disable");
+  expect(built.args).toContain("multi_agent");
+  expect(built.args).toContain("-m");
+  expect(built.args).toContain("gpt-5.6-luna");
+  expect(built.stdin).toStartWith("digest request");
+});
+
+test("runHeadlessCodexOnce resolves done from the last-message artifact", async () => {
+  const artifactDir = path.join(process.env.LLV_STATE_DIR!, "digest-done");
+  const executablePath = path.join(process.env.LLV_STATE_DIR!, "fake-digest-codex");
+  fs.writeFileSync(
+    executablePath,
+    `#!${process.execPath}\nawait Bun.stdin.text();\nconst target = process.argv[process.argv.indexOf("--output-last-message") + 1];\nawait Bun.write(target, "Decisions:\\n- compacted the history");\n`,
+    { mode: 0o700 },
+  );
+
+  const result = await runHeadlessCodexOnce({
+    key: "orchestrator-handoff:done",
+    cwd: path.join(artifactDir, "cwd"),
+    ["prompt"]: "compact these handoffs",
+    model: null,
+    effort: null,
+    account: null,
+    artifactDir,
+    timeoutMs: 10_000,
+    sandbox: "read-only",
+    runtime: { command: executablePath },
+  });
+
+  expect(result.status).toBe("done");
+  expect(result.finalOutput).toContain("compacted the history");
+  expect(result.code).toBe(0);
+});
+
+test("runHeadlessCodexOnce kills and reports a hung child once its bounded timeout fires", async () => {
+  const artifactDir = path.join(process.env.LLV_STATE_DIR!, "digest-timeout");
+  const executablePath = path.join(process.env.LLV_STATE_DIR!, "fake-hanging-codex");
+  fs.writeFileSync(
+    executablePath,
+    `#!${process.execPath}\nawait Bun.stdin.text();\nsetInterval(() => {}, 1_000);\n`,
+    { mode: 0o700 },
+  );
+
+  const result = await runHeadlessCodexOnce({
+    key: "orchestrator-handoff:timeout",
+    cwd: path.join(artifactDir, "cwd"),
+    ["prompt"]: "compact these handoffs",
+    model: null,
+    effort: null,
+    account: null,
+    artifactDir,
+    timeoutMs: 200,
+    sandbox: "read-only",
+    runtime: { command: executablePath },
+  });
+
+  expect(result.status).toBe("timeout");
+  expect(result.finalOutput).toBe("");
+});
+
+test("runHeadlessCodexOnce reports timeout even when the hung child already wrote its artifact", async () => {
+  const artifactDir = path.join(process.env.LLV_STATE_DIR!, "digest-artifact-then-hang");
+  const pidPath = path.join(process.env.LLV_STATE_DIR!, "artifact-then-hang.pid");
+  const executablePath = path.join(process.env.LLV_STATE_DIR!, "fake-artifact-then-hanging-codex");
+  /* Writes the last-message artifact, records its own pid, then hangs — the
+     shape that used to be read as `done` and rob the caller of its fallback. */
+  fs.writeFileSync(
+    executablePath,
+    [
+      `#!${process.execPath}`,
+      "await Bun.stdin.text();",
+      `const target = process.argv[process.argv.indexOf("--output-last-message") + 1];`,
+      `await Bun.write(target, "Decisions:\\n- half-written before the hang");`,
+      `await Bun.write(${JSON.stringify(pidPath)}, String(process.pid));`,
+      "setInterval(() => {}, 1_000);",
+      "",
+    ].join("\n"),
+    { mode: 0o700 },
+  );
+
+  const result = await runHeadlessCodexOnce({
+    key: "orchestrator-handoff:artifact-then-hang",
+    cwd: path.join(artifactDir, "cwd"),
+    ["prompt"]: "compact these handoffs",
+    model: null,
+    effort: null,
+    account: null,
+    artifactDir,
+    timeoutMs: 400,
+    sandbox: "read-only",
+    runtime: { command: executablePath },
+  });
+
+  /* The artifact is on disk and non-empty, and the run is STILL a timeout: a
+     child killed mid-turn produced whatever it had flushed, not an answer. */
+  expect(fs.readFileSync(path.join(artifactDir, "last-message.md"), "utf8")).toContain("half-written");
+  expect(result.status).toBe("timeout");
+
+  /* Detached, so the child is its own group leader: the whole group is gone. */
+  const childPid = Number(fs.readFileSync(pidPath, "utf8"));
+  expect(Number.isInteger(childPid)).toBeTrue();
+  await waitForDeath(childPid);
+  expect(() => process.kill(-childPid, 0)).toThrow();
+});
+
+/* Issue #1067: `last-message.md` is Codex's completed-turn artifact, but a
+   child that writes it and then dies did NOT complete its turn. Reading that
+   as `done` handed the orchestrator digest a partial answer AND denied it the
+   deterministic fallback, exactly as the timeout case above. */
+
+test("runHeadlessCodexOnce reports failed when the child wrote its artifact and exited non-zero", async () => {
+  const artifactDir = path.join(process.env.LLV_STATE_DIR!, "digest-artifact-then-exit-1");
+  const executablePath = path.join(process.env.LLV_STATE_DIR!, "fake-failing-codex");
+  fs.writeFileSync(
+    executablePath,
+    [
+      `#!${process.execPath}`,
+      "await Bun.stdin.text();",
+      `const target = process.argv[process.argv.indexOf("--output-last-message") + 1];`,
+      `await Bun.write(target, "Decisions:\\n- written before the error");`,
+      "process.exit(1);",
+      "",
+    ].join("\n"),
+    { mode: 0o700 },
+  );
+
+  const result = await runHeadlessCodexOnce({
+    key: "orchestrator-handoff:exit-1",
+    cwd: path.join(artifactDir, "cwd"),
+    ["prompt"]: "compact these handoffs",
+    model: null,
+    effort: null,
+    account: null,
+    artifactDir,
+    timeoutMs: 10_000,
+    sandbox: "read-only",
+    runtime: { command: executablePath },
+  });
+
+  /* The artifact is on disk and non-empty, and the run is STILL a failure. */
+  expect(fs.readFileSync(path.join(artifactDir, "last-message.md"), "utf8")).toContain("written before the error");
+  expect(result.status).toBe("failed");
+  expect(result.code).toBe(1);
+});
+
+test("runHeadlessCodexOnce reports failed when the child wrote its artifact and died by signal", async () => {
+  const artifactDir = path.join(process.env.LLV_STATE_DIR!, "digest-artifact-then-signal");
+  const executablePath = path.join(process.env.LLV_STATE_DIR!, "fake-signalled-codex");
+  fs.writeFileSync(
+    executablePath,
+    [
+      `#!${process.execPath}`,
+      "await Bun.stdin.text();",
+      `const target = process.argv[process.argv.indexOf("--output-last-message") + 1];`,
+      `await Bun.write(target, "Decisions:\\n- written before the signal");`,
+      `process.kill(process.pid, "SIGKILL");`,
+      "setInterval(() => {}, 1_000);",
+      "",
+    ].join("\n"),
+    { mode: 0o700 },
+  );
+
+  const result = await runHeadlessCodexOnce({
+    key: "orchestrator-handoff:signal",
+    cwd: path.join(artifactDir, "cwd"),
+    ["prompt"]: "compact these handoffs",
+    model: null,
+    effort: null,
+    account: null,
+    artifactDir,
+    timeoutMs: 10_000,
+    sandbox: "read-only",
+    runtime: { command: executablePath },
+  });
+
+  expect(fs.readFileSync(path.join(artifactDir, "last-message.md"), "utf8")).toContain("written before the signal");
+  expect(result.status).toBe("failed");
+  expect(result.signal).toBe("SIGKILL");
+});
