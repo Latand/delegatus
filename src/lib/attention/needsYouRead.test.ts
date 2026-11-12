@@ -342,3 +342,21 @@ test("a reason Delegatus cleared stays in the cleared list and on the card with 
   expect(needsYouAnswer(body, decision, now, "project-a", { ...ports(body), dismissals: [restored] }).cleared.some(r => r.id === "operator-ask")).toBe(false);
   expect(conversationNeed(ask, now)).toBeNull();
 });
+
+
+test("a taskless round carries publishing-lane and earlier-seat facts from its notice", async () => {
+  const { seatRoundNotice } = await import("@/lib/prototypeReview/model");
+  const publishing = lane("published-lane", "completed");
+  const notice = seatRoundNotice({ id: "round-seat", project: "project-a", title: "Choose a direction", createdAt: at,
+    source: { conversationId: "earlier-seat", pipelineId: publishing.id, stageId: "review", attempt: 1 } });
+  const body = { files: [], tasks: [], pipelines: [publishing], seatDecisions: [notice] };
+  const evidence = { tasks: [], pipelines: [publishing], dismissals: [], admissions: [], reports: null, unavailable: [], seatConversationId: "current-seat" };
+  const answer = needsYouAnswer(body, null, now, "project-a", evidence, { kinds: ["prototype"], full: true });
+  expect(answer.rows).toHaveLength(1);
+  expect(answer.rows[0]).toMatchObject({ stale: true, subject: { reviewId: "round-seat" } });
+  expect(answer.rows[0]!.evidence).toContainEqual(expect.objectContaining({ code: "lane-moved-past", stale: true }));
+  expect(answer.rows[0]!.evidence).toContainEqual(expect.objectContaining({ code: "earlier-seat", stale: false }));
+  const current = needsYouAnswer({ ...body, pipelines: [] }, null, now, "project-a", { ...evidence, pipelines: [], seatConversationId: "earlier-seat" });
+  expect(current.rows[0]!.stale).toBe(false);
+  expect(current.rows[0]!.evidence).toEqual([]);
+});

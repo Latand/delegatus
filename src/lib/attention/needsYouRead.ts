@@ -5,7 +5,7 @@ import { withoutArchivedPredecessors } from "@/lib/accounts/identity";
 import { bridgeQuestions, openBridgeAsks } from "@/lib/bridge/asks";
 import { BRIDGE_ASK_TTL_SECONDS, type BridgeReportLogV1 } from "@/lib/bridge/types";
 import { translate, type Locale } from "@/lib/i18n/core";
-import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
+import { canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline } from "@/lib/pipelines/types";
 import type { AutoView } from "@/lib/selfUpdate/auto";
@@ -18,7 +18,7 @@ import { laneRouteNow } from "./routeTypes";
 
 export const NEEDS_YOU_ROW_KINDS = ["decision", "question", "plan", "permission", "delivery", "launch", "memory", "ask", "lane-decision", "lane-review", "prototype", "update"] as const;
 export type NeedsYouRowKind = typeof NEEDS_YOU_ROW_KINDS[number];
-export interface NeedsYouBody { files: readonly FileEntry[]; pipelines: readonly Pipeline[]; tasks: readonly BoardTask[]; workLinks?: import("@/lib/forge/workLinks").FilesWorkLinks;
+export interface NeedsYouBody { prototypeReviewNotices?: readonly import("@/lib/prototypeReview/types").PrototypeReviewNotice[]; files: readonly FileEntry[]; pipelines: readonly Pipeline[]; tasks: readonly BoardTask[]; workLinks?: import("@/lib/forge/workLinks").FilesWorkLinks;
   /** The orchestrators' own open questions (docs/design/operator-decision-forms.md §2.2). */
   seatDecisions?: readonly import("@/lib/prototypeReview/types").PrototypeReviewNotice[] }
 export interface NeedsYouEvidence { code: string; stale: boolean; at: string | null; detail: string; source: string }
@@ -49,6 +49,7 @@ export interface NeedsYouEvidencePorts {
   reports: BridgeReportLogV1 | null; admissions: readonly { conversationId: string; at: string }[];
   workLinks?: import("@/lib/forge/workLinks").FilesWorkLinks;
   canonicalConversationId?(id: string): string;
+  seatConversationId?: string | null;
   ended?: ReadonlySet<string>; unavailable: readonly string[];
 }
 export interface NeedsYouReadOptions { kinds?: readonly NeedsYouRowKind[]; full?: boolean; cursor?: string; locale?: Locale; signal?: AbortSignal; deadlineAt?: number }
@@ -56,8 +57,10 @@ export interface NeedsYouReadOptions { kinds?: readonly NeedsYouRowKind[]; full?
 /** One projection shared with both panels; closing is a browser transient. */
 export function needsYouEntries(body: NeedsYouBody, decision: AutoView["decision"], now: number, project: string): MobileAttentionEntry[] {
   const key = canonicalOrchestratorProject(project);
+  const notices = new Map((body.prototypeReviewNotices ?? []).map(notice => [notice.id, notice]));
   return needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks, body.seatDecisions), key)
-    .filter(section => canonicalOrchestratorProject(section.project) === key).flatMap(section => section.entries);
+    .filter(section => canonicalOrchestratorProject(section.project) === key).flatMap(section => section.entries)
+    .map(entry => entry.kind === "prototype" && notices.has(entry.id) ? { ...entry, notice: notices.get(entry.id)! } : entry);
 }
 const readEnded = (options: NeedsYouReadOptions) => options.signal?.aborted || options.deadlineAt !== undefined && Date.now() >= options.deadlineAt;
 const iso = (seconds: number | null) => seconds !== null && Number.isFinite(seconds) ? new Date(seconds * 1000).toISOString() : null;
@@ -119,8 +122,10 @@ export function needsYouEvidence(entry: MobileAttentionEntry, ports: NeedsYouEvi
     const round = rounds[index];
     const later = rounds.slice(index + 1).find(r => r.decision);
     if (index >= 0 && later?.decision) add("later-round-decided", true, "A later round was decided", "tasks", later.decision.at);
-    const lane = round?.source.pipelineId ? ports.pipelines.find(p => p.id === round.source.pipelineId) : undefined;
-    const sourceIndex = lane?.stages.findIndex(s => s.id === round?.source.stageId) ?? -1;
+    const source = round?.source ?? entry.notice.source;
+    const lane = source?.pipelineId ? ports.pipelines.find(p => p.id === source.pipelineId) : undefined;
+    const sourceIndex = lane?.stages.findIndex(s => s.id === source?.stageId) ?? -1;
+    if (!task && source?.conversationId && ports.seatConversationId && canonical(source.conversationId) !== canonical(ports.seatConversationId)) add("earlier-seat", false, "An earlier seat asked this question", "seat-rounds");
     if (lane && (["completed", "closed"].includes(lane.state) || sourceIndex >= 0 && lane.runs.some(r => lane.stages.findIndex(s => s.id === r.stageId) > sourceIndex && r.attempts.some(a => after(a.startedAt, since))))) add("lane-moved-past", true, "The publishing lane moved past this round", "pipelines", iso(laneMovedAt(lane) / 1000));
     if (task?.prototypeReviewReplica) add("elsewhere", false, "This review belongs to another installation", "tasks");
     if (entry.notice.undelivered) add("undelivered", false, "The round is decided and its message keeps failing to reach the seat; Delegatus retries it", "tasks",
@@ -237,7 +242,7 @@ export function routedToSeat(body: Pick<NeedsYouBody, "files" | "pipelines">, no
 }
 
 /** Forty rows and 24 KB, including the cleared list and pagination envelope. */
-export function needsYouAnswer(body: NeedsYouBody, decision: AutoView["decision"], now: number, project: string, ports: NeedsYouEvidencePorts, options: NeedsYouReadOptions = {}, order: "panel" | "stale-first" = "panel"): NeedsYouAnswer {
+export function needsYouAnswer(body: NeedsYouBody, decision: AutoView["decision"], now: number, project: string, ports: NeedsYouEvidencePorts, options: NeedsYouReadOptions = {}, order: "panel" | "stale-first" = "panel", bounds = { rows: 40, bytes: 24_000 }): NeedsYouAnswer {
   const entries = needsYouEntries(body, decision, now, project);
   const selected = entries.filter(entry => !options.kinds || options.kinds.includes(entry.kind === "conversation" ? entry.item.reason.kind
     : entry.kind === "pipeline" ? entry.row.pipeline.state === "needs_review" ? "lane-review" : "lane-decision" : entry.kind));
@@ -259,13 +264,19 @@ export function needsYouAnswer(body: NeedsYouBody, decision: AutoView["decision"
   if (sections > 1) answer.sections = sections;
   const routed = readEnded(options) ? 0 : routedToSeat(body, now, answer.project);
   if (routed) answer.routedToSeat = routed;
-  for (const row of filtered.slice(start, start + 40)) {
+  for (const row of filtered.slice(start, start + bounds.rows)) {
+    // The seat worker returns an internal projection of the already parsed
+    // board body. Avoid repeatedly encoding its growing row prefix.
+    if (!Number.isFinite(bounds.bytes)) {
+      answer.rows.push(row); answer.omittedCount--; answer.nextCursor = row.id;
+      continue;
+    }
     const candidate = { ...answer, rows: [...answer.rows, row], omittedCount: filtered.length - start - answer.rows.length - 1 + projectionOmitted, nextCursor: row.id };
-    while (Buffer.byteLength(JSON.stringify(candidate)) > 24_000 && candidate.cleared.length) candidate.cleared = candidate.cleared.slice(0,-1);
-    if (Buffer.byteLength(JSON.stringify(candidate)) > 24_000) break;
+    while (Buffer.byteLength(JSON.stringify(candidate)) > bounds.bytes && candidate.cleared.length) candidate.cleared = candidate.cleared.slice(0,-1);
+    if (Buffer.byteLength(JSON.stringify(candidate)) > bounds.bytes) break;
     Object.assign(answer, candidate);
   }
-  while (Buffer.byteLength(JSON.stringify(answer)) > 24_000 && answer.cleared.length) answer.cleared.pop();
+  while (Number.isFinite(bounds.bytes) && Buffer.byteLength(JSON.stringify(answer)) > bounds.bytes && answer.cleared.length) answer.cleared.pop();
   if (projectionOmitted || readEnded(options)) {
     answer.partial = true;
     answer.countIsLowerBound = true;
@@ -273,12 +284,13 @@ export function needsYouAnswer(body: NeedsYouBody, decision: AutoView["decision"
     delete answer.nextCursor;
   }
   if (!answer.omittedCount) delete answer.nextCursor;
-  while (Buffer.byteLength(JSON.stringify(answer)) > 24_000 && answer.rows.length) { answer.rows.pop(); answer.omittedCount++; }
+  while (Number.isFinite(bounds.bytes) && Buffer.byteLength(JSON.stringify(answer)) > bounds.bytes && answer.rows.length) { answer.rows.pop(); answer.omittedCount++; }
   return answer;
 }
 
 /** Sources are selected before imports or reads. Each wait shares the route's cutoff. */
 export interface NeedsYouReadSources {
+  seat?(project: string, signal: AbortSignal): Promise<string | null>;
   board(signal: AbortSignal): Promise<NeedsYouBody>;
   tasks(signal: AbortSignal): Promise<readonly BoardTask[]>;
   pipelines(signal: AbortSignal): Promise<readonly Pipeline[]>;
@@ -291,6 +303,7 @@ export interface NeedsYouReadSources {
   locale(signal: AbortSignal): Promise<Locale>;
 }
 const productionSources: NeedsYouReadSources = {
+  seat: async project => orchestratorSeatFor(project).active?.conversationId ?? null,
   board: async signal => (await import("@/app/api/files/operatorProjection")).operatorBoardRepresentation(signal),
   tasks: async signal => { const store = await import("@/lib/tasks/store"); signal.throwIfAborted(); return store.loadTasksForList(); },
   pipelines: async signal => { const store = await import("@/lib/pipelines/store"); signal.throwIfAborted(); return store.loadPipelinesForList(); },
@@ -345,6 +358,7 @@ export async function readNeedsYou(project: string, options: NeedsYouReadOptions
     const body = boardNeeded ? await source("board", () => sources.board(signal), { files: [], pipelines: [], tasks: [] }) : { files: [], pipelines: [], tasks: [] };
     const tasks = boardNeeded ? await source("tasks", sources.tasks, []) : [];
     const pipelines = boardNeeded ? await source("pipelines", sources.pipelines, []) : [];
+    const seatConversationId = wants(["prototype"]) && sources.seat ? await source("seat", signal => sources.seat!(project, signal), null) : null;
     const dismissals = boardNeeded ? await source("dismissals", sources.dismissals, []) : [];
     const reports = wants(["decision"]) ? await source("bridge", sources.reports, null) : null;
     const admissions = conversations ? await source("reply-suggestions", sources.admissions, []) : [];
@@ -355,7 +369,7 @@ export async function readNeedsYou(project: string, options: NeedsYouReadOptions
     const locale = options.locale ?? await source("locale", sources.locale, "en");
     if (needsYouEntries(body, null, Date.now() / 1000, project).some(entry => entry.kind === "pipeline" && (!body.workLinks?.pipelines[entry.row.pipeline.id] || body.workLinks.pipelines[entry.row.pipeline.id].links.some(link => link.kind === "pr" && link.state === null)))) unavailable.push("forge");
     // A partial collection cannot validate a cursor into missing data.
-    const answer = needsYouAnswer(body, decision, Date.now() / 1000, project, { tasks, pipelines, dismissals, reports, admissions, ended: liveness.ids, canonicalConversationId, workLinks: body.workLinks, unavailable }, { ...options, signal, deadlineAt, ...(omissions.length ? { cursor: undefined } : {}), locale }, order);
+    const answer = needsYouAnswer(body, decision, Date.now() / 1000, project, { tasks, pipelines, dismissals, reports, admissions, seatConversationId, ended: liveness.ids, canonicalConversationId, workLinks: body.workLinks, unavailable }, { ...options, signal, deadlineAt, ...(omissions.length ? { cursor: undefined } : {}), locale }, order);
     if (omissions.length) Object.assign(answer, { partial: true, omissions: [...new Set([...omissions, ...(answer.omissions ?? [])])], countIsLowerBound: true });
     while (Buffer.byteLength(JSON.stringify(answer)) > 24_000 && answer.rows.length) { answer.rows.pop(); answer.omittedCount++; }
     if (answer.partial) delete answer.nextCursor;

@@ -393,3 +393,19 @@ test("an unchanged note is one line naming its length and the read that returns 
   /* With no note, "unchanged" says nothing at all. */
   expect(seatTickWakeMessage({ ...fullAgenda(), monitorPromptUnchanged: true })).toBe(seatTickWakeMessage(fullAgenda()));
 });
+
+
+test("reserved task and form rows add exactly their rendered budget and survive a full roster", () => {
+  const base = { project: PROJECT, reasons: [{ kind: "interval" as const, detail: "review".repeat(2000) }], items: [], signals: [], deferred: 0, mandateCarriesContract: true };
+  const ordinary = seatTickWakeMessage(base);
+  expect(seatTickWakeMessage({ ...base, taskPage: undefined, formPage: undefined })).toBe(ordinary);
+  const taskPage = { due: 1, lines: ["Tasks: waiting 1", "- task-fixture | waiting 3d | due none | hold: none | Review"], rows: [] };
+  const formPage = { lines: ["Open decision forms: 1", "- prototype review-fixture | asked 4h ago | current | Review"], rows: [] };
+  const added = ["", ...taskPage.lines, "", ...formPage.lines].join("\n").length + 1;
+  const text = seatTickWakeMessage({ ...base, taskPage, formPage });
+  expect(text.length).toBe(ordinary.length + added);
+  for (const row of [...taskPage.lines, ...formPage.lines]) expect(text.split("\n")).toContain(row);
+  const roster = seatTickWakeMessage({ ...base, taskPage, formPage, seatOwnedLanes: Array.from({ length: 20 }, (_, n) => ({ id: `row-${n}`, title: "Review", reason: "decision", sinceMs: 0 })) });
+  expect(roster.length).toBeLessThanOrEqual(4000 + added);
+  for (const row of [...taskPage.lines, ...formPage.lines]) expect(roster.split("\n")).toContain(row);
+});

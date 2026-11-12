@@ -606,7 +606,7 @@ function wakeClientMessageId(
   project: string,
   seatEpoch: number,
   verdict: SeatTickVerdict,
-  context: { fingerprint: string; lastWakeAt: string | null; monitorPrompt: string | null; operatorInstructions: string | null; instructionLines?: SeatTickInstructionLine[]; releasedWake?: SeatTickProjectState["releasedWake"] },
+  context: { fingerprint: string; lastWakeAt: string | null; monitorPrompt: string | null; operatorInstructions: string | null; instructionLines?: SeatTickInstructionLine[]; instructionReview?: string; releasedWake?: SeatTickProjectState["releasedWake"] },
 ): string {
   const shape = verdict.kind === "wake"
     ? verdict.reasons.map((reason) => reason.kind).sort().join(",")
@@ -614,7 +614,7 @@ function wakeClientMessageId(
   // Fold instructions into the fixed-size board digest so edits change the
   // payload identity without lengthening a key already near the runtime bound.
   const fingerprint = context.operatorInstructions
-    ? crypto.createHash("sha512").update(JSON.stringify([context.fingerprint, context.operatorInstructions, context.instructionLines])).digest("hex").slice(0, context.fingerprint.length)
+    ? crypto.createHash("sha512").update(JSON.stringify([context.fingerprint, context.operatorInstructions, context.instructionLines, ...(context.instructionReview ? [context.instructionReview] : [])])).digest("hex").slice(0, context.fingerprint.length)
     : context.fingerprint;
   return boundedWakeIdentity(`${seatMessageKeys.tick}${project}:${seatEpoch}:${context.lastWakeAt ?? "first"}:${shape}:${fingerprint}`
     + wakePromptIdentity(context.monitorPrompt)
@@ -1682,6 +1682,8 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
          its transcript's tail now that the wake is going out. */
       items: renderedVerdict.kind === "wake" ? renderedVerdict.items : [],
       seatOwnedLanes: verdict.seatOwnedLanes,
+      taskPage: verdict.taskPage,
+      formPage: verdict.formPage,
       deferred: verdict.deferred,
       /* Said once, as counts (#1749, #1783): the children this check declined
          to list because their outcomes are a retired seat's, not this one's,
@@ -1697,6 +1699,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       sourceBudgetNote: seatTickSkippedSources(),
       operatorInstructions: input.settings.reason,
       instructionLines: input.settings.instructionLines,
+      instructionReview: input.instructionReview,
       monitorPrompt: input.settings.monitorPrompt,
       monitorPromptUnchanged,
       mandateCarriesContract: input.seat?.mandateCarriesTickContract === true,
@@ -1713,6 +1716,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       slot: String(Math.floor(input.now / input.policy.proposalIntervalMs)),
       operatorInstructions: input.settings.reason,
       instructionLines: input.settings.instructionLines,
+      instructionReview: input.instructionReview,
       monitorPrompt: input.settings.monitorPrompt,
       monitorPromptUnchanged,
       mandateCarriesContract: input.seat?.mandateCarriesTickContract === true,
@@ -2239,6 +2243,7 @@ async function check(
          disagreement this key exists to prevent. */
       operatorInstructions: input.settings.reason,
       instructionLines: input.settings.instructionLines,
+      instructionReview: input.instructionReview,
       monitorPrompt: input.settings.monitorPrompt,
     });
     state = { ...state, wakeDecidedSince: state.wakeDecidedSince ?? state.outstandingWake?.preparedAt ?? at };

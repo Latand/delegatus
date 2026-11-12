@@ -54,9 +54,9 @@ type ProjectionResult = {
   cacheStatus: "hit" | "joined" | "miss" | "stale";
 };
 type CachedProjection = { key: string; representation: ProjectionRepresentation };
-// v2: pre-#1718 full bodies lack lastAgentWorkAt even after a fresh scan.
-// Invalidate them independently of the persisted scan's schema.
-const PERSISTED_PROJECTION_VERSION = 2;
+// v3: decision notices retain their publishing source for form currency.
+// Older bodies need rebuilding even when their stored data did not change.
+const PERSISTED_PROJECTION_VERSION = 3;
 type PersistedProjection = {
   version: typeof PERSISTED_PROJECTION_VERSION;
   bodyFile: string;
@@ -194,6 +194,7 @@ function projectionBaseKey(
   pinnedPath: string | undefined,
 ): string {
   return createHash("sha1").update(JSON.stringify({
+    projectionVersion: PERSISTED_PROJECTION_VERSION,
     pinnedPath: pinnedPath ?? null,
     // A full disk can change with no successful state write or scan revision.
     // Healthy free-byte fluctuations do not warrant rebuilding the projection.
@@ -879,6 +880,6 @@ export async function operatorBoardRepresentation(signal?: AbortSignal): Promise
 }
 
 /** The exact panel representation, decoded and reduced outside the Viewer. */
-export async function operatorSeatAgenda(project: string): Promise<import("@/lib/monitor/types").SeatTickWorkerAskInput[]> {
-  return seatAgendaInWorker(await operatorBoardBody(), project, Date.now() / 1000);
+export async function operatorSeatAgenda(project: string, seatConversationId?: string): Promise<import("@/lib/monitor/types").SeatTickAgendaInput> {
+  return seatAgendaInWorker(await operatorBoardBody(), project, Date.now() / 1000, undefined, seatConversationId);
 }

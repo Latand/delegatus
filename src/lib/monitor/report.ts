@@ -147,9 +147,9 @@ const SEAT_TICK_MESSAGE_LIMIT = 4_000;
  * newline below is the break the single join supplied, and the `trimStart` and
  * `trimEnd` are between them the one `trim` that join's result was given.
  */
-function boundedSeatTickMessage(dynamic: readonly string[], reserved: readonly string[]): string {
+function boundedSeatTickMessage(dynamic: readonly string[], reserved: readonly string[], extra = 0): string {
   const tail = `\n${redactMonitorText(reserved.join("\n")).trimEnd()}`;
-  const budget = Math.max(SEAT_TICK_MESSAGE_LIMIT - tail.length, 0);
+  const budget = Math.max(SEAT_TICK_MESSAGE_LIMIT + extra - tail.length, 0);
   const head = redactMonitorText(dynamic.join("\n")).trimStart();
   if (budget === 0) return tail.trimStart();
   return head.length <= budget ? `${head}${tail}` : `${head.slice(0, budget - 1).trimEnd()}…${tail}`;
@@ -314,6 +314,9 @@ export function seatTickWakeMessage(input: {
   /** Panel instructions, delivered in full on every scheduler wake. */
   operatorInstructions?: string | null;
   instructionLines?: SeatTickInstructionLine[];
+  instructionReview?: string;
+  taskPage?: import("./types").SeatTickTaskPage;
+  formPage?: import("./types").SeatTickFormPage;
   /** The project's own monitor prompt (#1280), or nothing. */
   monitorPrompt?: string | null;
   /** The seat's last landed wake already showed this exact note (#2030). */
@@ -326,6 +329,8 @@ export function seatTickWakeMessage(input: {
       so the length bound never cuts them. */
   reportLines?: readonly string[];
 }): string {
+  const added = [...(input.taskPage?.lines.length ? ["", ...input.taskPage.lines] : []), ...(input.formPage?.lines.length ? ["", ...input.formPage.lines] : [])];
+  const extra = (added.length ? redactMonitorText(added.join("\n")).length + 1 : 0) + (input.instructionReview ? input.instructionReview.length + 2 : 0);
   const lines = input.seatOwnedLanes?.length ? [
     `Seat tick — ${input.project}; ${input.reasons.map(reason => reason.kind).join(", ")}.`,
   ] : [
@@ -389,12 +394,13 @@ export function seatTickWakeMessage(input: {
   const turbo = turboMandate(input.turbo, input.now ?? Date.now(), input.turboUnchanged);
   const reservation = (compactRoster = false, compactRules = false) => {
     const sections = [
+      added,
       (input.sourceBudgetNote ? ["", input.sourceBudgetNote] : []),
       compactRules ? autonomyMandate(input.autonomy, input.now ?? Date.now(), input.autonomyUnchanged, true) : autonomy,
       compactRules ? turboMandate(input.turbo, input.now ?? Date.now(), input.turboUnchanged, undefined, true) : turbo,
       (compactRoster && input.snapshotAt ? ["", `Snapshot at ${input.snapshotAt}. Re-read if delayed.`] : snapshotSection(input.snapshotAt, !!input.workers)),
       (input.reportLines && input.reportLines.length > 0 ? ["", compactLedger ? "Reports:" : "Bridge reports:", ...input.reportLines.map((line) => `- ${line}`)] : []),
-      seatTickInstructionSections({ reason: input.operatorInstructions ?? null, instructionLines: input.instructionLines }),
+      seatTickInstructionSections({ reason: input.operatorInstructions ?? null, instructionLines: input.instructionLines, instructionReview: input.instructionReview }),
       (compactRoster && input.monitorPrompt
       ? ["", autonomyNote || input.monitorPromptUnchanged
         ? "Standing monitor note: seat_tick_settings verbose:true."
@@ -410,7 +416,7 @@ export function seatTickWakeMessage(input: {
   const reserved = reservation();
   // Large report ledgers keep all their keys. Shorten the note's explicitly
   // marked preview when that tail would exceed the payload bound.
-  if (!autonomyNote && input.reportLines?.length && redactMonitorText(reserved.join("\n")).length > SEAT_TICK_MESSAGE_LIMIT - 700) {
+  if (!autonomyNote && input.reportLines?.length && redactMonitorText(reserved.join("\n")).length > SEAT_TICK_MESSAGE_LIMIT + extra - 700) {
     const note = seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, noteLimit, !!input.workers);
     reserved.splice(reserved.length - seatTickContractLines(input.mandateCarriesContract === true).length - (input.workers ? 2 : 0) - note.length, note.length,
       ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, 100, !!input.workers));
@@ -438,12 +444,12 @@ export function seatTickWakeMessage(input: {
     for (const [compact, compactRules] of [[false, false], [true, false], [true, true]]) {
       const tail = compact ? reservation(true, compactRules) : reserved;
       const roster = seatOwnedLaneSection(input.seatOwnedLanes, input.now ?? Date.now(),
-        SEAT_TICK_MESSAGE_LIMIT - redactMonitorText(tail.join("\n")).trimEnd().length - headBudget - 2, compact);
-      if (roster) return boundedSeatTickMessage(lines, [...roster, ...tail]);
+        SEAT_TICK_MESSAGE_LIMIT + extra - redactMonitorText(tail.join("\n")).trimEnd().length - headBudget - 2, compact);
+      if (roster) return boundedSeatTickMessage(lines, [...roster, ...tail], extra);
     }
     throw new Error("seat-owned lane roster and first detail exceed wake budget after compaction");
   }
-  return boundedSeatTickMessage(lines, reserved);
+  return boundedSeatTickMessage(lines, reserved, extra);
 }
 
 /** A retry must make agenda progress even while a large report ledger stays
@@ -561,6 +567,7 @@ export function seatTickProposalMessage(input: {
   /** Panel instructions, delivered in full on every scheduler wake. */
   operatorInstructions?: string | null;
   instructionLines?: SeatTickInstructionLine[];
+  instructionReview?: string;
   /** The project's own monitor prompt (#1280), or nothing. The proposal slot is
       a scheduler-fired wake like any other, so a note about what this project's
       monitor should look at is owed here too — a prompt that silently went
@@ -596,9 +603,9 @@ export function seatTickProposalMessage(input: {
     "Rank by what actually matters now: what is blocking, what is cheap and finishes something, what has been waiting longest.",
     `Put this exact line at the foot of the card so the next tick recognizes it: ${MONITOR_REF_PREFIX} ${seatTickProposalRef(input.slot)}`,
     "Open no GitHub issue and start no pipeline from this — the operator moves a card to assigned when they want it, and the next tick starts it.",
-    ...seatTickInstructionSections({ reason: input.operatorInstructions ?? null, instructionLines: input.instructionLines }),
+    ...seatTickInstructionSections({ reason: input.operatorInstructions ?? null, instructionLines: input.instructionLines, instructionReview: input.instructionReview }),
     ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, SEAT_TICK_PROMPT_PREVIEW_LIMIT, !!input.workers),
     ...workerSection(input.workers),
     ...seatTickContractLines(input.mandateCarriesContract === true),
-  ]);
+  ], input.instructionReview ? input.instructionReview.length + 2 : 0);
 }

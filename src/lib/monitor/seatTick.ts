@@ -1,3 +1,5 @@
+import { seatTickFormPage } from "./seatTickForms";
+import { seatTickTaskPage } from "./seatTickReminders";
 import { shortId } from "@/lib/shortIds";
 import { autonomyActive, pendingAutonomyReports, autonomyEndInstructions } from "./autonomy";
 import { createHash } from "node:crypto";
@@ -1258,7 +1260,8 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const unstarted = input.tasks.filter((task) => !overdueIds.has(task.id) && !taskIsOverdue(task, input.now) && (isUnstarted(task, input.now, input.policy.backlogAfterMs)
     || autonomous && !task.accepted && !taskHasBlocker(task, input.now) && task.status === "inbox" && !task.owned && !task.runsOn));
   const backlog = input.tasks.filter((task) => !task.accepted && !taskHasBlocker(task, input.now) && task.status === "assigned" && !task.owned && !task.runsOn).length - unstarted.filter(task => task.status === "assigned").length;
-  const openWork = hasOpenWork(input) || seatOwnedLanes.length > 0;
+  const taskPage = seatTickTaskPage(input, unstarted);
+  const openWork = hasOpenWork(input) || seatOwnedLanes.length > 0 || (taskPage?.due ?? 0) > 0;
   /* The bound shortens while the seat's own children are moving (#1881): a
      child that settled or stalled since the last wake is due at the next
      check, and running children bring the interval wake to a quarter of an
@@ -1314,7 +1317,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   }
 
   const laneEvents = input.events.filter(event => isOwedEvent(event, input));
-  const intervalAgenda = seatOwnedLanes.length > 0 || input.pipelines.some(pipeline => isOpenLane(pipeline) && !pipeline.pausedBy) || runningChildren.length > 0 || input.signals.some(signal => signal.actionable !== false);
+  const intervalAgenda = (taskPage?.due ?? 0) > 0 || seatOwnedLanes.length > 0 || input.pipelines.some(pipeline => isOpenLane(pipeline) && !pipeline.pausedBy) || runningChildren.length > 0 || input.signals.some(signal => signal.actionable !== false);
   const candidates: SeatTickWakeReason[] = [];
   if (endReports.length && (wakeDue || input.state.autonomySummaryFor !== endReports[0]!.startedAt)) candidates.push({ kind: "autonomy-ended", detail: "the autonomy episode ended; its report is owed" });
   if (autonomous && wakeDue && !input.pipelines.some(isOpenLane) && runningChildren.length === 0 && unstarted.length === 0) {
@@ -1445,9 +1448,9 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const periodicItem = (item: SeatTickItem) => (item.kind === "pipeline" && periodicLaneIds.has(item.id) && !item.stallToken)
     || (item.kind === "child" && periodicChildIds.has(item.id) && !item.outcomeIds?.length && !item.stallToken)
     || (wakeDue && item.kind === "ask" && periodicAskIds.has(item.id));
-  const hasPeriodicWork = periodicLaneIds.size > 0 || periodicChildIds.size > 0 || periodicAskIds.size > 0;
+  const hasPeriodicWork = (taskPage?.due ?? 0) > 0 || periodicLaneIds.size > 0 || periodicChildIds.size > 0 || periodicAskIds.size > 0;
   const shownItems = new Set(input.state.itemsShown ?? []);
-  const composed = wakeItems({ input, ownLanes, stalled: persistedStalls, stalledChildren: persistedChildStalls, harvest, runningChildren, laneEvents, unstarted, reminders })
+  const composed = wakeItems({ input, ownLanes, stalled: persistedStalls, stalledChildren: persistedChildStalls, harvest, runningChildren, laneEvents, unstarted: [], reminders: reminders.filter(item => item.kind !== "task") })
     .map(item => {
       const itemVersion = agendaVersion(item, input);
       return itemVersion ? { ...item, itemVersion } : item;
@@ -1485,7 +1488,9 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const reasons: SeatTickWakeReason[] = [];
   let guardHeld = 0;
   for (const reason of candidates) {
-    const pending = forReason(reason.kind);
+    const pending = reason.kind === "overdue-task" || reason.kind === "unstarted-task"
+      ? (taskPage?.rows ?? []).map(row => row.item).filter(item => reason.kind === "overdue-task" ? item.reminderKind === "overdue" : item.reminderKind === "task")
+      : reason.kind === "interval" ? [...forReason(reason.kind), ...(taskPage?.rows ?? []).map(row => row.item)] : forReason(reason.kind);
     if (versionedReasons.has(reason.kind) && pending.length === 0) continue;
     // Held-back items have never been delivered. A whole-board retry count
     // must not prevent later pages from reaching the seat.
@@ -1505,21 +1510,21 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     if (reason.kind === "unmerged-pr") {
       const first = input.pullRequests.find(pr => `#${pr.number}` === pending[0]?.id)!;
       reasons.push({ ...reason, detail: `pull request #${first.number}${pending.length > 1 ? ` and ${pending.length - 1} more` : ""} left open by a lane that finished${first.lastFixUnreviewed ? "; last fix not re-reviewed" : ""}${first.mergeBlocked ? `; merge stopped: ${first.mergeBlocked}` : ""}` });
-    } else if (reason.kind === "own-lane-settled" || reason.kind === "unstarted-task" || reason.kind === "overdue-task" || reason.kind === "stalled") {
+    } else if (reason.kind === "unstarted-task" || reason.kind === "overdue-task") {
+      reasons.push({ ...reason, detail: `${pending.length} due task rows; see Tasks.${reason.kind === "unstarted-task" && backlog > 0 ? ` ${backlog} older than the backlog bound.` : ""}${reason.kind === "overdue-task" ? " Start or finish, hold with an until, close with a note, or move dueAt with dueReason. Move horizon: high next day, normal +3 days, low +7 days; open over 7 days: shorten horizon and raise priority. At 3 slips, move again only with a running lane or a hold with an until; otherwise split or close. Handle dates without reminding the operator." : ""}` });
+    } else if (reason.kind === "own-lane-settled" || reason.kind === "stalled") {
       const named = pending.slice(0, input.policy.itemsPerWake).map(item => `${item.kind === "pull-request" ? `${item.id}: ` : ""}${item.label.replace(/\s+/g, " ").slice(0, 200)}`).join("; ");
       const more = pending.length > input.policy.itemsPerWake ? `; ${pending.length - input.policy.itemsPerWake} more ${seatTickCatchUp(input) ? "included in this catch-up" : "await a later wake"}` : "";
-      const duePolicy = reason.kind === "overdue-task" ? "; start or finish it, hold with an until, close with a note, or move dueAt with dueReason. Move horizon: high next day, normal +3 days, low +7 days; open over 7 days: use the next shorter horizon and raise priority one level. Handle dates without reminding the operator." : "";
-      const dueCount = reason.kind === "overdue-task" && (input.overdueTasks?.length ?? 0) === 51 ? "; 50 or more overdue tasks" : "";
-      reasons.push({ ...reason, detail: `${named}${more}${dueCount}${duePolicy}${reason.kind === "unstarted-task" && backlog > 0 ? `; ${backlog} older than the backlog bound` : ""}` });
+      reasons.push({ ...reason, detail: `${named}${more}` });
     } else reasons.push(reason);
   }
 
   // Delivered or guarded obligations cannot cancel the live-work cadence.
   // This reminder carries current work only; it does not reannounce outcomes.
-  let offered = all;
+  let offered = all.filter(item => item.kind !== "task");
   if (wakeDue && openWork && reasons.length === 0 && hasPeriodicWork) {
     const current = all.filter(periodicItem);
-    if (current.length > 0) {
+    if (current.length > 0 || (taskPage?.due ?? 0) > 0) {
       reasons.push({ kind: "interval", detail: "the wake interval elapsed while work is open" });
       offered = current;
     }
@@ -1605,6 +1610,8 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
         ...(catchUp ? { catchUp } : {}),
         reasons,
         items,
+        ...(taskPage ? { taskPage } : {}),
+        formPage: seatTickFormPage(input),
         ...(seatOwnedLanes.length ? { seatOwnedLanes } : {}),
         activeStallTokens: [...stalled.map(entry => laneStallToken(entry.pipeline)), ...stalledKids.map(entry => childStallToken(entry.child))],
         pendingMergeSeqs: laneEvents.filter(event => event.type === "pipeline_merged").map(event => event.seq),
@@ -2223,12 +2230,14 @@ export function seatTickWakeCommitPlan(
     ...(catchUp ? { catchUp } : {}),
     ...(context.wakeIntervalMs ? { wakeIntervalMs: context.wakeIntervalMs } : {}),
     ...(deployResumeThrough ? { deployResumeThrough } : {}),
+    formPage: verdict.formPage ? { lines: verdict.formPage.lines.map(redactMonitorText),
+      rows: verdict.formPage.rows.filter(row => carries(redactMonitorText(row.line))).map(row => ({ ...row, line: redactMonitorText(row.line) })) } : undefined,
     proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough: deliveredThrough, children, announcedLanes, announcedDeploys, announcedMaintenance, shownChildren, ...note,
     ...(verdict.activeStallTokens ? { activeStallTokens: verdict.activeStallTokens } : {}),
     ...(disk ? { diskPressure: { episode: disk.diskPressureEpisode!, version: disk.itemVersion! } } : {}),
-    itemsShown: items.flatMap(item => [item.itemVersion, ...(item.creditVersions ?? [])].filter((version): version is string => !!version)),
-    itemLines: items.flatMap(item => [item.itemVersion, ...(item.creditVersions ?? [])].filter((version): version is string => !!version)
-      .map(version => ({ version, line: redactMonitorText(item.manifestLine ?? seatTickBullet(item)) }))),
+    itemsShown: [...(verdict.taskPage?.rows ?? []).filter(row => carries(redactMonitorText(row.line))).flatMap(row => [row.item.itemVersion!, ...(row.item.creditVersions ?? [])]), ...items.flatMap(item => [item.itemVersion, ...(item.creditVersions ?? [])].filter((version): version is string => !!version))],
+    itemLines: [...(verdict.taskPage?.rows ?? []).filter(row => carries(redactMonitorText(row.line))).flatMap(row => [row.item.itemVersion!, ...(row.item.creditVersions ?? [])].map(version => ({ version, line: redactMonitorText(row.line) }))), ...items.flatMap(item => [item.itemVersion, ...(item.creditVersions ?? [])].filter((version): version is string => !!version)
+      .map(version => ({ version, line: redactMonitorText(item.manifestLine ?? seatTickBullet(item)) })))],
     acknowledgmentLines,
     ...(reportsOwed.length > 0 ? { reportsOwed } : {}),
     ...(reportedStalls.length > 0 ? { reportedStalls } : {}),
@@ -2261,6 +2270,7 @@ export function seatTickWakeCommit(
   reachedAt?: string | null,
 ): SeatTickProjectState {
   commit = visibleWakeAcknowledgments(state, commit);
+  const formPageAfter = visibleFormCursor(state, commit);
   const at = new Date(now).toISOString();
   const received = reachedAt && Number.isFinite(Date.parse(reachedAt)) && Date.parse(reachedAt) <= now ? reachedAt : at;
   const owed = commit.reportsOwed?.length
@@ -2324,6 +2334,7 @@ export function seatTickWakeCommit(
     harvestedChildren: harvested(state.harvestedChildren, commit.children),
     childrenShown: childrenShown(state.childrenShown ?? [], commit.shownChildren ?? []),
     ...(commit.diskPressure && visibleAgendaVersions(state, commit).includes(commit.diskPressure.version) ? { diskPressureShown: commit.diskPressure.episode } : {}),
+    ...(formPageAfter ? { formPageAfter } : {}),
     itemsShown: mergeAgendaVersions(state.itemsShown ?? [], visibleAgendaVersions(state, commit).map(version => reminderDeliveredVersion(version, now)), commit.activeStallTokens, now),
     announcedLanes: announced(state.announcedLanes ?? [], commit.announcedLanes ?? []),
     announcedMaintenance: announced(state.announcedMaintenance ?? [], commit.announcedMaintenance ?? [], SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT),
@@ -2430,6 +2441,12 @@ function mergeAgendaVersions(before: readonly string[], delivered: readonly stri
 /** Production landings use the exact frozen text. The renderer may have cut
  * an item; only a complete bullet is positive evidence that it was shown.
  * Pure callers without an outstanding payload commit their explicit plan. */
+function visibleFormCursor(state: SeatTickProjectState, commit: SeatTickWakeCommit): string | undefined {
+  if (!commit.formPage) return undefined;
+  const lines = new Set((state.outstandingWake?.text ?? commit.formPage.lines.join("\n")).split("\n"));
+  return commit.formPage.rows.filter(row => lines.has(row.line)).at(-1)?.id;
+}
+
 function visibleAgendaVersions(state: SeatTickProjectState, commit: SeatTickWakeCommit): string[] {
   const text = state.outstandingWake?.text;
   if (text === undefined || commit.itemLines === undefined) return commit.itemsShown ?? [];

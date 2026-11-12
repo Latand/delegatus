@@ -191,6 +191,7 @@ export interface PrototypeReviewSummary {
   decision?: { answered?: true; rejected?: true; chosen: Array<{ number: number; name: string }>; comment: string; at: string; delivery: PrototypeDeliveryState; phase?: PrototypeDeliveryPhase };
 }
 export interface PrototypeReviewNotice {
+  source?: PrototypeReviewRound["source"];
   asks?: "questions";
   /** The round is decided and its message keeps failing to reach the seat. */
   undelivered?: true;

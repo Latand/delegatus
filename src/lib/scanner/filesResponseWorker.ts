@@ -50,7 +50,7 @@ export type FilesResponseWorkerRequest = {
 
 export type SeatSourceWorkerRequest =
   | { type: "seat-liveness"; query: Parameters<import("@/lib/monitor/seatTickSources").SeatTickSources["liveness"]>[0]; scan: import("./scanCache").PersistedFileScanGeneration & { snapshotFile: string } }
-  | { type: "seat-agenda"; bodyFile: string; project: string; now: number }
+  | { type: "seat-agenda"; bodyFile: string; project: string; now: number; seatConversationId?: string }
   | { type: "seat-reports"; project: string }
   | { type: "seat-rule-reports"; project: string; at: string; deadlineAt?: number };
 type WorkerRequest = FilesResponseWorkerRequest | SeatSourceWorkerRequest;
@@ -556,7 +556,7 @@ export function runSeatSourceInWorker(request: SeatSourceWorkerRequest, runtime:
   return Promise.race([current, timeout]).finally(() => { endQueue(); clearTimeout(timer); });
 }
 
-export async function seatAgendaInWorker(body: string, project: string, now: number, runtime: FilesResponseWorkerRuntime = testRuntime ?? {}): Promise<import("@/lib/monitor/types").SeatTickWorkerAskInput[]> {
+export async function seatAgendaInWorker(body: string, project: string, now: number, runtime: FilesResponseWorkerRuntime = testRuntime ?? {}, seatConversationId?: string): Promise<import("@/lib/monitor/types").SeatTickAgendaInput> {
   // The frame carries a filename. Serialising the whole board into the pipe
   // would recreate the large synchronous encode on the Viewer.
   const directory = runtime.env?.LLV_STATE_DIR ? path.resolve(runtime.env.LLV_STATE_DIR, "files-response-results") : statePath("files-response-results");
@@ -564,7 +564,7 @@ export async function seatAgendaInWorker(body: string, project: string, now: num
   const file = path.join(directory, `seat-agenda-${crypto.randomUUID()}.json`);
   try {
     await fs.promises.writeFile(file, body, { encoding: "utf8", mode: 0o600 });
-    const result = await runSeatSourceInWorker({ type: "seat-agenda", bodyFile: file, project, now }, runtime);
+    const result = await runSeatSourceInWorker({ type: "seat-agenda", bodyFile: file, project, now, ...(seatConversationId ? { seatConversationId } : {}) }, runtime);
     return JSON.parse(result.body);
   } finally { await fs.promises.rm(file, { force: true }); }
 }
