@@ -901,6 +901,8 @@ export interface ResourcesPayload {
   releaseRetention?: ReturnType<typeof import("./selfUpdate/retention").releaseRetentionStatus>;
   /** Temp cleanup's Git and inspection holds, with counts and bytes. */
   tempSweep?: ReturnType<typeof import("./tempSweep").tempSweepStatus>;
+  /** Files-response result cleanup: removed and kept counts with bytes. */
+  filesResponseSweep?: ReturnType<typeof import("./scanner/filesResponseResults").filesResponseSweepStatus>;
   system: ResourcesSystem | null;
   sessions: ResourceSession[];
   /** When the session table was captured. The system block carries its own
