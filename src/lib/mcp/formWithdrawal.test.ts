@@ -106,7 +106,7 @@ test("SDK HTTP: taskless and decided rows have withdrawal targets, exact counts,
   for (const digit of ["e", "f", "9"]) insertSeatRound(round(`pr_${digit.repeat(32)}`));
   const saved = { ...round(TASK_ROUND), taskId: "task-a", decision: { chosen: [], comment: "Keep this answer", at: new Date(NOW - 600_000).toISOString(),
     delivery: { state: "failed" as const, conversationId: SEAT, clientMessageId: "answer-key", text: "Keep this answer", failingSince: new Date(NOW - 600_000).toISOString() } } };
-  saveTasks([{ id: "task-a", project: PROJECT, text: "Finished work", status: "done", assignments: [], createdAt: new Date(NOW).toISOString(), updatedAt: new Date(NOW).toISOString(), prototypeReviews: [saved] }]);
+  saveTasks([{ id: "task-a", project: PROJECT, text: "Finished work", status: "done", placement: "unplaced", assignments: [], createdAt: new Date(NOW).toISOString(), updatedAt: new Date(NOW).toISOString(), prototypeReviews: [saved] }]);
   const f = await sdk();
   try {
     const read = await f.call({ project: PROJECT }) as unknown as NeedsYouAnswer;

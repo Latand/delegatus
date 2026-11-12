@@ -38654,13 +38654,13 @@ describe("saved decision delivery", () => {
             await page.evaluate(() => {
               const original = window.fetch;
               let refused = false;
-              window.fetch = async (input, init) => {
+              window.fetch = Object.assign(async (input: Parameters<typeof original>[0], init?: Parameters<typeof original>[1]) => {
                 if (!refused && String(input) === "/api/attention/dismissals") {
                   refused = true;
                   return new Response(JSON.stringify({ error: "private backend failure" }), { status: 503 });
                 }
                 return original(input, init);
-              };
+              }, original);
             });
             await scope.locator("[data-decision-withdraw]").click();
             await scope.locator("[data-decision-withdraw-error]").waitFor();
