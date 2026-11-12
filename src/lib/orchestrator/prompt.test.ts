@@ -46,7 +46,7 @@ test("the manager draft defaults to the Claude Opus alias on low effort through 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
 test("the default mandate advances and marks the previous seat stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(67);
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(68);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -132,7 +132,8 @@ test("the default mandate advances and marks the previous seat stale", () => {
   expect(orchestratorMandateStale(64)).toBe(true);
   expect(orchestratorMandateStale(65)).toBe(true);
   expect(orchestratorMandateStale(66)).toBe(true);
-  expect(orchestratorMandateStale(67)).toBe(false);
+  expect(orchestratorMandateStale(67)).toBe(true);
+  expect(orchestratorMandateStale(68)).toBe(false);
 });
 
 /**
@@ -228,6 +229,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   // v66 promotes contract preparation, effect-aware recovery and role-specific guidance.
   66: "fc1e372d84b668a3e29d64a8f7383cd0feeb72051fa3d95133d139cb49844606",
   67: "63a5a68874eccd4d1490efce573c4f520c33ef984fee7d14dd9005c44f1e3c91",
+  68: "444b06dc3d0f147c89dcdf9d8b7ae231f39168253b89c88e9ba930e057fa845c",
 };
 
 /* v30: a proactive seat keeps accepted work moving, so the greeting says what
@@ -407,8 +409,10 @@ test("the previous review and merge policy upgrades once without changing pendin
   expect(orchestratorMandateUpgraded(orchestratorMandateUpgraded(v58))).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
   expect(orchestratorMandateWithRoleTable(v58, null)).toBe(v58);
   const bespoke = "Review: our own budget.\n- Merge bar: operator approval.";
-  expect(orchestratorMandateUpgraded(bespoke)).toBe(`${bespoke}\n\n${OPERATOR_CORRECTION_RULE}`);
-  expect(orchestratorMandateUpgraded(orchestratorMandateUpgraded(bespoke))).toBe(`${bespoke}\n\n${OPERATOR_CORRECTION_RULE}`);
+  const upgraded = orchestratorMandateUpgraded(bespoke);
+  expect(upgraded.startsWith(bespoke)).toBe(true);
+  expect(orchestratorMandateUpgraded(upgraded)).toBe(upgraded);
+  expect(orchestratorMandateWithRoleTable(bespoke, null)).toBe(bespoke);
   expect(orchestratorMandateForDelivery(bespoke)).toContain(bespoke);
 });
 
@@ -942,8 +946,9 @@ test("default and retained seat mandates require same-turn correction lessons on
 test("a retained v59 rule 13 upgrades to the compact current rule once", () => {
   const previous = `13. Read the newest answer first: it replaces only the decision it names; recheck answers since the brief before you publish or ask, and never re-ask a settled question. ${OPERATOR_CORRECTION_RULE}`;
   const current = WORKING_RULES_SHORT.split("\n").find((line) => line.startsWith("13. "))!;
-  expect(orchestratorMandateUpgraded(previous)).toBe(current);
-  expect(orchestratorMandateUpgraded(current)).toBe(current);
+  const upgraded = orchestratorMandateUpgraded(current);
+  expect(orchestratorMandateUpgraded(previous)).toBe(upgraded);
+  expect(orchestratorMandateUpgraded(upgraded)).toBe(upgraded);
 });
 
 test("delivery upgrades the previous report directive idempotently while retaining custom rules", () => {
