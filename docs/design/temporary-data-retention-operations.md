@@ -66,7 +66,10 @@ The existing gated release remover remains responsible for active, rollback,
 in-flight and newest-release protections, checkout checks, two process scans,
 identity checks and unprivileged removal. The observer grants no root deletion.
 Installation is an operator action after publication. Validation must keep the
-operator's live data untouched; test workers force Docker requests to dry-run
-and fixture markers retain that guard under production mode because state-directory
-isolation leaves the host daemon shared. The validation
-report records an earlier violation of this boundary and the corrected tests.
+operator's live data untouched. Test and fixture contexts refuse the default Docker
+runner before any checkpoint write; tests inject a fixture runner or request an
+explicit dry-run. Workers force Docker dry-run. Physical temp-root checks reject
+outside ledger paths, discovery namespaces and replayed candidates before effects,
+and repeat at asynchronous removal fences. The original context and root stay
+pinned across environment changes. These refusals fail tests. The validation
+report records the earlier live Docker calls and the approved continuation.

@@ -8,6 +8,7 @@ import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { restoreRefusedAttemptTrash } from "@/lib/pipelines/retirementClaim";
 import { RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { TemporaryDataStore, type TemporaryDataCandidate } from "./temporaryDataStore";
+import { assertRetentionTestPath, RetentionTestSafetyError } from "@/lib/retentionTestSafety";
 
 export const TEMPORARY_DATA_RETENTION_MS = 7 * 86400000;
 const MAX_PROTECTION_ENTRIES = 200000;
@@ -95,6 +96,7 @@ function fileIntent(row: TemporaryDataCandidate, journal: string): FileIntent {
 }
 
 function restoreCandidate(row: TemporaryDataCandidate, journal: string) {
+  assertRetentionTestPath(row.directory);
   if (!fs.existsSync(journal)) return;
   if (fs.realpathSync(path.dirname(row.directory)) !== path.dirname(row.directory)) throw new Error("indirect-parent");
   const intent = readEnvelope(journal) as { kind?: unknown };
@@ -111,12 +113,15 @@ function restoreCandidate(row: TemporaryDataCandidate, journal: string) {
 /** The same admission as automatic copies serializes overlapping discovery.
  * Journals bind to an existing row; losing that row grants no recovery power. */
 export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDataPorts, admission = store.filename + ".sweep") {
+  assertRetentionTestPath(admission);
   return withFileTransactionAsync(admission, "temporary data retention", async () => {
     const now = ports.now ?? Date.now, clock = ports.clock ?? (() => performance.now());
     const deadline = clock() + (ports.budgetMs ?? 5000), mounts = ports.mounts ?? mountPointsUnder;
     const inventory = new RepositoryLinkInventory({ now: clock, budgetMs: Math.max(0, deadline - clock()), retained: ports.checkoutReads });
     const report = { checked: 0, removed: 0, removedBytes: 0, wouldRemove: 0, wouldRemoveBytes: 0, kept: {} as Record<string, number>, errors: 0 };
     for (const row of store.due(now(), 128)) {
+      assertRetentionTestPath(row.directory);
+      assertRetentionTestPath(row.scope);
       if (clock() >= deadline) break;
       report.checked++;
       store.record(row.directory, now() + 60000, row.bytes, "pending");
@@ -142,7 +147,9 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
         }
         // A claim also protects replay when a previous process died in trash.
         if (ports.mode !== "dry-run") release = await ports.claim(row);
+        assertRetentionTestPath(row.directory);
         const authority = await ports.authority(row);
+        assertRetentionTestPath(row.directory);
         let dispatch = authority;
         const due = () => dispatch.expiresAt !== null && now() >= dispatch.expiresAt && authority.current() && dispatch.current();
         if (!due()) {
@@ -172,14 +179,21 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
           throw new Error("quarantine-unavailable");
         }
         let protection: ReturnType<typeof temporaryDataProtection>;
-        const validate = (current: string) => clock() < deadline && due()
-          && store.get(row.directory)?.identity === row.identity && protection?.current() === true
-          && inventory.unchangedAll() && mounts(current).length === 0;
+        const validate = (current: string) => {
+          assertRetentionTestPath(current);
+          return clock() < deadline && due()
+            && store.get(row.directory)?.identity === row.identity && protection?.current() === true
+            && inventory.unchangedAll() && mounts(current).length === 0;
+        };
         const held = async (current: string) => {
+          assertRetentionTestPath(current);
           protection = temporaryDataProtection(row, current, clock, deadline);
           bytes = protection.bytes;
-          if (!await ports.references(row, current, inventory)) { reason = "live-reference"; return true; }
+          const clear = await ports.references(row, current, inventory);
+          assertRetentionTestPath(current);
+          if (!clear) { reason = "live-reference"; return true; }
           dispatch = await ports.authority(row);
+          assertRetentionTestPath(current);
           if (dispatch.revision !== authority.revision || !validate(current)) { reason = "fence-changed"; return true; }
           return false;
         };
@@ -208,7 +222,10 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
           }
         }
         if (removed) { report.removed++; report.removedBytes += bytes; ports.onRemoved?.(row); store.forget(row.directory); reason = "removed"; }
-      } catch (error) { reason = error instanceof Error ? error.message : "inspection-unavailable"; report.errors++; }
+      } catch (error) {
+        if (error instanceof RetentionTestSafetyError) throw error;
+        reason = error instanceof Error ? error.message : "inspection-unavailable"; report.errors++;
+      }
       finally {
         try { release?.(); } catch { report.errors++; }
         if (reason !== "removed" && reason !== "absent") {

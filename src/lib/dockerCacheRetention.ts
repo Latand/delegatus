@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { statePath } from "./configDir";
 import { withFileTransactionAsync } from "./state/fileTransaction";
 import { writeJsonDurably } from "./state/durableJson";
+import { assertRetentionTestPath, retentionUnderTest } from "./retentionTestSafety";
 
 const exec = promisify(execFile);
 export const DOCKER_CACHE_PRUNE_COMMANDS = [
@@ -14,14 +15,17 @@ export const DOCKER_CACHE_PRUNE_COMMANDS = [
 /** The attempt is durable before either command: a restart or missing Docker
  * cannot turn minute polling into repeated prune attempts. No other Docker
  * operation is accepted by this module. The daemon enforces unused ownership. */
-export function pruneDockerCache(options: {
+export async function pruneDockerCache(options: {
   file?: string; now?: () => number; mode?: "on" | "dry-run"; deadline?: number;
   run?: (args: readonly string[], timeout: number) => Promise<void>;
 } = {}) {
+  if (retentionUnderTest() && options.mode !== "dry-run" && !options.run)
+    throw new Error("retention test refused the real Docker runner; inject a fixture runner");
   const file = options.file ?? statePath("docker-cache-retention.json"), now = options.now ?? Date.now;
+  assertRetentionTestPath(file);
   return withFileTransactionAsync(file, "daily Docker cache retention", async () => {
-    const testContext = process.env.NODE_ENV === "test" || !!process.env.LLV_FIXTURE_PARENT_IDENTITY || !!process.env.LLV_TEST_STARTUP_HOME;
-    if (options.mode === "dry-run" || testContext && !options.run)
+    assertRetentionTestPath(file);
+    if (options.mode === "dry-run")
       return { state: "dry-run", commands: 0, errors: 0 };
     let prior: { attemptedAt: number } | undefined;
     try {
@@ -43,6 +47,7 @@ export function pruneDockerCache(options: {
       } catch { report.errors++; }
     }
     report.state = report.errors ? "docker-prune-unavailable" : "complete";
+    assertRetentionTestPath(file);
     writeJsonDurably(file, report);
     return report;
   });

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Database } from "bun:sqlite";
 import { statePath } from "@/lib/configDir";
 import { assertNotOperatorStateUnderTest } from "@/lib/stateOwnership";
+import { assertRetentionTestPath } from "@/lib/retentionTestSafety";
 
 export type TemporaryDataKind = "lane-evidence" | "agent-evidence" | "journal" | "ownerless-copy";
 export type TemporaryDataCandidate = {
@@ -16,6 +17,7 @@ export type TemporaryNamespace = { directory: string; kind: string; owner: strin
 export class TemporaryDataStore {
   private db: Database;
   constructor(readonly filename = statePath("temporary-data.sqlite")) {
+    assertRetentionTestPath(filename);
     assertNotOperatorStateUnderTest(path.dirname(filename), "temporary data retention");
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
@@ -34,6 +36,8 @@ export class TemporaryDataStore {
   close() { this.db.close(); }
   get(directory: string) { return this.db.query<TemporaryDataCandidate, [string]>("SELECT * FROM candidates WHERE directory=?").get(directory); }
   register(row: TemporaryDataCandidate) {
+    assertRetentionTestPath(row.directory);
+    assertRetentionTestPath(row.scope);
     const prior = this.get(row.directory);
     if (prior?.identity === row.identity) return;
     this.db.query("INSERT OR REPLACE INTO candidates VALUES(?,?,?,?,?,?,?,?,?)")
@@ -47,10 +51,13 @@ export class TemporaryDataStore {
   }
   forget(directory: string) { this.db.query("DELETE FROM candidates WHERE directory=?").run(directory); }
   namespace(directory: string, kind: string, owner = "") {
+    assertRetentionTestPath(directory);
     this.db.query("INSERT OR IGNORE INTO namespaces VALUES(?,?,?,'',0)").run(directory, kind, owner);
   }
   namespaces(now: number, limit = 4) {
-    return this.db.query<TemporaryNamespace, [number, number]>("SELECT * FROM namespaces WHERE checkedAt<=? ORDER BY checkedAt,directory LIMIT ?").all(now, limit);
+    const rows = this.db.query<TemporaryNamespace, [number, number]>("SELECT * FROM namespaces WHERE checkedAt<=? ORDER BY checkedAt,directory LIMIT ?").all(now, limit);
+    for (const row of rows) assertRetentionTestPath(row.directory);
+    return rows;
   }
   checkpoint(row: TemporaryNamespace) {
     this.db.query("UPDATE namespaces SET cursor=?,checkedAt=? WHERE directory=?").run(row.cursor, row.checkedAt, row.directory);

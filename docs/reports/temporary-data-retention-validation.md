@@ -1,7 +1,9 @@
 # Temporary data retention: implementation and validation
 
-The implementation is prepared for review. Publication needs an operator decision
-because validation crossed the lane's prohibition on live cleanup.
+The implementation is prepared for review. The continuation decision on
+2026-11-12 authorizes review and publication with the incident below disclosed:
+the two Docker prune operations match the approved daily policy. The original
+no-live-deletion acceptance cannot be certified for the earlier test attempts.
 
 ## Validation incident
 
@@ -15,9 +17,22 @@ docker builder prune -f --filter until=336h
 docker image prune -a -f --filter until=336h
 ```
 
-The attempts began at 07:21:14Z and 07:44:26Z on 2026-11-12. Retained Docker events
-show the later builder prune reclaimed 0 bytes. Earlier command output was not
-retained. The image inventory changed from 79 images / 27.01 GB at the first audit
+All times below are UTC on 2026-11-12. Checkpoints record attempt start times,
+two completed commands and zero command errors for each attempt. They do not
+record individual command start/end times or stdout/stderr.
+
+| Attempt start | Exact live command | Retained output / result |
+|---|---|---|
+| 07:21:14.178Z | `docker builder prune -f --filter until=336h` | stdout/stderr unavailable; checkpoint completed without command error; reclaimed bytes unknown |
+| 07:21:14.178Z | `docker image prune -a -f --filter until=336h` | stdout/stderr unavailable; checkpoint completed without command error; image deletions unknown |
+| 07:44:26.064Z | `docker builder prune -f --filter until=336h` | stdout/stderr unavailable; checkpoint completed without command error; daemon event at 07:44:26.224706604Z: `Type=builder Action=prune reclaimed=0` |
+| 07:44:26.064Z | `docker image prune -a -f --filter until=336h` | stdout/stderr unavailable; checkpoint completed without command error; image deletions unknown |
+
+`until=336h` is the approved fourteen-day filter; only image pruning uses `-a`.
+The retained event query ended at 07:47:19.590559Z and returned one builder event.
+The image-deletion query returned zero retained events. These observations cannot
+reconstruct the missing output from either attempt. The image inventory changed
+from 79 images / 27.01 GB at the first audit
 to 77 / 26.30 GB at read-back; retained image-deletion events are empty, and
 concurrent machine activity prevents attribution of that change. The requested
 no-live-deletion condition therefore cannot be certified. Containers and volumes
@@ -25,12 +40,18 @@ have no removal command in this change; their observed counts remained 76 and 50
 The observer was never installed. Evidence, journals and releases were exercised
 only in fixture directories.
 
-The corrected code forces default Docker calls in test and fixture contexts to dry-run, forces
-test workers to dry-run as a second guard, cancels maintenance after its timer is
-stopped, and makes the timer test await its mocked maintenance call. Real adapter
-tests supply a fixture-owned Docker executable. The full temp-sweep file now passes
-82 tests with no surviving helper. This incident remains disclosed for the
-operator's publication decision.
+The corrected code refuses the default Docker runner in test and fixture
+contexts before locking or writing a checkpoint. Tests inject a fixture runner;
+an explicit dry-run makes zero calls. The original test context and physical
+temp root remain pinned even if a fixture changes NODE_ENV or TMPDIR. Retention
+ledger opens, discovery namespaces, replayed candidates and removal fences reject
+paths outside that root, including symlink escapes. Safety errors fail the test
+instead of becoming ordinary retained-candidate reports. Test workers also force
+Docker dry-run, timer shutdown cancels maintenance, and the timer test awaits its
+mocked maintenance call. A real production-worker fixture proves zero Docker
+calls and fixture-only ledger writes. No live Docker command was rerun during
+this continuation; the timestamped machine inventory below remains the earlier
+read-only observation.
 
 ## Operator installation
 
@@ -102,8 +123,9 @@ Large copy manifests use a bounded ownership-header reader, tested with the real
 copy writer beyond the recorded-check envelope limit.
 
 The daily Docker checkpoint survives restart and records an attempt before its two
-commands; success and refusal both wait one day. Tests cover the real adapter with
-a fixture-owned executable. PR #3894 remains open, so
+commands; success and refusal both wait one day. Tests execute the filtered
+commands with a fixture-owned executable through an injected runner. The parallel lane's
+PR #3894 remains open, so
 `src/lib/runtime/attemptTempFilesystem.ts` and `attemptTempRetention.ts` are unchanged.
 The base advanced in UI tests and merge-queue auto-refresh work; its shared
 pipeline-store diff leaves the retention reader and retirement-claim APIs unchanged. No speed improvement is claimed.
@@ -121,8 +143,8 @@ test commands are exact after that wrapper. Private roots in audit and lint repl
 commands are represented by variables; log names identify each run. The retained
 command ledger carries the resolved wrapper, environment and scratch paths.
 
-The latest eleven files report **503 passed, one pre-existing failure**, with
-2,892 assertions. The bundled byte-request case in
+Before this continuation, the latest eleven files reported **503 passed, one
+pre-existing failure**, with 2,892 assertions. Continuation checks are listed below. The bundled byte-request case in
 `src/lib/selfUpdate/retentionWorker.test.ts` fails identically on base and head:
 31 pass, 1 fail, 85 assertions, unresolved Telegram aliases during `Bun.build`.
 The source and bundled read-only observer case passes. The initial two temp-sweep
@@ -206,4 +228,69 @@ existing `_completedHandoff` warning, also present in the base source. Full-suit
 full-build and full-typecheck commands were outside this stage's check allowance;
 the publication gate remains the publisher's check. The public-text privacy gate passed with zero findings over all 31 changed files.
 The six later-changed source/report files also passed a renewed privacy scan.
-Final committed-text privacy and commit-hook receipts accompany the stage report.
+The original committed-text privacy and commit-hook receipts are retained.
+The continuation adds its own receipts below.
+
+
+## Continuation verification
+
+The original transcript was reopened to recover the exact launched commands,
+including earlier lint, privacy, commit and static-check launchers. Their complete
+argv, timestamps, launcher exit statuses and retained output are handed over in
+`earlier-recovered-checks.json` alongside `check-inventory.json` and `checks/`.
+A recorder launcher's exit is separate from the terminal test verdict; the test
+counts and exits above come from the recorded checks. This recovery also confirms
+the two daily checkpoints: 07:21:14.178Z and 07:44:26.064Z, each with
+`state=complete commands=2 errors=0`. Prune stdout/stderr remain unavailable.
+
+All continuation checks use the same installed wrapper, one test file per owned
+runner, private HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and TMPDIR, a closed Viewer
+control URL and `LLV_GATE_RUNNER=off`. The command launcher also sets DOCKER_HOST
+to a nonexistent socket below the fixture root. No live Docker request, deletion
+or observer installation occurred during this continuation.
+
+The final PR body is this complete report, including the incident and installation
+command. A GitHub read-back found no PR for this branch; #3894 belongs to the
+parallel lane. The pipeline publisher must create this branch's PR and read back
+its full body. The builder commits locally under the controller's no-push rule.
+
+| Run | Command after the gate wrapper | Exit | Pass / fail / assertions |
+|---|---|---:|---:|
+| `guard-test.log` | `bun test --timeout=60000 src/lib/retentionTestSafety.test.ts` | 0 | 5 / 0 / 16 |
+| `docker-guard.log` | `bun test --timeout=60000 src/lib/dockerCacheRetention.test.ts` | 0 | 10 / 0 / 36 |
+| `retention-guard.log` | `bun test --timeout=60000 src/lib/runtime/temporaryDataRetention.test.ts` | 0 | 34 / 0 / 118 |
+| `production-guard.log` | `bun test --timeout=60000 src/lib/runtime/temporaryDataProduction.test.ts` | 0 | 24 / 0 / 50 |
+| `worker-guard.log` | `bun test --timeout=60000 src/lib/pipelines/worktreeSweepWorker.test.ts` | 0 | 37 / 0 / 141 |
+| `worker-maintenance-guard.log` | `bun test --timeout=60000 src/lib/pipelines/worktreeSweepWorker.test.ts` | 0 | 38 / 0 / 147 |
+| `tempsweep-guard.log` | `bun test --timeout=60000 src/lib/tempSweep.test.ts` | 0 | 82 / 0 / 357 |
+| `renew-guard.log` | `bun test --timeout=60000 src/lib/retentionTestSafety.test.ts` | 0 | 5 / 0 / 17 |
+| `renew-docker.log` | `bun test --timeout=60000 src/lib/dockerCacheRetention.test.ts` | 0 | 10 / 0 / 36 |
+| `renew-retention.log` | `bun test --timeout=60000 src/lib/runtime/temporaryDataRetention.test.ts` | 0 | 34 / 0 / 118 |
+| `renew-production.log` | `bun test --timeout=60000 src/lib/runtime/temporaryDataProduction.test.ts` | 0 | 24 / 0 / 50 |
+| `guard-final.log` | `bun test --timeout=60000 src/lib/retentionTestSafety.test.ts` | 0 | 6 / 0 / 19 |
+| `maintenance-final.log` | `bun test --timeout=60000 src/lib/pipelines/worktreeSweepWorker.test.ts -t "production maintenance keeps Docker dry"` | 0 | 1 / 0 / 6 |
+
+
+The latest full-file result for each of twelve files totals **512 passed, one
+pre-existing failure and 2,923 assertions**. This combines the eleven-file
+earlier campaign above with the renewed Docker, worker and retention results
+and the new six-case sandbox guard file. The final filtered production-maintenance
+case separately passes with six assertions; it does not add to that full-file total.
+Unchanged observer, binding, registry and release results retain their earlier
+receipts. No new full suite, build or typecheck was run.
+
+The continuation's plain `git commit --file "$TMPDIR/continuation-commit-message.txt"`
+exited 0; normal hooks checked staged whitespace and linted seven TypeScript files,
+with zero introduced errors. `git diff --check` exited 0 with zero whitespace
+findings. The parallel PR remains open at the final read-back, and both protected
+retention implementation files remain unchanged from the lane's starting commit.
+
+
+| Continuation publication check | Exit | Counts |
+|---|---:|---|
+| `G bun scripts/privacy-publication-gate.ts --repository "$WORKTREE" --base origin/main --require-known-values --check-commits --added-lines` (`privacy-continuation.log`) | 0 | PASS; 33 changed files across 2 lane commits; 0 findings |
+
+The full final report and installation command are handed to the publisher as
+`pr-body.md`. After publication, read back the new PR body and verify it carries
+this whole report. PR creation, pre-push checks and the three deletion-review
+rounds belong to the remaining pipeline stages.
