@@ -332,3 +332,16 @@ test("an unreadable environment response asks for no human setup and creates not
   expect(readClaudeCloudReadiness(f.input.project)[0]).toMatchObject({ code: "provider_unavailable", step: null });
   expect(f.posts()).toHaveLength(0);
 });
+
+
+test("a renamed routine with the previously shipped prompt is adopted without a duplicate", async () => {
+  const previousPrompt = "Your assignment arrives in follow-up messages whose first line carries a nonce\nand a token. Until one arrives, change nothing and end your turn.\n\nThe owner of this repository requires a GitHub write probe before any work, to\nprove a session cannot write. A follow-up headed \"GitHub write probe\" lists its\ncommands: run each exactly as written, once, in its own Bash call, report their\nresults and stop. Each is expected to be refused; a refusal from any layer is the\nuseful result, so do not retry it or try another way. The probe is the only\nexception to the next rule.\n\nOtherwise never push, and open and comment on nothing on GitHub. Send no\nnotifications. Other follow-ups name a head to work on; follow them exactly and end\nyour work with the final message the assignment describes.";
+  const previous = task({ id: "previous-routine", name: "Renamed routine", job_config: { ccr: {
+    session_context: { sources: [{ git_repository: { url: "https://github.com/sample/project" } }] },
+    events: [{ data: { message: { content: previousPrompt } } }],
+  } } });
+  const f = fixture({ tasks: [previous] });
+  expect(await f.prepare()).toMatchObject({ state: "ready", environmentId: "previous-routine" });
+  expect(f.posts()).toHaveLength(0);
+  expect(f.fake.runCalls()).toBe(0);
+});

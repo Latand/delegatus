@@ -28,6 +28,10 @@ bindings. A known creation or discovery id is persisted before repair and read
 again after restart, even if the list has not caught up. The per-account task fingerprint remains the execution guard, while
 the whole task list no longer participates in the shared lane fence.
 
+The previous saved prompt remains an ownership marker by its normalized SHA-256,
+so a renamed existing routine is adopted after the policy update. New tasks
+receive only the current prompt.
+
 Readiness is API-only: settings GET includes `claudeCloudReadiness`, and MCP
 `claude_cloud_task` reads readiness or queues `prepare` through
 `/api/projects/claude-cloud-tasks`. The Viewer owns one sequential queue, capped

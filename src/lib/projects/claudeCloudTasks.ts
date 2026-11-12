@@ -9,7 +9,7 @@ import { translate } from "@/lib/i18n/core";
 import { operatorLocale } from "@/lib/operator/settings";
 import { initializeStateCollectionsAsync, readStateCollectionRevision, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { HostedCloudError } from "@/lib/pipelines/cloudHostedErrors";
-import { CLAUDE_CLOUD_TASK_PROMPT } from "@/lib/pipelines/claudeCloudTaskPrompt";
+import { CLAUDE_CLOUD_TASK_PROMPT, CLAUDE_CLOUD_TASK_PROMPT_LEGACY_SHA256 } from "@/lib/pipelines/claudeCloudTaskPrompt";
 import { canonicalProject, projectAliasKeys, recordedProjectRemote } from "./aliases";
 import { claudeCloudTasks, claudeCloudTaskFingerprint, setClaudeCloudTaskFor } from "./settings";
 import type { PrepareCloudEnvironmentInput, CloudEnvironmentPreparation } from "./codexCloudEnvironments";
@@ -175,7 +175,7 @@ export async function prepareClaudeCloudTask(input: PrepareCloudEnvironmentInput
       const list = await get("/v1/code/triggers");
       if (list.has_more !== false || !Array.isArray(list.data)) throw new ClaudeTaskError("task_list_incomplete");
       if (list.data.some(value => typeof record(value).id !== "string" || !Array.isArray(context(record(value)).sources))) throw new ClaudeTaskError("task_invalid");
-      const matches = list.data.map(record).filter(t => sameRepo(t, repository) && (t.name === "Delegatus pipeline stages" || promptText(t) === CLAUDE_CLOUD_TASK_PROMPT.replace(/\s+/g, " ").trim()));
+      const matches = list.data.map(record).filter(t => sameRepo(t, repository) && (t.name === "Delegatus pipeline stages" || (promptText(t) === CLAUDE_CLOUD_TASK_PROMPT.replace(/\s+/g, " ").trim() || digest(promptText(t)) === CLAUDE_CLOUD_TASK_PROMPT_LEGACY_SHA256)));
       matches.sort((a, b) => Number(b.enabled === true) - Number(a.enabled === true) || String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) || String(a.id).localeCompare(String(b.id)));
       task = matches[0] ?? null;
       if (!task && row.create.dispatchedAt !== undefined) {
