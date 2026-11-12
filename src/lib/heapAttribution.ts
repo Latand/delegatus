@@ -38,7 +38,7 @@ export interface ProcessMetadata {
   startedAt: number; exitedAt: number | null; exitCode: number | null; signal: string | null;
 }
 export interface HeapHost {
-  heapAttribution(): { engine: string; events: number; eventSubscribers: number; stateSubscribers: number; queuedEvents: number };
+  heapAttribution(): { engine: string; events: number; eventSubscribers: number; stateSubscribers: number; queuedEvents: number; windowBytes?: number; windowByteLimit?: number; trimmedEvents?: number };
 }
 
 export function createHeapAttribution() {
@@ -81,20 +81,23 @@ export function createHeapAttribution() {
           if (oldest.length > 32) oldest.pop();
         }
       });
-      const byEngine: Record<string, { hosts: number; events: number; eventSubscribers: number; stateSubscribers: number; queuedEvents: number }> = {};
-      const hostRows: { id: number; engine: string; events: number; eventSubscribers: number; stateSubscribers: number; queuedEvents: number }[] = [];
-      let hostCount = 0;
+      const byEngine: Record<string, { hosts: number; events: number; eventSubscribers: number; stateSubscribers: number; queuedEvents: number; windowBytes: number; largestWindowBytes: number; trimmedEvents: number }> = {};
+      const hostRows: (ReturnType<HeapHost["heapAttribution"]> & { id: number })[] = [];
+      let hostCount = 0, windowBytes = 0, largestWindowBytes = 0, trimmedEvents = 0;
       hosts.visit((host, _meta, id) => {
         const counts = host.heapAttribution();
-        const row = byEngine[counts.engine] ??= { hosts: 0, events: 0, eventSubscribers: 0, stateSubscribers: 0, queuedEvents: 0 };
+        const row = byEngine[counts.engine] ??= { hosts: 0, events: 0, eventSubscribers: 0, stateSubscribers: 0, queuedEvents: 0, windowBytes: 0, largestWindowBytes: 0, trimmedEvents: 0 };
         row.hosts++; hostCount++;
+        const bytes = counts.windowBytes ?? 0, trimmed = counts.trimmedEvents ?? 0;
+        windowBytes += bytes; largestWindowBytes = Math.max(largestWindowBytes, bytes); trimmedEvents += trimmed;
+        row.windowBytes += bytes; row.largestWindowBytes = Math.max(row.largestWindowBytes, bytes); row.trimmedEvents += trimmed;
         row.events += counts.events; row.eventSubscribers += counts.eventSubscribers; row.stateSubscribers += counts.stateSubscribers; row.queuedEvents += counts.queuedEvents;
         if (details) hostRows.push({ id, ...counts });
       });
-      hostRows.sort((a, b) => b.events + b.queuedEvents - a.events - a.queuedEvents);
+      hostRows.sort((a, b) => (b.windowBytes ?? 0) - (a.windowBytes ?? 0) || b.events + b.queuedEvents - a.events - a.queuedEvents);
       return {
         processes: { running, exited, groups: [...groups.values()].sort((a, b) => b.running + b.exited - a.running - a.exited).slice(0, details ? Infinity : 64), omittedGroups: details ? 0 : Math.max(0, groups.size - 64), oldest, dropped: processes.dropped(), siteOverflow, limit: HEAP_TRACKED_PROCESSES },
-        hosts: { count: hostCount, byEngine, largest: hostRows.slice(0, 256), omittedDetails: details ? Math.max(0, hostCount - 256) : hostCount, dropped: hosts.dropped(), limit: HEAP_TRACKED_HOSTS },
+        hosts: { count: hostCount, windowBytes, largestWindowBytes, trimmedEvents, byEngine, largest: hostRows.slice(0, 256), omittedDetails: details ? Math.max(0, hostCount - 256) : hostCount, dropped: hosts.dropped(), limit: HEAP_TRACKED_HOSTS },
       };
     },
   };
