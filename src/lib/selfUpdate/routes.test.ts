@@ -959,7 +959,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       record.web = { ...record.web, revision: serving.slice(0, 7) };
       record.runtimeHost = { ...record.runtimeHost, revision: serving.slice(0, 7) };
       record.launcher = { ...record.launcher, requestId: controller.current!.requestId, state: "healthy",
-        revision: serving, error: outcome === "rolled-back" ? { kind: "fell-back", detail: "candidate health failed" } : null };
+        revision: serving, error: outcome === "rolled-back" ? { kind: "fell-back", revision: tipSha.slice(0, 7), detail: "candidate health failed" } : null };
       writeFileSync(h.recordFile, JSON.stringify(record));
       expect(await run(false)).toMatchObject({ apply: { state: "switching" }, drain: { id: controller.current!.requestId } });
       expect(await run()).toMatchObject({ apply: { state: outcome === "done" ? "done" : "failed", rolledBack: outcome === "rolled-back" }, drain: null });
