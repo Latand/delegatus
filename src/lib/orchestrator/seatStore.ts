@@ -103,7 +103,7 @@ type Sequence = keyof typeof SEQUENCE_PREFIX;
 const SLOTS = Object.keys(SLOT_PREFIX) as Slot[];
 const SEQUENCES = Object.keys(SEQUENCE_PREFIX) as Sequence[];
 
-/** The keyed parts a reader may ask for. `slots` carries the meta row. */
+/** The keyed parts a reader may ask for. Every read also carries the meta row. */
 export type SeatPart = "slots" | "revocations" | "lineage" | "history";
 const PART_PREFIXES: Record<SeatPart, readonly string[]> = {
   slots: Object.values(SLOT_PREFIX),
@@ -391,7 +391,8 @@ function partOf(key: string): SeatPart | "meta" | "text" | null {
 function selectParts(database: string, parts: readonly SeatPart[], textKeys: boolean) {
   return performanceSpans.sync("orchestrator.seat-read", () => readStateCollectionSelection(database, ORCHESTRATOR_SEAT_COLLECTION, {
     prefixes: parts.flatMap((part) => PART_PREFIXES[part]),
-    keys: parts.includes("slots") ? [META_KEY] : [],
+    // Every read carries the meta row: it says whether the record is established.
+    keys: parts.length > 0 ? [META_KEY] : [],
     keysOnly: textKeys ? [TEXT_PREFIX] : [],
   }));
 }

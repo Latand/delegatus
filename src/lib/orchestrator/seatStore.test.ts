@@ -22,6 +22,7 @@ import {
   orchestratorRevocations,
   orchestratorSeatFor,
   readOrchestratorSeatFile,
+  revokedOrchestratorSeatConversationsOrUnknown,
 } from "./seats";
 import type { OrchestratorSeatFile } from "./seatRecords";
 import { importLegacyOrchestratorSeats, ORCHESTRATOR_SEAT_COLLECTION, resetOrchestratorSeatStoreForTests } from "./seatStore";
@@ -164,7 +165,13 @@ test("a write in one process is read by another through its own connection, and 
 
 test("a damaged stored record reads as unknown until the next designation rewrites it", () => {
   designate("proj-a", "first", "conversation_a");
+  designate("proj-a", "second", "conversation_a2");
+  expect(orchestratorRevocations()).toHaveLength(1);
   damageStoredSeatRecord();
+  resetOrchestratorSeatStoreForTests();
+  // A reader that asks for revocations alone still learns the record is not established.
+  expect(orchestratorRevocations()).toEqual([]);
+  expect(revokedOrchestratorSeatConversationsOrUnknown()).toBeNull();
   expect(activeOrchestratorSeatsOrUnknown()).toBeNull();
   expect(activeOrchestratorSeats()).toEqual([]);
   designate("proj-b", "second", "conversation_b");
