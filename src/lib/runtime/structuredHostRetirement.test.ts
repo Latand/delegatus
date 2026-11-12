@@ -1604,15 +1604,26 @@ test("the persisted cursor round-trips Copilot after mixed and protected retirem
   try {
     const file = snapshot();
     const template = file.entries[`claude:${SESSION}`]!;
+    const conversationTemplate = structuredClone(file.conversations[CONVERSATION]!);
+    const generationTemplate = structuredClone(file.conversations[CONVERSATION]!.generations[0]!);
     delete file.entries[`claude:${SESSION}`];
-    for (const engine of ["claude", "codex", "copilot"] as const) {
+    delete file.conversations[CONVERSATION];
+    for (const [index, engine] of (["claude", "codex", "copilot"] as const).entries()) {
+      const sessionId = `${index}${SESSION.slice(1)}`;
+      const conversationId = `conversation_retirement_${engine}` as const;
       const host = structuredClone(template);
-      host.key = { engine, sessionId: SESSION };
+      host.key = { engine, sessionId };
       host.structuredHost!.kind = engine === "codex" ? "codex-app-server"
         : engine === "copilot" ? "copilot-acp" : "claude-broker";
       host.structuredHost!.activeFlags = [];
       if (engine === "copilot") host.structuredHost!.pendingAttention = ["open-question"];
-      file.entries[`${engine}:${SESSION}`] = host;
+      file.entries[`${engine}:${sessionId}`] = host;
+      file.conversations[conversationId] = {
+        ...conversationTemplate,
+        id: conversationId,
+        engine,
+        generations: [{ ...generationTemplate, id: sessionId }],
+      };
     }
 
     const persistence = { readCursor: undefined, writeCursor: undefined,
@@ -1621,7 +1632,7 @@ test("the persisted cursor round-trips Copilot after mixed and protected retirem
     expect(first.terminated.map(host => host.engine)).toEqual(["claude", "codex"]);
     expect(first.report.refused.map(item => item.clause)).toEqual(["attention-settled"]);
     expect(fs.readFileSync(path.join(root, "host-retirement-cursor.json"), "utf8"))
-      .toContain(`copilot:${SESSION}`);
+      .toContain(`copilot:${`2${SESSION.slice(1)}`}`);
 
     const second = await sweep(persistence);
     expect(second.terminated.map(host => host.engine)).toEqual(["claude", "codex"]);
