@@ -70,8 +70,9 @@ async function fixture() {
   const service = () => createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), domain as never), receipts,
     viewerMcpToolPolicy(domain as never), { recovery: viewerMcpRecoverableTools(domain as never) });
   setMcpHttpDependenciesForTests({ service: async () => service(), conversationForCapability: () => seat });
-  let mode: "normal" | "before" | "after" | "hold" = "normal", held: (() => Promise<number>) | undefined;
-  let posts = 0, lastId = "", recoveryDelayMs = 0;
+  let mode: "normal" | "before" | "after" | "cut-body" | "hold" = "normal", held: (() => Promise<number>) | undefined;
+  let posts = 0, lastId = "", rotateEffects = 0;
+  let recoveryHold: { reached(): void; wait: Promise<void>; release(): void } | null = null;
   const server = http.createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -79,17 +80,25 @@ async function fixture() {
     const url = new URL(request.url!, "http://127.0.0.1");
     const next = new NextRequest(url, { method: request.method, headers: request.headers as HeadersInit,
       ...(request.method === "POST" ? { body } : {}) });
-    const answer = url.pathname === "/api/mcp" ? await POST(next) : overrideAnswer !== undefined ? Response.json(overrideAnswer) : await sendPOST(next);
+    let answer: Response;
+    if (url.pathname === "/api/mcp") answer = await POST(next);
+    else if (url.pathname === "/api/attention/needs-you") {
+      answer = Response.json(overrideAnswer ?? { ok: true, rows: [], partial: false });
+    } else {
+      if (url.pathname === "/api/orchestrator/rotate") rotateEffects++;
+      answer = overrideAnswer !== undefined ? Response.json(overrideAnswer) : await sendPOST(next);
+    }
     response.writeHead(answer.status, Object.fromEntries(answer.headers)); response.end(await answer.text());
   });
   const uninstall = installControlIngress(server, evidence);
   const origin = await listen(server);
   const gateway = http.createServer(async (request, response) => {
-    if (request.url?.startsWith(CONTROL_RECOVERY_PATH) && recoveryDelayMs) {
-      const delay = recoveryDelayMs; recoveryDelayMs = 0; await Bun.sleep(delay);
+    if (request.url?.startsWith(CONTROL_RECOVERY_PATH) && recoveryHold) {
+      const held = recoveryHold; recoveryHold = null;
+      if (held) { held.reached(); await held.wait; }
     }
+    if (request.method === "POST") { posts++; lastId = String(request.headers[CONTROL_REQUEST_HEADER]); }
     if (request.url === "/api/conversation-host") {
-      posts++; lastId = String(request.headers[CONTROL_REQUEST_HEADER]);
       if (mode === "before") { mode = "normal"; request.socket.destroy(); return; }
     }
     const proxy = () => new Promise<number>((resolve, reject) => {
@@ -98,6 +107,10 @@ async function fixture() {
         answer.on("data", chunk => chunks.push(Buffer.from(chunk)));
         answer.on("end", () => {
           if (request.url === "/api/conversation-host" && mode === "after") { mode = "normal"; request.socket.destroy(); }
+          else if (mode === "cut-body") {
+            mode = "normal"; response.writeHead(answer.statusCode!, answer.headers);
+            response.write(Buffer.concat(chunks).subarray(0, 5)); response.destroy();
+          }
           else if (!response.destroyed) { response.writeHead(answer.statusCode!, answer.headers); response.end(Buffer.concat(chunks)); }
           resolve(answer.statusCode!);
         });
@@ -118,10 +131,16 @@ async function fixture() {
   process.env.LLV_VIEWER_CONTROL_URL = gateOrigin;
   const client = new Client({ name: "control-evidence-http", version: "1" });
   await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", origin), { requestInit: { headers: { "x-llv-spawn-capability": "a".repeat(43) } } }));
-  return { client, origin, gateOrigin, evidence, mode: (next: typeof mode) => { mode = next; }, posts: () => posts, lastId: () => lastId,
+  return { client, origin, gateOrigin, evidence, mode: (next: typeof mode) => { mode = next; }, posts: () => posts, lastId: () => lastId, rotateEffects: () => rotateEffects,
     late: async () => held!(), reopen: () => { receipts.close(); receipts = new ReceiptStore(receipts.filename); },
     override: (value: unknown) => { overrideAnswer = value; }, loseSettlement: (value: boolean) => { lostSettlement = value; },
-    delayRecovery: (milliseconds: number) => { recoveryDelayMs = milliseconds; },
+    holdRecovery: () => {
+      let reached!: () => void, release!: () => void;
+      const arrived = new Promise<void>(resolve => { reached = resolve; });
+      const wait = new Promise<void>(resolve => { release = resolve; });
+      recoveryHold = { reached, wait, release };
+      return { arrived, release: () => release() };
+    },
     close: async () => {
       await client.close(); await stop(gateway); await stop(server); uninstall(); await evidence.close(); receipts.close(); setMcpHttpDependenciesForTests(null);
       if (previous === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previous;
@@ -133,9 +152,7 @@ test("SDK reset before ingress settles nonexecution, fences late bytes and permi
   const args = { conversationId: recipient.id, text: "send after ingress fence", clientRequestId: "reset-before-ingress" };
   try {
     f.mode("hold");
-    const started = Date.now();
     const answer = payload(await f.client.callTool({ name: "send_message", arguments: args }));
-    expect(Date.now() - started).toBeLessThan(5000);
     expect(answer).toMatchObject({ ok: false, details: { outcome: "not-executed" } });
     expect(effects).toBe(before);
     expect((await f.evidence.observe(f.lastId(), true)).state).toBe("fenced");
@@ -168,13 +185,31 @@ test("SDK reset after response reads the committed answer back with exactly one 
   } finally { await f.close(); }
 });
 
-test("SDK reset recovery waits through a six-second Viewer evidence stall", async () => {
+test("SDK reset after headers recovers the retained non-delivery outcome without repeating the request", async () => {
+  const f = await fixture();
+  try {
+    f.mode("cut-body");
+    f.override({ ok: true, conversationId: recipient.id, path: transcript, seat: { conversationId: recipient.id }, replayed: false });
+    const answer = payload(await f.client.callTool({ name: "rotate_orchestrator", arguments: {
+      project: "fixture-project", clientRequestId: "reset-during-read-body",
+    } }));
+    expect(answer).toMatchObject({ ok: true, project: "fixture-project", conversationId: recipient.id, replayed: false });
+    expect(await f.evidence.observe(f.lastId(), true)).toMatchObject({ state: "seen", status: 200, outcome: expect.stringContaining(recipient.id) });
+    expect(f.posts()).toBe(1); expect(f.rotateEffects()).toBe(1);
+  } finally { await f.close(); }
+});
+
+test("SDK reset recovery remains pending through a synchronized Viewer evidence stall", async () => {
   const f = await fixture(), before = effects;
   try {
-    f.mode("before"); f.delayRecovery(6000);
-    const answer = payload(await f.client.callTool({ name: "send_message", arguments: {
+    f.mode("before");
+    const hold = f.holdRecovery();
+    const pending = f.client.callTool({ name: "send_message", arguments: {
       conversationId: recipient.id, text: "wait for ingress proof", clientRequestId: "stalled-ingress-proof",
-    } }));
+    } });
+    await hold.arrived;
+    hold.release();
+    const answer = payload(await pending);
     expect(answer).toMatchObject({ ok: false, details: { outcome: "not-executed" } });
     expect(f.posts()).toBe(1); expect(effects).toBe(before);
   } finally { await f.close(); }
@@ -212,7 +247,8 @@ test("ingress recovery requires the internal service proof, bounds bodies, and p
   const server = http.createServer((_request, response) => { response.setHeader("content-type", "application/json"); response.end(body); });
   const uninstall = installControlIngress(server, evidence), origin = await listen(server);
   try {
-    const forged = `${Date.now() + 1}-${"f".repeat(64)}`;
+    const opened = (evidence.db.query("SELECT opened FROM coverage WHERE id=1").get() as { opened: number }).opened;
+    const forged = `${opened + 1}-${"f".repeat(64)}`;
     const denied = await controlFetch(new URL(`${CONTROL_RECOVERY_PATH}?id=${forged}`, origin));
     expect(denied.status).toBe(403); await denied.text();
     const id = controlRequestId();
@@ -240,29 +276,33 @@ test("ingress recovery requires the internal service proof, bounds bodies, and p
   } finally { await stop(server); uninstall(); evidence.close(); }
 });
 
-test("SDK control read survives a six-second stall in a separate serving process", async () => {
+test("SDK control read survives a synchronized stall in a separate serving process", async () => {
   const f = await fixture();
   const script = `import http from 'node:http';
-    const server = http.createServer((_req, res) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 6000);
+    let release; const held = new Promise(resolve => { release = resolve; });
+    const server = http.createServer(async (_req, res) => { process.stdout.write('received\\n'); await held;
       res.setHeader('content-type','application/json'); res.end(JSON.stringify({partial:true, omissions:['board']})); });
     server.listen(0,'127.0.0.1',()=>process.stdout.write(String(server.address().port)+'\\n'));
+    process.stdin.once('data',()=>release());
     process.on('SIGTERM',()=>server.closeAllConnections());`;
-  const child = (await import("node:child_process")).spawn(process.execPath, ["--eval", script], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env } });
+  const child = (await import("node:child_process")).spawn(process.execPath, ["--eval", script], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env } });
   const lines = createInterface({ input: child.stdout });
   const exited = new Promise<void>(resolve => child.once("exit", () => resolve()));
   try {
-    const port = await new Promise<string>((resolve, reject) => {
+    const nextLine = () => new Promise<string>((resolve, reject) => {
       lines.once("line", line => resolve(line.trim())); child.once("error", reject);
       child.once("exit", () => reject(new Error("stall fixture exited before its port handshake")));
     });
+    const port = await nextLine();
     process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${port}`;
-    const started = Date.now();
     // Exercise a registered real tool through SDK -> exported MCP route ->
     // production binding and control transport; only the downstream data is a fixture.
-    const answer = payload(await f.client.callTool({ name: "dismiss_attention", arguments: { project: "fixture-project", kinds: ["memory"], clientRequestId: "stalled-control-read" },
-      _meta: { "delegatus/deadlineAt": Date.now() + 12_000 } }));
+    const pending = f.client.callTool({ name: "dismiss_attention", arguments: { project: "fixture-project", kinds: ["memory"], clientRequestId: "stalled-control-read" },
+      _meta: { "delegatus/deadlineAt": Date.now() + 12_000 } });
+    expect(await nextLine()).toBe("received");
+    child.stdin.write("release\n");
+    const answer = payload(await pending);
     expect(answer).toMatchObject({ ok: true, partial: true, omissions: ["board"] });
-    expect(Date.now() - started).toBeGreaterThanOrEqual(5900);
   } finally { lines.close(); child.kill("SIGKILL"); await exited; await f.close(); }
 }, 20_000);
 

@@ -797,6 +797,26 @@ async function dispatchViewerControl(
   } finally {
     attempt.release();
   }
+  if (unreadable) {
+    // Headers do not settle a control call. The route may have completed and
+    // durably recorded its answer before the socket reset during the body.
+    // Reconcile the same transport id under the caller's remaining dispatch
+    // budget; an absent or incomplete witness remains uncertain.
+    const evidence = await readControlEvidence(transportId, {
+      ...context,
+      deadlineAt: Math.min(context.deadlineAt ?? expiresAt, expiresAt),
+    }, pinConfiguredEndpoint);
+    context.assertCaller?.();
+    if (evidence?.state === "seen" && typeof evidence.status === "number" && typeof evidence.outcome === "string") {
+      response = new Response(evidence.outcome, { status: evidence.status, headers: { "content-type": "application/json" } });
+      try {
+        parsed = await response.json() as unknown;
+        unreadable = false;
+      } catch {
+        // Retained bytes that are not a complete JSON verdict prove no result.
+      }
+    }
+  }
   const result = objectRecord(parsed) ? parsed : {};
   const answered = !unreadable && objectRecord(parsed) && Boolean(text(result.error) || text(result.code) || Object.keys(result).length);
   if (TRANSIENT_CONTROL_STATUSES.has(response.status) || (response.status === 503 && !answered)) {

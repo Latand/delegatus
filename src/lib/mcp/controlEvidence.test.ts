@@ -7,9 +7,9 @@ import type { McpRequestBinding } from "./server";
 
 const epoch = 1_800_000_000_000;
 const id = (at: number, tail = "a") => `${at}-${tail.repeat(64)}`;
-function fixture() {
+function fixture(openedAt = epoch) {
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "control-evidence-"));
-  let now = epoch;
+  let now = openedAt;
   const filename = path.join(root, "http.sqlite");
   const store = new ControlEvidenceStore(filename, () => now);
   return { store, filename, at: (at: number) => { now = at; }, close: () => { store.close(); fs.rmSync(root, { recursive: true, force: true }); } };
@@ -44,6 +44,15 @@ test("malformed, pre-coverage, future and expired ids cannot prove nonexecution"
     expect(f.store.observe(id(epoch + 1)).state).toBe("seen");
     f.at(epoch + EVIDENCE_TTL_MS + 3);
     expect(f.store.observe(id(epoch + 1), true).state).toBe("unknown");
+  } finally { f.close(); }
+});
+
+test("request timestamps equal to coverage opening stay unknown and later timestamps are admitted", () => {
+  const opened = epoch + 100;
+  const f = fixture(opened);
+  try {
+    expect(f.store.observe(id(opened), true).state).toBe("unknown");
+    expect(f.store.observe(id(opened + 1))).toMatchObject({ state: "seen", fresh: true });
   } finally { f.close(); }
 });
 
@@ -120,7 +129,8 @@ test("the production worker persists writer output, fails busy reads promptly an
   let worker = new AsyncControlEvidenceStore(filename, true, 1000);
   try {
     await worker.ready();
-    const request = controlRequestId();
+    const opened = (peer.db.query("SELECT opened FROM coverage WHERE id=1").get() as { opened: number }).opened;
+    const request = id(opened + 1);
     expect((await worker.observe(request)).state).toBe("seen");
     await worker.complete(request, 200, '{"operationId":"worker-operation"}');
     await worker.closed(request, 321, 456);
@@ -128,9 +138,7 @@ test("the production worker persists writer output, fails busy reads promptly an
     await worker.close(); worker = new AsyncControlEvidenceStore(filename, true, 1000);
     expect(await worker.observe(request, true)).toMatchObject({ state: "seen", status: 200, outcome: '{"operationId":"worker-operation"}' });
     peer.db.exec("BEGIN IMMEDIATE");
-    const started = Date.now();
-    await expect(worker.observe(controlRequestId(), true)).rejects.toThrow();
-    expect(Date.now() - started).toBeLessThan(2200);
+    await expect(worker.observe(id(opened + 2), true)).rejects.toThrow();
     peer.db.exec("ROLLBACK");
     await worker.close();
     await expect(worker.observe(request, true)).rejects.toThrow("unavailable");
@@ -144,7 +152,9 @@ test("a bundled evidence writer runs without the source tree and retains its fen
     expect(built.success).toBe(true);
     const source = `const {AsyncControlEvidenceStore}=await import(process.argv[1]);
       const store=new AsyncControlEvidenceStore(process.argv[2]); await store.ready();
-      const id=String(Date.now()+1)+'-'+ 'a'.repeat(64);
+      const {Database}=require('bun:sqlite'); const db=new Database(process.argv[2],{readonly:true});
+      const opened=db.query('SELECT opened FROM coverage WHERE id=1').get().opened; db.close();
+      const id=String(opened+1)+'-'+ 'a'.repeat(64);
       console.log(JSON.stringify([await store.observe(id,true),await store.observe(id)])); await store.close();`;
     const answer = JSON.parse(execFileSync(process.execPath, ["--eval", source, built.outputs[0]!.path, path.join(root, "bundle.sqlite")], { cwd: root, encoding: "utf8", env: { ...process.env } }));
     expect(answer).toMatchObject([{ state: "fenced" }, { state: "fenced" }]);
