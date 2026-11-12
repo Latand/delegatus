@@ -82,6 +82,35 @@ Bun 1.3.3 and requires exit codes 0 and 7 to reach the caller. Its Linux base
 result establishes that Linux does not reproduce the Windows hang. Native
 before/after confirmation remains a publication acceptance requirement.
 
+## Rollback receipt finding follow-up
+
+Windows run 43190710471 / job 131089418162 completed in 6m46s, then exposed a
+separate failure in the DELEGATUS_TOKEN/start-launcher, rollback=true custody
+case at bin/launcher-credentials.test.ts:273. The recovered launcher and both
+services became healthy, but the existing rollback receipt did not acquire the
+new launcher PID within the test's 90-second bound. The run did not record a
+rename error, so its cause is inferred from the write path: createRelaunch.succeeded()
+replaces that receipt through launcher-relaunch.mjs's atomic() helper, which
+had no retry for transient Windows rename denials. The adjacent launcher-record
+writer already retries Windows EPERM and EBUSY up to 100 times at 50 ms
+intervals.
+
+The receipt writer now uses that same bounded retry and always removes its
+temporary file. bin/launcher-relaunch.test.ts exercises succeeded() with two
+transient denials, exhausted EBUSY, and immediate EACCES; the successful case
+commits the new receipt owner, while refusals preserve the previous owner.
+On Linux/Bun 1.4.0, the focused suite passed 11 tests / 87 assertions, and
+bin/launcher-credentials.test.ts passed 17 tests / 685 assertions. Those local
+runs exercise the retry logic with a simulated Windows platform; they are not
+native Windows evidence.
+
+The publisher's next Windows (native) job on the PR head is the native
+verification. It must finish within the ten-minute job budget and pass both
+bin/launcher-relaunch.test.ts and bin/launcher-credentials.test.ts; the latter
+checks that the recovered rollback receipt names the new launcher. Record its
+terminal status, file counts, and duration in the PR review before closing the
+task.
+
 Workflow tests execute the real inline shell bodies against a fixture gate,
 requiring one file per invocation, complete successful dispatch and immediate
 propagation of exit 17. Removing the per-file workflow change fails all four
