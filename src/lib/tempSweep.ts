@@ -459,7 +459,7 @@ export async function removeTreeViaTrash(directory: string, options: {
     if (!mutationStarted) {
       const current = fs.lstatSync(trash);
       if (current.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === identity && current.uid === uid) {
-        try { fs.lstatSync(directory); throw new Error("original path was acquired while removal was refused; preserved both paths"); }
+        try { fs.lstatSync(directory); throw new Error(`original path was acquired while removal was refused (${attemptTempFailureDetail(error)}); preserved both paths`, { cause: error }); }
         catch (restoreError) { if ((restoreError as NodeJS.ErrnoException).code !== "ENOENT") throw restoreError; }
         fs.renameSync(trash, directory);
         fs.unlinkSync(options.journal);

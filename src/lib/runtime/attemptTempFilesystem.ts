@@ -635,7 +635,7 @@ const namespaceSnapshot = "find /attempt -xdev -type d -exec stat -c '%d:%i:%f:%
 export type AttemptNamespaceProtection = { digest: string };
 type NamespaceBudget = { budgetMs?: number; bytes?: number };
 type AttemptRemovalSettings = NamespaceBudget & {
-  /** Called immediately before the first permission write or removal dispatch. */
+  /** Called when native deletion starts or the cleanup namespace reaches its delete command. */
   mutationStarted?: () => void;
   /** Synchronous entry authority; full checkout validation brackets repair. */
   permissionAuthority?: () => boolean;
@@ -676,7 +676,7 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
     : operation === "measure" ? 'exec du -skx /attempt'
     : operation === "evidence" ? noEvidence
       : inspection + (requireNoEvidence ? noEvidence : "")
-        + (operation === "remove" ? 'exec find /attempt -xdev -depth -mindepth 1 -delete' : 'exit 0');
+        + (operation === "remove" ? 'printf "%s\\n" "DELEGATUS_REMOVAL_STARTED"; exec find /attempt -xdev -depth -mindepth 1 -delete' : 'exit 0');
   if (protection && !/^[a-f0-9]{64}$/.test(protection.digest)) throw new Error("invalid attempt namespace snapshot");
   const verify = protection ? namespaceSnapshot + `test "$digest" = '${protection.digest}' || exit 75; ` : "";
   const script = 'identity=$1; shift; test "$(stat -c %d:%i /attempt)" = "$identity" || exit 75; ' + linkedEvidence + verify + body;
@@ -693,7 +693,6 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
   const timeout = remaining();
   let result: { stdout: string };
   try {
-    if (operation === "remove") mutationStarted?.();
     result = await run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=4m",
     "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
       "--mount", `type=bind,source=${directory},target=/attempt${operation !== "remove" ? ",readonly" : ""}`,
@@ -701,10 +700,12 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
       String(linked.length), ...linked, original, ...markers], timeout);
   }
   catch (error) {
+    if (operation === "remove" && String((error as { stdout?: unknown }).stdout ?? "").includes("DELEGATUS_REMOVAL_STARTED")) mutationStarted?.();
     const code = (error as NodeJS.ErrnoException & { code?: unknown }).code;
     if (code === "ENOENT" || [125, 126, 127].includes(Number(code))) throw unavailable(attemptTempFailureDetail(error));
     throw new Error(attemptTempFailureDetail(error), { cause: error });
   }
+  if (operation === "remove" && result.stdout.includes("DELEGATUS_REMOVAL_STARTED")) mutationStarted?.();
   return { identity, stdout: result.stdout };
 }
 
@@ -854,13 +855,13 @@ const descriptorMount = (fd: number) => {
  * following a symlink, then chmod directory descriptors. O_PATH opens mode 000;
  * the proc descriptor names that inode even if its directory entry changes.
  * All child paths are relative to a held parent, on the root's device. */
-function repairAttemptPermissions(directory: string, authority: () => boolean, budgetMs: number, permissionChange?: AttemptProtection["permissionChange"], dispatchGuard?: () => boolean, mutationStarted?: () => void) {
+function repairAttemptPermissions(directory: string, authority: () => boolean, budgetMs: number, permissionChange?: AttemptProtection["permissionChange"], dispatchGuard?: () => boolean) {
   // Descendant lookup through these pinned descriptors requires Linux procfs.
   // Other platforms keep their existing native removal path.
-  if (process.platform !== "linux") return;
+  if (process.platform !== "linux") return { rollback() {}, release() {} };
   const until = performance.now() + Math.max(0, Math.min(30_000, budgetMs));
   const uid = process.getuid?.();
-  if (uid === undefined) return;
+  if (uid === undefined) return { rollback() {}, release() {} };
   const initial = fs.lstatSync(directory);
   const physicalRoot = fs.realpathSync(directory);
   assertAttemptMountsClear(physicalRoot);
@@ -871,6 +872,8 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
   };
   type Entry = { fd: number; pinned: string; expected: string; identity: string };
   const stack: Array<Entry & { entries: fs.Dir }> = [];
+  const changed: Array<{ fd: number; mode: number }> = [];
+  const retainedFds = new Set<number>();
   const bound = (entry: Entry) => {
     const mount = descriptorMount(entry.fd);
     const linked = fs.lstatSync(entry.expected, { throwIfNoEntry: false });
@@ -883,7 +886,7 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
     // O_PATH is Linux-specific and is intentionally combined with O_NOFOLLOW:
     // a symlink descriptor is classified and closed without touching its target.
     const fd = fs.openSync(file, 0x200000 | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
-    let retained = false;
+    let keepDescriptor = false;
     try {
       const stat = fs.fstatSync(fd);
       // File modes do not prevent unlink from a writable parent. A file can
@@ -911,20 +914,31 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
           // Complete descriptor/mount/protection observations before it;
           // no filesystem read may follow admission before this write.
           if (dispatchGuard && !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed before permission repair");
-          mutationStarted?.();
           fs.chmodSync(pinned, mode & 0o7777);
+          changed.push({ fd, mode: stat.mode & 0o7777 });
+          retainedFds.add(fd);
         };
         if (permissionChange) permissionChange(path.join(directory, path.relative(physicalRoot, expected)), mode & 0o7777, apply);
         else apply();
       }
       validate();
       stack.push({ ...entry, entries: fs.opendirSync(pinned) });
-      retained = true;
-    } finally { if (!retained) fs.closeSync(fd); }
+      keepDescriptor = true;
+    } finally { if (!keepDescriptor) fs.closeSync(fd); }
   };
   const close = () => {
     const frame = stack.pop()!;
-    try { frame.entries.closeSync(); } finally { fs.closeSync(frame.fd); }
+    try { frame.entries.closeSync(); } finally { if (!retainedFds.has(frame.fd)) fs.closeSync(frame.fd); }
+  };
+  const release = () => { for (const entry of changed.splice(0)) { retainedFds.delete(entry.fd); fs.closeSync(entry.fd); } };
+  const rollback = () => {
+    let failure: unknown;
+    for (const entry of changed.splice(0).reverse()) {
+      try { fs.chmodSync(`/proc/self/fd/${entry.fd}`, entry.mode); }
+      catch (error) { failure ??= error; }
+      finally { retainedFds.delete(entry.fd); fs.closeSync(entry.fd); }
+    }
+    if (failure) throw failure;
   };
   try {
     enter(directory, physicalRoot, true);
@@ -936,7 +950,12 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
       if (entry) enter(path.join(frame.pinned, entry.name), path.join(frame.expected, entry.name));
       else close();
     }
+  } catch (error) {
+    while (stack.length) close();
+    try { rollback(); } catch (rollbackError) { throw new Error("attempt permission repair failed and original modes could not be restored", { cause: rollbackError }); }
+    throw error;
   } finally { while (stack.length) close(); }
+  return { rollback, release };
 }
 
 /** An unreadable tree can retire only when the readonly namespace proves it
@@ -948,6 +967,8 @@ export async function attemptTreeHasNoEvidence(directory: string, original: stri
 export async function removeAttemptTree(directory: string, original = directory, guard?: () => Promise<boolean>, requireNoEvidence = false,
   dispatchGuard?: () => boolean, postDeleteGuard = dispatchGuard, discardExpiredEvidence = false,
   protection?: AttemptNamespaceProtection, settings: AttemptRemovalSettings = {}): Promise<void> {
+  let repair: ReturnType<typeof repairAttemptPermissions> | undefined;
+  let mutationStarted = false;
   try {
     if (requireNoEvidence || protection) {
       const { identity } = await containerCommand(directory, "remove", original, guard, requireNoEvidence || !discardExpiredEvidence, dispatchGuard, settings, protection,
@@ -957,8 +978,7 @@ export async function removeAttemptTree(directory: string, original = directory,
     }
     if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before native removal");
     if (discardExpiredEvidence && guard && dispatchGuard && postDeleteGuard) {
-      repairAttemptPermissions(directory, settings.permissionAuthority ?? postDeleteGuard, settings.budgetMs ?? 30_000, settings.permissionChange, dispatchGuard,
-        settings.mutationStarted);
+      repair = repairAttemptPermissions(directory, settings.permissionAuthority ?? postDeleteGuard, settings.budgetMs ?? 30_000, settings.permissionChange, dispatchGuard);
       // Repeat all observations after repair, including checkout references,
       // and reauthorize after the last await.
       if (!await guard() || !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed after permission repair");
@@ -967,14 +987,20 @@ export async function removeAttemptTree(directory: string, original = directory,
     // Mount and physical-path reads may observe a changed root or protection.
     // Admit from the final synchronous snapshots immediately before native rm.
     if (dispatchGuard && !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed before native removal");
+    mutationStarted = true;
     settings.mutationStarted?.();
-    try { await fs.promises.rm(directory, { recursive: true, force: true }); }
+    try { await fs.promises.rm(directory, { recursive: true, force: true }); repair?.release(); }
     catch (error) {
+      repair?.release();
       if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
       const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard, settings, protection);
       removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
     }
   } catch (error) {
+    // Permission repair changes no data. Until deletion dispatch, restore every
+    // changed directory mode before the quarantine owner restores its path.
+    // Once deletion starts, retain the journal because removal may be partial.
+    if (!mutationStarted) repair?.rollback();
     if (error instanceof AttemptTempBudgetDeferred) throw error;
     throw new Error(attemptTempFailureDetail(error), { cause: error });
   }

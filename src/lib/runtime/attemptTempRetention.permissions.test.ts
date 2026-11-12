@@ -40,13 +40,12 @@ test.skipIf(process.platform !== "linux").each(["unchanged", "rewrite-before-rep
     fs.mkdirSync(uv, { recursive: true }); fs.writeFileSync(path.join(uv, ".git"), "");
     fs.chmodSync(f.cache, 0o555);
     const outside = path.join(f.parent, "external-gitdir"); fs.mkdirSync(outside);
-    let injected = false, retained = f.directory;
+    let injected = false;
     try {
       const report = await sweepAttemptTemps(f.store, { now: () => NOW, maxRoots: 1,
         state: async () => "expired", scan: emptyScan, references: async (_original, current) => {
           if (!injected && kind !== "unchanged"
             && (kind === "rewrite-before-repair" || (fs.statSync(path.join(current, "module-cache")).mode & 0o700) === 0o700)) {
-            retained = current;
             fs.writeFileSync(path.join(current, "module-cache/uv/sdists-v9/.git"), `gitdir: ${outside}\n`);
             injected = true;
           }
@@ -57,10 +56,13 @@ test.skipIf(process.platform !== "linux").each(["unchanged", "rewrite-before-rep
       expect(injected).toBe(kind !== "unchanged");
       expect(f.store.has(f.directory)).toBe(kind !== "unchanged");
       if (kind !== "unchanged") {
-        expect(fs.readFileSync(path.join(retained, "module-cache/payload"), "utf8")).toBe("cache");
-        expect(fs.readFileSync(path.join(retained, "module-cache/uv/sdists-v9/.git"), "utf8")).toBe(`gitdir: ${outside}\n`);
-        if (kind === "rewrite-before-repair") expect(fs.statSync(f.cache).mode & 0o777).toBe(0o555);
-        else expect(JSON.parse(fs.readFileSync(attemptTempJournalPath(f.directory), "utf8")).trash).toBe(retained);
+        const restored = f.retainedRoot();
+        expect(restored).toBe(f.directory);
+        expect(fs.readFileSync(path.join(restored, "module-cache/payload"), "utf8")).toBe("cache");
+        expect(fs.readFileSync(path.join(restored, "module-cache/uv/sdists-v9/.git"), "utf8")).toBe(`gitdir: ${outside}\n`);
+        expect(fs.statSync(f.cache).mode & 0o777).toBe(0o555);
+        expect(fs.existsSync(attemptTempJournalPath(f.directory))).toBeFalse();
+        expect(fs.readdirSync(f.parent).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
       } else {
         expect(fs.existsSync(f.directory)).toBeFalse();
         expect(fs.existsSync(attemptTempJournalPath(f.directory))).toBeFalse();

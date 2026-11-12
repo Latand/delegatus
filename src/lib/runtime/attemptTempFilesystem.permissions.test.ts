@@ -267,7 +267,7 @@ test.skipIf(process.platform !== "linux").each(["before-repair", "after-repair"]
       await expect(removeAttemptTree(f.directory, f.directory, async () => { mounted = true; return true; }, false,
         allowed, allowed, true)).rejects.toThrow("mount boundary");
       expect(removed).toBeFalse();
-      expect(fs.statSync(f.cache).mode & 0o777).toBe(boundary === "before-repair" ? 0o555 : 0o755);
+      expect(fs.statSync(f.cache).mode & 0o777).toBe(0o555);
       expect(fs.readFileSync(path.join(f.cache, "payload"), "utf8")).toBe("cache");
     } finally { read.mockRestore(); rm.mockRestore(); }
   });

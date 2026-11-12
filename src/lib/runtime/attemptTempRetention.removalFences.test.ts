@@ -39,6 +39,26 @@ test("a removal callback fence refusal restores quarantine before returning", as
   expect(fs.readdirSync(parent).filter(name => name.startsWith(".delegatus-trash-"))).toEqual([]);
 });
 
+test("an acquired original path keeps the named refusal as its cause", async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-trash-refusal-cause-"));
+  cleanup.push(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const directory = path.join(parent, "root"), journal = path.join(parent, "intent.json");
+  fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "retained");
+  const refusal = new Error("attempt temp deferred: authority changed after permission repair");
+  let observed: unknown;
+  try {
+    await removeTreeViaTrash(directory, { journal, disposable: true, held: () => false,
+      remove: async () => { fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "replacement"), "keep"); throw refusal; },
+    });
+  } catch (error) { observed = error; }
+  expect(observed).toBeInstanceOf(Error);
+  expect((observed as Error).message).toContain(refusal.message);
+  expect((observed as Error).cause).toBe(refusal);
+  expect(fs.readFileSync(path.join(directory, "replacement"), "utf8")).toBe("keep");
+  expect(fs.readFileSync(JSON.parse(fs.readFileSync(journal, "utf8")).trash + "/payload", "utf8")).toBe("retained");
+  expect(fs.existsSync(journal)).toBeTrue();
+});
+
 test.skipIf(process.platform !== "linux").each([false, true])(
   "a post-quarantine fence refusal restores consumer links in the same tick (recreate=%s)", async recreate => {
     const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-trash-restore-"));
@@ -353,12 +373,17 @@ test.skipIf(process.platform !== "linux").each(["keep", "swap"] as const)(
     expect(report).toMatchObject({ removed: 0, errors: 0 });
     expect(report.outcomes[0].disposition).not.toBe("removed");
     expect(f.store.has(f.directory)).toBeTrue();
-    expect(f.journal().trash).toBe(trash);
-    const admitted = mutation === "swap" ? moved : trash;
+    const admitted = mutation === "swap" ? moved : f.directory;
     expect(fs.statSync(admitted).ino).toBe(originalIdentity);
     expect(fs.readFileSync(path.join(admitted, "cache/payload"), "utf8")).toBe("retained cache");
-    if (mutation === "keep") expect(fs.readFileSync(path.join(trash, "cache/.delegatus-keep"), "utf8")).toBe("late pin");
-    else {
+    if (mutation === "keep") {
+      expect(f.retainedRoot()).toBe(f.directory);
+      expect(fs.statSync(path.join(f.directory, "cache")).mode & 0o777).toBe(0o555);
+      expect(fs.readFileSync(path.join(f.directory, "cache/.delegatus-keep"), "utf8")).toBe("late pin");
+      expect(fs.existsSync(attemptTempJournalPath(f.directory))).toBeFalse();
+      expect(fs.readdirSync(f.parent).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+    } else {
+      expect(f.journal().trash).toBe(trash);
       expect(fs.statSync(trash).ino).toBe(replacementIdentity);
       expect(fs.readFileSync(path.join(trash, "payload"), "utf8")).toBe("protected replacement");
       expect(fs.readFileSync(path.join(trash, ".delegatus-keep"), "utf8")).toBe("permanent pin");
