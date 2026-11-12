@@ -40,7 +40,7 @@ const scenarios = ["unlanded", "ancestor", "squash", "batch", "later-edit", "par
   "remote-readonly", "wrong-path", "empty-diff", "cached-fork", "refresh-cache", "cached-branch", "archived-merged",
   "unlanded-no-pr", "internal-open-pr"] as const;
 
-test.each(scenarios)("finished lane delivery: %s", async scenario => {
+test.each([...scenarios])("finished lane delivery: %s", async scenario => {
   const repo = repository(scenario);
   const { git, write, base, tip } = repo;
   if (["squash", "batch", "later-edit"].includes(scenario)) {
