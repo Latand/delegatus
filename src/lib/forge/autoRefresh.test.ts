@@ -1589,7 +1589,7 @@ test("an outdated red head with a real conflict gets one visible lane and cannot
 });
 
 for (const phase of ["comparison", "plan", "record"] as const) {
-  test.each(["active", "foreign", "disabled", "review", "head", "target", "peer", "proactive"])(`red update rejects changed authority after ${phase}: %s`, async change => {
+  test.each(["active", "foreign", "disabled", "review", "head", "target", "peer", "completed-peer", "proactive"])(`red update rejects changed authority after ${phase}: %s`, async change => {
     const { h, git, pushes } = behindQueue(1, { mergeBase: "0".repeat(40), pr: { checks: [red("ci")] } });
     const invalidate = () => {
       const owner = h.pipeline("queued-0");
@@ -1600,9 +1600,13 @@ for (const phase of ["comparison", "plan", "record"] as const) {
       if (change === "head") owner.lastPassedCommit = "b".repeat(40);
       if (change === "target") owner.delivery!.target.branch = "refs/heads/other";
       if (change === "proactive") owner.proactiveTaskIds = ["unadopted-task"];
-      if (change === "peer") {
+      if (change === "peer" || change === "completed-peer") {
         const peer = structuredClone(owner);
-        peer.id = "new-owner"; peer.state = "running"; peer.delivery!.active = true;
+        peer.id = "new-owner"; peer.state = change === "completed-peer" ? "completed" : "running";
+        peer.delivery!.active = change !== "completed-peer";
+        peer.delivery!.ownerId = peer.id;
+        peer.delivery!.epoch += 1;
+        delete peer.merge;
         h.add(peer);
       }
     };
@@ -1878,7 +1882,10 @@ test.each(["closed", "paused", "needs_decision", "running"] as const)("a %s mech
     expect(pushes.map(push => push.branch)).toEqual(["refs/heads/topic-1"]);
     expect(h.merges().map(args => args[2])).toEqual(["12"]);
     expect(h.merge("queued-1")!.state).toBe("merged");
-    expect(h.pipeline("queued-0")).toEqual(owner);
+    if (state === "closed") {
+      expect(owner).toEqual({ ...h.pipeline("queued-0"), merge: owner.merge });
+      expect(h.merge("queued-0")).toMatchObject({ state: "cancelled", reason: "Lane is closed", nextReadAt: null });
+    } else expect(h.pipeline("queued-0")).toEqual(owner);
     expect(h.creates).toEqual([]);
     return;
   }
@@ -2824,6 +2831,7 @@ test("queued followers retain a readiness reason until their own checks replace 
   // A carrier replacement does not falsely make the clean follower wait on it.
   const nextHead = structuredClone(h.pipeline("queued-1"));
   nextHead.id = "head-successor";
+  nextHead.delivery!.ownerId = nextHead.id;
   h.remove("queued-1");
   h.add(nextHead);
   await h.sweep();
@@ -2844,6 +2852,7 @@ test("queued followers retain a readiness reason until their own checks replace 
 
   const holder = structuredClone(h.pipeline("refresh-1"));
   holder.id = "refresh-replacement";
+  holder.delivery!.ownerId = holder.id;
   h.remove("refresh-1");
   h.add(holder);
   h.merge("queued-0")!.refresh!.pipelineId = holder.id;
