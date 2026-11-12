@@ -214,4 +214,15 @@ export class ApplyController {
     if (intent.autoGateId) endRestartGate(restartGateFile(record.requestFile), intent.autoGateId);
   }
 
+  /** A policy-disabled cold ready apply was never handed to the launcher.
+      Restore only its own unpublished pointer and settle its receipt. */
+  cancelSuppressedReady(record: LauncherRecord, detail: string): boolean {
+    const intent = this.current;
+    if (!intent || intent.state !== "ready") return false;
+    this.restoreUntaken(record);
+    this.patch({ state: "failed", admissionRefused: true, detail });
+    this.releaseAdmission(record, intent);
+    return true;
+  }
+
 }

@@ -879,22 +879,41 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     });
   }
 
-  test.each(["operator", "auto"] as const)("disabled built-in updates never resume a ready %s apply from a snapshot", async trigger => {
+  test.each(["operator", "seat"] as const)("disabled built-in updates settle a cold ready %s apply and release external deployment admission", async trigger => {
     const { ApplyController } = await import("./apply");
     const h = harness({ relaunch: true });
     const record = readLauncherRecord(h.recordFile)!;
+    writeFileSync(h.recordFile, JSON.stringify({ ...record, launcher: { ...record.launcher, revision: firstSha, state: "healthy" } }));
     const controller = new ApplyController(h.deps.dir);
-    controller.begin(record, firstSha, trigger);
+    const deploymentId = trigger === "seat" ? "suppressed-seat-deployment" : undefined;
+    if (deploymentId) saveCheckoutDeployment(h.deps.dir, {
+      deploymentId, idempotencyKey: "seat-ready-before-policy", requestedRevision: firstSha, revision: firstSha,
+      phase: "building", terminal: false, candidate: null, previous: null,
+      mcpRuntime: { candidate: null, previous: null, publications: [], health: [] }, health: [], error: null,
+      owner: { pid: record.launcher.pid, startIdentity: record.launcher.startIdentity },
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), revisionNumber: 1,
+    });
+    controller.begin(record, firstSha, trigger, deploymentId);
     controller.patch({ state: "ready" });
     h.service.stop();
     h.deps.env = { ...h.deps.env, LLV_DISABLE_SELF_UPDATE: "1" };
+    h.deps.now = () => Date.now() + 7 * 24 * 60 * 60_000;
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
     h.service = new SelfUpdateService(h.deps);
+    setSelfUpdateServiceForTests(h.service);
     try {
       expect((await h.service.snapshot()).selfUpdateDisabled).toBe(true);
       await h.service.autoTick();
       expect(existsSync(record.requestFile)).toBe(false);
-      expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8")).state).toBe("ready");
+      expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"))).toMatchObject({ state: "failed", admissionRefused: true });
+      if (deploymentId) expect(checkoutDeployments(h.deps.dir)[0]).toMatchObject({ deploymentId, phase: "failed", terminal: true, error: expect.stringContaining("administrator disabled") });
       expect(h.spawned).toEqual([]);
+      const external = await deployPost(post("/runtime/deployments", { revision: firstSha, idempotencyKey: "after-disabled-" + trigger }));
+      expect(external.status).toBe(202);
+      expect(await external.json()).toMatchObject({ state: "accepted" });
+      const builtIn = await updatePost(post("/update", { key: "still-disabled-" + trigger }));
+      expect(builtIn.status).toBe(403);
+      expect(await builtIn.json()).toMatchObject({ code: "updates-disabled" });
     } finally { h.service.stop(); }
   });
 

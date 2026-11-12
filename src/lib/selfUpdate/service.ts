@@ -2219,7 +2219,10 @@ export class SelfUpdateService {
 
   private async checkoutPart(record: LauncherRecord, now: number): Promise<Omit<Snapshot, "mode" | "unsupportedReason" | "available" | "check" | "meta">> {
     const runner = this.runnerFor(record);
-    if (this.recoverReadyApply && (!this.disabledByAdmin || this.apply.current?.trigger === "auto" && this.hasAutoCustody())) {
+    if (this.recoverReadyApply && this.disabledByAdmin && this.apply.cancelSuppressedReady(
+      record, "The administrator disabled built-in updates before this apply was handed to the launcher",
+    )) this.recoverReadyApply = false;
+    if (this.recoverReadyApply && !this.disabledByAdmin) {
       this.recoverReadyApply = false;
       const intent = this.apply.current;
       if (intent?.state === "ready" && record.launcher.pid === intent.launcherPid && record.launcher.startIdentity === intent.launcherIdentity
