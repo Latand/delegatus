@@ -15,6 +15,7 @@ import { AttemptTempStore } from "./attemptTempRetention";
 import { attemptReferencesClear, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { TemporaryDataStore, type TemporaryDataCandidate } from "./temporaryDataStore";
 import { PRESERVATION_NAMES, sweepTemporaryData, TEMPORARY_DATA_RETENTION_MS, type TemporaryDataAuthority } from "./temporaryDataRetention";
+import { retentionUnderTest, RetentionTestSafetyError } from "@/lib/retentionTestSafety";
 
 const HOUR = 3600000;
 // One leased helper owns these version-checked observations. The inventory
@@ -130,7 +131,7 @@ export function temporaryDataAuthority(row: TemporaryDataCandidate, registry: Te
     const launchBindings = [...new Set([
       typeof manifest.launchId === "string" ? manifest.launchId : null,
       source?.identity === manifest.identity ? source.launchId : null,
-      copy && copy.launchId !== "legacy" ? copy.launchId : null,
+      copy && copy.kind !== "unattributed" && copy.launchId !== "legacy" ? copy.launchId : null,
     ].filter((value): value is string => !!value))];
     if (launchBindings.length > 1) return held("copy-owner-conflict");
     launchId = launchBindings[0] ?? "";
@@ -221,7 +222,8 @@ export function discoverTemporaryData(store: TemporaryDataStore, registry: Tempo
   return discovered;
 }
 
-export async function runTemporaryDataSweep(ports: { scan: (directories: string[]) => ProcessScan }, env = process.env, deadline = Date.now() + 30000) {
+export async function runTemporaryDataSweep(ports: { scan: (directories: string[]) => ProcessScan;
+  containerReferences?: (roots: readonly string[]) => Promise<boolean> }, env = process.env, deadline = Date.now() + 30000) {
   const mode = tempSweepMode(env);
   if (!mode || Date.now() >= deadline) return null;
   const store = new TemporaryDataStore(), roots = new AttemptTempStore();
@@ -230,7 +232,11 @@ export async function runTemporaryDataSweep(ports: { scan: (directories: string[
     const discovered = discoverTemporaryData(store, registry, Date.now, performance.now() + 1000);
     const report = await sweepTemporaryData(store, {
       mode, checkoutReads, budgetMs: Math.max(0, Math.min(5000, deadline - Date.now())), authority: async row => temporaryDataAuthority(row, registry, roots),
-      references: async (row, target, inventory) => attemptReferencesClear(row.directory, target, ports.scan([row.directory, target]), undefined, inventory),
+      references: async (row, target, inventory) => {
+        if (!ports.containerReferences && retentionUnderTest())
+          throw new RetentionTestSafetyError("retention test refused the default Docker reference observer");
+        return attemptReferencesClear(row.directory, target, ports.scan([row.directory, target]), ports.containerReferences, inventory);
+      },
       onRemoved: row => { if (row.kind === "ownerless-copy") roots.forgetCopy(row.directory); },
       claim: async row => {
         const authority = temporaryDataAuthority(row, registry, roots), releases: (() => void)[] = [];

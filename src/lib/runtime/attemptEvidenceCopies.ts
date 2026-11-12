@@ -66,7 +66,8 @@ async function adoptCopies(store: AttemptTempStore, now: () => number, deadline:
       const owner = typeof manifest.original === "string" ? store.owner(manifest.original) : null;
       const pipelineId = typeof manifest.pipelineId === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(manifest.pipelineId)
         ? manifest.pipelineId : owner?.identity === manifest.identity ? owner?.pipelineId ?? null : null;
-      const launchId = typeof manifest.launchId === "string" ? manifest.launchId : owner?.launchId ?? "legacy";
+      const launchId = typeof manifest.launchId === "string" ? manifest.launchId
+        : owner?.identity === manifest.identity ? owner.launchId : "legacy";
       store.registerCopy({ destination, pipelineId, launchId, kind: pipelineId ? "lane" : "unattributed",
         createdAt: now(), expiresAt: null, checkedAt: now(), bytes: 0 });
       adopted++;

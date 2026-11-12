@@ -79,6 +79,30 @@ test.each(["claim", "initial-authority", "references", "dispatch-authority"])("r
   expect(fs.existsSync(attemptTempJournalPath(f.row.directory))).toBeFalse();
 });
 
+test("a keep marker planted during the last protection listing blocks dispatch", async () => {
+  const f = fixture(), marker = path.join(f.row.scope, ".delegatus-keep");
+  let mountReads = 0, armed = false, planted = false;
+  const read = fs.readFileSync, original = fs.opendirSync;
+  const readSpy = spyOn(fs, "readFileSync").mockImplementation(((file: unknown, ...args: unknown[]) => {
+    const result = (read as (...values: unknown[]) => unknown)(file, ...args);
+    if (String(file) === "/proc/self/mountinfo" && ++mountReads === 5) armed = true;
+    return result;
+  }) as typeof fs.readFileSync);
+  const spy = spyOn(fs, "opendirSync").mockImplementation(((directory: fs.PathLike, ...args: unknown[]) => {
+    const stream = (original as (...values: unknown[]) => fs.Dir).call(fs, directory, ...args);
+    if (armed && !planted && String(directory).includes(".delegatus-trash-")) {
+      fs.writeFileSync(marker, "late hold"); planted = true;
+    }
+    return stream;
+  }) as typeof fs.opendirSync);
+  try {
+    const identity = fs.lstatSync(f.row.directory).ino;
+    const report = await sweepTemporaryData(f.store, { ...f.ports, mounts: undefined });
+    expect(planted).toBeTrue(); expect(report.removed).toBe(0);
+    expect(fs.lstatSync(f.row.directory).ino).toBe(identity); expect(fs.existsSync(attemptTempJournalPath(f.row.directory))).toBeFalse();
+  } finally { spy.mockRestore(); readSpy.mockRestore(); }
+});
+
 test.each([true, false])("a keep marker appearing after quarantine restores the candidate (%s)", async directory => {
   const f = fixture(directory); let calls = 0;
   const report = await sweepTemporaryData(f.store, { ...f.ports, references: async (_row, target) => {

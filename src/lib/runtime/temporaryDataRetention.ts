@@ -74,8 +74,7 @@ export function temporaryDataProtection(row: TemporaryDataCandidate, target: str
   }
   return { bytes, current: () => {
     try {
-      if (![...entries, ...parents].every(([file, before]) => signature(fs.lstatSync(file, { bigint: true })) === before)
-        || [...parents.keys()].some(parent => fs.existsSync(path.join(parent, ".delegatus-keep")))) return false;
+      if (![...entries, ...parents].every(([file, before]) => signature(fs.lstatSync(file, { bigint: true })) === before)) return false;
       // Directory clocks can share a kernel granule. Compare the actual names
       // too so a marker created within that granule cannot evade the fence.
       for (const [file, before] of listings) {
@@ -84,6 +83,9 @@ export function temporaryDataProtection(row: TemporaryDataCandidate, target: str
         finally { stream.closeSync(); }
         if (count !== before.size) return false;
       }
+      // Marker reads must be last: a marker created while reading a directory
+      // listing is part of the final mutation fence, including trash replay.
+      if ([...parents.keys()].some(parent => fs.existsSync(path.join(parent, ".delegatus-keep")))) return false;
       return true;
     } catch { return false; }
   } };

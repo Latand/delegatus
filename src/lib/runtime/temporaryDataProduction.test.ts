@@ -10,6 +10,7 @@ import { discoverTemporaryData, finishedAgent, temporaryDataAuthority, type Temp
 import { sweepTemporaryData, TEMPORARY_DATA_RETENTION_MS as WEEK } from "./temporaryDataRetention";
 import { AttemptTempStore, type EvidenceCopy } from "./attemptTempRetention";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
+import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
 
 const NOW = Date.UTC(2035, 0, 15), roots: string[] = [], stores: TemporaryDataStore[] = [];
 type Facts = ReturnType<AgentRegistry["temporaryDataFacts"]>;
@@ -170,6 +171,94 @@ test.each(["expired", "grace", "open-lane", "invalid-manifest"])("a legacy copy 
     authority: async row => temporaryDataAuthority(row, f.registry, f.source, () => NOW,
       () => ({ expiresAt: null, reason: "open-lane", revision: "open", current: () => true })) });
   expect(report.removed).toBe(state === "expired" ? 1 : 0); expect(fs.existsSync(directory)).toBe(state !== "expired");
+});
+
+test("an unattributed adopted copy ignores a launch copied from a replacement source identity", async () => {
+  const f = fixture(), original = path.join(f.root, "old-scratch"), identity = "17:23";
+  const name = createHash("sha256").update(original).update("\0").update(identity).digest("hex"), directory = path.join(f.evidence, name);
+  fs.mkdirSync(directory); writeEnvelope(path.join(directory, "manifest.json"), { original, identity });
+  const row = f.candidate(directory, "ownerless-copy", name), adoptedRow = { ...row, adoptedAt: NOW };
+  f.store.forget(directory); f.store.register(adoptedRow);
+  let copy: EvidenceCopy | null = { destination: directory, pipelineId: null, launchId: "replacement-agent", kind: "unattributed",
+    createdAt: NOW, expiresAt: null, checkedAt: NOW, bytes: 0 };
+  const source = { owner: () => ({ directory: original, identity: "99:88", launchId: "replacement-agent", pipelineId: null,
+    retainUntilClose: false, createdAt: NOW, released: 0, checkedAt: NOW, bytes: 0 }), copy: () => copy };
+  const replacement: Facts = { receipt: { launchId: "replacement-agent", state: "completed" },
+    entry: { status: "dead", updatedAt: new Date(NOW - WEEK * 3).toISOString() }, pipelines: [] } as unknown as Facts;
+  f.registry.temporaryDataFacts = () => replacement;
+  const authority = temporaryDataAuthority(adoptedRow, f.registry, source, () => NOW);
+  expect(authority.expiresAt).toBe(NOW + WEEK); expect(authority.reason).toBe("adoption-grace");
+  expect(authority.current()).toBeTrue(); copy = { ...copy!, launchId: "other-generation" };
+  expect(authority.current()).toBeFalse();
+});
+
+test("legacy copy adoption keeps seven-day grace when its replacement source has another identity", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR, state = path.join(f.root, "state");
+  process.env.LLV_STATE_DIR = state;
+  const original = path.join(f.root, "llv-stage-source"); fs.mkdirSync(original); fs.writeFileSync(path.join(original, "capture.png"), "capture");
+  const sourceStat = fs.lstatSync(original), sourceIdentity = `${sourceStat.dev}:${sourceStat.ino}`;
+  const ledger = new AttemptTempStore(path.join(state, "attempt-temp.sqlite"));
+  try {
+    const saved = await preserveAttemptEvidence(original, original, sourceIdentity);
+    fs.renameSync(original, original + "-old"); fs.mkdirSync(original);
+    ledger.register({ directory: original, pipelineId: null, launchId: "replacement-agent", createdAt: NOW - WEEK * 3,
+      retainUntilClose: true });
+    expect(ledger.owner(original)?.identity).not.toBe(sourceIdentity);
+    const adoption = await sweepEvidenceCopies(ledger, { now: () => NOW, state: async () => "orphan", references: async () => true,
+      scan: () => ({ ownNamespace: null, processes: [] }) }, { agentCopiesManagedSeparately: true });
+    const directory = saved.destination!, stat = fs.lstatSync(directory), scope = path.join(state, "evidence");
+    f.store.register({ directory, scope, kind: "ownerless-copy", owner: path.basename(directory), identity: `${stat.dev}:${stat.ino}`,
+      adoptedAt: NOW, checkedAt: 0, bytes: 0, reason: "legacy-adoption" });
+    const replacement: Facts = { receipt: { launchId: "replacement-agent", state: "completed" },
+      entry: { status: "dead", updatedAt: new Date(NOW - WEEK * 3).toISOString() }, pipelines: [] } as unknown as Facts;
+    f.registry.temporaryDataFacts = () => replacement;
+    const authority = temporaryDataAuthority(f.store.get(directory)!, f.registry, ledger, () => NOW);
+    const report = await sweepTemporaryData(f.store, { now: () => NOW, mounts: () => [], claim: async () => () => {},
+      references: async () => true, authority: async row => temporaryDataAuthority(row, f.registry, ledger, () => NOW) });
+    expect(adoption.adopted).toBe(1); expect(ledger.copy(directory)?.launchId).toBe("legacy");
+    expect(authority.expiresAt).toBe(NOW + WEEK); expect(authority.reason).toBe("adoption-grace");
+    expect(report.removed).toBe(0); expect(fs.existsSync(directory)).toBeTrue();
+  } finally {
+    ledger.close();
+    if (priorState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = priorState;
+  }
+});
+
+test("production retention requires an injected container observer in tests", async () => {
+  const f = fixture(), original = path.join(f.root, "missing-source"), identity = "17:23";
+  const name = createHash("sha256").update(original).update("\0").update(identity).digest("hex");
+  const calls = path.join(f.root, "docker-calls"), bin = path.join(f.root, "bin"); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\nexit 0\n`, { mode: 0o700 });
+  const statePaths = [path.join(f.root, "state-refused"), path.join(f.root, "state-injected")];
+  const directories = statePaths.map(state => {
+    const directory = path.join(state, "evidence", "attempt-temp", name);
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, "manifest.json"), JSON.stringify({ original, identity, pipelineId: null, launchId: null, files: [] }));
+    const stat = fs.lstatSync(directory), seeded = new TemporaryDataStore(path.join(state, "temporary-data.sqlite"));
+    seeded.register({ directory, scope: path.join(state, "evidence"), kind: "ownerless-copy", owner: name, identity: `${stat.dev}:${stat.ino}`,
+      adoptedAt: Date.now() - WEEK - 1, checkedAt: 0, bytes: 0, reason: "fixture" }); seeded.close();
+    return directory;
+  });
+  const script = path.join(f.root, "run-sweep.ts");
+  fs.writeFileSync(script, `import { runTemporaryDataSweep } from ${JSON.stringify(path.resolve("src/lib/runtime/temporaryDataProduction.ts"))};\n`+
+    `const observer = process.env.FIXTURE_OBSERVER === "1" ? async () => true : undefined;\n`+
+    `console.log(JSON.stringify(await runTemporaryDataSweep({ scan: () => ({ ownNamespace: null, processes: [] }), `+
+    `...(observer ? { containerReferences: observer } : {}) })));\n`);
+  const run = async (state: string, observer: boolean) => {
+    const child = Bun.spawn([process.execPath, script], { env: { ...process.env, HOME: path.join(f.root, "home"),
+      XDG_CONFIG_HOME: path.join(f.root, "config"), TMPDIR: f.root, LLV_STATE_DIR: state, NODE_ENV: "test",
+      LLV_TEMP_SWEEP: "on", PATH: `${bin}:${process.env.PATH ?? ""}`, DOCKER_HOST: `unix://${path.join(f.root, "missing.sock")}`,
+      FIXTURE_OBSERVER: observer ? "1" : "0" }, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    return { exit: await child.exited, stdout, stderr };
+  };
+  for (const directoryName of ["home", "config"]) fs.mkdirSync(path.join(f.root, directoryName));
+  const refused = await run(statePaths[0]!, false);
+  expect(refused.exit).not.toBe(0); expect(refused.stderr).toContain("default Docker reference observer");
+  expect(fs.existsSync(calls)).toBeFalse(); expect(fs.existsSync(directories[0]!)).toBeTrue();
+  const injected = await run(statePaths[1]!, true);
+  expect(injected.exit).toBe(0); expect(JSON.parse(injected.stdout.trim()).removed).toBe(1);
+  expect(fs.existsSync(calls)).toBeFalse(); expect(fs.existsSync(directories[1]!)).toBeFalse();
 });
 
 test("discovery preserves worktree backup content and the adoption clock across pages", () => {
