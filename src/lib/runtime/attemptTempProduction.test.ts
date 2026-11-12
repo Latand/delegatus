@@ -8,7 +8,7 @@ import { materializeStructuredHostAccess } from "./structuredSpawn";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
 import { runTempSweep, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
 import { statePath } from "@/lib/configDir";
-import { attemptReferencesClear } from "./attemptTempFilesystem";
+import { attemptReferencesClear, RepositoryLinkInventory } from "./attemptTempFilesystem";
 import { holdFinishedRoot, finishedLane } from "./attemptTempRetention.testSupport";
 import { RecordedCheckStore, recordedRootHeld } from "@/lib/recordedChecks/store";
 import { attemptTempJournalPath } from "@/lib/tempSweep";
@@ -443,6 +443,65 @@ test("retrying preservation recreates a missing copy before expiry and stops doi
     store.defer(directory, 0);
     expect((await sweepAttemptTemps(store, { ...options, references: async () => true })).removed).toBe(1);
     expect(fs.existsSync(destination)).toBeFalse();
+  } finally { store.close(); }
+});
+
+test.each(["needs_decision", "pending"] as const)("a lane completed while an attempt was %s expires its scratch seven days after the close", async state => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempAuthority, recordingAttemptTempState } = await import("./attemptTempProduction");
+  const now = Date.parse("2026-11-01T00:00:01Z");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-parked-")); roots.push(root);
+  const directory = path.join(root, "llv-stage-parked"); fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "payload"), "scratch of a parked attempt");
+  const p = finishedLane(root, "2026-10-20T00:00:00Z");
+  // Parking leaves completedAt unset, and the later close does not stamp it.
+  p.runs = [{ stageId: "build", attempts: [{ n: 1, state, effectiveRole: p.stages[0]!.effectiveRole,
+    launchId: "parked-launch", conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2026-10-19T00:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: "waiting for the operator" }] }];
+  savePipelines([p]);
+  const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
+  const authority: NonNullable<Parameters<typeof sweepAttemptTemps>[1]["authority"]> = (owner, inventory) => attemptTempAuthority(owner, inventory, () => now);
+  try {
+    store.register({ directory, pipelineId: p.id, launchId: "parked-launch", retainUntilClose: false, createdAt: now - 14 * 86400000 });
+    expect(await authority(store.owner(directory)!, new RepositoryLinkInventory())).toMatchObject({ state: "expired", expiresAt: Date.parse("2026-10-27T00:00:00Z") });
+    const report = await sweepAttemptTemps(store, { now: () => now, state: recordingAttemptTempState(store, authority), authority,
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
+    expect(report).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(directory)).toBeFalse(); expect(store.has(directory)).toBeFalse();
+  } finally { store.close(); }
+});
+
+test("a finished-lane root held by linked evidence records its retention end and leads the first page after it", async () => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempAuthority, recordingAttemptTempState } = await import("./attemptTempProduction");
+  const closed = Date.parse("2026-10-30T00:00:00Z"), expiresAt = closed + 7 * 86400000;
+  let now = closed + 86400000;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-linked-")); roots.push(root);
+  const p = finishedLane(root, new Date(closed).toISOString());
+  const open = buildPipeline({ id: "open-lane", task: "Open", project: "fixture", repoDir: root, stages: p.stages,
+    srcPath: null, srcConversationId: null, now: "2026-10-01T00:00:00Z" });
+  open.state = "running"; savePipelines([p, open]);
+  const target = path.join(root, "outside.png"); fs.writeFileSync(target, "kept outside the root");
+  const linked = path.join(root, "llv-stage-linked"); fs.mkdirSync(linked);
+  fs.symlinkSync(target, path.join(linked, "frame.png"));
+  const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
+  const authority: NonNullable<Parameters<typeof sweepAttemptTemps>[1]["authority"]> = (owner, inventory) => attemptTempAuthority(owner, inventory, () => now);
+  const sweep = (maxRoots: number) => sweepAttemptTemps(store, { now: () => now, maxRoots, state: recordingAttemptTempState(store, authority), authority,
+    scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
+  try {
+    store.register({ directory: linked, pipelineId: p.id, launchId: "retention-launch", retainUntilClose: false, createdAt: closed - 86400000 });
+    const held = await sweep(1);
+    expect(held.outcomes).toEqual([expect.objectContaining({ directory: linked, disposition: "failed", reason: "linked attempt evidence" })]);
+    expect(store.retentionExpiry(linked)).toBe(expiresAt);
+    // Open-lane roots the round robin would visit before it.
+    for (let n = 0; n < 6; n++) {
+      const directory = path.join(root, `llv-stage-open-${n}`); fs.mkdirSync(directory);
+      store.register({ directory, pipelineId: open.id, launchId: `open-${n}`, retainUntilClose: false, createdAt: closed - 10 * 86400000 });
+    }
+    now = expiresAt + 1;
+    const report = await sweep(2);
+    expect(report.outcomes[0]).toMatchObject({ directory: linked, disposition: "removed" });
+    expect(fs.existsSync(linked)).toBeFalse(); expect(fs.readFileSync(target, "utf8")).toBe("kept outside the root");
   } finally { store.close(); }
 });
 

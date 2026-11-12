@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { historySamples, historySince, readHistory, recordLimitSample, recordLimitSamples, RETENTION_S } from "./limitsHistoryStore";
+import { historySamples, historySince, readHistory, recordLimitSample, recordLimitSamples, resetLimitsHistoryStoreForTests, RETENTION_S } from "./limitsHistoryStore";
+import { readStateCollectionRevision } from "./state/sqliteStateStore";
 import type { EngineLimits } from "./types";
 
 let dir: string;
@@ -15,6 +16,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetLimitsHistoryStoreForTests();
   if (prev === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = prev;
   fs.rmSync(dir, { recursive: true, force: true });
@@ -27,21 +29,19 @@ const limits = (session: number, weekly: number): EngineLimits => ({
   capturedAt: null,
 });
 
-test("a batch appends every account with one atomic write and retains the five-minute gap", () => {
+test("a batch appends every account in one transaction and retains the five-minute gap", () => {
   const t = 1_700_000_000_000;
-  const original = fs.renameSync;
-  let writes = 0;
-  fs.renameSync = (...args) => { writes++; return original(...args); };
-  try {
-    recordLimitSamples("codex", [{ accountId: "a", source: "live", limits: limits(10,20) }, { accountId: "b", source: "live", limits: limits(30,40) }],t);
-    expect(writes).toBe(1);
-    recordLimitSamples("codex", [{ accountId: "a", source: "live", limits: limits(20,30) }, { accountId: "b", source: "live", limits: limits(40,50) }],t+60000);
-    expect(writes).toBe(1);
-    expect(historySamples("codex","b","weekly",t/1000)).toEqual([{ t: t/1000,remaining: 60 }]);
-    recordLimitSamples("codex", [{ accountId: "a", source: "live", limits: limits(20,30) }],t+300000);
-    expect(writes).toBe(2);
-    expect(historySamples("codex","a","weekly",t/1000+300)).toHaveLength(2);
-  } finally { fs.renameSync = original; }
+  const revision = () => readStateCollectionRevision(path.join(dir, "state.sqlite"), "limits_history");
+  recordLimitSamples("codex", [{ accountId: "a", source: "live", limits: limits(10,20) }, { accountId: "b", source: "live", limits: limits(30,40) }],t);
+  const first = revision();
+  expect(first).not.toBeNull();
+  // Inside every series' gap: no transaction at all.
+  recordLimitSamples("codex", [{ accountId: "a", source: "live", limits: limits(20,30) }, { accountId: "b", source: "live", limits: limits(40,50) }],t+60000);
+  expect(revision()).toBe(first);
+  expect(historySamples("codex","b","weekly",t/1000)).toEqual([{ t: t/1000,remaining: 60 }]);
+  recordLimitSamples("codex", [{ accountId: "a", source: "live", limits: limits(20,30) }],t+300000);
+  expect(revision()).toBe(first! + 1);
+  expect(historySamples("codex","a","weekly",t/1000+300)).toHaveLength(2);
 });
 
 test("Codex forward history keeps only windows its own live probe answered", () => {
@@ -81,10 +81,12 @@ test("legacy Codex samples are excluded and retained in quarantine on the next w
   expect(historySamples("codex", "a", "weekly", t + 600)).toEqual([]);
   expect(historySamples("claude", "a", "weekly", t + 600)).toEqual([{ t, remaining: 50 }]);
   recordLimitSample("codex", "a", limits(20, 30), "live", (t + 600) * 1000);
+  // The write imported the file; the quarantine moved with it.
+  expect(fs.statSync(file).isDirectory()).toBe(true);
   expect(historySamples("codex", "a", "weekly", t + 600)).toEqual([{ t: t + 600, remaining: 70 }]);
-  expect(JSON.parse(fs.readFileSync(file, "utf8")).unattributedCodexSeries).toEqual({ "codex|a|weekly": mixed });
+  expect(readHistory().unattributedCodexSeries).toEqual({ "codex|a|weekly": mixed });
   recordLimitSample("claude", "b", limits(10, 10), "live", (t + 900) * 1000);
-  expect(JSON.parse(fs.readFileSync(file, "utf8")).unattributedCodexSeries).toEqual({ "codex|a|weekly": mixed });
+  expect(readHistory().unattributedCodexSeries).toEqual({ "codex|a|weekly": mixed });
 });
 
 test("downsamples samples closer than five minutes apart", () => {
@@ -122,24 +124,17 @@ test("skips windows with no numeric usage", () => {
   expect(historySamples("claude", "acct", "weekly", t0 / 1000)).toEqual([{ t: t0 / 1000, remaining: 75 }]);
 });
 
-test("replaces the history file whole so a reader in another process never sees a torn write", () => {
-  // The Viewer and the account-controller sidecar both record samples. A reader
-  // that opened the file before the other process wrote must keep reading the
-  // complete history it opened; a truncate-in-place write would hand it an
-  // empty or half-written file, which readHistory treats as no history at all.
+test("a sample another process records is read here without reading the other series again", async () => {
   const t0 = 1_700_000_000_000;
   recordLimitSample("claude", "acct", limits(20, 40), "live", t0);
-  const file = path.join(dir, "limits-history.json");
-  const reader = fs.openSync(file, "r");
-  try {
-    const opened = fs.fstatSync(reader).ino;
-    recordLimitSample("claude", "other", limits(30, 30), "live", t0 + 6 * 60_000);
-    expect(fs.statSync(file).ino).not.toBe(opened);
-    const seenByReader = JSON.parse(fs.readFileSync(reader, "utf8"));
-    expect(Object.keys(seenByReader.series).sort()).toEqual(["claude|acct|session", "claude|acct|weekly"]);
-  } finally {
-    fs.closeSync(reader);
-  }
-  expect(Object.keys(readHistory().series)).toHaveLength(4);
+  expect(readHistory().series["claude|acct|session"]).toHaveLength(1);
+  const child = Bun.spawn([process.execPath, "-e", `const { recordLimitSample } = await import(${JSON.stringify(path.resolve(import.meta.dir, "limitsHistoryStore.ts"))});`
+    + `recordLimitSample("claude", "other", { session: { usedPercent: 30, resetsAt: null }, weekly: { usedPercent: 30, resetsAt: null }, plan: "pro", capturedAt: null }, "live", ${t0 + 6 * 60_000});`], {
+    env: { ...process.env, LLV_STATE_DIR: dir }, stdout: "pipe", stderr: "pipe",
+  });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect([stdout, stderr, code]).toEqual(["", "", 0]);
+  expect(Object.keys(readHistory().series).sort()).toEqual(["claude|acct|session", "claude|acct|weekly", "claude|other|session", "claude|other|weekly"]);
+  expect(historySamples("claude", "other", "weekly", t0 / 1000 + 360)).toEqual([{ t: t0 / 1000 + 360, remaining: 70 }]);
   expect(fs.readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
 });

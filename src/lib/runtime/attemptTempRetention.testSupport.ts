@@ -1,4 +1,7 @@
 import fs from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import { statePath } from "@/lib/configDir";
 import { RecordedCheckStore, rowSchema } from "@/lib/recordedChecks/store";
 import { digest, descriptorDigest } from "@/lib/recordedChecks/wire";
 import { buildPipeline } from "@/lib/pipelines/store";
@@ -34,4 +37,17 @@ export async function holdFinishedRoot(directory: string, pipeline = "retention-
   const store = new RecordedCheckStore();
   try { await store.write(row, null); } finally { store.close(); }
   return id;
+}
+
+/** Names pictures in the report picture index the way a stage report does,
+ * with no kept copy: they are then the evidence ledger's links into scratch. */
+export function nameInReport(...files: string[]) {
+  const root = statePath("report-media"), index = path.join(root, "index.json");
+  fs.mkdirSync(root, { recursive: true });
+  let rows: unknown[] = [];
+  try { rows = JSON.parse(fs.readFileSync(index, "utf8")); } catch { /* A first name starts the index. */ }
+  for (const file of files) rows.push({ path: file, file: `${createHash("sha256").update(file).digest("hex")}${path.extname(file).toLowerCase()}`,
+    bytes: 1, mtimeMs: 1, at: 1, project: null });
+  // A new inode, so a reader holding the previous index reads this one.
+  fs.writeFileSync(index + ".next", JSON.stringify(rows)); fs.renameSync(index + ".next", index);
 }

@@ -450,6 +450,7 @@ describe("shared memory settings", () => {
     const { memoryIndex } = await import("@/lib/memory/service");
     const { writeAsksYouSettings } = await import("@/lib/asks/settings");
     const { mutateOperatorAsks } = await import("@/lib/asks/store");
+    const { spoilOperatorAsksForTests } = await import("@/lib/asks/storeFixture");
     const { asksYouSettingView } = await import("@/lib/asks/view");
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-browser-"));
     const previous = { ...process.env };
@@ -618,11 +619,10 @@ describe("shared memory settings", () => {
           await openPage("memory");
           await reasonIs("memoryPage.reason.noKey");
           const stateRoot = process.env.LLV_STATE_DIR!;
-          const spendFile = path.join(stateRoot, "operator-asks.json");
-          const spendBefore = fs.readFileSync(spendFile, "utf8");
           const pendingDirectory = path.join(stateRoot, "memory-injection-pending");
           for (const broken of ["spend", "pending"] as const) {
-            if (broken === "spend") fs.writeFileSync(spendFile, "broken");
+            let restoreSpend = () => {};
+            if (broken === "spend") restoreSpend = spoilOperatorAsksForTests();
             else {
               fs.mkdirSync(pendingDirectory, { recursive: true });
               fs.writeFileSync(path.join(pendingDirectory, "a".repeat(64) + ".json"), "{}");
@@ -640,7 +640,7 @@ describe("shared memory settings", () => {
             expect(await page.locator("[data-memory-numbers]").count()).toBe(0);
             expect(await page.locator("[data-memory-page]").textContent()).not.toContain("$");
             await measure(`unavailable-${broken}`);
-            if (broken === "spend") fs.writeFileSync(spendFile, spendBefore);
+            if (broken === "spend") restoreSpend();
             else fs.rmSync(pendingDirectory, { recursive: true });
           }
           const settingFile = path.join(stateRoot, "shared-memory-settings.json");
