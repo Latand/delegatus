@@ -526,6 +526,21 @@ test("the histogram names only listed native functions and repository files", ()
   for (const hidden of ["private", "alpha", "token", path.dirname(root)]) expect(text).not.toContain(hidden);
 });
 
+test("a native call made through a Bun module is credited to the repository frame that made it", () => {
+  const sqlite = (line: number) => ({ name: "[prepareOwned]", sourceURL: "bun:sqlite", line, column: 37, category: "Baseline" });
+  const categories = categorizeLoopProfile({ traces: [
+    { frames: [native("prepare"), sqlite(330), { ...sqlite(347), name: "query" }, caller(2, 11833)] },
+    { frames: [native("prepare"), sqlite(330), caller(2, 11833)] },
+    { frames: [native("run"), { name: "run", sourceURL: "node:sqlite", line: 1, column: 1 }, caller(7, 70)] },
+    { frames: [native("prepare"), sqlite(330)] },
+  ] }, root);
+  expect(categories.callers).toEqual([
+    { native: "prepare", positions: [[".next/server/chunks/57539.js:2:11833", 2], ["elsewhere", 1]] },
+    { native: "run", positions: [[".next/server/chunks/57539.js:7:70", 1]] },
+  ]);
+  expect(JSON.stringify(categories)).not.toContain("sqlite");
+});
+
 test("the histogram stays within its byte budget for many files and callers", () => {
   const traces = Array.from({ length: 6000 }, (_, i) => i % 2
     ? { frames: [native(["structuredClone", "parse", "all", "stringify", "get"][i % 5]!), { name: "f", sourceURL: path.join(root, `.next/server/chunks/${"c".repeat(180)}${i % 300}.js`), line: 1, column: i + 1 }] }
