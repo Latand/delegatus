@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -2381,6 +2382,31 @@ test("AC5: retrying a failed existing-mode designation with its OWN key clears i
   expect(active?.mandate).toContain("adopt me, corrected");
   expect(pending).toBeNull();
   expect(history).toMatchObject([{ reason: "terminal_error", seat: { intent: { clientRequestId: "req_00001066" } } }]);
+});
+
+/* The seat record shares state.sqlite with every other store. A designation
+   that meets another writer's open transaction is answered busy and retried
+   inside the request; it seats once and delivers once. */
+test("an adoption whose seat write meets another state writer's transaction is retried and seats once", async () => {
+  await seatIncumbent("own the board", "req_00001070");
+  const blocker = new Database(path.join(sandbox, "state.sqlite"));
+  blocker.exec("BEGIN IMMEDIATE");
+  const released = new Promise<void>((resolve) => setTimeout(() => { blocker.exec("ROLLBACK"); resolve(); }, 40));
+  try {
+    const { deps, recorded } = dependencies();
+    const result = await executeOrchestratorSeatRequest({
+      project: "proj-a",
+      mandate: "adopt me",
+      clientRequestId: "req_00001071",
+      conversationId: OLD_ID,
+    }, deps);
+    expect(result.status).toBe(200);
+    expect(recorded.deliveries).toHaveLength(1);
+    expect(orchestratorSeatFor("proj-a")).toMatchObject({ active: { conversationId: OLD_ID }, pending: null, history: [] });
+  } finally {
+    await released;
+    blocker.close();
+  }
 });
 
 /** Twelve rotations, each with the maximum handoff payload the caps allow. */
