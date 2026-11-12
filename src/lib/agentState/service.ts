@@ -262,7 +262,7 @@ export class AgentStateService {
       : fact({ status: processStatus, identity: process }, ev("proc", "process", true));
     const claimIdentity = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
     const claimStatus = claimIdentity ? this.ports.process(claimIdentity) : "unverified";
-    const candidateMemory = this.ports.memory(entry, source.conversationId);
+    const candidateMemory = source.conversationCurrent ? this.ports.memory(entry, source.conversationId) : null;
     const memory = claimIdentity && claimStatus === "alive" && entry.structuredHost!.writerClaimEpoch === entry.claimEpoch
       && candidateMemory && candidateMemory.eventCursor >= entry.structuredHost!.eventCursor ? candidateMemory : null;
     let owner: AgentFacts["owner"];
@@ -336,7 +336,7 @@ export class AgentStateService {
       const latest = registry.hostEntry(entry.key);
       if (!latest || entryRevision(latest) !== revision) return false;
       if (registry.agentStateRead(file => snapshotFacts(file, latest).obligationsRevision) !== source.obligationsRevision) return false;
-      if (digest(this.ports.memory(latest, source.conversationId)) !== digest(candidateMemory)) return false;
+      if (digest(source.conversationCurrent ? this.ports.memory(latest, source.conversationId) : null) !== digest(candidateMemory)) return false;
       if (entry.claimOwner) {
         const identity = structuredClaimIdentity(entry.claimOwner);
         if (owner.determined && owner.value === "absent" && (!identity || this.ports.process(identity) !== "dead")) return false;
@@ -387,7 +387,8 @@ export class AgentStateService {
           if (!row || entryRevision(row) !== committed.facts.revision || this.ports.process(process) !== processStatus) return false;
           if (claimIdentity && this.ports.process(claimIdentity) !== claimStatus) return false;
           const currentSource = registry.agentStateRead(file => snapshotFacts(file, row));
-          if (!publicationSource || currentSource.conversationRevision !== publicationSource.conversationRevision
+          if (!publicationSource || !currentSource.conversationCurrent || currentSource.conversationId !== committed.conversationId
+            || currentSource.conversationRevision !== publicationSource.conversationRevision
             || currentSource.obligationsRevision !== publicationSource.obligationsRevision) return false;
           if (digest(this.ports.memory(row, committed.conversationId)) !== publicationMemory) return false;
           const held = this.ports.memory(row, committed.conversationId);
@@ -420,14 +421,14 @@ export async function startAgentStateService(): Promise<void> {
     release: hotStateWriterRevision(dirname(registry.filename)) ?? "unknown",
     memory: (entry, conversationId) => {
       if (!conversationId) return null;
-      const held = controller.structuredDeliveryHostForConversation(conversationId);
+      const held = controller.structuredDeliveryHostForConversation(conversationId, registry);
       const owner = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
       return held && owner?.pid === process.pid && processIdentityStatus(owner) === "alive"
         && entry.structuredHost?.writerClaimEpoch === entry.claimEpoch ? held.agentStateMemory?.() ?? null : null;
     },
     settleMemory: (entry, conversationId, turn) => {
       if (!conversationId || !turn.localRef || turn.at === null) return false;
-      const held = controller.structuredDeliveryHostForConversation(conversationId);
+      const held = controller.structuredDeliveryHostForConversation(conversationId, registry);
       return held?.reconcileAgentStateTerminal?.(turn.localRef, turn.nativeId, turn.at, turn.outcome) ?? false;
     },
     publish: async (projection, current) => {

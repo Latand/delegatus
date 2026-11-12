@@ -255,3 +255,21 @@ test("a resumed scan retains earlier-page failures until a fresh complete census
   await successor.request();
   expect(readAgentStateMetrics(successorRegistry)).toMatchObject({ subjectsDeferred: 0, lastCompleteReconciliationAt: FIXTURE_NOW + 2000 });
 });
+
+test("a predecessor never reads or settles the successor host's conversation binding", async () => {
+  const f = fixture();
+  await f.registry.deliveryWriteOrBusy({ label: "fixture.successor-generation" }, () => f.registry.agentStateWrite(file => {
+    const conversation = Object.values(file.conversations)[0]!;
+    conversation.generations.push({ ...conversation.generations.at(-1)!, id: "successor-session", path: path.join(f.root, "successor.jsonl") });
+  }));
+  let settlements = 0;
+  f.service.ports.memory = () => ({ activeTurnRef: "successor-turn", pendingAttention: [], eventCursor: 0 });
+  f.service.ports.settleMemory = () => { settlements++; return true; };
+  await f.service.request();
+  const projection = readAgentProjection(f.registry, subjectId(f.entry()))!;
+  expect(projection.facts.owner).toMatchObject({ determined: true, value: "absent" });
+  expect(projection.facts.turn).toMatchObject({ determined: true, value: { state: "closed" } });
+  expect(f.entry().structuredHost!.activeTurnRef).toBeNull();
+  expect(Object.values(f.registry.readOnlySnapshot().conversations)[0]!.turn.state).toBe("busy");
+  expect(settlements).toBe(0);
+});
