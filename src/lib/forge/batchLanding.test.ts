@@ -191,7 +191,8 @@ test("a bounded receipt page continues past unrelated commit references", async 
   }
   g.git("checkout", "main"); references.push(g.landing);
   const read = async (args: string[]) => args[1]!.includes("/issues/7/comments")
-    ? JSON.stringify({ body: `Landed in batch/widgets; references ${references.join(" ")}`, author_association: "OWNER" }) : gh.issueRead(args);
+    ? JSON.stringify({ body: `Landed in batch/widgets; references ${references.join(" ")}`, author_association: "OWNER" })
+    : references.slice(0, 5).some(sha => args[1]!.includes(`/commits/${sha}/`)) ? "[]" : gh.issueRead(args);
   const first = await readCarriedBranchLanding(REPO, 7, "main", { head: g.head, repoDir: g.directory }, read, gh.contentsRead);
   expect(first.state).toBe("waiting");
   if (first.state !== "waiting") throw new Error("Expected a bounded first page");
@@ -211,4 +212,16 @@ test("a language-neutral batch-tip hint may contain other reviewed work", async 
   };
   expect(await readCarriedBranchLanding(REPO, 7, "main", reviewed, read, gh.contentsRead))
     .toEqual({ state: "landed", batch: 9, mergedAt: "2026-10-11T04:18:00Z", commit: graph.tip });
+});
+
+
+test("a nonexistent untrusted hint cannot hide a later verified delivery", async () => {
+  const gh = carriedGithub(), missing = "0".repeat(40);
+  const read = async (args: string[]) => {
+    if (args[1]!.includes("/issues/7/comments")) return JSON.stringify({ body: `${missing} ${graph.landing}` });
+    if (args[1]!.includes(`/commits/${missing}/`)) throw new Error("HTTP 404: commit not found");
+    return gh.issueRead(args);
+  };
+  expect(await readCarriedBranchLanding(REPO, 7, "main", reviewed, read, gh.contentsRead))
+    .toMatchObject({ state: "landed", commit: graph.landing });
 });

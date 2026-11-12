@@ -131,13 +131,23 @@ export async function readCarriedBranchLanding(repository: string, number: numbe
   let unproven = false;
   let openCarrier: { batch: number; commit: string } | undefined;
   for (const commit of candidates) {
-    if (!await patchPresent(reviewed.repoDir, reviewed.head, commit, commit, true)) continue;
-    provenCommit ??= commit;
-    const carriers = JSON.parse(await issueRead(["api", `repos/${repository}/commits/${commit}/pulls?per_page=100`])) as Array<{
+    // Arbitrary comments can contain nonexistent or unrelated commit ids.
+    // Establish a carrier before fetching Git objects for a hint.
+    let rawCarriers: string;
+    try { rawCarriers = await issueRead(["api", `repos/${repository}/commits/${commit}/pulls?per_page=100`]); }
+    catch (error) {
+      if (/\b404\b/.test(String((error as { stderr?: unknown })?.stderr ?? error))) continue;
+      throw error;
+    }
+    const carriers = JSON.parse(rawCarriers) as Array<{
       number?: number; state?: string; merged_at?: string | null; merge_commit_sha?: string | null;
       base?: { ref?: string }; head?: { ref?: string };
     }>;
     if (!Array.isArray(carriers)) throw new Error("Batch carrier list is unavailable");
+    if (!carriers.some(carrier => carrier.number !== number && carrier.base?.ref === base
+      && (carrier.state === "open" || carrier.merged_at))) continue;
+    if (!await patchPresent(reviewed.repoDir, reviewed.head, commit, commit, true)) continue;
+    provenCommit ??= commit;
     for (const carrier of carriers) {
       const batch = carrier.number;
       if (typeof batch !== "number" || !Number.isSafeInteger(batch) || batch <= 0 || batch === number
