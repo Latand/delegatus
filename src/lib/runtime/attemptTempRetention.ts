@@ -417,7 +417,6 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         }
       }
       let currentDirectory = owner.directory;
-      let namespaceOnly = false;
       let dispatchAuthority: AttemptTempAuthority | undefined;
       let dispatchState: AttemptTempState | undefined;
       let dispatchEvidence: { current: () => boolean } | undefined;
@@ -432,8 +431,6 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           && inventory.unchangedAll();
       };
       // The evidence snapshot must match until content deletion dispatches.
-      // Its directory metadata and entries change during our own cleanup;
-      // the final empty-root fence retains the independent authority checks.
       const dispatchEligible = (directory: string) => retirementAuthorityCurrent(directory)
         && dispatchEvidence?.current() === true;
       const scan = () => options.scan([owner.directory, currentDirectory]);
@@ -495,7 +492,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         checkBudget();
         if (!await observeReferences(directory)) return false;
         checkBudget();
-        const evidence = options.mode === "dry-run" || state === "expired" ? { current: protection.current, namespaceOnly: false, destination: undefined }
+        const evidence = options.mode === "dry-run" || state === "expired" ? { current: protection.current, destination: undefined }
           : await preserveAttemptEvidence(directory, owner.directory, owner.identity, {
             pipelineId: owner.pipelineId, launchId: owner.launchId, register: destination => {
               const prior = store.copy(destination);
@@ -510,7 +507,6 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           const copy = store.copy(evidence.destination)!;
           store.registerCopy({ ...copy, bytes: await allocatedAttemptBytes(evidence.destination) });
         }
-        namespaceOnly = evidence.namespaceOnly;
         // Native/container observations can await I/O. Ownership must still
         // agree after them, at the same dispatch boundary.
         const authorityObservation = options.authority
@@ -573,8 +569,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         dispatchGuard: dispatchEligible,
         remove: directory => options.remove
           ? options.remove(directory, () => eligible(directory), () => dispatchEligible(directory))
-          : removeAttemptTree(directory, owner.directory, () => eligible(directory), namespaceOnly,
-            () => dispatchEligible(directory), () => retirementAuthorityCurrent(directory), dispatchState === "expired"),
+          : removeAttemptTree(directory, () => dispatchEligible(directory)),
         measure: async () => bytes,
         // Settlement owns freshness. Preserve the full mount/Git/readability
         // inspection, including the reinspection after quarantine.
