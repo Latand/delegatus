@@ -83,3 +83,24 @@ the exported MCP route, policy, service, SQLite receipts, production bindings
 and internal HTTP transport on ephemeral loopback ports. It checks a socket
 cut before ingress, a cut after response completion, refusal of delayed bytes,
 safe resend, response bounds and an independently stalled serving process.
+
+Run the focused checks from a scratch export of the revision being reviewed,
+with matching dependencies. Give each test command a fresh private `HOME`,
+`XDG_CONFIG_HOME`, `TMPDIR` and `LLV_STATE_DIR` before starting it. Keep the
+commands serial through the project's gate wrapper:
+
+```sh
+bash scripts/gate-slot.sh bunx tsc --noEmit
+bash scripts/gate-slot.sh bun run test src/lib/mcp/controlTransport.http.test.ts
+bash scripts/gate-slot.sh bun run test src/lib/mcp/controlEvidence.test.ts
+bash scripts/gate-slot.sh bun run test src/lib/mcp/bindings.test.ts
+bash scripts/gate-slot.sh bun run test src/lib/mcp/http.test.ts
+bash scripts/gate-slot.sh bun run test src/lib/mcp/startup.test.ts
+bash scripts/gate-slot.sh bun run test src/lib/mcp/largeReads.test.ts
+```
+
+The last three files cover the existing HTTP service, stdio discovery and read
+forwarding consumers of the transport. Retain each command's actual exit,
+test and assertion counts with the reviewed revision. Run `bun run
+privacy:check` against the branch before publication; the pipeline publisher
+runs the required pre-push checks and opens the pull request.
