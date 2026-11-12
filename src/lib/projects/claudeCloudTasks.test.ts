@@ -295,3 +295,28 @@ test("an operator binding change during readiness persistence cannot pair an old
   expect(await f.prepare()).toMatchObject({ state: "ready", environmentId: "operator-choice", selection: JSON.stringify("operator-choice") });
   expect(f.posts()).toHaveLength(1);
 });
+
+
+test("a peer’s pending checkpoint cannot discard the successful creation receipt", async () => {
+  let release!: () => void, entered!: () => void, hide = false;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const f = fixture({ preparationAnswer: (method, target, body) => {
+    if (method === "GET" && target === "/v1/code/triggers" && hide) return Response.json({ data: [], has_more: false });
+    if (method !== "POST" || target !== "/v1/code/triggers") return null;
+    entered();
+    return barrier.then(() => {
+      const created = task({ ...body, id: "task-created" });
+      f.fake.tasks.set("task-created", created); hide = true;
+      return Response.json({ trigger: created });
+    });
+  } });
+  const first = f.prepare();
+  await started;
+  expect(await f.prepare()).toMatchObject({ state: "pending" });
+  release();
+  expect(await first).toMatchObject({ state: "ready", environmentId: "task-created" });
+  setClaudeCloudTasks(f.input.project, []);
+  expect(await f.restart()).toMatchObject({ state: "ready", environmentId: "task-created" });
+  expect(f.posts()).toHaveLength(1);
+});

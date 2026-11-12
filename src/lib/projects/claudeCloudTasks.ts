@@ -231,7 +231,9 @@ export async function prepareClaudeCloudTask(input: PrepareCloudEnvironmentInput
         }
         task = record(answer.body.trigger ?? answer.body);
         if (!answer.response.ok || typeof task.id !== "string") throw new ClaudeTaskError("create_uncertain");
-        await save({ taskId: task.id });
+        const createdTaskId = task.id;
+        if (!/^[A-Za-z0-9_-]{1,160}$/.test(createdTaskId)) throw new ClaudeTaskError("create_uncertain");
+        row = await settleCreation(row, dispatch, current => ({ ...current, taskId: createdTaskId }));
       }
     }
     const taskId = task.id;
@@ -270,13 +272,22 @@ export async function prepareClaudeCloudTask(input: PrepareCloudEnvironmentInput
     return result(failure.code);
   }
 }
-/** A definitive refusal releases only its own receipt even if a peer wrote uncertainty. */
+/** Effect receipts survive a peer’s readiness write under the same creation claim. */
+async function settleCreation(dispatched: ClaudeTaskRow, receipt: ClaudeTaskRow["create"], change: (current: ClaudeTaskRow) => ClaudeTaskRow): Promise<ClaudeTaskRow> {
+  const db = store();
+  if (!db) throw new Superseded();
+  try {
+    return await db.mutate(async (rows, persist) => {
+      const current = rows.find(row => row.key === dispatched.key);
+      if (!current || current.organization !== dispatched.organization || current.repository !== dispatched.repository
+        || current.create.intent !== receipt.intent || current.create.dispatchedAt !== receipt.dispatchedAt
+        || read(dispatched.project, dispatched.accountId)?.key !== dispatched.key) throw new Superseded();
+      const next = rowSchema.parse({ ...change(current), revision: current.revision + 1 });
+      await persist([next]); return next;
+    }, undefined, false, 1000, undefined, [dispatched.key]);
+  } finally { db.close(); }
+}
+/** A definitive refusal releases only its own receipt. */
 async function releaseRefusal(dispatched: ClaudeTaskRow, receipt: ClaudeTaskRow["create"], now: number) {
-  for (let round = 0; round < 3; round++) {
-    const current = read(dispatched.project, dispatched.accountId);
-    if (!current || current.organization !== dispatched.organization || current.create.intent !== receipt.intent || current.create.dispatchedAt !== receipt.dispatchedAt) throw new Superseded();
-    try { await update({ ...current, create: { intent: receipt.intent, releasedAt: now } }, current.revision, () => {}); return; }
-    catch (error) { if (!(error instanceof Superseded)) throw error; }
-  }
-  throw new Superseded();
+  await settleCreation(dispatched, receipt, current => ({ ...current, create: { intent: receipt.intent, releasedAt: now } }));
 }
