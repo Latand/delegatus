@@ -9,7 +9,7 @@ import { withAgentConfigSandbox } from "./agentConfigSandbox";
 import { runTempSweep, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
 import { statePath } from "@/lib/configDir";
 import { attemptReferencesClear, RepositoryLinkInventory } from "./attemptTempFilesystem";
-import { holdFinishedRoot, finishedLane, nameInReport } from "./attemptTempRetention.testSupport";
+import { holdFinishedRoot, finishedLane } from "./attemptTempRetention.testSupport";
 import { RecordedCheckStore, recordedRootHeld } from "@/lib/recordedChecks/store";
 import { attemptTempJournalPath } from "@/lib/tempSweep";
 
@@ -387,7 +387,6 @@ test("an unheld recent root retires immediately and its evidence copy inherits t
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-recent-")); roots.push(root);
   const directory = path.join(root, "llv-stage-recent"); fs.mkdirSync(path.join(directory, ".artifacts"), { recursive: true });
   fs.writeFileSync(path.join(directory, ".artifacts", "frame.png"), "evidence");
-  nameInReport(path.join(directory, ".artifacts", "frame.png"));
   const p = finishedLane(root, "2026-11-01T00:00:00Z"); savePipelines([p]);
   const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
   const authority: NonNullable<Parameters<typeof sweepAttemptTemps>[1]["authority"]> = (owner, inventory) => attemptTempAuthority(owner, inventory, () => now);
@@ -415,7 +414,6 @@ test("retrying preservation recreates a missing copy before expiry and stops doi
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-copy-producer-")); roots.push(root);
   const directory = path.join(root, "llv-stage-producer"); fs.mkdirSync(directory);
   fs.writeFileSync(path.join(directory, "frame.png"), "source evidence");
-  nameInReport(path.join(directory, "frame.png"));
   let now = Date.parse("2026-11-01T01:00:00Z"), references = 0;
   const p = finishedLane(root, "2026-11-01T00:00:00Z"); savePipelines([p]);
   const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
@@ -486,8 +484,6 @@ test("a finished-lane root held by linked evidence records its retention end and
   const target = path.join(root, "outside.png"); fs.writeFileSync(target, "kept outside the root");
   const linked = path.join(root, "llv-stage-linked"); fs.mkdirSync(linked);
   fs.symlinkSync(target, path.join(linked, "frame.png"));
-  // A report named the linked picture; it holds the root until expiry.
-  nameInReport(path.join(linked, "frame.png"));
   const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
   const authority: NonNullable<Parameters<typeof sweepAttemptTemps>[1]["authority"]> = (owner, inventory) => attemptTempAuthority(owner, inventory, () => now);
   const sweep = (maxRoots: number) => sweepAttemptTemps(store, { now: () => now, maxRoots, state: recordingAttemptTempState(store, authority), authority,
@@ -544,7 +540,7 @@ test.each(["running", "paused", "needs_decision", "teardown", "merge", "attempt"
 });
 
 const roots: string[] = [];
-afterEach(() => { savePipelines([]); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
+afterEach(() => { savePipelines([]); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 const modeledBytesPerHour = (removedBytes: number, elapsedMs: number) => removedBytes * 3600000 / (60000 + elapsedMs);
 
 test("hourly reclaim model includes sweep duration before the scheduler's minute wait", () => {

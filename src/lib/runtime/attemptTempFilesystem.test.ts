@@ -7,15 +7,14 @@ import { promisify } from "node:util";
 import { statePath } from "@/lib/configDir";
 import { execFile } from "node:child_process";
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { attemptReferencesClear, blockedSubtrees, measureAttemptAllocation, inspectAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
+import { attemptReferencesClear, blockedSubtrees, measureAttemptAllocation, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
   RETAINED_CHECKOUT_READ_MAX_AGE_MS, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
-import { nameInReport } from "./attemptTempRetention.testSupport";
 import type { ProcessScan } from "@/lib/tempSweep";
 const exec = promisify(execFile);
 const roots: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
+afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 const root = () => { const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-filesystem-")); roots.push(directory); return directory; };
 
 /** A directory left by a container that ran as another user: this user can
@@ -218,6 +217,135 @@ test.each(["absent", "unreadable", "restored"] as const)("the final removal chec
   } finally { denied?.mockRestore(); fs.chmodSync(change === "unreadable" ? repository : parent, 0o700); store.close(); }
 });
 
+test.each([
+  ["namespace-only", "control"], ["namespace-only", "activate"], ["namespace-only", "checkout-disappears"], ["namespace-only", "reopen-absent"],
+  ["permission-fallback", "control"], ["permission-fallback", "activate"], ["permission-fallback", "checkout-disappears"], ["permission-fallback", "reopen-absent"],
+] as const)("namespace dispatch validates its final snapshot (%s, %s)", async (removalPath, change) => {
+  const parent = root(), directory = path.join(parent, "llv-stage-namespace-dispatch"), bin = path.join(parent, "bin");
+  fs.mkdirSync(directory); fs.mkdirSync(bin);
+  const payload = path.join(directory, "payload"), dispatched = path.join(parent, "dispatched");
+  fs.writeFileSync(payload, "keep");
+  const docker = path.join(bin, "docker");
+  fs.writeFileSync(docker, `#!/bin/sh
+case "$1" in
+  ps) exit 0 ;;
+  run)
+    for arg do
+      case "$arg" in type=bind,source=*,target=/attempt) source=\${arg#type=bind,source=}; source=\${source%,target=/attempt} ;; esac
+    done
+    test -n "$source" || exit 2
+    printf started > "$DOCKER_DISPATCH_MARKER"
+    find "$source" -depth -mindepth 1 -delete
+    ;;
+  *) exit 2 ;;
+esac
+`);
+  fs.chmodSync(docker, 0o700);
+  const previousPath = process.env.PATH, previousImage = process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
+  const previousMarker = process.env.DOCKER_DISPATCH_MARKER;
+  process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
+  process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
+  process.env.DOCKER_DISPATCH_MARKER = dispatched;
+  const rm = spyOn(fs.promises, "rm").mockImplementation(async () => {
+    if (removalPath === "permission-fallback") throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    return undefined;
+  });
+  let producerState = "closed", checkoutReadable = true;
+  const guard = async () => {
+    await Promise.resolve();
+    if (change === "activate") producerState = "live";
+    if (change === "checkout-disappears") checkoutReadable = false;
+    if (change === "reopen-absent") producerState = "unknown";
+    return true;
+  };
+  const dispatchGuard = () => producerState === "closed" && checkoutReadable;
+  try {
+    let error: unknown;
+    try { await removeAttemptTree(directory, directory, guard, removalPath === "namespace-only", dispatchGuard); }
+    catch (caught) { error = caught; }
+    if (change === "control") {
+      expect(error).toBeUndefined();
+      expect(fs.existsSync(dispatched)).toBeTrue();
+      expect(fs.existsSync(directory)).toBeFalse();
+    } else {
+      expect(String(error)).toContain("authority changed before namespace removal");
+      expect(fs.existsSync(dispatched)).toBeFalse();
+      expect(fs.readFileSync(payload, "utf8")).toBe("keep");
+    }
+  } finally {
+    rm.mockRestore();
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+    if (previousImage === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
+    else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
+    if (previousMarker === undefined) delete process.env.DOCKER_DISPATCH_MARKER;
+    else process.env.DOCKER_DISPATCH_MARKER = previousMarker;
+  }
+});
+
+test.each([
+  ["namespace-only", "control"], ["namespace-only", "producer-changed"], ["namespace-only", "checkout-unreadable"], ["namespace-only", "root-replaced"],
+  ["permission-fallback", "control"], ["permission-fallback", "producer-changed"], ["permission-fallback", "checkout-unreadable"], ["permission-fallback", "root-replaced"],
+] as const)("final namespace rmdir revalidates authority and root identity (%s, %s)", async (pathKind, change) => {
+  const parent = root(), directory = path.join(parent, "llv-stage-final-rmdir"), bin = path.join(parent, "bin");
+  fs.mkdirSync(directory); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(directory, "payload"), "keep");
+  const originalIdentity = fs.lstatSync(directory), identity = `${originalIdentity.dev}:${originalIdentity.ino}`;
+  const docker = path.join(bin, "docker"), completion = path.join(parent, "docker-complete");
+  fs.writeFileSync(docker, `#!/bin/sh
+case "$1" in
+  ps) exit 0 ;;
+  run)
+    for arg do
+      case "$arg" in type=bind,source=*,target=/attempt) source=\${arg#type=bind,source=}; source=\${source%,target=/attempt} ;; esac
+    done
+    test -n "$source" || exit 2
+    find "$source" -depth -mindepth 1 -delete || exit
+    if test "$FINAL_RMDIR_CHANGE" = root-replaced; then mv "$source" "$source-original"; mkdir "$source"; printf replacement > "$source/payload"; fi
+    printf done > "$FINAL_RMDIR_COMPLETE"
+    ;;
+  *) exit 2 ;;
+esac
+`);
+  fs.chmodSync(docker, 0o700);
+  const previous = { PATH: process.env.PATH, image: process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE,
+    change: process.env.FINAL_RMDIR_CHANGE, complete: process.env.FINAL_RMDIR_COMPLETE };
+  process.env.PATH = `${bin}${path.delimiter}${previous.PATH ?? ""}`;
+  process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
+  process.env.FINAL_RMDIR_CHANGE = change;
+  process.env.FINAL_RMDIR_COMPLETE = completion;
+  const rm = spyOn(fs.promises, "rm").mockImplementation(async () => {
+    if (pathKind === "permission-fallback") throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    return undefined;
+  });
+  const dispatchGuard = () => !fs.existsSync(completion) || change !== "producer-changed" && change !== "checkout-unreadable";
+  try {
+    let error: unknown;
+    try { await removeAttemptTree(directory, directory, async () => true, pathKind === "namespace-only", dispatchGuard); }
+    catch (caught) { error = caught; }
+    if (change === "control") {
+      expect(error).toBeUndefined();
+      expect(fs.existsSync(directory)).toBeFalse();
+    } else {
+      expect(fs.existsSync(completion)).toBeTrue();
+      expect(String(error)).toMatch(change === "root-replaced" ? /identity changed before namespace rmdir/ : /authority changed before namespace rmdir/);
+      if (change === "root-replaced") {
+        const replacement = fs.lstatSync(directory);
+        expect(`${replacement.dev}:${replacement.ino}`).not.toBe(identity);
+        expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("replacement");
+      } else {
+        expect(`${fs.lstatSync(directory).dev}:${fs.lstatSync(directory).ino}`).toBe(identity);
+        expect(fs.readdirSync(directory)).toEqual([]);
+      }
+    }
+  } finally {
+    rm.mockRestore();
+    if (previous.PATH === undefined) delete process.env.PATH; else process.env.PATH = previous.PATH;
+    if (previous.image === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previous.image;
+    if (previous.change === undefined) delete process.env.FINAL_RMDIR_CHANGE; else process.env.FINAL_RMDIR_CHANGE = previous.change;
+    if (previous.complete === undefined) delete process.env.FINAL_RMDIR_COMPLETE; else process.env.FINAL_RMDIR_COMPLETE = previous.complete;
+  }
+});
+
 test("a capture created during the final container observation is preserved before reclaim", async () => {
   const parent = root(), directory = path.join(parent, "llv-stage-late-capture");
   fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "keep");
@@ -232,7 +360,7 @@ test("a capture created during the final container observation is preserved befo
   const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 0,
     state: async () => {
       stateReads++;
-      if (stateReads === 3) { fs.writeFileSync(path.join(directory, "frame.png"), "late frame"); nameInReport(path.join(directory, "frame.png")); }
+      if (stateReads === 3) fs.writeFileSync(path.join(directory, "frame.png"), "late frame");
       return "closed";
     }, references: async () => true, scan: () => ({ ownNamespace: null, processes: [] }) });
   try {
@@ -699,6 +827,69 @@ test.each([1, 2, 3])("an absent consumer checkout keeps scratch at removal obser
   } finally { store.close(); }
 });
 
+test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.() === 0).each(["plain", "capture", "late-capture", "dispatch-capture", "fallback-capture", "bmp-capture", "bmp-dispatch-capture", "bmp-fallback-capture"])("container-owned private files retain evidence and retire empty scratch (%s)", async variant => {
+  const kind = variant.replace(/^bmp-/, ""), extension = variant.startsWith("bmp-") ? "BMP" : "png";
+  const parent = root(), directory = path.join(parent, "llv-stage-private"); fs.mkdirSync(directory);
+  const image = await attemptTempUtilityImage();
+  const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+  cleanups.push(async () => {
+    store.close();
+    if (fs.existsSync(directory)) await exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
+      "--mount", `type=bind,source=${directory},target=/attempt`, "--entrypoint", "/bin/sh", image, "-c", "find /attempt -depth -mindepth 1 -delete"], { timeout: 15000 });
+  });
+  store.register({ directory, pipelineId: "fixture", launchId: "fixture", retainUntilClose: false, createdAt: 1 });
+  await exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0", "--mount", `type=bind,source=${directory},target=/attempt`,
+    "--entrypoint", "/bin/sh", image, "-c", "mkdir -p /attempt/private/deep; dd if=/dev/zero of=/attempt/private/data bs=1048576 count=4 2>/dev/null; chown -R 12345:12345 /attempt/private; chmod 700 /attempt/private"], { timeout: 15000 });
+  try {
+    expect(() => fs.readdirSync(path.join(directory, "private"))).toThrow();
+    const now = Date.parse("2030-01-01T00:00:00Z");
+    const pin = path.join(directory, ".delegatus-keep"); fs.writeFileSync(pin, "keep");
+    const sweep = (at: number) => sweepAttemptTemps(store, { now: () => at, state: async () => "closed", scan: () => ({ ownNamespace: null, processes: [] }) });
+    expect((await sweep(now)).removed).toBe(0); expect(fs.existsSync(directory)).toBeTrue();
+    fs.unlinkSync(pin);
+    const writeCapture = () => exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
+      "--mount", `type=bind,source=${directory},target=/attempt`, "--entrypoint", "/bin/sh", image, "-c",
+      `mkdir -p /attempt/private/deep; printf 'private capture' > /attempt/private/deep/frame.${extension}`], { timeout: 15000 });
+    const readCapture = async () => (await exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
+      "--mount", `type=bind,source=${directory},target=/attempt,readonly`, "--entrypoint", "/bin/cat", image,
+      `/attempt/private/deep/frame.${extension}`], { timeout: 15000 })).stdout;
+    if (kind === "capture") {
+      await writeCapture();
+      expect((await sweep(now + 60000)).removed).toBe(0);
+      expect(await readCapture()).toBe("private capture");
+      return;
+    }
+    if (kind === "dispatch-capture" || kind === "fallback-capture") {
+      await expect(removeAttemptTree(directory, directory, async () => { await writeCapture(); return true; }, kind === "dispatch-capture")).rejects.toThrow();
+      expect(await readCapture()).toBe("private capture");
+      return;
+    }
+    if (kind === "late-capture") {
+      let reads = 0;
+      const report = await sweepAttemptTemps(store, { now: () => now + 60000, scan: () => ({ ownNamespace: null, processes: [] }),
+        references: async () => true, state: async () => {
+          if (++reads === 2) await writeCapture();
+          return "closed";
+        } });
+      expect(reads).toBeGreaterThanOrEqual(2);
+      expect(report.removed).toBe(0);
+      expect(await readCapture()).toBe("private capture");
+      return;
+    }
+    let report;
+    // Other test runs may remove a container between ps and inspect. Production
+    // must retain this tree on that incomplete observation, then retry next tick.
+    for (let tick = 1; tick <= 4; tick++) {
+      report = await sweep(now + tick * 60000);
+      if (report.removed) break;
+      expect(report.held + report.errors).toBeGreaterThan(0);
+      expect(fs.existsSync(path.join(directory, "private"))).toBeTrue();
+    }
+    expect(report!.errors).toBe(0); expect(report!.removed).toBe(1); expect(report!.removedBytes).toBeGreaterThanOrEqual(4 * 1024 * 1024); expect(fs.existsSync(directory)).toBeFalse();
+  } finally { store.close(); }
+}, 60000);
+
+
 test.skipIf(process.platform !== "linux")("an incomplete container inventory cannot authorize deletion", async () => {
   const directory = root();
   const bin = path.join(directory, "bin"); fs.mkdirSync(bin);
@@ -766,6 +957,26 @@ test.each([".git", "project/.git", ".delegatus-keep"])("unknown marker %s is ret
   fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, "");
   expect(await inspectAttemptTree(directory)).toBeFalse();
 });
+
+
+test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.() === 0).each(["uv", "internal", "missing", "external", "unknown", "pin"])("private container marker classifier preserves its boundary (%s)", async kind => {
+  const directory = root(), privateRoot = path.join(directory, "private");
+  fs.mkdirSync(privateRoot);
+  const image = await attemptTempUtilityImage();
+  const docker = (script: string) => exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
+    "--mount", `type=bind,source=${directory},target=/attempt`, "--entrypoint", "/bin/sh", image, "-c", script], { timeout: 15_000 });
+  cleanups.push(async () => { await docker("find /attempt -depth -mindepth 1 -delete"); });
+  if (kind === "uv") {
+    const cache = path.join(privateRoot, "cache/uv/sdists-v9"); fs.mkdirSync(cache, { recursive: true }); fs.writeFileSync(path.join(cache, ".git"), "");
+  } else if (kind === "pin") fs.writeFileSync(path.join(privateRoot, ".delegatus-keep"), "keep");
+  else if (kind === "internal") {
+    const metadata = path.join(privateRoot, "metadata"); fs.mkdirSync(metadata);
+    fs.writeFileSync(path.join(privateRoot, ".git"), `gitdir: ${metadata}\n`);
+  } else fs.writeFileSync(path.join(privateRoot, ".git"), kind === "unknown" ? "unknown" : `gitdir: ${kind === "missing" ? path.join(privateRoot, "absent") : root()}\n`);
+  await docker("chown -R 12345:12345 /attempt/private; chmod 700 /attempt/private");
+  expect(() => fs.readdirSync(privateRoot)).toThrow();
+  expect(await inspectAttemptTree(directory)).toBe(kind === "uv" || kind === "internal");
+}, 60_000);
 
 
 test.skipIf(process.platform !== "linux")("a closed lane's checkout link stops holding scratch when its real consumer exits", async () => {

@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { measureTempBytes, resolvePhysicalPath, type ProcessScan, isUvCacheMarker } from "@/lib/tempSweep";
+import { PRESERVED_MEDIA_EXTENSIONS } from "@/lib/artifact/evidenceFormats";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 
 const exec = promisify(execFile);
@@ -537,6 +538,81 @@ function markerHolds(file: string, directory: string, original: string): boolean
   catch { return true; }
 }
 
+// Same bounded classifier inside the narrowly mounted cleanup namespace.
+// find supplies file names as argv, so whitespace and newlines stay literal.
+const containerClassifier = `
+  for file do
+    test "$(basename "$file")" != .delegatus-keep || exit 75
+    test -f "$file" && test ! -L "$file" || exit 75
+    size=$(stat -c %s "$file") || exit
+    test "$size" -le 4096 || exit 75
+    if test "$(basename "$file")" = .git && test "$size" = 0; then
+      printf '%s\\n' "$(dirname "$file")" | grep -Eq '/sdists-v[0-9]+(/|$)' && continue
+    fi
+    value=$(cat "$file") || exit
+    case "$file" in */worktrees/*/gitdir) target=$value;;
+      *) case "$value" in "gitdir: "*) target=\${value#gitdir: };; *) exit 75;; esac;; esac
+    case "$target" in "$ORIGINAL"/*) target=/attempt\${target#"$ORIGINAL"};;
+      /*) ;; *) target=$(dirname "$file")/$target;; esac
+    case "$target" in /attempt/*) ;; *) exit 75;; esac
+    test -e "$target" || exit 75
+    target=$(readlink -f "$target") || exit 75
+    case "$target" in /attempt/*) ;; *) exit 75;; esac
+  done`;
+const utilityImages = ["busybox:*", "alpine:*", "debian:*", "ubuntu:*", "postgres:*", "redis:*"];
+export async function attemptTempUtilityImage(): Promise<string> {
+  if (process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE) return process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
+  for (const pattern of utilityImages) {
+    const found = (await run("docker", ["image", "ls", "--filter", `reference=${pattern}`, "--format", "{{.ID}}"])).stdout.trim().split(/\s+/)[0];
+    if (found) return found;
+  }
+  throw new Error("no installed container cleanup utility image");
+}
+const noEvidence = 'found=$(find /attempt -xdev "(" -name .artifacts'
+  + PRESERVED_MEDIA_EXTENSIONS.map(extension => ` -o -iname "*.${extension}"`).join("")
+  + ' ")" -print -quit) || exit; test -z "$found" || exit 75; ';
+
+async function containerCommand(directory: string, operation: "inspect" | "remove" | "measure" | "evidence", original = directory,
+  guard?: () => Promise<boolean>, requireNoEvidence = false, dispatchGuard?: () => boolean): Promise<{ identity: string; stdout: string }> {
+  const initial = fs.lstatSync(directory);
+  if (!initial.isDirectory() || initial.isSymbolicLink()) throw new Error("attempt namespace root changed");
+  const identity = `${initial.dev}:${initial.ino}`;
+  // Running containers may hold files through mount aliases that an ordinary
+  // proc observer cannot read. Never stop or exec into one for reclamation.
+  if (!await containerMountsClear([directory, original])) throw new Error("container ownership could not be cleared for the attempt tree");
+  const image = await attemptTempUtilityImage();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(image) || directory.includes(",")) throw new Error("invalid container cleanup input");
+  const inspection = 'export ORIGINAL=$1; shift; find /attempt -xdev "$@" -print > /tmp/markers || exit; '
+    + 'test "$(wc -l < /tmp/markers)" -le 10000 || exit 75; '
+    + `find /attempt -xdev "$@" -exec /bin/sh -c ${"'" + containerClassifier.replaceAll("'", "'\\''") + "'"} sh {} + || exit; `;
+  const body = operation === "measure" ? 'exec du -skx /attempt'
+    : operation === "evidence" ? noEvidence
+      : inspection + (requireNoEvidence ? noEvidence : "")
+        + (operation === "remove" ? 'exec find /attempt -xdev -depth -mindepth 1 -delete' : 'exit 0');
+  const script = 'identity=$1; shift; test "$(stat -c %d:%i /attempt)" = "$identity" || exit 75; ' + body;
+  if (guard && !await guard()) throw new Error("attempt authority changed before namespace removal");
+  const final = fs.lstatSync(directory);
+  if (!final.isDirectory() || final.isSymbolicLink() || `${final.dev}:${final.ino}` !== identity)
+    throw new Error("attempt identity changed before namespace dispatch");
+  if (operation === "remove" && dispatchGuard && !dispatchGuard())
+    throw new Error("attempt temp deferred: authority changed before namespace removal");
+  // Only this owned tree is writable. No pull, network, socket, privileged
+  // mode or host namespace is granted to the cleanup container.
+  const result = await run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1m",
+    "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
+    "--mount", `type=bind,source=${directory},target=/attempt${operation !== "remove" ? ",readonly" : ""}`,
+    "--entrypoint", "timeout", image, "12", "/bin/sh", "-c", script, "sh", identity, original, ...markers]);
+  return { identity, stdout: result.stdout };
+}
+
+function removeEmptyNamespaceRoot(directory: string, identity: string, postDeleteGuard?: () => boolean) {
+  const current = fs.lstatSync(directory, { throwIfNoEntry: false });
+  if (!current?.isDirectory() || current.isSymbolicLink() || `${current.dev}:${current.ino}` !== identity)
+    throw new Error("attempt identity changed before namespace rmdir");
+  if (postDeleteGuard && !postDeleteGuard()) throw new Error("attempt temp deferred: authority changed before namespace rmdir");
+  fs.rmdirSync(directory);
+}
+
 /** Native find streams an arbitrarily large owned tree; the owned worker and
  * each command impose time bounds instead of permanently retaining it at an
  * entry-count ceiling. Linked worktrees remain with their preservation owner. */
@@ -555,14 +631,15 @@ export async function inspectAttemptTree(directory: string, original = directory
     }
     return true;
   }
-  // A tree find cannot read whole is held for the operator before it gets
-  // here; one that turns unreadable meanwhile is held, never read with
-  // privileges.
   try {
     const found = (await run("find", [directory, "-xdev", ...markers, "-print0"])).stdout.split("\0").filter(Boolean);
     return found.length <= MARKER_LIMIT && !found.some(file => markerHolds(file, directory, original));
   }
-  catch { return false; }
+  catch (error) {
+    if (process.platform !== "linux") throw error;
+    try { await containerCommand(directory, "inspect", original); return true; }
+    catch { return false; }
+  }
 }
 
 /** An independent directory snapshot protects new markers even when expired
@@ -595,13 +672,26 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
   } };
 }
 
-/** Removes an attempt tree with this user's own rights. A directory it cannot
- * list or empty, left by a container that ran as another user, needs
- * privileges the Viewer does not have: the sweep holds such a root for the
- * operator before it gets here, and a removal that still meets one fails. */
-export async function removeAttemptTree(directory: string, dispatchGuard?: () => boolean): Promise<void> {
+/** An unreadable tree can retire only when the readonly namespace proves it
+ * has no captures. The deletion namespace repeats that proof at dispatch. */
+export async function attemptTreeHasNoEvidence(directory: string, original: string): Promise<void> {
+  await containerCommand(directory, "evidence", original);
+}
+
+export async function removeAttemptTree(directory: string, original = directory, guard?: () => Promise<boolean>, requireNoEvidence = false,
+  dispatchGuard?: () => boolean, postDeleteGuard = dispatchGuard, discardExpiredEvidence = false): Promise<void> {
+  if (requireNoEvidence) {
+    const { identity } = await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
+    removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
+    return;
+  }
   if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before native removal");
-  await fs.promises.rm(directory, { recursive: true, force: true });
+  try { await fs.promises.rm(directory, { recursive: true, force: true }); }
+  catch (error) {
+    if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
+    const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard);
+    removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
+  }
 }
 
 const kibibytes = (output: string | undefined) => {

@@ -10,7 +10,7 @@ import * as filesystem from "./attemptTempFilesystem";
 import type { ProcessScan } from "@/lib/tempSweep";
 import { AttemptTempStore, BLOCKED_SUBTREE_RETRY_MS, EXPIRED_HOLD_RETRY_MS, sweepAttemptTemps, type AttemptTempState, type AttemptTempOwner } from "./attemptTempRetention";
 import { attemptTempAuthority, attemptTempState } from "./attemptTempProduction";
-import { holdFinishedRoot, nameInReport } from "./attemptTempRetention.testSupport";
+import { holdFinishedRoot } from "./attemptTempRetention.testSupport";
 import { recordedRootHeld, RecordedCheckStore } from "@/lib/recordedChecks/store";
 import { Database } from "bun:sqlite";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
@@ -19,7 +19,7 @@ import { digest } from "@/lib/recordedChecks/wire";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
+afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 const NOW = Date.parse("2026-10-22T12:00:00Z");
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-attempt-retention-")); roots.push(root);
@@ -480,7 +480,6 @@ test("expired linked evidence retires without following its target; recent failu
   const f = fixture(), directory = f.make("linked", 30 * 86400000), target = path.join(f.root, "outside");
   fs.mkdirSync(target); fs.writeFileSync(path.join(target, "frame.png"), "keep target");
   fs.symlinkSync(target, path.join(directory, ".artifacts"));
-  nameInReport(path.join(directory, ".artifacts", "frame.png"));
   const lines: unknown[][] = [], log = spyOn(console, "error").mockImplementation((...args) => { lines.push(args); });
   try {
     for (let n = 0; n < 3; n++) { f.store.defer(directory, 0); expect((await f.sweep("closed")).errors).toBe(1); }
@@ -713,7 +712,6 @@ test("legacy adoption attributes a real producer manifest through its still-reco
   process.env.LLV_STATE_DIR = path.join(f.root, "copy-state");
   try {
     fs.writeFileSync(path.join(directory, "frame.png"), "legacy capture");
-    nameInReport(path.join(directory, "frame.png"));
     const evidence = await preserveAttemptEvidence(directory, directory, f.store.owner(directory)!.identity);
     expect(evidence.destination).toBeDefined();
     const report = await sweepEvidenceCopies(f.store, { now: () => NOW, state: async () => "expired",
@@ -773,6 +771,131 @@ test("a settled attempt removes its scratch without waiting for host release", a
   try { expect((await f.sweep()).removed).toBe(1); expect(fs.existsSync(directory)).toBeFalse(); }
   finally { f.store.close(); }
 });
+
+type NamespacePath = "namespace-only" | "permission-fallback";
+type NamespaceChange = "control" | "producer-changed" | "checkout-unreadable" | "root-replaced";
+async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceChange = "control", expired = false) {
+  const f = fixture(), directory = f.make(`namespace-${kind}`), bin = path.join(f.root, "bin");
+  const checkout = path.join(f.root, "checkout"), completion = path.join(f.root, "cleanup-complete");
+  fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
+  fs.mkdirSync(path.join(directory, "private")); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(directory, "private", "payload"), "reclaim me");
+  if (expired) fs.writeFileSync(path.join(directory, "frame.png"), "expired evidence");
+  f.store.measure(directory, 8192); f.store.release(directory);
+  fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}
+import fs from "node:fs";
+const args = process.argv.slice(2);
+if (args[0] === "ps") process.exit(0);
+if (args[0] !== "run") process.exit(61);
+const source = /source=([^,]+)/.exec(args[args.indexOf("--mount") + 1])?.[1];
+if (!source || !source.startsWith(${JSON.stringify(f.root + path.sep)})) process.exit(62);
+const script = args[args.indexOf("-c") + 1];
+if (script.includes("-delete")) {
+  if (script.includes("found=$(find") && fs.existsSync(source + "/frame.png")) process.exit(75);
+  for (const entry of fs.readdirSync(source)) fs.rmSync(source + "/" + entry, { recursive: true, force: true });
+  if (${JSON.stringify(change)} === "checkout-unreadable") fs.chmodSync(${JSON.stringify(checkout)}, 0);
+  if (${JSON.stringify(change)} === "root-replaced") {
+    fs.renameSync(source, source + "-original"); fs.mkdirSync(source);
+    fs.writeFileSync(source + "/payload", "replacement");
+  }
+  fs.writeFileSync(${JSON.stringify(completion)}, "done");
+}
+`, { mode: 0o700 });
+  const previousPath = process.env.PATH, previousImage = process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
+  process.env.PATH = bin + path.delimiter + (previousPath ?? "");
+  process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
+  const nativeOpendir = fs.promises.opendir.bind(fs.promises);
+  const opendir = spyOn(fs.promises, "opendir").mockImplementation(async (target, options) => {
+    if (kind === "namespace-only" && String(target).startsWith(f.root + path.sep) && path.basename(String(target)) === "private")
+      throw Object.assign(new Error("fixture private"), { code: "EACCES" });
+    return nativeOpendir(target, options);
+  });
+  const nativeRm = fs.promises.rm.bind(fs.promises);
+  const rm = spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+    if (kind === "permission-fallback" && String(target).startsWith(f.root + path.sep) && path.basename(String(target)).startsWith(".delegatus-trash-"))
+      throw Object.assign(new Error("fixture denied"), { code: "EACCES" });
+    return nativeRm(target, options);
+  });
+  try {
+    const report = await f.sweep("closed", { maxRoots: 1, capBytes: 0, references: async () => true,
+      state: async (owner: AttemptTempOwner, inventory: filesystem.RepositoryLinkInventory) => {
+        await filesystem.repositoryReferencesAttemptTemp(checkout, owner.directory, owner.directory, inventory);
+        return expired ? "expired" : "closed";
+      },
+      authority: async () => ({ state: expired ? "expired" : "closed", revision: "unchanged",
+        isCurrent: () => change !== "producer-changed" || !fs.existsSync(completion) }) });
+    expect(fs.existsSync(completion)).toBeTrue();
+    if (change !== "control") {
+      expect(report.removed).toBe(0);
+      expect(report.errors).toBe(change === "root-replaced" ? 1 : 0);
+      expect(report.outcomes[0].reason).toContain(change === "root-replaced"
+        ? "identity changed before namespace rmdir" : "authority changed before namespace rmdir");
+      expect(fs.existsSync(attemptTempJournalPath(directory))).toBeTrue();
+      expect(f.store.has(directory)).toBeTrue();
+      const trash = fs.readdirSync(f.root).find(name => name.startsWith(".delegatus-trash-") && !name.endsWith("-original"));
+      expect(trash).toBeDefined();
+      if (change === "root-replaced") expect(fs.readFileSync(path.join(f.root, trash!, "payload"), "utf8")).toBe("replacement");
+      else expect(fs.readdirSync(path.join(f.root, trash!))).toEqual([]);
+      return;
+    }
+    expect(report.errors).toBe(0);
+    expect(report.removed).toBe(1);
+    expect(fs.existsSync(attemptTempJournalPath(directory))).toBeFalse();
+    expect(fs.existsSync(directory)).toBeFalse();
+    expect(fs.readdirSync(f.root).filter(name => name.startsWith(".delegatus-trash-"))).toEqual([]);
+    expect(f.store.has(directory)).toBeFalse();
+    expect(f.store.bytes()).toBe(0);
+  } finally {
+    opendir.mockRestore(); rm.mockRestore(); f.store.close(); fs.chmodSync(checkout, 0o700);
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+    if (previousImage === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
+  }
+}
+
+test.skipIf(process.platform !== "linux")("expired evidence also retires through the permission-denied namespace fallback", async () => {
+  await integratedNamespaceSweep("permission-fallback", "control", true);
+});
+
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a root holding a directory this user cannot remove waits for the operator and is reported", async () => {
+  const f = fixture(), directory = f.make("blocked", 2 * 86400000), bin = path.join(f.root, "bin");
+  // What a container that ran as another user leaves behind: a directory this
+  // user can neither list nor empty. Mode 000 on our own directory models it.
+  const locked = path.join(directory, "tmp", "pgdata");
+  fs.mkdirSync(locked, { recursive: true }); fs.writeFileSync(path.join(locked, "base"), Buffer.alloc(8192)); fs.chmodSync(locked, 0);
+  fs.mkdirSync(path.join(directory, "tmp", "empty-foreign")); fs.chmodSync(path.join(directory, "tmp", "empty-foreign"), 0o500);
+  // Nothing may be removed or measured with privileges.
+  fs.mkdirSync(bin); fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh\necho "$@" >> ${JSON.stringify(path.join(f.root, "docker.log"))}\nexit 1\n`, { mode: 0o700 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = bin + path.delimiter + (previousPath ?? "");
+  try {
+    const held = await f.sweep("expired");
+    expect(held).toMatchObject({ removed: 0, errors: 0, operatorHeld: 1 });
+    expect(held.outcomes[0]).toMatchObject({ directory, disposition: "operator", unreadable: true });
+    expect(held.outcomes[0].reason).toContain("1 directory this user cannot remove");
+    expect(held.operatorHeldBytes).toBeGreaterThanOrEqual(4096);
+    expect(held.blocked).toMatchObject({ roots: 1, listed: [{ directory, count: 1, entries: [{ path: locked, uid: process.getuid!(), unreadable: true }] }] });
+    expect(fs.existsSync(path.join(directory, "tmp"))).toBeTrue();
+    expect(f.store.owner(directory)!.checkedAt).toBe(NOW + BLOCKED_SUBTREE_RETRY_MS);
+    const dockerLog = path.join(f.root, "docker.log");
+    expect((fs.existsSync(dockerLog) ? fs.readFileSync(dockerLog, "utf8") : "").split("\n").filter(line => line.startsWith("run"))).toEqual([]);
+    // Once the operator removed it, the next visit retires the root and the report forgets it.
+    fs.chmodSync(locked, 0o700); fs.rmSync(locked, { recursive: true });
+    const retired = await f.sweep("expired", { now: () => NOW + BLOCKED_SUBTREE_RETRY_MS });
+    expect(retired).toMatchObject({ removed: 1, errors: 0, blocked: { roots: 0, listed: [] } });
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally {
+    try { fs.chmodSync(locked, 0o700); } catch { /* Removed above. */ }
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+    f.store.close();
+  }
+});
+
+test.skipIf(process.platform !== "linux").each(["namespace-only", "permission-fallback"] as const)(
+  "an unchanged integrated sweep finishes namespace cleanup in one pass (%s)", kind => integratedNamespaceSweep(kind));
+test.skipIf(process.platform !== "linux").each([
+  ["namespace-only", "producer-changed"], ["namespace-only", "checkout-unreadable"], ["namespace-only", "root-replaced"],
+  ["permission-fallback", "producer-changed"], ["permission-fallback", "checkout-unreadable"], ["permission-fallback", "root-replaced"],
+] as const)("an integrated sweep refuses post-delete drift (%s, %s)", (kind, change) => integratedNamespaceSweep(kind, change));
 
 test.each(["absent", "unreadable", "restored-with-link"] as const)(
   "the final producer read revalidates a changed consumer checkout (%s)", async change => {
@@ -1727,10 +1850,6 @@ function legacyEvidence(f: ReturnType<typeof fixture>) {
   fs.writeFileSync(path.join(directory, ".artifacts/prototype.png"), "prototype bytes");
   fs.writeFileSync(path.join(directory, "report.webp"), "report bytes");
   fs.writeFileSync(path.join(directory, "scratch.bin"), "disposable");
-  // An image of a checked-out source tree that no report named.
-  fs.mkdirSync(path.join(directory, "source/static"), { recursive: true });
-  fs.writeFileSync(path.join(directory, "source/static/icon.png"), "source asset");
-  nameInReport(path.join(directory, ".artifacts/prototype.png"), path.join(directory, "report.webp"));
   return directory;
 }
 
@@ -1746,7 +1865,6 @@ test.each(["png", "jpg", "jpeg", "gif", "webp", "avif", "BMP"])("legacy %s captu
   const f = fixture(), directory = path.join(f.root, "scratch/llv-stage-AbC123");
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(directory, `report.${extension}`), "raster capture bytes");
-  nameInReport(path.join(directory, `report.${extension}`));
   expect((await f.sweep("orphan")).removed).toBe(0); f.store.close();
   const store = new AttemptTempStore(f.filename);
   try {
@@ -1773,8 +1891,6 @@ test("legacy scratch screenshots survive adoption and retirement across reopenin
     expect(fs.readFileSync(path.join(saved!, "files/report.webp"), "utf8")).toBe("report bytes");
     expect(fs.existsSync(directory)).toBeFalse();
     expect(fs.existsSync(path.join(saved!, "files/scratch.bin"))).toBeFalse();
-    // Only what the ledger links is evidence; a source tree's image is not.
-    expect(fs.existsSync(path.join(saved!, "files/source/static/icon.png"))).toBeFalse();
   } finally { store.close(); }
 });
 
@@ -1808,7 +1924,6 @@ test.each(["new", "changed"])("evidence arriving during the final authority read
     expect((await f.sweep("orphan", { now: () => NOW + 2 * 86400000, state: async () => {
       if (!added && savedAttemptEvidence(directory)) {
         added = true; fs.writeFileSync(path.join(directory, kind === "new" ? "late.png" : ".artifacts/prototype.png"), "late frame");
-        if (kind === "new") nameInReport(path.join(directory, "late.png"));
       }
       return "orphan";
     } })).removed).toBe(0);
@@ -1822,46 +1937,15 @@ test.each(["new", "changed"])("evidence arriving during the final authority read
   } finally { f.store.close(); }
 });
 
-test.each([".artifacts", "frame.png"])("linked %s evidence a report named retains scratch and its outside target", async name => {
+test.each([".artifacts", "frame.png"])("linked %s evidence retains scratch and its outside target", async name => {
   const f = fixture(), directory = f.make("linked-evidence");
   const outside = path.join(f.root, "outside"); fs.mkdirSync(outside);
   fs.writeFileSync(path.join(outside, "frame.png"), "outside capture");
   fs.symlinkSync(name === ".artifacts" ? outside : path.join(outside, "frame.png"), path.join(directory, name));
-  nameInReport(path.join(directory, name === ".artifacts" ? ".artifacts/frame.png" : "frame.png"));
   try {
     expect((await f.sweep()).removed).toBe(0);
     expect(fs.existsSync(directory)).toBeTrue();
     expect(fs.readFileSync(path.join(outside, "frame.png"), "utf8")).toBe("outside capture");
-  } finally { f.store.close(); }
-});
-
-test.each([".artifacts", "frame.png"])("a linked %s no report named is no evidence: the root retires and the target stays", async name => {
-  const f = fixture(), directory = f.make("unnamed-link");
-  const outside = path.join(f.root, "outside"); fs.mkdirSync(outside);
-  fs.writeFileSync(path.join(outside, "frame.png"), "outside capture");
-  fs.symlinkSync(name === ".artifacts" ? outside : path.join(outside, "frame.png"), path.join(directory, name));
-  try {
-    expect(await f.sweep()).toMatchObject({ removed: 1, errors: 0 });
-    expect(fs.existsSync(directory)).toBeFalse();
-    expect(fs.readFileSync(path.join(outside, "frame.png"), "utf8")).toBe("outside capture");
-  } finally { f.store.close(); }
-});
-
-test("a picture whose report copy is kept needs no second copy, and an unreadable index refuses", async () => {
-  const f = fixture(), directory = f.make("kept-copy"), frame = path.join(directory, "frame.png");
-  fs.writeFileSync(frame, "named and kept");
-  nameInReport(frame);
-  const index = JSON.parse(fs.readFileSync(statePath("report-media", "index.json"), "utf8"));
-  fs.writeFileSync(statePath("report-media", index[0].file), "named and kept");
-  const unreadable = f.make("unreadable-index");
-  try {
-    expect(await f.sweep("settled", { maxRoots: 1 })).toMatchObject({ removed: 1, errors: 0 });
-    expect(savedAttemptEvidence(directory)).toBeUndefined();
-    fs.writeFileSync(statePath("report-media", "index.json"), "not an index");
-    const refused = await f.sweep("settled", { maxRoots: 1 });
-    expect(refused).toMatchObject({ removed: 0, errors: 1 });
-    expect(refused.outcomes[0].reason).toContain("report picture index is unreadable");
-    expect(fs.existsSync(unreadable)).toBeTrue();
   } finally { f.store.close(); }
 });
 
