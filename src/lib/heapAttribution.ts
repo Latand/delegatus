@@ -12,11 +12,11 @@ export function createWeakRegistry<T extends object, M>(limit: number) {
     has: (target: T) => seen.has(target),
     add(target: T, meta: M) {
       if (seen.has(target)) return false;
-      seen.add(target);
       if (rows.size >= limit) {
         for (const [id, row] of rows) if (!row.ref.deref()) { rows.delete(id); finalizer.unregister(row); }
       }
       if (rows.size >= limit) { dropped++; return false; }
+      seen.add(target);
       const id = ++sequence, row = { ref: new WeakRef(target), meta };
       rows.set(id, row);
       finalizer.register(target, id, row);

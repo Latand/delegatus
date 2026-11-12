@@ -20,7 +20,7 @@ test("startup wraps Bun and Node, preserves named imports and is idempotent", ()
 
 test("both Bun overloads record safe creation sites and exits while preserving callbacks", async () => {
   let exits = 0;
-  const a = Bun.spawn([process.execPath, "-e", "process.exit(7)", "private-argument"], { stdout: "ignore", stderr: "ignore", onExit: () => exits++ });
+  const a = Bun.spawn([process.execPath, "-e", "process.exit(7)", "private-argument"], { stdout: "ignore", stderr: "ignore", onExit: () => { exits++; } });
   const b = Bun.spawn({ cmd: [process.execPath, "-e", "process.exit(0)"], stdout: "ignore", stderr: "ignore" });
   expect(await a.exited).toBe(7);
   await b.exited;

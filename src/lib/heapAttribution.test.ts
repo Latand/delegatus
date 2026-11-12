@@ -34,7 +34,9 @@ test("weak registries deduplicate, report saturation and let targets die", async
   const ref = new WeakRef(target);
   expect(registry.add(target, 1)).toBe(true);
   expect(registry.add(target, 2)).toBe(false);
-  expect(registry.add({}, 3)).toBe(false);
+  const declined = {};
+  expect(registry.add(declined, 3)).toBe(false);
+  expect(registry.has(declined)).toBe(false);
   expect(registry.dropped()).toBe(1);
   target = null;
   let live = true;
@@ -46,7 +48,7 @@ test("weak registries deduplicate, report saturation and let targets die", async
   let visits = 0;
   registry.visit(() => visits++);
   expect(visits).toBe(0);
-  expect(registry.add({}, 4)).toBe(true);
+  expect(registry.add(declined, 4)).toBe(true);
 });
 
 test("host snapshots retain scalar sizes, include queued subscriber events and bound details", () => {
