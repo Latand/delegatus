@@ -22,6 +22,32 @@ afterEach(() => {
 });
 const own = () => { const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-keep-marker-guard-")); roots.push(root); return root; };
 
+function markerFiles(directory: string, found: string[] = []): string[] {
+  if (!fs.existsSync(directory)) return found;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const file = path.join(directory, entry.name);
+    if (entry.name === KEEP_MARKER) { found.push(file); continue; }
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) markerFiles(file, found);
+  }
+  return found;
+}
+
+function assertNoMarkersOutsideTemp(sandbox: string, tempRoot: string): void {
+  const temp = fs.realpathSync(tempRoot);
+  const escaped = markerFiles(sandbox).filter(file => {
+    const relative = path.relative(temp, path.resolve(file));
+    return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+  });
+  expect(escaped).toEqual([]);
+}
+
+function runChild(file: string, env: NodeJS.ProcessEnv, testName?: string) {
+  return Bun.spawnSync([process.execPath, "test", "--timeout=60000", ...(testName ? ["--test-name-pattern", testName] : []), file], {
+    cwd: path.resolve(import.meta.dir, "../../.."), env, stdout: "pipe", stderr: "pipe", timeout: 9 * 60_000,
+  });
+}
+
 test("a marker is written inside the test temp root with the human-pin text by default", () => {
   const file = plantKeepMarker(path.join(own(), KEEP_MARKER));
   expect(fs.readFileSync(file, "utf8")).toBe("operator pin");
@@ -75,6 +101,54 @@ test("removal tolerates a marker whose tree was moved or already removed", () =>
   expect(() => removeKeepMarkers()).not.toThrow();
   expect(plantedKeepMarkers()).toEqual([]);
 });
+
+test("real marker writers leave no markers after their isolated child runs", () => {
+  const files = [
+    "src/lib/runtime/attemptTempRetention.test.ts",
+    "src/lib/runtime/attemptTempProduction.test.ts",
+    "src/lib/runtime/attemptTempFilesystem.test.ts",
+    "src/lib/tempSweep.test.ts",
+  ];
+  for (const file of files) {
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-keep-marker-child-"));
+    const tempRoot = path.join(sandbox, "tmp");
+    fs.mkdirSync(tempRoot);
+    const env = { ...process.env, HOME: path.join(sandbox, "home"), XDG_CONFIG_HOME: path.join(sandbox, "config"), TMPDIR: tempRoot,
+      LLV_STATE_DIR: path.join(sandbox, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_GATE_RUNNER: "off" };
+    try {
+      const result = runChild(file, env);
+      expect(result.exitCode, `${file}\n${result.stderr.toString()}\n${result.stdout.toString()}`).toBe(0);
+      assertNoMarkersOutsideTemp(sandbox, tempRoot);
+    } finally { fs.rmSync(sandbox, { recursive: true, force: true }); }
+  }
+}, { timeout: 10 * 60_000 });
+
+test("the isolated child cleanup runs after an actual assertion failure", () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-keep-marker-failure-"));
+  const tempRoot = path.join(sandbox, "tmp"); fs.mkdirSync(tempRoot);
+  const env = { ...process.env, HOME: path.join(sandbox, "home"), XDG_CONFIG_HOME: path.join(sandbox, "config"), TMPDIR: tempRoot,
+    LLV_STATE_DIR: path.join(sandbox, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_KEEP_MARKER_FAILURE_CONTROL: "1" };
+  try {
+    const result = runChild(import.meta.path, env, "intentional keep-marker assertion failure control");
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.toString()).toContain("intentional keep-marker assertion failure control");
+    assertNoMarkersOutsideTemp(sandbox, tempRoot);
+  } finally { fs.rmSync(sandbox, { recursive: true, force: true }); }
+});
+
+test("a marker outside the child temp root makes the leak assertion fail", () => {
+  const sandbox = own(), tempRoot = path.join(sandbox, "tmp"); fs.mkdirSync(tempRoot);
+  const leaked = path.join(sandbox, KEEP_MARKER); fs.writeFileSync(leaked, "control leak");
+  expect(() => assertNoMarkersOutsideTemp(sandbox, tempRoot)).toThrow();
+});
+
+if (process.env.LLV_KEEP_MARKER_FAILURE_CONTROL === "1") {
+  test("intentional keep-marker assertion failure control", () => {
+    fs.mkdirSync(path.join(os.tmpdir(), "failure-control"), { recursive: true });
+    plantKeepMarker(path.join(os.tmpdir(), "failure-control", KEEP_MARKER));
+    expect("intentional keep-marker assertion failure control").toBe("unexpected success");
+  });
+}
 
 /** Every test file under src and scripts. */
 function testFiles(directory: string, found: string[] = []): string[] {
