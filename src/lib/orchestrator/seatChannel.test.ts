@@ -6,7 +6,8 @@ import { UnixRuntimeHostClient } from "@/lib/runtime/client";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
 import { lookupOriginalSend, resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import { deliverConversationMessage } from "@/lib/delivery";
-import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorRevocations, readOrchestratorSeatFileOrNull } from "./seats";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorRevocations, readOrchestratorSeatFile, readOrchestratorSeatFileOrNull } from "./seats";
+import { writeStoredSeatRecord } from "./seatStoreFixture";
 import { currentSeat, reconcileSeatChannel, seatChannelRecord, seatDeliveryDisposition, seatRecipientVerdictAsync, withdrawRuntimeWake, SEND_SEAT_REVOKED_REASON, type SeatChannelPorts } from "./seatChannel";
 import { boardReportMessageId } from "./boardReportRun";
 import { deputyNoteKey } from "./deputySweep";
@@ -176,10 +177,9 @@ test("a project temporarily without a seat keeps its withdrawn words until activ
   if (!original?.ok) throw new Error("fixture admission failed");
   designate(runtime, true);
   const revocation = orchestratorRevocations().at(-1)!;
-  const filename = path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json");
-  const file = JSON.parse(fs.readFileSync(filename, "utf8"));
+  const file = readOrchestratorSeatFile();
   delete file.seats["channel-project"];
-  fs.writeFileSync(filename, JSON.stringify(file));
+  writeStoredSeatRecord(file);
   expect(await reconcileSeatChannel(revocation, ports)).toBe(false);
   expect(seatChannelRecord(original.operationId)?.outcome).toBe("awaiting-seat");
   expect(await resolveSendReceipt(original.operationId, { registry: runtime.registry, client: ports.client })).toMatchObject({ state: "in-flight", resend: "verify-first" });
@@ -401,10 +401,9 @@ test("a fresh process resumes open records outside the recent-rotation window", 
   if (!original?.ok) throw new Error("fixture admission failed");
   designate(runtime, true);
   const revoked = { ...orchestratorRevocations().at(-1)!, revokedAt: "2020-01-01T00:00:00.000Z" };
-  const filename = path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json");
-  const file = JSON.parse(fs.readFileSync(filename, "utf8"));
+  const file = readOrchestratorSeatFile();
   file.seats = {}; file.revocations = [];
-  fs.writeFileSync(filename, JSON.stringify(file));
+  writeStoredSeatRecord(file);
   expect(await reconcileSeatChannel(revoked, { ...ports, now: () => Date.parse(revoked.revokedAt) })).toBe(false);
   expect(seatChannelRecord(original.operationId)?.outcome).toBe("awaiting-seat");
   const child = Bun.spawn([process.execPath, "-e", `

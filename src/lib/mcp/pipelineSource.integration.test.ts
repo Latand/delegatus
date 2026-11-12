@@ -368,9 +368,13 @@ test("seat replacement during writer admission refuses overwrite without changin
   f.ports({ deputySeatFor: () => {
     if (!held) {
       held = true; blocker.exec("BEGIN IMMEDIATE");
+      /* The seat record lives in the same database, so the rotation commits
+         the moment the blocking writer lets go, before the waiting admission
+         takes the lock. */
       released = new Promise<void>(resolve => setTimeout(() => {
+        blocker.exec("ROLLBACK");
         designate(f.pipeline.project, f.other.id, f.other.src, "source-wait-successor");
-        blocker.exec("ROLLBACK"); resolve();
+        resolve();
       }, 20));
     }
     return null;
