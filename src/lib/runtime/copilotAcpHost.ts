@@ -1,3 +1,4 @@
+import { heapAttribution } from "@/lib/heapAttribution";
 import { hostExitProcess, observeHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
 import { memoryField, memoryKillText } from "./agentMemoryState";
@@ -313,6 +314,15 @@ export class CopilotAcpHost implements EngineHost {
   private readonly processIdentity: (pid: number) => string | null;
   private readonly childStartIdentity: string | null;
   private readonly exitProcess: import("@/lib/processIdentity").ProcessIdentity | null;
+
+  /** Scalar reads only; independent of event-window retention policy. */
+  heapAttribution() {
+    let queuedEvents = 0;
+    for (const subscriber of this.subscribers) queuedEvents += subscriber.queue.length;
+    return { engine: "copilot", events: this.events.length, eventSubscribers: this.subscribers.size,
+      stateSubscribers: this.stateListeners.size, queuedEvents };
+  }
+
   private readonly subscribers = new Set<Subscriber>();
   private readonly events: RuntimeEvent[] = [];
   private readonly pending = new Map<number, PendingRequest>();
@@ -352,6 +362,7 @@ export class CopilotAcpHost implements EngineHost {
   private resolveReaped!: () => void;
 
   private constructor(child: ChildProcessWithoutNullStreams, options: CopilotAcpHostOptions) {
+    heapAttribution.hosts.add(this, null);
     this.child = child;
     this.memoryCell = options.memoryCell ?? null;
     this.memoryCell?.onChange(() => this.notifyStateListeners());

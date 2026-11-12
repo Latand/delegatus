@@ -6,7 +6,9 @@ name: macOS process identity
 # because that half was never executed anywhere — this job is where it runs.
 
 on:
+  # Only pull requests into main (docs/stage-branches.md).
   pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
