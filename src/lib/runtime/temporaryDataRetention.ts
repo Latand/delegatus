@@ -13,6 +13,8 @@ import { assertRetentionTestPath, RetentionTestSafetyError } from "@/lib/retenti
 export const TEMPORARY_DATA_RETENTION_MS = 7 * 86400000;
 const MAX_PROTECTION_ENTRIES = 200000;
 export const PRESERVATION_NAMES = new Set(["worktree", "worktree-backup.json", "preservation", "bundles", ".git"]);
+const lifecycleControlName = (name: string) => name.startsWith(".delegatus-trash-")
+  || name.startsWith(".delegatus-sweep-") && name.endsWith(".json");
 export type TemporaryDataAuthority = { expiresAt: number | null; reason: string; revision: string; current: () => boolean; pipelineIds?: string[] };
 export type TemporaryDataPorts = {
   authority: (row: TemporaryDataCandidate) => Promise<TemporaryDataAuthority>;
@@ -52,6 +54,7 @@ export function temporaryDataProtection(row: TemporaryDataCandidate, target: str
     if (stat.dev !== BigInt(root.dev) || stat.isSymbolicLink() || !stat.isFile() && !stat.isDirectory()) throw new Error("indirect-tree");
     const name = path.basename(file);
     if (name === ".delegatus-keep") throw new Error("keep-marker");
+    if (file !== target && lifecycleControlName(name)) throw new Error("lifecycle-control");
     if (PRESERVATION_NAMES.has(name)) throw new Error("preservation-record");
     entries.set(file, signature(stat));
     const key = `${stat.dev}:${stat.ino}`;
@@ -130,6 +133,12 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
       let nextCheck = now() + 60000;
       const journal = attemptTempJournalPath(row.directory);
       try {
+        const candidateName = path.basename(row.directory);
+        if (lifecycleControlName(candidateName)) {
+          reason = "lifecycle-control";
+          nextCheck = now() + 3600000;
+          continue;
+        }
         if (!fs.lstatSync(row.directory, { throwIfNoEntry: false }) && !fs.existsSync(journal)) {
           ports.onRemoved?.(row); store.forget(row.directory); reason = "absent"; continue;
         }
@@ -150,8 +159,8 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
         assertRetentionTestPath(row.directory);
         const authority = await ports.authority(row);
         assertRetentionTestPath(row.directory);
-        let dispatch = authority;
-        const due = () => dispatch.expiresAt !== null && now() >= dispatch.expiresAt && authority.current() && dispatch.current();
+        let currentAuthority = authority;
+        const due = () => currentAuthority.expiresAt !== null && now() >= currentAuthority.expiresAt && authority.current() && currentAuthority.current();
         if (!due()) {
           if (ports.mode !== "dry-run") restoreCandidate(row, journal);
           reason = authority.reason;
@@ -179,11 +188,14 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
           throw new Error("quarantine-unavailable");
         }
         let protection: ReturnType<typeof temporaryDataProtection>;
+        const dispatch = (current: string) => {
+          assertRetentionTestPath(current);
+          return clock() < deadline && inventory.unchangedAll() && due()
+            && store.get(row.directory)?.identity === row.identity && protection?.current() === true;
+        };
         const validate = (current: string) => {
           assertRetentionTestPath(current);
-          return clock() < deadline && due()
-            && store.get(row.directory)?.identity === row.identity && protection?.current() === true
-            && inventory.unchangedAll() && mounts(current).length === 0;
+          return mounts(current).length === 0 && dispatch(current);
         };
         const held = async (current: string) => {
           assertRetentionTestPath(current);
@@ -192,9 +204,9 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
           const clear = await ports.references(row, current, inventory);
           assertRetentionTestPath(current);
           if (!clear) { reason = "live-reference"; return true; }
-          dispatch = await ports.authority(row);
+          currentAuthority = await ports.authority(row);
           assertRetentionTestPath(current);
-          if (dispatch.revision !== authority.revision || !validate(current)) { reason = "fence-changed"; return true; }
+          if (currentAuthority.revision !== authority.revision || !validate(current)) { reason = "fence-changed"; return true; }
           return false;
         };
         if (await held(target)) continue;
@@ -202,8 +214,8 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
         const stat = fs.lstatSync(target);
         let removed = false;
         if (stat.isDirectory()) {
-          removed = fs.existsSync(journal) ? await finishTreeTrash(journal, held, undefined, validate, true)
-            : await removeTreeViaTrash(row.directory, { journal, held, validate, disposable: true });
+          removed = fs.existsSync(journal) ? await finishTreeTrash(journal, held, undefined, validate, true, dispatch)
+            : await removeTreeViaTrash(row.directory, { journal, held, validate, dispatch, disposable: true });
           if (!removed) restoreRefusedAttemptTrash(row.directory, row.identity);
         } else {
           if (!file) {

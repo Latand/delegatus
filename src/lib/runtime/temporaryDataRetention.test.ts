@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -59,6 +59,14 @@ test.each(["worktree", "worktree-backup.json", "bundles", ".git"])("%s preservat
   expect(fs.readFileSync(path.join(f.row.directory, name), "utf8")).toBe("only copy");
 });
 
+test("an embedded lifecycle journal keeps its containing candidate", async () => {
+  const f = fixture();
+  fs.writeFileSync(path.join(f.row.directory, `.delegatus-sweep-${"b".repeat(64)}.json`), "recovery owner");
+  const report = await sweepTemporaryData(f.store, f.ports);
+  expect(report.removed).toBe(0); expect(report.kept["lifecycle-control"]).toBe(1);
+  expect(fs.existsSync(f.row.directory)).toBeTrue();
+});
+
 test.each(["claim", "initial-authority", "references", "dispatch-authority"])("revocation at %s prevents removal", async seam => {
   const f = fixture(); let allowed = true, authorities = 0;
   const report = await sweepTemporaryData(f.store, { ...f.ports,
@@ -78,6 +86,21 @@ test.each([true, false])("a keep marker appearing after quarantine restores the 
   } });
   expect(report.removed).toBe(0); expect(fs.existsSync(f.row.directory)).toBeTrue();
   expect(fs.existsSync(attemptTempJournalPath(f.row.directory))).toBeFalse();
+});
+
+test.each([true, false])("a keep marker created by the final mount read retains the same candidate (%s)", async directory => {
+  const f = fixture(directory), marker = path.join(f.row.scope, ".delegatus-keep");
+  const read = fs.readFileSync; let mountReads = 0, planted = false;
+  const readSpy = spyOn(fs, "readFileSync").mockImplementation(((file: unknown, ...args: unknown[]) => {
+    const result = (read as (...values: unknown[]) => unknown)(file, ...args);
+    if (String(file) === "/proc/self/mountinfo" && ++mountReads === 4) { fs.writeFileSync(marker, "keep"); planted = true; }
+    return result;
+  }) as typeof fs.readFileSync);
+  try {
+    const report = await sweepTemporaryData(f.store, { ...f.ports, mounts: undefined });
+    expect(planted).toBeTrue(); expect(report.removed).toBe(0);
+    expect(fs.existsSync(f.row.directory)).toBeTrue(); expect(fs.existsSync(marker)).toBeTrue();
+  } finally { readSpy.mockRestore(); }
 });
 
 test("a replacement identity and a symlink never grant removal", async () => {
@@ -156,6 +179,29 @@ test.each([true, false])("a new process recovers the real quarantine writer's in
   expect(fs.existsSync(attemptTempJournalPath(f.row.directory))).toBeTrue(); expect(fs.existsSync(f.row.directory)).toBeFalse();
   expect(JSON.parse(await run("recover", NOW + 60001))).toMatchObject({ removed: 1, errors: 0 });
   expect(fs.existsSync(attemptTempJournalPath(f.row.directory))).toBeFalse(); expect(f.store.get(f.row.directory)).toBeNull();
+});
+
+test("quarantine replay restores the same identity when a keep marker appears at final dispatch", async () => {
+  const f = fixture(true), run = async (mode: string, time: number) => {
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "temporaryDataRetention.fixture.ts"), f.store.filename, mode, String(time)], { stdout: "pipe", stderr: "pipe" });
+    const [output, error] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(await child.exited, error).toBe(0); return output;
+  };
+  expect(await run("crash", NOW)).toBe("quarantined\n");
+  const before = JSON.parse(fs.readFileSync(attemptTempJournalPath(f.row.directory), "utf8")) as { trash: string };
+  const marker = path.join(f.row.scope, ".delegatus-keep"), read = fs.readFileSync;
+  let mountReads = 0, planted = false;
+  const readSpy = spyOn(fs, "readFileSync").mockImplementation(((file: unknown, ...args: unknown[]) => {
+    const result = (read as (...values: unknown[]) => unknown)(file, ...args);
+    if (String(file) === "/proc/self/mountinfo" && ++mountReads === 4) { fs.writeFileSync(marker, "keep"); planted = true; }
+    return result;
+  }) as typeof fs.readFileSync);
+  try {
+    const report = await sweepTemporaryData(f.store, { ...f.ports, now: () => NOW + 60001, mounts: undefined });
+    expect(planted).toBeTrue(); expect(report.removed).toBe(0);
+    expect(fs.existsSync(f.row.directory)).toBeTrue(); expect(fs.lstatSync(f.row.directory).ino).toBe(Number(f.row.identity.split(":")[1]));
+    expect(fs.existsSync(before.trash)).toBeFalse(); expect(fs.existsSync(attemptTempJournalPath(f.row.directory))).toBeFalse();
+  } finally { readSpy.mockRestore(); }
 });
 
 test.each([true, false])("a restarted process restores evidence when authority is revoked (directory=%s)", async directory => {

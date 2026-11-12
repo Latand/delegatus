@@ -8,7 +8,8 @@ import type { AgentRegistry } from "@/lib/agent/registry";
 import { TemporaryDataStore, type TemporaryDataCandidate } from "./temporaryDataStore";
 import { discoverTemporaryData, finishedAgent, temporaryDataAuthority, type TemporaryRegistry } from "./temporaryDataProduction";
 import { sweepTemporaryData, TEMPORARY_DATA_RETENTION_MS as WEEK } from "./temporaryDataRetention";
-import type { EvidenceCopy } from "./attemptTempRetention";
+import { AttemptTempStore, type EvidenceCopy } from "./attemptTempRetention";
+import { preserveAttemptEvidence } from "./attemptTempEvidence";
 
 const NOW = Date.UTC(2035, 0, 15), roots: string[] = [], stores: TemporaryDataStore[] = [];
 type Facts = ReturnType<AgentRegistry["temporaryDataFacts"]>;
@@ -90,6 +91,43 @@ test.each([1, 2])("a copy ledger rebound at reference fence %s retains its data"
   expect(report.removed).toBe(0); expect(fs.existsSync(directory)).toBeTrue();
 });
 
+test("a real evidence writer cannot replace live copy-ledger ownership with a finished manifest owner", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR, state = path.join(f.root, "state");
+  process.env.LLV_STATE_DIR = state;
+  const original = path.join(f.root, "original-scratch"); fs.mkdirSync(original); fs.writeFileSync(path.join(original, "capture.png"), "capture");
+  const sourceStat = fs.lstatSync(original), sourceIdentity = `${sourceStat.dev}:${sourceStat.ino}`;
+  const ledger = new AttemptTempStore(path.join(f.root, "attempt-temp.sqlite"));
+  let destination = "";
+  try {
+    for (const launchId of ["live-agent", "finished-agent"]) {
+      const saved = await preserveAttemptEvidence(original, original, sourceIdentity, { pipelineId: null, launchId,
+        register: value => ledger.registerCopy({ destination: value, pipelineId: null, launchId, kind: "agent",
+          createdAt: NOW - WEEK - 1, expiresAt: null, checkedAt: 0, bytes: 0 }) });
+      destination = saved.destination!;
+    }
+    const stat = fs.lstatSync(destination), scope = path.join(state, "evidence"), candidate = {
+      directory: destination, scope, kind: "ownerless-copy" as const, owner: path.basename(destination),
+      identity: `${stat.dev}:${stat.ino}`, adoptedAt: NOW - WEEK - 1, checkedAt: 0, bytes: 0, reason: "fixture",
+    };
+    f.store.register(candidate);
+    const finished = { receipt: { launchId: "finished-agent", state: "completed" },
+      entry: { status: "dead", updatedAt: new Date(NOW - WEEK - 1).toISOString() }, pipelines: [] } as unknown as Facts;
+    const live = { receipt: { launchId: "live-agent", state: "running" },
+      entry: { status: "live", updatedAt: new Date(NOW).toISOString() }, pipelines: [] } as unknown as Facts;
+    const registry: TemporaryRegistry = { temporaryDataFacts: input => input.launchId === "live-agent" ? live : finished,
+      temporaryDataReceiptKeys: () => [], spawnReceipt: () => null, spawnReceiptForHost: () => null };
+    const report = await sweepTemporaryData(f.store, { now: () => NOW, mounts: () => [], claim: async () => () => {},
+      references: async () => true, authority: async row => temporaryDataAuthority(row, registry, ledger, () => NOW) });
+    expect(ledger.copy(destination)?.launchId).toBe("live-agent");
+    expect(report.removed).toBe(0); expect(fs.existsSync(destination)).toBeTrue();
+    expect(report.kept["copy-owner-conflict"]).toBe(1);
+  } finally {
+    ledger.close();
+    if (priorState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = priorState;
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+});
+
 test("a closed lane preserves the journal's seven-day last-event clock", async () => {
   const f = fixture(), file = path.join(f.journals, "session-fixed.jsonl"); fs.writeFileSync(file, "journal");
   fs.utimesSync(file, new Date(NOW - WEEK - 1), new Date(NOW - WEEK - 1));
@@ -144,6 +182,23 @@ test("discovery preserves worktree backup content and the adoption clock across 
   expect(rows.map(row => path.basename(row.directory))).toEqual(["screen.png"]);
   expect(rows[0]!.adoptedAt).toBeLessThan(now - 3600001);
   expect(fs.readFileSync(path.join(lane, "worktree", "only.txt"), "utf8")).toBe("only copy");
+});
+
+test("discovery and sweep reserve interrupted lifecycle journals, including adopted rows", async () => {
+  const f = fixture(), lane = path.join(f.evidence, "lane-fixed"); fs.mkdirSync(lane);
+  const journal = path.join(lane, `.delegatus-sweep-${"a".repeat(64)}.json`);
+  fs.writeFileSync(journal, JSON.stringify({ directory: path.join(lane, "captures"), trash: path.join(lane, ".delegatus-trash-captures-fixed"),
+    uid: process.getuid?.() ?? 0, identity: "1:2", disposable: true }));
+  let now = NOW;
+  for (let i = 0; i < 10; i++) { discoverTemporaryData(f.store, f.registry, () => now, performance.now() + 1000, () => performance.now(), f); now += 3600001; }
+  expect(f.store.get(journal)).toBeNull();
+  const stat = fs.lstatSync(journal), row: TemporaryDataCandidate = { directory: journal, scope: f.evidence, kind: "lane-evidence", owner: "lane-fixed",
+    identity: `${stat.dev}:${stat.ino}`, adoptedAt: NOW - WEEK - 1, checkedAt: 0, bytes: 0, reason: "legacy-adoption" };
+  f.store.register(row);
+  const report = await sweepTemporaryData(f.store, { now: () => now, mounts: () => [], claim: async () => () => {}, references: async () => true,
+    authority: async () => ({ expiresAt: now - 1, reason: "expired", revision: "fixture", current: () => true }) });
+  expect(fs.existsSync(journal)).toBeTrue(); expect(report.removed).toBe(0);
+  expect(report.kept["lifecycle-control"]).toBe(1); expect(f.store.get(journal)?.reason).toBe("lifecycle-control");
 });
 
 test("an absent namespace is retried and restored data is discovered", () => {

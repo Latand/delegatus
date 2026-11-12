@@ -22,6 +22,8 @@ const HOUR = 3600000;
 const checkoutReads: RetainedCheckoutReads = new Map();
 const ownedName = /^[A-Za-z0-9_-]+$/;
 const agentHash = (launchId: string) => createHash("sha256").update(launchId).digest("hex").slice(0, 32);
+const lifecycleControlName = (name: string) => name.startsWith(".delegatus-trash-")
+  || name.startsWith(".delegatus-sweep-") && name.endsWith(".json");
 const stamp = (file: string) => {
   try { const s = fs.lstatSync(file, { bigint: true }); return [s.dev, s.ino, s.mode, s.size, s.mtimeNs, s.ctimeNs].join(":"); }
   catch { return "missing"; }
@@ -122,7 +124,16 @@ export function temporaryDataAuthority(row: TemporaryDataCandidate, registry: Te
     const knownPipelines = [...new Set([fromRoot, fromManifest, copy?.pipelineId].filter((value): value is string => !!value))];
     if (knownPipelines.length > 1) return held("copy-owner-conflict");
     declaredPipeline = knownPipelines[0] ?? null;
-    launchId = typeof manifest.launchId === "string" ? manifest.launchId : source?.launchId ?? (copy?.launchId !== "legacy" ? copy?.launchId : "") ?? "";
+    if (typeof manifest.launchId === "string" && !manifest.launchId.trim()) return held("copy-owner-unknown");
+    if (source?.identity === manifest.identity && !source.launchId) return held("copy-owner-unknown");
+    if (copy && !copy.launchId) return held("copy-owner-unknown");
+    const launchBindings = [...new Set([
+      typeof manifest.launchId === "string" ? manifest.launchId : null,
+      source?.identity === manifest.identity ? source.launchId : null,
+      copy && copy.launchId !== "legacy" ? copy.launchId : null,
+    ].filter((value): value is string => !!value))];
+    if (launchBindings.length > 1) return held("copy-owner-conflict");
+    launchId = launchBindings[0] ?? "";
     manifestCurrent = () => stamp(path.join(retainedTarget(row), "manifest.json")) === before
       && JSON.stringify(roots.owner(manifest.original as string)) === JSON.stringify(source)
       && JSON.stringify(roots.copy(row.directory)) === JSON.stringify(copy);
@@ -167,7 +178,7 @@ export function discoverTemporaryData(store: TemporaryDataStore, registry: Tempo
       for (const name of page.names) {
         if (clock() >= deadline) return discovered; // Do not advance an incomplete page.
         const directory = path.join(namespace.directory, name);
-        if (PRESERVATION_NAMES.has(name) || name === ".delegatus-keep" || name.startsWith(".delegatus-trash-")) continue;
+        if (PRESERVATION_NAMES.has(name) || name === ".delegatus-keep" || lifecycleControlName(name)) continue;
         const stat = fs.lstatSync(directory, { throwIfNoEntry: false });
         if (!stat || stat.isSymbolicLink() || !stat.isDirectory() && !stat.isFile()) continue;
         const enqueue = (kind: string, owner = name) => { if (stat.isDirectory() && ownedName.test(name)) store.namespace(directory, kind, owner); };
