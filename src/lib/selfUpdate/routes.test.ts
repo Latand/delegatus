@@ -917,13 +917,74 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     } finally { h.service.stop(); }
   });
 
+  for (const trigger of ["operator", "seat"] as const) test.each(["done", "rolled-back"] as const)(
+    `disabled cold processes retain an accepted ${trigger} relaunch until verified %s`, async outcome => {
+      const { ApplyController } = await import("./apply");
+      const h = harness({ relaunch: true });
+      h.service.stop();
+      const record = readLauncherRecord(h.recordFile)!;
+      const controller = new ApplyController(h.deps.dir);
+      const at = "2030-01-01T00:00:00.000Z";
+      const candidate = join(h.deps.dir, "accepted-release");
+      await git(root, "clone", remote, candidate);
+      mkdirSync(join(candidate, ".next"), { recursive: true });
+      writeFileSync(join(candidate, ".next", "BUILD_ID"), "accepted-b\n");
+      controller.begin(record, tipSha, trigger);
+      controller.patch({ requestId: `policy-${trigger}-${outcome}`, startedAt: at, switchedAt: at,
+        switchDeadlineAt: Date.parse(at) + 10 * 60_000 });
+      writeFileSync(record.releasePointer, JSON.stringify({ sha: tipSha, dir: candidate, checkoutHead: firstSha }));
+      controller.send(record);
+      const drainFile = join(h.deps.dir, "auto-drain.json");
+      const acceptedDrain = readFileSync(drainFile, "utf8");
+      const run = async (healthy = true) => {
+        const child = Bun.spawn([process.execPath, join(import.meta.dir, "__fixtures__/installationPolicy.child.ts")], {
+          cwd: process.cwd(), env: { ...process.env, LLV_DISABLE_SELF_UPDATE: "1", DELEGATUS_DISABLE_SELF_UPDATE: undefined,
+            POLICY_DIR: h.deps.dir, POLICY_RECORD: h.recordFile, POLICY_NOW: "2030-01-01T00:00:01.000Z", POLICY_HOST_HEALTH: healthy ? "1" : "0" },
+          stdout: "pipe", stderr: "pipe",
+        });
+        const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+        expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+        const result = JSON.parse(stdout);
+        expect(result).toMatchObject({ disabled: true, update: { ok: false, status: 403, code: "updates-disabled" },
+          admission: false, checks: 0, deployments: 0 });
+        expect(result.drainAfterTick).toEqual(result.drain);
+        return result;
+      };
+      for (let generation = 0; generation < 2; generation++) {
+        expect(await run()).toMatchObject({ apply: { state: "switching" }, drain: { id: controller.current!.requestId, persistent: true } });
+        expect(readFileSync(drainFile, "utf8")).toBe(acceptedDrain);
+      }
+      const serving = outcome === "done" ? tipSha : firstSha;
+      if (outcome === "rolled-back") rmSync(record.releasePointer);
+      record.web = { ...record.web, revision: serving.slice(0, 7) };
+      record.runtimeHost = { ...record.runtimeHost, revision: serving.slice(0, 7) };
+      record.launcher = { ...record.launcher, requestId: controller.current!.requestId, state: "healthy",
+        revision: serving, error: outcome === "rolled-back" ? { kind: "fell-back", detail: "candidate health failed" } : null };
+      writeFileSync(h.recordFile, JSON.stringify(record));
+      expect(await run(false)).toMatchObject({ apply: { state: "switching" }, drain: { id: controller.current!.requestId } });
+      expect(await run()).toMatchObject({ apply: { state: outcome === "done" ? "done" : "failed", rolledBack: outcome === "rolled-back" }, drain: null });
+      expect(existsSync(drainFile)).toBe(false);
+      expect(existsSync(record.requestFile)).toBe(false);
+      // Reproduce a crash after the terminal write, before hold cleanup.
+      writeFileSync(drainFile, acceptedDrain);
+      writeAuto(join(h.deps.dir, "auto.json"), { ...initialAuto(), drain: {
+        id: controller.current!.requestId, target: await readRevision(checkout, tipSha), since: at, overranAt: null, blockers: null,
+      } });
+      expect(await run(false)).toMatchObject({ drain: { id: controller.current!.requestId } });
+      expect(await run()).toMatchObject({ drain: null });
+    },
+  );
+
   test("disabled recovery preserves a ready pointer already serving through a healthy successor bootstrap", async () => {
     const { ApplyController } = await import("./apply");
     const h = harness({ relaunch: true });
     const record = readLauncherRecord(h.recordFile)!;
-    mkdirSync(join(checkout, ".next"), { recursive: true });
-    writeFileSync(join(checkout, ".next", "BUILD_ID"), "fixture-a\n");
-    const baselinePointer = JSON.stringify({ sha: firstSha, dir: checkout, checkoutHead: firstSha });
+    const baseline = join(h.deps.dir, "baseline-release");
+    await git(root, "clone", remote, baseline);
+    await git(baseline, "checkout", firstSha);
+    mkdirSync(join(baseline, ".next"), { recursive: true });
+    writeFileSync(join(baseline, ".next", "BUILD_ID"), "fixture-a\n");
+    const baselinePointer = JSON.stringify({ sha: firstSha, dir: baseline, checkoutHead: firstSha });
     writeFileSync(record.releasePointer, baselinePointer);
     const candidate = join(h.deps.dir, "successor-release");
     await git(root, "clone", "--branch", "main", remote, candidate);

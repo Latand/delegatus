@@ -462,10 +462,6 @@ export class SelfUpdateService {
   /** Re-read durable facts on every pass. A web restart replaces this object
       between the two restart requests, so no in-memory phase is authoritative. */
   async autoTick(): Promise<void> {
-    if (this.disabledByAdmin && !this.hasAutoCustody()) {
-      this.endDrain();
-      return;
-    }
     // Renew accepted custody, or expire waiting, even while an earlier
     // GitHub or host observation awaits. I/O cannot extend the waiting bound.
     try { this.refreshDrain(); }
@@ -500,7 +496,8 @@ export class SelfUpdateService {
   }
 
   private async runAutoTick(): Promise<void> {
-    if (this.apply.current?.state === "switching") {
+    if (this.apply.current?.state === "switching"
+      || this.apply.current && activeDrain(this.drainFile, this.deps.now())?.id === this.apply.current.requestId) {
       await this.snapshot();
       if (this.apply.current?.state === "switching") return;
     }
@@ -1202,11 +1199,19 @@ export class SelfUpdateService {
   }
 
   private recoverDrainOwner(): void {
+    // Older recovery could copy an apply-owned lease into automatic state.
+    // Drop that copy without touching the live hold its apply still owns.
+    if (this.auto.drain && this.auto.drain.id === this.apply.current?.requestId) {
+      this.auto = { ...this.auto, drain: null };
+      this.saveAuto();
+    }
     if (this.auto.drain) return;
     const lease = activeDrain(this.drainFile, this.deps.now());
     // A valid older first-publication checkpoint can lack its owner. An
     // unreadable hold stays fenced for repair instead of being reassigned.
-    if (!lease?.persistent || lease.id === "unreadable" || !/^[a-f0-9]{40}$/i.test(lease.target)) return;
+    // ApplyController alone releases its request's hold after serving proof.
+    if (!lease?.persistent || lease.id === "unreadable" || lease.id === this.apply.current?.requestId
+      || !/^[a-f0-9]{40}$/i.test(lease.target)) return;
     const target = [this.auto.managedPending?.target, this.slice.available, this.slice.installed]
       .find(revision => revision?.sha === lease.target)
       ?? { ...UNKNOWN_REVISION, sha: lease.target, short: shortSha(lease.target) };
