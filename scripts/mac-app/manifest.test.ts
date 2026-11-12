@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { digest, validatePackage, verifiedBun } from "./manifest";
-import { appSessionData, intelIsTranslated, smokeEnvironment, smokeStdio } from "./smoke-platform.mjs";
+import { appSessionData, commandFailure, comparablePath, intelIsTranslated, smokeEnvironment, smokeStdio } from "./smoke-platform.mjs";
 
 describe("Mac runtime manifest", () => {
   const bytes = new TextEncoder().encode("archive fixture");
@@ -99,5 +99,33 @@ describe("Intel smoke architecture guard", () => {
     { status: 0, stdout: "unexpected\n", stderr: "" },
   ])("refuses a genuine or malformed translation probe failure %#", result => {
     expect(() => intelIsTranslated(result)).toThrow();
+  });
+});
+
+describe("Mac smoke process paths", () => {
+  test("folds leading private aliases so ps rows match the run root", () => {
+    expect(comparablePath("123 1 /private/tmp/dlg-a/h0/bun /private/var/f/cli.mjs")).toBe("123 1 /tmp/dlg-a/h0/bun /var/f/cli.mjs");
+    expect(comparablePath("/private/etc/hosts")).toBe("/etc/hosts");
+    expect(comparablePath("/tmp/dlg-a")).toBe("/tmp/dlg-a");
+  });
+  test("leaves a private segment inside another path alone", () => {
+    expect(comparablePath("/fixture/private/tmp/bun")).toBe("/fixture/private/tmp/bun");
+    expect(comparablePath("/private/Users/fixture")).toBe("/private/Users/fixture");
+  });
+});
+
+describe("Mac smoke command failures", () => {
+  test("keeps the exit, signal, Node code and both streams", () => {
+    const text = commandFailure("/usr/bin/log", { status: null, signal: "SIGTERM", code: "ENOBUFS", stdout: "first\nlast line\n", stderr: "" });
+    expect(text).toBe("/usr/bin/log exited 1 signal SIGTERM (ENOBUFS): stderr: (empty); stdout tail: first\nlast line");
+  });
+  test("keeps only the stdout tail of a large output", () => {
+    const text = commandFailure("/usr/bin/log", { status: 1, stdout: `${"x".repeat(10_000)}END`, stderr: "bad predicate" });
+    expect(text.startsWith("/usr/bin/log exited 1: stderr: bad predicate; stdout tail: ")).toBe(true);
+    expect(text.endsWith("END")).toBe(true);
+    expect(text.length).toBeLessThan(4200);
+  });
+  test("falls back to the error message when both streams are empty", () => {
+    expect(commandFailure("/bin/ps", { status: 2, message: "spawn failed" })).toBe("/bin/ps exited 2: stderr: (empty); stdout tail: (empty); spawn failed");
   });
 });

@@ -48,3 +48,23 @@ export function appSessionData(runnerHome, bundle) {
     `Library/HTTPStorages/${bundle}.binarycookies`,
   ].map(path => join(runnerHome, path));
 }
+
+// macOS spells one file /tmp/... and /private/tmp/... (also /var and /etc).
+// Process rows and expected paths compare in one spelling.
+/** @param {string} text */
+export function comparablePath(text) {
+  return String(text).replace(/(^|\s)\/private\/(tmp|var|etc)\//g, "$1/$2/");
+}
+
+// A failed command keeps everything it said: exit, signal, Node's error code
+// (ENOBUFS when output outgrew the buffer) and both streams.
+/** @param {string} command @param {{ status?: number | null, signal?: string | null, code?: unknown, stdout?: unknown, stderr?: unknown, message?: string }} error */
+export function commandFailure(command, error) {
+  const head = [`${command} exited ${error?.status ?? 1}`];
+  if (error?.signal) head.push(`signal ${error.signal}`);
+  if (typeof error?.code === "string") head.push(`(${error.code})`);
+  const stderr = String(error?.stderr ?? "").trim();
+  const stdout = String(error?.stdout ?? "").trim();
+  const message = !stderr && !stdout && error?.message ? `; ${error.message}` : "";
+  return `${head.join(" ")}: stderr: ${stderr || "(empty)"}; stdout tail: ${stdout ? stdout.slice(-4000) : "(empty)"}${message}`;
+}

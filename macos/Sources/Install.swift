@@ -53,8 +53,18 @@ enum Installations {
         return expectedDirectory
     }
 
+    /// Matches the CLI's `sha256(resolve(packageRoot))`. Bun reports the
+    /// package root by its real path, so this hashes realpath(3). Foundation's
+    /// standardizing and symlink resolution drop a leading /private, which
+    /// names another release record for a home under /private/tmp.
     static func installID(_ packageRoot: URL) -> String {
-        SHA256.hash(data: Data(packageRoot.standardizedFileURL.path.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+        SHA256.hash(data: Data(realPath(packageRoot).utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func realPath(_ url: URL) -> String {
+        guard let resolved = realpath(url.path, nil) else { return url.standardizedFileURL.path }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     private static func appDirectory(_ root: URL) -> URL {

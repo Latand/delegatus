@@ -5,7 +5,7 @@ import { userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
-import { appSessionData, intelIsTranslated, smokeEnvironment, smokeStdio } from "./smoke-platform.mjs";
+import { appSessionData, comparablePath, commandFailure, intelIsTranslated, smokeEnvironment, smokeStdio } from "./smoke-platform.mjs";
 
 const [image, reportArg] = process.argv.slice(2);
 if (process.platform !== "darwin" || !image || !reportArg || process.env.CI !== "true") throw new Error("Usage on disposable macOS CI: node smoke.mjs DMG REPORT");
@@ -33,6 +33,8 @@ const visualCases = [
   ].map(([size, args]) => ({ language, appearance, size, args }))))
 ];
 const accessKey = randomBytes(16).toString("hex");
+// App.start's own bound for a launched server to verify (macos/Sources/App.swift).
+const APP_START_BOUND_MS = 180_000;
 function redact(value) {
   return String(value).replaceAll(root || "\0", "$SMOKE_ROOT").replaceAll(runnerHome || "\0", "$RUNNER_HOME")
     .replace(/([?&]k=|Bearer )[A-Za-z0-9%._~-]+/gi, "$1[redacted]")
@@ -41,7 +43,7 @@ function redact(value) {
 function run(command, args, options = {}) {
   let status = 0;
   try { return execFileSync(command, args, { encoding: "utf8", stdio: smokeStdio(options.input), timeout: 180_000, ...options }); }
-  catch (error) { status = error.status ?? 1; throw new Error(`${command} exited ${status}: ${redact(error.stderr ?? error.message)}`); }
+  catch (error) { status = error.status ?? 1; throw new Error(redact(commandFailure(command, error))); }
   finally { commands.push({ command: redact([command, ...args].join(" ")), exit: status }); }
 }
 // Runs a windowless command against one case's data.
@@ -76,7 +78,6 @@ function appLogs(caseHome, pid) {
       .map(name => readFileSync(join(directory, name), "utf8")).join("");
   } catch { return ""; }
 }
-const logs = () => appLogs(home);
 const processLog = app => appLogs(app.home, app.pid);
 function capturedFrames(directory) {
   try { return readdirSync(directory).filter(name => name.endsWith(".png")).length; } catch { return 0; }
@@ -123,8 +124,18 @@ const runtimeOf = caseHome => join(caseHome, "Library/Application Support/Delega
 function launcherPID() {
   const processes = run("/bin/ps", ["-U", String(userInfo().uid), "-o", "pid=,command="]);
   const runtime = runtimeOf(home);
-  const row = processes.split("\n").find(line => line.includes(join(runtime, "bun/bin/bun")) && line.includes(join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs")) && !line.includes("stop --all"));
+  const bun = comparablePath(join(runtime, "bun/bin/bun")), cli = comparablePath(join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"));
+  const row = processes.split("\n").map(comparablePath).find(line => line.includes(bun) && line.includes(cli) && !line.includes("stop --all"));
   assert(row, "the launcher runs from this run's private runtime"); return Number(row.trim().split(/\s+/)[0]);
+}
+// What the app's listener check reads: who holds the port and the process
+// chain above it. Diagnostics only; a failed read is recorded, never thrown.
+function listenerSnapshot() {
+  const read = (command, args) => { try { return run(command, args, { timeout: 20_000 }); } catch (error) { return error.message; } };
+  const listing = read("/usr/sbin/lsof", ["-nP", "-a", "-iTCP:8898", "-sTCP:LISTEN", "-Fpcu"]);
+  const rows = read("/bin/ps", ["-ww", "-U", String(userInfo().uid), "-o", "pid=,ppid=,command="]).split("\n")
+    .filter(line => root && comparablePath(line).includes(comparablePath(root))).join("\n");
+  return redact(`lsof listener:\n${listing || "(empty)"}\nprocesses under the run root:\n${rows || "(none)"}`);
 }
 function stopAll() {
   const runtime = runtimeOf(home);
@@ -241,7 +252,15 @@ try {
     const instance = launch(home, ["--accept-install", "-AppleLanguages", "(en)"], "first-en-light");
     await until("HTTP 200", async () => (await http())?.status === 200, 720_000, () => `${instance.diagnostics()}\napp log:\n${processLog(instance) || "(empty)"}`);
     const head = await http("HEAD"); assert.equal(head?.status, 204); assert.equal(head?.headers.get("x-delegatus-diagnostics"), "1");
-    await until("ready and web language", () => logs().includes("STATE ready") && /WEB language=en/.test(logs()));
+    // The app gives its start 180 s from STATE starting; wait that bound plus
+    // margin, and stop at once when the app reports failure.
+    const firstRun = () => `${instance.diagnostics()}\napp log:\n${processLog(instance) || "(empty)"}\n${listenerSnapshot()}`;
+    await until("ready", () => {
+      const output = processLog(instance);
+      if (output.includes("STATE failed")) throw new Error(`App reported failure before ready\n${firstRun()}`);
+      return output.includes("STATE ready");
+    }, APP_START_BOUND_MS + 30_000, firstRun);
+    await until("web language", () => /WEB language=en/.test(processLog(instance)), 60_000, firstRun);
     original = launcherPID();
     for (const entry of readdirSync(home).filter(entry => !before.includes(entry))) assert(["Library", ".config", ".cache"].includes(entry), `unexpected home entry ${entry}`);
     await sleep(4000); await end(instance);
@@ -250,7 +269,8 @@ try {
   for (const { language, appearance, size, args } of visualCases) {
     await check(`reuse-${language}-${appearance}-${size}`, async () => {
       const instance = launch(home, [...args, "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `reuse-${language}-${appearance}-${size}`);
-      await until("reuse and language", () => { const output = processLog(instance); return output.includes("STATE reused") && new RegExp(`WEB language=${language}`).test(output); }, 60_000, instance.diagnostics);
+      await until("reuse and language", () => { const output = processLog(instance); return output.includes("STATE reused") && new RegExp(`WEB language=${language}`).test(output); }, 60_000,
+        () => `${instance.diagnostics()}\napp log:\n${processLog(instance) || "(empty)"}\n${listenerSnapshot()}`);
       assert.equal(launcherPID(), original); await sleep(900); await end(instance);
     });
   }
@@ -273,12 +293,13 @@ try {
   });
   for (const { language, appearance, size, args } of visualCases) await check(`recovery-${language}-${appearance}-${size}`, async () => {
     const instance = launch(home, [...args, "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `recovery-${language}-${appearance}-${size}`);
-    await until("recovery app attaches", () => processLog(instance).includes("STATE reused"), 60_000, instance.diagnostics);
+    const recovery = () => `${instance.diagnostics()}\napp log:\n${processLog(instance) || "(empty)"}\n${listenerSnapshot()}`;
+    await until("recovery app attaches", () => processLog(instance).includes("STATE reused"), 60_000, recovery);
     const runtime = runtimeOf(home);
     stopAll();
-    await until("monitor reports stopped", () => processLog(instance).includes("STATE stopped"), 90_000, instance.diagnostics);
+    await until("monitor reports stopped", () => processLog(instance).includes("STATE stopped"), 90_000, recovery);
     startViewer(join(runtime, "bun/bin/bun"), join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"));
-    await until("monitor restores the web view", async () => processLog(instance).includes("STATE recovered") && /WEB language=/.test(processLog(instance)) && (await http("GET", true))?.status === 200, 90_000, instance.diagnostics);
+    await until("monitor restores the web view", async () => processLog(instance).includes("STATE recovered") && /WEB language=/.test(processLog(instance)) && (await http("GET", true))?.status === 200, 90_000, recovery);
     await sleep(4000); await end(instance);
   });
   await check("busy-port-setup", async () => {
@@ -298,7 +319,8 @@ try {
     assert(Number.isSafeInteger(pid) && pid > 1); foreignListener = pid;
     for (const { language, appearance, size, args } of visualCases) {
       const instance = launch(home, [...args, "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `busy-${language}-${appearance}-${size}`);
-      await until("busy screen", () => processLog(instance).includes("STATE port-busy") && processLog(instance).includes(String(pid)), 60_000, instance.diagnostics);
+      await until("busy screen", () => processLog(instance).includes("STATE port-busy") && processLog(instance).includes(String(pid)), 60_000,
+        () => `${instance.diagnostics()}\napp log:\n${processLog(instance) || "(empty)"}\n${listenerSnapshot()}`);
       assert.throws(launcherPID); assert(alive(pid), "foreign listener keeps the port");
       await sleep(900); await end(instance);
     }
@@ -318,7 +340,9 @@ finally {
   }
   if (exit !== 0) {
     try {
-      const diagnostic = run("/usr/bin/log", ["show", "--last", "5m", "--style", "compact", "--predicate", 'process == "Delegatus" || eventMessage CONTAINS "Delegatus"'], { timeout: 60_000 });
+      // The unified log can exceed execFileSync's 1 MiB default buffer,
+      // which ends the read with ENOBUFS and no stderr.
+      const diagnostic = run("/usr/bin/log", ["show", "--last", "10m", "--style", "compact", "--predicate", 'process == "Delegatus" || eventMessage CONTAINS "Delegatus"'], { timeout: 120_000, maxBuffer: 256 * 1024 * 1024 });
       writeFileSync(join(report, "macos-diagnostics.log"), redact(diagnostic.slice(-200_000)));
     } catch (error) { writeFileSync(join(report, "macos-diagnostics.log"), redact(error.message)); }
     try {

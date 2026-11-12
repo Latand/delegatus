@@ -132,7 +132,10 @@ jobs:
           - arch: x86_64
             runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    # First run, twelve reuse, twelve recovery and twelve busy-port launches
+    # follow 120 rendered launches; recovery alone waits on the app's
+    # 15-second monitor twice per case.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:

@@ -169,15 +169,21 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
             do {
                 install = try (retainedInstall ?? Installations.discover(home))
                 serviceMenu.state = install?.service == nil ? .off : .on
-                let probe = await Server.probe(home: home, environment: environment, install: install)
+                let (probe, observed) = await Server.inspect(home: home, environment: environment, install: install)
                 guard !Task.isCancelled, generation == token else { return }
+                if probe != .free { evidence.log("PROBE \(probe.label) \(observed)") }
                 if case .ready(let key) = probe {
                     let listener = await Server.listener(environment: environment, install: install)
                     guard !Task.isCancelled, generation == token else { return }
+                    evidence.log("LISTENER \(listener.verified ? "verified" : "refused") \(listener.description): \(listener.reason)")
                     if listener.verified { ready(key: key, reused: true); return }
                     portBusy(listener); return
                 }
-                if probe == .busy || probe == .waiting { portBusy(await Server.listener(environment: environment)); return }
+                if probe == .busy || probe == .waiting {
+                    let listener = await Server.listener(environment: environment)
+                    evidence.log("LISTENER \(listener.description): \(listener.reason)")
+                    portBusy(listener); return
+                }
                 guard let install else {
                     presentInstallation()
                     if CommandLine.arguments.contains("--accept-install") { busy = false; installRuntime() }
@@ -194,7 +200,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
             } catch { failed(error) }
         }
     }
-    func portBusy(_ listener: (owned: Bool, verified: Bool, description: String)) {
+    func portBusy(_ listener: ListenerCheck) {
         show("port-busy", message: listener.owned ? String(format: text("port-owner"), listener.description) : text("port-other-user"), actions: [("retry", #selector(retry)), ("logs", #selector(logs))])
     }
     func start(_ install: Installation, token: Int) async throws {
@@ -208,18 +214,34 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         }
         let deadline = Date().addingTimeInterval(180)
         var exitDeadline: Date? = nil
+        // Each distinct probe and listener observation is logged once, so a
+        // start that never verifies names the guard that refused it.
+        var observation = ""
+        func observe(_ next: String) { if next != observation { observation = next; evidence.log(next) } }
         while Date() < min(deadline, exitDeadline ?? deadline) {
             guard !Task.isCancelled, generation == token else { return }
-            let result = await Server.probe(home: home, environment: environment, install: install)
+            // The CLI this app started is the launcher by identity while it runs.
+            let own = launcher.flatMap { $0.isRunning ? Int($0.processIdentifier) : nil }
+            let (result, observed) = await Server.inspect(home: home, environment: environment, install: install, launcher: own)
             guard !Task.isCancelled, generation == token else { return }
             if case .ready(let key) = result {
-                let listener = await Server.listener(environment: environment, install: install)
+                let listener = await Server.listener(environment: environment, install: install, launcher: own)
                 guard !Task.isCancelled, generation == token else { return }
-                if listener.verified { ready(key: key, reused: false); return }
+                if listener.verified {
+                    evidence.log("LISTENER verified \(listener.description): \(listener.reason)")
+                    ready(key: key, reused: false); return
+                }
+                observe("PROBE ready \(observed); LISTENER refused \(listener.description): \(listener.reason)")
+            } else {
+                observe("PROBE \(result.label) \(observed)")
             }
-            if let launcher, !launcher.isRunning, exitDeadline == nil { exitDeadline = Date().addingTimeInterval(30) }
+            if let launcher, !launcher.isRunning, exitDeadline == nil {
+                exitDeadline = Date().addingTimeInterval(30)
+                evidence.log("LAUNCHER exited \(launcher.terminationStatus)")
+            }
             try await Task.sleep(nanoseconds: 500_000_000)
         }
+        evidence.log("START timed out; last observation: \(observation.isEmpty ? "none" : observation)")
         throw LauncherError.message("start-failed")
     }
     func ready(key: String?, reused: Bool) {

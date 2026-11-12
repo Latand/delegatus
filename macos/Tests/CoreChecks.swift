@@ -37,6 +37,25 @@ import Foundation
             let refused = await Server.verifyAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs") { rows[$0] }
             expect(!refused, "foreign, cyclic, changed and missing process identities refuse reuse")
         }
+        // macOS spells one file /tmp/... and /private/tmp/...; Bun reports a
+        // resolved path while the app names the path it was given.
+        expect(Server.comparablePath("/private/tmp/h/bun /private/var/f/server.js") == "/tmp/h/bun /var/f/server.js", "private aliases compare as one path")
+        expect(Server.comparablePath("/fixture/private/tmp/bun") == "/fixture/private/tmp/bun", "only a leading private alias is folded")
+        let aliasRows = [42: "42 43 /private/tmp/h/bun --bun /private/tmp/h/server.js", 43: "43 1 /tmp/h/bun /tmp/h/cli.mjs --no-open"]
+        let aliased = await Server.explainAncestry(listenerPID: 42, bun: "/tmp/h/bun", server: "/tmp/h/server.js", cli: "/private/tmp/h/cli.mjs") { aliasRows[$0] }
+        expect(aliased.verified, "listener verifies across /private aliases (\(aliased.reason))")
+        let renamedLauncher = [42: "42 43 /fixture/bun /fixture/server.js", 43: "43 1 node-supervisor"]
+        let ownLauncher = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs", launcherPID: 43) { renamedLauncher[$0] }
+        expect(ownLauncher.verified, "the CLI process this app started is the launcher by identity")
+        let otherLauncher = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs", launcherPID: 77) { renamedLauncher[$0] }
+        expect(!otherLauncher.verified && otherLauncher.reason.contains("no launcher"), "another process ID never stands in for the launcher (\(otherLauncher.reason))")
+        let foreignViewer = [42: "42 43 /foreign/bun /fixture/server.js", 43: "43 1 /fixture/bun /fixture/cli.mjs"]
+        let ownForeign = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs", launcherPID: 43) { foreignViewer[$0] }
+        expect(!ownForeign.verified && ownForeign.reason.contains("no Viewer"), "the app's own launcher does not vouch for a foreign Viewer (\(ownForeign.reason))")
+        let unreadable = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs") { _ in nil }
+        expect(!unreadable.verified && unreadable.reason.contains("process 42 unreadable"), "an unreadable listener names its guard (\(unreadable.reason))")
+        let listing = Server.listingProcesses("lsof: WARNING: can't stat() fixture\np42\ncbun\nu501\nf9\np77\ncbun\nu502\nf9\n")
+        expect(listing.count == 2 && listing[0].pid == 42 && listing[0].uid == "501" && listing[1].pid == 77 && listing[1].uid == "502", "every listing process keeps its own owner")
         do {
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
             process.arguments = ["-c", "import sys; print('ready', flush=True); sys.stdin.read()", String(repeating: "x", count: 40000), "перевірка"]
@@ -65,6 +84,15 @@ import Foundation
         expect(privateInstall?.bun == bun, "private install with spaces")
         let state = home.appendingPathComponent("custom-state")
         let releaseID = Installations.installID(package)
+        // The CLI hashes the package root's real path; a home reached through a
+        // symlink (as /tmp reaches /private/tmp) names the same release record.
+        let alias = home.deletingLastPathComponent().appendingPathComponent(UUID().uuidString)
+        try fm.createSymbolicLink(at: alias, withDestinationURL: home)
+        defer { try? fm.removeItem(at: alias) }
+        let aliasPackage = alias.appendingPathComponent("Library/Application Support/Delegatus/Runtime/packages/node_modules/delegatus-cli")
+        expect(Installations.realPath(aliasPackage) == Installations.realPath(package) && !Installations.realPath(package).contains(alias.lastPathComponent),
+            "real path resolves the alias (\(Installations.realPath(aliasPackage)))")
+        expect(Installations.installID(aliasPackage) == releaseID, "an aliased home keeps the CLI's install id")
         let activePackage = home.appendingPathComponent(".cache/delegatus/self-update/\(releaseID)/releases/npm-2.1.0/node_modules/delegatus-cli")
         for file in ["dist/standalone/server.js", "dist/runtime-host.mjs"] {
             let destination = activePackage.appendingPathComponent(file)
