@@ -9,6 +9,7 @@ import { allocatedAttemptBytes, attemptReferencesClear, blockedSubtrees, inspect
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
 import { recordedRootHeld, recordRootRetirement, expireRecordedRootHolds, type CheckRow } from "@/lib/recordedChecks/store";
+import { trackSqliteMemory } from "@/lib/sqliteMemoryDiagnostics";
 import { AttemptRetentionReporting } from "./attemptRetentionReporting";
 import { FINISHED_LANE_RETENTION_MS } from "@/lib/pipelines/laneFinish";
 import { claimAttemptRetirement } from "@/lib/pipelines/store";
@@ -49,12 +50,14 @@ const attemptTempIndexes = declaredIndexes([
  * walks all roots. The due index also prevents live roots starving old ones. */
 export class AttemptTempStore {
   private db: Database;
+  private releaseMemoryTracking: (() => void) | undefined;
   private reporting!: AttemptRetentionReporting;
   constructor(readonly filename = statePath("attempt-temp.sqlite")) {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite) throw new Error("Attempt temp retention requires Bun");
     this.db = new sqlite.Database(filename, { create: true });
+    this.releaseMemoryTracking = trackSqliteMemory(this.db);
     try {
       attemptTempIndexes.assertRepairAuthority(this.db, path.dirname(filename));
       this.db.exec("PRAGMA busy_timeout=0");
@@ -81,7 +84,7 @@ export class AttemptTempStore {
       this.db.exec("CREATE TABLE IF NOT EXISTS adoption (id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL)");
       this.reporting = new AttemptRetentionReporting(this.db, path.dirname(filename));
       fs.chmodSync(filename, 0o600);
-    } catch (error) { this.db.close(); throw error; }
+    } catch (error) { this.db.close(); this.releaseMemoryTracking(); this.releaseMemoryTracking = undefined; throw error; }
   }
   register(owner: AttemptTempOwner) {
     const evidence = statePath("evidence");
@@ -261,7 +264,7 @@ export class AttemptTempStore {
   }
   measure(directory: string, bytes: number) { this.db.query("UPDATE roots SET bytes=? WHERE directory=?").run(bytes, directory); }
   bytes() { return this.db.query<{ bytes: number }, []>("SELECT bytes FROM totals WHERE id=1").get()!.bytes; }
-  close() { this.db.close(); }
+  close() { this.db.close(); this.releaseMemoryTracking?.(); this.releaseMemoryTracking = undefined; }
 }
 
 export type AttemptTempSweepOptions = {

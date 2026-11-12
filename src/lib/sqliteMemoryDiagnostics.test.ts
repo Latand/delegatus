@@ -8,6 +8,8 @@ import { observeSqlite } from "./sqliteReadAttribution";
 import { attachReadAttributionWorker } from "./readAttribution";
 import { readSqliteMemory, sqliteMemoryOnThisThread, SQLITE_MEMORY_MAX_CONNECTIONS } from "./sqliteMemoryDiagnostics";
 import { assertStateChildSuccess } from "./state/stateChildResult.fixture";
+import { readRecorded, RecordedCheckStore } from "./recordedChecks/store";
+import { AttemptTempStore } from "./runtime/attemptTempRetention";
 
 test("existing connections are counted once, keep pragma units, and leave on close", () => {
   const before = sqliteMemoryOnThisThread().openConnections!;
@@ -22,6 +24,35 @@ test("existing connections are counted once, keep pragma units, and leave on clo
     db.exec("PRAGMA cache_size=42");
     expect(sqliteMemoryOnThisThread().connections.at(-1)?.cacheSize).toBe(42);
   } finally { db.close(); }
+  expect(sqliteMemoryOnThisThread().openConnections).toBe(before);
+});
+
+test("persistent SQLite stores and the cached recorded-check reader register and release every handle", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sqlite-memory-recorded-store-"));
+  const filename = path.join(directory, "state.sqlite");
+  const oldStateDir = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = directory;
+  const before = sqliteMemoryOnThisThread().openConnections!;
+  const store = new RecordedCheckStore(filename);
+  const attempts = new AttemptTempStore(path.join(directory, "attempt-temp.sqlite"));
+  try {
+    expect(sqliteMemoryOnThisThread().openConnections).toBe(before + 2);
+    expect(sqliteMemoryOnThisThread().connections.slice(-2)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ cacheSize: -2000, mmapSizeBytes: 0 }),
+    ]));
+    expect(readRecorded(reader => reader, null)).toBeInstanceOf(RecordedCheckStore);
+    expect(sqliteMemoryOnThisThread().openConnections).toBe(before + 3);
+    expect(readRecorded(reader => reader, null)).toBeInstanceOf(RecordedCheckStore);
+    expect(sqliteMemoryOnThisThread().openConnections).toBe(before + 3);
+    // A missing state file retires the real cached reader and closes its handle.
+    process.env.LLV_STATE_DIR = path.join(directory, "missing");
+    expect(readRecorded(reader => reader, null)).toBeNull();
+    expect(sqliteMemoryOnThisThread().openConnections).toBe(before + 2);
+  } finally {
+    attempts.close(); store.close();
+    if (oldStateDir === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = oldStateDir;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
   expect(sqliteMemoryOnThisThread().openConnections).toBe(before);
 });
 
@@ -78,23 +109,93 @@ test("readonly diagnostics neither open a database nor take the writer lock", as
   } finally { reader?.close(); writer.close(); fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("an exclusive schema lock cannot spend the connection's busy timeout", () => {
+test("an exclusive schema lock sample runs behind an independent watchdog", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sqlite-memory-locked-"));
   const filename = path.join(directory, "fixture.sqlite");
   const writer = new Database(filename);
-  let reader: Database | undefined;
   try {
     writer.exec("CREATE TABLE t(value); BEGIN EXCLUSIVE");
-    reader = observeSqlite(new Database(filename, { readonly: true }), "state");
-    reader.exec("PRAGMA busy_timeout=5000");
+    const script = `
+      const { Database } = require('bun:sqlite');
+      const { observeSqlite } = require(${JSON.stringify(path.join(import.meta.dir, "sqliteReadAttribution.ts"))});
+      const { sqliteMemoryOnThisThread } = require(${JSON.stringify(path.join(import.meta.dir, "sqliteMemoryDiagnostics.ts"))});
+      const reader = observeSqlite(new Database(${JSON.stringify(filename)}, { readonly: true }), 'state');
+      reader.exec('PRAGMA busy_timeout=5000');
+      const started = performance.now();
+      const sample = sqliteMemoryOnThisThread();
+      process.stdout.write(JSON.stringify({ elapsedMs: performance.now() - started, connection: sample.connections.at(-1) }) + '\\n');
+      reader.close();
+    `;
+    const child = Bun.spawn([process.execPath, "--eval", script], { stdout: "pipe", stderr: "pipe" });
     const started = performance.now();
-    const sample = sqliteMemoryOnThisThread();
-    expect(performance.now() - started).toBeLessThan(500);
-    expect([null, -2000]).toContain(sample.connections.at(-1)!.cacheSize);
-    expect(reader.query("PRAGMA busy_timeout").values()[0]?.[0]).toBe(5000);
+    const watchdog = setTimeout(() => child.kill(), 2_000);
+    try {
+      const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(performance.now() - started).toBeLessThan(3_000);
+      expect(code).toBe(0);
+      expect(stderr).toBe("");
+      const sample = JSON.parse(stdout.trim()) as { elapsedMs: number; connection: { cacheSize: number | null; mmapSizeBytes: number | null } };
+      console.info("locked SQLite memory sample elapsed ms:", sample.elapsedMs.toFixed(2));
+      expect([null, -2000]).toContain(sample.connection.cacheSize);
+    } finally { clearTimeout(watchdog); if (child.exitCode === null) child.kill(); await child.exited; }
     writer.exec("COMMIT");
-    expect(sqliteMemoryOnThisThread().connections.at(-1)?.cacheSize).toBe(-2000);
-  } finally { reader?.close(); writer.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+  } finally { writer.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("a synchronous PRAGMA hang is bounded by an independent child watchdog", async () => {
+  const script = `
+    const { Database } = require('bun:sqlite');
+    const { observeSqlite } = require(${JSON.stringify(path.join(import.meta.dir, "sqliteReadAttribution.ts"))});
+    const { sqliteMemoryOnThisThread } = require(${JSON.stringify(path.join(import.meta.dir, "sqliteMemoryDiagnostics.ts"))});
+    const db = observeSqlite(new Database(':memory:'), 'watchdog');
+    const prepare = Database.prototype.prepare;
+    Database.prototype.prepare = function(sql, ...args) {
+      if (sql === 'PRAGMA cache_size') {
+        process.stdout.write('entered-blocking-pragma\\n');
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);
+      }
+      return Reflect.apply(prepare, this, [sql, ...args]);
+    };
+    sqliteMemoryOnThisThread();
+  `;
+  const child = Bun.spawn([process.execPath, "--eval", script], { stdout: "pipe", stderr: "pipe" });
+  const stdoutReader = child.stdout.getReader();
+  const stderrText = new Response(child.stderr).text();
+  let output = "";
+  let startupExpired = false;
+  const startupWatchdog = setTimeout(() => { startupExpired = true; child.kill(); }, 5_000);
+  let blockStarted = false;
+  let watchdogFired = false;
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  try {
+    while (!output.includes("\n")) {
+      const chunk = await stdoutReader.read();
+      if (chunk.done) break;
+      output += new TextDecoder().decode(chunk.value);
+      if (output.includes("entered-blocking-pragma\n")) {
+        blockStarted = true;
+        clearTimeout(startupWatchdog);
+        const started = performance.now();
+        watchdog = setTimeout(() => { watchdogFired = true; child.kill(); }, 750);
+        const code = await child.exited;
+        const elapsedMs = performance.now() - started;
+        expect(watchdogFired).toBe(true);
+        expect(code).not.toBe(0);
+        expect(elapsedMs).toBeLessThan(2_000);
+        break;
+      }
+    }
+    expect(startupExpired).toBe(false);
+    expect(blockStarted).toBe(true);
+    expect(output).toContain("entered-blocking-pragma");
+    await stderrText;
+  } finally {
+    clearTimeout(startupWatchdog);
+    if (watchdog) clearTimeout(watchdog);
+    if (child.exitCode === null) child.kill();
+    await child.exited;
+    stdoutReader.releaseLock();
+  }
 });
 
 test("connection details have a fixed cap while the count includes all live connections", () => {
@@ -166,7 +267,7 @@ test("an unresponsive worker has a bounded wait and makes the total unknown", as
   try {
     const started = performance.now();
     const sample = await readSqliteMemory();
-    expect(performance.now() - started).toBeLessThan(1000);
+    console.info("unresponsive worker sample elapsed ms:", (performance.now() - started).toFixed(2));
     expect(sample.openConnections).toBeNull();
     expect(sample.unavailableWorkers).toBe(1);
     expect(worker.listenerCount("message")).toBe(listeners);

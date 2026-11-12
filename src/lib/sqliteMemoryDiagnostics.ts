@@ -78,7 +78,8 @@ export function sqliteMemoryOnThisThread(): SqliteMemorySample {
     unavailableWorkers: 0, memoryUsedBytes: null };
 }
 
-const REQUEST = "delegatus-sqlite-memory-request", ANSWER = "delegatus-sqlite-memory-answer";
+export const SQLITE_MEMORY_MESSAGE_PREFIX = "delegatus-sqlite-memory-";
+const REQUEST = `${SQLITE_MEMORY_MESSAGE_PREFIX}request`, ANSWER = `${SQLITE_MEMORY_MESSAGE_PREFIX}answer`;
 // The observer is loaded on each store-owning worker through readAttribution.
 if (parentPort && !state.listening) {
   state.listening = true;
