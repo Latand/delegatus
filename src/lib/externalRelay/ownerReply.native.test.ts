@@ -3,11 +3,37 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { prepareOwnerPrompt, ownerContinuationPrompt, ownerAnswer } from "./ownerRun";
+import { openOwnerAnswer, relayAnswerOp, sealOwnerAnswer } from "./ownerAnswer";
 import { richRequest } from "./rich.fixture";
+import { reserveRun, updateRelayStore } from "./store";
+import { procBackend } from "@/lib/proc";
+import type { ExternalRelayRequest } from "./protocol";
 
 const probe = process.env.LLV_RELAY_REPLY_PROBE === "1" ? test : test.skip;
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-reply-probe-"));
+process.env.LLV_STATE_DIR = path.join(root, "state");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+
+let replays = 0;
+// What the owner turn posts: the recorded relay_answer calls replace the parts
+// through the production operation, in order, and the sealed text wins over
+// the last message exactly as in ownerRun.
+async function postedReply(base: ExternalRelayRequest, calls: unknown[], lastMessage: string) {
+  const id = `${++replays}`;
+  const request: ExternalRelayRequest = { ...base, request_id: `rq_reply_probe_${id}` };
+  const conversationId = `conversation_reply_probe_${id}`;
+  const relay = { id: `relay_reply_probe_${id}`, paused: false, targets: [{ id: request.target_id, enabled: true, ownerTier: true }] };
+  updateRelayStore(store => ({ ...store, relays: [...store.relays, relay as never] }));
+  reserveRun({ requestId: request.request_id, leaseId: request.lease_id, relayId: relay.id, targetId: request.target_id, childPid: null, childIdentity: null,
+    ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid)!, runDir: root, startedAt: "2026-11-12T00:00:00.000Z", conversationId,
+    ownerTurn: { clientAttemptId: `relay-owner-${request.request_id}`, request: { text: "probe", requestText: null } } });
+  const entry = openOwnerAnswer(relay.id, request, root, [], () => true);
+  try {
+    for (const call of calls) expect(await relayAnswerOp(conversationId, call)).not.toBeNull();
+    const text = sealOwnerAnswer(request.request_id)?.text;
+    return { composed: text, reply: text ?? lastMessage };
+  } finally { await entry.dispose(); }
+}
 
 function hasInlineCitations(reply: string): boolean {
   const links = [...reply.matchAll(/\[[^\]]+\]\(https?:\/\/[^)]+\)/gu)];
@@ -36,6 +62,17 @@ test("inline citation structure accepts ordinary linked prose", () => {
   expect(hasInlineCitations("Базовий стандарт — RFC 2606. Джерела: [IANA: Example Domains](https://www.iana.org/help/example-domains), [RFC 2606](https://www.rfc-editor.org/rfc/rfc2606).")).toBe(false);
   expect(hasInlineCitations("Імена зарезервовано. Sources: [IANA](https://www.iana.org/help/example-domains).")).toBe(false);
   expect(hasInlineCitations("Сторінка IANA пише так: [IANA: Example domains](https://www.iana.org/help/example-domains), а правила закріплені в [RFC 2606](https://www.rfc-editor.org/rfc/rfc2606).")).toBe(true);
+});
+
+test("the probe posts the text of the last relay_answer call, falling back to the last message when it cleared text", async () => {
+  const inline = "Домен example.com зарезервовано для прикладів ([IANA](https://www.iana.org/help/example-domains)).";
+  const footer = "Відповіла в чат.\n\nSources:\n- [IANA](https://www.iana.org/help/example-domains)";
+  const cleared = await postedReply(richRequest(), [{ text: inline }, { format: "rich_markdown" }], footer);
+  expect(cleared).toEqual({ composed: undefined, reply: footer });
+  expect(hasInlineCitations(cleared.reply)).toBe(false);
+  const rewritten = await postedReply(richRequest(), [{ format: "rich_markdown" }, { text: inline }], footer);
+  expect(rewritten).toEqual({ composed: inline, reply: inline });
+  expect(hasInlineCitations(rewritten.reply)).toBe(true);
 });
 
 probe("native chat reply and continuation post the relay_answer text with inline web citations", async () => {
@@ -70,11 +107,8 @@ probe("native chat reply and continuation post the relay_answer text with inline
     const response = JSON.parse(stdout);
     expect({ status, stderr, result: response.is_error ? response.result : "ok" }).toEqual({ status: 0, stderr: "", result: "ok" });
     expect(response.is_error).toBe(false);
-    const answers = fs.readFileSync(calls, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line) as { text?: string });
-    // As in the owner turn: relay_answer text is the chat reply; the last
-    // message is posted only when no call supplied text.
-    const composed = answers.findLast(call => call.text !== undefined)?.text;
-    const reply = composed ?? String(response.result);
+    const answers = fs.readFileSync(calls, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line) as unknown);
+    const { composed, reply } = await postedReply(request, answers, String(response.result));
     console.log(JSON.stringify({ turn: index + 1, turns: response.num_turns, calls: answers.length, reply, lastMessage: response.result }));
     expect(composed).toBeDefined();
     expect(ownerAnswer(reply, request, owner)).toMatchObject({ action: "reply", format: "rich_markdown", text: reply.trim() });
