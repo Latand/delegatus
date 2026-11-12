@@ -555,7 +555,8 @@ export async function dismissAttention(target: DismissalTarget, by: DismissedBy,
     const round = request.taskId === null ? findSeatRound(request.reviewId)
       : (task?.prototypeReviews ?? task?.prototypeReviewReplica?.rounds ?? []).find(round => round.id === request.reviewId);
     if (request.taskId === null ? !round : !task) throw new DismissalError("REVIEW_NOT_FOUND", "prototype review not found", 404);
-    if (!undo && round?.nativeAssociation && nativeAssociationDecisionApproves(round.decision))
+    if (!undo && round && "nativeAssociation" in round && round.nativeAssociation
+      && nativeAssociationDecisionApproves(round.decision))
       throw new DismissalError("ACTIVE_NATIVE_APPROVAL", "revoke this approved session before withdrawing its form", 409);
     const summary = task ? currentPrototypeSummary(task.prototypeReview ?? prototypeReviewSummary(task.prototypeReviews ?? []) ?? task.prototypeReviewReplica?.summary) : undefined;
     const answer: DismissalSubject = { ...request };
