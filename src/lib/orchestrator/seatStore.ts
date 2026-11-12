@@ -78,8 +78,9 @@ import {
  *
  * Reads go through the shared read-only connection and select only the key
  * prefixes a question needs, in one snapshot (`readStateCollectionSelection`).
- * A read keeps what it selected per revision, so an unchanged record costs one
- * revision query and no parse. Texts are content-addressed and cached by digest.
+ * A read keeps what it selected per revision, and reads the revision again only
+ * when the database or its WAL changed, so an unchanged record costs two stats
+ * and no query. Texts are content-addressed and cached by digest.
  * Nothing on the read path imports the legacy file: the Viewer's activation
  * does (`LEGACY_COLLECTIONS`), and so does the first write of an install with
  * no release target. Until then a read parses the legacy file as before.

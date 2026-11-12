@@ -1069,7 +1069,7 @@ export interface SeatWorkspaceBinding {
 
 // One map per process, keyed by the seat store's committed revision: peer
 // writes and revocations take effect on the next call without a polling
-// interval, and an unchanged record costs one revision query.
+// interval, and an unchanged record reads no row.
 let workspacePrincipalsCache: {
   signature: string; principals: ReadonlyMap<string | null, SeatWorkspaceBinding>;
 } | undefined;
