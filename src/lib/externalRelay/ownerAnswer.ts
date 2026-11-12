@@ -6,7 +6,7 @@ import { answerCapabilities, checkedButtons, type AnswerDrop } from "./answerV2"
 import { stageOwnerAttachments, removeStaged, type StagedAttachment } from "./attachments";
 import type { ExternalRelayRequest, RelayUrlButton, RelayMention } from "./protocol";
 import { scrubOwnerOutput } from "./ownerOutput";
-export type OwnerAnswerParts = { format:"plain"|"rich_markdown"; buttons:RelayUrlButton[][]; mentions?:RelayMention[]; attachments:StagedAttachment[] };
+export type OwnerAnswerParts = { text?:string; format:"plain"|"rich_markdown"; buttons:RelayUrlButton[][]; mentions?:RelayMention[]; attachments:StagedAttachment[] };
 type Entry = {relayId:string;request:ExternalRelayRequest;runDir:string;credentials:readonly string[];authorize:()=>boolean;signal?:AbortSignal;open:boolean;sequence:number;parts:OwnerAnswerParts;drops:AnswerDrop[]};
 const shared=globalThis as typeof globalThis & {__llvRelayOwnerAnswers?:Map<string,Entry>};
 const entries=shared.__llvRelayOwnerAnswers??=new Map<string,Entry>();
@@ -54,7 +54,7 @@ export async function relayAnswerOp(conversationId:string,args:unknown) {
   const files=await stageOwnerAttachments(refs,entry.runDir,caps,drops,undefined,undefined,entry.signal);
   if(!available() || sequence!==entry.sequence) {await removeStaged(files);return null;}
   const old=entry.parts.attachments;
-  entry.parts={format,buttons,...(value.mentions ? {mentions:value.mentions} : {}),attachments:files}; entry.drops.push(...drops);
+  entry.parts={...(value.text!==undefined ? {text:value.text} : {}),format,buttons,...(value.mentions ? {mentions:value.mentions} : {}),attachments:files}; entry.drops.push(...drops);
   await removeStaged(old);
-  return {format:entry.parts.format,buttons,attachments:files.map((file,index)=>({index,attachment_id:file.id,kind:file.kind,filename:file.filename,bytes:file.size})),limits:{plain:caps.plainMax,rich_markdown:caps.richMax,max_items:caps.maxItems}};
+  return {text_chars:Array.from(value.text??"").length,format:entry.parts.format,buttons,attachments:files.map((file,index)=>({index,attachment_id:file.id,kind:file.kind,filename:file.filename,bytes:file.size})),limits:{plain:caps.plainMax,rich_markdown:caps.richMax,max_items:caps.maxItems}};
 }
