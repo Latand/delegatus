@@ -902,7 +902,8 @@ function recoverCheckoutHeadLocks(accessible: (directory: string) => string, err
 /** Git commits and ref updates honor these locks. Prepare an inode and record
     it durably BEFORE linking it at Git's lock name, covering a crash at every
     point between acquisition and removal without claiming somebody else's lock. */
-export function lockCheckoutHead(directory: string, accessible: (directory: string) => string, errors: string[]): (() => void) | null {
+export function lockCheckoutHead(directory: string, accessible: (directory: string) => string, errors: string[],
+  options: { repository?: boolean } = {}): (() => void) | null {
   const journal = path.join(HEAD_LOCK_RECORDS(), `${randomUUID()}.json`);
   const record: SweepHeadLockRecord = { owner: captureProcessIdentity(process.pid), locks: [] };
   const release = () => {
@@ -911,10 +912,18 @@ export function lockCheckoutHead(directory: string, accessible: (directory: stri
     catch { errors.push("HEAD lock release: recorded locks await recovery"); }
   };
   try {
-    const pointer = fs.readFileSync(path.join(accessible(directory), ".git"), "utf8").trim();
-    if (!pointer.startsWith("gitdir: ")) return null;
-    const metadata = path.resolve(directory, pointer.slice(8));
-    const common = path.resolve(metadata, fs.readFileSync(accessible(path.join(metadata, "commondir")), "utf8").trim());
+    let metadata: string; let common: string;
+    const dotGit = fs.lstatSync(path.join(accessible(directory), ".git"));
+    if (dotGit.isDirectory()) {
+      // A standalone repository's own .git, only when the caller asks for one.
+      if (!options.repository || fs.existsSync(accessible(path.join(directory, ".git", "commondir")))) return null;
+      metadata = common = path.join(directory, ".git");
+    } else {
+      const pointer = fs.readFileSync(path.join(accessible(directory), ".git"), "utf8").trim();
+      if (!pointer.startsWith("gitdir: ")) return null;
+      metadata = path.resolve(directory, pointer.slice(8));
+      common = path.resolve(metadata, fs.readFileSync(accessible(path.join(metadata, "commondir")), "utf8").trim());
+    }
     if (fs.existsSync(accessible(path.join(common, "reftable")))) return null;
     const claim = (file: string) => {
       const prepared = path.join(path.dirname(file), `.delegatus-sweep-${randomUUID()}`);

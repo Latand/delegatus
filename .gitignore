@@ -79,3 +79,6 @@ evidence/**/*.png
 # carry no privacy-manifest provenance and stay out of the commit. Its one-shot
 # driver was deleted in #1761.
 /.artifacts/
+
+# Python bytecode from scripts/*_test.py imports; release retention treats it as generated output.
+__pycache__/

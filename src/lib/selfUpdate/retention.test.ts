@@ -1587,3 +1587,129 @@ test.each(["release", "intermediate"])("generated file cleanup retains a replace
   expect(fs.readFileSync(path.join(outside, "next-env.d.ts"), "utf8")).toBe("preserved generated file");
   expect(report.kept.some(row => row.dir === dir)).toBeTrue();
 });
+
+test("the report names each process it could not rule out, with the rule that kept it", async () => {
+  const h = fixture();
+  const named = { pid: 123, reason: "ns/mnt:EACCES", rule: "delegatus-ancestor:77", comm: "sudo", uid: 0, startedAt: "2029-12-30T00:00:00.000Z" };
+  h.ports.scan = () => ({ ...EMPTY, uncertain: [{ ...named, roots: [h.record.releasesDir] }] });
+  const report = await h.run();
+  expect(report.removed).toEqual([]);
+  expect(report.uncertain).toEqual([named]);
+  expect(JSON.parse(fs.readFileSync(h.ports.reportFile!, "utf8")).uncertain).toEqual([named]);
+  // A pass with nothing uncertain writes no list.
+  h.ports.scan = () => EMPTY;
+  expect((await h.run()).uncertain).toBeUndefined();
+});
+
+/** The candidate release replaced by a standalone clone of the checkout at the same path and commit. The
+ * checkout carries a backup tag on a commit no branch holds, which the clone copies, as a real clone does. */
+function cloneReleaseFixture() {
+  const h = realReleaseFixture();
+  const sha = h.git(["rev-parse", "HEAD"], h.candidate);
+  h.git(["worktree", "remove", "--force", h.candidate]);
+  h.git(["switch", "-q", "-c", "backup-work"]); commit(h, h.record.checkout!, "backup.txt", "backup only");
+  h.git(["tag", "backup/fixture"]); h.git(["switch", "-q", "main"]); h.git(["branch", "-q", "-D", "backup-work"]);
+  h.git(["clone", "-q", "--no-checkout", h.record.checkout!, h.candidate], h.root);
+  h.git(["checkout", "-q", "--detach", sha], h.candidate);
+  fs.mkdirSync(path.join(h.candidate, ".next"), { recursive: true });
+  fs.writeFileSync(path.join(h.candidate, ".next/DELEGATUS_RELEASE_READY"), sha);
+  fs.writeFileSync(path.join(h.candidate, ".next/BUILD_ID"), "fixture");
+  const old = new Date(h.now - 4 * DAY);
+  for (const file of [h.candidate, path.join(h.candidate, ".next"), path.join(h.candidate, ".next/DELEGATUS_RELEASE_READY"), path.join(h.candidate, ".next/BUILD_ID")]) fs.utimesSync(file, old, old);
+  return { ...h, sha };
+}
+
+function commit(h: ReturnType<typeof realReleaseFixture>, cwd: string, file: string, message: string) {
+  fs.writeFileSync(path.join(cwd, file), `${message}\n`); h.git(["add", file], cwd);
+  h.git(["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-qm", message], cwd);
+}
+
+test("a clean clone at a release path whose commits the checkout holds is removed like a worktree", async () => {
+  const h = cloneReleaseFixture();
+  expect(h.git(["tag", "--list"], h.candidate)).toBe("backup/fixture");
+  const worktrees = h.git(["worktree", "list", "--porcelain"]);
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(report.removed).toContainEqual(expect.objectContaining({ dir: h.candidate, sha: h.sha }));
+  expect(fs.existsSync(h.candidate)).toBeFalse();
+  expect(fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+  // The checkout's own registrations are untouched.
+  expect(h.git(["worktree", "list", "--porcelain"])).toBe(worktrees);
+});
+
+test.each(["local-branch-commit", "clone-only-tag", "stash", "untracked-file", "tracked-edit", "unpublished-head", "head-not-its-name"])(
+  "a clone at a release path is kept with %s", async kind => {
+    const h = cloneReleaseFixture();
+    let target = h.candidate;
+    if (kind === "local-branch-commit") { h.git(["switch", "-q", "-c", "work"], h.candidate); commit(h, h.candidate, "work.txt", "unique work"); h.git(["checkout", "-q", "--detach", h.sha], h.candidate); }
+    if (kind === "clone-only-tag") { h.git(["switch", "-q", "-c", "tagged"], h.candidate); commit(h, h.candidate, "tagged.txt", "tagged only");
+      h.git(["tag", "only-here"], h.candidate); h.git(["checkout", "-q", "--detach", h.sha], h.candidate); h.git(["branch", "-q", "-D", "tagged"], h.candidate); }
+    if (kind === "stash") { fs.writeFileSync(path.join(h.candidate, "source.txt"), "stashed edit\n"); h.git(["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "stash", "-q"], h.candidate); }
+    if (kind === "untracked-file") fs.writeFileSync(path.join(h.candidate, "unique.txt"), "preserve me\n");
+    if (kind === "tracked-edit") fs.writeFileSync(path.join(h.candidate, "source.txt"), "unique edit\n");
+    if (kind === "unpublished-head" || kind === "head-not-its-name") {
+      // A commit only the clone has, at a directory named after it (or not).
+      commit(h, h.candidate, "private.txt", "unpublished");
+      const head = h.git(["rev-parse", "HEAD"], h.candidate);
+      target = path.join(h.record.releasesDir, (kind === "unpublished-head" ? head : "f".repeat(40)).slice(0, 12));
+      fs.renameSync(h.candidate, target);
+      const old = new Date(h.now - 4 * DAY); fs.utimesSync(target, old, old);
+    }
+    const report = await h.run();
+    expect(report.errors).toEqual([]);
+    expect(fs.existsSync(path.join(target, ".git"))).toBeTrue();
+    expect(report.removed.some(row => row.dir === target)).toBeFalse();
+    expect(report.kept).toContainEqual(expect.objectContaining({ dir: target, reason: kind === "head-not-its-name" ? "unregistered" : "uncommitted" }));
+    if (kind === "stash") expect(h.git(["stash", "list"], target)).toContain("stash@{0}");
+  });
+
+/** A real procfs view of this process, the given holders, init and the kernel's thread parent. */
+function scanWithRefusedNeighbours(h: ReturnType<typeof fixture>): NonNullable<RetentionPorts["inspection"]> {
+  return {
+    scan: async root => {
+      const proc = scopedProcRoot(h.root, [...children.flatMap(child => child.pid && alive(child) ? [child.pid] : []), 1, 2]);
+      try { return retentionProcessScan(root, proc); } finally { fs.rmSync(proc, { recursive: true, force: true }); }
+    },
+    bytes: async () => 0, close: async () => {},
+  };
+}
+/** A process running a copy of `sleep` from inside `location`, its argv naming no release path. */
+async function startExecutableHolder(location: string): Promise<ChildProcess> {
+  const source = spawnSync("sh", ["-c", "command -v sleep"], { encoding: "utf8" }).stdout.trim();
+  const binary = path.join(location, ".next/holder/sleep");
+  fs.mkdirSync(path.dirname(binary), { recursive: true }); fs.copyFileSync(source, binary); fs.chmodSync(binary, 0o755);
+  const child = spawn(binary, ["600"], { argv0: "sleep", cwd: os.tmpdir(), stdio: "ignore" });
+  children.push(child);
+  for (let attempt = 0; attempt < 200; attempt++) {
+    try { if (fs.readlinkSync(`/proc/${child.pid}/exe`) === binary) return child; } catch { /* Not exec'd yet. */ }
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error("executable holder did not start");
+}
+
+test.skipIf(process.platform !== "linux").each([["worktree", "cwd"], ["worktree", "exe"], ["clone", "cwd"], ["clone", "exe"]] as const)(
+  "a %s release a live readable process runs from by %s is never removed beside refused system processes", async (layout, kind) => {
+    const h = layout === "clone" ? cloneReleaseFixture() : realReleaseFixture();
+    const old = new Date(h.now - 4 * DAY);
+    for (const file of [h.candidate, path.join(h.candidate, ".next/DELEGATUS_RELEASE_READY"), path.join(h.candidate, ".next/BUILD_ID")]) fs.utimesSync(file, old, old);
+    h.ports.scan = undefined;
+    h.ports.inspection = scanWithRefusedNeighbours(h);
+    const holder = kind === "cwd" ? await startHolder("cwd", h.candidate, "", h.root) : await startExecutableHolder(h.candidate);
+    expect(holder).not.toBeNull();
+    const seen = await h.ports.inspection.scan(h.record.releasesDir);
+    // Init and kernel threads this user cannot read no longer hold every release.
+    expect(seen.uncertain ?? []).toEqual([]);
+    expect(seen.processes.find(proc => proc.pid === holder!.pid)?.paths.some(entry => entry === h.candidate || entry.startsWith(h.candidate + path.sep))).toBeTrue();
+    for (let pass = 0; pass < 2; pass++) {
+      const report = await h.run();
+      expect(report.errors).toEqual([]);
+      expect(report.removed.some(row => row.dir === h.candidate)).toBeFalse();
+      expect(report.kept).toContainEqual(expect.objectContaining({ dir: h.candidate, reason: "process" }));
+      expect(fs.existsSync(path.join(h.candidate, ".next/DELEGATUS_RELEASE_READY"))).toBeTrue();
+    }
+    expect(alive(holder!)).toBeTrue();
+    await settleChildren();
+    const after = await h.run();
+    expect(after.errors).toEqual([]);
+    expect(after.removed.map(row => row.dir)).toContain(h.candidate);
+  }, 60_000);

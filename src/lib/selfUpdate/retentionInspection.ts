@@ -3,7 +3,9 @@ import path from "node:path";
 import { performanceSpans } from "@/lib/performanceSpans";
 import type { ProcessScan } from "@/lib/tempSweep";
 
-export type RetentionUncertainty = { pid: number; reason: string; roots: string[] };
+/** `rule` names why the process could not be ruled out; `comm`, `uid` (real)
+ * and `startedAt` identify it in the report. Older helpers omit all four. */
+export type RetentionUncertainty = { pid: number; reason: string; roots: string[]; rule?: string; comm?: string; uid?: number | null; startedAt?: string | null };
 export type RetentionScan = ProcessScan & { complete: true; uncertain?: RetentionUncertainty[] };
 
 const inside = (entry: string, root: string) => entry === root || entry.startsWith(root === path.sep ? root : root + path.sep);
@@ -68,6 +70,7 @@ export function retentionProcessScan(root: string, procRoot = "/proc", only?: nu
   const delegatus = new Set<number>();
   const ownNamespace = fs.readlinkSync(path.join(procRoot, "self/ns/mnt"));
   if (!ownNamespace) throw new Error("missing retention mount namespace");
+  const identify = processIdentifier(procRoot);
   const physical = new Map<string, string>();
   const relevant = (entry: string) => {
     const target = entry.replace(/ \(deleted\)$/, "");
@@ -148,7 +151,8 @@ export function retentionProcessScan(root: string, procRoot = "/proc", only?: nu
       const reason = `${operation}:${code ?? "unavailable"}`;
       // A single-process observation has no inventory to judge lineage against.
       if (only === undefined && (code === "EACCES" || code === "EPERM")) refused.push({ pid: Number(name), reason });
-      else uncertain.push({ pid: Number(name), reason, roots: [root] });
+      else uncertain.push({ pid: Number(name), reason, roots: [root], ...identify(Number(name)),
+        rule: only === undefined ? "evidence-missing" : "single-process-observation" });
     }
     const held = paths.filter(value => value.startsWith("/") && relevant(value));
     const refs = references.filter(value => value.includes(root));
@@ -159,9 +163,12 @@ export function retentionProcessScan(root: string, procRoot = "/proc", only?: nu
     }
   }
   if (refused.length) {
-    const mayHold = refusedProcessMayHold(procRoot, readable, delegatus,
+    const keptBy = refusedProcessMayHold(procRoot, readable, delegatus,
       value => value.includes(root) || value.startsWith("/") && relevant(value));
-    for (const row of refused) if (mayHold(row.pid)) uncertain.push({ ...row, roots: [root] });
+    for (const row of refused) {
+      const rule = keptBy(row.pid);
+      if (rule) uncertain.push({ ...row, roots: [root], ...identify(row.pid), rule });
+    }
   }
   return { ownNamespace, processes, complete: true, uncertain };
 }
@@ -169,7 +176,7 @@ export function retentionProcessScan(root: string, procRoot = "/proc", only?: nu
 type Lineage = { ppid: number; session: number; start: number; flags: number };
 
 /** The verdict for a process procfs refused to show, from world-readable
- * evidence only. True keeps installation-wide uncertainty. */
+ * evidence only: the rule that keeps installation-wide uncertainty, or null. */
 function refusedProcessMayHold(procRoot: string, readable: ReadonlySet<number>, delegatus: ReadonlySet<number>, names: (value: string) => boolean) {
   const file = (pid: number, name: string) => fs.readFileSync(path.join(procRoot, String(pid), name), "utf8");
   const lineage = new Map<number, Lineage | null>();
@@ -216,13 +223,13 @@ function refusedProcessMayHold(procRoot: string, readable: ReadonlySet<number>, 
    * an orphan is tied to the cgroup it inherited: it shares one with a
    * Delegatus process it did not start. A login's own processes (sshd leads
    * its session, as does each service) are judged by their ancestry alone. */
-  const orphanInDelegatusGroup = (pid: number) => {
+  const orphanInDelegatusGroup = (pid: number): string | null => {
     const own = observe(pid);
     const chain = ancestry(pid);
-    if (!own || !chain) return true;
-    if (own.session === pid || chain.includes(own.session)) return false;
+    if (!own || !chain) return "ancestry-unproven";
+    if (own.session === pid || chain.includes(own.session)) return null;
     const group = cgroup(pid);
-    if (!group) return true;
+    if (!group) return "cgroup-unreadable";
     if (!groups) {
       groups = new Map();
       for (const member of delegatus) {
@@ -230,19 +237,55 @@ function refusedProcessMayHold(procRoot: string, readable: ReadonlySet<number>, 
         if (key) groups.set(key, [...groups.get(key) ?? [], member]);
       }
     }
-    return (groups.get(group) ?? []).some(other => other !== pid && !(ancestry(other)?.includes(pid) ?? false));
+    const mate = (groups.get(group) ?? []).find(other => other !== pid && !(ancestry(other)?.includes(pid) ?? false));
+    return mate === undefined ? null : `orphan-in-delegatus-cgroup:${mate}`;
   };
-  return (pid: number) => {
+  return (pid: number): string | null => {
     const own = observe(pid);
-    if (!own) return fs.existsSync(path.join(procRoot, String(pid)));
-    if ((own.flags & KERNEL_THREAD) !== 0) return false;
+    if (!own) return fs.existsSync(path.join(procRoot, String(pid))) ? "stat-unreadable" : null;
+    if ((own.flags & KERNEL_THREAD) !== 0) return null;
     let argv: string[];
     try { argv = file(pid, "cmdline").split("\0"); }
-    catch { return true; }
-    if (argv.some(names)) return true;
+    catch { return "command-line-unreadable"; }
+    if (argv.some(names)) return "command-line-names-root";
     const chain = ancestry(pid);
-    if (!chain || orphanInDelegatusGroup(pid)) return true;
-    return chain.some(ancestor => delegatus.has(ancestor) || !readable.has(ancestor) && orphanInDelegatusGroup(ancestor));
+    if (!chain) return "ancestry-unproven";
+    const orphan = orphanInDelegatusGroup(pid);
+    if (orphan) return orphan;
+    for (const ancestor of chain) {
+      if (delegatus.has(ancestor)) return `delegatus-ancestor:${ancestor}`;
+      const inherited = readable.has(ancestor) ? null : orphanInDelegatusGroup(ancestor);
+      if (inherited) return `ancestor:${ancestor}:${inherited}`;
+    }
+    return null;
+  };
+}
+
+/** comm, real uid and start time of a process, from files procfs shows every
+ * user; any of them is null when it cannot be read. */
+function processIdentifier(procRoot: string) {
+  let boot: number | null | undefined;
+  const bootAt = () => {
+    if (boot === undefined) {
+      try { const match = /^btime (\d+)$/m.exec(fs.readFileSync(path.join(procRoot, "stat"), "utf8")); boot = match ? Number(match[1]) * 1000 : null; }
+      catch { boot = null; }
+    }
+    return boot;
+  };
+  return (pid: number): { comm: string; uid: number | null; startedAt: string | null } => {
+    let comm = ""; let uid: number | null = null; let startedAt: string | null = null;
+    try {
+      const stat = fs.readFileSync(path.join(procRoot, String(pid), "stat"), "utf8");
+      comm = stat.slice(stat.indexOf("(") + 1, stat.lastIndexOf(")"));
+      const ticks = Number(fields(stat)[19]); const at = bootAt();
+      // /proc reports start times in USER_HZ, 100 per second.
+      if (at !== null && Number.isFinite(ticks)) startedAt = new Date(at + ticks * 10).toISOString();
+    } catch { /* Exited, or hidden from this user. */ }
+    try {
+      const real = /^Uid:\s+(\d+)/m.exec(fs.readFileSync(path.join(procRoot, String(pid), "status"), "utf8"))?.[1];
+      if (real !== undefined) uid = Number(real);
+    } catch { /* As above. */ }
+    return { comm, uid, startedAt };
   };
 }
 
@@ -266,7 +309,10 @@ export function validRetentionScan(value: unknown): value is RetentionScan {
       && Array.isArray(proc.references) && proc.references.every(entry => typeof entry === "string"))
     && (scan.uncertain === undefined || Array.isArray(scan.uncertain) && scan.uncertain.every(row =>
       Number.isSafeInteger(row.pid) && row.pid > 0 && typeof row.reason === "string" && !!row.reason
-      && Array.isArray(row.roots) && row.roots.length > 0 && row.roots.every(root => typeof root === "string" && path.isAbsolute(root))));
+      && Array.isArray(row.roots) && row.roots.length > 0 && row.roots.every(root => typeof root === "string" && path.isAbsolute(root))
+      && [row.rule, row.comm].every(value => value === undefined || typeof value === "string")
+      && (row.uid === undefined || row.uid === null || Number.isSafeInteger(row.uid))
+      && (row.startedAt === undefined || row.startedAt === null || typeof row.startedAt === "string")));
 }
 
 /** Called only in the leased helper. A refused observer preserves the original

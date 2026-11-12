@@ -76,6 +76,15 @@ unobserved: a process of another user that opens a release by itself, and a
 credential-changed orphan whose Delegatus parent exited and whose cgroup holds
 no other Delegatus process.
 
+Each uncertain row names the rule that kept it (`delegatus-ancestor:<pid>`,
+`orphan-in-delegatus-cgroup:<pid>`, `ancestor:<pid>:<rule>`,
+`command-line-names-root`, `command-line-unreadable`, `cgroup-unreadable`,
+`ancestry-unproven`, `stat-unreadable`, `evidence-missing`,
+`single-process-observation`) with the process's `comm`, real `uid` and
+`startedAt`. A pass writes the processes it could not rule out to
+`retention.json` as `uncertain` (at most 100, without their root scopes), so a
+pass that kept everything names its holders.
+
 ## Read-only observation, 2026-11-12
 
 On a production checkout install with no noninteractive `sudo`, the report
@@ -91,6 +100,19 @@ table found no uncertainty, 16 releases held by readable processes (agents'
 MCP servers among them) and 40 releases with no holder. The same run on a
 desktop install kept uncertainty for two `nsenter` children of a sweep
 helper, as it should.
+
+Read-only Git checks of those 40 (status, index flags and ref containment,
+with `--no-optional-locks`) put 26 as removable: 21 worktrees and the five
+older clones, about 20 GB. Their every branch and stash tip is in the
+checkout, and their tags are the checkout's own. Kept: 14 held by processes,
+the active and rollback releases, three newest, two under a day old, and nine
+with local changes. Seven of those nine carry only
+`scripts/__pycache__/deploy-checkout.cpython-312.pyc`, written when the
+procedure's test imports the script from the release; `__pycache__/` is now
+ignored, which makes that bytecode generated output for later releases. A
+pass considers four releases oldest first, about a minute apart. The first
+two passes meet only held or changed releases and remove none; the 26 go in
+the ten passes after them.
 
 The leased inspection worker first scans without privilege. If references are
 inaccessible, it tries `sudo -n` for one read-only proc inventory, with a

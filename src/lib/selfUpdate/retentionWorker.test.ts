@@ -107,18 +107,21 @@ test("an inaccessible live process is reported as uncertainty instead of abortin
 });
 
 type ProcRow = { pid: number; ppid: number; session: number; start?: number; kernel?: boolean; cgroup?: string; cmdline?: string;
-  refused?: boolean; environ?: string; cwd?: string };
+  refused?: boolean; environ?: string; cwd?: string; uid?: number };
 /** A process table with readable rows and rows procfs refuses (EACCES on their links). */
 function lineageFixture(table: ProcRow[] | ((release: string) => ProcRow[])) {
   const directory = root(); const proc = path.join(directory, "proc"); const release = path.join(directory, "releases");
   fs.mkdirSync(release); fs.mkdirSync(path.join(release, "0123456789ab"));
   const rows = typeof table === "function" ? table(release) : table;
   fs.mkdirSync(path.join(proc, "self/ns"), { recursive: true }); fs.symlinkSync("mnt:[fixture]", path.join(proc, "self/ns/mnt"));
+  fs.writeFileSync(path.join(proc, "stat"), "cpu 0 0 0 0\nbtime 1700000000\n");
   for (const row of rows) {
     const base = path.join(proc, String(row.pid)); fs.mkdirSync(base);
     const values = Array(21).fill("0"); values[0] = "S"; values[1] = String(row.ppid); values[3] = String(row.session);
     values[6] = String(row.kernel ? 0x200000 : 0); values[19] = String(row.start ?? row.pid);
-    fs.writeFileSync(path.join(base, "stat"), `${row.pid} (fixture) ${values.join(" ")}`);
+    fs.writeFileSync(path.join(base, "stat"), `${row.pid} (fixture ${row.pid}) ${values.join(" ")}`);
+    const uid = row.uid ?? 1000;
+    fs.writeFileSync(path.join(base, "status"), `Name:\tfixture\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`);
     if (row.cgroup !== undefined) fs.writeFileSync(path.join(base, "cgroup"), row.cgroup);
     if (row.cmdline !== undefined) fs.writeFileSync(path.join(base, "cmdline"), row.cmdline);
     if (row.refused) continue;
@@ -158,24 +161,31 @@ test("kernel threads, services and a login's own processes that procfs refuses a
 });
 
 const ORPHAN_GROUP = "0::/user.slice/session-1.scope\n";
-test.each<[string, (release: string) => ProcRow[]]>([
-  ["a child of a Delegatus process", () => [{ pid: 60, ppid: 30, session: 30, refused: true, cgroup: ORPHAN_GROUP, cmdline: "sudo\0" }]],
+test.each<[string, (release: string) => ProcRow[], string[]]>([
+  ["a child of a Delegatus process", () => [{ pid: 60, ppid: 30, session: 30, refused: true, cgroup: ORPHAN_GROUP, cmdline: "sudo\0", uid: 0 }],
+    ["delegatus-ancestor:30"]],
   ["a grandchild through a refused parent", () => [
     { pid: 60, ppid: 30, session: 30, refused: true, cgroup: ORPHAN_GROUP, cmdline: "sudo\0" },
-    { pid: 61, ppid: 60, session: 61, refused: true, cgroup: ORPHAN_GROUP, cmdline: "command\0" }]],
-  ["an orphan left in a Delegatus cgroup", () => [{ pid: 60, ppid: 1, session: 30, refused: true, cgroup: ORPHAN_GROUP, cmdline: "command\0" }]],
+    { pid: 61, ppid: 60, session: 61, refused: true, cgroup: ORPHAN_GROUP, cmdline: "command\0" }], ["delegatus-ancestor:30", "delegatus-ancestor:30"]],
+  ["an orphan left in a Delegatus cgroup", () => [{ pid: 60, ppid: 1, session: 30, refused: true, cgroup: ORPHAN_GROUP, cmdline: "command\0" }],
+    ["orphan-in-delegatus-cgroup:30"]],
   ["a descendant of such an orphan", () => [
     { pid: 60, ppid: 1, session: 30, refused: true, cgroup: ORPHAN_GROUP, cmdline: "sudo\0" },
-    { pid: 61, ppid: 60, session: 61, refused: true, cgroup: "0::/system.slice/moved.scope\n", cmdline: "command\0" }]],
-  ["an orphan whose cgroup cannot be read", () => [{ pid: 60, ppid: 1, session: 30, refused: true, cmdline: "command\0" }]],
-  ["a command line naming the release root", release => [{ pid: 60, ppid: 1, session: 60, refused: true, cgroup: "0::/system.slice/x.service\n", cmdline: `${release}/0123456789ab/bin/tool\0` }]],
-  ["an unreadable command line", () => [{ pid: 60, ppid: 1, session: 60, refused: true, cgroup: "0::/system.slice/x.service\n" }]],
-  ["a parent PID reused after the child started", () => [{ pid: 60, ppid: 10, session: 60, start: 5, refused: true, cgroup: "0::/system.slice/x.service\n", cmdline: "daemon\0" }]],
-  ["a parent that is gone", () => [{ pid: 60, ppid: 999, session: 60, refused: true, cgroup: "0::/system.slice/x.service\n", cmdline: "daemon\0" }]],
-])("a refused process keeps installation-wide uncertainty as %s", (_, extra) => {
+    { pid: 61, ppid: 60, session: 61, refused: true, cgroup: "0::/system.slice/moved.scope\n", cmdline: "command\0" }],
+    ["orphan-in-delegatus-cgroup:30", "ancestor:60:orphan-in-delegatus-cgroup:30"]],
+  ["an orphan whose cgroup cannot be read", () => [{ pid: 60, ppid: 1, session: 30, refused: true, cmdline: "command\0" }], ["cgroup-unreadable"]],
+  ["a command line naming the release root", release => [{ pid: 60, ppid: 1, session: 60, refused: true, cgroup: "0::/system.slice/x.service\n",
+    cmdline: `${release}/0123456789ab/bin/tool\0` }], ["command-line-names-root"]],
+  ["an unreadable command line", () => [{ pid: 60, ppid: 1, session: 60, refused: true, cgroup: "0::/system.slice/x.service\n" }], ["command-line-unreadable"]],
+  ["a parent PID reused after the child started", () => [{ pid: 60, ppid: 10, session: 60, start: 5, refused: true, cgroup: "0::/system.slice/x.service\n",
+    cmdline: "daemon\0" }], ["ancestry-unproven"]],
+  ["a parent that is gone", () => [{ pid: 60, ppid: 999, session: 60, refused: true, cgroup: "0::/system.slice/x.service\n", cmdline: "daemon\0" }],
+    ["ancestry-unproven"]],
+])("a refused process keeps installation-wide uncertainty as %s, and the scan names it", (_, extra, rules) => {
   let rows: ProcRow[] = [];
   const fixture = lineageFixture(release => [...LOGIN, ...rows = extra(release)]);
-  expect(fixture.scan().uncertain).toEqual(rows.map(row => ({ pid: row.pid, reason: "ns/mnt:EACCES", roots: [fixture.release] })));
+  expect(fixture.scan().uncertain).toEqual(rows.map((row, index) => ({ pid: row.pid, reason: "ns/mnt:EACCES", roots: [fixture.release],
+    rule: rules[index], comm: `fixture ${row.pid}`, uid: row.uid ?? 1000, startedAt: new Date(1_700_000_000_000 + (row.start ?? row.pid) * 10).toISOString() })));
 });
 
 test.each([false, true])("a readable process without a Delegatus environment marks its refused children only while it holds a release: %p", holds => {
@@ -183,7 +193,7 @@ test.each([false, true])("a readable process without a Delegatus environment mar
     { pid: 30, ppid: 21, session: 30, cgroup: ORPHAN_GROUP, ...(holds ? { cwd: path.join(release, "0123456789ab") } : {}) },
     { pid: 60, ppid: 30, session: 30, refused: true, cgroup: ORPHAN_GROUP, cmdline: "sudo\0" }]);
   const scan = fixture.scan();
-  expect(scan.uncertain).toEqual(holds ? [{ pid: 60, reason: "ns/mnt:EACCES", roots: [fixture.release] }] : []);
+  expect(scan.uncertain).toEqual(holds ? [expect.objectContaining({ pid: 60, reason: "ns/mnt:EACCES", roots: [fixture.release], rule: "delegatus-ancestor:30" })] : []);
   expect(scan.processes.map(proc => proc.pid)).toEqual(holds ? [30] : []);
 });
 

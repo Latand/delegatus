@@ -1,5 +1,5 @@
 import { startupDiagnosticsQuiet } from "@/lib/startupDiagnostics";
-import { withSelfObservation, type RetentionScan } from "./retentionInspection";
+import { withSelfObservation, type RetentionScan, type RetentionUncertainty } from "./retentionInspection";
 import { RetentionWorker, RetentionInspectionError, type RetentionInspection } from "./retentionWorker";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
@@ -26,7 +26,11 @@ export type RetentionReport = {
   cursor?: { age: number; dir: string };
   recoveryCursor?: string;
   reclaimedCacheBytes: number; kept: { dir: string; reason: string; bytes: number }[]; errors: string[];
+  /** The processes this pass counted as possible holders it could not read,
+   * with the rule that kept each one; at most UNCERTAIN_REPORTED rows. */
+  uncertain?: Omit<RetentionUncertainty, "roots">[];
 };
+const UNCERTAIN_REPORTED = 100;
 /** The owner's state. `fenced` answers a claim: the owner refuses every new
  * serving, rollback or in-flight hold on the claimed release from before this
  * read until the pass ends, so the read is the last word on its holds. */
@@ -90,10 +94,16 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
   const maxCandidates = Number.isFinite(budget) ? Math.max(1, Math.min(128, Math.floor(budget))) : 4;
   let worked = 0;
   const deadline = now() + 120_000;
+  const uncertainSeen = new Map<number, RetentionUncertainty>();
+  /** This process seals its own links behind a gate and observes itself instead. */
+  const noteUncertain = (value: Partial<Pick<RetentionScan, "uncertain">>, self: boolean) => {
+    for (const row of value.uncertain ?? []) if (self || row.pid !== process.pid) uncertainSeen.set(row.pid, row);
+  };
   const scan = async () => {
     try {
       const value = ports.scan ? ports.scan() : await inspection.scan(path.resolve(record.releasesDir));
       if (!value.ownNamespace || ("complete" in value && !value.complete)) throw new Error("scan-unavailable: incomplete /proc inventory");
+      noteUncertain(value, false);
       return value;
     } catch (error) { throw new RetentionInspectionError(String(error)); }
   };
@@ -118,12 +128,14 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
   const gatedObservation = async (trash: string, claim: string) => {
     const root = path.resolve(record.releasesDir);
     const scanned = union(withSelfObservation(await scan(), root), withSelfObservation(await scan(), root));
+    noteUncertain(scanned as Partial<RetentionScan>, true);
     const processes = { ...scanned, processes: scanned.processes.map(proc => proc.pid === process.pid
       ? { ...proc, paths: proc.paths.filter(entry => entry !== trash) } : proc) };
     const current = await read(claim);
     return { current, processes, unfenced: current.fenced !== true };
   };
-  type Candidate = { dir: string; sha: string; age: number; locked: boolean; identity: string };
+  /** `clone`: a standalone clone at a release path, not a registered worktree. */
+  type Candidate = { dir: string; sha: string; age: number; locked: boolean; identity: string; clone?: boolean };
   const byAge = (a: Candidate, b: Candidate) => a.age - b.age || (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0);
   const identity = (dir: string) => { const stat = fs.lstatSync(dir); return `${stat.dev}:${stat.ino}`; };
   const candidates: Candidate[] = [];
@@ -186,13 +198,47 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     const tagged = await run(["ls-files", "--cached", "-v", "-z"], directory);
     return tagged.code === 0 && tagged.stdout.split("\0").filter(Boolean).every(row => row.startsWith("H "));
   };
+  /** Whether a ref of the install checkout contains the commit. */
+  const safeRef = async (sha: string, refs = ["refs/heads", "refs/remotes", "refs/self-update/tip"]) => {
+    const found = await run(["for-each-ref", "--contains", sha, "--format=%(refname)", ...refs], record.checkout!);
+    return found.code === 0 && found.stdout.split("\n").some(ref => ref.trim().length > 0);
+  };
+  /** A standalone clone's own branch, tag and stash tips are all contained by
+   * refs of the install checkout, tags included (a clone copies the checkout's
+   * tags), so removing the clone loses no commit. Its remote-tracking refs are
+   * copies of the checkout's own branches. */
+  const cloneRefsPublished = async (directory: string) => {
+    const tips = await run(["for-each-ref", "--format=%(objectname) %(*objectname)", "refs/heads", "refs/tags", "refs/stash"], directory);
+    if (tips.code !== 0) return false;
+    for (const line of new Set(tips.stdout.split("\n").map(row => row.trim()).filter(Boolean))) {
+      const [object, peeled] = line.split(" ");
+      if (!await safeRef(peeled || object!, ["refs/heads", "refs/remotes", "refs/tags", "refs/self-update/tip"])) return false;
+    }
+    return true;
+  };
+  /** A `<sha12>` directory Git does not list as a worktree may be a clone a
+   * manual deploy made: a real `.git` directory at its own top, HEAD at the
+   * commit its name starts. Its HEAD, or null when it is anything else. */
+  const cloneHead = async (directory: string, name: string): Promise<string | null> => {
+    if (!fs.lstatSync(path.join(directory, ".git"), { throwIfNoEntry: false })?.isDirectory()) return null;
+    const where = await run(["rev-parse", "--absolute-git-dir", "--show-toplevel"], directory);
+    const [gitDir, top] = where.stdout.trim().split("\n");
+    if (where.code !== 0 || gitDir !== path.join(directory, ".git") || top !== directory) return null;
+    const head = await run(["rev-parse", "--verify", "HEAD"], directory);
+    const sha = head.stdout.trim();
+    return head.code === 0 && /^[0-9a-f]{40}$/.test(sha) && sha.startsWith(name) ? sha : null;
+  };
   /** Git's view of a quarantined checkout, before its gate closes: an edit
-   * made before the rename restores the release. */
+   * made before the rename restores the release. A clone's own refs and
+   * HEAD must still be contained by the install checkout there. */
   const releaseContentHold = async (trash: string, sha: string) => {
     const content = await worktreeStatus(trash);
     if (!content.ok || content.changed.length || content.ignored.length || !await safeTrackedFlags(trash)) return "uncommitted";
     const head = await run(["rev-parse", "--verify", "HEAD"], trash);
-    return head.code === 0 && head.stdout.trim() === sha ? null : "changed";
+    if (head.code !== 0 || head.stdout.trim() !== sha) return "changed";
+    if (fs.lstatSync(path.join(trash, ".git"), { throwIfNoEntry: false })?.isDirectory()
+      && (!await safeRef(sha) || !await cloneRefsPublished(trash))) return "uncommitted";
+    return null;
   };
   /** The tree is gone; drop only its own registration, never other prunable ones. */
   const dropWorktreeMetadata = async (directory: string) => {
@@ -223,13 +269,15 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
       if (record.checkout ? !/^[a-f0-9]{12}$/.test(name) : !/^npm-\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(name)) continue;
       const registered = listed.find(entry => path.resolve(entry.path) === dir && !entry.bare && !entry.prunable);
-      if (record.checkout && !registered) { report.kept.push({ dir, reason: "unregistered", bytes: 0 }); continue; }
-      let sha = registered?.head ?? "";
+      // A path Git lists in any state (prunable, bare) is never a clone.
+      const clone = record.checkout && !listed.some(entry => path.resolve(entry.path) === dir) ? await cloneHead(dir, name) : null;
+      if (record.checkout && !registered && !clone) { report.kept.push({ dir, reason: "unregistered", bytes: 0 }); continue; }
+      let sha = registered?.head ?? clone ?? "";
       if (!record.checkout) {
         try { sha = JSON.parse(fs.readFileSync(path.join(dir, "node_modules/delegatus-cli/package.json"), "utf8")).gitHead ?? ""; }
         catch { /* Unknown package revision cannot match serving revisions. */ }
       }
-      candidates.push({ dir, sha, age: releaseAge(dir, !!record.checkout), locked: registered?.locked ?? false, identity: identity(dir) });
+      candidates.push({ dir, sha, age: releaseAge(dir, !!record.checkout), locked: registered?.locked ?? false, identity: identity(dir), ...(clone ? { clone: true } : {}) });
     }
     const rawKeep = Number((ports.env ?? process.env).LLV_SELF_UPDATE_KEEP_RELEASES?.trim() || 3);
     const keepCount = Number.isFinite(rawKeep) ? Math.max(1, Math.floor(rawKeep)) : 3;
@@ -262,10 +310,6 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     const newest = new Set([...candidates.filter(candidate => !protectedSet.get(candidate.dir)),
       ...quarantined.filter(candidate => !protect(candidate, initial, processes, true))]
       .filter(candidate => now() - candidate.age >= DAY).sort((a, b) => byAge(b, a)).slice(0, keepCount).map(candidate => candidate.dir));
-    const safeRef = async (sha: string) => {
-      const refs = await run(["for-each-ref", "--contains", sha, "--format=%(refname)", "refs/heads", "refs/remotes", "refs/self-update/tip"], record.checkout!);
-      return refs.code === 0 && refs.stdout.split("\n").some(ref => ref.trim().length > 0);
-    };
     const ordered = candidates.sort(byAge);
     const afterCursor = (candidate: Candidate) => cursor && (candidate.age > cursor.age || candidate.age === cursor.age && candidate.dir > cursor.dir);
     const window = cursor ? [...ordered.filter(afterCursor), ...ordered.filter(candidate => !afterCursor(candidate))] : ordered;
@@ -324,7 +368,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
         }
         let releaseHead: (() => void) | null = null;
         if (record.checkout) {
-          releaseHead = (ports.lockHead ?? (directory => lockCheckoutHead(directory, entry => entry, report.errors)))(candidate.dir);
+          releaseHead = (ports.lockHead ?? (directory => lockCheckoutHead(directory, entry => entry, report.errors, { repository: candidate.clone })))(candidate.dir);
           if (!releaseHead) { report.kept.push({ dir: candidate.dir, reason: "locked", bytes: 0 }); continue; }
         }
         try {
@@ -336,12 +380,15 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           const listing = await run(["worktree", "list", "--porcelain", "-z"], record.checkout);
           if (listing.code !== 0) throw new Error("cannot refresh release worktree listing");
           const entry = parseWorktreeList(listing.stdout).find(entry => path.resolve(entry.path) === candidate.dir);
-          if (!entry || entry.locked || entry.head !== actualHead.stdout.trim() || await freshProtection(candidate) || mounts(candidate.dir).length) {
+          // A clone stays outside Git's worktree list; a worktree stays in it, unlocked, at its HEAD.
+          const listedAsBefore = candidate.clone ? !entry && !!await cloneHead(candidate.dir, path.basename(candidate.dir))
+            : !!entry && !entry.locked && entry.head === actualHead.stdout.trim();
+          if (!listedAsBefore || await freshProtection(candidate) || mounts(candidate.dir).length) {
             report.kept.push({ dir: candidate.dir, reason: "changed", bytes: 0 }); continue;
           }
           let content = await worktreeStatus(candidate.dir);
           if (!content.ok || content.changed.length || content.ignored.length || !await safeTrackedFlags(candidate.dir)
-            || !await safeRef(actualHead.stdout.trim())) {
+            || !await safeRef(actualHead.stdout.trim()) || candidate.clone && !await cloneRefsPublished(candidate.dir)) {
             report.kept.push({ dir: candidate.dir, reason: "uncommitted", bytes: await bytesOf(candidate.dir) }); continue;
           }
           for (const ignored of content.allIgnored) {
@@ -396,7 +443,8 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           }
           const finalContent = await worktreeStatus(candidate.dir);
           if (!finalContent.ok || finalContent.changed.length || finalContent.ignored.length
-            || !await safeTrackedFlags(candidate.dir) || !await safeRef(candidate.sha)) {
+            || !await safeTrackedFlags(candidate.dir) || !await safeRef(candidate.sha)
+            || candidate.clone && !await cloneRefsPublished(candidate.dir)) {
             report.kept.push({ dir: candidate.dir, reason: "uncommitted", bytes }); continue;
           }
           const finalHead = await run(["rev-parse", "--verify", "HEAD"], candidate.dir);
@@ -435,7 +483,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
             observe: (trash, gate) => gatedReleaseHold(candidate, trash, gate) });
           if (!outcome.removed) { report.kept.push({ dir: candidate.dir, reason: outcome.reason, bytes }); continue; }
           report.removed.push({ dir: candidate.dir, sha: candidate.sha, bytes });
-          await dropWorktreeMetadata(candidate.dir);
+          if (!candidate.clone) await dropWorktreeMetadata(candidate.dir);
           continue;
         } else {
           const packageTree = inspectTree(candidate.dir, { git: true, mounts: mounts(candidate.dir) });
@@ -530,6 +578,9 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       } catch (error) { if (error instanceof RetentionInspectionError) throw error; report.errors.push(String(error)); }
     }
   } catch (error) { report.errors.push(String(error)); }
+  if (uncertainSeen.size) report.uncertain = [...uncertainSeen.values()].slice(0, UNCERTAIN_REPORTED).map(row => {
+    const named: Partial<RetentionUncertainty> = { ...row }; delete named.roots; return named as Omit<RetentionUncertainty, "roots">;
+  });
   try { fs.mkdirSync(path.dirname(reportFile), { recursive: true }); writeJsonDurably(reportFile, report); }
   catch (error) {
     report.errors.push(`cannot write retention report: ${String(error)}`);
@@ -546,6 +597,7 @@ export function releaseRetentionStatus() {
   try {
     const report = JSON.parse(fs.readFileSync(statePath("self-update", "retention.json"), "utf8")) as RetentionReport;
     return { at: report.at, removed: report.removed.length, removedBytes: report.removed.reduce((sum, row) => sum + row.bytes, 0),
-      reclaimedCacheBytes: report.reclaimedCacheBytes, kept: report.kept.length, errors: report.errors.length };
+      reclaimedCacheBytes: report.reclaimedCacheBytes, kept: report.kept.length, errors: report.errors.length,
+      uncertainProcesses: report.uncertain?.length ?? 0 };
   } catch { return null; }
 }

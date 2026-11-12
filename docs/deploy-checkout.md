@@ -8,9 +8,9 @@ census; post-switch stage reconciliation uses read-only MCP tools.
 
 Build the exact approved target in its release directory first. Create that
 directory as a worktree of the install checkout
-(`git -C <checkout> worktree add --detach <releaseDir> <target>`): release
-retention removes only registered worktrees and keeps any other directory,
-such as a clone, as `unregistered` for good. Use private
+(`git -C <checkout> worktree add --detach <releaseDir> <target>`). Release
+retention also removes a clean clone whose commits the checkout holds, but
+keeps any directory it cannot prove that for as `unregistered`. Use private
 state for the build and both rehearsals described in AGENTS.md. Save a private
 verification JSON file containing the full `sha`, `viewer: "pass"` and
 `runtimeHost: "pass"`. Preserve the baseline release. The procedure verifies

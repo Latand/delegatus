@@ -348,7 +348,13 @@ Candidates are the registered worktrees of the install checkout directly under
 `releasesDir` named `<sha12>` (unchanged), plus, for a package install
 (`record.checkout === null`), the `npm-<semver>` containers directly under
 `releasesDir`. Everything else under `releasesDir` is never touched. A
-`<sha12>` directory Git does not list is reported as `unregistered` and kept.
+`<sha12>` directory Git does not list is reported as `unregistered` and kept,
+unless it is a standalone clone a manual deploy made: a real `.git` directory
+at its own top and HEAD at the commit its name starts. Such a clone is a
+candidate under every rule here, and is removed only when it is clean, a head
+or remote ref of the checkout contains its HEAD, and a head, remote or tag ref
+of the checkout contains each of its own branch, tag and stash tips. It has no
+registration to drop.
 
 Protected, never removed:
 
