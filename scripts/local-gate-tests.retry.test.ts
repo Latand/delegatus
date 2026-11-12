@@ -81,7 +81,7 @@ test("a between-tests error present on both sides is PRE-EXISTING from the CLI a
   const accepted = cliAt(f, f.base);
   expect(accepted.status).toBe(0);
   expect(accepted.stdout).toContain(`PRE-EXISTING example.test.ts: <between-tests error> error: describe boom ${SAME_WAY}`);
-  expect(accepted.stdout).toContain("PRE-EXISTING example.test.ts: steady red\n");
+  expect(accepted.stdout).toContain("PRE-EXISTING example.test.ts: steady red (base: FAIL; head: FAIL; non-blocking note)\n");
   expect(accepted.stdout).toContain("0 new failures, 2 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky");
   expect(accepted.stdout).not.toContain("gate error"); expect(accepted.stderr).not.toContain("gate error");
 });
