@@ -515,5 +515,440 @@
       "assertions": 483,
       "files": 2
     }
+  },
+  "priorPublicationRepair": {
+    "at": "2026-11-12T13:51:11.014014+00:00",
+    "revision": "09b70cb589fa620663f61e8561926402bf48ede8",
+    "checks": [
+      {
+        "name": "types",
+        "command": "bash \"$TMPDIR/publication-repair/run-isolated.sh\" bunx tsc --noEmit",
+        "exitStatus": 0,
+        "counts": {
+          "errors": 0
+        }
+      },
+      {
+        "name": "settings-route.test.ts",
+        "command": "bash \"$TMPDIR/publication-repair/run-isolated.sh\" bun test --timeout=60000 src/app/api/monitor/seat-tick/settings/route.test.ts",
+        "exitStatus": 0,
+        "counts": {
+          "pass": 34,
+          "fail": 0,
+          "assertions": 268
+        }
+      },
+      {
+        "name": "mobile-MobileSeatTickSheet.dom.test.tsx",
+        "command": "bash \"$TMPDIR/publication-repair/run-isolated.sh\" bun test --timeout=60000 src/components/mobile/MobileSeatTickSheet.dom.test.tsx",
+        "exitStatus": 0,
+        "counts": {
+          "pass": 20,
+          "fail": 0,
+          "assertions": 128
+        }
+      },
+      {
+        "name": "orchestrator-seatTickView.test.ts",
+        "command": "bash \"$TMPDIR/publication-repair/run-isolated.sh\" bun test --timeout=60000 src/components/orchestrator/seatTickView.test.ts",
+        "exitStatus": 0,
+        "counts": {
+          "pass": 25,
+          "fail": 0,
+          "assertions": 200
+        }
+      },
+      {
+        "name": "gate campaign",
+        "command": "rtk proxy env LLV_OWNED_RUN_TIMEOUT_MS=1200000 bash \"$GATE\" --record \"$TMPDIR/publication-repair/checks.log\" bash \"$TMPDIR/publication-repair/run-checks.sh\"",
+        "exitStatus": 0,
+        "counts": {
+          "subruns": 4
+        }
+      },
+      {
+        "name": "publication lint",
+        "command": "bash \"$TMPDIR/publication-repair/run-lint.sh\"",
+        "fileSelection": [
+          "src/app/api/monitor/seat-tick/settings/route.test.ts",
+          "src/app/api/monitor/seat-tick/settings/route.ts",
+          "src/components/kanban/kanbanBoard.browser.test.tsx",
+          "src/components/mobile/MobileSeatTickSheet.dom.test.tsx",
+          "src/components/mobile/MobileSeatTickSheet.tsx",
+          "src/components/orchestrator/SeatTickBody.tsx",
+          "src/components/orchestrator/SeatTickChip.dom.test.tsx",
+          "src/components/orchestrator/SeatTickChip.tsx",
+          "src/components/orchestrator/SeatTickSwitch.tsx",
+          "src/components/orchestrator/seatTickView.test.ts",
+          "src/components/orchestrator/useSeatTickSettings.ts",
+          "src/lib/monitor/seatTickSettingsAnswer.ts"
+        ],
+        "exitStatus": 0,
+        "counts": {
+          "files": 12,
+          "introducedErrors": 0,
+          "matchingBaseErrors": 4
+        }
+      },
+      {
+        "name": "emission comparison initial setup",
+        "command": "bun compare-emission.ts ../changed-files.json \"$WORKTREE\"",
+        "exitStatus": 1,
+        "counts": {
+          "completedComparisons": 0
+        },
+        "note": "Analysis helper exceeded its git stdout buffer; no product command failed. The corrected comparison below replaces this observation."
+      },
+      {
+        "name": "emission comparison corrected",
+        "command": "bun ../compare-emission.ts ../changed-files.json \"$WORKTREE\"",
+        "exitStatus": 0,
+        "counts": {
+          "files": 4,
+          "identical": 4,
+          "different": 0
+        }
+      },
+      {
+        "name": "commit hooks",
+        "command": "git commit --file \"$TMPDIR/publication-repair/commit-message.txt\"",
+        "exitStatus": 0,
+        "counts": {
+          "checks": 2,
+          "lintFiles": 4,
+          "introducedErrors": 0,
+          "matchingBaseErrors": 1
+        },
+        "hookSteps": [
+          "git diff --cached --check",
+          "eslint"
+        ]
+      },
+      {
+        "name": "committed-range privacy",
+        "command": "LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE=scripts/privacy-known-value-fingerprints.json bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --added-lines --base 2614b079",
+        "exitStatus": 0,
+        "counts": {
+          "findings": 0,
+          "commits": 2,
+          "changedFiles": 16
+        }
+      },
+      {
+        "name": "preserved ancestry 2614b079",
+        "command": "git merge-base --is-ancestor 2614b079 HEAD",
+        "exitStatus": 0,
+        "counts": {
+          "verified": 1
+        }
+      },
+      {
+        "name": "preserved ancestry 725489de",
+        "command": "git merge-base --is-ancestor 725489de HEAD",
+        "exitStatus": 0,
+        "counts": {
+          "verified": 1
+        }
+      },
+      {
+        "name": "committed whitespace",
+        "command": "git diff 725489de..HEAD --check",
+        "exitStatus": 0,
+        "counts": {
+          "changedFiles": 4,
+          "findings": 0
+        }
+      },
+      {
+        "name": "clean checkout",
+        "command": "git status --porcelain",
+        "exitStatus": 0,
+        "counts": {
+          "uncommittedFiles": 0
+        }
+      }
+    ],
+    "testTotals": {
+      "pass": 79,
+      "fail": 0,
+      "assertions": 596,
+      "files": 3
+    },
+    "runtimeEmission": "Unchanged in all four repaired test files; accepted timings and frames remain applicable."
+  },
+  "publicationRepair": {
+    "at": "2026-11-12T14:24:29.724893+00:00",
+    "procedure": "Merged origin/main without rebasing. A scratch export and fresh HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and TMPDIR per command; closed Viewer control port; sequential gate commands; one recorded campaign and one native wait.",
+    "checks": [
+      {
+        "name": "types",
+        "command": "bash \"$GATE\" bash \"$TMPDIR/repair-final/run-isolated.sh\" bun x tsc --noEmit",
+        "exitStatus": 0,
+        "wallSeconds": 395,
+        "counts": {
+          "errors": 0
+        }
+      },
+      {
+        "name": "route.test.ts",
+        "command": "bash \"$GATE\" bash \"$TMPDIR/repair-final/run-isolated.sh\" bun test --timeout=60000 src/app/api/monitor/seat-tick/settings/route.test.ts",
+        "exitStatus": 0,
+        "wallSeconds": 10,
+        "counts": {
+          "pass": 34,
+          "fail": 0,
+          "assertions": 268
+        }
+      },
+      {
+        "name": "MobileSeatTickSheet.dom.test.tsx",
+        "command": "bash \"$GATE\" bash \"$TMPDIR/repair-final/run-isolated.sh\" bun test --timeout=60000 src/components/mobile/MobileSeatTickSheet.dom.test.tsx",
+        "exitStatus": 0,
+        "wallSeconds": 6,
+        "counts": {
+          "pass": 20,
+          "fail": 0,
+          "assertions": 128
+        }
+      },
+      {
+        "name": "seatTickView.test.ts",
+        "command": "bash \"$GATE\" bash \"$TMPDIR/repair-final/run-isolated.sh\" bun test --timeout=60000 src/components/orchestrator/seatTickView.test.ts",
+        "exitStatus": 0,
+        "wallSeconds": 1,
+        "counts": {
+          "pass": 25,
+          "fail": 0,
+          "assertions": 200
+        }
+      },
+      {
+        "name": "SeatTickChip.dom.test.tsx",
+        "command": "bash \"$GATE\" bash \"$TMPDIR/repair-final/run-isolated.sh\" bun test --timeout=60000 src/components/orchestrator/SeatTickChip.dom.test.tsx",
+        "exitStatus": 0,
+        "wallSeconds": 6,
+        "counts": {
+          "pass": 58,
+          "fail": 0,
+          "assertions": 384
+        }
+      },
+      {
+        "name": "SeatTickSwitch.dom.test.tsx",
+        "command": "bash \"$GATE\" bash \"$TMPDIR/repair-final/run-isolated.sh\" bun test --timeout=60000 src/components/orchestrator/SeatTickSwitch.dom.test.tsx",
+        "exitStatus": 0,
+        "wallSeconds": 19,
+        "counts": {
+          "pass": 25,
+          "fail": 0,
+          "assertions": 173
+        }
+      },
+      {
+        "name": "tokens.contrast.test.ts",
+        "command": "bash \"$GATE\" bash \"$TMPDIR/repair-final/run-isolated.sh\" bun test --timeout=60000 src/styles/tokens.contrast.test.ts",
+        "exitStatus": 0,
+        "wallSeconds": 1,
+        "counts": {
+          "pass": 8,
+          "fail": 0,
+          "assertions": 230
+        }
+      },
+      {
+        "name": "darkControls.contrast.test.ts",
+        "command": "bash \"$GATE\" bash \"$TMPDIR/repair-final/run-isolated.sh\" bun test --timeout=60000 src/styles/darkControls.contrast.test.ts",
+        "exitStatus": 0,
+        "wallSeconds": 1,
+        "counts": {
+          "pass": 20,
+          "fail": 0,
+          "assertions": 253
+        }
+      },
+      {
+        "name": "browser-probe",
+        "command": "bash \"$GATE\" bash \"$TMPDIR/repair-final/run-isolated.sh\" bun browser-probe.ts",
+        "exitStatus": 0,
+        "wallSeconds": 3,
+        "counts": {
+          "pass": 1,
+          "fail": 0
+        }
+      },
+      {
+        "name": "browser",
+        "command": "bash \"$GATE\" bash \"$TMPDIR/repair-final/run-isolated.sh\" bun test --timeout=60000 src/components/kanban/kanbanBoard.browser.test.tsx -t \"seat tick summary arrives before panel details\"",
+        "exitStatus": 0,
+        "wallSeconds": 86,
+        "counts": {
+          "pass": 1,
+          "fail": 0,
+          "assertions": 752
+        }
+      },
+      {
+        "name": "publication lint",
+        "command": "bash \"$GATE\" --record \"$TMPDIR/repair-final/lint.log\" bash \"$TMPDIR/repair-final/run-lint.sh\"",
+        "fileSelection": [
+          "src/app/api/monitor/seat-tick/settings/route.test.ts",
+          "src/app/api/monitor/seat-tick/settings/route.ts",
+          "src/components/kanban/kanbanBoard.browser.test.tsx",
+          "src/components/mobile/MobileSeatTickSheet.dom.test.tsx",
+          "src/components/mobile/MobileSeatTickSheet.tsx",
+          "src/components/orchestrator/SeatTickBody.tsx",
+          "src/components/orchestrator/SeatTickChip.dom.test.tsx",
+          "src/components/orchestrator/SeatTickChip.tsx",
+          "src/components/orchestrator/SeatTickSwitch.tsx",
+          "src/components/orchestrator/seatTickView.test.ts",
+          "src/components/orchestrator/useSeatTickSettings.ts",
+          "src/lib/monitor/seatTickSettingsAnswer.ts"
+        ],
+        "exitStatus": 0,
+        "counts": {
+          "files": 12,
+          "introducedErrors": 0,
+          "matchingBaseErrors": 4
+        }
+      },
+      {
+        "name": "privacy of changed files before ledger finalization",
+        "command": "LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE=scripts/privacy-known-value-fingerprints.json bun scripts/privacy-publication-gate.ts --require-known-values --base origin/main --paths docs/verification/seat-tick-summary.md evidence/seat-tick-summary/checks.json src/app/api/monitor/seat-tick/settings/route.test.ts src/components/mobile/MobileSeatTickSheet.dom.test.tsx src/components/orchestrator/seatTickView.test.ts",
+        "exitStatus": 0,
+        "counts": {
+          "files": 5,
+          "findings": 0
+        }
+      },
+      {
+        "name": "main merge",
+        "command": "git merge --no-ff origin/main -m \"Merge origin/main before tick publication repair\"",
+        "exitStatus": 0,
+        "counts": {
+          "commitsIncorporated": 5,
+          "conflicts": 0
+        }
+      },
+      {
+        "name": "contact sheet rendering",
+        "command": "LLV_EVIDENCE_DIR=\"$LLV_EVIDENCE_DIR/attempt3-checks\" bun review-sheets.ts",
+        "exitStatus": 0,
+        "counts": {
+          "sheets": 37,
+          "frames": 111
+        }
+      },
+      {
+        "name": "source identity",
+        "command": "python3 \"$TMPDIR/repair-final/summarize.py\"; compare SHA-256 of working source with the checked export",
+        "exitStatus": 0,
+        "counts": {
+          "files": 12,
+          "mismatches": 0
+        }
+      },
+      {
+        "name": "latest main observation",
+        "command": "git ls-remote origin refs/heads/main",
+        "exitStatus": 0,
+        "counts": {
+          "unchangedRemoteRefs": 1
+        }
+      }
+    ],
+    "testTotals": {
+      "pass": 191,
+      "fail": 0,
+      "assertions": 2388
+    },
+    "rendered": {
+      "states": 136,
+      "screenshots": 248,
+      "contexts": 40,
+      "cuts": 0,
+      "overlaps": 0,
+      "pageErrors": 0,
+      "closedControlsOnFirstScreen": true,
+      "desktopScrollbarGutters": [
+        0,
+        15
+      ],
+      "identicalToInspectedFrames": 137,
+      "changedFrames": 111,
+      "visuallyInspectedChangedFrames": 111,
+      "reviewSheets": 37,
+      "geometryReadingsIdenticalToEarlierRun": 136
+    },
+    "gateRevision": "2614b079b3f1",
+    "mergedBase": "a706416942",
+    "recordedCampaign": {
+      "command": "rtk proxy env LLV_OWNED_RUN_TIMEOUT_MS=1800000 CHROME_BIN=\"$CHROME_BIN\" LLV_KANBAN_BROWSER_TEST=1 bash \"$GATE\" --record \"$TMPDIR/repair-final/checks.log\" bash \"$TMPDIR/repair-final/run-checks.sh\"",
+      "exitStatus": 0,
+      "counts": {
+        "completedCommands": 10
+      }
+    },
+    "testedSources": [
+      {
+        "path": "src/app/api/monitor/seat-tick/settings/route.test.ts",
+        "sha256": "f8bfcd5cb3dfd2c15ca9fb49b4c6fc980e4a2b6538d82f27a6bf8d216bdf0682",
+        "matchesCheckedExport": true
+      },
+      {
+        "path": "src/app/api/monitor/seat-tick/settings/route.ts",
+        "sha256": "7f2e2b38e7653640497a10da771b9cd043a2b9867e0f6e4581840f30c6532da4",
+        "matchesCheckedExport": true
+      },
+      {
+        "path": "src/components/kanban/kanbanBoard.browser.test.tsx",
+        "sha256": "4bfe8aebeff8fb0315a5d6dcdccb81f2ad079f53779392d45b6e7d5bc39eda88",
+        "matchesCheckedExport": true
+      },
+      {
+        "path": "src/components/mobile/MobileSeatTickSheet.dom.test.tsx",
+        "sha256": "bd6e2f81fe76bc2de26a7041efa906cb77d4575d3fb7f21436eaac4414dd0916",
+        "matchesCheckedExport": true
+      },
+      {
+        "path": "src/components/mobile/MobileSeatTickSheet.tsx",
+        "sha256": "761068cb47788be7c5a61b5a1940409f5d920cdc3b90d39f05f2aa3734c66ee1",
+        "matchesCheckedExport": true
+      },
+      {
+        "path": "src/components/orchestrator/SeatTickBody.tsx",
+        "sha256": "b9d5753b4d8c48bc875c182d15dc62df23fd55deadfb42eecd4f401ee040387f",
+        "matchesCheckedExport": true
+      },
+      {
+        "path": "src/components/orchestrator/SeatTickChip.dom.test.tsx",
+        "sha256": "e840d4fe24ab12fa2f6563f5d1f069cb429efdb4b82470c8f1847496598153d1",
+        "matchesCheckedExport": true
+      },
+      {
+        "path": "src/components/orchestrator/SeatTickChip.tsx",
+        "sha256": "c4f0a17bb2a523381dfe297f18f7e90f8a5a794ef5bd0be6b7401d1aec2c1f66",
+        "matchesCheckedExport": true
+      },
+      {
+        "path": "src/components/orchestrator/SeatTickSwitch.tsx",
+        "sha256": "56e1180c8d8a50ad74aac6357aff094c5aa0e0c78522d30b1e7b58a91f1d83a2",
+        "matchesCheckedExport": true
+      },
+      {
+        "path": "src/components/orchestrator/seatTickView.test.ts",
+        "sha256": "028938f95144bfcd0c42036db394eaa97247c17b91be812e249359506b9aabe0",
+        "matchesCheckedExport": true
+      },
+      {
+        "path": "src/components/orchestrator/useSeatTickSettings.ts",
+        "sha256": "36b4634af505660f15b0627ba72b7b4faa1f41e169e52bb24a80ddd954fb722c",
+        "matchesCheckedExport": true
+      },
+      {
+        "path": "src/lib/monitor/seatTickSettingsAnswer.ts",
+        "sha256": "16b53f6e1a87351f4c856eb89e28088c9cbb3f1411dbf2188739446af0ba5995",
+        "matchesCheckedExport": true
+      }
+    ]
   }
 }

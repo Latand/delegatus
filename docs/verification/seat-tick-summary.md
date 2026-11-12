@@ -110,11 +110,12 @@ native completion wait; no check is restarted while its result is unknown.
 
 Raw whole-file ESLint reports the same three errors on the base: two render
 clock reads and an existing effect update. The project's lint comparator is
-the publication policy. This stage runs no full typecheck or build, as the stage instructions require.
+the publication policy. The initial implementation ran focused checks. The
+publication repair below also runs the explicitly requested full typecheck.
 The publisher owns the repository's pre-push gate.
 
 
-## Final verification
+## Initial verification
 
 | Explicit test file | Passed | Failed | Assertions |
 | --- | ---: | ---: | ---: |
@@ -155,3 +156,39 @@ The retained evidence also holds `attempt1-checks`, `attempt2-checks`,
 The private replay snapshot and live response bodies stay outside published
 repository data. The candidate timing is an isolated route measurement; no
 production promotion is part of this change.
+
+## Publication repair verification
+
+On 2026-11-12, the continuation merged `origin/main` at `a706416942` with a
+merge commit. Full-response fixture factories now require their maintenance
+block in the factory type; the HTTP test also checks its presence at runtime.
+The browser geometry walk explicitly accepts a null parent. The product
+implementation and the original paired measurement records are preserved.
+
+`bun x tsc --noEmit` exited 0 with zero diagnostics (395 seconds inside the
+admitted campaign). The eight explicit test files in the table above were
+rerun: 191 passed, zero failed, 2388 assertions. Each file ran through its own
+gate command with fresh HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and TMPDIR in the
+stage scratch directory. The browser support probe also passed before capture.
+
+The renewed browser case took 83.56 seconds, with 136 states in 40 contexts
+and 248 PNGs at the same widths, heights, languages and themes. It found zero
+text-range cuts, overlaps, page errors or page overflow; every closed control
+showed the saved cadence on its first screen. Scrollable desktop panels had
+a 15 px gutter; short panels had none. Of these frames, 137 match previously
+inspected frames byte for byte; all 111 changed frames were visually inspected
+in 37 labelled sheets. No new visual defect was found.
+
+The `publicationRepair` section of
+[evidence/seat-tick-summary/checks.json](../../evidence/seat-tick-summary/checks.json)
+records every renewed command, exit status, count and duration, plus hashes
+matching the checked export. `priorPublicationRepair` preserves the earlier
+fixture repair's checks. The retained `attempt3-checks` directory holds the
+new PNGs, readings, visual comparison, sheets, full logs and gate receipts.
+The original paired timing series remains the measurement reported above.
+
+Publication lint compared all 12 changed TypeScript files with the merged base:
+exit 0, zero introduced errors and four matching base errors. The new geometry
+readings are identical to the earlier 136 records; the rendered evidence now
+pins the renewed source hashes. Commit-hook and final committed-range privacy
+receipts accompany the retained command ledger.

@@ -19,7 +19,9 @@ import { MAINTENANCE_FAILURES, SEAT_TICK_REASON_KEYS, maintenanceReading, seatTi
 const t = ((key: MessageKey, params?: Record<string, string | number>) => translate("en", key, params)) as never;
 const NOW = Date.parse("2026-09-18T12:00:00.000Z");
 
-function answer(overrides: Partial<SeatTickSettingsAnswer> = {}): SeatTickSettingsAnswer {
+type MaintenanceFixture = SeatTickSettingsAnswer & { maintenance: BoardMaintenanceAnswer };
+
+function answer(overrides: Partial<MaintenanceFixture> = {}): MaintenanceFixture {
   return {
     maintenance: {
       enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
@@ -312,7 +314,7 @@ test("both locales carry every wake reason", () => {
  */
 
 function maintenance(overrides: Partial<BoardMaintenanceAnswer> = {}): BoardMaintenanceAnswer {
-  return { ...answer().maintenance!, ...overrides };
+  return { ...answer().maintenance, ...overrides };
 }
 
 function run(overrides: Partial<BoardMaintenanceRunSummary> = {}): BoardMaintenanceRunSummary {

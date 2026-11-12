@@ -208,7 +208,8 @@ test("HTTP and seat_tick_settings report maintenance paused while wakes are off"
   const tool = await viewerMcpBindings(undefined, undefined, {
     callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => PROJECT, authorizedSeats: () => [{ project: PROJECT, conversationId: SEAT_CONVERSATION, path: null }],
   } as never).seat_tick_settings({ clientRequestId: "fixture-paused-maintenance-read", project: PROJECT, verbose: true });
-  expect(tool.maintenance).toMatchObject(http.maintenance!);
+  if (!http.maintenance) throw new Error("Full settings response omitted maintenance");
+  expect(tool.maintenance).toMatchObject(http.maintenance);
 });
 
 /** The active seats attribution is measured against: which conversation holds

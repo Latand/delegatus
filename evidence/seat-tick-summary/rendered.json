@@ -1,15 +1,17 @@
 {
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
-  "baseRevision": "2614b079b3f174eb06bb65d9311460ea57aa6fee",
+  "baseRevision": "a706416942a261300de13ed78c965cea75c1d202",
   "sourceSha256": {
-    "src/app/api/monitor/seat-tick/settings/route.test.ts": "b4261dbbf67b6cff898674cf5b64e7700a6913d7d318dc53dfce12afa490109b",
+    "src/app/api/monitor/seat-tick/settings/route.test.ts": "f8bfcd5cb3dfd2c15ca9fb49b4c6fc980e4a2b6538d82f27a6bf8d216bdf0682",
     "src/app/api/monitor/seat-tick/settings/route.ts": "7f2e2b38e7653640497a10da771b9cd043a2b9867e0f6e4581840f30c6532da4",
-    "src/components/kanban/kanbanBoard.browser.test.tsx": "b51abae77273b7804b0e5ca1eb0f385d055739b6f7f3bbc5a4716a39c7e93da8",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "4bfe8aebeff8fb0315a5d6dcdccb81f2ad079f53779392d45b6e7d5bc39eda88",
+    "src/components/mobile/MobileSeatTickSheet.dom.test.tsx": "bd6e2f81fe76bc2de26a7041efa906cb77d4575d3fb7f21436eaac4414dd0916",
     "src/components/mobile/MobileSeatTickSheet.tsx": "761068cb47788be7c5a61b5a1940409f5d920cdc3b90d39f05f2aa3734c66ee1",
     "src/components/orchestrator/SeatTickBody.tsx": "b9d5753b4d8c48bc875c182d15dc62df23fd55deadfb42eecd4f401ee040387f",
     "src/components/orchestrator/SeatTickChip.dom.test.tsx": "e840d4fe24ab12fa2f6563f5d1f069cb429efdb4b82470c8f1847496598153d1",
     "src/components/orchestrator/SeatTickChip.tsx": "c4f0a17bb2a523381dfe297f18f7e90f8a5a794ef5bd0be6b7401d1aec2c1f66",
     "src/components/orchestrator/SeatTickSwitch.tsx": "56e1180c8d8a50ad74aac6357aff094c5aa0e0c78522d30b1e7b58a91f1d83a2",
+    "src/components/orchestrator/seatTickView.test.ts": "028938f95144bfcd0c42036db394eaa97247c17b91be812e249359506b9aabe0",
     "src/components/orchestrator/useSeatTickSettings.ts": "36b4634af505660f15b0627ba72b7b4faa1f41e169e52bb24a80ddd954fb722c",
     "src/lib/monitor/seatTickSettingsAnswer.ts": "16b53f6e1a87351f4c856eb89e28088c9cbb3f1411dbf2188739446af0ba5995"
   },

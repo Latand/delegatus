@@ -8,6 +8,7 @@ import { applySeatTickSettingsChange, defaultSeatTickSettings } from "@/lib/moni
 import { ORCHESTRATOR_PROMPT_VERSION } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
+import type { BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import type { FileEntry } from "@/lib/types";
 
 /*
@@ -53,7 +54,9 @@ import type { OrchestratorPanelState } from "../orchestrator/seatState";
 const PROJECT = "atlas";
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
-function record(overrides: Partial<SeatTickSettingsAnswer> = {}): SeatTickSettingsAnswer {
+type MaintenanceFixture = SeatTickSettingsAnswer & { maintenance: BoardMaintenanceAnswer };
+
+function record(overrides: Partial<MaintenanceFixture> = {}): MaintenanceFixture {
   return {
     autoRotate: { enabled: false, thresholdPercent: 50, defaultPercent: 50, minPercent: 50, maxPercent: 90, windowKnown: true, lastAttempt: null, setBy: null, updatedAt: null, why: null },
     maintenance: {
@@ -81,7 +84,7 @@ function record(overrides: Partial<SeatTickSettingsAnswer> = {}): SeatTickSettin
   };
 }
 
-function paused(): SeatTickSettingsAnswer {
+function paused(): MaintenanceFixture {
   const base = record();
   return {
     ...base,
@@ -126,7 +129,7 @@ interface Recorded { url: string; method: string; body: Record<string, unknown> 
 
 const realFetch = globalThis.fetch;
 const requests: Recorded[] = [];
-let getAnswer: SeatTickSettingsAnswer;
+let getAnswer: MaintenanceFixture;
 let putAnswers: Array<{ status: number; body: unknown }>;
 /** How long the route takes to answer a write. */
 let putDelay = 0;
@@ -423,7 +426,7 @@ test("a save on the phone carries maintenance in the footer Save, in one request
   type(mInterval()!, "2");
   expect(save()).not.toBeNull();
   const stored = record({ changed: true });
-  stored.maintenance = { ...stored.maintenance!, enabled: true, intervalHours: 2, updatedAt: new Date().toISOString(), waitingOn: null, nextRunAt: new Date(Date.now() + 300_000).toISOString() };
+  stored.maintenance = { ...stored.maintenance, enabled: true, intervalHours: 2, updatedAt: new Date().toISOString(), waitingOn: null, nextRunAt: new Date(Date.now() + 300_000).toISOString() };
   putAnswers = [{ status: 200, body: stored }];
   press(save());
   await settle(root);
@@ -451,7 +454,7 @@ test("a refused save on the phone shows the module's words beside the Save, in t
 test("N need you opens the last run's card through the board's own task-open event, from the status line", async () => {
   getAnswer = record();
   getAnswer.maintenance = {
-    ...getAnswer.maintenance!, enabled: true, waitingOn: "interval", nextRunAt: new Date(Date.now() + 3_600_000).toISOString(),
+    ...getAnswer.maintenance, enabled: true, waitingOn: "interval", nextRunAt: new Date(Date.now() + 3_600_000).toISOString(),
     lastRun: {
       runId: "run-1", taskId: "hidden-done-card", conversationId: null, state: "succeeded",
       claimedAt: ago(120), launchedAt: ago(119), endedAt: ago(105), failure: null,
