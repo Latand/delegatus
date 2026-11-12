@@ -201,10 +201,11 @@ try {
     await until("port free", async () => !(await http()));
     const file = join(home, "listener.py");
     const foreignAuth = join(home, "foreign-auth-received");
-    run("sudo", ["-n", "-u", user, "tee", file], { input: 'import http.server,os\nopen(os.path.expanduser("~/listener.pid"),"w").write(str(os.getpid()))\nclass Handler(http.server.BaseHTTPRequestHandler):\n def do_GET(self):\n  if self.headers.get("Authorization"): open(os.path.expanduser("~/foreign-auth-received"),"w").write("credential received")\n  self.send_response(401); self.end_headers()\n def log_message(self,*args): pass\nhttp.server.HTTPServer(("127.0.0.1",8898),Handler).serve_forever()\n' });
+    run("sudo", ["-n", "-u", user, "tee", file], { input: 'import http.server,os\nopen(os.path.expanduser("~/listener.pid"),"w").write(str(os.getpid()))\nclass Handler(http.server.BaseHTTPRequestHandler):\n def refuse(self):\n  if self.headers.get("Authorization"): open(os.path.expanduser("~/foreign-auth-received"),"w").write("credential received")\n  self.send_response(401); self.end_headers()\n def do_GET(self): self.refuse()\n def do_HEAD(self): self.refuse()\n def log_message(self,*args): pass\nhttp.server.HTTPServer(("127.0.0.1",8898),Handler).serve_forever()\n' });
     const listener = spawn("sudo", ["-n", "-u", user, "-H", "/usr/bin/env", `HOME=${home}`, "/usr/bin/python3", file], { stdio: "ignore" });
     listener.on("error", () => {});
     await until("foreign listener", async () => !!(await http()));
+    assert.equal((await http("HEAD"))?.status, 401, "foreign listener exercises the app's HEAD authorization path");
     const pid = Number(sudo(["cat", join(home, "listener.pid")]).trim()); owned.add(pid);
     for (const { language, appearance, size, args } of visualCases) {
       const previous = logs().length;
