@@ -1,8 +1,8 @@
 # Claude Code cloud: a second cloud runtime for pipeline stages and checks
 
 Status: slice 1 built and its launch shapes observed on two live sessions
-(§1.14). No stage has run in the cloud yet: the only connected account's GitHub
-connection can write, so decision 2 keeps every stage local. First written 2026-10-24; revised 2026-10-25 with the
+(§1.14). GitHub write access is allowed and does not force local execution;
+stages use the configured cloud runtime when otherwise eligible. First written 2026-10-24; revised 2026-10-25 with the
 operator's answers and their 06:22 UTC correction, then again the same day for
 run recovery, follow-up receipts and the launch contract when L1 is unusable,
 and once more for binding the result to the last part, the first readiness
