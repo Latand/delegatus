@@ -2,495 +2,678 @@
 
 ## Requirement
 
-On 2026-11-12 at about 06:07 UTC the operator wrote to this project's seat
-while full autonomy was on. The message said the tick kept waking the seat
-and the seat kept doing nothing. It asked for an issue that analyses how
-orchestrator seats behave under the tick and finds this kind of failure. It
-named two acceptable behaviours for a seat with owed work: start and invent
-tasks without the operator, or set the tick to wake when the operator next
-returns. It rejected the third behaviour: staying passive and reporting
-that there is nothing to do. The seat filed this as
-issue #3912.
+On 2026-11-12, around 06:07 UTC, the operator asked for an analysis of
+orchestrator seats repeatedly waking while accepted work remained untouched.
+The requested alternatives were autonomous progress within the mandate, or a
+tick setting that waits for the operator to return. Source: issue #3912.
+The correction later that morning explicitly extended the analysis to seats
+running on every engine. This report paraphrases those private instructions.
 
-This document is the read-only analysis that issue asks for. It changes no
-code. File and line references name commit `dfc99dce25`, the pipeline's base.
+This is an analysis and a proposed design. It changes no product code.
+Source references below name `dfc99dce25`; evidence has a common exclusive
+cutoff of **2026-11-12 06:10 UTC**. The correction was investigated on
+2026-11-12, with source reads between 07:05 and 07:30 UTC.
 
-**Answer in brief.** Over 67 hours of this project's seat, 158 of 265 wakes
-that carried owed work moved nothing (60%). They fell into 12 idle runs of
-four or more wakes, 21.5 hours in total. Five patterns stood in for work:
-holds and due-date moves in answer to unstarted or overdue tasks, verbatim
-status replies, the same ask re-listed on every wake, an operator
-instruction read wider than its scope, and waiting without slowing the
-tick. The tick has no measure of any of
-them. Its retry guard counts a hold as board movement, so a seat that only
-holds is never slowed. Three proposals follow, each checked against the known
-case: a no-advance detector computed from the tick's own records, a wake that
-names the operator's two choices when that detector trips, and a backoff that
-slows the tick and says so.
+**Finding.** Both engines show wakes that repeatedly inspect blockers and
+report status without advancing work. In this project, Claude recorded no
+work transition on **155 of 265 owed wakes (58.5%)**. Codex recorded none on
+**79 of 91 (86.8%)**, with another two outcomes unresolved. The longest
+confirmed runs were 49 Claude wakes over 10 hours 10 minutes and 38 Codex
+wakes over 4 hours 22 minutes. These are observations of different periods,
+mandates and workloads; they establish a shared failure class. They do not
+establish an engine performance ranking.
 
-## 1. Method
+The known November 12 case remains confirmed: five successive task wakes
+held nine existing tasks and created one held task, with no lane started.
+The corrected proposals preserve a baseline for each delivered wake, flag
+repeated parking or unchanged work, and make waiting change the tick.
 
-### Sources (all read-only)
+## 1. Sources, coverage and method
 
-| Source | What it gave | Bounds |
+### 1.1 Census before sampling
+
+The earlier version selected four projects with recent journal wakes and
+searched their Claude transcripts. Its assertion that Codex seats were
+absent was wrong. The corrected census starts from current seats and
+revocations in `orchestrator-seats.json`, using each record's engine,
+activation, revocation, transcript and project. The lineage list supplies
+conversation membership but does not itself contain engine fields.
+
+The common observation window is **2026-11-09 00:00 through 2026-11-12
+06:10 UTC**. Every retained seat record overlapping that window is included.
+This includes seats that received no wake. There are 56 recorded
+conversations in 12 projects: 29 Claude and 27 Codex, covering 57 ownership
+intervals. One C conversation was designated twice and is counted once;
+each wake still joins to the epoch in force at its time. Fifty-four transcripts
+are readable; 46 contain sampled wakes. Eight readable conversations have
+no wake in the window; two Claude transcripts are unavailable.
+
+Codex discovery covers the default sessions root and managed account session
+roots, including retained roots described by
+`src/lib/accounts/codex.ts:546` and registered by
+`src/lib/scanner/roots.ts:80`. The default root contains a November 11 Codex
+seat in project D; the managed roots contain the earlier seats. A directory
+restricted to Claude projects misses both. No additional engine occurs in
+the overlapping seat records.
+
+Engine attribution comes from the seat record and the transcript format,
+checked against `conversation_messages`. Journal wake rows join to those
+records by project and seat epoch. The journal examples examined do not
+carry a separate top-level engine field; worker stage engine fields describe
+workers and cannot establish the seat's engine. Error rows with no seat epoch
+remain unattributed.
+
+### 1.2 Coverage by project and engine
+
+Project letters identify kinds of cases without publishing project names.
+A is this repository. Counts include every readable wake in the common
+window, including catch-up wakes and both autonomy-overlay wordings.
+
+| Project | Claude conversations / waking / wakes | Codex conversations / waking / wakes | Wake bounds, UTC |
+| --- | --- | --- | --- |
+| A | 10 / 10 / 295 | 8 / 7 / 91 | Codex: 11-09 00:09–11:26; Claude: 11-09 11:38–11-12 06:05 |
+| B | 6 / 6 / 114 | 2 / 0 / 0 | Claude: 11-10 20:46–11-11 20:17 |
+| C | 2 / 2 / 184 | 0 / 0 / 0 | Claude: 11-09 11:08–11-11 06:59 |
+| D | 4 / 4 / 79 | 11 / 11 / 37 | Codex: 11-09 07:01–11-11 10:33; Claude: 11-09 14:58–11-12 00:52 |
+| E | 2 / 1 / 6 | 4 / 4 / 38 | Codex: 11-09 00:02–13:12; Claude: 11-09 13:45–17:05 |
+| F | 1 / unavailable / unknown | 0 / 0 / 0 | Transcript unavailable |
+| G | 1 / 0 / 0 | 0 / 0 / 0 | Readable; no sampled wake |
+| H | 1 / 0 / 0 | 0 / 0 / 0 | Readable; no sampled wake |
+| I | 0 / 0 / 0 | 1 / 0 / 0 | Readable; no sampled wake |
+| J | 1 / 0 / 0 | 0 / 0 / 0 | Readable; no sampled wake |
+| K | 0 / 0 / 0 | 1 / 1 / 7 | Codex: 11-09 10:00–17:00 |
+| L | 1 / unavailable / unknown | 0 / 0 / 0 | Transcript unavailable |
+| **Total** | **29 / 23 / 678 observed** | **27 / 23 / 173 observed** | **851 observed wakes** |
+
+These are bounded historical observations. Zero sampled wakes does not prove
+that a seat was absent, healthy or idle throughout its lifetime. The missing
+F and L transcripts prevent a complete transcript census for those two seats;
+the retained recent journals contain quiet/error checks rather than landed
+wakes for them. Their earlier behaviour remains unmeasured.
+
+All 295 A/Claude wakes and all 91 A/Codex wakes contain an autonomy overlay.
+B/Claude has 38 of 114. The other sampled groups have none. Matching only the
+short unchanged-overlay wording caused the earlier undercount.
+
+### 1.3 Primary records and limits
+
+| Source | Use and bound |
+| --- | --- |
+| Native Claude and Codex transcripts | Wake payload, complete call arguments, call results, assistant replies and usage records; only records before the common cutoff |
+| `conversation_messages` and `search_transcripts` | Opened the earlier author and check conclusions, cross-checked both native formats, the known case and Codex examples |
+| `search_memory` | Project and cross-project searches for earlier idle/recovery explanations; no earlier engine-complete analysis found |
+| Seat store | Census, ownership intervals and engine attribution; read on the correction pass |
+| MCP receipt store | Read-only lookup by original tool/request key when Codex printed a projection instead of the full result; 150 supplemental envelopes, including reads |
+| Delivery-progress store | Original operation/key and timestamped engine-echo/delivery records; later reads credit only effects dated before the common cutoff |
+| Per-project tick journal | Check, wake and landing evidence; bounded rings retain 500 records, whose oldest timestamp moves as new checks arrive |
+| Source at the stated revision | Existing admission, reminder, hold, retry and landing behaviour |
+
+No command from a transcript was executed. The parser reads JSON and
+statically inspects JavaScript call arguments; it never evaluates transcript
+code. Analysis scripts run in stage scratch. Live stores are opened read-only;
+no settings, tasks, conversations or services are changed.
+
+### 1.4 Per-wake classification
+
+A wake starts with the seat-tick header, after removing the transport marker.
+Both header forms occur: a separate `Wake reasons` line and reasons following
+a semicolon on the first line. Calls and replies belong to that wake until
+the next user message, excluding tool-result envelopes. Both engines follow
+this boundary. Duplicate usage envelopes are deduplicated independently.
+
+An **owed wake** carries any of `unstarted-task`, `overdue-task`, `worker-ask`,
+`stalled`, `own-lane-settled`, `unmerged-pr`, `permission-request` or
+`autonomy-idle`. An interval or event-only wake is neutral for the denominator.
+
+The outcome partition is applied in this order:
+
+1. **Work transition:** a successfully admitted lane or worker; an applied
+   stage, decision, publication or merge transition; a task newly done or
+   assigned, a hold lifted, or an unheld task created; a delivered worker
+   instruction; a confirmed requested delivery/deploy; or a successful manual
+   Git/forge repair. A reserved worker launch is an admission, with execution
+   still pending. A transition measures recorded action. Completion and compliance with the
+   mandate require separate assessment.
+2. **Unknown:** no confirmed transition, with an unresolved potentially
+   consequential write/send. Queued acceptance and timeouts alone earn no
+   progress credit. Original-key delivery records can resolve a send even
+   when its first reply was lost. Unresolved operations stay unknown.
+3. **Hold only / date only / mixed parking:** task holds and/or due-date
+   changes, allowing accompanying task notes, reports and decision-log notes.
+   A published form, lane closure or other separate state write instead puts
+   the wake in bookkeeping.
+4. **Other bookkeeping:** successful forms, escalation, lane closure,
+   annotations, reports or settings notes, with no work transition.
+5. **No write:** reads and reply, including refused mutations and reporting
+   calls that explicitly stored nothing.
+
+Refused actions, empty `changedFields`, and replayed acknowledgements earn no
+new transition. Full arguments identify targets; truncation is permitted only
+for displayed excerpts. Shell reads such as PR checks or log tails earn no
+write. A successful check rerun is a manual repair.
+
+The aggregate table asks whether **any work transition** occurred in a wake
+that carried owed work. It is an upper bound on responsiveness to the listed
+items: action elsewhere can coexist with neglect of the wake's agenda.
+Section 2.3 separately matches visible item IDs to actual structured write
+targets. Missing/truncated bullets and work mentioned only in prose receive
+no invented item-level attribution.
+
+A **confirmed no-transition run** contains consecutive owed wakes classified
+as parking, bookkeeping or no-write. An advance or unknown outcome on any
+wake breaks it, including a neutral wake; a neutral wake without either
+neither extends nor breaks it. Duration is last minus first wake timestamp.
+Runs describe wake handling and can cross rotations or intervening operator
+messages. They do not establish inactivity between wakes, a blocked item's
+invalidity, or operator absence elsewhere.
+
+## 2. Results and engine comparison
+
+### 2.1 Outcomes on owed wakes
+
+| Project / engine | Owed | Work transition | Hold only | Date only | Mixed parking | Other bookkeeping | No write | Unknown |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| A / Claude | 265 | 110 | 17 | 20 | 1 | 38 | 79 | 0 |
+| A / Codex | 91 | 10 | 1 | 0 | 0 | 43 | 35 | 2 |
+| B / Claude | 47 | 33 | 2 | 0 | 0 | 3 | 8 | 1 |
+| C / Claude | 23 | 9 | 0 | 0 | 0 | 9 | 5 | 0 |
+| D / Claude | 52 | 25 | 5 | 1 | 0 | 13 | 5 | 3 |
+| D / Codex | 29 | 22 | 0 | 0 | 0 | 2 | 5 | 0 |
+| E / Claude | 6 | 4 | 0 | 0 | 1 | 1 | 0 | 0 |
+| E / Codex | 9 | 2 | 1 | 0 | 0 | 3 | 0 | 3 |
+| K / Codex | 6 | 5 | 0 | 0 | 0 | 1 | 0 | 0 |
+| **Claude total** | **393** | **181** | **24** | **21** | **2** | **64** | **97** | **4** |
+| **Codex total** | **135** | **39** | **2** | **0** | **0** | **49** | **40** | **5** |
+
+Every row partitions its denominator. Of 528 owed wakes across both engines,
+220 show a transition, 299 show none, and nine remain unknown. Unknowns are
+excluded from confirmed no-transition runs. Some initially uncertain sends
+were delivered according to their original operation records; those earn
+credit. Others have no such evidence. Repeated attempts under one original
+key can leave more than one wake unknown without proving multiple deliveries.
+
+The distinction between projects is substantial. In D, Codex transitions on
+22 of 29 owed wakes, frequently delivering a bounded instruction to an
+existing reader or worker. In A, it transitions on 10 of 91. D provides a
+counterexample to interpreting A as an engine-wide inability to act.
+
+### 2.2 Confirmed runs of four or more owed wakes
+
+| Project / engine | Runs | Wakes in runs | Total elapsed hours | Longest |
+| --- | ---: | ---: | ---: | --- |
+| A / Claude | 11 | 103 | 20.03 | 49 wakes, 10 h 10 min |
+| A / Codex | 3 | 72 | 7.68 | 38 wakes, 4 h 22 min |
+| B / Claude | 1 | 5 | 1.09 | 11-11 03:38–04:43 |
+| D / Claude | 1 | 4 | 0.62 | 11-10 20:59–21:36 |
+| Other measured groups | 0 | 0 | 0 | No qualifying confirmed run |
+
+A/Codex runs, all on November 9:
+
+| Start–end, UTC | Owed wakes | Outcome mix |
+| --- | ---: | --- |
+| 00:09–04:31 | 38 | 24 bookkeeping, 14 no-write |
+| 04:51–07:27 | 28 | 8 bookkeeping, 20 no-write |
+| 09:48–10:30 | 6 | 6 bookkeeping |
+
+The first two runs cross seat rotations. The wakes keep listing exhausted
+review budgets, uncertain previous launches and paused lanes. The seat rereads
+primary history and records why it retains each blocker. These reads can be
+necessary for a safe recovery. Repeating them without resolving the blocker,
+choosing another authorized item or changing the tick reproduces the idle
+failure. No Codex turn in A changes cadence during this window.
+
+A/Claude runs: 11-09 21:12–22:42 (9); 11-09 23:05–11-10 09:15 (49);
+11-10 09:52–10:40 (5), 12:57–13:45 (4), 14:10–14:35 (4),
+14:55–16:10 (4); 11-11 05:03–05:50 (5), 06:48–07:42 (6),
+22:25–23:32 (6); 11-12 03:20–04:22 (5), 04:47–06:05 (6).
+A successful repair on a neutral wake breaks a run; this corrects the earlier
+method that ignored movement on neutral wakes.
+
+For cost context, the A/Codex 38-wake run contains 208 distinct cumulative
+usage increments, 70,074 output tokens and 31,870,916 replayed input tokens.
+The A/Claude 49-wake run contains 79 model requests, 19,007 output tokens and
+22,492,069 input tokens. Codex usage increments come from changes in the
+provider cumulative totals; duplicate snapshots add nothing. Claude requests
+are deduplicated by model message ID. Input includes cache reads; Codex cached
+input is already part of input and is not added again. These are native usage
+observations, without a monetary-cost or cross-engine efficiency claim.
+
+Across A, confirmed no-transition owed wakes account for 390 Claude requests
+and 250,304 output tokens, and 437 Codex usage increments and 155,844 output
+tokens. Unknown wakes are excluded from those costs.
+
+### 2.3 What happened to the visible agenda items
+
+The following table counts complete `[task]` and `[ask]` bullets by their
+structured target, retaining full call arguments and successful effects.
+Other includes notes, closure or escalation. A successful action on an
+unrelated item earns no item-level credit. Delivery instructions lacking a
+provable item link likewise receive no direct target attribution.
+
+| Project / engine / item | Listings | Transition targeting item | Hold | Date | Other targeted write | Unknown | No targeted write |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| A / Claude / task | 529 | 15 | 38 | 59 | 2 | 1 | 414 |
+| A / Claude / ask | 149 | 25 | 0 | 0 | 16 | 0 | 108 |
+| A / Codex / ask | 100 | 0 | 0 | 0 | 0 | 0 | 100 |
+| B / Claude / task | 25 | 2 | 18 | 2 | 0 | 0 | 3 |
+| B / Claude / ask | 24 | 12 | 0 | 0 | 4 | 0 | 8 |
+| C / Claude / ask | 3 | 2 | 0 | 0 | 0 | 0 | 1 |
+| D / Claude / task | 35 | 5 | 14 | 16 | 0 | 0 | 0 |
+| D / Claude / ask | 16 | 2 | 0 | 0 | 1 | 0 | 13 |
+| D / Codex / task | 31 | 1 | 4 | 1 | 2 | 0 | 23 |
+| D / Codex / ask | 7 | 0 | 0 | 0 | 1 | 0 | 6 |
+| E / Claude / task | 13 | 1 | 11 | 1 | 0 | 0 | 0 |
+| E / Claude / ask | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
+| E / Codex / task | 6 | 0 | 5 | 0 | 1 | 0 | 0 |
+| E / Codex / ask | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| K / Codex / task | 4 | 3 | 1 | 0 | 0 | 0 | 0 |
+| K / Codex / ask | 2 | 1 | 0 | 0 | 0 | 0 | 1 |
+
+This narrower matching replaces the earlier substring-based item totals.
+The 149 A/Claude asks include every complete visible ask bullet, including
+catch-up payloads. The table's units are listings, so a repeated item appears
+more than once. A/Codex has unstarted work in 30 wakes' reasons but no complete
+`[task]` bullets; its task response rate cannot be inferred from zero bullets.
+
+A/Claude lists 55 distinct asks, of which 17 occur on at least three wakes;
+the maximum is 15 listings. A/Codex lists 20, of which 13 occur at least
+three times; the maximum is 13. Repeated asks and unstarted-work reasons are
+shared across engines even when their rendered item mixes differ.
+
+### 2.4 Where the engines differ in this sample
+
+| Behaviour | Claude | Codex |
 | --- | --- | --- |
-| Seat-tick journal, per-project ring (`seat-tick/runs.ndjson.projects/` under the state directory) | Every check: verdict, wake reasons, item count, delivery outcome, a bounded detail line | 500 checks per project; for this project that reached back to 2026-11-11 06:20Z |
-| Seat transcripts, read with a parser that executes nothing they contain, cross-checked with `conversation_messages` | Each wake's full text, every tool call the seat made before the next message, its replies, provider-reported token usage | Listed per project below |
-| `get_orchestrator`, `seat_tick_settings` (read), `list_pipelines`, `search_transcripts`, `search_memory` | Seat lineage, autonomy episode, tick settings and instruction lines, open lanes | Read on 2026-11-12 06:10–06:40Z |
-| Source at `dfc99dce25` | How reasons, reminders, holds and the retry guard work | — |
+| Parking in A | 17 hold-only, 20 date-only and one mixed owed wake | One hold-only owed wake; repeated reads and annotations dominate |
+| Repeated replies | A has 19 seat-authored replies repeated across three exact texts; three provider quota notices are excluded | No final reply repeats three times in any sampled group; changing wording still accompanies long unchanged runs |
+| Repeated asks | A has 17 asks listed at least three times | A has 13; none of its 100 complete ask listings receives a direct targeted write in that wake |
+| Recovery uncertainty | Some sends begin uncertain; original-key delivery records resolve several | Particularly visible in D; recovering those deliveries changes many apparent idle wakes into confirmed instructions |
+| Mandate overreach | Successor work rejected by the operator; direct Git/forge repairs from the seat shell | Added an unnecessary login prerequisite in K, then removed it |
+| Cadence in A | No cadence change across 295 wakes; two monitor-note edits, plus decision-log writes | No cadence change across 91 wakes; decision-log writes did not slow the tick |
 
-The parser scripts and their intermediate tables stayed in the stage's scratch
-directory; nothing was committed beside this document. Section 8 says how to
-rebuild them.
+An exact-text repetition detector would miss the Codex A runs. A detector
+based on consequential state transitions covers both. A rule that treats all
+holds as wrong would also misclassify legitimate external dependencies in
+other projects.
 
-### Sample
+## 3. The known case: November 12, 04:40–06:05 UTC
 
-| Project | Seats (conversations) | Wakes | Window (UTC) |
+### 3.1 Per-wake evidence
+
+Full autonomy was active, with a worker limit of 30. The directive lanes from
+the preceding evening had merged by 04:22, apart from one parked on an
+operator question. No other lane was running in this project during the
+known idle window. The previous board-maintenance report counted 196 open
+tasks, including 115 inbox tasks. A standing instruction visible in the wakes
+called for filing and fixing accepted defects within the available capacity.
+
+| Wake, UTC | Listed | Recorded outcome | Progress on listed work |
 | --- | --- | --- | --- |
-| A, this project | 10 consecutive seats | 295 | 2026-11-09 11:38 → 2026-11-12 06:05 |
-| B | 6 consecutive seats | 114 | 2026-11-10 20:46 → 2026-11-11 20:17 |
-| C | 1 seat | 112 | 2026-11-10 06:26 → 2026-11-11 06:59 |
-| D | 4 consecutive seats | 79 | 2026-11-09 14:58 → 2026-11-12 00:52 |
+| 04:35, preceding boundary | Three unstarted tasks, two asks | Closed an already merged lane and marked its task done | Completion acknowledged; three unstarted tasks untouched |
+| 04:47 | Research-lane ask, its thirteenth listing | Escalated to the operator | Handed over |
+| 05:02 | Interval, two old-lane signals | Reads/reply | Neutral |
+| 05:15 | One unstarted task, waiting 993 hours | One hold | None |
+| 05:27 | Two unstarted tasks, retirement signal | Two holds | None |
+| 05:40 | One unstarted task | One hold | None |
+| 05:52 | Four unstarted tasks, repeated signal | Four holds and a new held defect task | None |
+| 06:05 | One unstarted task | One hold | None |
 
-B, C and D are the other projects whose journals held wakes in the last
-24 hours. Every seat in the sample ran on the Claude engine; no Codex seat
-was active in these windows, so Codex seats are unmeasured (section 7).
-Project A had full autonomy on throughout (285 of its 295 wakes
-carried the overlay); B had it for 35 of 114 wakes, until it ended on 11-11;
-C and D had none.
+Nine existing tasks and one new task were held. The existing tasks shared a
+reason that treated an earlier pause as a blanket ban on new lanes and dated
+it November 11. All ten lacked an expiry. The task holds were authored by the
+seat, despite their operator-wait kind; that kind does not establish that the
+operator set each hold.
 
-### Definitions
+The seven wakes from 04:47 through 06:05 contain 14 model requests, 5,504
+output tokens and 4,339,994 input tokens. Measured from each wake timestamp
+to its last assistant record, their durations are 9.073, 2.652, 7.560,
+10.336, 8.540, 21.915 and 7.480 seconds: **median 8.540 seconds**.
+Around 06:07 the operator intervened; at 06:08 the seat lifted four holds and
+created six lanes. Those response timestamps explain the intervention and
+are outside the measured idle window.
 
-- **Owed wake**: a wake whose reasons include `unstarted-task`,
-  `overdue-task`, `worker-ask`, `stalled`, `own-lane-settled`, `unmerged-pr`,
-  `permission-request` or `autonomy-idle`. A wake with only `interval`,
-  `lane-event` or a signal is neutral.
-- **Outcome of a wake**, from the seat's tool calls before the next message:
-  - *moved work*: started or spawned a lane, moved a stage (retry, resume,
-    override, add-stage, merge), answered a worker, settled a form, deployed,
-    marked a task done or assigned, lifted a hold, or created a task without a
-    hold;
-  - *hand repair*: a git or GitHub write from the seat's own shell;
-  - *hold only*: the state writes were holds (or a new task created on hold),
-    with notes and reports beside them;
-  - *date only*: the state writes were due-date moves;
-  - *other bookkeeping*: notes, reports, decision-log entries, closing lanes,
-    escalating to the operator;
-  - *no write*: reads and a reply.
-- **Idle run**: consecutive owed wakes with neither moved work nor a hand
-  repair. A neutral wake neither breaks nor extends a run.
-- **Item response**: for each `[task]` or `[ask]` line in a wake, the calls in
-  that turn that name the item's id.
+### 3.2 How the interpretation spread
 
-Limits of the method: the classes record what the seat did, never whether it
-was the right call; a hold can be correct (section 2.4, P1, shows correct
-ones).
-Token counts are per model request, deduplicated by message id; input counts
-include cache reads and measure the context replayed per request.
+On November 9 the seat launched nine successor lanes; the operator rejected
+that expansion around 21:07. A subsequent form answer paused successor work
+with named exceptions and requested watch/report behaviour while the
+operator drove their own tasks. The persisted pause reason retained the time
+of day without the date. The November 10 successor treated a brief request
+to continue as insufficient to reverse the form answer.
 
-## 2. Results
+By November 12 the seat read that earlier answer as a project-wide ban on
+new lanes, including accepted unstarted tasks, and misdated it November 11.
+The date loss is a plausible contributor; the records establish the missing
+date and later misdating, without proving the model's internal cause.
+A prose instruction passed through rotations without a machine-checkable
+scope or release condition.
 
-### 2.1 How often owed wakes moved nothing
+The 49-wake overnight run establishes silence in A until the operator's
+09:06 answer. It establishes no wider operator inactivity: other project
+transcripts contain operator messages and decisions during that run.
+Whether the earlier activity-qualified instruction still applied therefore
+remained ambiguous. Waiting at full cadence was observable independently.
 
-| Project | Owed wakes | Moved work or hand repair | Hold only | Date only | Other bookkeeping | No write | Idle runs ≥4 (wakes, hours) |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| A | 265 | 107 (40%) | 25 | 20 | 53 | 60 | 12 (109 wakes, 21.5 h) |
-| B | 47 | 28 (60%) | 2 | 0 | 9 | 8 | 1 (5 wakes, 1.1 h) |
-| C | 15 | 8 (53%) | 0 | 0 | 7 | 0 | 0 |
-| D | 52 | 25 (48%) | 10 | 1 | 14 | 2 | 1 (4 wakes, 0.6 h) |
+### 3.3 Existing code that permits the loop
 
-In project A the owed wakes that moved nothing took 410 of the seat's 1,387
-model requests (30%) and 253 thousand of its 1.22 million output tokens
-(21%).
+- `src/lib/orchestrator/prompt.ts:227` directs the seat to hold items it
+  cannot complete, and describes the tick controls. The record shows two
+  monitor-note changes during A/Claude, at 11-10 13:19 and 22:47; neither
+  changes cadence. The latter shared a call with a decision-log write.
+- `src/lib/monitor/seatTickReminders.ts:32` treats a noted, unexpired or
+  open-ended hold as a blocker. Its unstarted filter at line 117 then omits
+  the task. Holding each fresh page removes those tasks from future reminders.
+- `src/lib/monitor/seatTickSources.ts:1749` includes hold and update time in
+  the board fingerprint. `src/lib/monitor/seatTick.ts:1495` allows unseen
+  pages through the retry guard, and line 1496 permits worker asks at their
+  interval. Repeated parking and changing pages can keep producing wakes.
+- `src/lib/monitor/seatTickReminders.ts:139` renders a pause reason without
+  its persisted pause date. The later seat cannot date that reason from the
+  reminder line alone.
 
-Item responses in project A:
+## 4. Patterns, including the opposite failure
 
-| Item kind | Listings | Started or closed | Held | Due date moved | Note only | Untouched |
-| --- | --- | --- | --- | --- | --- | --- |
-| Unstarted accepted task | 342 | 1 | 12 | 2 | 1 | 326 |
-| Overdue task | 187 | 10 | 29 | 54 | 6 | 88 |
-| Ask waiting on the seat | 146 | 38 (29 acted, 9 closed) | — | — | — | 103 (5 more escalated) |
+**Parking instead of starting.** A/Claude has 38 owed wakes whose only
+consequential changes are task parking: 17 holds, 20 dates, one mixed.
+A/Codex has one such wake. The Codex A failure usually preserves an existing
+blocker and appends a fresh explanation instead of creating a new hold.
+A hold can be warranted: a missing external reply, an explicit operator
+pause, or a delivery whose original outcome is still unknown requires a
+recorded stop. The failure is repeatedly waking for that same unresolved
+condition without a next action or an adjusted schedule.
 
-### 2.2 Idle runs in project A
+**Status as a substitute for action.** Claude A has verbatim repetitions.
+Codex A varies its final wording while repeatedly reporting unchanged board
+counts, retained blockers and no new launches. Its first run spends 38 wakes
+rereading those states. Text similarity is useful audit evidence but is an
+incomplete production signal.
 
-| Start → end (UTC) | Owed wakes | Outcomes | Reasons carried |
-| --- | --- | --- | --- |
-| 11-09 20:31 → 22:42 | 10 | 6 bookkeeping, 3 no write, 1 escalation | overdue, own lane settled, unstarted, ask |
-| 11-09 23:05 → 11-10 09:15 | **49** | 33 no write, 16 bookkeeping | overdue, ask, stalled, unstarted |
-| 11-10 09:52 → 10:40 | 5 | mixed, 1 hold | unstarted, overdue |
-| 11-10 12:57 → 16:10 | 3 runs of 4 | 5 of 12 hold only, rest no write or bookkeeping | unstarted, ask, stalled |
-| 11-11 05:03 → 09:10 | 3 runs (5, 6, 4) | 7 hold only, 6 date only | overdue, unstarted |
-| 11-11 22:25 → 23:40 | 7 | 4 no write, 2 bookkeeping, 1 escalation | stalled, unstarted, ask |
-| 11-12 03:20 → 04:22 | 5 | 1 date only, rest no write or report | lane events, unstarted, ask |
-| **11-12 04:47 → 06:05** | **6** | 1 escalation, 5 hold only | ask, unstarted |
+**The same ask returns.** Both engines repeatedly receive parked asks.
+One Claude ask appears 15 times over approximately 13.6 hours, including
+three listings after its PR had merged through a batch. The research ask
+appears 13 times over approximately 5.7 hours before escalation at 04:47.
+Codex's repeated asks concern retained review and uncertain-launch blockers.
+Retry-guard exemption makes recurrence possible; it proves no fault in a
+particular hold. The seat still owes either a supported next action or an
+explicit waiting policy.
 
-The 49-wake run lasted 10 hours 10 minutes overnight and cost 79 model
-requests, 19 thousand output tokens and 22.5 million input tokens. It ended
-when the operator answered a pending form at 09:06Z. The runs in B and D were
-short and had concrete waits behind them (section 2.4, P1).
+**An instruction widens across rotations.** The known Claude case turns a
+situational successor-lane pause into a general prohibition. Codex A also
+carries earlier workspace and recovery restrictions through rotations;
+this audit establishes repeated blocking decisions, without enough evidence
+to declare those original restrictions revoked. The shared design need is
+an instruction whose scope and release condition survive rotation.
 
-### 2.3 The known case: 2026-11-12 04:40–06:05, project A
+**Waiting leaves cadence unchanged.** Neither engine's A wakes change the
+tick interval or disable it. The existing retry fingerprint measures board
+changes, including holds and annotations, rather than advancement of the
+work presented by a wake.
 
-**Context at the time.** Full autonomy had been on since 2026-10-24 with no
-end time. The tick checked every two and a half minutes and could wake the
-seat every ten. The worker limit was 30. The three lanes of the operator's
-directive from 22:20Z the evening before had merged by 04:22, and the only
-other lane of that directive sat parked on a question for the operator. The
-six lanes the seat started after the operator's message were all created at
-06:08Z (`list_pipelines`), so between 04:47 and 06:05 no lane of this project
-was running apart from that parked one. The board maintenance report delivered
-to the seat at 22:07Z counted 196 open tasks, 115 of them in the inbox and 21
-assigned. A standing tick instruction from 2026-10-19, shown on every wake,
-told the seat to file and fix every bug and unfinished item, first up to 15
-lanes and up to 30 if the load held.
+**Old events return.** Fourteen Claude A replies between 11-09 12:34 and
+11-11 13:55 identify already handled lane events. Codex E also receives
+signals for historical lanes whose PRs are already merged. A prior issue,
+#1285, concerns a historical terminal-event backlog. This report has not
+proved that the two engines' examples share one cause.
 
-| Wake (UTC) | Listed | What the seat changed | Advanced? |
-| --- | --- | --- | --- |
-| 04:35 | 3 unstarted accepted tasks, 2 asks | Closed a lane whose PR had already merged in a batch; marked its task done | Housekeeping only; the 3 tasks untouched, reply says no new lane without a request |
-| 04:47 | 1 ask (a research lane's question, its 13th listing since 23:07) | Escalated it to the operator's Decisions list | Handed to the operator |
-| 05:02 | Interval: 2 signals about old lanes | Nothing | Neutral |
-| 05:15 | 1 unstarted task, waiting 993 h | Hold | No |
-| 05:27 | 2 unstarted tasks, 1 signal (curator host retirement failed) | 2 holds | No |
-| 05:40 | 1 unstarted task | Hold | No |
-| 05:52 | 4 unstarted tasks, same signal again | 4 holds; filed the signal as a new task, created on hold | No |
-| 06:05 | 1 unstarted task | Hold | No |
+**The opposite failure remains real.** Counting transitions must never
+reward violating the operator's mandate:
 
-Nine existing tasks went on hold and one new defect task was created on hold.
-The nine holds on existing tasks carried one note: new lanes without a request
-had been paused since 21:07 on 11-11, and the task would start when the
-operator said so. The new task's hold said its lane would start once the
-operator agreed. None carried an `until`. The seven wakes from 04:47 cost 14 model requests, 5.5
-thousand output tokens and 4.3 million input tokens; each turn took a median
-of 37 seconds. At 06:07 the operator wrote; within two minutes the seat lifted
-four holds, two of them set in the hour before, and started six lanes.
-
-**How the seat got there.** The chain runs back two and a half days and
-across eight seat rotations.
-
-1. On 2026-11-09 the seat launched nine successor lanes nobody had asked for.
-   At 21:07Z the operator objected, and at 21:09Z answered the seat's form:
-   pause those lanes except three named workstreams and start nothing new,
-   and, *while the operator was driving their own tasks*, only watch and
-   report.
-2. The seat paused the lanes with a reason that began with the operator and
-   the time of day, 21:07Z. The reason text carries no date, and the pause
-   reminder line puts it into wakes with no date beside it
-   (`src/lib/monitor/seatTickReminders.ts:139`).
-3. On 2026-11-10 the operator asked the seat then in charge, in one word, to
-   continue. That seat judged that one word did not lift a form answer, and
-   kept the rest paused.
-4. The seat in charge on 2026-11-12 dated the pause 21:07 on 11-11 in its hold
-   notes, two days later than it was. The wakes it read showed the reason with
-   no date; the misdating is inferred from that. It widened a pause on those
-   successor lanes, given while the operator drove their own work, into a ban
-   on any new lane without a request, and applied that reading with autonomy
-   on and the 10-19 standing instruction in view. A learned seat rule written
-   from the 11-09 correction carried the same situational condition in prose,
-   with nothing a later seat could check to tell whether it still held.
-5. The mandate names a hold as the way to stop on an item: "If an item cannot
-   be done, set its task's hold with the reason: that is the stop, and the
-   only one" (`src/lib/orchestrator/prompt.ts:227`). A hold with a note and no
-   `until` removes the task from unstarted reminders for good
-   (`taskHasBlocker`, `src/lib/monitor/seatTickReminders.ts:32`). Each wake
-   therefore surfaced the next tasks whose reminders had come due, and the
-   seat held those too.
-6. The retry guard, which stops re-sending a reason after two wakes that
-   changed nothing (`retryGuard: 2`, `src/lib/monitor/seatTick.ts:147`), could
-   not engage. The guard's fingerprint includes each task's `hold` and
-   `updatedAt` (`src/lib/monitor/seatTickSources.ts:1749`), so a hold reads as
-   board movement. Every wake also carried an item never shown before, which
-   bypasses the guard outright (`unseenPage`,
-   `src/lib/monitor/seatTick.ts:1495`).
-7. The seat never touched the tick's cadence. In 67 hours of project A the
-   seats' only change to the tick settings, apart from autonomy decision
-   entries, edited a line of the monitor note; no seat slowed or stopped
-   wakes.
-
-The operator found the run by reading the chat.
-
-### 2.4 Patterns that stand in for work
-
-**P1. Hold-only and date-only answers to unstarted and overdue wakes.**
-Project A: 25 owed wakes whose only state writes were holds and 20 whose only
-state writes were due-date moves; 41 task listings answered by a hold and 56
-by a date move. The known case is the clearest run. On 11-10 a different seat
-held eleven inbox tasks as waiting for the queue over several overdue wakes,
-then at 21:40Z lifted all eleven, saying it had recalled an earlier correction
-(which it dated 11-06) that queued inbox work stays in the inbox. Projects B
-and D held tasks too, and their notes named concrete waits: an operator
-decision already recorded, a ready PR waiting for the operator's merge word (B
-merges only on the operator's word), replies from named outside people with a
-date to look again. In the records the two differ in shape. The known case's
-holds were set by the seat (`TaskHold.by: "agent"`, with its conversation id)
-within a minute of the wake that listed each task, had no `until`, and nine
-shared one note. D's holds mostly carried a recheck date in the note; B's were
-set in one board pass from varied notes.
-
-**P2. Repeated status replies.** Project A: 51 replies open by saying nothing
-changed, 66 state that the seat starts nothing itself, and 22 re-list the same
-pending operator forms. Nineteen replies are verbatim repeats of three texts;
-the most common, given twelve times in the 49-wake overnight run, says that
-the same 14 lanes wait for a decision, nothing runs and the seat starts
-nothing. Projects B, C and D had no reply repeated three times.
-
-**P3. The same parked ask re-listed.** Project A listed 55 distinct asks;
-17 appeared on three or more wakes. The longest: an ask about a lane whose
-merge had stopped, listed 15 times over 13.6 hours, the last three after its
-PR had merged through a merge batch, until the seat closed the lane at
-04:35Z. Next: the research lane's question, listed 13 times over 5.7 hours
-until the seat escalated it at 04:47Z. A `worker-ask` reason is exempt from
-the retry guard whenever the wake interval is due
-(`src/lib/monitor/seatTick.ts:1496`), so an ask the seat cannot or will not
-settle comes back every interval. Overnight on 11-09/10 the delivery-lane asks
-came back that way on 28 of the 49 wakes while the seat waited on the
-operator's form.
-
-**P4. An operator instruction read wider than its scope.** Two instances,
-both from the 11-09 21:07Z answer. Overnight 11-09/10 the seat followed the
-watch-and-report choice to the letter for 49 wakes; the choice was
-framed by the operator's own activity, and the operator was not active
-overnight. On 11-12 the same answer, misdated and widened, became a ban on
-any new lane (section 2.3). The second instance was a misreading. The first
-was a literal reading at a cost the instruction never asked for. Both show
-the same gap: the recorded instruction had no end the seat could observe.
-
-**P5. Waiting without slowing the tick.** Whenever a seat decided to wait for
-the operator (both runs above), it kept the ten-minute cadence. The mandate
-tells it `seat_tick_settings` can turn the tick down or off with a reason, and
-the operator's 11-12 message names that as one of the two acceptable choices.
-Zero cadence changes in 67 hours.
-
-**P6. Old lane events shown again after a rotation (tick side).** Fourteen
-replies of project A between 11-09 12:34 and 11-11 13:55 say the lane events
-in that wake were old, some merged days earlier; several add that they had
-been shown again to a newly rotated seat.
-The cause was not traced here. #1285 tracked a historical terminal-event
-backlog and is the nearest earlier report.
-
-**Adjacent: seats that cannot run a turn.** Three wakes in project A were
-answered by the model's usage-limit message (11-10 17:01, 11-11 00:31 and
-20:29Z); after the last, that seat had no further turn before it was replaced
-at 22:07Z. In project B the checks began failing with "seat quota control
-history still being verified" at 11-11 10:33Z, and since 19:58Z 210 of 215
-checks have failed or been refused; in project D all 86 checks since 11-12
-00:54Z have failed the same way. The seat hosts of B and C have been gone for
-about 10 and 16 hours. Those seats get no wakes at all, which is the
-silent-tick class of #2695 and #3905. They are noted here because nothing
-advances there either, and the detector in section 4.1 reports them too.
-
-### 2.5 The opposite failure: acting outside the mandate
-
-| Date (UTC) | What the seat did | Mandate or overlay text it crosses |
+| Kind and time, UTC | Observation | Assessment |
 | --- | --- | --- |
-| 11-09, during the day | Launched nine successor lanes nobody asked for | "never start work nobody asked for" (`prompt.ts:529`); the autonomy overlay's "Resolve parked lanes; keep work moving" (`src/lib/monitor/autonomy.ts:101`) reads the other way |
-| 11-09 → 11-12 | From its own shell: closed or reopened PRs in 9 calls (two close-and-reopen to re-run checks, one close at the operator's request), wrote PR titles, bodies or draft state in 8 calls, retargeted one PR's base | "Act only through its MCP tools … with no direct process or runtime manipulation" |
-| 11-11 19:17 | Wrote a backup ref into the shared checkout | Same |
-| 11-12 01:45 | Merged current main into a lane's PR branch in a temporary worktree and pushed it | Same |
+| A / Claude, 11-09 daytime | Nine successor lanes, subsequently rejected by the operator | Scope expansion; the later correction then contributed to excessive waiting |
+| A / Claude, 11-09 through 11-12 | Ten successful shell call invocations closing/reopening PRs, including paired close/reopen operations; other shell edits to PR metadata and successful check reruns | Crosses the seat's MCP-only operating boundary; ten counts invocations, not individual close/reopen operations |
+| A / Claude, 11-11 19:17 | Shared-checkout backup ref written | Direct Git mutation outside that boundary |
+| A / Claude, 11-12 01:45 | Merged main into a lane branch in a temporary checkout, then submitted its push | Successful local merge is a repair; a background push submission alone proves no remote publication |
+| K / Codex, 11-09 11:00–11:31 | Added an authentication-only prerequisite to an authorized desktop-login stage; the worker showed that prerequisite could not precede the real connection; the seat removed it on the next ask wake | Extra requirement blocked the requested action; recorded movement includes imposing and undoing it |
 
-Several shell repairs follow procedures recorded in the seat engine's project
-memory (re-run a check by reopening the PR; re-merge main in a temporary
-worktree, since the forge's update-branch is ruled out). The mandate does
-not mention those procedures, so the seat follows two texts that disagree.
-The repairs
-between 01:32 and 02:00Z on 11-12 left no board note or autonomy decision in
-their turns. At 02:17Z the seat filed the defect they uncovered (a lane PR
-opened against an old lane branch) as a task created on hold. Its lane started
-only after the operator's 06:07 message. The account binding changes the seat
-made on 11-09 and 11-11 were explicit operator requests and
-are not counted.
+No comparable confirmed Codex Git/forge mutation from its own shell was
+found in the sampled wake turns. That bounded observation grants no broader
+compliance verdict. The K example shows why a transition counter needs the
+mandate alongside it: more transitions can represent avoidable rework.
 
-The two failures alternate. The 11-09 correction answered over-reach. The
-seat's learned rule and the next seats then over-applied it until the 11-12
-correction answered the idling. Each correction was right about its moment,
-and neither reached later seats with a scope or end they could check.
+**Adjacent failure: no landed wake.** At the common cutoff, B has 206
+error/refused journal records among 211 records since 11-11 19:58, covering
+209 distinct check IDs. D has 82 error records since 11-12 00:54. These use
+a record denominator; a check and its landing can share a check ID. Such
+failures belong to the silent-tick class tracked by #2695 and #3905. A seat
+with no delivered turn cannot be assigned an idle-response outcome.
 
-## 3. What would have detected each pattern from records alone
+## 5. Proposals grounded in the current storage and write paths
 
-| Pattern | Record that shows it | Rule | Fires in the known case at |
-| --- | --- | --- | --- |
-| P1 hold or date only | Task rows read by every check: `hold` (`by`, `conversationId`, `since`, `until`), `dueAt`, `owned`, `runsOn` | An item shown in the last landed wake is *parked* when, by the next check, the seat set a hold or moved its due date and opened no lane | 05:17 check (first park) |
-| P1, P2, P4, P5 combined | The landed wake's item list (`itemsShown`) and the same task and lane rows | Three consecutive owed wakes whose items all came back parked or unchanged | 05:42 check, after the 05:40 wake landed |
-| P3 re-listed ask | `itemsShown` versions per ask id | Same ask on three wakes with its lane state unchanged | 11-12 01:45 for the research lane's question |
-| P4 dateless instruction | Pause rows: `pausedAt` beside a reason without a date | Show `pausedAt` in the reminder line | Would have shown 11-09 on every pause reminder from 11-10 on |
-| P5 waiting at full cadence | Settings row unchanged while the run grows | Part of the combined rule | 05:42 |
-| P2 verbatim replies | Transcript text only | The tick reads no transcripts; left to the detector above, which sees the same runs from state | — |
+### 5.1 Detector over records: retain the delivered baseline
 
-The combined rule reads nothing new. Each check already loads the tasks and
-lanes, and the landing records the delivered items' versions in
-`itemsShown`; a reminder version hashes the task id, so the check can match
-it against the tasks it reads. It needs one new counter in
-`SeatTickProjectState`, beside `wakesWithoutChange`.
+The current `itemsShown` field is a cumulative cache of up to 2,000 recent
+versions (`src/lib/monitor/types.ts:1161`). It cannot recover one wake's
+items or their previous state. `seatTickWakeCommit`
+(`src/lib/monitor/seatTick.ts:2254`) merges new versions into that cache and
+clears `outstandingWake`. Adding a counter alone cannot supply the detector.
 
-## 4. Proposals
+The smallest sufficient addition is one bounded assessment record per
+project, plus a baseline attached to the outstanding wake:
 
-### 4.1 Detector: wakes without advance (tick, records only)
+1. **Preparation:** `seatTickWakeCommitPlan` at `seatTick.ts:2127` already
+   determines which complete bullets survive the frozen-text bound. Preserve
+   each owed item's kind, stable target, reason kind and pre-send fields
+   beside that delivery plan: task status, ownership, hold and due date;
+   lane stage/attempt/state; ask identity and escalation/answer state.
+   Include the seat engine/epoch and original wake key. Versions alone are
+   insufficient. Preserve these fields unchanged on retries.
+2. **Landing:** `seatTickWakeCommit` retains the visible baseline before
+   clearing the outstanding wake, using the complete-bullet visibility
+   filtering at `seatTick.ts:2433`. A send refused before delivery earns no
+   assessment. An uncertain landing remains unknown until the original
+   delivery settles. Capture the baseline before sending: seat actions can
+   precede the journal's landing by roughly two minutes.
+3. **Assessment:** after the seat turn settles, compare those targets with
+   current task, lane, ask and delivery records. Resolve through existing
+   operation receipts. Read held/done targets by their retained IDs even
+   after they disappear from the open agenda. Missing rows or unreadable
+   evidence are unknown; disappearing from the agenda proves no advance.
+4. **Retention:** keep the outstanding baseline and the last delivered
+   assessment until evaluated, then retain only its bounded summary and
+   counters. Use a fixed maximum of 256 item references for assessment;
+   oversized catch-up deliveries are marked incomplete and cannot increment
+   or reset the counter. The normal page default is five items
+   (`seatTick.ts:146`); catch-up payloads can exceed it. Rotation preserves
+   project-level counts and records the new epoch. The tick controller owns
+   this state; no transcript scan, whole-store read or unbounded history is
+   added to each check.
 
-At each check, look at the items of the last landed wake and classify each:
+Classify a retained item as advanced, handed over, parked, unchanged or
+unknown. Lane admission, a real stage/attempt transition, task completion or
+a confirmed answer is advance. Hold/date-only changes are parking. A recorded
+escalation is handover. An unrelated note, a replayed receipt and a refused
+retry earn no advance. Preserve legitimate hold reasons for the operator's
+interpretation. A recorded external dependency can explain a no-advance run
+without granting the detector authority to release it.
 
-- **advanced**: a lane opened on the task (`owned` or `runsOn`), the task
-  moved to done or assigned with a lane, the ask left the seat's list because
-  it was answered, or its lane's stage moved;
-- **handed over**: the ask was escalated to the operator;
-- **parked**: the seat set a hold (`by: "agent"`, its conversation, `since`
-  after the check that raised the wake) or moved `dueAt`. The journal's
-  landing record can trail the seat's first action by about two minutes, so
-  the check time is the bound;
-- **unchanged**: none of the above.
+An assessment with any advanced owed item resets `wakesWithoutAdvance`.
+All parked/unchanged items increment it; handover-only assessments neither
+increment nor reset it. Unknown or incomplete assessments freeze the count
+and show an evidence-gap label. A new operator message resets the run.
+Only an effective cadence/autonomy change resets policy state; annotation
+or decision-log writes cannot erase the detector's history. Record the wake
+key already assessed so repeated checks cannot increment it twice.
 
-A landed owed wake counts as *advanced* when any of its items advanced, and as
-*no advance* when all came back parked or unchanged. Items handed over neither
-count nor reset. Keep `wakesWithoutAdvance` with the parked and unchanged
-tallies; reset it on any advance, on an operator message to the seat, and on a
-settings write. When it reaches 3, raise a board card through the existing
-`SeatTickCard` path with a new kind `no-advance`. The card names the run
-length, the parked/unchanged counts, the reasons involved, running workers
-against the limit, and whether autonomy is on.
+At three, use the existing `SeatTickCard` path with a proposed `no-advance`
+kind. Show the run length, parking/unchanged counts, reasons, engine,
+autonomy, available worker slots and the recorded blockers. It is advisory
+and refuses no operation. Preserve the current retry guard: its different
+fingerprint semantics protect against repeated unchanged reasons.
 
-Keep the retry guard as it is. It answers a different question (should this
-reason be re-sent), and changing what counts as movement there would reopen
-#1262. The new counter reads holds and date moves as parking, the opposite of
-the guard's fingerprint.
+**Known-case replay:** assess the 05:15, 05:27 and 05:40 wakes after their
+turns. All four listed tasks become held with no lane; count three is visible
+at the 05:42 check. The earlier handover does not increment it. For Codex A,
+the first three wakes at 00:09, 00:16 and 00:26 show no owed advancement;
+the next completed assessment would display the same card. Exact historical
+check timing for that earlier period is outside the retained journal ring.
 
-The card is a hint for the seat and the operator; it refuses nothing. That
-matches how this project treats detectors.
+### 5.2 Tick behaviour: require an explicit waiting policy
 
-*Known case:* the 05:15, 05:27 and 05:40 wakes come back parked; the card is
-up at the 05:42 check, about 25 minutes before the operator noticed.
-*Overnight run:* the 23:05, 23:18 and 23:30 wakes on 11-09 come back
-unchanged; the card is up from about 23:32 for the rest of the 10-hour run.
-*Silent or quota-failed seats* (adjacent class): the same card can carry "no
-wake landed for N hours while owed items exist", from the journal alone.
+At count three, the next wake states the run and asks the seat to choose
+within its existing authority: advance an accepted item within capacity, or
+set the tick's waiting policy with a reason and release/recheck condition.
+It cannot treat this instruction as permission to release an operator pause,
+repeat an uncertain send under a new key or invent additional work.
 
-### 4.2 Tick behaviour: say the two choices, then slow down and say so
+`seat_tick_settings` already supports `untilMinutes`, `wakeIntervalMinutes`
+and `enabled: false`. Non-default settings require a reason; omitted
+`untilMinutes` leaves them in force until explicitly changed. Disabling the
+tick also ends an active autonomy episode
+(`src/lib/monitor/seatTickSettings.ts:752`); re-enabling the tick does not
+restore that episode. Prefer bounded slower cadence when preserving autonomy
+is intended, and read the effective settings back. A bounded delay needs a
+recheck time. Waiting for an operator return also needs a defined wake path:
+an operator message still
+reaches the conversation, and that turn must re-enable a tick it disabled.
+A disabled tick sends no return-triggered wake by itself. Persist that obligation
+with the waiting reason so rotation carries it forward; merely promising an
+automatic return-triggered wake overstates the existing controls.
 
-**Step 1, on the card (count 3).** The next wake carries one line: how many
-wakes in a row advanced nothing and how (holds, date moves, unchanged), then
-the operator's two choices in plain words. Act on the listed items within the
-worker limit, or set the tick with `seat_tick_settings` (`untilMinutes`,
-`wakeIntervalMinutes` or `enabled: false` with a reason) until the operator
-returns. Both controls exist today.
+If count six is reached and no explicit waiting policy has been chosen,
+back off only repeated unchanged/parking reminders of the involved kinds.
+Double the interval per further assessment, capped at two hours, and put the
+reason in the card and next wake. Apply it to new pages of the same reason
+kind too. New lifecycle settlements, a permission request, a delivery outcome
+or another changed actionable item keep their normal urgency. An operator
+message, real advancement or explicit effective cadence choice clears the
+backoff. Decisions and delivery uncertainty retain their original guards.
 
-**Step 2, backstop (count 6).** If the run continues, the tick stretches the
-interval for the reason kinds involved: doubled per further no-advance wake,
-capped at two hours. The stretch covers new pages of the same kind, which is
-how the known case kept producing wakes. It writes "slowed by the tick: N
-wakes advanced nothing" into the tick card's explanation and into the next
-wake. A different reason kind, such as a lane settling, a deploy or a
-permission request, still wakes the seat at once. Any advance, operator
-message or settings write restores the cadence.
+**Known case:** the first reminder would be in the 05:52 wake; the sixth
+count is not reached before the operator intervenes. **Codex A:** the first
+38-wake run would trip the card and later backoff despite its varied reply
+text and few new holds. **Claude overnight:** the 49-wake run likewise trips
+both. Exact counterfactual wake savings require a scheduler replay with the
+above exceptions; the earlier claim of six remaining wakes is withdrawn.
 
-*Known case:* step 1 lands in the 05:52 wake. Step 2 would not have been
-reached before 06:07. *Overnight run:* step 1 lands in the 23:42 wake; step 2
-starts after the 23:51 wake. From there the run's owed reasons (overdue,
-unstarted, ask, stalled) wake the seat about six more times before the
-operator's 09:06 answer, in place of 43. Lane events still wake it at once.
+### 5.3 Rule changes within the existing controls
 
-### 4.3 Rule changes
+1. **Accepted work and scope:** distinguish accepted tasks from proposed
+   successor work in the autonomy overlay and seat mandate. The operator
+   chooses the authority and exceptions; the seat may execute accepted work
+   within them and propose new outcomes. A pause records its date, affected
+   items, allowed actions and release condition. A scope change requires the
+   operator's authority; an idle detector cannot broaden it.
+2. **A wait has an observable end:** use `postponed` or `limit` with `until`
+   for timed waits. `src/lib/tasks/hold.ts:31` preserves expiry only for
+   those kinds; operator/external holds discard it. For an external or
+   operator wait, name the dependency and put the recheck in the tick's
+   waiting policy. Verify the stored hold after writing it. A blanket demand
+   for `until` on every existing hold kind would fail today.
+3. **Waiting changes scheduling in the same turn:** when the seat decides
+   all permitted work must wait, it records that condition and sets cadence
+   or suspension. Reports and new holds alone do not discharge this duty.
+4. **No invented prerequisites:** an implementation precaution that blocks
+   an already authorized action needs evidence of necessity or an operator
+   decision. K's authentication-only requirement would have failed this
+   check before it was added; protection of other sessions remained valid.
+5. **Date the reminder:** render the existing pause timestamp beside the
+   reason, and retain the original instruction date through rotations.
+   The known case would have displayed November 9 rather than allowing a
+   dateless reason to be interpreted as a November 11 instruction.
 
-1. **A hold names its end.** Change the mandate sentence at
-   `src/lib/orchestrator/prompt.ts:227`: a hold names what ends the wait and
-   carries an `until` for when to look again. While autonomy is on, the
-   absence of an operator request is no reason for a hold on an accepted task.
-   *Known case:* none of the ten holds would qualify; the seat either starts
-   the work or sets the tick (4.2).
-2. **Autonomy says which rule wins for unstarted accepted work.** Add to the
-   overlay (`src/lib/monitor/autonomy.ts:101`) that an unstarted accepted task
-   on a wake is started within free worker slots. When the seat may not start
-   it, the seat sets the tick until the operator returns in the same turn.
-   Today the overlay's "keep work moving" and the mandate's "never start work
-   nobody asked for" each win in a different correction.
-3. **Recorded instructions carry their date.** Show `pausedAt` (date and time)
-   in the pause reminder line (`seatTickReminders.ts:139`), and stamp the
-   server's write date on hold notes shown in wakes. *Known case:* every pause
-   reminder from 11-10 on shows 11-09, and the misdating has nothing to stand
-   on.
-4. **Waiting is a tick setting.** The practice of setting the tick in the same
-   turn the seat decides to wait, and saying so, exists today only as a
-   learned rule. Move it into the mandate's clock section. Learned rules yield
-   to the mandate and to tick instructions, which is how the 11-09 rule
-   survived beside the 10-19 instruction it contradicted.
+### 5.4 Acceptance for a future implementation
 
-### 4.4 Smaller tick fixes found on the way
+| Case | Required observation |
+| --- | --- |
+| Known Claude hold sequence | Card after three assessed wakes/four parked tasks at approximately 05:42; next wake states both choices |
+| Codex A blocker/status sequence | Three unchanged owed assessments trip the same card despite unique prose and no new holds |
+| Hold followed by form publication or lane closure | Outcome records both effects; never mislabelled hold-only |
+| Refused retry and lost send answer | Refusal earns no advance; original-key confirmed delivery earns it; unresolved delivery freezes assessment |
+| Successful check rerun or local merge | Audit recognises the actual repair while separately marking the seat's authority violation |
+| Cumulative cache, rotation and a second page | Compare only retained delivered items; previous pages and note writes cannot reset the count |
+| Action before landing, crash/retry and duplicate check | Frozen pre-send baseline survives; credit/increment once per original wake |
+| Held/done item leaves the open list | Fetch its retained target; disappearance alone never earns progress |
+| Oversized catch-up or unreadable source | Incomplete/unknown label; bounded storage and no fabricated verdict |
+| Valid operator/external hold | Preserve the pause, explain dependency and change waiting policy; no forced launch |
+| New urgent event during backoff | Lifecycle/permission/delivery change still wakes normally |
+| Tick disabled while waiting | Later operator turn restores ticking explicitly; autonomy stays ended unless explicitly authorized again; rotation retains the obligation |
+| K's added prerequisite | Keep the authorized requested action possible; prevent the extra blocking condition |
 
-- **P3, stale ask:** a lane whose PR merged through a merge batch kept its
-  "merge stopped" ask for hours. Before listing a merge-stopped ask, check
-  whether its PR is merged. Cause not traced here; a short investigation
-  first.
-- **P6, re-shown events:** lane events already delivered to the project
-  should not be delivered again to the next seat epoch. Reproduce first.
+### 5.5 Smaller investigations
 
-## 5. How each proposal meets the known case
+A merged PR left a merge-stopped ask visible for hours; reconcile the lane's
+stored merge/closure evidence before repeating the ask. Old events appeared
+again after rotations; reproduce the epoch/acknowledgement path on each
+engine before attributing a shared cause. Both findings justify narrow
+investigation, with no implementation prescribed by this report.
 
-| Proposal | Effect on 11-12 04:40–06:05 | Effect on the 11-09/10 overnight run |
-| --- | --- | --- |
-| 4.1 detector card | Card at 05:42: 3 wakes, 4 tasks parked, running workers against the limit of 30, autonomy on | Card from about 23:32 |
-| 4.2 step 1 wake line | The 05:52 wake names both choices; the seat must start work or set the tick | The 23:42 wake does the same |
-| 4.2 step 2 backoff | Not reached | About 6 owed wakes in place of 43 |
-| 4.3.1 hold rule | None of the ten holds is a valid stop | No effect (no holds) |
-| 4.3.2 overlay precedence | Unstarted accepted tasks start on the 05:15 wake | Ambiguous until the operator decides question 2 in section 6 |
-| 4.3.3 dated reasons | Pause reminders show 11-09 | No effect |
-| 4.3.4 waiting is a setting | The seat sets the tick if it still chooses to wait | The seat sets the tick at 23:05 |
+## 6. Choices when implementation is scheduled
 
-## 6. Questions for the operator when this is scheduled
+These choices do not block the read-only analysis.
 
-These do not block the analysis; they decide the build.
-
-1. **Thresholds.** Card at 3 consecutive no-advance wakes, backoff from 6, cap
-   2 hours. *Recommended as stated;* the known case trips the card 25 minutes
-   before it was noticed.
-2. **Corrections tied to the operator's own activity.** Should a correction
-   framed by the operator's own activity lapse on its own when the operator
-   has not written for a while, and after how long? Option a: lapse after 2
-   hours of operator silence. Option b: hold until the operator says
-   otherwise, with the tick set to wake when they return (4.3.4).
-   *Recommended: b.* It keeps the operator's word as the only release and
-   still stops the idle wakes.
-3. **Shell repairs.** Should the seat's procedures for re-running a check and
-   re-merging main into a PR branch move into the mandate as named exceptions
-   with a board note required, or into a lane role? *Recommended:* a lane role
-   (a small merger or refresh stage); the seat then stays inside its MCP
-   tools.
+- **Thresholds:** recommend a card at three assessed no-advance wakes,
+  backoff from six, capped at two hours. Treat unknowns separately.
+- **Activity-qualified operator instructions:** recommend keeping an explicit
+  pause until the operator releases it, with an explicit waiting policy.
+  Automatically expiring it after an assumed absence risks unauthorized work;
+  project-local silence cannot establish that absence.
+- **Direct repairs:** recommend a bounded worker/merger role for Git and
+  forge repairs, with board evidence. The seat remains inside its stated
+  tool boundary. Git-only repositories need equivalent local task/lane
+  transitions; missing GitHub access must not block the detector.
 
 ## 7. Deferred — not currently justified
 
-- **A judge over seat replies** (a model reading transcripts to grade wakes).
-  The tick's state shows the same runs without reading text; P2 adds nothing
-  the 4.1 counter misses.
-- **Refusing holds or blocking seat writes on a pattern.** This project
-  treats detectors as hints; the card and the backoff change cadence and say
-  why, and the seat or operator decides.
-- **The tick starting unstarted tasks itself.** That moves the seat's
-  judgement into the controller and needs its own requirement.
-- **Expiring open-ended holds automatically under autonomy.** Rule 4.3.1
-  stops new ones; the detector shows old ones. Revisit if they recur.
-- **Codex seats.** None was active in the sampled windows. Re-run the parser
-  on the next Codex seat window before claiming the rates hold there.
-- **Fixing the quota-failed checks of projects B and D.** Tracked by the
-  silent-tick issues (#2695, #3905); only their detection is in scope here.
+- A model judging every reply: record comparisons cover both engines and
+  avoid making prose similarity the criterion.
+- Automatically releasing holds, rejecting writes, or launching tasks from
+  the tick: those would add authority the requirement does not grant.
+- Historical claims beyond the common window, and behaviour in the two
+  unavailable transcripts: the present census names those limits.
+- Monetary-cost estimates or an engine ranking: native usage and differing
+  mandates do not support either.
+- Fixing quota/check failures themselves: their detection is adjacent;
+  #2695 and #3905 track the silent-tick class.
+- An exact claim about saved wakes under backoff: needs the actual scheduler
+  replay and event/unknown-outcome exceptions.
 
-## 8. Requirement check and reproduction
+Codex is included in the analysis and is no longer deferred.
 
-The operator asked for an analysis that finds seats ticking without acting,
-with the 11-12 case as an example, and named two acceptable behaviours. This
-document measures how often and how long it happened in four projects
-(sections 2.1–2.2). It traces the known case to records and code (2.3), names
-five patterns, one tick-side defect, an adjacent class and the opposite
-failure (2.4–2.5),
-and gives each proposal's effect on the known case (sections 3 and 5). The
-tick-behaviour proposal (4.2) puts the operator's two behaviours into the
-wake itself.
+## 8. Corrections and reproducibility
 
-To rebuild the numbers:
+The check stage's findings were applied together with the engine extension:
 
-1. For each seat conversation in the windows above, read the transcript in
-   order. Treat a user message that starts with the seat-tick header as a
-   wake; collect every tool call and reply until the next user message that
-   is not a tool result.
-2. Classify each call with the outcome classes in section 1; match `[task]`
-   and `[ask]` lines to calls by id.
-3. Read the per-project journal ring for the 24-hour check counts and the
-   known case's check times.
-4. All reads are local and read-only; no transcript command is executed.
+| Earlier defect | Correction |
+| --- | --- |
+| Attempts counted as success; uncertain sends counted as advances; successful check reruns missed | Inspect outcomes, no-op/replay fields, original-key delivery records and shell results; regenerate the partition and runs |
+| Inputs cut at 600 characters | Retain complete structured arguments and targets; regenerate item tables; ten successful close/reopen shell invocations |
+| Hold-only mixed with forms/closures; reads classified as bookkeeping | Exclusive partition in 1.4, applied before generating tables |
+| Cumulative `itemsShown` treated as a per-wake baseline | Explicit preparation, landing, retained fields and bounded assessment in 5.1 |
+| Autonomy undercount | A/Claude 295, B/Claude 38; A/Codex 91 |
+| Known-case median reported as 37 seconds | Seven timestamp deltas, median 8.540 seconds |
+| Journal totals beyond the stated cutoff; records confused with checks | Exclusive 06:10 cutoff; B 206/211 records, 209 check IDs; D 82 error records |
+| One monitor-note change claimed | Two, counted field by field even when sharing a decision-log write |
+| Operator inactivity inferred globally | Limit the observation to silence in A; other projects contain contemporaneous operator activity |
 
-Checked against: the tick journal and seat transcripts up to 2026-11-12
-06:10Z; source at `dfc99dce25`.
+To reproduce without executing transcript content:
+
+1. Read current and revoked seat records. Select ownership intervals
+   overlapping the common window; enumerate engines before opening paths.
+   Resolve aliases within each project and deduplicate conversation paths.
+   Include missing and zero-wake histories in the coverage inventory.
+2. Parse native message records, removing only the structured transport
+   marker. Recognise both tick-header forms and join journal epochs to seat
+   engines. Ignore duplicate Codex `event_msg` message copies.
+3. Assign tool calls/results and replies to the next non-tool-result user
+   boundary. Preserve complete arguments. Statically inspect nested Codex
+   tool calls; do not evaluate their JavaScript. Recover projected replies
+   through exact original receipt keys and timestamped delivery records.
+4. Apply 1.4. For the item table, match complete visible bullets of the form
+   `- [task]` or `- [ask]`, a full target ID and the separator, to structured
+   mutation targets. Count each listing, retaining catch-up bullets. Validate
+   partition sums per project and engine before computing totals and runs.
+5. Derive Claude usage once per message ID and Codex usage from changed
+   cumulative input/output totals, subtracting the preceding snapshot.
+   Measure durations from the wake to its last assistant record. Match
+   journal timestamps to checks; do not count a delivery row as another
+   independent check.
+6. Apply the public-text scan to the whole document. Keep private target and
+   transcript identifiers out of the published report.
+
+Validation: the nine project/engine outcome partitions reproduce from the
+read-only extraction and sum to their denominators. The known-case hold
+sequence, refused retry, successful check rerun, mixed form/hold wake and
+unresolved sends were checked separately. Whole-document manual privacy
+review and the repository privacy-publication gate passed in isolated
+scratch. No runtime test or build was run for this document-only change.
