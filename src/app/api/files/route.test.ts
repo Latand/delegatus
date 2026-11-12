@@ -4841,10 +4841,13 @@ describe("a cold scope the projection queue refuses", () => {
   });
 });
 
-/* A cold scope whose build the files worker cannot finish in time. The worker
-   answers with the deadline code it uses for its own cap, so the test waits for
-   no clock. The installed Viewer answered `500` here for the finished-audit
-   links, and the client never reached the transcript. */
+/* A cold scope whose build the files worker cannot finish in time. In
+   production the Viewer's own cap timer retires the silent worker and raises
+   the deadline. Most cases here use the answer path instead (a worker that
+   answers with the deadline code), so they wait for no clock; one case drives
+   the real cap timer with a worker that never answers. The installed Viewer
+   answered `500` here for the finished-audit links, and the client never
+   reached the transcript. */
 describe("a cold scope the files worker cannot finish in time", () => {
   const pinnedUrl = (target: string) => `http://127.0.0.1/api/files?view=summary&path=${encodeURIComponent(target)}`;
   const realWorker = () => setFilesResponseWorkerRuntimeForTests({
@@ -4859,8 +4862,33 @@ describe("a cold scope the files worker cannot finish in time", () => {
 readline.createInterface({input:process.stdin}).on('line', line => {const {id}=JSON.parse(line);process.stdout.write(JSON.stringify({id,ok:false,error:'files response worker timed out',errorCode:'DEADLINE_EXCEEDED',rssBytes:1})+'\\n');});`);
     setFilesResponseWorkerRuntimeForTests({ launch: { executable: process.execPath, workerPath: script }, timeoutMs: 2000 });
   };
+  /* A worker that names its trouble on stderr and then never answers: only the
+     Viewer's cap timer ends the wait, retires it and raises the deadline. */
+  const silentWorker = () => {
+    const script = path.join(stateDir, "silent-worker.mjs");
+    fs.writeFileSync(script, `import readline from 'node:readline';
+readline.createInterface({input:process.stdin}).on('line', () => {process.stderr.write('PROBE-DETAIL blocking-wait\\n');});
+setInterval(() => undefined, 1000);`);
+    setFilesResponseWorkerRuntimeForTests({ launch: { executable: process.execPath, workerPath: script }, timeoutMs: 1500 });
+  };
   beforeEach(() => { scannedFiles = [file("/sessions/cold-one.jsonl"), file("/sessions/cold-two.jsonl")]; realWorker(); });
   afterEach(async () => { setFilesResponseWorkerRuntimeForTests(null); await stopTestWorker(); });
+
+  test("the cap timer's 503 keeps the worker's stderr reason in the journal", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    silentWorker();
+    try {
+      const response = await GET(new Request(pinnedUrl("/sessions/cold-one.jsonl")));
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ code: "files_projection_unavailable", reason: "build-timeout" });
+      const lines = warn.mock.calls.map((call) => String(call[0]));
+      expect(lines.some((text) => text.includes("PROBE-DETAIL"))).toBe(true);
+      const summary = lines.find((text) => text.includes("build-timeout for a scope with nothing to serve"));
+      expect(summary).toBeDefined();
+      expect(summary).not.toContain("PROBE-DETAIL");
+      expect(summary).not.toContain("cold-one");
+    } finally { warn.mockRestore(); }
+  });
 
   test("answers a controlled 503 with no rows instead of a 500", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => undefined);
@@ -4872,7 +4900,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {const {id}=J
       expect(response.headers.get("x-llv-files-projection-cache")).toBe("unavailable");
       expect(response.headers.get("etag")).toBeNull();
       expect(await response.json()).toEqual({ error: "files projection unavailable", code: "files_projection_unavailable", reason: "build-timeout" });
-      const line = warn.mock.calls.map((call) => String(call[0])).find((text) => text.startsWith("[files projection]"));
+      const line = warn.mock.calls.map((call) => String(call[0])).find((text) => text.startsWith("[files projection] build-timeout"));
       expect(line).toContain("build-timeout for a scope with nothing to serve");
       expect(line).not.toContain("cold-one");
     } finally { warn.mockRestore(); }

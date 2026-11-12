@@ -615,6 +615,9 @@ function projectionUnavailableResponse(request: Request, error: FilesProjectionQ
   const url = new URL(request.url);
   const diagnostics = filesProjectionQueueDiagnostics();
   const yesNo = (flag: boolean) => (flag ? "yes" : "no");
+  /* The worker's bounded stderr tail travels only in this message. Next used to
+     print it with the thrown error; the summary line below stays free of it. */
+  if (error instanceof DeadlineExceededError) console.warn(`[files projection] deadline detail: ${error.message}`);
   console.warn(
     `[files projection] ${reason} for a scope with nothing to serve: waited ${Math.round(waitedMs)}ms; `
     + `waiting ${diagnostics.waiting}, expired ${diagnostics.expired}, refused ${diagnostics.refused}; `
