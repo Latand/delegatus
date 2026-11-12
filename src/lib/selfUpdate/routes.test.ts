@@ -968,7 +968,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       // Reproduce a crash after the terminal write, before hold cleanup.
       writeFileSync(drainFile, acceptedDrain);
       writeAuto(join(h.deps.dir, "auto.json"), { ...initialAuto(), drain: {
-        id: controller.current!.requestId, target: await readRevision(checkout, tipSha), since: at, overranAt: null, blockers: null,
+        id: controller.current!.requestId, target: await readRevision(candidate, tipSha), since: at, overranAt: null, blockers: null,
       } });
       expect(await run(false)).toMatchObject({ drain: { id: controller.current!.requestId } });
       expect(await run()).toMatchObject({ drain: null });
