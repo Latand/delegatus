@@ -55,26 +55,41 @@ import WebKit
         frame += 1
         let destination = directory.appendingPathComponent(String(format: "%03d-%@.png", frame, name))
         scheduleCapture(name: name, completion: completion) {
-            self.writeWindow(CGWindowID(window.windowNumber), to: destination, name: name)
+            _ = self.writeWindow(CGWindowID(window.windowNumber), to: destination, name: name)
         }
     }
-    func captureMenu(name: String, completion: (() -> Void)? = nil) {
-        guard let directory else { return }
+    func captureMenu(name: String, completion: (() -> Void)? = nil) -> Timer? {
+        guard let directory else { return nil }
         frame += 1
         let destination = directory.appendingPathComponent(String(format: "%03d-%@.png", frame, name))
         // Menus use their own WindowServer window. Capture that app-owned
         // window while tracking runs, avoiding a whole-screen capture and its
         // Screen Recording permission prompt.
-        scheduleCapture(name: name, completion: completion) {
-            let windows = (CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]]) ?? []
-            let menuWindow = windows.first { row in
-                (row[kCGWindowOwnerPID as String] as? Int) == Int(getpid())
-                    && (row[kCGWindowLayer as String] as? Int ?? 0) > 0
-                    && (row[kCGWindowNumber as String] as? Int) != nil
-            }?[kCGWindowNumber as String] as? Int
-            guard let menuWindow else { self.log("CAPTURE failed \(name)"); return }
-            self.writeWindow(CGWindowID(menuWindow), to: destination, name: name)
+        // A nested tracking loop can run before the menu window is published.
+        // Keep the menu open through a bounded set of attempts in that loop.
+        var attempts = 0
+        let timer = Timer(fire: Date().addingTimeInterval(0.5), interval: 0.1, repeats: true) { timer in
+            MainActor.assumeIsolated {
+                attempts += 1
+                var captured = false
+                defer {
+                    if captured || attempts == 20 {
+                        timer.invalidate()
+                        completion?()
+                    }
+                }
+                let windows = (CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]]) ?? []
+                let menuWindow = windows.first { row in
+                    (row[kCGWindowOwnerPID as String] as? Int) == Int(getpid())
+                        && (row[kCGWindowLayer as String] as? Int ?? 0) > 0
+                        && (row[kCGWindowNumber as String] as? Int) != nil
+                }?[kCGWindowNumber as String] as? Int
+                guard let menuWindow else { self.log("CAPTURE failed \(name): window-lookup"); return }
+                captured = self.writeWindow(CGWindowID(menuWindow), to: destination, name: name)
+            }
         }
+        RunLoop.main.add(timer, forMode: .eventTracking)
+        return timer
     }
     private func scheduleCapture(name: String, completion: (() -> Void)?, capture: @escaping () -> Void) {
         let timer = Timer(timeInterval: 0.5, repeats: false) { _ in
@@ -85,14 +100,17 @@ import WebKit
         }
         for mode in [RunLoop.Mode.common, .eventTracking, .modalPanel] { RunLoop.main.add(timer, forMode: mode) }
     }
-    private func writeWindow(_ window: CGWindowID, to destination: URL, name: String) {
-        guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, window, [.bestResolution]),
-              let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
-            log("CAPTURE failed \(name)"); return
+    @discardableResult private func writeWindow(_ window: CGWindowID, to destination: URL, name: String) -> Bool {
+        guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, window, [.bestResolution]) else {
+            log("CAPTURE failed \(name): window-image"); return false
+        }
+        guard let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
+            log("CAPTURE failed \(name): png-encoding"); return false
         }
         do {
             try png.write(to: destination)
             log("CAPTURED \(name)")
-        } catch { log("CAPTURE failed \(name)") }
+            return true
+        } catch { log("CAPTURE failed \(name): png-write"); return false }
     }
 }

@@ -71,7 +71,8 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         case "cancelling": presentCancellation()
         case "menu":
             guard let menu = NSApp.mainMenu?.item(at: 0)?.submenu else { return }
-            evidence.captureMenu(name: "menu") { menu.cancelTracking() }
+            let capture = evidence.captureMenu(name: "menu") { menu.cancelTracking() }
+            defer { capture?.invalidate() }
             menu.popUp(positioning: nil, at: NSPoint(x: 18, y: window.frame.height - 42), in: window.contentView)
             evidence.log("SURFACE-CLOSED menu")
         case "stop", "login", "update", "quit":

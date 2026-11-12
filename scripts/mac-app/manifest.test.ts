@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { digest, validatePackage, verifiedBun } from "./manifest";
-import { intelIsTranslated } from "./smoke-platform.mjs";
+import { intelIsTranslated, smokeUserArguments } from "./smoke-platform.mjs";
 
 describe("Mac runtime manifest", () => {
   const bytes = new TextEncoder().encode("archive fixture");
@@ -29,6 +29,31 @@ describe("Mac runtime manifest", () => {
   });
   test("refuses integrity different from the publisher", () => {
     expect(() => validatePackage(valid, "2.0.0", revision, "sha512-different")).toThrow();
+  });
+});
+
+describe("Fresh Mac smoke account context", () => {
+  const account = { uid: 502, user: "smoke-fixture", home: "/fixture/home" };
+  test.each([
+    ["/fixture/Delegatus.app/Contents/MacOS/Delegatus", ["--evidence-dir", "/fixture/frames with spaces"]],
+    ["/fixture/private bun", ["/fixture/private cli", "--no-open"]],
+    ["/bin/launchctl", ["manageruid"]],
+  ])("joins the account context before dropping credentials for %s", (command, args) => {
+    const invocation = smokeUserArguments(account, command, args);
+    expect(invocation.slice(0, 9)).toEqual(["-n", "/bin/launchctl", "asuser", "502", "/usr/bin/sudo", "-n", "-u", account.user, "-H"]);
+    const env = invocation.indexOf("/usr/bin/env");
+    expect(invocation[env + 1]).toBe("-i");
+    expect(invocation).toContain(`HOME=${account.home}`);
+    expect(invocation).toContain("PATH=/usr/bin:/bin:/usr/sbin:/sbin");
+    expect(invocation.slice(-args.length - 1)).toEqual([command, ...args]);
+  });
+  test("retains server settings while account isolation wins over copied defaults", () => {
+    const invocation = smokeUserArguments(account, "/fixture/bun", [], { LLV_LANG: "uk", HOME: "/foreign", PATH: "/foreign/bin" });
+    const env = Object.fromEntries(invocation.slice(invocation.indexOf("-i") + 1, -1).map(entry => entry.split(/=(.*)/s).slice(0, 2)));
+    expect(env).toMatchObject({ HOME: account.home, USER: account.user, LOGNAME: account.user, PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LLV_LANG: "uk" });
+  });
+  test.each([0, -1, 1.5, NaN, undefined])("refuses an invalid or privileged account UID: %s", uid => {
+    expect(() => smokeUserArguments({ ...account, uid }, "/usr/bin/true")).toThrow("Invalid smoke account context");
   });
 });
 

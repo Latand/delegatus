@@ -429,8 +429,10 @@ for this surface; later cases are added to it):
 - **Fresh user.** `sudo sysadminctl -addUser dlgsmoke` with a random
   password that is never printed, then `createhomedir`. The `.dmg` is
   attached read-only, and `ditto` copies the app into `Applications` in the
-  new account's home. The app runs with `sudo -u dlgsmoke -H` in
-  the runner's GUI session, which is the hosted runner's auto-login session.
+  new account's home. Commands first select that account's bootstrap and audit
+  context with `launchctl asuser`, then drop credentials with `sudo -u`.
+  The context check requires its launchd manager UID and effective UID to match
+  the fresh account and refuses an account with sudo rights.
   Its environment holds `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, no Bun and
   `DELEGATUS_TELEMETRY=0`. A wrapper writes the app's PID before `exec`, and
   every stop goes by that PID or through `stop --all`.
@@ -559,12 +561,15 @@ Community Launcher contributors". The bundle copies the notice into
 
 ## 12. Risks and facts the first CI run settles
 
-- **U1. GUI under `sudo -u`.** I expect AppKit to connect to the window
-  server from a process of another user inside the console session. It was
-  not run here, because this machine has no Mac. If the first run refuses the
-  connection, the smoke runs the app as the runner account with `HOME` set to
-  a new empty home. The app takes its home from `HOME`, which launchd always
-  sets, so the same assertions hold. The report states which variant ran.
+- **U1. Fresh-account session.** The Intel smoke on the earlier revision
+  crashed at its first `NSWindow`: the diagnostic log records the fresh
+  account's effective UID alongside the runner's audit UID, then a
+  `WMClientWindowManager` / `xpc_connection_set_target_uid` API-misuse trap.
+  The harness now selects the fresh account's launchd context before dropping
+  credentials. `asuser` does not create an Aqua login; successful window
+  creation, HTTP 200 and the PNG matrix on both hosted architectures remain
+  the required proof that the fresh account can use the runner's display.
+  There is no fallback to running the app under the runner account.
 - **U2. `navigator.language` in `WKWebView`.** I expect it to follow the
   app's localization. The `WEB language=` assertions in cases `first-run`
   and `reuse` prove it or fail.

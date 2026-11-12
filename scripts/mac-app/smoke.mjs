@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, statSy
 import { dirname, join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
-import { intelIsTranslated } from "./smoke-platform.mjs";
+import { intelIsTranslated, smokeUserArguments } from "./smoke-platform.mjs";
 
 const [image, reportArg] = process.argv.slice(2);
 if (process.platform !== "darwin" || !image || !reportArg || process.env.CI !== "true") throw new Error("Usage on disposable macOS CI: node smoke.mjs DMG REPORT");
@@ -15,6 +15,7 @@ const checks = [];
 const commands = [];
 let home = "";
 const user = "dlgsmoke";
+let uid;
 let created = false;
 let mount;
 const owned = new Set();
@@ -41,7 +42,7 @@ function run(command, args, options = {}) {
 }
 const sudo = args => run("sudo", ["-n", ...args]);
 function asUser(command, args = [], options = {}) {
-  return sudo(["-u", user, "-H", "/usr/bin/env", "-i", `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "DELEGATUS_TELEMETRY=0", command, ...args], options);
+  return run("sudo", smokeUserArguments({ uid, user, home }, command, args), options);
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(label, check, timeout = 60_000, diagnostics = () => "") {
@@ -65,8 +66,8 @@ function capturedFrames(directory) {
 function launch(args, label) {
   const pidFile = join(home, `app-${++serial}.pid`);
   const frames = join(home, "Library", "Evidence", label);
-  const process = spawn("sudo", ["-n", "-u", user, "-H", "/usr/bin/env", "-i", `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "DELEGATUS_TELEMETRY=0", "/bin/sh", "-c", 'echo $$ > "$1"; shift; exec "$@"', "sh", pidFile,
-    join(home, "Applications", "Delegatus.app", "Contents", "MacOS", "Delegatus"), "--evidence-dir", frames, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+  const process = spawn("sudo", smokeUserArguments({ uid, user, home }, "/bin/sh", ["-c", 'echo $$ > "$1"; shift; exec "$@"', "sh", pidFile,
+    join(home, "Applications", "Delegatus.app", "Contents", "MacOS", "Delegatus"), "--evidence-dir", frames, ...args]), { stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "", stderr = "", exitCode = null, signal = null, spawnError = null;
   const append = (current, chunk) => (current + redact(chunk.toString("utf8"))).slice(-12_000);
   process.stdout.on("data", chunk => { stdout = append(stdout, chunk); });
@@ -78,7 +79,7 @@ function launch(args, label) {
 }
 async function startViewer(bun, cli, extraEnvironment = {}) {
   const pidFile = join(home, `viewer-${++serial}.pid`);
-  const args = ["-n", "-u", user, "-H", "/usr/bin/env", "-i", `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "DELEGATUS_TELEMETRY=0", ...Object.entries(extraEnvironment).map(([key, value]) => `${key}=${value}`), "/bin/sh", "-c", 'echo $$ > "$1"; shift; exec "$@"', "sh", pidFile, bun, cli, "--no-open", "--port", "8898"];
+  const args = smokeUserArguments({ uid, user, home }, "/bin/sh", ["-c", 'echo $$ > "$1"; shift; exec "$@"', "sh", pidFile, bun, cli, "--no-open", "--port", "8898"], extraEnvironment);
   const child = spawn("sudo", args, { stdio: "ignore" });
   child.on("error", error => { throw error; });
   commands.push({ command: redact(["sudo", ...args].join(" ")), exit: "started" });
@@ -155,8 +156,14 @@ try {
     created = true;
     sudo(["createhomedir", "-c", "-u", user]);
     home = sudo(["dscl", ".", "-read", `/Users/${user}`, "NFSHomeDirectory"]).trim().replace(/^NFSHomeDirectory:\s*/, "");
+    uid = Number(sudo(["id", "-u", user]).trim());
     assert(home.startsWith("/"));
     assert(!sudo(["id", "-Gn", user]).split(/\s+/).includes("admin"));
+  });
+  await check("fresh-account-context", () => {
+    assert.equal(Number(asUser("/bin/launchctl", ["manageruid"]).trim()), uid, "bootstrap context belongs to the fresh account");
+    assert.equal(Number(asUser("/usr/bin/id", ["-u"]).trim()), uid, "effective user belongs to the fresh account");
+    assert.throws(() => asUser("/usr/bin/sudo", ["-n", "/usr/bin/true"]), "fresh account has no sudo rights");
   });
   await check("drag-install", () => {
     const plist = run("hdiutil", ["attach", "-readonly", "-nobrowse", "-plist", resolve(image)]);
@@ -192,7 +199,7 @@ try {
           return log.includes(`CAPTURED ${name}`) && log.includes(`SURFACE-CLOSED ${surface}`);
         }
         return true;
-      }, 60_000, app.diagnostics);
+      }, 60_000, () => `${app.diagnostics()}\napp log:\n${processLog(app.pid) || "(empty)"}`);
       await end(app);
     });
   }
@@ -262,8 +269,8 @@ try {
     await until("port free", async () => !(await http()));
     const file = join(home, "listener.py");
     const foreignAuth = join(home, "foreign-auth-received");
-    run("sudo", ["-n", "-u", user, "tee", file], { input: 'import http.server,os\nopen(os.path.expanduser("~/listener.pid"),"w").write(str(os.getpid()))\nclass Handler(http.server.BaseHTTPRequestHandler):\n def refuse(self):\n  if self.headers.get("Authorization"): open(os.path.expanduser("~/foreign-auth-received"),"w").write("credential received")\n  self.send_response(401); self.end_headers()\n def do_GET(self): self.refuse()\n def do_HEAD(self): self.refuse()\n def log_message(self,*args): pass\nhttp.server.HTTPServer(("127.0.0.1",8898),Handler).serve_forever()\n' });
-    const listener = spawn("sudo", ["-n", "-u", user, "-H", "/usr/bin/env", `HOME=${home}`, "/usr/bin/python3", file], { stdio: "ignore" });
+    asUser("/usr/bin/tee", [file], { input: 'import http.server,os\nopen(os.path.expanduser("~/listener.pid"),"w").write(str(os.getpid()))\nclass Handler(http.server.BaseHTTPRequestHandler):\n def refuse(self):\n  if self.headers.get("Authorization"): open(os.path.expanduser("~/foreign-auth-received"),"w").write("credential received")\n  self.send_response(401); self.end_headers()\n def do_GET(self): self.refuse()\n def do_HEAD(self): self.refuse()\n def log_message(self,*args): pass\nhttp.server.HTTPServer(("127.0.0.1",8898),Handler).serve_forever()\n' });
+    const listener = spawn("sudo", smokeUserArguments({ uid, user, home }, "/usr/bin/python3", [file]), { stdio: "ignore" });
     listener.on("error", () => {});
     await until("foreign listener", async () => !!(await http()));
     assert.equal((await http("HEAD"))?.status, 401, "foreign listener exercises the app's HEAD authorization path");
