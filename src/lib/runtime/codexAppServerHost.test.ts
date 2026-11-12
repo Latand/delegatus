@@ -710,6 +710,7 @@ class FakeAppServer extends EventEmitter {
   omitThreadPath = false;
   omitThreadReadPath = false;
   threadPath: string | null = null;
+  threadCwdOverride: string | null = null;
   private readonly serverRequestIds = new Set<string | number>();
   private turn = 0;
 
@@ -849,6 +850,8 @@ class FakeAppServer extends EventEmitter {
         ...(this.threadModel ? { model: this.threadModel } : {}),
         thread: {
           id,
+          ...(this.threadCwdOverride ? { cwd: this.threadCwdOverride } : typeof (message.params as { cwd?: unknown } | undefined)?.cwd === "string"
+            ? { cwd: (message.params as { cwd: string }).cwd } : {}),
           ...(!this.omitThreadPath ? { path: this.threadPath ?? `/sessions/${id}.jsonl` } : {}),
           ...(excludeTurns ? {} : { turns: this.turns }),
           ...(this.resumeStatus ? { status: this.resumeStatus } : {}),
@@ -2842,6 +2845,34 @@ describe("CodexAppServerHost", () => {
     expect(eventStore.load("requested-thread")).toEqual([
       { kind: "session-status", status: "idle", seq: 1 },
     ]);
+  });
+
+  test("cold cleaner resume binds the old thread to a fresh workspace after old scratch cleanup", async () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-cleaner-resume-"));
+    const oldScratch = path.join(parent, "old-scratch");
+    const newCwd = path.join(parent, "new-scratch", "cwd");
+    fs.mkdirSync(oldScratch, { recursive: true });
+    fs.mkdirSync(newCwd, { recursive: true });
+    fs.rmSync(oldScratch, { recursive: true });
+    const server = new FakeAppServer("cleaner-cold-thread");
+    const host = await CodexAppServerHost.adopt("cleaner-cold-thread", {
+      cwd: newCwd, cleanerDiskWorkspace: true, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+    });
+    try {
+      const request = server.requests.find(row => row.method === "thread/resume")!;
+      expect(request.params).toMatchObject({ cwd: newCwd });
+      expect(fs.existsSync(oldScratch)).toBeFalse();
+      expect(fs.existsSync(newCwd)).toBeTrue();
+    } finally { await host.release(); fs.rmSync(parent, { recursive: true, force: true }); }
+  });
+
+  test("rejects a cleaner resume when Codex reports the previous workspace", async () => {
+    const server = new FakeAppServer("cleaner-stale-thread");
+    server.threadCwdOverride = "/retired/cleaner/scratch";
+    await expect(CodexAppServerHost.adopt("cleaner-stale-thread", {
+      cwd: "/current/cleaner/scratch/cwd", cleanerDiskWorkspace: true,
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+    })).rejects.toThrow("thread/resume did not adopt the cleaner workspace cwd");
   });
 
   test("rebuilds replay from resume history when a legacy host has no event ledger", async () => {

@@ -241,6 +241,8 @@ export interface CodexAppServerHostOptions {
   developerInstructions?: string;
   /** Launch observations must reach the report even when memory is disabled. */
   runtimeInstructions?: string;
+  /** Enforce returned cwd identity for the cleaner's disposable workspace. */
+  cleanerDiskWorkspace?: boolean;
   mcpServers?: string[];
   validateTelegramGrant?: () => void;
   /** Codex plugins granted to this session (issue #687). Empty or absent
@@ -1738,6 +1740,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       const result = threadId
         ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId, ...(Object.keys(reconnectConfig).length ? { config: reconnectConfig } : {}) } : {
           threadId,
+          ...(options.cleanerDiskWorkspace ? { cwd: options.cwd } : {}),
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...launchAccess,
           ...runInstructions,
@@ -1753,6 +1756,10 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           config,
         });
       const identity = threadFromResult(result, threadId ? "thread/resume" : "thread/start");
+      if (threadId && options.cleanerDiskWorkspace) {
+        const returnedCwd = stringField(record(record(result)?.thread), "cwd");
+        if (returnedCwd !== options.cwd) throw new Error("thread/resume did not adopt the cleaner workspace cwd");
+      }
       options.assertCurrent?.();
       if (threadId && identity.threadId !== threadId) {
         throw new Error("thread/resume returned a different thread id");

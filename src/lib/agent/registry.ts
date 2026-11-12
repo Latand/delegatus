@@ -6864,6 +6864,17 @@ export class AgentRegistry {
     return this.readKeyed(file => clone(file.receipts[launchId] ?? null));
   }
 
+  /** Active disk cleaner host generations keep their source launch receipt
+      while a migration replaces the generation's operation id. */
+  diskCleanerReceiptForConversation(conversationId: string): SpawnReceipt | null {
+    return this.readKeyed(file => {
+      const receipt = registryReceiptsForConversation(file, conversationId).findLast(row =>
+        row.agentRole === "cleaner" && row.launchProfile.agentMemoryRoleParams?.mode === "disk"
+        && !["failed", "conflicted"].includes(row.state));
+      return receipt ? clone(receipt) : null;
+    });
+  }
+
   /** What structured recovery reads for one host: its row, optionally one
       launch receipt and one lineage edge, and the small quota table its park
       check asks. Recovery asks inside writer admission, where a whole snapshot
@@ -8173,7 +8184,7 @@ export class AgentRegistry {
     if (!normalized) throw new Error("invalid cleaner sandbox observation");
     await this.deliveryWriteOrBusy({ label: "spawn.cleaner-sandbox", operationId: launchId }, () => this.mutate((file) => {
       const receipt = file.receipts[launchId];
-      if (!receipt || ["completed", "failed", "conflicted"].includes(receipt.state)
+      if (!receipt || ["failed", "conflicted"].includes(receipt.state)
         || receipt.agentRole !== "cleaner" || receipt.launchProfile.agentMemoryRoleParams?.mode !== "disk"
         || !isDeepStrictEqual(clone(receipt.launchProfile), clone(expected.launchProfile))
         || (expected.admissionOwner && (!receipt.admissionOwner || !sameRecordedProcessIdentity(expected.admissionOwner, receipt.admissionOwner)))) {

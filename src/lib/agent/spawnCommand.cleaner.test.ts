@@ -172,7 +172,10 @@ test("fresh and recovered disk hosts get separate empty cwd roots; checkout host
       expect(host.cwd).not.toBe(cwd);
       expect(path.dirname(host.cwd)).toBe(path.dirname(host.env!.TMPDIR!));
       expect(fs.readdirSync(host.cwd)).toEqual([]);
-      expect(host).toMatchObject({ sandbox: "workspace-write", permissionProfile: "llv-stage", approvalPolicy: "never", allowSubagents: false, mcpServers: ["viewer"] });
+      expect(host).toMatchObject({ sandbox: "workspace-write", approvalPolicy: "never", allowSubagents: false, mcpServers: ["viewer"] });
+      expect(host.permissionProfile).toMatch(/^llv-cleaner-[0-9a-f-]{36}$/);
+      expect(host.permissionProfileConfig).toContain(`permissions.${host.permissionProfile}=`);
+      expect(host.permissionProfileConfig).not.toContain("permissions.llv-stage=");
       expect(host.runtimeInstructions).toContain(JSON.stringify({ cleanerSandbox: { mode: "restricted", reason: null } }));
     }
     expect(first.cwd).not.toBe(second.cwd);
@@ -180,7 +183,7 @@ test("fresh and recovered disk hosts get separate empty cwd roots; checkout host
     const calls = fs.readFileSync(probeCalls, "utf8").trim().split("\n");
     expect(calls).toHaveLength(2);
     for (const [index, host] of [first, second].entries()) {
-      expect(calls[index]).toContain(`-C ${host.cwd} -P llv-stage -c ${host.permissionProfileConfig}`);
+      expect(calls[index]).toContain(`-C ${host.cwd} -P ${host.permissionProfile} -c ${host.permissionProfileConfig}`);
     }
     expect(reopened.spawnReceiptForClientAttempt(id)?.cwd).toBe(cwd);
     const checkoutId = "cleaner_checkout_host";
@@ -193,6 +196,13 @@ test("fresh and recovered disk hosts get separate empty cwd roots; checkout host
   } finally {
     first.releaseCleanup?.(); second?.releaseCleanup?.(); reopened.close();
   }
+});
+
+test("active disk cleaner source receipt remains addressable by conversation", async () => {
+  const result = await launch("cleaner_receipt_by_conversation");
+  expect(result.status).toBe(202);
+  const receipt = result.receipt!;
+  expect(registry.diskCleanerReceiptForConversation(receipt.conversationId!)?.launchId).toBe(receipt.launchId);
 });
 
 test.each(["bwrap: loopback RTM_NEWADDR: Operation not permitted", "bwrap: setting up uid map: Permission denied"])("disk host records unsandboxed fallback when probe fails: %s", async reason => {
@@ -295,12 +305,13 @@ test.skipIf(process.platform !== "linux" || process.env.LLV_CLEANER_SANDBOX_TEST
   expect(result.status).toBe(202);
   const access = materializeStructuredHostAccess(structuredHostAccessPolicy(result.receipt?.launchProfile), process.env, null, path.join(root, "scratch"));
   const workingDirectory = structuredHostWorkingDirectory({ engine: "codex", receipt: result.receipt!,
-    spec: { engine: "codex", command: "codex", cwd, windowName: "cleaner", launchProfile: result.receipt!.launchProfile } }, access);
+    spec: { cwd, launchProfile: result.receipt!.launchProfile } }, access);
   const probe = path.join(cwd, "preserved.txt");
   fs.writeFileSync(probe, "preserved\n");
   fs.symlinkSync(cwd, path.join(workingDirectory, "outside"));
   const codexHome = path.join(root, "codex-sandbox");
   fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), `[permissions.llv-stage.filesystem]\nwritable_roots = [${JSON.stringify(cwd)}]\n[permissions.llv-stage.network]\nenabled = true\n`);
   const scratchProbe = path.join(access.scratchDirectory!, "writable.txt");
   const evidenceProbe = path.join(access.env.LLV_EVIDENCE_DIR!, "writable.txt");
   const before = fs.statSync(probe);

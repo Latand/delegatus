@@ -17,7 +17,7 @@ import { AgentMemoryCell, planAgentMemory } from "./agentMemory";
 import { agentMemoryScopes, agentMemoryCapForPlan, PIPELINE_MEMORY_DEFAULT_ROLE } from "./agentMemorySettings";
 import { planAgentCpu, workloadForMemberships } from "./cpuPlacement";
 import { attemptTempConfigParent } from "./attemptTempPaths";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -307,7 +307,13 @@ async function materializeAttemptAccess(input: StructuredSpawnInput, capability:
   return materializeOwnedStructuredHostAccess(structuredHostAccessPolicy(input.spec.launchProfile), { ...input.account.env, ...guard }, capability, () => tempOwnerForSpawn(input));
 }
 
-function assertDiskCleanerAccess(input: Pick<StructuredSpawnInput, "engine" | "receipt" | "spec">): boolean {
+type DiskCleanerHostIdentity = {
+  engine: AgentEngine;
+  receipt: Pick<SpawnReceipt, "agentRole" | "launchId" | "launchProfile">;
+  spec: Pick<ResumeSpec, "cwd" | "launchProfile">;
+};
+
+function assertDiskCleanerAccess(input: DiskCleanerHostIdentity): boolean {
   const profile = input.spec.launchProfile;
   if (input.receipt.agentRole !== "cleaner" || profile?.agentMemoryRoleParams?.mode !== "disk") return false;
   if (input.engine !== "codex" || !guardedDiskCleanerProfile(profile)) throw new Error("disk cleaner requires a guarded restricted profile");
@@ -317,17 +323,51 @@ function assertDiskCleanerAccess(input: Pick<StructuredSpawnInput, "engine" | "r
 /** Keep the requested cwd for project identity, but never grant it workspace writes.
     Each new host, including a recovered host, receives its own empty workspace. */
 export function structuredHostWorkingDirectory(
-  input: Pick<StructuredSpawnInput, "engine" | "receipt" | "spec">,
+  input: DiskCleanerHostIdentity,
   access: StructuredHostAccessMaterialization,
 ): string {
   if (!assertDiskCleanerAccess(input)) return input.spec.cwd;
   if (!access.scratchDirectory || access.codex.sandbox !== "workspace-write") throw new Error("disk cleaner scratch is unavailable");
   const cwd = path.join(access.scratchDirectory, "cwd");
   fs.mkdirSync(cwd, { mode: 0o700 });
-  // :workspace also grants the shared /tmp. Disk inventory needs only the
-  // two owned roots, even when its empty cwd happens to live under /tmp.
-  access.codex.permissionProfileConfig = `permissions.llv-stage={extends=":read-only",filesystem={${JSON.stringify(access.scratchDirectory)}="write",${JSON.stringify(access.env.LLV_EVIDENCE_DIR)}="write"}}`;
+  // Account config is recursively merged with CLI TOML. Give this launch a
+  // fresh profile key so a preconfigured permissions.llv-stage cannot add roots.
+  const profile = `llv-cleaner-${randomUUID()}`;
+  access.codex.permissionProfile = profile;
+  access.codex.permissionProfileConfig = `permissions.${profile}={extends=":read-only",filesystem={${JSON.stringify(access.scratchDirectory)}="write",${JSON.stringify(access.env.LLV_EVIDENCE_DIR)}="write"}}`;
   return cwd;
+}
+
+/** Applies the cleaner boundary whenever a new Codex process is made, including
+    startup adoption and account-migration successors. */
+export async function prepareDiskCleanerHost(
+  input: DiskCleanerHostIdentity & { registry: AgentRegistry },
+  access: StructuredHostAccessMaterialization,
+  options: CodexAppServerHostOptions,
+  expectedReceipt: SpawnReceipt | null,
+): Promise<CleanerSandboxObservation | null> {
+  if (!assertDiskCleanerAccess(input)) return null;
+  options.cwd = structuredHostWorkingDirectory(input, access);
+  options.sandbox = access.codex.sandbox;
+  options.permissionProfile = access.codex.permissionProfile;
+  options.permissionProfileConfig = access.codex.permissionProfileConfig;
+  if (!expectedReceipt) throw new Error("disk cleaner launch receipt is unavailable for sandbox observation");
+  let observation: CleanerSandboxObservation = { mode: "restricted", reason: null };
+  try {
+    const probeEnv = { ...(options.env ?? process.env), ...(options.codexHome ? { CODEX_HOME: options.codexHome } : {}) };
+    await assertCleanerSandboxAvailable({ ...options, env: probeEnv });
+  } catch (error) {
+    observation = { mode: "unsandboxed", reason: hardenedRedact(error instanceof Error ? error.message : String(error)).slice(0, 4096) };
+  }
+  await input.registry.recordCleanerSandboxOffLoop(expectedReceipt.launchId, observation, expectedReceipt);
+  if (observation.mode === "unsandboxed") {
+    options.sandbox = "danger-full-access";
+    options.permissionProfile = undefined;
+    options.permissionProfileConfig = undefined;
+  }
+  options.cleanerDiskWorkspace = true;
+  options.runtimeInstructions = `Include this runtime observation in your final report: ${JSON.stringify({ cleanerSandbox: observation })}`;
+  return observation;
 }
 
 /** Runtime admission calls carry the durable launch id as their idempotency
@@ -2253,7 +2293,7 @@ export async function defaultStartHost(
   if (input.engine === "codex") {
     const nativeMemoryEnabled = await codexNativeMemoryEnabled(input.account.home, profile.allowSubagents, profile.cleanMemory === true);
     const options: CodexAppServerHostOptions = {
-      cwd: structuredHostWorkingDirectory(input, access),
+      cwd: input.spec.cwd,
       codexHome: input.account.home,
       fileAuthCredentials: input.account.kind === "managed",
       serviceTier: launchServiceTier(profile),
@@ -2279,28 +2319,10 @@ export async function defaultStartHost(
       assertCurrent: () => assertMemoryPreparedStartCurrent(input),
       ...(memoryCell ? { memoryCell } : {}),
     };
-    if (assertDiskCleanerAccess(input)) {
-      let observation: CleanerSandboxObservation = { mode: "restricted", reason: null };
-      try {
-        await assertCleanerSandboxAvailable({ ...options, env: { ...env, CODEX_HOME: input.account.home } });
-      } catch (error) {
-        observation = { mode: "unsandboxed", reason: hardenedRedact(error instanceof Error ? error.message : String(error)).slice(0, 4096) };
-      }
-      try {
-        assertMemoryPreparedStartCurrent(input);
-        await input.registry.recordCleanerSandboxOffLoop(input.receipt.launchId, observation, input.receipt);
-        assertMemoryPreparedStartCurrent(input);
-        if (observation.mode === "unsandboxed") {
-          options.sandbox = "danger-full-access";
-          options.permissionProfile = undefined;
-          options.permissionProfileConfig = undefined;
-        }
-        options.runtimeInstructions = `Include this runtime observation in your final report: ${JSON.stringify({ cleanerSandbox: observation })}`;
-      } catch (error) {
-        access.cleanup();
-        throw error;
-      }
-    }
+    try {
+      await prepareDiskCleanerHost(input, access, options, input.receipt);
+      assertMemoryPreparedStartCurrent(input);
+    } catch (error) { access.cleanup(); throw error; }
     await input.authorize?.();
     assertMemoryPreparedStartCurrent(input);
     return resumeSessionId
