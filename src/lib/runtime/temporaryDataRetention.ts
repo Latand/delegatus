@@ -44,24 +44,6 @@ function mutationCurrent(files: readonly string[], directories: readonly string[
   try {
     fd = library.symbols.inotify_init1(0x800 | 0x80000); // NONBLOCK | CLOEXEC
     if (fd < 0) return false;
-    const requested = new Map<string, Set<string> | null>();
-    for (const directory of directories) requested.set(directory, null);
-    // Observe path bindings as well as their objects. Resolve each existing
-    // component, including alias chains and the parent of an absent target.
-    const pending = [...files, ...directories], seen = new Set<string>();
-    while (pending.length) {
-      if (performance.now() >= deadline || seen.size >= MAX_PROTECTION_ENTRIES) return false;
-      const file = pending.pop()!;
-      if (seen.has(file)) continue;
-      seen.add(file);
-      const parent = path.dirname(file);
-      if (parent === file) continue;
-      if (!requested.has(parent)) requested.set(parent, new Set());
-      requested.get(parent)?.add(path.basename(file));
-      pending.push(parent);
-      const stat = fs.lstatSync(file, { throwIfNoEntry: false });
-      if (stat?.isSymbolicLink()) pending.push(path.resolve(parent, fs.readlinkSync(file)));
-    }
     const watched = new Map<number, Set<string> | null>();
     const add = (file: string, names: Set<string> | null, directory: boolean) => {
       // MODIFY, ATTRIB, MOVE, CREATE, DELETE, self changes; do not follow links.
@@ -71,13 +53,52 @@ function mutationCurrent(files: readonly string[], directories: readonly string[
       watched.set(wd, previous === null || names === null ? null : new Set([...(previous ?? []), ...names]));
       return true;
     };
-    for (const [directory, names] of requested) {
-      if (performance.now() >= deadline) return false;
-      const stat = fs.lstatSync(directory, { throwIfNoEntry: false });
-      if (!stat) continue; // Its nearest existing parent watches the missing name.
-      if (stat.isSymbolicLink()) {
-        if (!add(fs.realpathSync(directory), names, true)) return false;
-      } else if (!stat.isDirectory() || !add(directory, names, true)) return false;
+    const requested = new Map<string, Set<string> | null>();
+    const observe = (directory: string, name?: string) => {
+      const previous = requested.get(directory);
+      if (previous === null || name !== undefined && previous?.has(name)) return true;
+      const names = name === undefined ? null : new Set([...(previous ?? []), name]);
+      requested.set(directory, names);
+      return add(directory, names, true);
+    };
+    // Traverse in filesystem order: hop/.. climbs the physical directory
+    // reached through hop. Never normalize a link's remaining components.
+    // Install each parent watch before reading its child, so a binding change
+    // during watch discovery also invalidates the final validation interval.
+    const wholeDirectories = new Set(directories);
+    const physicalDirectories = new Set<string>();
+    let steps = 0;
+    for (const file of new Set([...files, ...directories])) {
+      if (!path.isAbsolute(file)) return false;
+      // Reuse only physical parents whose bindings are already watched. A
+      // flat capture tree then visits its shared ancestry once per dispatch.
+      const parent = path.dirname(file);
+      let reached = physicalDirectories.has(parent) ? parent : path.parse(file).root, hops = 0, missing = false;
+      const pending = file.slice(reached.length).split(path.sep).filter(Boolean);
+      while (pending.length) {
+        if (performance.now() >= deadline || ++steps > MAX_PROTECTION_ENTRIES) return false;
+        const name = pending.shift()!;
+        if (name === ".") continue;
+        if (name === "..") { reached = path.dirname(reached); continue; }
+        if (!observe(reached, name)) return false;
+        const current = path.join(reached, name);
+        const stat = fs.lstatSync(current, { throwIfNoEntry: false });
+        if (!stat) { missing = true; break; } // Its existing parent watches the missing name.
+        if (stat.isSymbolicLink()) {
+          if (++hops > 256) return false;
+          const link = fs.readlinkSync(current);
+          if (path.isAbsolute(link)) reached = path.parse(link).root;
+          pending.unshift(...link.split(path.sep).filter(Boolean));
+        } else {
+          reached = current;
+          if (pending.length && !stat.isDirectory()) return false;
+          if (stat.isDirectory()) physicalDirectories.add(reached);
+        }
+      }
+      if (!missing && wholeDirectories.has(file)) {
+        if (!physicalDirectories.has(reached) && !fs.lstatSync(reached).isDirectory()) return false;
+        if (!observe(reached)) return false;
+      }
     }
     // Object watches also detect writes through hardlinks outside the tree.
     for (const file of files) {

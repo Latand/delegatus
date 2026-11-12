@@ -82,7 +82,7 @@ for (const replay of [false, true]) for (const seam of ["close", "authority"]) f
        if (closed && !planted && seam === "authority") plant();
        return allowed;
      } }) });
-     expect(planted).toBeTrue();
+     expect(planted, JSON.stringify({ report, mounts, armed, closed })).toBeTrue();
      expect(report.errors).toBe(0);
      expect(report.removed).toBe(mutation === "none" ? 1 : 0);
      if (mutation === "none") {
@@ -100,5 +100,92 @@ for (const replay of [false, true]) for (const seam of ["close", "authority"]) f
      }
      if (mutation === "checkout") expect(fs.realpathSync(path.join(checkout, "late-link"))).toBe(directory);
    } finally { directorySpy.mockRestore(); mountSpy.mockRestore(); queueSpy.mockRestore(); }
+  });
+}
+
+// The entry's hop/.. reaches the physical parent of hop's target. The final
+// fence must observe that binding even after inventory validation has ended.
+for (const replay of [false, true]) for (const binding of ["target", "hop", "parent", "lexical-target"]) for (const timing of ["early", "close", "authority", "none"]) {
+  test(`checkout alias traversal: ${binding} ${timing} (replay=${replay})`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-alias-")); roots.push(root);
+    const scope = path.join(root, "evidence"), directory = path.join(scope, "lane", "captures");
+    fs.mkdirSync(directory, { recursive: true });
+    const content = Buffer.from([0, 1, 255, 10, 128]);
+    fs.writeFileSync(path.join(directory, "capture.png"), content);
+    const checkout = path.join(root, "checkout"), aliases = path.join(root, "aliases");
+    const physical = path.join(root, "physical"), safe = path.join(root, "safe");
+    fs.mkdirSync(path.join(checkout, ".git"), { recursive: true }); fs.mkdirSync(aliases);
+    fs.mkdirSync(path.join(physical, "child"), { recursive: true }); fs.mkdirSync(safe);
+    fs.symlinkSync(path.join(physical, "child"), path.join(aliases, "hop"));
+    fs.symlinkSync(safe, path.join(physical, "target"));
+    fs.symlinkSync("hop/../target", path.join(aliases, "entry"));
+    fs.symlinkSync(binding === "lexical-target" ? `${aliases}/hop/../target` : path.join(aliases, "entry"), path.join(checkout, "dependency"));
+    const stat = fs.lstatSync(directory), journal = attemptTempJournalPath(directory);
+    let store = new TemporaryDataStore(path.join(root, "ledger.sqlite")); stores.push(store);
+    store.register({ directory, scope, kind: "lane-evidence", owner: "fixture", identity: `${stat.dev}:${stat.ino}`,
+      adoptedAt: 0, checkedAt: 0, bytes: 0, reason: "fixture" });
+    if (replay) {
+      await expect(removeTreeViaTrash(directory, { journal, disposable: true, held: () => false,
+        remove: async () => { throw new Error("fixture interruption before native removal"); }
+      })).rejects.toThrow("fixture interruption");
+      expect(fs.existsSync(journal)).toBeTrue();
+      store.close(); stores.splice(stores.indexOf(store), 1);
+      store = new TemporaryDataStore(path.join(root, "ledger.sqlite")); stores.push(store);
+    }
+    let mounts = 0, armed = false, closed = false, planted = false;
+    const plant = () => {
+      planted = true;
+      if (binding === "target" || binding === "lexical-target") {
+        fs.unlinkSync(path.join(physical, "target")); fs.symlinkSync(directory, path.join(physical, "target"));
+      } else {
+        const replacement = path.join(root, "replacement");
+        fs.mkdirSync(path.join(replacement, "child"), { recursive: true });
+        fs.symlinkSync(directory, path.join(replacement, "target"));
+        if (binding === "hop") {
+          fs.unlinkSync(path.join(aliases, "hop")); fs.symlinkSync(path.join(replacement, "child"), path.join(aliases, "hop"));
+        } else {
+          fs.renameSync(physical, path.join(root, "old-physical")); fs.symlinkSync(replacement, physical);
+        }
+      }
+    };
+    const read = fs.readFileSync, open = fs.opendirSync;
+    const mountSpy = spyOn(fs, "readFileSync").mockImplementation(((file: unknown, ...args: unknown[]) => {
+      const value = (read as (...a: unknown[]) => unknown)(file, ...args);
+      if (String(file) === "/proc/self/mountinfo" && ++mounts === 5) {
+        armed = true;
+        if (timing === "early") plant();
+      }
+      return value;
+    }) as typeof fs.readFileSync);
+    const directorySpy = spyOn(fs, "opendirSync").mockImplementation(((file: fs.PathLike, ...args: unknown[]) => {
+      const stream = (open as (...a: unknown[]) => fs.Dir)(file, ...args);
+      if (armed && !closed && String(file).includes(".delegatus-trash-")) {
+        const close = stream.closeSync.bind(stream);
+        stream.closeSync = () => { close(); closed = true; if (timing === "close") plant(); };
+      }
+      return stream;
+    }) as typeof fs.opendirSync);
+    try {
+      const report = await sweepTemporaryData(store, { now: () => 2000000000000, claim: async () => () => {},
+        references: async (_row, target, inventory) => {
+          const targets = await inventory.targets(checkout);
+          return !targets.some(value => [directory, target].some(candidate => value === candidate || value.startsWith(candidate + path.sep)));
+        }, authority: async () => ({ expiresAt: 1, reason: "expired", revision: "fixture", current: () => {
+          if (closed && !planted && timing === "authority") plant();
+          return true;
+        } }) });
+      expect(planted).toBe(timing !== "none");
+      expect(report.errors).toBe(0);
+      expect(report.removed).toBe(timing === "none" ? 1 : 0);
+      expect(fs.existsSync(journal)).toBeFalse();
+      if (timing === "none") {
+        expect(fs.existsSync(directory)).toBeFalse();
+        expect(store.get(directory)).toBeNull();
+      } else {
+        expect(fs.lstatSync(directory).ino).toBe(stat.ino);
+        expect(fs.readFileSync(path.join(directory, "capture.png"))).toEqual(content);
+        expect(store.get(directory)?.identity).toBe(`${stat.dev}:${stat.ino}`);
+      }
+    } finally { directorySpy.mockRestore(); mountSpy.mockRestore(); }
   });
 }
