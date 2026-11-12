@@ -39,7 +39,10 @@ probe("native chat reply and continuation address the chat with inline web citat
     console.log(JSON.stringify({ turn: index + 1, turns: response.num_turns, reply }));
     if (index === 0) expect(response.num_turns).toBeGreaterThan(1);
     expect(reply).toMatch(/[іїєґ]/iu);
-    expect(reply).toMatch(/https:\/\/(?:www\.)?iana\.org\//);
+    expect(reply).toMatch(/\[[^\]]+\]\(https?:\/\//);
+    expect(reply.split(/(?<=[.!?])\s+/u).some((sentence) =>
+      /(?:example\.(?:com|org)|домен|зареєстр|признач|документ|правил)/iu.test(sentence) && /\[[^\]]+\]\(https?:\/\//u.test(sentence),
+    )).toBe(true);
     expect(reply).not.toMatch(/^\s*(?:Sources:|Відповіла в чат|Розповіла .+ про)/mi);
     expect(reply.split(/\n\s*\n/)).toHaveLength(1);
   }
