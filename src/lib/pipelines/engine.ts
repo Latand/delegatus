@@ -1725,7 +1725,7 @@ function rememberUnresolvedTermination(
   const unique = new Map(survivors.map((survivor) => [
     JSON.stringify([survivor.pid, survivor.startIdentity, survivor.bootEpoch ?? null]), survivor,
   ]));
-  attempt.unresolvedTermination = { survivors: [...unique.values()], error: result.error, recordedAt };
+  attempt.unresolvedTermination = { survivors: [...unique.values()], error: result.error, recordedAt, sourceRevision: crypto.randomUUID() };
 }
 
 /**
@@ -12450,11 +12450,13 @@ async function reconcileUnconfirmedHosts(pipeline: Pipeline, ports: PipelinePort
   const attemptFor = (host: PipelineStageHostRef) => selectedRuns.find(run => run.stageId === host.stageId)?.attempts
     .find(attempt => attempt.n === host.attempt && attempt.conversationId === host.conversationId
       && attempt.agentPath === host.agentPath && attempt.paneId === host.paneId);
-  const extraIdentities = (host: PipelineStageHostRef) => {
+  const extraIdentitySources = (host: PipelineStageHostRef) => {
     const frozen = controllerClosedHosts(pipeline, host);
     if (!frozen) return null;
-    return [...(attemptFor(host)?.unresolvedTermination?.survivors ?? []),
-      ...frozen.flatMap(item => item.evidence.unresolvedTermination?.survivors ?? [])];
+    const sources = [attemptFor(host)?.unresolvedTermination, ...frozen.map(item => item.evidence.unresolvedTermination)]
+      .filter((record): record is NonNullable<typeof record> => Boolean(record));
+    return { arrays: sources.map(record => record.survivors),
+      revision: JSON.stringify(sources.map(record => [record.sourceRevision ?? record.recordedAt, record.survivors.length])) };
   };
   const owner = (host: PipelineStageHostRef) => JSON.stringify([pipeline.id, pipeline.project, pipeline.repoDir,
     pipeline.closeTeardown?.id, "operationId" in host ? host.operationId : null, hostTerminationKey(host)]);
@@ -12471,29 +12473,30 @@ async function reconcileUnconfirmedHosts(pipeline: Pipeline, ports: PipelinePort
     const attempt = attemptFor(host);
     if (controllerReferences(pipeline.id) && !selectedRuns.some(run => run.stageId === host.stageId && run.attempts.some(item => item.n === host.attempt))
       && pipeline.runs.find(run => run.stageId === host.stageId)?.attempts.length) { remaining.push(host); continue; }
-    const identities = extraIdentities(host);
+    const identities = extraIdentitySources(host);
     if (attempt?.activation || identities === null) { remaining.push(host); continue; }
     let terminated: boolean;
     if (ports.stageHostTermination) {
       const key = hostTerminationKey(host);
-      const result = await ports.stageHostTermination(target, { owner: owner(host), identities, progress: proofs[key] });
+      const result = await ports.stageHostTermination(target, { owner: owner(host), identities: [], identitySources: identities.arrays,
+        identitySourceRevision: identities.revision, progress: proofs[key] });
       if (result.progress && JSON.stringify(result.progress) !== JSON.stringify(proofs[key])) {
         proofs[key] = result.progress;
         progressChanged = true;
       }
       terminated = result.terminated;
       if (terminated) positive.set(host, () => {
-        const currentIdentities = extraIdentities(host);
+        const currentIdentities = extraIdentitySources(host);
         // Scope absence was checked asynchronously by the production probe.
         // The registry revision fence is cheap and synchronous inside the
         // SQLite write transaction, and detects replacement of any source row.
-        return currentIdentities !== null && !attemptFor(host)?.activation
+        return currentIdentities !== null && currentIdentities.revision === identities.revision && !attemptFor(host)?.activation
           && Boolean(result.sourceRevision && pipelineStageHostTerminationSourceCurrent(result.sourceRevision));
       });
     } else {
       // Injected legacy ports retain their own observation contract. Production
       // always requires the positive identity proof above.
-      terminated = identities.length === 0 && !await ports.stageHostResident(target);
+      terminated = identities.arrays.every(source => source.length === 0) && !await ports.stageHostResident(target);
     }
     const paneAlive = terminated && target.paneId ? await ports.paneAgentAlive(target.paneId) : false;
     if (!terminated || paneAlive) remaining.push(host); else gone.push(host);

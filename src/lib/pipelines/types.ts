@@ -875,6 +875,7 @@ export type PipelineUnresolvedTermination = {
   survivors: Array<{ pid: number; startIdentity: string | null; bootEpoch?: string | null }>;
   error: string;
   recordedAt: string;
+  sourceRevision?: string;
 };
 
 export type PipelineStageRun = {

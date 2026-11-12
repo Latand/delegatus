@@ -6560,6 +6560,16 @@ export class AgentRegistry {
     return this.scopedConversationSnapshot({ conversationId }, true, true);
   }
 
+  private cloneLivenessEntry(entry: AgentRegistryEntry): AgentRegistryEntry {
+    // Survivor sets can be large and immutable during this read. Clone the
+    // bounded metadata while retaining the array reference for paged probes.
+    const { structuredTerminationSurvivors, pendingHostExits, ...metadata } = entry;
+    const copied = clone(metadata) as AgentRegistryEntry;
+    if (structuredTerminationSurvivors !== undefined) copied.structuredTerminationSurvivors = structuredTerminationSurvivors;
+    if (pendingHostExits !== undefined) copied.pendingHostExits = pendingHostExits;
+    return copied;
+  }
+
   /** Cheap revision fence for work resumed across controller ticks. */
   livenessRevision(): string {
     const sqliteRevision = this.sqliteStore?.revision();
@@ -6584,7 +6594,7 @@ export class AgentRegistry {
         const generation = conversation.generations.at(-1);
         if (generation) {
           const key = `${conversation.engine}:${generation.id}`;
-          if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+          if (file.entries[key]) result.entries[key] = liveness ? this.cloneLivenessEntry(file.entries[key]!) : clone(file.entries[key]!);
         }
         if (liveness) {
           const paths = new Set([
@@ -6593,11 +6603,11 @@ export class AgentRegistry {
           ]);
           for (const candidate of conversation.generations) {
             const key = `${conversation.engine}:${candidate.id}`;
-            if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+            if (file.entries[key]) result.entries[key] = this.cloneLivenessEntry(file.entries[key]!);
           }
           for (const pathname of paths) {
             for (const entry of registryRowsMatching(file, "entries", "artifactPath", pathname)) {
-              result.entries[`${entry.key.engine}:${entry.key.sessionId}`] = clone(entry);
+              result.entries[`${entry.key.engine}:${entry.key.sessionId}`] = this.cloneLivenessEntry(entry);
             }
           }
         }

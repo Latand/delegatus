@@ -634,6 +634,8 @@ function isUnresolvedTermination(value: unknown): boolean {
   const record = value as Record<string, unknown>;
   return typeof record.error === "string"
     && typeof record.recordedAt === "string"
+    && (record.sourceRevision === undefined || typeof record.sourceRevision === "string"
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(record.sourceRevision))
     && Array.isArray(record.survivors)
     && record.survivors.every((survivor) => survivor !== null
       && typeof survivor === "object"

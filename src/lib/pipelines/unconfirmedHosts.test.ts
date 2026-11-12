@@ -183,6 +183,48 @@ test("large identity inputs read only the current durable cursor page and reset 
   expect(pidReads).toBeLessThanOrEqual(48 * 8);
 });
 
+test("same-length survivor replacement changes the durable proof source", async () => {
+  const f = host(63, { pid: MISSING_PID, startIdentity: "old-start" });
+  const old = Array.from({ length: 100 }, (_, index) => ({ pid: MISSING_PID, startIdentity: `old-${index}` }));
+  const first = await probePipelineStageHostTermination(f.target, { owner: "same-length", identities: [],
+    identitySources: [old], identitySourceRevision: "source-a", limit: 64 });
+  expect(first.progress?.next).toBe(64);
+  const replacement = [captureProcessIdentity(process.pid), ...old.slice(1)];
+  const next = await probePipelineStageHostTermination(f.target, { owner: "same-length", identities: [],
+    identitySources: [replacement], identitySourceRevision: "source-b", progress: first.progress, limit: 64 });
+  expect(next.terminated).toBeFalse();
+  expect(next.progress?.next).toBe(0);
+  expect(next.checked).toBe(1);
+});
+
+test("registry replacement during scope await cannot certify the old snapshot", async () => {
+  const f = host(64, { pid: MISSING_PID, startIdentity: "old-start" });
+  const snapshot = structuredClone(registry.readOnlySnapshot());
+  snapshot.entries[sessionKeyId(f.key)]!.structuredHost!.scope = { unit: "delegatus-agent-fixture.scope", bootEpoch: systemBootEpoch() };
+  fs.writeFileSync(registry.filename, JSON.stringify(snapshot));
+  const result = await probePipelineStageHostTermination(f.target, { owner: "scope-race", identities: [],
+    scopeState: async () => {
+      const replacement = structuredClone(registry.readOnlySnapshot());
+      replacement.entries[sessionKeyId(f.key)]!.structuredHost!.process = captureProcessIdentity(process.pid);
+      fs.writeFileSync(registry.filename, JSON.stringify(replacement));
+      return "not-found";
+    } });
+  expect(result.terminated).toBeFalse();
+  expect(result.checked).toBe(0);
+});
+
+test.each([64, 4096])("zero identity budget does not read elements from a %i survivor list", async size => {
+  const f = host(5000 + size, { pid: MISSING_PID, startIdentity: "old-start" });
+  let reads = 0;
+  const survivors = Array.from({ length: size }, (_, index) => Object.defineProperty({ startIdentity: `child-${index}` }, "pid", {
+    enumerable: true, get() { reads++; return MISSING_PID; },
+  }) as ProcessIdentity);
+  const result = await probePipelineStageHostTermination(f.target, { owner: "zero-budget", identities: [],
+    identitySources: [survivors], identitySourceRevision: "zero-budget-source", limit: 0 });
+  expect(result.checked).toBe(0);
+  expect(reads).toBe(0);
+});
+
 test("an old lane without delivery custody still reconciles its hosts", async () => {
   const f = host(15, { pid: MISSING_PID, startIdentity: "old-start" });
   const record = lane([f], "closed");
