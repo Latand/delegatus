@@ -1,11 +1,10 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
-import { agentRegistry, resolveConversationAlias } from "@/lib/agent/registry";
+import { agentRegistry } from "@/lib/agent/registry";
 import { procBackend } from "@/lib/proc";
 import { processIdentityStatus, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
 import { differentKernelBoot } from "@/lib/runtime/agentScope";
 import { agentScopeCommand, recordedAgentScope } from "@/lib/runtime/agentScope";
-import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import type { PipelineStageHostRef } from "./types";
 import type { HostTerminationProgress } from "./hostTerminationProof";
 
@@ -55,26 +54,38 @@ export async function probePipelineStageHostTermination(target: PipelineStageHos
   const unknown: HostTerminationProbe = { terminated: false, checked: 0 };
 
   try {
-    const registry = agentRegistry();
-    const conversation = (target.conversationId?.startsWith("conversation_")
-      ? registry.conversation(target.conversationId as ViewerConversationId) : null)
-      ?? (target.agentPath ? registry.conversationForPath(target.agentPath) : null);
-    if (!conversation) return unknown;
     // Fence the exact registry image used to collect evidence. The later scope
     // query is asynchronous, so its completion must never bless an older read.
-    const limit = Math.max(0, Math.min(64, input.limit ?? 64));
+    const limit = Math.floor(Math.max(0, Math.min(64, input.limit ?? 64)));
     // Preparation, source reads, scope probes and PID probes share this tick
     // budget. A zero budget returns before cloning conversation history.
-    if (limit === 0) return unknown;
+    if (limit < 8 || (input.identitySources?.length ?? 0) > 64) return unknown;
+    const registry = agentRegistry();
+    const owner = input.owner, identitySourceRevision = input.identitySourceRevision;
+    const identities = input.identities, externalSources = input.identitySources;
+    const inputCurrent = () => input.owner === owner && input.identitySourceRevision === identitySourceRevision
+      && input.identities === identities && input.identitySources === externalSources;
     const sourceRevision = registry.livenessRevision();
-    const generationOffset = input.progress?.generationNext ?? 0;
+    const conversation = registry.livenessConversationIdentity({
+      conversationId: target.conversationId?.startsWith("conversation_") ? target.conversationId : null,
+      path: target.agentPath,
+    });
+    if (!conversation) return unknown;
+    const sequence = crypto.createHash("sha256").update(JSON.stringify(["termination-sequence-v2", owner,
+      registry.filename, identitySourceRevision ?? null, conversation.id, conversation.version,
+      conversation.aliases, target.agentPath, systemBootEpoch()])).digest("hex");
+    // The caller's revision attests to large external arrays without reading
+    // all their elements on every tick. Unversioned inputs get a fresh proof.
+    const resumable = identitySourceRevision !== undefined || identities.length === 0 && !externalSources?.length;
+    const sameSequence = resumable && input.progress?.sequence === sequence;
+    // A changed dependency discards the entire traversal, including its flags
+    // and external identity sources. Never read the old offset first.
+    const generationOffset = sameSequence ? input.progress?.generationNext ?? 0 : 0;
     const generationPageLimit = Math.max(1, Math.min(8, Math.floor(limit / 8)));
     const page = registry.livenessConversationPage(conversation.id, generationOffset, generationPageLimit);
     const snapshot = page.snapshot;
-    if (registry.livenessRevision() !== sourceRevision) return unknown;
-    const current = snapshot.conversations[resolveConversationAlias(snapshot, conversation.id)];
-    if (target.conversationId?.startsWith("conversation_")
-      && resolveConversationAlias(snapshot, target.conversationId as ViewerConversationId) !== current?.id) return unknown;
+    if (registry.livenessRevision() !== sourceRevision || page.currentEvidence !== conversation.version) return unknown;
+    const current = snapshot.conversations[conversation.id];
     if (!current?.generations.length || current.generations.some(generation => !snapshot.entries[`${current.engine}:${generation.id}`])) return unknown;
     const registryIdentitySources: ProcessIdentity[][] = [];
     const entries = Object.values(snapshot.entries);
@@ -116,14 +127,15 @@ export async function probePipelineStageHostTermination(target: PipelineStageHos
       try {
         const loadState = input.scopeState ? await input.scopeState(scope.unit)
           : await agentScopeCommand(["show", "--value", "-p", "LoadState", scope.unit]);
+        if (!inputCurrent() || registry.livenessRevision() !== sourceRevision) return unknown;
         if (loadState !== "not-found") return unknown;
       } catch { return unknown; }
     }
     const preparationCost = current.generations.length + entries.length + scopes.size;
     if (preparationCost >= limit) return unknown;
     const firstPage = generationOffset === 0;
-    const identitySources = [...(firstPage && input.identities.length ? [input.identities] : []),
-      ...(firstPage ? input.identitySources ?? [] : []), ...registryIdentitySources];
+    const identitySources = [...(firstPage && identities.length ? [identities] : []),
+      ...(firstPage ? externalSources ?? [] : []), ...registryIdentitySources];
     const identityCount = identitySources.reduce((count, source) => count + source.length, 0);
     // The owner and registry row custody fence the source. Keep the identity
     // list in its recorded order and resume by index: sorting and deduplicating
@@ -133,12 +145,8 @@ export async function probePipelineStageHostTermination(target: PipelineStageHos
       return [generation.id, generation.path, entry?.updatedAt ?? null, entry?.structuredHost?.process ?? null,
         entry?.structuredHost?.exitProcess ?? null, entry?.structuredTerminationCaptureId ?? null];
     });
-    const sequence = crypto.createHash("sha256").update(JSON.stringify(["termination-sequence-v1", input.owner,
-      registry.filename, input.identitySourceRevision ?? null, current.id, current.engine, page.totalGenerations,
-      page.currentEvidence, systemBootEpoch()])).digest("hex");
     const source = crypto.createHash("sha256").update(JSON.stringify(["termination-page-v1", sequence,
       page.offset, pageEvidence, firstPage ? identityCount : null])).digest("hex");
-    const sameSequence = input.progress?.sequence === sequence;
     const samePage = sameSequence && input.progress?.source === source
       && input.progress.generationNext === generationOffset && input.progress.next <= identityCount;
     let next = samePage ? input.progress!.next : 0;
@@ -155,7 +163,7 @@ export async function probePipelineStageHostTermination(target: PipelineStageHos
       if (!recordedProcessTerminated(identity)) break;
       next++;
     }
-    if (registry.livenessRevision() !== sourceRevision) return unknown;
+    if (!inputCurrent() || registry.livenessRevision() !== sourceRevision) return unknown;
     const targetPathMatched = Boolean(sameSequence && input.progress?.targetPathMatched)
       || pageEvidence.some(([, pathname]) => pathname === target.agentPath);
     const identitySeen = Boolean(sameSequence && input.progress?.identitySeen) || identityCount > 0;
@@ -165,7 +173,7 @@ export async function probePipelineStageHostTermination(target: PipelineStageHos
       return { terminated: false, progress: { source, next: 0, generationNext: generationOffset + current.generations.length,
         sequence, targetPathMatched, identitySeen }, checked, sourceRevision };
     }
-    if (!identitySeen || target.agentPath && !targetPathMatched && !current.continuityPaths.includes(target.agentPath)) return unknown;
+    if (!identitySeen || target.agentPath && !targetPathMatched && !registry.livenessConversationPathMatches(current.id, target.agentPath)) return unknown;
     return { terminated: true, progress: { source, next, generationNext: generationOffset, sequence }, checked, sourceRevision };
   } catch { return unknown; }
 }

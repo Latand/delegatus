@@ -5382,7 +5382,9 @@ export class AgentRegistry {
   accountCreditGuardRevision(): number { return this.creditGuardRevision; }
   invalidateAccountCreditGuard(): void { this.creditGuardRevision += 1; }
   private readonly beforeDualWriteMutationReplace: (() => void) | undefined;
-  private readOnlyCache: { signature: string; snapshot: RegistryFile } | null = null;
+  private readOnlyCache: { signature: string; snapshot: RegistryFile; termination: {
+    versions: Map<string, string>; entriesByPath: Map<string, AgentRegistryEntry[]>; conversationsByPath: Map<string, Set<string>>;
+  } } | null = null;
   private readonly mirrorCheckpointMs: number;
   private readonly now: () => number;
   private readonly scheduleMirrorCheckpoint: (callback: () => void, delayMs: number) => { unref?(): unknown };
@@ -6267,6 +6269,7 @@ export class AgentRegistry {
         }
         this.assertSqliteParity();
       }
+      if (changed) this.readOnlySnapshot();
       return result;
     } finally {
       if (!admitted) this.releaseLock(claim);
@@ -6444,10 +6447,37 @@ export class AgentRegistry {
       const snapshot = deepFreeze(readFile(this.filename, this.mcpGrantPolicy));
       const after = registryFileSignature(this.filename);
       if (before !== after) continue;
-      this.readOnlyCache = { signature: after, snapshot };
+      this.readOnlyCache = { signature: after, snapshot, termination: this.jsonTerminationIndex(snapshot) };
       return snapshot;
     }
     return deepFreeze(readFile(this.filename, this.mcpGrantPolicy));
+  }
+
+  /** The legacy backend imports whole JSON files. Build its derived tokens
+      once with that immutable view, owned and evicted by the same cache. */
+  private jsonTerminationIndex(file: RegistryFile) {
+    const byPath = new Map<string, AgentRegistryEntry[]>();
+    for (const entry of Object.values(file.entries)) if (entry.artifactPath) {
+      const entries = byPath.get(entry.artifactPath) ?? [];
+      entries.push(entry);
+      byPath.set(entry.artifactPath, entries);
+    }
+    const versions = new Map<string, string>();
+    const conversationsByPath = new Map<string, Set<string>>();
+    for (const conversation of Object.values(file.conversations)) {
+      const hash = crypto.createHash("sha256").update(JSON.stringify(conversation));
+      for (const generation of conversation.generations) {
+        hash.update(JSON.stringify(file.entries[`${conversation.engine}:${generation.id}`] ?? null));
+        for (const entry of byPath.get(generation.path) ?? []) hash.update(JSON.stringify(entry));
+      }
+      versions.set(conversation.id, hash.digest("hex"));
+      for (const pathname of [...conversation.generations.map(generation => generation.path), ...conversation.continuityPaths]) {
+        const ids = conversationsByPath.get(pathname) ?? new Set<string>();
+        ids.add(conversation.id);
+        conversationsByPath.set(pathname, ids);
+      }
+    }
+    return { versions, entriesByPath: byPath, conversationsByPath };
   }
 
   worktreeProtectionSnapshot(): WorktreeProtection {
@@ -6562,39 +6592,70 @@ export class AgentRegistry {
 
   /** Read a bounded generation window for host liveness reconciliation. The
       cursor advances through retained history without cloning the full array. */
-  livenessConversationPage(conversationId: string, offset: number, limit: number): {
-    snapshot: RegistryFile; offset: number; totalGenerations: number; currentEvidence: unknown;
-  } {
-    return this.readKeyed(file => {
-      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
-      const id = resolveConversationAlias(file, conversationId as ViewerConversationId);
-      const conversation = file.conversations[id];
-      if (!conversation) return { snapshot: result, offset, totalGenerations: 0, currentEvidence: null };
-      for (const identity of conversationIdentities(file, id)) {
-        if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
+  livenessConversationIdentity(target: { conversationId?: string | null; path?: string | null }): {
+    id: string; version: string; aliases: [string, string][];
+  } | null {
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) return this.sqliteStore.terminationIdentity(target);
+    const file = this.readOnlyCache?.signature === registryFileSignature(this.filename) ? this.readOnlyCache.snapshot : null;
+    if (!file) return null;
+    const aliases: [string, string][] = [];
+    let selected = target.conversationId;
+    if (!selected && target.path) {
+      const matches = this.readOnlyCache!.termination.conversationsByPath.get(target.path);
+      if (matches?.size !== 1) return null;
+      selected = matches.values().next().value;
+    }
+    if (!selected) return null;
+    let id: string = selected;
+    const seen = new Set<string>();
+    while (file.conversationAliases[id]) {
+      if (seen.has(id) || seen.size >= 64) return null;
+      seen.add(id);
+      const next: string = file.conversationAliases[id]!;
+      aliases.push([id, next]);
+      id = next;
+    }
+    const conversation = file.conversations[id];
+    if (!conversation) return null;
+    const version = this.readOnlyCache?.snapshot === file ? this.readOnlyCache.termination.versions.get(id) : undefined;
+    return version ? { id, version, aliases } : null;
+  }
+
+  livenessConversationPathMatches(id: string, pathname: string): boolean {
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) return this.sqliteStore.terminationPathMatches(id, pathname);
+    const file = this.readOnlyCache?.signature === registryFileSignature(this.filename) ? this.readOnlyCache.snapshot : null;
+    return Boolean(file && this.readOnlyCache?.termination.conversationsByPath.get(pathname)?.has(id));
+  }
+
+  livenessConversationPage(conversationId: string, offset: number, limit: number) {
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) return this.sqliteStore.terminationPage(conversationId, offset, limit);
+    const file = this.readOnlyCache?.signature === registryFileSignature(this.filename) ? this.readOnlyCache.snapshot : null;
+    if (!file) throw new Error("termination JSON view is not prepared");
+    const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+    const id = resolveConversationAlias(file, conversationId as ViewerConversationId);
+    const conversation = file.conversations[id];
+    if (!conversation) return { snapshot: result, offset, totalGenerations: 0, currentEvidence: null };
+    const totalGenerations = conversation.generations.length;
+    const generations = conversation.generations.slice(offset, offset + limit);
+    // These records are read-only evidence. Keep unrelated retained arrays
+    // by reference and copy only the requested generation window.
+    result.conversations[id] = { ...conversation, generations };
+    result.conversationRevision[conversation.engine] = file.conversationRevision[conversation.engine];
+    const paths = new Set(generations.map(candidate => candidate.path));
+    for (const candidate of generations) {
+      const key = `${conversation.engine}:${candidate.id}`;
+      if (file.entries[key]) result.entries[key] = file.entries[key]!;
+    }
+    for (const pathname of paths) {
+      const entries = this.readOnlyCache!.termination.entriesByPath.get(pathname) ?? [];
+      if (entries.length > limit) throw new Error("termination entry window exceeded");
+      for (const entry of entries) {
+        result.entries[`${entry.key.engine}:${entry.key.sessionId}`] = entry;
+        if (Object.keys(result.entries).length > limit) throw new Error("termination entry window exceeded");
       }
-      const totalGenerations = conversation.generations.length;
-      const generations = conversation.generations.slice(offset, offset + limit);
-      // These records are read-only evidence. Keep unrelated retained arrays
-      // by reference and copy only the requested generation window.
-      result.conversations[id] = { ...conversation, generations };
-      result.conversationRevision[conversation.engine] = file.conversationRevision[conversation.engine];
-      const paths = new Set(generations.map(candidate => candidate.path));
-      for (const candidate of generations) {
-        const key = `${conversation.engine}:${candidate.id}`;
-        if (file.entries[key]) result.entries[key] = this.cloneLivenessEntry(file.entries[key]!);
-      }
-      for (const pathname of paths) {
-        for (const entry of registryRowsMatching(file, "entries", "artifactPath", pathname)) {
-          result.entries[`${entry.key.engine}:${entry.key.sessionId}`] = this.cloneLivenessEntry(entry);
-        }
-      }
-      const latest = conversation.generations.at(-1);
-      const latestEntry = latest ? file.entries[`${conversation.engine}:${latest.id}`] : undefined;
-      const currentEvidence = latest ? [latest.id, latest.path, latestEntry?.updatedAt ?? null,
-        latestEntry?.structuredHost?.process ?? null, latestEntry?.structuredTerminationCaptureId ?? null] : null;
-      return { snapshot: result, offset, totalGenerations, currentEvidence };
-    });
+    }
+    const currentEvidence = this.livenessConversationIdentity({ conversationId: id })?.version;
+    return { snapshot: result, offset, totalGenerations, currentEvidence };
   }
 
   private cloneLivenessEntry(entry: AgentRegistryEntry): AgentRegistryEntry {
@@ -6609,8 +6670,7 @@ export class AgentRegistry {
 
   /** Cheap revision fence for work resumed across controller ticks. */
   livenessRevision(): string {
-    const sqliteRevision = this.sqliteStore?.revision();
-    if (sqliteRevision !== null && sqliteRevision !== undefined) return `sqlite:${sqliteRevision}`;
+    if (this.sqliteStore) return this.sqliteStore.terminationRevision();
     const stat = fs.statSync(this.filename, { bigint: true });
     return `file:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`;
   }
