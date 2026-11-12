@@ -53,6 +53,15 @@ compatibility raises the major version.
   went from about 20 ms to about 0.1 ms. On first start the file is imported
   and verified, then kept as `orchestrator-seats.json.imported-<release>`,
   and a directory with a README takes its place (#1870).
+- **The forge cache is stored in `state.sqlite`** (collection
+  `forge_links`) instead of `forge-links.json`: one row per repository,
+  proposal page, pull request and issue number. Every sweep of a repository
+  and every pull request a stage report observed used to rewrite the whole
+  2.6 MB file; a sweep page now writes the pull requests it read, about
+  0.26 MB to disk, and an observed pull request about 90 KB. On first start the
+  file is imported and verified, then kept as
+  `forge-links.json.imported-<release>`, and a directory with a README takes
+  its place (#1870).
 - **"Asks you" state is stored in `state.sqlite`** (collection
   `operator_asks`) instead of `operator-asks.json`: one row per ask, per
   message already sent and per scored text, and one for the month's spend.
@@ -114,6 +123,12 @@ compatibility raises the major version.
   loses seat changes made since the upgrade. Deployed releases rolled back
   through the release fence get the file written back for them automatically,
   and the designations they make are merged at roll-forward.
+- A version older than this one finds a directory where `forge-links.json`
+  was. It reads that as an empty forge cache, so pull request and issue
+  chips disappear, and its sweep cannot write. Upgrade again to recover, or
+  replace the directory with the `forge-links.json.imported-*` copy. Deployed
+  releases rolled back through the release fence get the file written back
+  for them automatically, and their newer readings are merged at roll-forward.
 - A version older than this one finds a directory where
   `operator-asks.json` was. Its classifier reads that as a file it cannot
   read and sends nothing, memory decisions cannot record their spend, and the

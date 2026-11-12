@@ -161,6 +161,11 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     checkpointMirrorForDemotion: async () => (await import("@/lib/session/titleStore")).sessionTitleStore.checkpointRollbackMirror(statePath("session-titles.json")),
   },
   {
+    collection: "forge_links",
+    importAtActivation: async () => (await import("@/lib/forge/cache")).importLegacyForgeLinks(statePath("forge-links.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/forge/cache")).checkpointForgeLinksRollbackMirrorForDemotion(statePath("forge-links.json")),
+  },
+  {
     collection: "operator_asks",
     importAtActivation: async () => (await import("@/lib/asks/store")).importLegacyOperatorAsks(statePath("operator-asks.json"), { reconcile: true }),
     checkpointMirrorForDemotion: async () => (await import("@/lib/asks/store")).checkpointOperatorAsksRollbackMirrorForDemotion(statePath("operator-asks.json")),
