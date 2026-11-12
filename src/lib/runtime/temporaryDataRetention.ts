@@ -83,9 +83,10 @@ export function temporaryDataProtection(row: TemporaryDataCandidate, target: str
         finally { stream.closeSync(); }
         if (count !== before.size) return false;
       }
-      // Marker reads must be last: a marker created while reading a directory
-      // listing is part of the final mutation fence, including trash replay.
-      if ([...parents.keys()].some(parent => fs.existsSync(path.join(parent, ".delegatus-keep")))) return false;
+      // Markers are valid at every level, including the candidate's own root.
+      // Recheck after listings close so a marker created at that boundary is
+      // visible even when directory timestamps share a kernel granule.
+      if ([...parents.keys(), ...listings.keys()].some(directory => fs.existsSync(path.join(directory, ".delegatus-keep")))) return false;
       return true;
     } catch { return false; }
   } };
@@ -192,8 +193,13 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
         let protection: ReturnType<typeof temporaryDataProtection>;
         const dispatch = (current: string) => {
           assertRetentionTestPath(current);
-          return clock() < deadline && inventory.unchangedAll() && due()
-            && store.get(row.directory)?.identity === row.identity && protection?.current() === true;
+          return clock() < deadline
+            && store.get(row.directory)?.identity === row.identity
+            && inventory.unchangedAll()
+            && protection?.current() === true
+            // Authority may change during the final filesystem snapshot reads.
+            // Keep its current check adjacent to the native removal edge.
+            && due();
         };
         const validate = (current: string) => {
           assertRetentionTestPath(current);

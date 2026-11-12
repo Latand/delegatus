@@ -103,6 +103,42 @@ test("a keep marker planted during the last protection listing blocks dispatch",
   } finally { spy.mockRestore(); readSpy.mockRestore(); }
 });
 
+test("last protection reads recheck descendant markers and authority before deletion", async () => {
+  const f = fixture(), markerName = ".delegatus-keep";
+  let mountReads = 0, armed = false, planted = false, allowed = true;
+  const read = fs.readFileSync, original = fs.opendirSync;
+  const readSpy = spyOn(fs, "readFileSync").mockImplementation(((file: unknown, ...args: unknown[]) => {
+    const result = (read as (...values: unknown[]) => unknown)(file, ...args);
+    if (String(file) === "/proc/self/mountinfo" && ++mountReads === 5) armed = true;
+    return result;
+  }) as typeof fs.readFileSync);
+  const spy = spyOn(fs, "opendirSync").mockImplementation(((directory: fs.PathLike, ...args: unknown[]) => {
+    const stream = (original as (...values: unknown[]) => fs.Dir).call(fs, directory, ...args);
+    if (armed && !planted && String(directory).includes(".delegatus-trash-")) {
+      const close = stream.closeSync.bind(stream);
+      stream.closeSync = () => {
+        close();
+        fs.writeFileSync(path.join(String(directory), markerName), "late hold");
+        allowed = false;
+        planted = true;
+      };
+    }
+    return stream;
+  }) as typeof fs.opendirSync);
+  try {
+    const inode = fs.lstatSync(f.row.directory).ino;
+    const report = await sweepTemporaryData(f.store, { ...f.ports,
+      authority: async () => ({ expiresAt: NOW - 1, reason: "expired", revision: "stable", current: () => allowed }),
+      mounts: undefined,
+    });
+    expect(planted).toBeTrue(); expect(allowed).toBeFalse();
+    expect(report).toMatchObject({ removed: 0, errors: 0 });
+    expect(fs.lstatSync(f.row.directory).ino).toBe(inode);
+    expect(fs.existsSync(path.join(f.row.directory, markerName))).toBeTrue();
+    expect(fs.existsSync(attemptTempJournalPath(f.row.directory))).toBeFalse();
+  } finally { spy.mockRestore(); readSpy.mockRestore(); }
+});
+
 test.each([true, false])("a keep marker appearing after quarantine restores the candidate (%s)", async directory => {
   const f = fixture(directory); let calls = 0;
   const report = await sweepTemporaryData(f.store, { ...f.ports, references: async (_row, target) => {
