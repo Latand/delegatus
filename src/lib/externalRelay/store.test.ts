@@ -271,3 +271,19 @@ test("an asynchronous file-lock action retains ownership until its work finishes
     expect(fs.existsSync(`${file}.lock`)).toBe(false);
   } finally { release(); await pending.catch(() => {}); }
 });
+
+test("an old claim whose owner process is gone leaves the ledger with the next claim", async () => {
+  const file = path.join(root, "external-relay/requests.json");
+  const prior = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  const dead = { leaseId: "lease", ownerPid: 999999999, ownerIdentity: "dead" };
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ v: 1, claims: [
+      { ...dead, requestId: "abandoned-old", claimedAt: Date.now() - 3 * 24 * 60 * 60_000 },
+      { ...dead, requestId: "abandoned-recent", claimedAt: Date.now() - 60_000 },
+    ] }));
+    expect(await claimRelayRequestAsync("claim-after-abandoned", "lease", Date.now() + 5000)).toEqual({ kind: "claimed" });
+    const kept = (JSON.parse(fs.readFileSync(file, "utf8")) as { claims: { requestId: string }[] }).claims.map(claim => claim.requestId);
+    expect(kept.sort()).toEqual(["abandoned-recent", "claim-after-abandoned"]);
+  } finally { if (prior) fs.writeFileSync(file, prior); else fs.rmSync(file, { force: true }); }
+});

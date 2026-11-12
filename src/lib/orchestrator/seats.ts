@@ -105,6 +105,11 @@ export interface OrchestratorSeat {
   authCredentialBaseline?: SeatAuthCredentialBaseline;
   /** Connector selection frozen with this spawn intent for idempotent replay. */
   telegramGrant?: boolean;
+  /** This is the installation's first seat ever (decided under the store's lock
+      when the intent began): its spawn text carries the first-run instruction,
+      and a replay delivers the same bytes. The instruction is never part of
+      `mandate`, so nothing that rebuilds a mandate can carry it on. */
+  firstRun?: true;
   /** The mandate text delivered (active) or to be delivered (pending). */
   mandate: string;
   /** The role table (#1880) rendered from the live registry when this intent
@@ -347,6 +352,7 @@ function normalizeSeat(value: unknown): OrchestratorSeat | null {
     runtimeIdentityFrozen,
     authCredentialBaseline: normalizeSeatAuthCredentialBaseline(seat.authCredentialBaseline),
     ...(typeof seat.telegramGrant === "boolean" ? { telegramGrant: seat.telegramGrant } : {}),
+    ...(seat.firstRun === true ? { firstRun: true as const } : {}),
     mandate: seat.mandate,
     ...(typeof seat.roleTable === "string" ? { roleTable: seat.roleTable } : {}),
     promptVersion: typeof seat.promptVersion === "number" && Number.isInteger(seat.promptVersion) ? seat.promptVersion : null,
@@ -795,11 +801,28 @@ export function orchestratorSeatEverHeldIn(file: OrchestratorSeatFile | null, pr
   if (!file) return true;
   const canonical = canonicalOrchestratorProject(project);
   if (file.seats[canonical]) return true;
-  const stillborn = new Set(file.history
-    .filter((entry) => entry.seat.project === canonical && entry.reason === "terminal_error")
-    .map((entry) => `${entry.seat.conversationId}\0${entry.seat.seatEpoch}`));
+  const stillborn = stillbornSeatKeys(file, canonical);
   return file.revocations.some((revocation) => revocation.project === canonical
     && !stillborn.has(`${revocation.conversationId}\0${revocation.seatEpoch}`));
+}
+
+/** Seats a stillborn designation rolled back into `history`; one project's, or every project's. */
+function stillbornSeatKeys(file: OrchestratorSeatFile, project?: string): Set<string> {
+  return new Set(file.history
+    .filter((entry) => (project === undefined || entry.seat.project === project) && entry.reason === "terminal_error")
+    .map((entry) => `${entry.seat.conversationId}\0${entry.seat.seatEpoch}`));
+}
+
+/**
+ * Whether the installation has ever had an orchestrator in any project: an
+ * active seat, or a seat that was revoked since. Stillborn designations are not
+ * seats the operator had. An unreadable record answers true, as above.
+ */
+export function orchestratorInstallationEverHeld(file: OrchestratorSeatFile | null): boolean {
+  if (!file) return true;
+  if (Object.keys(file.seats).length > 0) return true;
+  const stillborn = stillbornSeatKeys(file);
+  return file.revocations.some((revocation) => !stillborn.has(`${revocation.conversationId}\0${revocation.seatEpoch}`));
 }
 
 /** How many previous seats a project's status read carries. */
@@ -1007,6 +1030,10 @@ export interface BeginSeatIntentInput {
   engine?: string | null;
   model?: string | null;
   telegramGrant?: boolean;
+  /** Ask for the first-run instruction. Granted only when the seat file, read
+      under the lock this intent begins in, shows no seat in any project, ever,
+      and no other intent in flight; otherwise the record carries no `firstRun`. */
+  firstRun?: boolean;
   automaticReplacement?: OrchestratorSeatIntent["automaticReplacement"];
   promptVersion?: number | null;
   /** Who triggered this designation, resolved from the request by the caller —
@@ -1070,6 +1097,12 @@ export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginS
       });
       delete file.pending[project];
     }
+    /* Decided here, under the lock: two first assignments racing in different
+       projects cannot both be the first, and a file that cannot be read proves
+       nothing, so it grants nothing. */
+    const firstRun = input.firstRun === true
+      && !Object.values(file.pending).some((other) => other.intent.error === null)
+      && !orchestratorInstallationEverHeld(readOrchestratorSeatFileOrNull());
     const seat: OrchestratorSeat = {
       ...(input.workspace ? { workspace: { memberId: input.workspace.memberId, workspaceId: input.workspace.workspaceId } } : {}),
       ...(input.workspace ? { workspaceFromMessage: input.workspaceFromMessage === true } : {}),
@@ -1081,6 +1114,7 @@ export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginS
       model: input.model?.trim() || null,
       runtimeIdentityFrozen: Boolean(input.engine?.trim() && input.model?.trim()),
       ...(typeof input.telegramGrant === "boolean" ? { telegramGrant: input.telegramGrant } : {}),
+      ...(firstRun ? { firstRun: true as const } : {}),
       mandate: input.mandate,
       ...(typeof input.roleTable === "string" ? { roleTable: input.roleTable } : {}),
       promptVersion: input.promptVersion ?? null,

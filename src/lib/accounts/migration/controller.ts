@@ -11,7 +11,7 @@ import { yieldToRuntime } from "@/lib/cooperative";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { loadFlows, reconcileFlowConversationOwnershipCooperatively } from "@/lib/flows/store";
+import { loadFlows } from "@/lib/flows/store";
 import { reconcileHandoffConversationOwnershipCooperatively } from "@/lib/handoffLineage";
 import { listFilesWithProjectCatalog, reconcileFileControllers } from "@/lib/scanner";
 import { persistedFileScanSnapshot } from "@/lib/scanner/scanCache";
@@ -23,7 +23,6 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { pathForPanePid, reconcileTasks } from "@/lib/tasks/reconcile";
 import { loadTasksForList, mutateTasks } from "@/lib/tasks/store";
 import { waitForStateLock } from "@/lib/state/lockWait";
-import { reconcileWorkflowConversationOwnershipCooperatively } from "@/lib/workflows/store";
 import { spawnViewerResidentWorker } from "@/lib/viewerWorkerLifecycle";
 
 import { reconcileMigrationInventory, reconcileMigrations, type HeldDeliveryPort } from "./coordinator";
@@ -132,8 +131,6 @@ export function accountControllerScan(
 export interface AccountMigrationControllerCyclePorts {
   scan: () => ReturnType<typeof listFilesWithProjectCatalog>;
   reconcileInventory: (registry: AgentRegistry, files: ControllerScan["files"], onTranscriptRead?: (pathname: string, complete: boolean) => void) => Promise<InventorySnapshot>;
-  reconcileFlowOwnership: (lookup: ConversationLookup) => Promise<void>;
-  reconcileWorkflowOwnership: (lookup: ConversationLookup) => Promise<void>;
   reconcileHandoffOwnership: (lookup: ConversationLookup) => Promise<void>;
   reconcileFiles: typeof reconcileFileControllers;
   reconcileRuntime: (registry: AgentRegistry, files: ControllerScan["files"]) => Promise<void>;
@@ -189,8 +186,6 @@ const DEFAULT_CONTROLLER_CYCLE_PORTS: AccountMigrationControllerCyclePorts = {
   reconcileInventory: (registry, files, onTranscriptRead) => reconcileMigrationInventory(registry, files, {
     readOnlySnapshot: true, incrementalInventory: true, onTranscriptRead,
   }),
-  reconcileFlowOwnership: reconcileFlowConversationOwnershipCooperatively,
-  reconcileWorkflowOwnership: reconcileWorkflowConversationOwnershipCooperatively,
   reconcileHandoffOwnership: reconcileHandoffConversationOwnershipCooperatively,
   reconcileFiles: reconcileFileControllers,
   reconcileRuntime: reconcileControllerRuntime,
@@ -333,8 +328,6 @@ export class AccountMigrationController {
     // Ownership stores can change independently of the scanner. Their lookups
     // remain keyed and do not need an assembled registry snapshot.
     const inventoryLookup: ConversationLookup = this.registry;
-    await this.ports.reconcileFlowOwnership(inventoryLookup);
-    await this.ports.reconcileWorkflowOwnership(inventoryLookup);
     await this.ports.reconcileHandoffOwnership(inventoryLookup);
     await yieldToRuntime();
     // Flow/pipeline deadlines and question routing also advance with no file

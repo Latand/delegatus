@@ -12,6 +12,7 @@ import { DELEGATION_REASONS, deliveryFailureReason, type DelegationCode } from "
 import { CompanionTranscriptRecords, type TranscriptEntry } from "./transcriptRecord";
 import { LIVE_VOICE } from "./sessionConfig";
 import { CompanionStorage, type ReportSpeech, type SessionStarter, type StoredProposal, type StoredSession } from "./storage";
+import { CHAIN_LIMIT, DROP_REASONS, RESUME_WINDOW_MS, type CallSegment } from "./callResume";
 import { voiceReportText } from "./reportSpeech";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
@@ -80,10 +81,11 @@ const reportStatus = (report: BridgeReportV1): "progress" | "result" | "question
  * answersDirective; without it, a result or a failure answers, while progress,
  * a question back and a blocker leave the request waiting. */
 const answersRequest = (report: BridgeReportV1) => report.answersDirective ?? (report.class === "completed" || report.class === "review_verdict" || report.class === "failed");
-/** Reports owed to the voice that one scan fills the queue up to; it scans on only after the voice has taken some. */
+/** Speech backlog, including handed entries still awaiting a reply, that pauses report discovery. */
 const REPORT_SPEECH_CAPACITY = 64;
-/** Only an open Live call has a voice to owe reports to; prototype sessions read them from their events. */
-const owesSpeech = (session: StoredSession) => !session.closed && session.authority === "live-model";
+/** A dropped Live part keeps owing speech until its continuation or the resume window's end. */
+const owesSpeech = (session: StoredSession, now: number) => session.authority === "live-model" && !session.resumedBy
+  && (!session.closed || session.droppedAt !== undefined && now - session.droppedAt <= RESUME_WINDOW_MS);
 
 function appendEvent(session: StoredSession, payload: Payload, now: number, clean: (text: string) => string): CompanionEvent {
   const event = { ...cleanStrings(payload, clean), version: 1 as const, sessionId: session.id, generation: session.generation,
@@ -188,6 +190,7 @@ export class CompanionAdmission {
     const event = appendEvent(session, payload, now, clean);
     if (event.type === "session.closed") {
       session.endedAt = now;
+      if (DROP_REASONS.has(event.reason)) session.droppedAt = now;
       this.record(session.id, { id: "end", kind: "session_end", atMs: event.atMs,
         data: { reason: event.reason, seconds: session.usage?.seconds ?? 0, endedAt: now, incomplete: event.incomplete,
           ...(event.cause ? { cause: event.cause } : {}), ...(event.episode ? { episode: event.episode } : {}) } });
@@ -440,6 +443,7 @@ export class CompanionAdmission {
   /** Admits or declines one delegation. The page can only tap; the spoken
    * answer arrives through the model's tool, and "auto" from `delegate`. */
   async confirm(id: string, command: Extract<CompanionCommand, { type: "confirmation" }> | Admit): Promise<DelegationOutcome | void> {
+    if (this.session(id).resumedBy) return;
     const refused: { code: DelegationCode } = { code: "proposal_unavailable" };
     const binding = this.storage.change(document => {
       const session = document.sessions[id];
@@ -487,6 +491,16 @@ export class CompanionAdmission {
     this.sending.set(key, promise);
     try { await promise; } finally { this.sending.delete(key); }
   }
+  private deliveryOwner(id: string, proposalId: string): string {
+    const seen = new Set<string>();
+    for (;;) {
+      if (seen.has(id) || seen.size >= CHAIN_LIMIT) throw new Error("SESSION_UNAVAILABLE");
+      seen.add(id);
+      const next = this.session(id).proposals[proposalId]?.adoptedBy;
+      if (!next) return id;
+      id = next;
+    }
+  }
   private async deliver(id: string, row: StoredProposal): Promise<void> {
     if (row.status === "failed") return;
     if (row.admittedAt === undefined) {
@@ -506,6 +520,8 @@ export class CompanionAdmission {
       try { settled = await this.paths.send({ sessionId: id, proposalId, delivery: row.delivery!, text: row.text!, startedBy: this.session(id).startedBy }); }
       catch { settled = { status: "unknown", operationId: row.delivery!.operationId }; }
     }
+    // A send may settle after the lease moved while its transport awaited.
+    id = this.deliveryOwner(id, proposalId);
     if (settled.status === "failed" && settled.code === "voice_seat_changed" && settled.operationId === null && row.delivery!.operationId === null) {
       const retry = this.storage.change(document => {
         const session = document.sessions[id];
@@ -543,10 +559,12 @@ export class CompanionAdmission {
       result: { status: receipt.status, delivery: receipt.delivery } });
   }
   async pollReceipts(id: string): Promise<void> {
-    if (!this.paths.receipt) return;
+    if (!this.paths.receipt || this.session(id).resumedBy) return;
     for (const row of Object.values(this.session(id).proposals)) {
       if (!row.delivery?.operationId || row.status === "delivered" || row.status === "failed") continue;
+      if (this.session(id).resumedBy) return;
       const status = await this.paths.receipt(row.delivery);
+      if (this.session(id).resumedBy) return;
       if (status === "pending") continue;
       if (status === "seat-revoked") {
         const retry = this.storage.change(document => {
@@ -596,6 +614,7 @@ export class CompanionAdmission {
     return this.storage.change(document => {
       const session = document.sessions[id];
       if (!session) throw new Error("SESSION_UNAVAILABLE");
+      if (session.resumedBy) return [];
       const projects = new Set<string>();
       const current = session.currentProject === undefined ? session.project : session.currentProject;
       if (current) projects.add(canonicalProject(current));
@@ -636,7 +655,7 @@ export class CompanionAdmission {
         // A full speech queue stops the scan before the next report, so nothing
         // owed is ever dropped: the rest stay past the watermark for a later poll,
         // once the voice has taken what waits. Migration recovery is bounded by its requests.
-        if (!legacy && owesSpeech(session) && (session.reportSpeech?.length ?? 0) >= REPORT_SPEECH_CAPACITY) break;
+        if (!legacy && owesSpeech(session, this.now()) && ((session.reportSpeech?.length ?? 0) + (session.speechInFlight?.length ?? 0)) >= REPORT_SPEECH_CAPACITY) break;
         // Advance even past rows that are not spoken. The bounded id ring is
         // a second guard; the durable sequence is what prevents old replay.
         marks[project] = report.seq;
@@ -653,7 +672,7 @@ export class CompanionAdmission {
           else if (status === "question" || status === "blocked") row.askedBack = report.id;
         }
         // Owed to the voice in the same commit that moves the scan past it.
-        if (owesSpeech(session)) (session.reportSpeech ??= []).push({ reportId: report.id, project, status, text, handed: 0 });
+        if (owesSpeech(session, this.now())) (session.reportSpeech ??= []).push({ reportId: report.id, project, status, text, handed: 0 });
         // A card can join only a receipt already published to the client. A
         // report arriving during a send or after a lost transport reply still
         // gets its own visible card, without inventing an operation identity.
@@ -748,8 +767,51 @@ export class CompanionAdmission {
   }
   /** Reports owed to the voice, oldest first, each with the parts already handed to the provider. */
   reportSpeech(id: string): ReportSpeech[] { return this.session(id).reportSpeech ?? []; }
-  /** Records how many parts of a report the provider took. Its parts are fixed
-   * at the first hand-off; a report is dropped once all of them are handed. */
+  /** Called inside the mint's lease transaction, before the provider can be asked. */
+  adoptPending(previous: StoredSession, next: StoredSession, segments: readonly CallSegment[]): void {
+    next.reportWatermarks = { ...previous.reportWatermarks };
+    next.spokenReports = [...previous.spokenReports ?? []];
+    const requests = this.records.read(previous.id).entries;
+    const owed = new Set(next.reportSpeech?.map(row => row.reportId));
+    for (const [id, row] of Object.entries(previous.proposals)) {
+      if (!awaitingReport(row) && !(row.state === "admitted" && row.delivery && row.reports.some(reportId => owed.has(reportId)))) continue;
+      this.hasPublishedReceipt(previous, row);
+      next.proposals[id] = structuredClone(row);
+      delete next.proposals[id].adoptedBy;
+      delete next.proposals[id].sourceTurn;
+      row.adoptedBy = next.id;
+      const request = requests.find(entry => entry.id === `request-${row.proposal.callId}`);
+      if (request) this.record(next.id, request);
+    }
+    const cards = new Map<string, Payload>();
+    for (const segment of segments) for (const row of segment.entries) {
+      const reportId = row.id.slice("report-".length);
+      if (row.kind !== "report" || !owed.has(reportId)) continue;
+      const delivery = row.data.delivery as Delivery | undefined;
+      const status = row.data.status;
+      if (typeof row.data.text !== "string" || status !== "progress" && status !== "result" && status !== "question" && status !== "blocked" && status !== "message") throw new Error("TRANSCRIPT_UNAVAILABLE");
+      if (delivery) {
+        if (status === "message") throw new Error("TRANSCRIPT_UNAVAILABLE");
+        cards.set(reportId, { type: "orchestrator.answer", reportId, delivery, status, text: row.data.text });
+      } else cards.set(reportId, { type: "orchestrator.report", reportId, project: String(row.data.project ?? previous.project), at: segment.createdAt + row.atMs, status, text: row.data.text });
+    }
+    for (const event of previous.events) {
+      if ((event.type === "orchestrator.answer" || event.type === "orchestrator.report") && owed.has(event.reportId)) cards.set(event.reportId, event);
+    }
+    const deliveries = new Set([...cards.values()].flatMap(card => card.type === "orchestrator.answer" ? [card.delivery.proposalId] : []));
+    for (const row of Object.values(previous.proposals)) if (row.delivery && (next.proposals[row.proposal.proposalId] || deliveries.has(row.proposal.proposalId))) {
+      appendEvent(next, { type: "delegation.tool.called", callId: row.proposal.callId, sourceItemId: row.proposal.sourceItemId,
+        instruction: row.proposal.instruction }, this.now(), this.cleaner());
+      appendEvent(next, { type: "delegation.sending", proposal: row.proposal }, this.now(), this.cleaner());
+      appendEvent(next, row.status === "failed"
+        ? { type: "delegation.delivery.settled", delivery: row.delivery, status: "failed", code: row.failureCode }
+        : { type: "delegation.tool.result", callId: row.proposal.callId, proposalId: row.proposal.proposalId,
+          result: { status: row.status ?? "unknown", delivery: row.delivery } }, this.now(), this.cleaner());
+    }
+    // Replay cards only. Their journal rows already belong to the call's earlier parts.
+    for (const card of cards.values()) appendEvent(next, card, this.now(), this.cleaner());
+  }
+  /** Parts are fixed at the first handoff. Fully handed reports wait separately for a durable reply. */
   speechHanded(id: string, reportId: string, parts: readonly string[], handed: number): void {
     this.storage.change(document => {
       const session = document.sessions[id];
@@ -757,20 +819,46 @@ export class CompanionAdmission {
       if (!entry) return;
       entry.parts ??= [...parts];
       entry.handed = Math.max(entry.handed, handed);
-      if (entry.handed >= entry.parts.length) session.reportSpeech = session.reportSpeech!.filter(row => row !== entry);
+      if (!entry.resumeOf && entry.handed >= entry.parts.length) {
+        (session.speechInFlight ??= []).push(structuredClone(entry));
+        session.reportSpeech = session.reportSpeech!.filter(row => row !== entry);
+      }
+    });
+  }
+  /** Called only after the output reply and its handoff receipts are durable. */
+  resumeReplied(id: string, handoffIds?: readonly string[]): void {
+    const receipts = handoffIds ? this.records.read(id).entries.filter(row => row.kind === "handoff" && handoffIds.includes(row.id)) : undefined;
+    this.storage.change(document => {
+      const session = document.sessions[id];
+      if (session) {
+        session.reportSpeech = session.reportSpeech?.filter(row => !row.resumeOf || row.handed === 0 || receipts && !receipts.some(receipt => {
+          const point = receipt.data.resumeOf as ReportSpeech["resumeOf"];
+          return point?.part === row.resumeOf!.part && point.item === row.resumeOf!.item;
+        }));
+        session.speechInFlight = receipts ? session.speechInFlight?.filter(row => !receipts.some(receipt => receipt.data.reportId === row.reportId
+          && typeof receipt.data.reportPart === "number" && receipt.data.reportPart >= (row.parts?.length ?? Infinity) - 1)) : undefined;
+      }
     });
   }
   /** Compatibility for callers that still consume only correlated answers. */
   pollReplies(id: string): CompanionEvent[] { return this.pollReports(id).filter(event => event.type === "orchestrator.answer"); }
   retire(id: string): void {
+    // The bounded event ring may have rolled its end off while closed cards were reconciled.
+    const end = this.records.read(id).entries.findLast(row => row.kind === "session_end");
+    const dropped = ["transport", "error"].includes(String(end?.data.reason));
     this.storage.change(document => {
       const session = document.sessions[id];
       if (!session) return;
       session.closed = true;
       session.endedAt ??= this.now();
-      // Nobody is left to hear them; the transcript keeps every report.
-      delete session.reportSpeech;
-      for (const row of Object.values(session.proposals)) if (row.state === "pending") { row.state = "cancelled"; row.cancelCode = "session_closed"; }
+      // Repeated closes preserve a dropped part until its continuation adopts the queue.
+      if (dropped) session.droppedAt ??= typeof end?.data.endedAt === "number" ? end.data.endedAt : session.endedAt;
+      if (!dropped) { delete session.reportSpeech; delete session.speechInFlight; }
+      for (const row of Object.values(session.proposals)) if (row.state === "pending") {
+        row.state = "cancelled"; row.cancelCode = dropped ? "connection_dropped" : "session_closed";
+        if (dropped) this.append(session, { type: "delegation.tool.result", callId: row.proposal.callId, proposalId: row.proposal.proposalId,
+          result: { status: "cancelled", code: row.cancelCode } }, this.now(), this.cleaner());
+      }
     });
     for (const map of [this.shown, this.reread]) for (const key of map.keys()) if (key.startsWith(`${id}\0`)) map.delete(key);
     for (const key of this.messageReads.keys()) if (JSON.parse(key)[0] === id) this.messageReads.delete(key);
