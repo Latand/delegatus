@@ -271,14 +271,21 @@ jobs:
         run: bun scripts/verify-platform-backend.ts --expect win32
 
       - name: Platform tests
+        shell: bash
         env:
+          HOME: ${{ runner.temp }}/llv-home
           USERPROFILE: ${{ runner.temp }}\llv-home
           XDG_CONFIG_HOME: ${{ runner.temp }}\llv-config
           LLV_STATE_DIR: ${{ runner.temp }}\llv-state
           TMP: ${{ runner.temp }}\llv-tmp
           TEMP: ${{ runner.temp }}\llv-tmp
-        run: >
-          bun test
+          TMPDIR: ${{ runner.temp }}/llv-tmp
+          LLV_VIEWER_CONTROL_URL: http://127.0.0.1:1
+          LLV_OWNED_RUN_TIMEOUT_MS: "120000"
+        run: |
+          set -euo pipefail
+          files=(
+          scripts/owned-runner.portable.test.ts
           src/lib/proc/memory.test.ts
           src/lib/proc/portable.test.ts
           src/lib/proc/darwinIdentity.test.ts
@@ -296,6 +303,16 @@ jobs:
           src/runtime-host/runtimeHostFence.test.ts
           bin/server-runtime.test.ts
           bin/bind-guard.test.ts
+          )
+          for file in "${files[@]}"; do
+            test -f "$file"
+            echo "::group::$file"
+            code=0
+            bash scripts/gate-slot.sh bun test "$file" || code=$?
+            echo "$file: exit=$code"
+            echo "::endgroup::"
+            if (( code != 0 )); then exit "$code"; fi
+          done
 
       - name: Install the launcher trial runtime
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -303,17 +320,33 @@ jobs:
           bun-version: 1.4.0
 
       - name: Terminal bootstrap custody with native Windows paths
+        shell: bash
         env:
+          HOME: ${{ runner.temp }}/llv-home
           USERPROFILE: ${{ runner.temp }}\llv-home
           XDG_CONFIG_HOME: ${{ runner.temp }}\llv-config
           LLV_STATE_DIR: ${{ runner.temp }}\llv-state
           TMP: ${{ runner.temp }}\llv-tmp
           TEMP: ${{ runner.temp }}\llv-tmp
-        run: >
-          bun test
+          TMPDIR: ${{ runner.temp }}/llv-tmp
+          LLV_VIEWER_CONTROL_URL: http://127.0.0.1:1
+          LLV_OWNED_RUN_TIMEOUT_MS: "240000"
+        run: |
+          set -euo pipefail
+          files=(
           bin/launcher-relaunch.test.ts
           bin/launcher-credentials.test.ts
           src/lib/selfUpdate/pid.test.ts
+          )
+          for file in "${files[@]}"; do
+            test -f "$file"
+            echo "::group::$file"
+            code=0
+            bash scripts/gate-slot.sh bun test "$file" || code=$?
+            echo "$file: exit=$code"
+            echo "::endgroup::"
+            if (( code != 0 )); then exit "$code"; fi
+          done
 
       # The real launch also executes src/lib/transcriptSearchQuery.worker.ts;
       # keep that spawned entry visible to ci-platform-scope's dependency walk.
@@ -329,6 +362,8 @@ jobs:
           TEMP: ${{ runner.temp }}\llv-tmp
           LLV_VIEWER_CONTROL_URL: http://127.0.0.1:1
           LLV_HELPER_LEASE_ENTRY: bin/helper-lease.mjs
+          LLV_OWNED_RUN_TIMEOUT_MS: "120000"
         run: |
+          set -euo pipefail
           bash scripts/gate-slot.sh bun test src/lib/search/transcriptSearchWorker.test.ts
           bash scripts/gate-slot.sh bun test bin/helper-lease-windows.test.ts
