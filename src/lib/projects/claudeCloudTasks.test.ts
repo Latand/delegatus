@@ -85,6 +85,17 @@ test.each([
   expect(f.fake.calls.length).toBeGreaterThan(calls);
 });
 
+test.each([
+  ["no task", []],
+  ["existing task", [task()]],
+])("GitHub disconnection is visible for %s without creating a replacement task", async (_name, tasks) => {
+  const f = fixture({ tasks, githubConnected: false });
+  expect(await f.prepare()).toMatchObject({ state: "unavailable", reason: expect.stringContaining("GitHub is not connected") });
+  expect(readClaudeCloudReadiness(f.input.project)[0]).toMatchObject({ state: "unavailable", code: "github_not_connected" });
+  expect(f.posts()).toHaveLength(0);
+  expect(f.fake.calls.some(call => call.method === "GET" && call.path.endsWith("/sync/github/auth"))).toBe(true);
+});
+
 test.each([400, 401])("definitive creation refusal %s releases only its claim and keeps provider text private", async status => {
   let refuse = true;
   const f = fixture({ preparationAnswer: (method, target) => method === "POST" && target === "/v1/code/triggers" && refuse

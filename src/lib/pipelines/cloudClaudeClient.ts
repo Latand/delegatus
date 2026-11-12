@@ -48,6 +48,8 @@ export type ClaudeCloudDependencies = {
   random: () => string;
   now: () => number;
   sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+  /** Test seam; production admission queues the complete allowed project pool. */
+  queueTaskPreparation?: (project: string, assertCurrent: () => void) => void;
 };
 type Access = Pick<CloudTaskAccess, "account" | "signal" | "assertCurrent">;
 type Event = { sequence: number; type: string; payload: Row };
@@ -423,8 +425,16 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
     supportsModel: (model, effort) => /^[A-Za-z0-9._-]{1,128}$/.test(model) && (effort === null || /^[a-z]{1,32}$/.test(effort)),
     sameModel: sameClaudeModel,
     hasEnvironment: async input => !!input.environmentId,
-    prepareEnvironment: async (input: PrepareCloudEnvironmentInput): Promise<CloudEnvironmentPreparation> =>
-      prepareClaudeCloudTask({ ...input, now: input.now ?? dependencies.now }, provider),
+    prepareEnvironment: async (input: PrepareCloudEnvironmentInput): Promise<CloudEnvironmentPreparation> => {
+      // A Claude Cloud admission is the demand signal for every allowed account
+      // in this project, including accounts without execution capacity.
+      if (dependencies.queueTaskPreparation) dependencies.queueTaskPreparation(input.project, input.assertCurrent);
+      else {
+        const { queueClaudeCloudTasks } = await import("@/lib/projects/claudeCloudTaskDemand");
+        queueClaudeCloudTasks(input.project, undefined, input.assertCurrent);
+      }
+      return prepareClaudeCloudTask({ ...input, now: input.now ?? dependencies.now }, provider);
+    },
     submit: async input => {
       const repository = input.environmentScope?.repository;
       if (!repository) throw never("Claude Cloud requires a GitHub repository", "cloud-limit");

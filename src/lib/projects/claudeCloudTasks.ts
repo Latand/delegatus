@@ -189,13 +189,14 @@ export async function prepareClaudeCloudTask(input: PrepareCloudEnvironmentInput
           return result("create_uncertain");
         }
       }
-      if (!task) {
-        // GitHub status can be unavailable; creation supplies the authoritative missing-token refusal.
-        const auth = await get(`/api/oauth/organizations/current/sync/github/auth`).catch(error => {
-          if (error instanceof ClaudeTaskError && ["provider_unavailable", "task_invalid"].includes(error.code)) return {} as Row;
-          throw error;
-        });
-        if (auth.is_authenticated === false) throw new ClaudeTaskError("github_not_connected");
+    // Existing tasks also require the account's GitHub connection to start a
+    // Claude Cloud session. Check before either creating or confirming ready.
+    const auth = await get(`/api/oauth/organizations/current/sync/github/auth`).catch(error => {
+      if (!task && error instanceof ClaudeTaskError && ["provider_unavailable", "task_invalid"].includes(error.code)) return {} as Row;
+      throw error;
+    });
+    if (auth.is_authenticated === false) throw new ClaudeTaskError("github_not_connected");
+    if (!task) {
         const environments = await get("/v1/environment_providers");
         const providers = environments.environments ?? environments.data;
         if (!Array.isArray(providers) || providers.some(value => !value || typeof value !== "object" || Array.isArray(value))) throw new ClaudeTaskError("provider_unavailable", undefined, true);

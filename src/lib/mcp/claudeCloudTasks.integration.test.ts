@@ -65,19 +65,6 @@ async function protocol(kind: "root" | "worker" | "seat" = "root", maintenance =
   return { call: (args: Record<string, unknown>) => client.callTool({ name: "claude_cloud_task", arguments: args }), close: async () => { await client.close(); await server.close(); } };
 }
 
-test("SDK reads saved readiness without provider traffic and refuses forged fields", async () => {
-  const p = await protocol();
-  try {
-    const before = fake.calls.length;
-    const answer = await p.call({ action: "read", project: "repo-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" });
-    expect(answer.isError, JSON.stringify(answer)).not.toBe(true);
-    expect(answer.structuredContent).toMatchObject({ accounts: [{ accountId: "default", state: "not_prepared" }] });
-    expect(fake.calls).toHaveLength(before);
-    expect((await p.call({ action: "prepare", project: "repo-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", actor: "operator", clientRequestId: "forged-actor" })).isError).toBe(true);
-    expect(writes).toBe(0);
-  } finally { await p.close(); }
-});
-
 test("worker and maintenance callers cannot prepare or replay root receipts", async () => {
   for (const [kind, maintenance] of [["worker", false], ["root", true]] as const) {
     const p = await protocol(kind, maintenance);
@@ -96,6 +83,14 @@ test("root queues a slow preparation; seat and transport retries join it; SDK re
   const p = await protocol();
   const args = { action: "prepare", project: "repo-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", clientRequestId: "prepare-first" };
   try {
+    const beforeRead = fake.calls.length;
+    const initial = await p.call({ action: "read", project: "repo-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" });
+    expect(initial.isError, JSON.stringify(initial)).not.toBe(true);
+    expect(initial.structuredContent).toMatchObject({ accounts: [{ accountId: "default", state: "not_prepared" }] });
+    expect(fake.calls).toHaveLength(beforeRead);
+    const writesBeforeForged = writes;
+    expect((await p.call({ action: "prepare", project: "repo-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", actor: "operator", clientRequestId: "forged-actor" })).isError).toBe(true);
+    expect(writes).toBe(writesBeforeForged);
     const answer = await p.call(args);
     expect(answer.isError, JSON.stringify(answer)).not.toBe(true);
     expect(answer.structuredContent).toMatchObject({ ok: true, queued: ["default"] });

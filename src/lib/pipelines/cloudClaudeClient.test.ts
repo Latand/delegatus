@@ -581,13 +581,15 @@ test("a read-only stage is told nothing about exporting a diff", async () => {
 
 test("admission prepares a missing binding and repairs paused tasks and connectors", async () => {
   let n = 0;
+  const demanded: string[] = [];
   for (const options of [{}, { task: { enabled: false, mcp_connections: [{ name: "connector" }], job_config: { ccr: { session_context: { sources: [{ git_repository: { url: "https://github.com/sample/project" } }] } } } } }]) {
     const project = `prepare-${++n}`, fake = provider(options);
     if (options.task) setClaudeCloudTasks(project, [{ accountId: account.accountId, taskId: "task-1" }]);
-    expect(await createClaudeCloudStageClient(fake.dependencies).prepareEnvironment!({ project, account, repository: "sample/project", ref: "main", signal: controller.signal, assertCurrent: () => {} })).toMatchObject({ state: "ready" });
+    expect(await createClaudeCloudStageClient({ ...fake.dependencies, queueTaskPreparation: queuedProject => demanded.push(queuedProject) }).prepareEnvironment!({ project, account, repository: "sample/project", ref: "main", signal: controller.signal, assertCurrent: () => {} })).toMatchObject({ state: "ready" });
     expect(fake.calls.filter(c => c.method === "POST").length).toBeGreaterThan(0);
     expect(fake.runCalls()).toBe(0);
   }
+  expect(demanded).toEqual(["prepare-1", "prepare-2"]);
 });
 
 test("admission reads the observed answer: the task sits inside `trigger`, in either of its forms", async () => {
@@ -596,7 +598,7 @@ test("admission reads the observed answer: the task sits inside `trigger`, in ei
   const sources = [{ git_repository: { url: "https://github.com/sample/project" } }];
   const answering = (answer: unknown) => {
     const fake = provider();
-    return createClaudeCloudStageClient({ ...fake.dependencies, fetch: (async () => Response.json(answer)) as unknown as typeof fetch });
+    return createClaudeCloudStageClient({ ...fake.dependencies, queueTaskPreparation: () => {}, fetch: (async () => Response.json(answer)) as unknown as typeof fetch });
   };
   expect(await prepare(answering({ trigger: { enabled: true, mcp_connections: [], job_config: { ccr: { session_context: { sources } } } } }))).toMatchObject({ state: "ready", environmentId: "task-1" });
   expect(await prepare(answering({ trigger: { enabled: true, session_request: { session_context: { sources } } } }))).toMatchObject({ state: "ready" });
@@ -612,12 +614,12 @@ test("an account with no subscription login, an expired one or a third-party pro
     [{ readLogin: async () => ({ accessToken: "t", organization: "o", expiresAt: 1 }) }, "sign-in expired"],
   ] as const) {
     const fake = provider();
-    const answer = await prepare(createClaudeCloudStageClient({ ...fake.dependencies, ...overrides }));
+    const answer = await prepare(createClaudeCloudStageClient({ ...fake.dependencies, ...overrides, queueTaskPreparation: () => {} }));
     expect(answer).toMatchObject({ state: "unavailable", reason: expect.stringContaining(reason) });
     expect(fake.calls).toEqual([]);
   }
   const fake = provider();
-  const answer = await createClaudeCloudStageClient(fake.dependencies).prepareEnvironment!({ project, account: { ...account, claudeProvider: { baseUrl: "https://gateway.example", model: "m", smallFastModel: null } },
+  const answer = await createClaudeCloudStageClient({ ...fake.dependencies, queueTaskPreparation: () => {} }).prepareEnvironment!({ project, account: { ...account, claudeProvider: { baseUrl: "https://gateway.example", model: "m", smallFastModel: null } },
     repository: "sample/project", ref: "main", signal: controller.signal, assertCurrent: () => undefined, model: "opus" });
   expect(answer).toMatchObject({ state: "unavailable", reason: expect.stringContaining("third-party provider") });
   expect(fake.calls).toEqual([]);
