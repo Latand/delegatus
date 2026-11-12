@@ -81,6 +81,15 @@ the exact admitted binding.
 
 ## Verification results
 
+The table records the original implementation checks. Publication repair later
+split the binding lifecycle cases across `codexCloudEnvironments.test.ts`,
+`codexCloudEnvironments.lifecycle.test.ts`,
+`codexCloudEnvironments.recovery.test.ts` and
+`codexCloudEnvironments.status.test.ts`. Succession recovery uses
+`engine.succession.test.ts`, `engine.succession.part4.test.ts` and
+`engine.succession.capacity.test.ts`. The test bodies
+and parameter loops are retained. Each file keeps its own isolated runner.
+
 Each row below used a separate gate command, with
 `scripts/gate-slot.sh bun test --timeout=60000 <file>` and the isolated roots
 above. The browser command additionally selected `-t "where a stage ran"` and
@@ -128,3 +137,17 @@ provider receipt are retained with the stage evidence.
 Claude Cloud's existing visible fallback remains intentional. Its separate
 automatic task preparation work consumes the shared execution/fallback fields;
 this change adds no Claude task provisioning or account-selection changes.
+
+## Publication repair
+
+The original publication exhausted the head campaign budget before all 84 files
+finished. Merging the current base retained the Cloud implementation unchanged.
+A fresh complete pre-push then finished 82 head files; the last two were stopped
+at the shared 15-minute deadline with only 138 and 114 seconds available.
+Their corresponding base files completed in 143 and 169 seconds. All eight
+originally named lifecycle files completed in separate isolated comparisons.
+
+Binding tests now own listeners and state roots through one context per file;
+the after-test cleanup remains explicit in each suite. Binding and succession
+groups now schedule independently at the end of the campaign. The campaign retains its
+15-minute head limit, five-minute file limit and all test cases.
