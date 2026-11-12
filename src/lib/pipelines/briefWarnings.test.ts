@@ -24,9 +24,27 @@ test.each(["pipeline-store", "archive", "interruption"])("recipient acceptance e
   expect(conflicts(lane("Complete recipient delivery with archive and interruption owners.", `No ${resource} edits.`))).toHaveLength(1);
 });
 
+test("an explicitly assigned successor owns required regression test edits", () => {
+  const build = stage("Update the workflow. No test edits. Authority: active parallel owner; Reason: avoid shared edits; Resource: regression tests; Owner: tests stage.");
+  const tests = stage("Update regression tests after the workflow change.");
+  tests.id = "tests";
+  const pipeline = { spec: "Required tests must pass.", stages: [build, tests] };
+  expect(conflicts(pipeline)).toEqual([]);
+
+  pipeline.stages = [build];
+  expect(conflicts(pipeline)).toMatchObject([{ stageId: "work", reason: "acceptance-conflict" }]);
+});
+
+test.each(["Do not skip tests.", "Do not weaken tests."])("retaining test integrity is not a ban: %s", fence => {
+  const prompt = `${fence} Authority: project policy; Reason: verification; Resource: test coverage; Owner: builder.`;
+  expect(conflicts(lane("Required tests must pass.", prompt))).toEqual([]);
+});
+
 test("fixed SQL mechanism warns while a free implementation preserves equivalence", () => {
   const spec = "Ensure SQL equivalence across the full accepted domain.";
-  expect(conflicts(lane(spec, "Use only 16 patterns."))).toHaveLength(1);
+  for (const limit of ["only", "exactly", "fixed"]) {
+    expect(conflicts(lane(spec, `Use ${limit} 16 patterns.`))).toMatchObject([{ reason: "acceptance-conflict" }]);
+  }
   expect(conflicts(lane(spec, "Choose the mechanism preserving SQL equivalence."))).toEqual([]);
 });
 

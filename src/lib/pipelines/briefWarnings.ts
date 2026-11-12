@@ -16,10 +16,19 @@ const clauses = (text: string) => text.split(/\n+|(?<=[.!?])\s+(?=[A-Z])/).map(l
 const required = /\b(?:acceptance|must|required|ensure|deliver|implement|update|change|support|complete|pass|verify)\b/i;
 
 const resources = [
-  { name: "tests", subject: /\b(?:tests?|checks?)\b/i, ban: /(?:\bno|do not|never|forbid\w*|prohibit\w*)\b[^\n.]*\btest|\btests?\b[^\n.]*\b(?:excluded|forbidden|prohibited)\b/i },
+  { name: "tests", subject: /\b(?:tests?|checks?)\b/i, ban: /(?:\bno\b[^\n.]*\btests?|\b(?:do not|never)\s+(?!skip\b|weaken\b)[^\n.]*\btests?|\b(?:forbid\w*|prohibit\w*)\b[^\n.]*\btests?|\btests?\b[^\n.]*\b(?:excluded|forbidden|prohibited)\b)/i },
   { name: "server dependencies", subject: /\b(?:server|readback|queue|recipient|archiv\w*|interruption|adapter|pipeline.store)\b/i, ban: /(?:\bno|do not|never|forbid\w*|prohibit\w*)\b[^\n.]*\b(?:server|adapter|pipeline.store|archiv\w*|interruption)|\b(?:server|adapter|pipeline.store|archiv\w*|interruption)\b[^\n.]*\b(?:excluded|forbidden|prohibited)\b/i },
   { name: "production actions", subject: /\b(?:production|live)\b.*\b(?:write|deploy|restart|mutation)\b/i, ban: /\b(?:no|do not|never)\b[^\n.]*\b(?:production|live|runtime)\b[^\n.]*\b(?:writes?|changes?|deploys?|restarts?)\b/i },
 ];
+
+function explicitlyAssignedToSuccessor(block: string, current: PipelineStage | undefined, resource: typeof resources[number], stages: PipelineStage[]): boolean {
+  const owner = block.match(/\b(?:owner|continuation)\s*:\s*([^\n;]+)/i)?.[1];
+  if (!owner) return false;
+  return stages.some(candidate => candidate.id !== current?.id
+    && new RegExp(`\\b${candidate.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(owner)
+    && resource.subject.test(candidate.prompt)
+    && required.test(candidate.prompt));
+}
 
 /** Bounded, recomputed from the admitted record, including frozen role access.
  * No persisted schema, model call, permission widening or hidden refusal.
@@ -48,11 +57,15 @@ export function briefWarnings(pipeline: Pick<Pipeline, "spec" | "stages">): Brie
       for (const line of clauses(block).filter(line => restriction.test(line))) {
         if (source !== "role/controller" && !justified) add({ stageId: source === "spec" ? null : stage?.id ?? null, source, reason: "restriction-reason", restriction: line.slice(0, 500),
           message: "Review this additional restriction: name its authority, current reason, protected resource and continuation owner, or reference the project's policy. Trace acceptance before launch; this warning grants no authority and does not block launch." });
+      }
+      for (const line of clauses(block)) {
         for (const [index, resource] of resources.entries()) {
           const criterion = criteria[index];
-          if (resource.ban.test(line) && criterion) add({ stageId: stage?.id ?? null, source, reason: "acceptance-conflict", restriction: line.slice(0, 500), criterion: criterion.slice(0, 500),
+          if (resource.ban.test(line) && criterion && !explicitlyAssignedToSuccessor(block, stage, resource, pipeline.stages)) add({ stageId: stage?.id ?? null, source, reason: "acceptance-conflict", restriction: line.slice(0, 500), criterion: criterion.slice(0, 500),
             message: `Acceptance needs ${resource.name} while this restriction excludes them. Identify the required action and permitted dependency owner; resolve a seat-added restriction within existing authority. Keep unresolved full acceptance open.` });
         }
+      }
+      for (const line of clauses(block)) {
         if (/\b(?:only|exactly|fixed)\s+(?:\w+\s+)?\d+\s+patterns?\b/i.test(line) && domainCriterion) add({ stageId: stage?.id ?? null, source, reason: "acceptance-conflict", restriction: line.slice(0, 500), criterion: domainCriterion.slice(0, 500),
           message: "A fixed implementation limit may exclude accepted inputs. Check the full domain against the protected invariant and allow a mechanism that satisfies it." });
       }
