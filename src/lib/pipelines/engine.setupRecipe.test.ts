@@ -21,6 +21,29 @@ async function ready(defaultBuilder = false) {
   return { h, lane };
 }
 
+test("long failed setup persists redacted tails of both streams across a fresh read", async () => {
+  const { h, lane } = await ready();
+  const secret = ["sk", "ant", "abcdefghijklmnopqrst"].join("-");
+  const tail = `\ntoken ${secret}\nFINAL_SETUP_ERROR`;
+  h.ports.executeProjectSetup = async () => ({ code: 9,
+    stdout: "o".repeat(17_000) + tail, stderr: "e".repeat(17_000) + tail });
+  await tickPipelines([], h.ports);
+  await settlePipelineControllerJobs();
+  const read = `import {findPipelineRecord} from ${JSON.stringify(path.resolve("src/lib/pipelines/store.ts"))};
+    console.log(JSON.stringify(findPipelineRecord(${JSON.stringify(lane.id)}).runs[0].attempts[0].setup));`;
+  const fresh = spawnSync(process.execPath, ["-e", read], { env: { ...process.env }, encoding: "utf8" });
+  expect(fresh.status).toBe(0);
+  const stored = JSON.parse(fresh.stdout.trim());
+  expect(stored).toMatchObject({ state: "failed", code: 9 });
+  for (const stream of [stored.stdout, stored.stderr]) {
+    expect(stream).toHaveLength(16_000);
+    expect(stream).toEndWith("\nFINAL_SETUP_ERROR");
+    expect(stream).not.toContain(secret);
+    expect(stream).toContain("[redacted]");
+  }
+  expect(h.spawnInputs).toHaveLength(0);
+});
+
 test("stage admission precedes setup, failure parks without spawning, and explicit retry keeps failed evidence", async () => {
   const { h, lane } = await ready();
   let setupCalls = 0;

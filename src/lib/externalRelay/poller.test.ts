@@ -1124,3 +1124,141 @@ test("any-document claims require both inbound capabilities in the descriptor", 
     expect(relayClaimCapabilities({ features }).features).not.toContain(RELAY_MEDIA_ANY_DOCUMENT);
   }
 });
+
+/** A retained owner row whose late answer never got a delivery context. */
+function staleLateRow(relay: PairedRelay, id: string, startedAt: string, custody: "quarantined" | "confirmed", directory: string) {
+  const at = new Date(Date.parse(startedAt) + 600_000).toISOString();
+  const answer = { action: "reply" as const, text: "Fixture failure notice", reply_to: null };
+  reserveRun({ requestId: id, leaseId: `lease-${id}`, relayId: relay.id, targetId: relay.targets[0]!.id,
+    ownerPid: 999999999, ownerIdentity: "dead", childPid: null, childIdentity: null, startedAt, runDir: directory,
+    capacityReleased: true,
+    ownerTurn: { clientAttemptId: `relay-owner-${id}`, admissionComplete: true, cancelledAt: at,
+      ...(custody === "quarantined" ? { cancel: "interrupt" as const, quarantinedAt: at } : { cancel: "kill" as const, confirmed: true }),
+      released: { at, reason: "stop_unconfirmed" }, diagnostic: ownerTurnDiagnostic("launch", "fixture"),
+      failureReply: { answer, until: at },
+      lateAnswer: { body: { lease_id: `lease-${id}`, outcome: "answered", answer, duration_ms: 1000 }, files: [],
+        clientKey: cloneClientKey(relay.id, "owner-late-answer", id, 0), status: "pending-delivery-context" } } });
+}
+const lateStatus = (id: string) => readRunLedger().runs.find(row => row.requestId === id)?.ownerTurn?.lateAnswer?.status;
+
+test("late answers that can never be delivered are written off on the first sweep and keep their custody", async () => {
+  const priorStore = readRelayStore();
+  let sends = 0;
+  const server = await startTestRelay(() => { sends++; return { body: cloneReceipt() }; });
+  const relay = { ...clonePairing(server.origin), id: "stale-late-relay" };
+  relay.targets[0]!.ownerTier = true;
+  const paused = { ...clonePairing(server.origin), id: "stale-late-paused", paused: true };
+  updateRelayStore(store => ({ ...store, relays: [relay, paused] }));
+  const old = new Date(Date.now() - 17 * 24 * 60 * 60_000).toISOString();
+  const ids = ["stale_quarantined", "stale_confirmed", "stale_paused"];
+  const directories = ids.map(() => fs.mkdtempSync(path.join(externalRelayTempRoot(), "llv-external-relay-stale-")));
+  runDirs.push(...directories);
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    staleLateRow(relay, ids[0]!, old, "quarantined", directories[0]!);
+    staleLateRow(relay, ids[1]!, old, "confirmed", directories[1]!);
+    staleLateRow(paused, ids[2]!, old, "confirmed", directories[2]!);
+    answerRecorder({ requestId: ids[1]!, relayId: relay.id, targetId: relay.targets[0]!.id, targetName: null, claimedAt: null, input: null })!
+      .begin("codex", null, { webSearch: true, owner: true });
+    await sweepExternalRelayOrphans();
+    expect(ids.map(lateStatus)).toEqual(["retry-expired", "retry-expired", "retry-expired"]);
+    // The write-off is readable in the answer record as well as the ledger.
+    expect(readAnswerRecord(relay.id, relay.targets[0]!.id, ids[1]!)).toMatchObject({ state: "finished", outcome: "failed:delivery_expired" });
+    expect(relayPollerStatus(paused.id).alarm).toBeNull();
+    const before = fs.statSync(externalRelayFile("runs")).ino;
+    await sweepExternalRelayOrphans();
+    // Terminal rows are neither retried nor rewritten, and nothing is deleted.
+    expect(fs.statSync(externalRelayFile("runs")).ino).toBe(before);
+    expect(ids.map(lateStatus)).toEqual(["retry-expired", "retry-expired", "retry-expired"]);
+    expect(directories.every(directory => fs.existsSync(directory))).toBe(true);
+    expect(readRunLedger().runs.find(row => row.requestId === ids[0])?.ownerTurn?.lateAnswer?.body).toMatchObject({ outcome: "answered" });
+    expect(sends).toBe(0);
+  } finally { log.mockRestore(); for (const id of ids) dropRun(id); updateRelayStore(() => priorStore); await server.close(); }
+});
+
+test("an unsent deliverable answer still reaches the owner after the install was off for days", async () => {
+  const priorStore = readRelayStore();
+  const sends: CloneSendInput[] = [];
+  const server = await startTestRelay((req, payload) => { sends.push(payload as CloneSendInput); return { body: cloneReceipt() }; });
+  const relay = { ...clonePairing(server.origin), id: "offline-late-relay" };
+  relay.targets[0]!.ownerTier = true;
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const id = "offline_unsent";
+  const request = requestSchema.parse({ ...contextRequest, request_id: id, target_id: relay.targets[0]!.id,
+    answer: { max_chars: 4000, progress: "none" },
+    input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } });
+  const owner = ownerTierFor({ ownerTier: true }, request)!;
+  const answer = { action: "reply" as const, text: "Fixture failure notice", reply_to: owner.messageId };
+  const startedAt = new Date(Date.now() - 3 * 24 * 60 * 60_000).toISOString();
+  const directory = fs.mkdtempSync(path.join(externalRelayTempRoot(), "llv-external-relay-offline-"));
+  runDirs.push(directory);
+  try {
+    reserveRun({ requestId: id, leaseId: request.lease_id, relayId: relay.id, targetId: request.target_id,
+      ownerPid: 999999999, ownerIdentity: "dead", childPid: null, childIdentity: null, startedAt, runDir: directory,
+      ownerTurn: { clientAttemptId: `relay-owner-${id}`, rawRequest: request, context: owner,
+        request: { text: owner.text, requestText: owner.requestText },
+        delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: null },
+        cancel: "kill", confirmed: true, diagnostic: ownerTurnDiagnostic("exception", "fixture"),
+        failureReply: { answer, until: startedAt },
+        lateAnswer: { body: { lease_id: request.lease_id, outcome: "answered", answer, duration_ms: 1000 }, files: [] } } });
+    await sweepExternalRelayOrphans();
+    expect(sends).toHaveLength(1);
+    expect(readRunLedger().runs.some(row => row.requestId === id)).toBe(false);
+  } finally { dropRun(id); updateRelayStore(() => priorStore); await server.close(); }
+});
+
+test("a settled terminal late answer is marked as holding no target slot, once", async () => {
+  const priorStore = readRelayStore();
+  const server = await startTestRelay(() => ({ body: cloneReceipt() }));
+  const relay = { ...clonePairing(server.origin), id: "terminal-slot-relay" };
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const directory = fs.mkdtempSync(path.join(externalRelayTempRoot(), "llv-external-relay-slot-"));
+  runDirs.push(directory);
+  try {
+    staleLateRow(relay, "terminal_slot", new Date(Date.now() - 3 * 24 * 60 * 60_000).toISOString(), "confirmed", directory);
+    changeRun("terminal_slot", ({ capacityReleased: _released, ...row }) => ({ ...row,
+      ownerTurn: { ...row.ownerTurn!, lateAnswer: { ...row.ownerTurn!.lateAnswer!, status: "retry-expired" } } }));
+    await sweepExternalRelayOrphans();
+    expect(readRunLedger().runs.find(row => row.requestId === "terminal_slot")).toMatchObject({ capacityReleased: true,
+      ownerTurn: { lateAnswer: { status: "retry-expired" } } });
+    const before = fs.statSync(externalRelayFile("runs")).ino;
+    await sweepExternalRelayOrphans();
+    expect(fs.statSync(externalRelayFile("runs")).ino).toBe(before);
+  } finally { dropRun("terminal_slot"); updateRelayStore(() => priorStore); await server.close(); }
+});
+
+test("a late answer inside its window keeps retrying and reports its alarm beside the last result", async () => {
+  const priorStore = readRelayStore();
+  const server = await startTestRelay(() => ({ body: cloneReceipt() }));
+  const relay = { ...clonePairing(server.origin), id: "fresh-late-relay" };
+  relay.targets[0]!.ownerTier = true;
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const directory = fs.mkdtempSync(path.join(externalRelayTempRoot(), "llv-external-relay-fresh-"));
+  runDirs.push(directory);
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    staleLateRow(relay, "fresh_late", new Date(Date.now() - 60 * 60_000).toISOString(), "confirmed", directory);
+    noteRelayOutcome(relay.id, "answered");
+    await sweepExternalRelayOrphans();
+    expect(lateStatus("fresh_late")).toBe("pending-delivery-context");
+    expect(relayPollerStatus(relay.id)).toMatchObject({ lastOutcome: "answered", alarm: "pending-delivery-context" });
+  } finally { log.mockRestore(); dropRun("fresh_late"); updateRelayStore(() => priorStore); await server.close(); }
+});
+
+test("a terminal late answer inside its window is retained without another ledger write", async () => {
+  const priorStore = readRelayStore();
+  const server = await startTestRelay(() => ({ body: cloneReceipt() }));
+  const relay = { ...clonePairing(server.origin), id: "terminal-late-relay" };
+  relay.targets[0]!.ownerTier = true;
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const directory = fs.mkdtempSync(path.join(externalRelayTempRoot(), "llv-external-relay-terminal-"));
+  runDirs.push(directory);
+  try {
+    staleLateRow(relay, "terminal_late", new Date(Date.now() - 60 * 60_000).toISOString(), "confirmed", directory);
+    changeRun("terminal_late", row => ({ ...row, ownerTurn: { ...row.ownerTurn!, lateAnswer: { ...row.ownerTurn!.lateAnswer!, status: "uncertain" } } }));
+    const before = fs.statSync(externalRelayFile("runs")).ino;
+    await sweepExternalRelayOrphans();
+    expect(fs.statSync(externalRelayFile("runs")).ino).toBe(before);
+    expect(lateStatus("terminal_late")).toBe("uncertain");
+  } finally { dropRun("terminal_late"); updateRelayStore(() => priorStore); await server.close(); }
+});

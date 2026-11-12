@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { pipelineCorpus } from "./fixtures/corpus";
-import { APP_PUSH_RETRY_WINDOW_MS, isPublicationRecovery, mergePublicationRecovery, publicationEnvironmentFailure, publicationFailurePhase, publicationRemoteRefusal, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
+import { APP_PUSH_RETRY_WINDOW_MS, isPublicationRecovery, mergePublicationRecovery, publicationEnvironmentFailure, publicationFailurePhase, publicationPrivacyConfigurationFault, publicationRemoteRefusal, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
+import { formatPrivacyReport } from "../../../scripts/privacy-publication-gate";
 import { isStoredPipeline, loadPipelines, savePipelines } from "./store";
 import { pipelineCompactRow } from "./listProjection";
 import { lockedFixture } from "./fixtures/lockedDependencies";
@@ -9,6 +10,21 @@ import { realExec, type ExecPort } from "../workflows/provision";
 
 const SHA = "a".repeat(40);
 const DELAYS = [60_000, 300_000, 900_000];
+
+test("only a configuration-only scanner report is a gate fault", () => {
+  const configuration = formatPrivacyReport(new Map([["configuration_error", 1]]), ["notice: scanner input unavailable"]);
+  expect(publicationPrivacyConfigurationFault(configuration)).toBe(true);
+  expect(publicationPrivacyConfigurationFault(`${configuration}\n${configuration}`)).toBe(true);
+  expect(publicationPrivacyConfigurationFault(formatPrivacyReport(new Map([["configuration_error", 1], ["credential", 1]])))).toBe(false);
+  expect(publicationPrivacyConfigurationFault(formatPrivacyReport(new Map([["credential", 1]])))).toBe(false);
+  expect(publicationPrivacyConfigurationFault(formatPrivacyReport(new Map()))).toBe(false);
+  expect(publicationPrivacyConfigurationFault("configuration_error: 1")).toBe(false);
+  expect(publicationPrivacyConfigurationFault("PRIVACY GATE: FAIL")).toBe(false);
+  expect(publicationPrivacyConfigurationFault("PRIVACY GATE: FAIL\nnotice: scanner unavailable\nconfiguration_error: 1")).toBe(false);
+  expect(publicationPrivacyConfigurationFault(`${configuration}\nPRIVACY GATE: FAIL\ncredential: 1`)).toBe(false);
+  expect(publicationPrivacyConfigurationFault(`${configuration}\nPRIVACY GATE: FAIL`)).toBe(false);
+  expect(publicationPrivacyConfigurationFault("(pass) a quoted PRIVACY GATE: FAIL\nconfiguration_error: 1")).toBe(false);
+});
 
 test.each([
   ["pre-push: privacy\nPRIVACY GATE: PASS", null],

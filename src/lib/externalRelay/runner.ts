@@ -60,9 +60,9 @@ import { json, answerPrompt, toolRoundPrompt, conversationTurnPrompt, conversati
 import { progressForEvent } from "./progress";
 import { createRelaySteps } from "./progressSteps";
 import { readRelayStepObservation } from "./stepObservation";
-import { noteRelayProgress, relayInflightRequests as inflight, relayUnrecordedAcceptances as unrecordedAcceptances } from "./activity";
+import { markRelayFailureNotice, noteRelayProgress, RELAY_FAILURE_NOTICE_OUTCOME, relayInflightRequests as inflight, relayUnrecordedAcceptances as unrecordedAcceptances } from "./activity";
 export { relayRequestInFlight } from "./activity";
-import { answerRecorder, countMemberAnswers, readAnswerRecord } from "./answers";
+import { answerRecorder, countMemberAnswers, readAnswerRecord, type RelayAnswerDelivery } from "./answers";
 import {
   answerProfileFor,
   ownerTierFor,
@@ -266,6 +266,20 @@ export async function runClaimedRequest(
   let allowOwnerReply: (() => boolean) | undefined;
   let failureReply = false;
   let ownerStatusReply: ExternalRelayCompletion | undefined;
+  // True while the body to deliver is a failure or timeout notice composed by
+  // this runner. It reaches the service as `answered`; local records name it.
+  let failureNotice = false;
+  const outcomeLabel = (value: ExternalRelayCompletion) => value.outcome !== "answered" ? `${value.outcome}:${value.reason}`
+    : failureNotice ? RELAY_FAILURE_NOTICE_OUTCOME : "answered";
+  // One journal line per request this process finished: fields only, no text.
+  const journal: { outcome: string; delivery: RelayAnswerDelivery | null; written: boolean } = { outcome: "lease_lost", delivery: null, written: false };
+  const journalFinished = () => {
+    if (journal.written) return;
+    journal.written = true;
+    console.info("External relay request finished", JSON.stringify({ event: "relay_request_finished", requestId, relayId: relay.id,
+      targetId: typeof targetId === "string" ? targetId : null, owner: ownerExecution, outcome: journal.outcome, delivery: journal.delivery,
+      diagnosticSource: diagnostic?.source ?? null, durationMs: Date.now() - deadline.receivedAt, promptBytes: chain?.promptBytes ?? null }));
+  };
   let leaseUnavailable = false;
   let ownerExecution = false;
   let executionDeadline = Infinity;
@@ -323,14 +337,15 @@ export async function runClaimedRequest(
           "The service window closed before the handoff could be requested", ownerCredentials), ownerCredentials);
         return answer ? { lease_id: leaseId, outcome: "answered", answer, duration_ms: Date.now() - deadline.receivedAt } : null;
       };
-      body = explainExpiredHandoff() ?? body;
+      const expiredHandoff = explainExpiredHandoff();
+      if (expiredHandoff) { body = expiredHandoff; failureNotice = true; }
       if (recovery && ownerExecution && owner && (body.outcome === "declined" || body.outcome === "failed")) {
         const cause = ownerTurnDiagnostic("launch", `Owner retry could not start: ${body.reason}`, ownerCredentials);
         recordDiagnostic(cause);
         failureReply = true;
         await changeRunAsync(requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, diagnostic: cause } }), ownerRelayStoreDeadline());
         const answer = ownerFailureAnswer(request!, owner, cause, ownerCredentials);
-        if (answer) body = { lease_id: leaseId, outcome: "answered", answer, duration_ms: Date.now() - deadline.receivedAt };
+        if (answer) { body = { lease_id: leaseId, outcome: "answered", answer, duration_ms: Date.now() - deadline.receivedAt }; failureNotice = true; }
       }
       // Persist the local decision before any delivery wait: a restart must
       // leave the generated answer and early declines inspectable.
@@ -339,11 +354,10 @@ export async function runClaimedRequest(
         try { validateAnswerComposition(body.answer, request, stagedAttachments.map(file => ({ attachment_id: file.id, kind: file.kind }))); }
         catch (error) { answerDrops.push({ part: "answer", reason: error instanceof ExternalRelayError ? error.code : "malformed" }); body = failed(body.lease_id, "invalid_answer"); }
       }
+      journal.outcome = outcomeLabel(body);
+      journal.delivery = "unconfirmed";
       recorder?.finish({
-        outcome:
-          body.outcome === "answered"
-            ? "answered"
-            : `${body.outcome}:${body.reason}`,
+        outcome: outcomeLabel(body),
         answer:
           body.outcome === "answered"
             ? body.answer
@@ -361,7 +375,7 @@ export async function runClaimedRequest(
           if (!ownerPastWindow() && (leaseUnavailable || callAbort.signal.aborted || error instanceof ExternalRelayError && (error.status === 404 || error.status === 409 && error.code === "lease_lost"))) {
             leaseUnavailable = true;
             recorder?.annotateV2({ outcome: "lease_lost", drops: answerDrops });
-            if (!ownerExecution) return null;
+            if (!ownerExecution) { journal.outcome = "lease_lost"; journal.delivery = null; return null; }
             answerDrops.push({part:"attachment",reason:"upload_failed"});
           } else {
             answerDrops.push({part:"attachment",reason:"upload_failed"});
@@ -379,6 +393,7 @@ export async function runClaimedRequest(
       }
       if (body.outcome === "answered" && body.answer.action === "reply" && caps?.rich && !body.answer.text.trim() && !body.answer.attachments?.length) body = failed(body.lease_id, "invalid_answer");
       if (caps?.rich) recorder?.annotateV2({ drops: answerDrops, attachments: stagedAttachments.map(({id,kind,filename,size,sha256}) => ({attachment_id:id,kind,filename,bytes:size,sha256})), ...(body.outcome === "answered" ? { answer: body.answer } : {outcome:`${body.outcome}:${body.reason}`}) });
+      journal.outcome = outcomeLabel(body);
       const deliveryStart = Date.now();
       const until = releaseRequested ? deliveryStart : deadline.at;
       if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
@@ -413,7 +428,8 @@ export async function runClaimedRequest(
         const explained = explainExpiredHandoff();
         if (explained) {
           body = explained;
-          recorder?.annotateV2({ outcome: "answered", answer: explained.answer });
+          failureNotice = true;
+          recorder?.annotateV2({ outcome: RELAY_FAILURE_NOTICE_OUTCOME, answer: explained.answer });
         }
       }
       if (!initiallyLate && body.outcome === "answered" && sent.delivery === "refused"
@@ -461,12 +477,13 @@ export async function runClaimedRequest(
         if (!claimTerminal) throw error;
         console.error("External relay terminal claim settlement pending");
       }
-      recorder?.recordDelivery({
-        outcome: completion.outcome === "answered"
-          ? sent.delivery === "accepted" ? "answered" : `failed:delivery_${sent.delivery}`
-          : `${completion.outcome}:${completion.reason}`,
-        delivery: sent.delivery,
-      });
+      // A late owner answer under failure custody is replaced by the scrubbed
+      // notice inside late delivery, so the delivered text is a notice too.
+      if (initiallyLate && completion.outcome === "answered" && (failureReply || diagnostic)) failureNotice = true;
+      journal.outcome = completion.outcome === "answered" && sent.delivery !== "accepted" ? `failed:delivery_${sent.delivery}` : outcomeLabel(completion);
+      journal.delivery = sent.delivery;
+      recorder?.recordDelivery({ outcome: journal.outcome, delivery: sent.delivery });
+      if (failureNotice && completion.outcome === "answered") markRelayFailureNotice(completion);
       return completion;
     } finally {
       notifyInitialLease();
@@ -488,6 +505,7 @@ export async function runClaimedRequest(
         }
       })();
       if (!executionScope) inflight.delete(requestId);
+      journalFinished();
       deliverySettled();
     }
     })();
@@ -535,6 +553,7 @@ export async function runClaimedRequest(
   const finishOwnerTimeout = async (startedAt: number): Promise<ExternalRelayCompletion | null> => {
     console.info("External relay owner execution cap reached", { request: requestId.slice(0, 8), elapsed_ms: Date.now() - deadline.receivedAt });
     callAbort.abort();
+    failureNotice = true;
     ownerStatusReply = { lease_id: leaseId, outcome: "answered", duration_ms: Date.now() - startedAt,
       answer: { action: "reply", text: ownerRequestTimeoutText(caps!.plainMax), reply_to: owner!.messageId,
         ...(caps!.rich ? { format: "plain", buttons: [], attachments: [] } : {}) } };
@@ -1202,6 +1221,7 @@ export async function runClaimedRequest(
     // its own agent (§A.8); it carries no text from this install.
     failureReply = !!owner && !!diagnostic && result?.status !== "cancelled";
     if (failureReply) stagedAttachments = [];
+    failureNotice = !completion && failureReply && !!allowOwnerReply?.();
     const body: ExternalRelayCompletion = completion?.action === "handoff"
       ? declined(leaseId, "handoff", null, HANDOFF_DETAIL)
       : completion
@@ -1211,7 +1231,7 @@ export async function runClaimedRequest(
           answer: completion,
           duration_ms: Date.now() - started,
         }
-      : owner && diagnostic && result?.status !== "cancelled" && allowOwnerReply?.()
+      : owner && diagnostic && failureNotice
       ? { lease_id: leaseId, outcome: "answered", answer: ownerFailureAnswer(request, owner, diagnostic, ownerCredentials)!, duration_ms: Date.now() - started }
       : failed(
           leaseId,
@@ -1232,6 +1252,7 @@ export async function runClaimedRequest(
       // The durable row fences redelivery, including after Viewer restart.
       console.error("External relay Cloud execution unconfirmed; request custody retained");
       recorder?.finish({ outcome: "execution_uncertain", answer: null, delivery: null, ...loopRecord() });
+      journal.outcome = "execution_uncertain";
       return null;
     }
     if (!ownerExecution && (leaseUnavailable || error instanceof ExternalRelayError && error.status === 409 && error.code === "lease_lost")) {
@@ -1275,8 +1296,11 @@ export async function runClaimedRequest(
     if (owner) {
       failureReply = true;
       stagedAttachments = [];
-      if (allowOwnerReply?.()) return await finish({ lease_id: leaseId, outcome: "answered",
-        answer: ownerFailureAnswer(request, owner, diagnostic!, ownerCredentials)!, duration_ms: Date.now() - deadline.receivedAt });
+      if (allowOwnerReply?.()) {
+        failureNotice = true;
+        return await finish({ lease_id: leaseId, outcome: "answered",
+          answer: ownerFailureAnswer(request, owner, diagnostic!, ownerCredentials)!, duration_ms: Date.now() - deadline.receivedAt });
+      }
     }
     return await finish(failed(leaseId, "agent_error"));
   } finally {
@@ -1325,6 +1349,7 @@ export async function runClaimedRequest(
       // The only way out without a completion is a lost lease.
       if (recorder && !duplicate && !recorder.finished)
         recorder.finish({ outcome: "lease_lost", answer: null, delivery: null, ...loopRecord() });
+      if (!duplicate) journalFinished();
       try {
         const held = readRunLedger().runs.find(r => r.requestId === requestId);
         // Pending stops and released owner stops both keep their custody record.

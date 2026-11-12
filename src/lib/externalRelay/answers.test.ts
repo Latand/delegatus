@@ -160,3 +160,15 @@ test("member counts include every admission and exclude runs made as admin or ow
   expect(countMemberAnswers({ ...scope, targetId: "other" }).count).toBe(0);
   expect(countMemberAnswers({ ...scope, sinceMs: Date.now() + 1 }).count).toBe(0);
 });
+
+test("an interrupted owner run settled with a failure notice is recorded apart from an answer, and older records stay listed", async () => {
+  const { settleInterruptedAnswer } = await import("./answers");
+  const answer = { action: "reply" as const, text: "Fixture notice", reply_to: null };
+  for (const requestId of ["notice-settled", "answer-settled"]) answerRecorder({ requestId, relayId: "relay", targetId: "notice", targetName: null, claimedAt: null, input: input("hi") })!
+    .begin("claude", "opus", { webSearch: true, owner: true });
+  settleInterruptedAnswer("relay", "notice", "notice-settled", "accepted", undefined, answer, false, true);
+  settleInterruptedAnswer("relay", "notice", "answer-settled", "accepted", undefined, answer);
+  expect(readAnswerRecord("relay", "notice", "notice-settled")).toMatchObject({ state: "finished", outcome: "failure_notice", delivery: "accepted" });
+  expect(readAnswerRecord("relay", "notice", "answer-settled")).toMatchObject({ state: "finished", outcome: "answered", delivery: "accepted" });
+  expect(listAnswerRecords("relay", "notice").map(row => row.outcome).sort()).toEqual(["answered", "failure_notice"]);
+});
