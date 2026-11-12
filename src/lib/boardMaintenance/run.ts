@@ -5,7 +5,7 @@ import { launchAutonomousConversation as launchMaintenanceConversation, observeS
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createTask, patchTask } from "@/lib/tasks/commands";
-import { loadTasks, mutateTasks, mutateTasksFile } from "@/lib/tasks/store";
+import { loadTasksForList, mutateTasks, mutateTasksFile } from "@/lib/tasks/store";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { archiveConversationPaths } from "@/lib/board/archivePlacement";
 import { boardFor } from "@/lib/board/store";
@@ -118,7 +118,7 @@ function settle(run: MaintenanceRun, patch: Partial<MaintenanceRun>, ports: Boar
   if (next.taskId) patchCard(next.taskId, { text: maintenanceCardText((ports.locale ?? (() => operatorLocale() ?? "uk"))(), next, ports.timeZone?.() ?? operatorTimeZone() ?? undefined), status: next.state === "succeeded" ? "done" : "blocked", board: next.state === "succeeded" ? "hidden" : "shown", appendLine: `Result: ${next.state} ${next.endedAt}; ${next.failure ? `${next.failure.kind}: ${next.failure.detail}` : `${next.counts.writes} writes on ${next.counts.tasks} tasks${next.log.verdict ? "" : "; no verdict line"}`}.` });
   if (next.state === "succeeded") (ports.archive ?? (r => archiveRun(r, ports.sources)))(next);
   const superseded: string[] = [];
-  const tasks = loadTasks(statePath("tasks.json"));
+  const tasks = loadTasksForList(statePath("tasks.json"));
   for (const old of maintenanceRuns(run.project)) {
     if (old.runId === run.runId || !old.taskId || tasks.find(t => t.id === old.taskId)?.status !== "blocked") continue;
     if (old.conversationId || old.transcriptPath) (ports.archive ?? (r => archiveRun(r, ports.sources)))(old);

@@ -127,7 +127,7 @@ import { captureProcessIdentity, processIdentityMayRun, processIdentityStatus, s
 import { parseReview, type ReviewFinding } from "@/lib/review";
 import { spawnStructuredConversation, stagedLaunchRecovery, recoverStagedStructuredLaunch, releaseFailedStagedLaunchContinuation, STAGED_RECOVERY_MAX_CHECKS, STAGED_RECOVERY_BUDGET_MS, type StagedLaunchRecovery } from "@/lib/runtime/structuredSpawn";
 import { projectForCwd } from "@/lib/scanner/describe";
-import { loadTasks, loadTasksByIds } from "@/lib/tasks/store";
+import { loadTasksByIds, loadTasksForList } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { claudeProjectRootFor, codexSessionRootFor } from "@/lib/scanner/roots";
 import { cleanTitle } from "@/lib/title";
@@ -4306,7 +4306,7 @@ export async function adoptPipelineAttemptFromSource(
     unreadable store binds nothing this tick and is retried on the next. */
 function tasksForBinding(): readonly BoardTask[] {
   try {
-    return loadTasks();
+    return loadTasksForList();
   } catch {
     return [];
   }
@@ -11667,7 +11667,7 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
       let target: string | null = null;
       let failedAccounts: string[] = [];
       try {
-        if (pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks())) return false;
+        if (pipelineTasksRunElsewhere(pipeline.taskIds, loadTasksForList())) return false;
         const pinned = attemptAccountPin(stage, attempt)?.trim();
         failedAccounts = authRefusal && attempt.accountId
           && ports.accountRecovered?.(engine, attempt.accountId, cutAt, attempt.effectiveRole.model, "auth_required") !== true
@@ -11791,7 +11791,7 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
   }
   if (attempt.providerWait !== wait || !wait.stageRetry) return true;
   if (modelCapacity(wait.condition)) {
-    if (pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks())) {
+    if (pipelineTasksRunElsewhere(pipeline.taskIds, loadTasksForList())) {
       await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled because the task runs elsewhere; waiting for operator decision");
       return true;
     }
@@ -11804,7 +11804,7 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
   if (wait.condition.kind === "auth_required" && !target) return false;
   const remaining = unixMs(wait.resumeAt) - unixMs(ports.now());
   if (remaining > 0 && !target) { scheduleProviderWake(ports, wait.resumeAt); return false; }
-  const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks());
+  const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasksForList());
   if (elsewhere) {
     await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled because the task runs elsewhere; waiting for operator decision");
     return true;
@@ -14986,7 +14986,7 @@ export async function createPipelineFromRequest(
         return { pipeline: existing };
       }
     }
-    const tasks = loadTasks();
+    const tasks = loadTasksForList();
     const taskLinkError = pipelineTaskLinkError(pipeline, taskIds, tasks);
     if (taskLinkError) return { error: taskLinkError, status: 400 };
     const elsewhere = pipelineTasksRunElsewhere(taskIds, tasks);
@@ -16497,7 +16497,7 @@ export async function patchPipeline(
     if (req.action === "link-task") {
       const taskId = typeof req.taskId === "string" ? req.taskId.trim() : "";
       if (!taskId) return { error: "taskId is required", status: 400 };
-      const tasks = loadTasks();
+      const tasks = loadTasksForList();
       const taskLinkError = pipelineTaskLinkError(pipeline, [taskId], tasks);
       if (taskLinkError) return { error: taskLinkError, status: 400 };
       const elsewhere = pipelineTasksRunElsewhere([taskId], tasks);
@@ -16529,13 +16529,13 @@ export async function patchPipeline(
       if (engineRefusal) return engineRefusal;
       /* A draft holds no task for a handover; its start is new work, so a task
          that runs on another linked machine refuses it. */
-      const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks());
+      const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasksForList());
       if (elsewhere) return elsewhere;
       const admission = (await ports.preflightRepo(pipeline.repoDir));
       if (!admission.ok) return preflightFailure(admission);
       if (admission.repoDir !== pipeline.repoDir) {
         const project = ports.projectForCwd(admission.repoDir) ?? path.basename(admission.repoDir);
-        const taskLinkError = pipelineTaskLinkError({ project }, pipeline.taskIds, loadTasks(), { allowMissing: true });
+        const taskLinkError = pipelineTaskLinkError({ project }, pipeline.taskIds, loadTasksForList(), { allowMissing: true });
         if (taskLinkError) return { error: taskLinkError, status: 400 };
         pipeline.repoDir = admission.repoDir;
         pipeline.project = project;
@@ -16578,7 +16578,7 @@ export async function patchPipeline(
       const repoChanged = repoDir !== pipeline.repoDir;
       const project = ports.projectForCwd(repoDir) ?? path.basename(repoDir);
       if (repoChanged) {
-        const taskLinkError = pipelineTaskLinkError({ project }, pipeline.taskIds, loadTasks(), { allowMissing: true });
+        const taskLinkError = pipelineTaskLinkError({ project }, pipeline.taskIds, loadTasksForList(), { allowMissing: true });
         if (taskLinkError) return { error: taskLinkError, status: 400 };
         if (pipeline.delivery && draftRepository !== pipeline.delivery.target.repository) return { error: "this draft has a claimed delivery repository; create a new lane to change repositories", status: 409 };
       }
@@ -16889,7 +16889,7 @@ export async function patchPipeline(
       if (explicitReceiptRetry && attempt?.launchId !== req.launchId) {
         return { error: "the clicked launch is no longer the current failed attempt", status: 409 };
       }
-      const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks());
+      const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasksForList());
       if (elsewhere) return elsewhere;
       const switchRetry = attempt && recoverableRuntimeSwitch(attempt);
       if (stage && attempt && switchRetry && ["running", "needs_decision"].includes(pipeline.state)) {
