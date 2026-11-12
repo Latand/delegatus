@@ -2232,6 +2232,30 @@ describe("ClaudeStreamBrokerHost", () => {
     await host.release();
   });
 
+  test("a confirmed delivery keeps no message body in memory and still answers its resend", async () => {
+    const sessionId = "settled-body-session";
+    const original: QueueEntry = { id: "settled-entry", text: `long body ${"x".repeat(20_000)}`, expectedTurnId: null };
+    const ledger = new RecordingDeliveryLedger();
+    ledger.recordQueued(sessionId, original, "turn-started");
+    const child = new FakeClaude(ledger);
+    const host = await ClaudeStreamBrokerHost.adopt(sessionId, {
+      cwd: "/repo",
+      deliveryLedger: ledger,
+      eventStore: new MemoryEventStore(),
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [{ text: original.text!, uuid: "settled-user", timestamp: new Date().toISOString() }],
+      spawnProcess: fakeSpawn(child, {}),
+    });
+
+    const held = (host as unknown as { deliveries: ClaudeDeliveryState[] }).deliveries.find(delivery => delivery.entry.id === "settled-entry");
+    expect(held).toMatchObject({ delivered: true, confirmation: "inferred", engineMessageId: "settled-user" });
+    expect(JSON.stringify(held).length).toBeLessThan(1_000);
+    expect(await host.send(original)).toEqual({ outcome: "turn-started", turnId: "settled-entry" });
+    await expect(host.send({ ...original, text: "changed" })).rejects.toThrow("different payload");
+    expect(child.inputs.filter((input) => input.type === "user")).toHaveLength(0);
+    await host.release();
+  });
+
   test("host loss rejects an unconfirmed send and leaves retry ownership for adoption", async () => {
     const ledger = new RecordingDeliveryLedger();
     const eventStore = new MemoryEventStore();
@@ -4995,4 +5019,27 @@ test("native accounting clocks reach the retained time reader through the real C
     expect(splitAttemptTime(at(1000), at(5000), readNativeTiming(sessionId, root)))
       .toMatchObject({ modelMs: 2000, toolsMs: 2000, unknownMs: 0 });
   } finally { setSystemTime(); await host.release(); }
+});
+
+
+test("heap counters observe events and subscriber queues without consuming them", async () => {
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", sessionId: crypto.randomUUID(), env: { NODE_ENV: "test" },
+    eventStore: new MemoryEventStore(), deliveryLedger: new RecordingDeliveryLedger(), readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), {}) });
+  const before = host.heapAttribution();
+  const stop = host.onStateChange(() => {});
+  const stream = host.attach(0)[Symbol.asyncIterator]();
+  try {
+    expect(before.engine).toBe("claude");
+    expect(before.events).toBeGreaterThan(0);
+    expect(host.heapAttribution()).toMatchObject({ events: before.events,
+      eventSubscribers: before.eventSubscribers + 1, stateSubscribers: before.stateSubscribers + 1,
+      queuedEvents: before.queuedEvents + before.events });
+    await stream.next();
+    expect(host.heapAttribution().queuedEvents).toBe(before.queuedEvents + before.events - 1);
+    await stream.return?.();
+    stop();
+    expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
+  } finally { stop(); await stream.return?.(); await host.release(); }
 });

@@ -43,7 +43,18 @@ function atomic(file, value) {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${process.pid}.tmp`;
   writeFileSync(temporary, value, { mode: 0o600 });
-  renameSync(temporary, file);
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try { renameSync(temporary, file); break; }
+      catch (error) {
+        // NTFS scanners and readers can briefly deny replacing a receipt.
+        // Keep its previous custody facts intact until this bounded retry
+        // commits the new launcher owner.
+        if (process.platform !== "win32" || attempt === 100 || !["EPERM", "EBUSY"].includes(error.code)) throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+      }
+    }
+  } finally { rmSync(temporary, { force: true }); }
 }
 
 async function guardLauncherTransition(paths, trial, installRoot, owner = { pid: process.pid, identity: readStartIdentity(process.pid) }, recordOwner = undefined, handoff = undefined) {
