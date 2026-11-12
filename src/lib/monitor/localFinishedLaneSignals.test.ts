@@ -83,7 +83,8 @@ test.each([...scenarios])("finished lane delivery: %s", async scenario => {
     if (scenario === "remote-readonly") lane.publication = "remote-branch";
   }
   if (scenario === "cached-fork") lane.delivery!.target.prRepository = "acme/upstream";
-  if (scenario === "unrelated-merged") lane.workLinks = [{ repository: "acme/widgets", number: 99, kind: "pr" }];
+  if (scenario === "unrelated-merged") lane.workLinks = [{ repository: "acme/widgets", number: 99, kind: "pr",
+    addedAt: "2026-08-27T10:00:00Z", addedBy: "agent" }];
   if (scenario === "comparison") lane.delivery!.disposition = "comparison";
   if (scenario === "merged-record" || scenario === "archived-merged") lane.merge = { state: "merged", reviewedHead: base, mergedHead: base, chain: [base] } as never;
   updateForgeCache(data => {
