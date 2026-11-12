@@ -1,3 +1,4 @@
+import { heapAttribution } from "@/lib/heapAttribution";
 import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { hostExitProcess, observeHostExit, readHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
@@ -729,6 +730,15 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private captureRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly childStartIdentity: string | null;
   private readonly exitProcess: import("@/lib/processIdentity").ProcessIdentity | null;
+
+  /** Scalar reads only; independent of event-window retention policy. */
+  heapAttribution() {
+    let queuedEvents = 0;
+    for (const subscriber of this.subscribers) queuedEvents += subscriber.queue.length;
+    return { engine: "claude", events: this.events.length, eventSubscribers: this.subscribers.size,
+      stateSubscribers: this.stateListeners.size, queuedEvents };
+  }
+
   private readonly subscribers = new Set<Subscriber>();
   private readonly events: RuntimeEvent[] = [];
   private readonly deliveries: ClaudeDeliveryState[] = [];
@@ -789,6 +799,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     auth: ClaudeAuthStatus,
     options: ClaudeStreamBrokerHostOptions,
   ) {
+    heapAttribution.hosts.add(this, null);
     this.child = child;
     this.memoryQueuePath = options.memoryQueuePath;
     this.memoryCell = options.memoryCell ?? null;

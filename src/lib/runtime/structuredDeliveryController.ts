@@ -160,6 +160,7 @@ interface ControllerState {
   activeQueue: StructuredDeliveryQueue | null;
   activeRegistry: AgentRegistry | null;
   activeHosts: Map<string, EngineHost> | null;
+  heapCounts?: (() => { registrations: number; attachments: number; pendingPublishChains: number }) | null;
   readMcpObservation?: ((conversationId: string) => ViewerMcpObservation | undefined) | null;
   registerActiveHost: ((item: StructuredDeliveryHost, ownsOperation?: () => Promise<boolean>) => Promise<() => Promise<void>>) | null;
   /* The hosts this generation currently serves, as re-registrable items. A
@@ -266,6 +267,7 @@ function retireStructuredDeliveryPublication(): void {
   state.activeQueue = null;
   state.activeRegistry = null;
   state.activeHosts = null;
+  state.heapCounts = null;
   state.readMcpObservation = null;
   state.registerActiveHost = null;
   state.activeRegistrations = null;
@@ -2128,6 +2130,11 @@ export async function bindStructuredDeliveryQueue(
     return observation;
   };
   state.registerActiveHost = register;
+  state.heapCounts = () => {
+    let attachments = 0;
+    for (const registration of registrations.values()) if (registration.attachment) attachments++;
+    return { registrations: registrations.size, attachments, pendingPublishChains: publishChains.size };
+  };
   state.activeRegistrations = () => [...registrations.values()].map(({ key, host, writerEpoch, mcpOwner }) => ({ key, host, writerEpoch, mcpOwner }));
   state.republishActiveHost = async (key) => {
     const registration = registrations.get(sessionKeyId(key));
@@ -2244,6 +2251,7 @@ export async function bindStructuredDeliveryQueue(
       state.activeQueue = null;
       state.activeRegistry = null;
       state.activeHosts = null;
+      state.heapCounts = null;
       state.readMcpObservation = null;
       state.registerActiveHost = null;
       state.activeRegistrations = null;
@@ -2532,6 +2540,11 @@ export function hasStructuredDeliveryController(registry: AgentRegistry): boolea
 
 export function hasStructuredDeliveryHost(key: SessionKey): boolean {
   return state.activeHosts?.has(sessionKeyId(key)) ?? false;
+}
+
+/** Scalar attachment counts from the current publication; reads no payload. */
+export function structuredDeliveryHeapCounts() {
+  return state.activeHosts ? { hosts: state.activeHosts.size, ...state.heapCounts?.() } : { hosts: 0, registrations: 0, attachments: 0, pendingPublishChains: 0 };
 }
 
 /** The hosts this Viewer holds, by session key. The update drain asks each

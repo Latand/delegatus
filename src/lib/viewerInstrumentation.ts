@@ -1068,6 +1068,8 @@ export async function registerViewerRuntime(): Promise<void> {
     const { startRoleHistoryDrain } = await import("@/lib/memory/roleHistoryDrain");
     startRoleHistoryDrain();
     const authority = await initializeHotStateStoresAtStartup(boundary, { signal: startupAbort.signal });
+    const { startServingHeapSeries } = await import("./heapSeries");
+    startServingHeapSeries(viewerReleaseOwnsTraffic);
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();
     await startupBarrier.run(() => settleInterruptedTransfers());
