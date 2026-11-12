@@ -3,7 +3,8 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { measureTempBytes, resolvePhysicalPath, type ProcessScan, isUvCacheMarker } from "@/lib/tempSweep";
-import { PRESERVED_MEDIA_EXTENSIONS } from "@/lib/artifact/evidenceFormats";
+import { reportMediaIndex } from "@/lib/reportMedia/lookup";
+import { recordedRootHeld } from "@/lib/recordedChecks/store";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 
 const exec = promisify(execFile);
@@ -30,6 +31,12 @@ const sameStrings = (left: readonly string[], right: readonly string[]) =>
 const sameRepositoryDiscovery = (left: RepositoryDiscovery, right: RepositoryDiscovery) =>
   left.repository === right.repository && left.signature === right.signature;
 const UNRESOLVED_LINK_CODES = new Set(["ENOENT", "ENOTDIR", "ELOOP"]);
+const vanished = (error: unknown) => ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "");
+/** Only a process the scan read from `/proc` (it has a namespace there) whose
+ * entry is gone now has provably exited. Off Linux, without that proof (null),
+ * or when the pid is present again, the process counts as alive. */
+const allExited = (pids: readonly (number | null)[] | undefined) => process.platform === "linux" && !!pids?.length
+  && pids.every(pid => pid !== null && !fs.existsSync(`/proc/${pid}`));
 const LINK_HOP_LIMIT = 256;
 const segments = (file: string) => file.split(path.sep).filter(Boolean);
 
@@ -180,7 +187,10 @@ async function repositoryLinks(directory: string, timeout?: number): Promise<{ l
   try { await visit(directory); }
   catch (error) {
     if (error instanceof AttemptTempBudgetDeferred) throw error;
-    throw new Error(attemptTempFailureDetail(error), { cause: error });
+    // A checkout removed during the walk keeps its code, so a caller can tell
+    // it from an unreadable one.
+    throw Object.assign(new Error(attemptTempFailureDetail(error), { cause: error }),
+      vanished(error) ? { code: (error as NodeJS.ErrnoException).code } : {});
   }
   return { links, directories };
 }
@@ -274,7 +284,8 @@ export class RepositoryLinkInventory {
   }
   /** Last synchronous fence for every checkout observed during this sweep. */
   unchangedAll() {
-    for (const read of this.reads.values()) {
+    for (const [repository, read] of this.reads) {
+      if (this.released(repository)) continue;
       if (!this.readUnchanged(read, false) || !read.physicalTargets) return false;
       const lexical = this.lexicalTargets.get(read);
       if (!lexical) return false;
@@ -283,11 +294,28 @@ export class RepositoryLinkInventory {
       } catch { return false; }
     }
     for (const [cwd, observed] of this.repositoriesOf) {
-      try {
-        if (!sameRepositoryDiscovery(observed, this.discoverRepository(cwd))) return false;
-      } catch { return false; }
+      let same = false;
+      try { same = sameRepositoryDiscovery(observed, this.discoverRepository(cwd)); }
+      catch { /* Judged below with every other change. */ }
+      if (!same && !this.abandoned(cwd)) return false;
     }
     return true;
+  }
+  /** Every process that held this cwd in the scan has exited since, so the cwd
+   * reaches no root; the same rule `retainDiscoveries` applies to a cwd absent
+   * from the next scan. Test runs and gate checks remove their cwd right after
+   * they exit, which used to hold every root observed at that moment. */
+  abandoned(cwd: string) { return allExited(this.holders.get(cwd)); }
+  private readonly holders = new Map<string, readonly (number | null)[]>();
+  /** Checkouts read directly, such as a lane's worktree. A checkout found only
+   * through the cwd of a scanned process is absent here. */
+  private readonly direct = new Set<string>();
+  /** A checkout that is gone, read only because scanned processes were in it,
+   * all of which have exited: no process can use a link in it any more. */
+  private released(repository: string) {
+    if (this.direct.has(repository) || fs.existsSync(repository)) return false;
+    const cwds = [...this.repositoriesOf].filter(([, discovery]) => discovery.repository === repository).map(([cwd]) => cwd);
+    return cwds.length > 0 && cwds.every(cwd => this.abandoned(cwd));
   }
   private readonly lexicalTargets = new WeakMap<object, string[]>();
   /** The signature lists what decides the answer: for each directory from the
@@ -336,16 +364,24 @@ export class RepositoryLinkInventory {
   retainDiscoveries(cwds: readonly string[]) {
     const current = new Set(cwds);
     for (const cwd of this.repositoriesOf.keys()) if (!current.has(cwd)) this.repositoriesOf.delete(cwd);
+    for (const cwd of this.holders.keys()) if (!current.has(cwd)) this.holders.delete(cwd);
   }
-  /** The nearest enclosing checkout of a process cwd. */
-  repositoryOf(cwd: string): string | null {
+  /** The nearest enclosing checkout of a process cwd, held by `pids` in the scan. */
+  repositoryOf(cwd: string, pids: readonly (number | null)[] = []): string | null {
+    if (pids.length) this.holders.set(cwd, pids);
     // Record negative results too: an existing cwd outside a checkout can
     // become a checkout while another awaited observation is in flight.
-    const discovery = this.discoverRepository(cwd);
+    let discovery: RepositoryDiscovery;
+    try { discovery = this.discoverRepository(cwd); }
+    catch (error) {
+      if (vanished(error) && this.abandoned(cwd)) { this.repositoriesOf.delete(cwd); return null; }
+      throw error;
+    }
     this.repositoriesOf.set(cwd, discovery);
     return discovery.repository;
   }
-  async targets(repository: string): Promise<string[]> {
+  async targets(repository: string, discovered = false): Promise<string[]> {
+    if (!discovered) this.direct.add(repository);
     const now = this.now(), cached = this.reads.get(repository) ?? this.retainedRead(repository, now);
     if (cached && now - cached.at <= this.freshMs
       && (!cached.directories || this.readUnchanged(cached, true))) {
@@ -394,8 +430,8 @@ const attemptRoots = (original: string, current: string) =>
 /** A durable checkout link remains a dependency while its lane is open,
  * including between stages when no process has that checkout as its cwd. */
 export async function repositoryReferencesAttemptTemp(repository: string, original: string, current = original,
-  inventory = new RepositoryLinkInventory()): Promise<boolean> {
-  return (await inventory.targets(repository)).some(referencesRoot(attemptRoots(original, current)));
+  inventory = new RepositoryLinkInventory(), discovered = false): Promise<boolean> {
+  return (await inventory.targets(repository, discovered)).some(referencesRoot(attemptRoots(original, current)));
 }
 
 /** Idle processes can still depend on a symlink in their checkout. Resolve
@@ -416,32 +452,44 @@ export async function attemptReferencesClear(original: string, current: string, 
   }
   const repositories = new Set<string>();
   const processCwds: string[] = [];
+  const holders = new Map<string, (number | null)[]>(), consumers = new Map<string, Set<string>>();
   for (const process of scan.processes) {
     const cwd = process.paths[0];
-    if (cwd?.startsWith(path.sep)) processCwds.push(cwd);
+    if (!cwd?.startsWith(path.sep)) continue;
+    processCwds.push(cwd);
+    holders.set(cwd, [...holders.get(cwd) ?? [], process.namespace ? process.pid : null]);
   }
   // The scan is the list of live processes. Discoveries recorded for an
   // earlier root of this tick stay only for cwds a live process still holds.
   inventory.retainDiscoveries(processCwds);
-  for (const cwd of processCwds) {
-    const repository = inventory.repositoryOf(cwd);
-    if (repository) repositories.add(repository);
-  }
-  for (const repository of [...repositories].sort()) {
-    if (await repositoryReferencesAttemptTemp(repository, original, current, inventory)) return false;
-  }
+  const discover = () => {
+    for (const cwd of processCwds) {
+      const repository = inventory.repositoryOf(cwd, holders.get(cwd));
+      if (!repository) continue;
+      repositories.add(repository);
+      consumers.set(repository, (consumers.get(repository) ?? new Set()).add(cwd));
+    }
+  };
+  const checkoutLinksIn = async () => {
+    for (const repository of [...repositories].sort()) {
+      try { if (await repositoryReferencesAttemptTemp(repository, original, current, inventory, true)) return true; }
+      catch (error) {
+        // A checkout removed after every process in it exited holds no link.
+        if (!vanished(error) || ![...consumers.get(repository) ?? []].every(cwd => inventory.abandoned(cwd))) throw error;
+        repositories.delete(repository);
+      }
+    }
+    return false;
+  };
+  discover();
+  if (await checkoutLinksIn()) return false;
   if (process.platform === "linux" && !await containers([original, current])) return false;
   // The container query yields. Re-resolve every consumer checkout and links
   // after it, then synchronously validate the directory snapshots so a late
   // disappearance, permission change, replacement, or link creation cannot
   // ride on the earlier negative inventory.
-  for (const cwd of processCwds) {
-    const repository = inventory.repositoryOf(cwd);
-    if (repository) repositories.add(repository);
-  }
-  for (const repository of [...repositories].sort()) {
-    if (await repositoryReferencesAttemptTemp(repository, original, current, inventory)) return false;
-  }
+  discover();
+  if (await checkoutLinksIn()) return false;
   return [...repositories].every(repository => inventory.unchanged(repository));
 }
 
@@ -521,9 +569,39 @@ export async function attemptTempUtilityImage(): Promise<string> {
   }
   throw new Error("no installed container cleanup utility image");
 }
-const noEvidence = 'found=$(find /attempt -xdev "(" -name .artifacts'
-  + PRESERVED_MEDIA_EXTENSIONS.map(extension => ` -o -iname "*.${extension}"`).join("")
-  + ' ")" -print -quit) || exit; test -z "$found" || exit 75; ';
+/** The files of an attempt root that the evidence ledger links, relative to
+ * it: pictures a stage report, a bridge report or a task named by their path
+ * in the root (the report picture index). A root that recorded-check custody
+ * still holds counts as evidence whole. Only these count in the namespace's
+ * no-evidence proof; an image of a checked-out source tree is no recorded
+ * evidence and no longer blocks a tree this user cannot read. An unreadable
+ * index proves nothing. */
+export function ledgerLinkedEvidence(original: string): string[] {
+  if (recordedRootHeld(original)) throw new Error("recorded-check custody holds this root; the no-evidence proof refuses");
+  const rows = reportMediaIndex();
+  if (rows === null) throw new Error("report picture index is unreadable; the no-evidence proof cannot run");
+  const roots = [path.resolve(original)];
+  try { roots.push(path.join(fs.realpathSync(path.dirname(original)), path.basename(original))); }
+  catch { /* A quarantined original keeps its lexical name. */ }
+  const linked = new Set<string>();
+  for (const row of rows) {
+    const named = path.resolve(row.path), root = roots.find(candidate => named.startsWith(candidate + path.sep));
+    if (!root) continue;
+    linked.add(path.relative(root, named));
+  }
+  return [...linked];
+}
+/** Consumes the linked paths the command passes first: `linked` is 1 when any
+ * of them exists in the mounted tree. */
+const linkedEvidence = 'count=$1; shift; linked=0; while test "$count" -gt 0; do '
+  + 'if test -e "/attempt/$1" || test -L "/attempt/$1"; then linked=1; fi; shift; count=$((count - 1)); done; ';
+const noEvidence = 'test "$linked" = 0 || exit 75; ';
+/** The cleanup container cannot run at all: no docker, no installed utility
+ * image, or a refusal by the daemon or the image (exit 125 to 127). Retrying
+ * does not help; the sweep holds the root for the operator. */
+export const PRIVILEGED_CLEANUP_UNAVAILABLE = "privileged cleanup unavailable";
+const unavailable = (detail: string) => new Error(`${PRIVILEGED_CLEANUP_UNAVAILABLE}: ${detail}`);
+export const privilegedCleanupUnavailable = (error: unknown) => String((error as Error)?.message ?? error).includes(PRIVILEGED_CLEANUP_UNAVAILABLE);
 
 async function containerCommand(directory: string, operation: "inspect" | "remove" | "measure" | "evidence", original = directory,
   guard?: () => Promise<boolean>, requireNoEvidence = false, dispatchGuard?: () => boolean): Promise<{ identity: string; stdout: string }> {
@@ -533,8 +611,10 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
   // Running containers may hold files through mount aliases that an ordinary
   // proc observer cannot read. Never stop or exec into one for reclamation.
   if (!await containerMountsClear([directory, original])) throw new Error("container ownership could not be cleared for the attempt tree");
-  const image = await attemptTempUtilityImage();
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(image) || directory.includes(",")) throw new Error("invalid container cleanup input");
+  let image: string;
+  try { image = await attemptTempUtilityImage(); }
+  catch (error) { throw unavailable(attemptTempFailureDetail(error)); }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(image) || directory.includes(",")) throw unavailable("invalid container cleanup input");
   const inspection = 'export ORIGINAL=$1; shift; find /attempt -xdev "$@" -print > /tmp/markers || exit; '
     + 'test "$(wc -l < /tmp/markers)" -le 10000 || exit 75; '
     + `find /attempt -xdev "$@" -exec /bin/sh -c ${"'" + containerClassifier.replaceAll("'", "'\\''") + "'"} sh {} + || exit; `;
@@ -542,8 +622,10 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
     : operation === "evidence" ? noEvidence
       : inspection + (requireNoEvidence ? noEvidence : "")
         + (operation === "remove" ? 'exec find /attempt -xdev -depth -mindepth 1 -delete' : 'exit 0');
-  const script = 'identity=$1; shift; test "$(stat -c %d:%i /attempt)" = "$identity" || exit 75; ' + body;
+  const script = 'identity=$1; shift; test "$(stat -c %d:%i /attempt)" = "$identity" || exit 75; ' + linkedEvidence + body;
   if (guard && !await guard()) throw new Error("attempt authority changed before namespace removal");
+  // Read after the guard's awaits, so a picture named meanwhile still counts.
+  const linked = operation === "evidence" || requireNoEvidence ? ledgerLinkedEvidence(original) : [];
   const final = fs.lstatSync(directory);
   if (!final.isDirectory() || final.isSymbolicLink() || `${final.dev}:${final.ino}` !== identity)
     throw new Error("attempt identity changed before namespace dispatch");
@@ -551,10 +633,17 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
     throw new Error("attempt temp deferred: authority changed before namespace removal");
   // Only this owned tree is writable. No pull, network, socket, privileged
   // mode or host namespace is granted to the cleanup container.
-  const result = await run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1m",
-    "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
-    "--mount", `type=bind,source=${directory},target=/attempt${operation !== "remove" ? ",readonly" : ""}`,
-    "--entrypoint", "timeout", image, "12", "/bin/sh", "-c", script, "sh", identity, original, ...markers]);
+  let result: { stdout: string };
+  try {
+    result = await run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1m",
+      "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
+      "--mount", `type=bind,source=${directory},target=/attempt${operation !== "remove" ? ",readonly" : ""}`,
+      "--entrypoint", "timeout", image, "12", "/bin/sh", "-c", script, "sh", identity, String(linked.length), ...linked, original, ...markers]);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException & { code?: unknown }).code;
+    if (code === "ENOENT" || [125, 126, 127].includes(Number(code))) throw unavailable(attemptTempFailureDetail(error));
+    throw error;
+  }
   return { identity, stdout: result.stdout };
 }
 
@@ -591,9 +680,11 @@ export async function inspectAttemptTree(directory: string, original = directory
   catch (error) {
     if (process.platform !== "linux") throw error;
     try { await containerCommand(directory, "inspect", original); return true; }
-    catch { return false; }
+    catch (failure) { if (privilegedCleanupUnavailable(failure)) throw failure; return false; }
   }
 }
+
+const unlistable = (error: unknown) => ["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "");
 
 /** An independent directory snapshot protects new markers even when expired
  * evidence is deliberately discarded. Check it synchronously after every
@@ -608,14 +699,22 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
     const current = pending.pop()!, stat = fs.lstatSync(current, { bigint: true });
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("attempt protection directory changed");
     directories.set(current, signature(stat));
-    const entries = fs.opendirSync(current);
+    // A container that ran as another user leaves directories this user cannot
+    // list. Each stays in the snapshot as a leaf, versioned by its own metadata:
+    // an entry made directly in it changes that signature, and the namespace
+    // removal that such a tree needs repeats the keep-marker classification
+    // inside the tree immediately before it deletes anything.
+    let entries: fs.Dir;
+    try { entries = fs.opendirSync(current); }
+    catch (error) { if (unlistable(error)) continue; throw error; }
     try {
       for (let entry; (entry = entries.readSync());) {
         if (performance.now() >= until || pending.length + directories.size >= 10000)
           throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
         if (entry.isDirectory()) pending.push(path.join(current, entry.name));
       }
-    } finally { entries.closeSync(); }
+    } catch (error) { if (!unlistable(error)) throw error; }
+    finally { entries.closeSync(); }
   }
   return { current: () => {
     try {
@@ -647,17 +746,73 @@ export async function removeAttemptTree(directory: string, original = directory,
   }
 }
 
-export async function allocatedAttemptBytes(directory: string): Promise<number> {
-  if (process.platform === "win32") return measureTempBytes(directory);
-  let output: string | undefined;
-  try { output = (await run("du", ["-skx", "--", directory])).stdout; }
-  catch {
-    if (process.platform === "linux") {
-      try { output = (await containerCommand(directory, "measure")).stdout; }
-      catch { /* Preserve a lower bound if namespace measurement is unavailable. */ }
-    }
+const kibibytes = (output: string | undefined) => {
+  const field = output?.trim().split(/\s+/)[0];
+  const value = field ? Number(field) : NaN;
+  return Number.isFinite(value) && value >= 0 ? value * 1024 : null;
+};
+
+/** What `du` can read, and whether part of the tree was unreadable. `du`
+ * totals what it can read and exits 1 when a subtree is unreadable; that total
+ * is the lower bound, flagged, and the cleanup namespace raises it when it can
+ * measure the whole tree. The old fallback kept only the root's own inode and
+ * recorded a 51 GiB tree as 4 KiB. */
+export async function measureAttemptAllocation(directory: string): Promise<{ bytes: number; unreadable: boolean }> {
+  if (process.platform === "win32") return { bytes: await measureTempBytes(directory), unreadable: false };
+  let partial: number | null = null;
+  try {
+    const bytes = kibibytes((await run("du", ["-skx", "--", directory])).stdout);
+    if (bytes !== null) return { bytes, unreadable: false };
+  } catch (error) { partial = kibibytes((error as { stdout?: string }).stdout); }
+  let bytes = partial ?? fs.lstatSync(directory).blocks * 512;
+  if (process.platform === "linux") {
+    try { bytes = Math.max(bytes, kibibytes((await containerCommand(directory, "measure")).stdout) ?? 0); }
+    catch { /* The readable lower bound stands. */ }
   }
-  const value = Number(output?.trim().split(/\s+/)[0] ?? NaN);
-  if (Number.isFinite(value) && value >= 0) return value * 1024;
-  return fs.lstatSync(directory).blocks * 512;
+  return { bytes, unreadable: true };
+}
+
+export async function allocatedAttemptBytes(directory: string): Promise<number> {
+  return (await measureAttemptAllocation(directory)).bytes;
+}
+
+/** A directory inside an attempt tree that this user cannot list or empty.
+ * Containers that ran as another user leave them: database data, browser
+ * profiles, lock directories. Removing one needs privileges the sweep does not
+ * use, so it is reported for the operator. `bytes` is what du could read in it. */
+export type BlockedSubtree = { path: string; uid: number; mode: string; bytes: number; unreadable: boolean };
+/** Entries one root reports in full; `count` still counts every one. */
+export const BLOCKED_SUBTREE_REPORT_LIMIT = 16;
+
+/** Every directory under `directory` that native removal would fail on, each
+ * reported once at its top: it is not listable, not searchable or not
+ * writable for this user, and not empty. */
+export async function blockedSubtrees(directory: string, limit = BLOCKED_SUBTREE_REPORT_LIMIT): Promise<{ count: number; entries: BlockedSubtree[] }> {
+  if (process.platform === "win32") return { count: 0, entries: [] };
+  let output: string;
+  try {
+    output = (await run("find", [directory, "-xdev", "-mindepth", "1", "-type", "d",
+      "(", "!", "-readable", "-o", "!", "-writable", "-o", "!", "-executable", ")", "-prune", "-printf", "%U\\0%m\\0%p\\0"])).stdout;
+  } catch (error) {
+    // find exits 1 when something below vanished or refused; what it printed
+    // stands, and a refused directory is pruned above before it is entered.
+    const stdout = (error as { stdout?: unknown }).stdout;
+    if (typeof stdout !== "string") throw error;
+    output = stdout;
+  }
+  const fields = output.split("\0");
+  const found: Array<{ path: string; uid: number; mode: string }> = [];
+  for (let index = 0; index + 2 < fields.length; index += 3) {
+    const [uid, mode, file] = [Number(fields[index]), fields[index + 1]!, fields[index + 2]!];
+    if (!file || !Number.isInteger(uid)) continue;
+    // An empty directory is removed by its parent however it is owned.
+    try { if (fs.readdirSync(file).length === 0) continue; } catch { /* Not listable: it stays reported. */ }
+    found.push({ path: file, uid, mode });
+  }
+  const entries: BlockedSubtree[] = [];
+  for (const entry of found.slice(0, limit)) {
+    const measured = await measureAttemptAllocation(entry.path).catch(() => ({ bytes: 0, unreadable: true }));
+    entries.push({ ...entry, ...measured });
+  }
+  return { count: found.length, entries };
 }
