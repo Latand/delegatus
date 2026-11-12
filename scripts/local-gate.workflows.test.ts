@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 import { isImageInput } from "./docker-image-scope.cjs";
+import { workflowEntries } from "./ci-platform-scope";
 const root = path.resolve(import.meta.dir, "..");
 function read(name: string) {
   return Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows", name), "utf8")) as {
@@ -56,3 +59,30 @@ test("Windows caches Bun downloads by the candidate lockfile before install", ()
   expect(cache.with?.key).toContain("hashFiles('bun.lock')");
   expect(job.steps!.indexOf(cache)).toBeLessThan(job.steps!.findIndex(step => step.name === "Install dependencies"));
 });
+
+for (const stepName of ["Platform tests", "Terminal bootstrap custody with native Windows paths"]) {
+  for (const failure of [false, true]) test(`${stepName} dispatches one owned file at a time and preserves ${failure ? "failure" : "success"}`, () => {
+    const run = read("platform-tests.yml").jobs["windows-platform"]!.steps!.find(step => step.name === stepName)!.run!;
+    const files = workflowEntries(run).filter(file => file.endsWith(".test.ts"));
+    const dir = mkdtempSync(path.join(os.tmpdir(), "windows-workflow-"));
+    try {
+      for (const file of [...files, "scripts/gate-slot.sh"]) {
+        mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+        writeFileSync(path.join(dir, file), "");
+      }
+      writeFileSync(path.join(dir, "scripts/gate-slot.sh"), `#!/bin/bash
+set -eu
+[[ $# == 3 && $1 == bun && $2 == test && -f $3 ]] || exit 91
+printf '%s\\n' "$3" >> "$CALLS"
+[[ $3 != "$FAIL_FILE" ]] || exit 17
+`);
+      const calls = path.join(dir, "calls");
+      const result = spawnSync("bash", ["-c", run], { cwd: dir, encoding: "utf8",
+        env: { ...process.env, CALLS: calls, FAIL_FILE: failure ? files[1] : "" } });
+      expect(files.length).toBeGreaterThan(2);
+      expect({ status: result.status, stderr: result.stderr }).toEqual({ status: failure ? 17 : 0, stderr: "" });
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual(failure ? files.slice(0, 2) : files);
+      expect(result.stdout).toContain(`exit=${failure ? 17 : 0}`);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+}
