@@ -40,13 +40,16 @@ const { startUnreapedChild } = await import("@/lib/testing/unreapedChild");
 const { createPipelineFromRequest, defaultPipelinePorts, patchPipeline, reportStageCompletion, stopPipelineStageAgent, stopSettledPipelineStageWriter, tickPipelines } = await import("./engine");
 const { loadPipelines, savePipelines } = await import("./store");
 const { registerPipelineTick } = await import("./controllerSignal");
+const { hasRuntimeSwitchKill } = await import("./runtimeSwitch");
+const { shutdownTaskPageWorker } = await import("@/lib/links/taskPageWorker");
 type PipelinePorts = import("./engine").PipelinePorts;
 type RuntimeHostClient = import("@/lib/runtime/client").RuntimeHostClient;
 
 /* A tick this suite did not ask for must never reach the real ports. */
 registerPipelineTick(async () => {});
 
-afterAll(() => {
+afterAll(async () => {
+  await shutdownTaskPageWorker();
   setAgentRegistryForTests(null);
   for (const [name, value] of Object.entries(ambientEnvironment)) {
     if (value === undefined) delete process.env[name];
@@ -189,6 +192,7 @@ function stagePorts(
   options: {
     liveness?: NonNullable<Parameters<typeof defaultPipelinePorts>[0]>["liveness"];
     autonomousStopClient?: RuntimeHostClient;
+    runtimeClient?: RuntimeHostClient;
     /** A wall clock that stands still at this instant and moves only when the
         test advances it, so no real delay between ticks can cross a spacing. */
     frozenAt?: number;
@@ -199,6 +203,10 @@ function stagePorts(
   const defaults = defaultPipelinePorts({ liveness: options.liveness });
   const ports: PipelinePorts = {
     ...defaults,
+    ...(options.autonomousStopClient || options.runtimeClient ? {
+      conversationOperatorStopped: (id: string, since: string, ignored?: readonly string[]) =>
+        hasRuntimeSwitchKill((options.autonomousStopClient ?? options.runtimeClient)!, id, since, ignored, true),
+    } : {}),
     engineReadiness: () => "connected",
     cpuPressureHold: () => null,
     cpuAdmissionReconcile: () => {},
@@ -247,12 +255,14 @@ function stagePorts(
       };
     },
     stopStageAgent: options.autonomousStopClient
-      ? (target) => stopPipelineStageAgent(target, {
+      ? (target, stopOptions) => stopPipelineStageAgent(target, {
           client: options.autonomousStopClient,
-          action: async ({ conversationId, transcriptPath, action }) => await dispatchStructuredControl({
+          automatic: stopOptions?.automatic,
+          action: async ({ conversationId, transcriptPath, action, actor }) => await dispatchStructuredControl({
             path: transcriptPath,
             conversationId,
             action,
+            actor,
           }, {
             registry: stage.registry,
             client: options.autonomousStopClient,
@@ -338,6 +348,10 @@ test("a CPU-flat stage autonomously retires its exact child before one replaceme
     } } });
     expect(recent?.reason).toContain(`latest ${LIVENESS_CPU_PROGRESS_WINDOW_MS / 1_000}s`);
     await tickPipelines([], ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.condition.kind).toBe("host_death");
+    expect(spawns).toHaveLength(1);
+    ports.advanceWallClock(60_000);
+    await tickPipelines([], ports);
 
     expect(procBackend.pidAlive(stage.child.pid)).toBe(false);
     expect(stage.registry.readOnlySnapshot().entries[`claude:${stage.key.sessionId}`]).toMatchObject({
@@ -345,11 +359,8 @@ test("a CPU-flat stage autonomously retires its exact child before one replaceme
       structuredHost: null,
     });
     const parked = loadPipelines()[0]!;
-    expect(parked.state).toBe("needs_decision");
+    expect(parked.state).toBe("running");
     expect(parked.runs[0]!.attempts[0]).toMatchObject({ state: "failed" });
-
-    const retried = await patchPipeline(parked.id, { action: "retry-stage" }, ports);
-    expect(retried.error).toBeUndefined();
     await tickPipelines([], ports);
     expect(spawns).toHaveLength(2);
     expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
@@ -365,12 +376,12 @@ test("a CPU-flat stage autonomously retires its exact child before one replaceme
   }
 });
 
-test("a live severed stage host is killed, retired, and its stage retried once, through the seams the incident ran through (#1282)", async () => {
+test.each(["agent", "operator", "unknown"] as const)("a severed stage retries only an authenticated automatic kill (origin=%s) (#1282)", async (origin) => {
   const stage = severedStage();
   const journal = new RuntimeJournal(path.join(path.dirname(stage.transcript), "runtime.sqlite"), { structuredHosts: true });
   const client = runtimeJournalClient(journal);
   const spawns: string[] = [];
-  const ports = stagePorts(stage, spawns) as PipelinePorts & { advanceWallClock(ms: number): void };
+  const ports = stagePorts(stage, spawns, { runtimeClient: client }) as PipelinePorts & { advanceWallClock(ms: number): void };
 
   try {
     /* 0. A pipeline whose one stage is running on that host, provisioned and
@@ -400,15 +411,16 @@ test("a live severed stage host is killed, retired, and its stage retried once, 
       paneId: null,
     });
 
-    /* 1. The operator's kill, admitted as a runtime operation and executed by
-       the delivery controller — the path that refused forever while the
-       recorded process was alive and this Viewer was its claim owner. */
+    /* The journal retains authorship at admission; an operator stop or an
+       older receipt with unknown authorship must fence automatic recovery. */
     journal.executeOperation({
       kind: "kill",
       operationId: "kill-severed-stage",
       idempotencyKey: "kill-severed-stage",
       conversationId: stage.conversationId,
       sessionKey: stage.key,
+      ...(origin === "agent" ? { origin: { kind: "agent" as const, conversationId: stage.conversationId } }
+        : origin === "operator" ? { origin: { kind: "operator" as const } } : {}),
     });
     await bindStructuredDeliveryQueue([], {
       registry: stage.registry,
@@ -437,16 +449,29 @@ test("a live severed stage host is killed, retired, and its stage retried once, 
     /* 3. The pipeline tick, reading host liveness through its own port. */
     ports.advanceWallClock(6 * 60_000);
     await tickPipelines([], ports);
+    if (origin !== "agent") {
+      const held = loadPipelines()[0]!;
+      expect(held.state).toBe(origin === "operator" ? "needs_decision" : "running");
+      expect(held.stateDetail).toBe(origin === "operator"
+        ? "provider recovery cancelled by operator stop; waiting for operator decision"
+        : "automatic recovery is waiting for durable operator-stop evidence");
+      ports.advanceWallClock(10 * 60_000);
+      await tickPipelines([], ports);
+      expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+      expect(spawns).toHaveLength(1);
+      return;
+    }
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.condition.kind).toBe("host_death");
+    expect(spawns).toHaveLength(1);
+    ports.advanceWallClock(60_000);
+    await tickPipelines([], ports);
 
     const parked = loadPipelines()[0]!;
-    expect(parked.state).toBe("needs_decision");
+    expect(parked.state).toBe("running");
     expect(parked.runs[0]!.attempts[0]).toMatchObject({ state: "failed" });
 
-    /* 4. `retry-stage`, which the stage's stuck `running` state used to refuse
-       — the lane could only be freed by closing the pipeline. */
-    const retried = await patchPipeline(parked.id, { action: "retry-stage" }, ports);
-    expect(retried.error).toBeUndefined();
-    expect(retried.pipeline?.state).not.toBe("closed");
+    /* The bounded host-death recovery replaces the failed attempt itself. */
+    expect(parked.state).not.toBe("closed");
 
     await tickPipelines([], ports);
 

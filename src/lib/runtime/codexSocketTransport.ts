@@ -10,6 +10,7 @@ import WebSocket from "ws";
 import { procBackend } from "@/lib/proc";
 import { redactBounded } from "@/lib/monitor/redact";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
+import { beforeStructuredSetupExec, retainStructuredSetupProcess, structuredSetupCustodyActive } from "./structuredSetupCustody";
 import { signalProcessGroup } from "@/lib/processGroup";
 import type { ProcessIdentity } from "@/lib/agent/registry";
 import { startupStderrText } from "./startupStderr";
@@ -236,7 +237,13 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
       if (writer !== null && env.env?.LLV_SIGNAL_DIAGNOSTIC) fs.symlinkSync(diagnosticFile, env.env.LLV_SIGNAL_DIAGNOSTIC);
       let child: ReturnType<typeof spawn>;
       try {
-        child = spawn(process.execPath, [...nativeWaitOwnerRuntimeFlags(), "-e", socketWaitOwnerSource, "--", JSON.stringify([directory, binary, ...argv])], { ...env, stdio: ["ignore", "ignore", writer ?? "ignore"] });
+        const awaitAdmission = structuredSetupCustodyActive();
+        child = spawn(process.execPath, [...nativeWaitOwnerRuntimeFlags(), "-e", socketWaitOwnerSource, "--", JSON.stringify({ command: [directory, binary, ...argv], awaitAdmission })], { ...env, stdio: ["ignore", "ignore", writer ?? "ignore"] });
+        retainStructuredSetupProcess(child.pid);
+        if (awaitAdmission) {
+          beforeStructuredSetupExec();
+          fs.writeFileSync(path.join(directory, "start.json"), "true", { mode: 0o600 });
+        }
       }
       finally {
         if (writer !== null) fs.closeSync(writer);

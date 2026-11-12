@@ -18,7 +18,6 @@ const { registerPipelineTick } = await import("./controllerSignal");
 const { loadPipelines, savePipelines, pipelineIdentity, withPipelineMutation } = await import("./store");
 const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
 const { createMcpToolService, FileMcpReceiptStore } = await import("@/lib/mcp/server");
-const { asStoredLegacyReviewLane } = await import("./fixtures/legacyReviewLane");
 type PipelinePorts = import("./engine").PipelinePorts;
 type StageCompletionRequest = import("./engine").StageCompletionRequest;
 
@@ -83,7 +82,7 @@ function harness() {
         const probe = /^remote\.([^=]+)\.url=(.*)$/.exec(args[1]!);
         if (probe) return { code: 0, stdout: `${probe[1]}\t${probe[2]} (fetch)\n${probe[1]}\t${probe[2]} (push)\n`, stderr: "" };
       }
-      if (args[0] === "ls-remote") return { code: 0, stdout: `${HEAD}\trefs/heads/${loadPipelines()[0]?.delivery?.target.branch ?? "fixture"}\n`, stderr: "" };
+      if (args[0] === "ls-remote") return { code: 0, stdout: `${HEAD}\t${loadPipelines()[0]?.delivery?.target.branch ?? "refs/heads/fixture"}\n`, stderr: "" };
       if (args[0] === "status" && args[1] === "--porcelain") return { code: 0, stdout: worktree.status, stderr: "" };
       if (args[0] === "ls-files") return { code: 0, stdout: worktree.knownPaths, stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return { code: 0, stdout: ".git\n", stderr: "" };
@@ -129,11 +128,9 @@ function harness() {
       return n ? `conversation_stage_${n}` : null;
     },
     pipelineAdoptionCandidates: () => [],
-    createFlow: async () => ({ error: "no review flows in this suite" }),
     patchFlow: () => ({}),
     closeFlow: async () => ({}),
     getFlow: () => null,
-    findFlow: () => null,
     projectForCwd: () => "viewer",
     now: () => new Date((clock += 1_000)).toISOString(),
   };
@@ -158,9 +155,6 @@ async function started(ports: PipelinePorts, stages: unknown[], publication: Pip
   savePipelines([]);
   const created = await createPipelineFromRequest({ task: "Graph slice 2", spec: "AC", publication, repoDir, stages: stages as never, src: "/codex/creator.jsonl" }, ports);
   if (!created.pipeline) throw new Error(created.error);
-  /* A review-loop here stands for a lane stored before #2187, which still
-     reviews through its embedded flow; creation now converts new ones. */
-  if (created.convertedStages?.length) savePipelines([asStoredLegacyReviewLane(created.pipeline, created.convertedStages)]);
   await tickPipelines([], ports); // provision
   await tickPipelines([], ports); // spawn the entry stage
   return created.pipeline.id;
@@ -237,7 +231,7 @@ test.each(["control-before", "control-during", "delivery-before", "delivery-duri
   } finally { release(); await observation; }
 });
 
-test("stage_report and controller ticks ignore a future stage beside a healthy running lane", async () => {
+test("stage_report retains a future stage and settlement waits for readable peer ownership", async () => {
   const h = harness();
   await started(h.ports, [stage("build", null)]);
   const future = structuredClone(current());
@@ -255,8 +249,9 @@ test("stage_report and controller ticks ignore a future stage beside a healthy r
       db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) SELECT 'pipelines',?,?,99,revision,1 FROM state_collections WHERE collection='pipelines'").run(future.id, bytes);
     })();
     expect((await h.report(1, { verdict: "pass", summary: "Healthy lane complete" })).error).toBeUndefined();
-    await tickPipelines([h.endTurn(1, "Done")], h.ports);
-    expect(attemptsOf("build")[0]!.state).toBe("passed");
+    await expect(tickPipelines([h.endTurn(1, "Done")], h.ports)).rejects.toThrow("stage settlement ownership preparation deferred");
+    expect(attemptsOf("build")[0]!.state).toBe("committing");
+    expect(current().cursor?.state).toBe("committing");
     expect(h.spawnedStages).toEqual(["build"]);
     expect(db.query("SELECT value_json FROM state_rows WHERE collection='pipelines' AND row_key=?").get(future.id)).toEqual({ value_json: bytes });
   } finally {
@@ -266,6 +261,10 @@ test("stage_report and controller ticks ignore a future stage beside a healthy r
     db.query("UPDATE state_collections SET revision=revision+1 WHERE collection='pipelines'").run();
     db.close();
   }
+  const retryAt = attemptsOf("build")[0]!.settlementPreparationWait!.retryAfter;
+  h.ports.now = () => new Date(Date.parse(retryAt) + 1).toISOString();
+  await tickPipelines([], h.ports);
+  expect(attemptsOf("build")[0]!.state).toBe("passed");
 });
 
 test("stage_report retries the same request after a pre-admission pipeline store busy refusal", async () => {
@@ -702,15 +701,14 @@ test("a review-loop stage's reviewer cannot report a completion, and nothing is 
   const h = harness();
   await started(h.ports, [
     stage("build", "review"),
-    { id: "review", kind: "review-loop", role: { roleId: "builder" }, prompt: "Review the run", next: null },
+    stage("review", null, { access: "read-only" }),
   ]);
   await tickPipelines([h.endTurn(1, 'Built.\n\n```json\n{"status":"pass","findings":[]}\n```')], h.ports);
 
-  /* What attachReviewFlowAttempt leaves on a review-loop attempt: the flow's
-     reviewer conversation, running the flow's own review. Its verdict is the
-     flow outcome tickReviewStage settles from, and that path never reads a
-     report — so a report taken here would show on the card and move nothing. */
+  /* Seed the readable shape an older release stored. New review-loop
+     creation is retired; its reviewer cannot complete the archived lane. */
   const records = loadPipelines();
+  records[0]!.stages.find((item) => item.id === "review")!.kind = "review-loop";
   const review = records[0]!.runs.find((run) => run.stageId === "review")!;
   review.attempts.push({
     ...structuredClone(records[0]!.runs[0]!.attempts[0]!),
@@ -727,7 +725,7 @@ test("a review-loop stage's reviewer cannot report a completion, and nothing is 
   h.execCalls.length = 0;
 
   const refused = await h.report(2, { verdict: "pass", summary: "Approved it myself." });
-  expect(refused).toMatchObject({ code: "STAGE_REPORT_NOT_A_RUN_STAGE", status: 403 });
+  expect(refused).toMatchObject({ code: "STAGE_KIND_RETIRED", status: 410 });
   expect(refused.error).toContain("review-loop stage");
   expect(refused.slots).toEqual([{ pipelineId: current().id, stageId: "review", attempt: 1, state: "reviewing" }]);
 
@@ -1003,6 +1001,7 @@ test.each(["report", "fenced"] as const)("a delivered parked attempt accepts its
   h.ports.sourcePathAllowed = (file) => file === pathname || file.startsWith("/codex/");
   h.ports.durableTurnEvidence = (engine, file) => import("./durableEvidence").then((module) => module.durableStageTurnEvidence(engine, file));
   h.ports.spawnReceipt = (launchId) => ({ launchId, conversationId: "conversation_stage_1", state: "failed", sessionId: null, transcript: null, stagedTranscript: pathname, paneId: null, staged: true, error: uncertainDelivery });
+  h.ports.originalLaunchOperations = async () => "matched";
   await started(h.ports, [stage("review", null, { access: "read-only", onFail: { to: "repair", maxRounds: 2 } }), stage("repair", null)]);
   expect(current().state).toBe("needs_decision");
   h.ports.spawnAgent = spawn;

@@ -21,9 +21,53 @@ import { canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeat
 import { nativeRelayConversation } from "./nativeRelayHandoff";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 
+/** Why a relay was refused under the stable `orchestrator_relay_refused` code.
+ * Existing callers match on the code; the reason names the one failed condition. */
+export type OrchestratorRelayRefusalReason =
+  /** The native relay caller could not be resolved, or its proof ended. */
+  | "caller_unverified"
+  /** A spawn capability was presented, yet it names no conversation. */
+  | "caller_unidentified"
+  /** The caller is no seat, gateway, verified owner relay or operator. */
+  | "sender_not_authorized"
+  /** The caller holds a seat that has no project to relay from. */
+  | "sender_seat_without_project"
+  /** Between admission and delivery the request resolved to another caller. */
+  | "caller_changed"
+  /** Between admission and delivery the sender stopped being a designated seat. */
+  | "sender_seat_revoked"
+  /** Between admission and delivery the sender's seat moved to another project. */
+  | "sender_project_changed"
+  /** Between admission and delivery the sender's seat was designated anew. */
+  | "sender_seat_rotated"
+  /** Between admission and delivery the target project's seat changed. */
+  | "recipient_seat_changed"
+  /** Seat authority could not be read while rechecking before delivery. */
+  | "authority_unreadable";
+
+export const ORCHESTRATOR_RELAY_REFUSED = "orchestrator_relay_refused";
+
+/** The admission guard's refusal: the stable code, plus the failed condition. */
+export class OrchestratorRelayRefusedError extends DeliveryAdmissionRefusedError {
+  constructor(readonly reason: OrchestratorRelayRefusalReason) { super(ORCHESTRATOR_RELAY_REFUSED); }
+}
+
+/** A caller-supplied recipient reaches the journal only as a well-formed id. */
+const journalConversation = (id: string | null | undefined) => id && /^conversation_[A-Za-z0-9_-]{1,120}$/.test(id) ? id : null;
+/** One journal line per refusal: identifiers and the reason, never the text. */
+function journalRelayRefusal(reason: OrchestratorRelayRefusalReason, stage: "admission" | "delivery", fields: {
+  sender?: string | null; recipient?: string | null; operationId?: string | null; clientMessageId?: string | null;
+}): void {
+  console.warn("Orchestrator relay refused", JSON.stringify({ event: ORCHESTRATOR_RELAY_REFUSED, reason, stage,
+    operationId: fields.operationId ?? null, clientMessageId: fields.clientMessageId?.slice(0, 128) ?? null,
+    sender: journalConversation(fields.sender), recipient: journalConversation(fields.recipient) }));
+}
+
 type RelayAdmission =
-  | { ok: true; text: string; origin: MessageOrigin; recipient: string; operationId?: string; terminalReceipt?: SendReceipt; voiceRecoveryReceipt?: SendReceipt; admissionGuard?: () => void }
-  | { ok: false; status: number; code: string; error: string };
+  | { ok: true; text: string; origin: MessageOrigin; recipient: string; operationId?: string; terminalReceipt?: SendReceipt; voiceRecoveryReceipt?: SendReceipt; admissionGuard?: () => void;
+      /** The reason the guard last refused this admission, for the response. */
+      refusalReason?: () => OrchestratorRelayRefusalReason | undefined }
+  | { ok: false; status: number; code: string; error: string; reason?: OrchestratorRelayRefusalReason };
 
 /** Shared server-derived payload for admission and durable MCP recovery. */
 export function orchestratorRelayPayload(text: string, seat: AuthorizedManagerSeat): { text: string; origin: MessageOrigin } {
@@ -55,11 +99,15 @@ export function admitOrchestratorRelay(
   inProcessPerson = false,
 ): RelayAdmission {
   const refused = (code: string, error: string, status = 403): RelayAdmission => ({ ok: false, status, code, error });
-  let conversationId: string | null;
+  let conversationId: string | null = null;
+  const relayRefused = (reason: OrchestratorRelayRefusalReason, error: string): RelayAdmission => {
+    journalRelayRefusal(reason, "admission", { sender: conversationId, recipient, clientMessageId });
+    return { ok: false, status: 403, code: ORCHESTRATOR_RELAY_REFUSED, error, reason };
+  };
   try { conversationId = nativeRelayConversation(request) ?? callerConversationId(request); }
-  catch { return refused("orchestrator_relay_refused", "the native relay caller changed or could not be verified"); }
+  catch { return relayRefused("caller_unverified", "the native relay caller changed or could not be verified"); }
   if (!conversationId && request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) {
-    return refused("orchestrator_relay_refused", "the relay caller's conversation could not be identified");
+    return relayRefused("caller_unidentified", "the relay caller's conversation could not be identified");
   }
   const seat = conversationId
     ? authorizedManagerSeats(productionManagerAuthoritySources()).find((candidate) => candidate.conversationId === conversationId)
@@ -68,7 +116,8 @@ export function admitOrchestratorRelay(
   const owner = conversationId && !seat && !gateway?.ok ? ownerRelayPayload(text, conversationId) : null;
   const operator = !conversationId && (inProcessPerson || operatorBrowserRequest(request));
   if ((!seat && !gateway?.ok && !owner && !operator) || (seat && !seat.project)) {
-    return refused("orchestrator_relay_refused", "only a designated orchestrator seat, the voice gateway, a verified owner relay or the operator may send to an orchestrator");
+    return relayRefused(seat ? "sender_seat_without_project" : "sender_not_authorized",
+      "only a designated orchestrator seat, the voice gateway, a verified owner relay or the operator may send to an orchestrator");
   }
   // A seat relays words, not delivery metadata or a gateway's correlation claim.
   // Refuse rather than silently changing the instruction being forwarded.
@@ -94,16 +143,30 @@ export function admitOrchestratorRelay(
   }
   if (!resolved.ok || !seat) return resolved;
   const epoch = orchestratorSeatFor(seat.project!).active?.seatEpoch;
-  return { ...resolved, admissionGuard: () => {
+  let lastRefusal: OrchestratorRelayRefusalReason | undefined;
+  // The first failed condition, in the order the conditions are checked.
+  const failedCondition = (): OrchestratorRelayRefusalReason | null => {
+    let caller: string | null;
+    try { caller = nativeRelayConversation(request) ?? callerConversationId(request); }
+    catch { return "caller_unverified"; }
     try {
-      const caller = nativeRelayConversation(request) ?? callerConversationId(request);
+      if (caller !== conversationId) return "caller_changed";
       const current = authorizedManagerSeats(productionManagerAuthoritySources()).find(candidate => candidate.conversationId === conversationId);
-      if (caller !== conversationId || !current || current.project !== seat.project
-        || orchestratorSeatFor(seat.project!).active?.seatEpoch !== epoch
-        || (!resolved.operationId && orchestratorSeatFor(project).active?.conversationId !== resolved.recipient)) throw new Error("relay authority changed");
-    } catch {
-      throw new DeliveryAdmissionRefusedError("orchestrator_relay_refused");
-    }
+      if (!current) return "sender_seat_revoked";
+      if (current.project !== seat.project) return "sender_project_changed";
+      if (orchestratorSeatFor(seat.project!).active?.seatEpoch !== epoch) return "sender_seat_rotated";
+      if (!resolved.operationId && orchestratorSeatFor(project).active?.conversationId !== resolved.recipient) return "recipient_seat_changed";
+      return null;
+    } catch { return "authority_unreadable"; }
+  };
+  return { ...resolved, refusalReason: () => lastRefusal, admissionGuard: () => {
+    const reason = failedCondition();
+    if (!reason) return;
+    // Delivery rechecks the guard more than once; journal each reason once.
+    if (lastRefusal !== reason) journalRelayRefusal(reason, "delivery", { sender: conversationId, recipient: resolved.recipient,
+      operationId: resolved.operationId, clientMessageId });
+    lastRefusal = reason;
+    throw new OrchestratorRelayRefusedError(reason);
   } };
 }
 

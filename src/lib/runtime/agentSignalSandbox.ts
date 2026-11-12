@@ -9,6 +9,7 @@ import type { AgentMemoryCell } from "./agentMemory";
 import { STDERR_READ_BYTES, startupStderrText, withoutUnterminatedSecret } from "./startupStderr";
 import { bindHostExitWriter } from "./hostExit";
 import { spawnNativeWaitOwner } from "./nativeWaitOwner";
+import { beforeStructuredSetupExec, retainStructuredSetupProcess } from "./structuredSetupCustody";
 
 export interface AgentSignalDomain {
   policyVersion: 1;
@@ -54,7 +55,12 @@ export async function spawnManagedEngine(command: string, args: string[], option
   memory: AgentMemoryCell | null | undefined, injected?: EngineSpawn, sourceEnv = options.env ?? process.env,
   transportSpawn?: EngineSpawn, assertCurrent?: () => void): Promise<ChildProcessWithoutNullStreams> {
   assertCurrent?.();
-  if (injected) return (memory?.wrapSpawn(injected) ?? injected)(command, args, options);
+  beforeStructuredSetupExec();
+  if (injected) {
+    const child = (memory?.wrapSpawn(injected) ?? injected)(command, args, options);
+    retainStructuredSetupProcess(child.pid);
+    return child;
+  }
   options = { ...options, env: { ...(options.env ?? process.env), LLV_HOST_EXIT_RECEIPTS: "1" } };
   const waiters: Array<ReturnType<typeof spawnNativeWaitOwner>> = [];
   const transport: EngineSpawn = transportSpawn ?? ((cmd, argv, opts) => {
@@ -410,6 +416,7 @@ export async function spawnSignalSandbox(command: string, args: string[], option
     // Main's launch path: the engine under its memory and CPU wrapper only.
     const child = start(command, args, options);
     await (child as ChildProcess & { spawnReady?: Promise<void> }).spawnReady;
+    retainStructuredSetupProcess(child.pid);
     recordSignalBoundaryOff(child, prepared.off, "managed");
     return child;
   }
@@ -440,6 +447,7 @@ export async function spawnSignalSandbox(command: string, args: string[], option
       if (fs.existsSync(receipt)) {
         const parsed = readReceipt(receipt);
         if ("off" in parsed) {
+          retainStructuredSetupProcess(child.pid);
           recordSignalBoundaryOff(child, parsed.off, "managed");
           if (assertCurrent) {
             if (!parsed.execAck) throw new Error("agent signal sandbox unavailable: fallback exec acknowledgement is unavailable");
@@ -455,6 +463,7 @@ export async function spawnSignalSandbox(command: string, args: string[], option
         const domain = parsed.domain;
         if (parsed.handle !== child.pid || domain.directory !== directory || !agentSignalDomainAlive(domain)) throw new Error("agent signal sandbox unavailable: launch identity could not be verified");
         domains.set(child, domain);
+        retainStructuredSetupProcess(domain.native.pid);
         if (env.LLV_HOST_EXIT_RECEIPTS === "1") bindHostExitWriter(directory, domain.native, domain.monitor);
         assertCurrent?.();
         fs.writeFileSync(path.join(directory, "exec.json"), "true", { mode: 0o600 });

@@ -133,7 +133,7 @@ function heldDeliveries(file: FileEntry): number {
  * The one state of one conversation, by the design's precedence. `now` is in
  * epoch seconds, like every other clock the board reads.
  */
-export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000): MobileRowState {
+export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000, { decisionWaiting = false }: { decisionWaiting?: boolean } = {}): MobileRowState {
   const bits = (over: Partial<MobileRowState> & { key: MobileRowStateKey }): MobileRowState => ({
     section: sectionOf(over.key),
     dot: "neutral",
@@ -183,6 +183,8 @@ export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000)
     const activity = file.agentActivity && file.proc === "running" ? fileAgentActivity(file, now * 1000).state : null;
     return bits({ key: "working", dot: "success", activity, seconds: since === null ? null : Math.max(0, now - since / 1000) });
   }
+  /* The seat's own turn is over while a decision form of its project waits: it is waiting on the operator, and says so, not «done». */
+  if (decisionWaiting) return bits({ key: "waiting", dot: "warning", edge: "warning", badge: "decision", seconds: Math.max(0, now - file.mtime) });
   if (file.activity === "recent") return bits({ key: "returned", dot: "accent", seconds: Math.max(0, now - file.mtime) });
   return bits({ key: "done", dot: "neutral", seconds: Math.max(0, now - file.mtime) });
 }

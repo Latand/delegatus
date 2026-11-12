@@ -168,7 +168,7 @@ test("a reply below a long bot answer resumes the same owner conversation with o
   } finally { selected.mockRestore(); setSystemTime(); await service.close(); }
 });
 
-for (const language of ["en", "uk"] as const) test(`an oversized mandatory ${language} request sends one human failure and no oversized agent message`, async () => {
+for (const language of ["en", "uk"] as const) test(`an oversized ${language} instruction sends one human failure and no oversized agent message`, async () => {
   let launches = 0;
   const delivered: string[] = [];
   const service = await startTestRelay((req, body) => {
@@ -190,8 +190,8 @@ for (const language of ["en", "uk"] as const) test(`an oversized mandatory ${lan
       launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_must_not_launch" } }; },
       observe: async () => ({ state: "ended", finalText: "must not run" }), stop: async () => {},
     } });
-    const human = language === "uk" ? "Обов’язковий контекст запиту завеликий. Скоротіть або розділіть запит і потрібні цитати."
-      : "The required request context is too large. Shorten or split the request and its required quotations.";
+    const human = language === "uk" ? "Текст вашого запиту завеликий. Скоротіть або розділіть сам запит."
+      : "Your instruction text is too large. Shorten or split the instruction itself.";
     expect(result).toMatchObject({ outcome: "answered", answer: { text: human, reply_to: request.input.respond_to } });
     expect(launches).toBe(0); expect(delivered).toEqual([human]);
     expect(Buffer.byteLength(human)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES);

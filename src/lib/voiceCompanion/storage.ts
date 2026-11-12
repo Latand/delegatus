@@ -39,6 +39,8 @@ export interface CompanionSettings {
   lastCodexSession?: { seconds: number; endedAt: number; plan: CompanionPlan | null };
 }
 export interface StoredProposal {
+  /** The continuation owns reconciliation; this row remains as the original send binding. */
+  adoptedBy?: string;
   admittedAt?: number;
   proposal: Proposal;
   sourceText: string;
@@ -70,11 +72,10 @@ export interface StoredProposal {
   publishedReceipt?: { clientMessageId: string; operationId: string };
 }
 export type SessionStarter = { memberId: string } | { operator: true };
-/** A report owed to the voice. Kept until every part is handed to the provider,
- * committed with the scan position that found it, so a failed hand-off resumes
- * at the first part not handed and never repeats one that was. */
+/** Speech committed with the scan position that found it. Handed reports remain
+ * recoverable until a journalled output reply acknowledges their handoffs. */
 export interface ReportSpeech { reportId: string; project: string; status: string; text: string; parts?: string[]; handed: number;
-  kind?: "message" | "resume";
+  kind?: "message" | "resume" | "notice";
   resumeOf?: { part: string; item: string };
   resumePoint?: import("./callResume").ResumePoint;
   at?: string | null;
@@ -88,6 +89,9 @@ export interface StoredSession {
   spokenReports?: string[];
   /** Reports owed to the voice, oldest first. */
   reportSpeech?: ReportSpeech[];
+  /** Completely handed reports awaiting a durable voice reply. */
+  speechInFlight?: ReportSpeech[];
+  droppedAt?: number;
   endedAt?: number;
   authority?: "live-model";
   providerId?: string;

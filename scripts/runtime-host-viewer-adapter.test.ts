@@ -8,7 +8,7 @@ import type { Readable } from "node:stream";
 
 import { checkEnvironment } from "./gate-cache";
 import { createGateSandbox, isolatedEnvironment } from "./local-gate";
-import { MCP_TOOL_NAMES } from "../src/lib/mcp/server";
+import { MCP_TOOL_NAMES, MCP_UPDATE_BRIDGE_TOOL_NAMES } from "../src/lib/mcp/server";
 import { UnixRuntimeHostClient } from "../src/lib/runtime/client";
 import { viewerComposeSnapshotName } from "../src/runtime-host/deploymentArtifacts";
 import { RuntimeHost } from "../src/runtime-host/host";
@@ -553,7 +553,7 @@ test("documented bootstrap input obtains host-owned admission through the final 
       calls: { deploymentStatus: true, boardSnapshot: true },
       ok: true,
     });
-    expect(result.health.mcpRuntime?.tools).toEqual([...MCP_TOOL_NAMES, "suggest_replies"].sort());
+    expect(result.health.mcpRuntime?.tools).toEqual([...MCP_TOOL_NAMES, ...MCP_UPDATE_BRIDGE_TOOL_NAMES].sort());
     expect(fs.existsSync(socketPath)).toBe(false);
     const successor = new RuntimeHostFence(`${socketPath}.lock`);
     successor.acquire();
@@ -1301,7 +1301,7 @@ test("the first successor boot publishes and probes the MCP runtime after an old
         },
       },
     });
-    expect(result.health.tools).toEqual([...MCP_TOOL_NAMES, "suggest_replies"].sort());
+    expect(result.health.tools).toEqual([...MCP_TOOL_NAMES, ...MCP_UPDATE_BRIDGE_TOOL_NAMES].sort());
     const target = JSON.parse(fs.readFileSync(path.join(fixture.state, "viewer-release.json"), "utf8"));
     expect(target).toMatchObject({
       revision,

@@ -725,7 +725,11 @@ test("projection handoff stops within a slice when its last caller cancels", asy
       yield item;
     }
   } });
-  writer.mutate(file => { file.receipts[kept]!.error = "next generation"; }, false);
+  // More commits than a preparation replays in one step, so it hands the
+  // projections to a new reader.
+  for (let commit = 0; commit <= 256; commit++) {
+    writer.mutate(file => { file.receipts[kept]!.error = commit < 256 ? `generation ${commit}` : "next generation"; }, false);
+  }
   try {
     await expect(reader.prepareReadOnlySnapshot(controller.signal)).rejects.toThrow("projection caller cancelled");
     expect(copied).toBeGreaterThan(0);
