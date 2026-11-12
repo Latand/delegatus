@@ -1158,6 +1158,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "accounts.resetsExpire": "діє до {at}",
   "accounts.useReset": "Використати скид",
   "accounts.useResetAria": "Використати один скид ліміту для {label}",
+  "accounts.useResetConfirm": "Для цього акаунта буде витрачено один скид, його не можна повернути.",
+  "accounts.useResetCancel": "Скасувати",
   "accounts.resetUsed": "Скид використано для {label} — показано нове вікно",
   "accounts.resetNone": "У {label} немає доступних скидів",
   "accounts.resetNothing": "Нічого скидати для {label} — жодне вікно не вичерпане",
