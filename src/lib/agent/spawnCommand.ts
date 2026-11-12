@@ -27,6 +27,7 @@ import { copilotBinaryGap, freshSpecFor, type AgentEngine } from "@/lib/agent/cl
 import { NoCopilotAccountError, UnknownCopilotAccountError } from "@/lib/accounts/copilot";
 import { agentRegistry, prepareAgentRegistry, identityMaterializationFence, SpawnChildLimitError, type SpawnLauncher, type SpawnRequest } from "@/lib/agent/registry";
 import { reasoningFromBody } from "@/lib/agent/efforts";
+import { guardedDiskCleanerProfile } from "./cleanerLaunchPolicy";
 import { grantedMcpServers, mcpServersForSession, normalizeSpawnMcpServers, SCHEDULED_REPORT_SESSION_CLASS, type McpSessionClass } from "@/lib/agent/mcpAllowlist";
 import { normalizeSpawnPlugins, pluginAllowlistForSession, SCHEDULED_REPORT_PLUGINS, sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { codexModelSupportsImages, defaultModelFor, modelFromBody, validateLaunchModel } from "@/lib/agent/models";
@@ -58,7 +59,7 @@ import { publishFilesRevision } from "@/lib/runtime/filesRevision";
 import { runtimeImageCapability, runtimeImageStore, type RuntimeImageUpload } from "@/lib/runtime/runtimeImageStore";
 import { assertStructuredTextEnvelope, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { composeStructuredFirstMessage } from "@/lib/runtime/structuredFirstMessage";
-import { withRuntimeAdmissionRetry, queuedPinnedSpawnTitle, reconcileStructuredSpawnReplay, resolvePinnedSpawnAdmission, spawnStructuredConversation, structuredClaudePermissionMode, structuredHostAccessPolicy } from "@/lib/runtime/structuredSpawn";
+import { withRuntimeAdmissionRetry, queuedPinnedSpawnTitle, reconcileStructuredSpawnReplay, resolvePinnedSpawnAdmission, spawnStructuredConversation, structuredClaudePermissionMode } from "@/lib/runtime/structuredSpawn";
 import { structuredSpawnGap, spawnTransport, type SpawnTransport } from "@/lib/runtime/spawnTransport";
 import { adoptPipelineAttemptFromSource, pipelineAttemptTargetForSource } from "@/lib/pipelines/engine";
 import { loadPipelines } from "@/lib/pipelines/store";
@@ -723,8 +724,8 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         : conversationWorkspacePrincipal((id: string) => registry.conversation(id as `conversation_${string}`), authenticatedCaller?.kind === "agent"
           ? authenticatedCaller.conversationId : launcher.value?.conversationId ?? pipelineSourceConversationId ?? parentConversationId));
     authorizeLaunch();
-    // Disk mode needs the OS read-only profile, including on idempotent replay.
-    if (diskCleaner && existingAttempt && structuredHostAccessPolicy(existingAttempt.launchProfile) !== true) {
+    // A replay must retain the guarded workspace and its disk-mode identity.
+    if (diskCleaner && existingAttempt && (existingAttempt.agentRole !== "cleaner" || !guardedDiskCleanerProfile(existingAttempt.launchProfile))) {
       return NextResponse.json({ error: "disk cleaner cannot reuse a writable launch" }, { status: 409 });
     }
     const seatParent = parentRecord?.agentRole === "orchestrator"
@@ -1099,6 +1100,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         ...specBase,
         launchProfile: emptyLaunchProfile({
           ...(specBase.launchProfile ?? {}),
+          ...(diskCleaner ? { sandbox: "restricted", permissionMode: "never" } : {}),
           cwd,
           parentConversationId,
           ...(workspacePrincipal ? { workspace: workspacePrincipal } : {}),

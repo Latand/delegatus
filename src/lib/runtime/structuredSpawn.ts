@@ -6,6 +6,7 @@ import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { startupHostSnapshot } from "./startupSnapshot";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
+import { guardedDiskCleanerProfile } from "@/lib/agent/cleanerLaunchPolicy";
 import { assertStageGitRehostProvable, stageGitEnvironment } from "./stageGitEnvironment";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { DEPLOY_ADMISSION_BUDGET_MS, structuredSetupStartedAt } from "./admissionBudget";
@@ -298,10 +299,31 @@ export function materializeOwnedStructuredHostAccess(
 }
 
 async function materializeAttemptAccess(input: StructuredSpawnInput, capability: string | null) {
+  assertDiskCleanerAccess(input);
   // Queued starts and resume successors reconstruct the account environment.
   // Recover the exact launch's binding before either engine builds its policy.
   const guard = await stageGitEnvironment(input.registry, input.receipt.conversationId, input.receipt.launchId, input.spec.cwd);
   return materializeOwnedStructuredHostAccess(structuredHostAccessPolicy(input.spec.launchProfile), { ...input.account.env, ...guard }, capability, () => tempOwnerForSpawn(input));
+}
+
+function assertDiskCleanerAccess(input: Pick<StructuredSpawnInput, "engine" | "receipt" | "spec">): boolean {
+  const profile = input.spec.launchProfile;
+  if (input.receipt.agentRole !== "cleaner" || profile?.agentMemoryRoleParams?.mode !== "disk") return false;
+  if (input.engine !== "codex" || !guardedDiskCleanerProfile(profile)) throw new Error("disk cleaner requires a guarded restricted profile");
+  return true;
+}
+
+/** Keep the requested cwd for project identity, but never grant it workspace writes.
+    Each new host, including a recovered host, receives its own empty workspace. */
+export function structuredHostWorkingDirectory(
+  input: Pick<StructuredSpawnInput, "engine" | "receipt" | "spec">,
+  access: StructuredHostAccessMaterialization,
+): string {
+  if (!assertDiskCleanerAccess(input)) return input.spec.cwd;
+  if (!access.scratchDirectory || access.codex.sandbox !== "workspace-write") throw new Error("disk cleaner scratch is unavailable");
+  const cwd = path.join(access.scratchDirectory, "cwd");
+  fs.mkdirSync(cwd, { mode: 0o700 });
+  return cwd;
 }
 
 /** Runtime admission calls carry the durable launch id as their idempotency
@@ -2227,7 +2249,7 @@ export async function defaultStartHost(
   if (input.engine === "codex") {
     const nativeMemoryEnabled = await codexNativeMemoryEnabled(input.account.home, profile.allowSubagents, profile.cleanMemory === true);
     const options = {
-      cwd: input.spec.cwd,
+      cwd: structuredHostWorkingDirectory(input, access),
       codexHome: input.account.home,
       fileAuthCredentials: input.account.kind === "managed",
       serviceTier: launchServiceTier(profile),
