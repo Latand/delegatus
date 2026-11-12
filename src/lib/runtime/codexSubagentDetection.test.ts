@@ -336,17 +336,15 @@ test("a corrupt detection journal leaves the scanner pipeline tick running and r
   fs.writeFileSync(childPath, JSON.stringify({ type: "session_meta", payload: { source: { subagent: { thread_spawn: { parent_thread_id: sessionId } } } } }) + "\n");
   const entries = [parentPath, childPath].map((pathname) => ({ engine: "codex", path: pathname,
     size: fs.statSync(pathname).size, mtime: fs.statSync(pathname).mtimeMs / 1000, sessionStartedAt: new Date().toISOString() } as FileEntry));
-  const [registryModule, links, flows, pipelines, workflows, membership] = await Promise.all([
-    import("@/lib/agent/registry"), import("@/lib/scanner/links"), import("@/lib/flows/engine"),
-    import("@/lib/pipelines/engine"), import("@/lib/workflows/engine"),
+  const [registryModule, links, pipelines, membership] = await Promise.all([
+    import("@/lib/agent/registry"), import("@/lib/scanner/links"),
+    import("@/lib/pipelines/engine"),
     import("@/lib/tasks/membership"),
   ]);
   const pipelineTick = spyOn(pipelines, "tickPipelines").mockResolvedValue({ pipelines: [], changed: false });
   const spies = [pipelineTick,
     spyOn(registryModule, "agentRegistry").mockReturnValue(registry),
     spyOn(links, "linkEntries").mockResolvedValue(undefined),
-    spyOn(flows, "tickFlows").mockResolvedValue({ flows: [], changed: false }),
-    spyOn(workflows, "tickWorkflows").mockResolvedValue({ workflows: [], changed: false }),
     spyOn(membership, "admitScannedConversations").mockReturnValue(0),
   ];
   try {

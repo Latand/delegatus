@@ -1641,38 +1641,6 @@ test("board_snapshot returns an inert bounded board projection with durable line
   expect(rawScans).toBe(0);
 });
 
-test("flow tools read archives and refuse new action effects", async () => {
-  const flows = [
-    { id: "flow_open", project: "viewer", state: "waiting_ready", closedAt: null },
-    { id: "flow_closed", project: "viewer", state: "closed", closedAt: "2026-07-23T01:00:00.000Z" },
-    { id: "flow_other", project: "other", state: "waiting_ready", closedAt: null },
-  ];
-  const actions: Array<{ id: string; action: string; actor: unknown }> = [];
-  const bindings = viewerMcpBindings(undefined, undefined, {
-    getFlowsWithPresets: () => ({ flows, presets: [] }),
-    patchFlow: (id: string, request: { action: string }, actor: unknown) => {
-      actions.push({ id, action: request.action, actor });
-      return { flow: { ...flows[0], id, state: "paused" } };
-    },
-    cancelRound: async () => ({ flow: flows[0] }),
-    closeFlow: async () => ({ flow: flows[0] }),
-    callerAttribution: () => ({ kind: "agent", conversationId: "conversation_reviewer", role: "reviewer" }),
-  } as never);
-
-  expect(await bindings.list_flows({ clientRequestId: "list-flows", project: "viewer" })).toMatchObject({
-    count: 1,
-    flows: [{ id: "flow_open" }],
-  });
-  expect(await bindings.get_flow({ clientRequestId: "get-flow", flowId: "flow_open" })).toMatchObject({
-    flowId: "flow_open", flow: flows[0], retired: true,
-  });
-  for (const action of ["pause", "resume", "set-roles", "cancel-round", "close"]) {
-    await expect(bindings.flow_action({ clientRequestId: `retired-${action}`, flowId: "flow_open", action }))
-      .rejects.toMatchObject({ details: { code: "FLOW_RETIRED", retryable: false } });
-  }
-  expect(actions).toEqual([]);
-});
-
 test("list_pipelines applies project, state, and closed filters to the durable registry", async () => {
   const bindings = viewerMcpBindings(undefined, undefined, {
     getPipelines: () => ({ pipelines: [

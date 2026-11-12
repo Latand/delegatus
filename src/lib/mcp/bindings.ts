@@ -9,7 +9,7 @@ import { conversationWorkspacePrincipal } from "@/lib/team/workspacePrincipal";
 import { previewAgentMemoryCap, PIPELINE_MEMORY_DEFAULT_ROLE } from "@/lib/runtime/agentMemorySettings";
 import { readSelf } from "@/lib/links/self";
 import { readFileConfirmationLink } from "@/lib/telegram/bot/fileConfirmationContract";
-import { FLOW_ARCHIVE, FLOW_RETIREMENT, STAGE_RETIREMENT, FlowRetiredError } from "@/lib/flows/retirement";
+import { STAGE_RETIREMENT } from "@/lib/flows/retirement";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { curationAnswerCooperatively } from "@/lib/memory/curation/answer";
 import { resolvePrototypeReviewId as resolveStoredReviewId } from "@/lib/prototypeReview/store";
@@ -124,10 +124,7 @@ import { applyBoardCommand } from "@/lib/board/command";
 import { boardFor } from "@/lib/board/store";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import { backoffDelayMs, DeadlineExceededError, deadlineSignal, systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
-import { cancelRound, closeFlow, patchFlow } from "@/lib/flows/commands";
-import { flowSelectionSource } from "@/lib/flows/store";
-import { getFlowsWithPresets } from "@/lib/flows/engine";
-import type { PatchFlowRequest } from "@/lib/flows/types";
+import { getFlowsWithPresets } from "@/lib/flows/store";
 import { pollLifecycleDigest, type LifecycleDigestRequest } from "@/lib/lifecycle/digest";
 import { queryLifecycleEvents, type LifecycleEventQuery } from "@/lib/lifecycle/journal";
 import type { CompletedGenerationRead } from "@/lib/lifecycle/inventorySelection";
@@ -203,7 +200,7 @@ import { leaveCorrectionForRole, leaveLessonForOperator, leaveLessonForSeat, lea
 import { operatorMemoryEnabled, storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import { readMemoryProblem } from "@/lib/memory/roleProblems";
 import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
-import { withoutStoredLessonsAsync, renderReportAsync, scrubIssueReportAsync } from "@/lib/memory/privacy";
+import { renderReportAsync, scrubIssueReportAsync } from "@/lib/memory/privacy";
 import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, stageGuardShapeError, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt, latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
@@ -320,7 +317,7 @@ import {
   stageReportAcknowledgement,
   type AccountLimitsInput,
 } from "./compactAnswers";
-import { changedFieldNames, fieldValues, compactFlow, compactTask, firstLine, fullAnswer, answerHint, listPage, listPageAsync, recordRevision, sinceTime, stringSet, taskAcknowledgement } from "./listAnswers";
+import { changedFieldNames, fieldValues, compactTask, firstLine, fullAnswer, answerHint, listPage, listPageAsync, recordRevision, sinceTime, stringSet, taskAcknowledgement } from "./listAnswers";
 
 import { viewerControlOrigin, viewerControlToken } from "./controlEndpoint";
 import {
@@ -818,6 +815,8 @@ async function dispatchViewerControl(
     throw new McpDispatchVerdictError(message, {
       status: response.status,
       ...(text(result.code) ? { code: text(result.code) } : {}),
+      // The failed condition behind a stable refusal code, a short identifier.
+      ...(/^[a-z][a-z_]{0,63}$/.test(text(result.reason)) ? { reason: text(result.reason) } : {}),
       ...(result.admission === "refused" ? { admission: "refused" } : {}),
       ...(typeof result.expectedRevision === "number" || result.expectedRevision === null ? { expectedRevision: result.expectedRevision } : {}),
       ...(typeof result.retryAfterSeconds === "number" ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
@@ -915,10 +914,6 @@ export interface ViewerMcpDomainDependencies {
   boardFor(project: string): ReturnType<typeof boardFor>;
   applyBoardCommand(input: unknown, snapshot: RegistrySnapshot): ReturnType<typeof applyBoardCommand>;
   getFlowsWithPresets(): ReturnType<typeof getFlowsWithPresets>;
-  flowSelectionSource?: typeof flowSelectionSource;
-  patchFlow: typeof patchFlow;
-  cancelRound: typeof cancelRound;
-  closeFlow: typeof closeFlow;
   getPipelines: typeof getPipelines;
   /** #863: the bounded list read — the shared cached registry parse, with none
       of the per-caller revive `getPipelines` pays, because a list row copies
@@ -1525,10 +1520,6 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   boardFor,
   applyBoardCommand: (input, snapshot) => applyBoardCommand(input, { registrySnapshot: () => snapshot }),
   getFlowsWithPresets,
-  flowSelectionSource,
-  patchFlow,
-  cancelRound,
-  closeFlow,
   getPipelines,
   listPipelineRecords: loadPipelinesForList,
   fleetLimitWaits: ids => readHistoryProjection(db => historyFleetLimitWaits(db, ids), { collections: ["pipelines"] }),
@@ -4466,9 +4457,10 @@ async function productionPublicDenyList(project: string | null, control: ViewerC
     if (requireComplete) throw error;
     // An unreadable catalog contributes nothing.
   }
-  /* Role memory is never optional here: a store that cannot be read throws
-     LESSON_PRIVACY_UNAVAILABLE, and nothing is sent unchecked. */
-  // The shared leased worker reads authoritative lessons at filtering time.
+  /* Learned rules are no part of this list. An issue report is checked
+     against them in the shared leased worker, which refuses with
+     LESSON_PRIVACY_UNAVAILABLE when the store cannot be read; a manager
+     report carries no lesson check. */
   return { accounts, people, local, projects };
 }
 
@@ -5983,7 +5975,7 @@ async function sendMessageToOrchestrator(
     if (link) {
       try {
         const message = bound?.sendPayload ? splitRelayMessageText(bound.sendPayload.text)?.body ?? bound.sendPayload.text
-          : await orchestratorRelayEgressText(requiredMessageText(args));
+          : requiredMessageText(args);
         const clientMessageId = bound?.downstreamKey ?? orchestratorSendDownstreamKey(key);
         const response = await dispatchControl(control)("/api/orchestrator/message", {
           project, machine: link.install, text: message,
@@ -6295,67 +6287,8 @@ async function boardSnapshot(
   });
 }
 
-function listFlows(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
-  const states = stringSet(args.state, ["waiting_ready", "spawn_pending", "spawning", "reviewing", "relay_pending", "relaying", "fixing", "approved", "done_comment", "needs_decision", "paused", "closed"]);
-  const scope = { project: text(args.project), states, includeClosed: args.includeClosed === true,
-    ids: stringSet(args.ids), query: "", updatedSince: "" };
-  const source = dependencies.flowSelectionSource?.();
-  const limit = Math.max(1, Math.min(200, integer(args.limit, 100)));
-  const project = (flow: import("@/lib/flows/types").Flow) => fullAnswer(args) ? flow : compactFlow(flow);
-  const page = source ? boardSelection(source.filename, "flows").page(source, scope, args.cursor, limit, project)
-    : listPage(dependencies.getFlowsWithPresets().flows, {
-      scope, cursor: args.cursor, limit,
-      identity: flow => ({ id: flow.id, time: flow.createdAt ?? "" }),
-      matches: flow => (!scope.project || flow.project === scope.project)
-        && (!states.length || states.includes(flow.state))
-        && (scope.includeClosed || (flow.state !== "closed" && !flow.closedAt))
-        && (!scope.ids.length || scope.ids.includes(flow.id)),
-      project,
-    });
-  const { rows: flows, ...pagination } = page;
-  return redactPayload({ ...pagination, flows, ...FLOW_ARCHIVE, compact: !fullAnswer(args),
-    omittedRecordCount: fullAnswer(args) ? 0 : flows.length,
-    readMore: "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. full:true, compact:false or get_flow(flowId) reads complete records." });
-}
-
-async function getFlow(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
-  const flowId = required(args, "flowId");
-  const source = dependencies.flowSelectionSource?.();
-  const flow = source ? source.read(flowId) : dependencies.getFlowsWithPresets().flows.find((candidate) => candidate.id === flowId);
-  if (!flow) throw new Error("flow not found");
-  return redactPayload({ flowId, flow, ...FLOW_ARCHIVE });
-}
-
 function mutationReceipt(operationId: string): { operationId: string; receipt: { operationId: string; status: "delivered" } } {
   return { operationId, receipt: { operationId, status: "delivered" } };
-}
-
-/** The conversation a flow decision is submitted as. A decision reports the
-    implementer's OWN turn, so a deputy speaks as itself here, never as its
-    seat: it is nobody's implementer, and the seat's turn is not its turn to
-    settle (docs/design/ghost-seat.md §4 rule 2). */
-export function flowDecisionCaller(caller: CallerAttribution): string | null {
-  if (caller.kind === "unidentified") return null;
-  return caller.via?.deputy ?? caller.conversationId;
-}
-
-async function flowAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
-  const flowId = required(args, "flowId");
-  const action = required(args, "action");
-  if (action === "agent-decision") {
-    const { submitFlowDecision } = await import("@/lib/flows/decisions");
-    const { flowDecisionRequestSchema } = await import("@/lib/flows/decisionSchema");
-    const request = flowDecisionRequestSchema.parse(args);
-    let result: Awaited<ReturnType<typeof submitFlowDecision>>;
-    try { result = await submitFlowDecision(request, flowDecisionCaller(attributionOf(dependencies))); }
-    catch (error) {
-      if (error instanceof FlowRetiredError) throw new McpToolRefusal(FLOW_RETIREMENT.error, { ...FLOW_RETIREMENT, retryable: false });
-      throw error;
-    }
-    return redactPayload({ ...result, ...FLOW_ARCHIVE, outcome: result.decision.disposition === "accepted" ? "accepted" : "settled",
-      nextAction: result.decision.disposition === "accepted" ? "original-key-lookup" : "follow-disposition" });
-  }
-  throw new McpToolRefusal(FLOW_RETIREMENT.error, { ...FLOW_RETIREMENT, retryable: false });
 }
 
 /** A seat's list scope comes from its authenticated designation. */
@@ -8175,15 +8108,6 @@ function orchestratorSendDownstreamKey(key: string): string {
   return `mcp_orchestrator_${crypto.createHash("sha256").update(key).digest("hex")}`;
 }
 
-/** Only a send leaving this installation crosses the learned-rule boundary. */
-async function orchestratorRelayEgressText(message: string): Promise<string> {
-  try { return await withoutStoredLessonsAsync(message); }
-  catch (error) {
-    if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
-    throw error;
-  }
-}
-
 async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, forRecovery = false): Promise<McpRequestBindingInput> {
   requireOrchestratorRelayCaller(dependencies);
   const named = required(args, "project");
@@ -8205,7 +8129,8 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
     throw new McpToolRefusal("the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", { code: "owner_report_seat_unavailable", retryable: false });
   }
   const link = project && text(args.machine) ? resolveRemoteSeatMachine(text(args.machine), project, dependencies) : null;
-  const outgoing = link ? await orchestratorRelayEgressText(message) : message;
+  // A linked installation is the same operator's: the message leaves as written.
+  const outgoing = message;
   return {
     // Relay receipts belong to the exact sender, never its successor seat.
     caller: { kind: caller.kind, conversationId: caller.conversationId, project: caller.project },
@@ -8888,9 +8813,6 @@ export function viewerMcpBindings(
     },
     get_pipeline: reads.get_pipeline,
     board_snapshot: (args) => boardSnapshot(args, domainDependencies),
-    list_flows: (args) => Promise.resolve(listFlows(args, domainDependencies)),
-    get_flow: (args) => Promise.resolve(getFlow(args, domainDependencies)),
-    flow_action: (args) => flowAction(args, domainDependencies),
     list_pipelines: reads.list_pipelines,
     list_tasks: reads.list_tasks,
     get_task: reads.get_task,

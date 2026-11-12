@@ -685,6 +685,66 @@ test("the seat's own conversation reaches the seat from the menu's first row (§
   expect(bottom.querySelector("[data-orchestrator-rotate]")).not.toBeNull();
 });
 
+/* The orchestrator's conversation on the phone: the bar names the role, whole; the account stays under ⋯; the field
+   asks what to do in the project, as the desktop does; and a finished turn with a decision form open reads «waiting». */
+async function mountSeatConversation(): Promise<FileEntry> {
+  const seatFile = entry({
+    path: "/orchestrator.jsonl",
+    title: "Run the demo board",
+    conversationId: "conv-seat",
+    activity: "idle",
+    mtime: Math.floor(Date.now() / 1000) - 30,
+  });
+  seatBody = {
+    seat: {
+      project: "demo", seatEpoch: 3, conversationId: "conv-seat", path: seatFile.path,
+      mandate: "Run the demo board and tell me what needs me.", promptVersion: 3,
+      predecessorConversationId: null, state: "active",
+      intent: { clientRequestId: "seat-req-1", mode: "spawn", launchId: null, error: null },
+      designatedAt: "2026-09-01T10:00:00.000Z", activatedAt: "2026-09-01T10:00:02.000Z",
+    },
+    pending: null,
+    exists: true,
+  };
+  const { host } = browser();
+  const nav = createMobileNav(host);
+  detach = nav.attach();
+  mount(nav, [seatFile, sibling], seatFile.path);
+  await settle();
+  await settle();
+  return seatFile;
+}
+
+test("the seat's conversation names the role without the account tag, asks what to do in the project, and waits while a form is open", async () => {
+  const { publishPrototypeNotices, resetPrototypeReviewStoreForTests } = await import("../prototypeReview/prototypeReviewStore");
+  resetPrototypeReviewStoreForTests();
+  try {
+    await mountSeatConversation();
+    expect(barTitle()).toBe("Orchestrator");
+    expect(dom.document.querySelector("[data-mobile2-chat-account]")).toBeNull();
+    const field = dom.document.querySelector("textarea") as unknown as HTMLTextAreaElement;
+    expect(field.getAttribute("placeholder")).toBe("what should get done in atlas?");
+    expect(metaState()).toMatch(/^done/);
+    /* A decision form of this project is open. */
+    flushSync(() => publishPrototypeNotices([{ id: "pr_1", reviewId: "pr_1", title: "What should I do first?", roundTitle: "What should I do first?", project: "demo", undelivered: false } as never]));
+    await settle();
+    expect(metaState()).toMatch(/^waiting/);
+  } finally {
+    resetPrototypeReviewStoreForTests();
+  }
+});
+
+test("a conversation that is not the seat keeps its own title and account tag", async () => {
+  const { browserHost } = { browserHost: browser() };
+  const nav = createMobileNav(browserHost.host);
+  detach = nav.attach();
+  mount(nav, [sibling], sibling.path);
+  await settle();
+  expect(barTitle()).toBe("Fix the flaky reseat test");
+  expect(dom.document.querySelector("[data-mobile2-chat-account]")).not.toBeNull();
+  expect((dom.document.querySelector("textarea") as unknown as HTMLTextAreaElement | null)?.getAttribute("placeholder") ?? "").not.toContain("what should get done in");
+});
+
 test("a conversation that does not hold the seat has no seat row", async () => {
   seatBody = {
     seat: {
