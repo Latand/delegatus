@@ -88,7 +88,7 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (mode === "pre-commit") return steps;
   const touched = new Set<string>();
   if (changedFiles.some(file => ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts", "scripts/gateTest.fixture.ts", "scripts/publicationHook.fixture.ts"].includes(file))) {
-    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.(?:receipts|checkpoints|hooks|publication|transport)(?:\.[^.]+)?|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
+    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.(?:config|receipts|checkpoints|hooks|publication|transport)(?:\.[^.]+)?|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
   }
   if (changedFiles.includes("scripts/local-gate-tests.fixture.ts")) {
     for (const test of env.tests) if (test.startsWith("scripts/local-gate-tests.") && isTest(test)) touched.add(test);
@@ -613,7 +613,7 @@ export interface StepPasses { reused(step: Step, until?: number): boolean; passe
 function checkGitConfig(root: string): [string, string][] {
   const ref = spawnSync("git", ["symbolic-ref", "-q", "HEAD"], { cwd: root, encoding: "utf8" });
   if (ref.status !== 0 && ref.status !== 1) throw new Error("git symbolic-ref failed");
-  const branch = ref.status === 0 ? ref.stdout.trimEnd().replace(/^refs\/heads\//, "") : undefined;
+  const branch = ref.status === 0 ? ref.stdout.replace(/\r?\n$/, "").replace(/^refs\/heads\//, "") : undefined;
   // NUL separates origin and entry; only the first newline separates key and
   // value. Values may contain newlines, tabs or text resembling another key.
   const fields = git(root, ["config", "--null", "--list", "--show-origin"]).split("\0");

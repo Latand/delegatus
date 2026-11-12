@@ -10,15 +10,28 @@ const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
 afterEach(() => { for (const directory of roots.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 const branch = "topic.with.dots";
-const fixture = () => {
+const fixture = (currentBranch = branch) => {
   const f = createHookFixture(root, roots);
-  f.git("branch", "-m", branch);
+  f.git("branch", "-m", currentBranch);
   const base = f.git("rev-parse", "origin/main").toString().trim();
   const reader = gateInputSnapshot(f.dir, base, [], f.env);
   const initial = reader.snapshot();
   expect(initial, reader.reason()).toBeDefined();
   return { ...f, base, reader, initial: initial! };
 };
+
+test.each(["\u00a0", "\u2003"])("current branch names preserve trailing Unicode whitespace %s", whitespace => {
+  const current = `topic${whitespace}`;
+  const f = fixture(current);
+  f.git("config", `branch.${current}.remote`, ".");
+  expect(f.reader.changed(f.initial)).toEqual(["git config"]);
+  expect(f.reader.snapshot()?.key).not.toBe(f.initial.key);
+
+  const afterOwnChange = f.reader.snapshot()!;
+  f.git("config", "branch.topic.remote", ".");
+  expect(f.reader.changed(afterOwnChange)).toEqual([]);
+  expect(f.reader.snapshot()?.key).toBe(afterOwnChange.key);
+});
 
 test.each(["other", "topic", `${branch}.extra`, "Topic.with.dots"])("another branch's %s section leaves snapshots and cache keys unchanged", other => {
   const f = fixture(), key = `branch.${other}.remote`;
