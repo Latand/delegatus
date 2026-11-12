@@ -72,8 +72,9 @@ import {
  * costs its few hundred bytes of metadata.
  *
  * `<seq>` comes from `meta.nextSeq` and is zero-padded, so key order is the
- * order the rows were written in, which is the order every reader of the
- * legacy arrays relied on. Project keys are stored as written and resolved
+ * order the rows were written in. Rows are read in collection order, so the
+ * arrays and the per-project maps keep the order the legacy file had: seats in
+ * the order they were designated, revocations in the order they were written. Project keys are stored as written and resolved
  * through the project alias map on every read, as the legacy reader did.
  *
  * Reads go through the shared read-only connection and select only the key

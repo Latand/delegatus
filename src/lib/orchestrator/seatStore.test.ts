@@ -132,6 +132,18 @@ test("keyed reads select only the parts a question needs, and an unchanged recor
   } finally { selections.mockRestore(); }
 });
 
+test("seats read back in the order they were designated, as the legacy file kept them", () => {
+  fs.writeFileSync(seatsFile(), JSON.stringify({
+    schemaVersion: 1, nextSeatEpoch: 3,
+    seats: { zeta: legacySeat("zeta", 1, "active", "conversation_zeta"), alpha: legacySeat("alpha", 2, "active", "conversation_alpha") },
+    pending: {}, revocations: [], history: [],
+  }));
+  expect(importLegacyOrchestratorSeats(seatsFile()).state).toBe("imported");
+  designate("mid", "mid", "conversation_mid");
+  designate("alpha", "alpha-again", "conversation_alpha_2");
+  expect(activeOrchestratorSeats().map((seat) => seat.project)).toEqual(["zeta", "alpha", "mid"]);
+});
+
 test("history and seats share one row per distinct text, and a text nothing names is removed", () => {
   for (let index = 0; index < 5; index += 1) {
     beginOrchestratorSeatIntent({ project: "proj-a", mandate: "the same long mandate", clientRequestId: `try-${index}`, mode: "spawn", now: AT });

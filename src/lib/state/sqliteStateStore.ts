@@ -1706,7 +1706,7 @@ export interface StateCollectionSelection {
   revision: number;
   /** The gap the collection's legacy import recorded, or null. */
   importGap: string | null;
-  /** Selected rows, each prefix's rows in key order, then the named keys. */
+  /** Selected rows: each prefix's rows in collection order, then the named keys. */
   rows: { key: string; valueJson: string; rowRevision: number }[];
   /** Keys under each `keysOnly` prefix, in key order, with no value read. */
   keys: string[];
@@ -1751,7 +1751,7 @@ export function readStateCollectionSelection(filename: string, collection: strin
     const rows: StateCollectionSelection["rows"] = [];
     const range = db.query<{ row_key: string; value_json: string; row_revision: number }, [string, string, string]>(`
       SELECT row_key, value_json, row_revision FROM state_rows
-      WHERE collection = ? AND row_key >= ? AND row_key < ? ORDER BY row_key
+      WHERE collection = ? AND row_key >= ? AND row_key < ? ORDER BY row_order, row_key
     `);
     for (const prefix of selection.prefixes ?? []) {
       for (const row of range.all(collection, prefix, prefixUpperBound(prefix))) rows.push({ key: row.row_key, valueJson: row.value_json, rowRevision: row.row_revision });
