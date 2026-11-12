@@ -1892,6 +1892,74 @@ export function readStateCollectionSelection(filename: string, collection: strin
   }
 }
 
+/** One bounded page of a collection's rows, as one read snapshot answered it. */
+export interface StateRowsPage {
+  revision: number;
+  /** Selected rows in the requested order. `valueJson` is null for a keys-only
+      page; `companionJson` is the companion row's text, or null when absent. */
+  rows: { key: string; valueJson: string | null; companionJson?: string | null }[];
+}
+
+/**
+ * One bounded page of the rows under a key prefix, ordered by key or by row
+ * order, oldest or newest first, from one read snapshot of the shared
+ * read-only connection: an append journal reads its newest entries without
+ * reading the rest. `companion` swaps the selected key's prefix for another
+ * and reads that row in the same snapshot (an entry's detail stored beside
+ * it). Values stay JSON text for the caller to decode. Null until the
+ * collection exists.
+ */
+export function readStateRowsPage(filename: string, collection: string, page: {
+  prefix: string;
+  by?: "key" | "order";
+  descending?: boolean;
+  offset?: number;
+  limit: number;
+  keysOnly?: boolean;
+  companion?: { from: string; to: string };
+}): StateRowsPage | null {
+  if (!Number.isSafeInteger(page.limit) || page.limit < 1 || page.limit > 4096) throw new Error("invalid state page limit");
+  const offset = page.offset ?? 0;
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("invalid state page offset");
+  if (page.companion && !page.prefix.startsWith(page.companion.from)) throw new Error("a companion prefix must cover the page prefix");
+  if (!fs.existsSync(filename)) return null;
+  const db = sharedStateReadonlyDatabase(filename);
+  let begun = false;
+  try {
+    db.exec("BEGIN");
+    begun = true;
+    const meta = db.query<{ revision: number }, [string]>("SELECT revision FROM state_collections WHERE collection = ?").get(collection);
+    if (!meta) {
+      db.exec("COMMIT");
+      return null;
+    }
+    const direction = page.descending ? "DESC" : "ASC";
+    /* By row order the collection's order index answers the page from its
+       end; left to itself the planner takes the key range and sorts it. */
+    const order = page.by === "order" ? `r.row_order ${direction}` : `r.row_key ${direction}`;
+    const rowsIndex = page.by === "order" ? "INDEXED BY state_rows_collection_order" : "";
+    const value = page.keysOnly ? "NULL" : "r.value_json";
+    const bounds = [collection, page.prefix, prefixUpperBound(page.prefix), page.limit, offset] as const;
+    const rows: StateRowsPage["rows"] = page.companion
+      ? db.query<{ row_key: string; value_json: string | null; companion_json: string | null }, [string, number, string, string, string, number, number]>(`
+          SELECT r.row_key, ${value} AS value_json, c.value_json AS companion_json FROM state_rows AS r ${rowsIndex}
+          LEFT JOIN state_rows AS c ON c.collection = r.collection AND c.row_key = ? || substr(r.row_key, ?)
+          WHERE r.collection = ? AND r.row_key >= ? AND r.row_key < ? ORDER BY ${order} LIMIT ? OFFSET ?
+        `).all(page.companion.to, page.companion.from.length + 1, ...bounds)
+        .map((row) => ({ key: row.row_key, valueJson: row.value_json, companionJson: row.companion_json }))
+      : db.query<{ row_key: string; value_json: string | null }, [string, string, string, number, number]>(`
+          SELECT r.row_key, ${value} AS value_json FROM state_rows AS r ${rowsIndex}
+          WHERE r.collection = ? AND r.row_key >= ? AND r.row_key < ? ORDER BY ${order} LIMIT ? OFFSET ?
+        `).all(...bounds).map((row) => ({ key: row.row_key, valueJson: row.value_json }));
+    db.exec("COMMIT");
+    return { revision: meta.revision, rows };
+  } catch (error) {
+    if (begun) rollbackQuietly(db);
+    if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return null;
+    throw error;
+  }
+}
+
 export function resetStateReadonlyConnectionCountForTests(): void {
   readonlyConnectionCount = 0;
 }
