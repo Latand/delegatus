@@ -2232,6 +2232,30 @@ describe("ClaudeStreamBrokerHost", () => {
     await host.release();
   });
 
+  test("a confirmed delivery keeps no message body in memory and still answers its resend", async () => {
+    const sessionId = "settled-body-session";
+    const original: QueueEntry = { id: "settled-entry", text: `long body ${"x".repeat(20_000)}`, expectedTurnId: null };
+    const ledger = new RecordingDeliveryLedger();
+    ledger.recordQueued(sessionId, original, "turn-started");
+    const child = new FakeClaude(ledger);
+    const host = await ClaudeStreamBrokerHost.adopt(sessionId, {
+      cwd: "/repo",
+      deliveryLedger: ledger,
+      eventStore: new MemoryEventStore(),
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [{ text: original.text!, uuid: "settled-user", timestamp: new Date().toISOString() }],
+      spawnProcess: fakeSpawn(child, {}),
+    });
+
+    const held = (host as unknown as { deliveries: ClaudeDeliveryState[] }).deliveries.find(delivery => delivery.entry.id === "settled-entry");
+    expect(held).toMatchObject({ delivered: true, confirmation: "inferred", engineMessageId: "settled-user" });
+    expect(JSON.stringify(held).length).toBeLessThan(1_000);
+    expect(await host.send(original)).toEqual({ outcome: "turn-started", turnId: "settled-entry" });
+    await expect(host.send({ ...original, text: "changed" })).rejects.toThrow("different payload");
+    expect(child.inputs.filter((input) => input.type === "user")).toHaveLength(0);
+    await host.release();
+  });
+
   test("host loss rejects an unconfirmed send and leaves retry ownership for adoption", async () => {
     const ledger = new RecordingDeliveryLedger();
     const eventStore = new MemoryEventStore();
