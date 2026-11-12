@@ -158,3 +158,26 @@ LLV_STATE_DIR and TMPDIR, through the gate-slot wrapper.
 | 1 | change, first heuristic | 2 of 3 | run 3: a link after `пише так:` inside a continuing sentence, rejected by the colon rule |
 | 2 | change, refined heuristic | 1 of 3 | run 1: continuation answered without `relay_answer`; run 3: `Офіційні джерела: […] та […].` inside the composed text |
 | 3 | continuation names `relay_answer` | 3 of 3 | |
+| 4 | merged with `origin/main` | 2 of 3 | run 1: `Джерело: [RFC 2606](…).` inside the composed paragraph |
+| 5 | final, `87fb83262e` | 5 of 6 | one run: `Офіційна сторінка IANA про це: [iana.org/…](…).` inside the composed paragraph |
+
+From series 3 on, all 24 turns gave the chat reply through `relay_answer`, and
+no composed text ended with a sources paragraph or list. The remaining misses
+are single citation sentences after the claim they support; the probe's
+`hasInlineCitations` counts a colon followed only by links as a list and
+fails them. Two direct calls of the final prompt without `relay_answer` (the
+last message is then the chat reply) produced one reply that ended with a
+`Sources:` list, which is the base behaviour.
+
+### Focused tests
+
+Each file ran by explicit path with fresh HOME, XDG_CONFIG_HOME, LLV_STATE_DIR
+and TMPDIR and `LLV_VIEWER_CONTROL_URL` on closed loopback port 1, through the
+gate-slot wrapper, on a scratch export of the commit. Failures in
+`ownerAnswer.test.ts` (1), `ownerTier.test.ts` (1), `ownerLifecycle.test.ts`
+(17), `ownerDelivery.test.ts` (4) and `runner.test.ts` (7) have identical test
+names on the base `1a85f5eb78` under the same isolation; the scratch root sits
+under a dot-directory, which the attachment rules refuse. The new
+`relay_answer text=true` runner case and the new `text` assertions in
+`ownerAnswer.test.ts` run and pass (runner 327 passes against 326 on the
+base; ownerAnswer reaches 25 assertions against 20 before the shared refusal).
