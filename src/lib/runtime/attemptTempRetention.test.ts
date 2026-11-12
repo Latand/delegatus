@@ -529,7 +529,8 @@ test("retention removal holds no state transaction or collection lease", async (
   try {
     await holdFinishedRoot(directory, "lane", "", [], f.store.owner(directory)!.launchId);
     let removals = 0;
-    const result = await f.sweep("expired", { remove: async (trash: string, guard: () => Promise<boolean>, dispatch: () => boolean) => {
+    const result = await f.sweep("expired", { remove: async (trash: string, guard: () => Promise<boolean>, dispatch: () => boolean,
+      mutationStarted: () => void) => {
       expect(await guard()).toBeTrue(); expect(dispatch()).toBeTrue();
       const db = new Database(statePath("state.sqlite"));
       try {
@@ -538,7 +539,7 @@ test("retention removal holds no state transaction or collection lease", async (
           expect(db.query("SELECT 1 FROM state_leases LIMIT 1").get()).toBeNull();
         db.exec("ROLLBACK");
       } finally { db.close(); }
-      removals++; await fs.promises.rm(trash, { recursive: true });
+      removals++; mutationStarted(); await fs.promises.rm(trash, { recursive: true });
     } });
     expect(result.errors).toBe(0); expect(removals).toBe(1);
   } finally { f.store.close(); }
@@ -798,6 +799,9 @@ if (args[0] !== "run") process.exit(61);
 const source = /source=([^,]+)/.exec(args[args.indexOf("--mount") + 1])?.[1];
 if (!source || !source.startsWith(${JSON.stringify(f.root + path.sep)})) process.exit(62);
 const script = args[args.indexOf("-c") + 1];
+if (script.includes("sha256sum /tmp/sorted") && !script.includes("-delete")) {
+  process.stdout.write("a".repeat(64) + "\\n"); process.exit(0);
+}
 // The namespace holds DAC_OVERRIDE: it lists what this user cannot.
 const grant = file => { if (!fs.lstatSync(file).isDirectory()) return; fs.chmodSync(file, 0o700); for (const entry of fs.readdirSync(file)) grant(file + "/" + entry); };
 // The no-evidence proof: the paths the evidence ledger links, passed after

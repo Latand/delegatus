@@ -6,6 +6,7 @@ import { measureTempBytes, resolvePhysicalPath, type ProcessScan, isUvCacheMarke
 import { reportMediaIndex } from "@/lib/reportMedia/lookup";
 import { recordedRootHeld } from "@/lib/recordedChecks/store";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
+import { attemptPathWatches, type AttemptMutationWatch } from "./attemptMutationFence";
 
 const exec = promisify(execFile);
 const inside = (file: string, root: string) => file === root || file.startsWith(root + path.sep);
@@ -242,6 +243,8 @@ async function repositoryLinkTargets(repository: string, timeout?: number): Prom
 export class RepositoryLinkInventory {
   private readonly reads = new Map<string, RepositoryLinkRead>();
   private readonly repositoriesOf = new Map<string, RepositoryDiscovery>();
+  private readonly holders = new Map<string, readonly (number | null)[]>();
+  private readonly direct = new Set<string>();
   private readonly deadline: number;
   readonly walks: string[] = [];
   private readonly freshMs: number;
@@ -301,21 +304,28 @@ export class RepositoryLinkInventory {
     }
     return true;
   }
-  /** Every process that held this cwd in the scan has exited since, so the cwd
-   * reaches no root; the same rule `retainDiscoveries` applies to a cwd absent
-   * from the next scan. Test runs and gate checks remove their cwd right after
-   * they exit, which used to hold every root observed at that moment. */
   abandoned(cwd: string) { return allExited(this.holders.get(cwd)); }
-  private readonly holders = new Map<string, readonly (number | null)[]>();
-  /** Checkouts read directly, such as a lane's worktree. A checkout found only
-   * through the cwd of a scanned process is absent here. */
-  private readonly direct = new Set<string>();
-  /** A checkout that is gone, read only because scanned processes were in it,
-   * all of which have exited: no process can use a link in it any more. */
   private released(repository: string) {
     if (this.direct.has(repository) || fs.existsSync(repository)) return false;
     const cwds = [...this.repositoriesOf].filter(([, discovery]) => discovery.repository === repository).map(([cwd]) => cwd);
     return cwds.length > 0 && cwds.every(cwd => this.abandoned(cwd));
+  }
+  /** Directory proofs used by the final synchronous mutation fence. Include
+   * negative checkout discoveries, whose missing .git can become present. */
+  mutationDirectories(): AttemptMutationWatch[] {
+    const paths: AttemptMutationWatch[] = [];
+    for (const read of this.reads.values()) {
+      for (const directory of read.directories ?? []) paths.push({ directory: directory.path, content: false });
+      paths.push(...attemptPathWatches([...(this.lexicalTargets.get(read) ?? []), ...(read.physicalTargets ?? [])]));
+    }
+    for (const [cwd, observed] of this.repositoriesOf) {
+      paths.push(...attemptPathWatches([cwd]));
+      for (let current = cwd;; current = path.dirname(current)) {
+        paths.push({ directory: current, entries: [".git"] });
+        if (current === observed.repository || current === path.dirname(current)) break;
+      }
+    }
+    return paths;
   }
   private readonly lexicalTargets = new WeakMap<object, string[]>();
   /** The signature lists what decides the answer: for each directory from the
@@ -493,17 +503,17 @@ export async function attemptReferencesClear(original: string, current: string, 
   return [...repositories].every(repository => inventory.unchanged(repository));
 }
 
-async function containerMountsClear(roots: readonly string[]): Promise<boolean> {
+async function containerMountsClear(roots: readonly string[], remaining?: () => number): Promise<boolean> {
   const physicalRoots = [...new Set(roots.flatMap(root => [root, resolvePhysicalPath(root)]))];
   let active: string[];
-  try { active = (await run("docker", ["ps", "-q"])).stdout.trim().split(/\s+/).filter(Boolean); }
+  try { active = (await run("docker", ["ps", "-q"], remaining?.())).stdout.trim().split(/\s+/).filter(Boolean); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return true; throw error; }
   if (active.length > 1024 || new Set(active).size !== active.length) return false;
   for (let offset = 0; offset < active.length; offset += 32) {
     const ids = active.slice(offset, offset + 32);
     // Read only ownership metadata, in bounded replies. Whole inspect output
     // also includes credentials and unrelated configuration.
-    const output = (await run("docker", ["inspect", "--format", '{"Id":{{json .Id}},"Mounts":{{json .Mounts}}}', ...ids])).stdout;
+    const output = (await run("docker", ["inspect", "--format", '{"Id":{{json .Id}},"Mounts":{{json .Mounts}}}', ...ids], remaining?.())).stdout;
     const containers = output.trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
     if (containers.length !== ids.length) return false;
     if (!ids.every(id => {
@@ -522,6 +532,17 @@ async function containerMountsClear(roots: readonly string[]): Promise<boolean> 
 const markers = ["(", "-name", ".delegatus-keep", "-o", "-path", "*/worktrees/*/gitdir",
   "-o", "-name", ".git", "!", "-type", "d", ")"];
 const MARKER_LIMIT = 10_000;
+const protectionMarker = (file: string, isDirectory: boolean) => path.basename(file) === ".delegatus-keep"
+  || path.basename(file) === ".git" && !isDirectory
+  || path.basename(file) === "gitdir" && /(?:^|\/)worktrees\/.*\/gitdir$/.test(file.replaceAll(path.sep, "/"));
+function markerContent(file: string): Buffer {
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    // Bound the read even if a writer grows or replaces the marker after stat.
+    const content = Buffer.alloc(4097);
+    return content.subarray(0, fs.readSync(fd, content, 0, content.length, 0));
+  } finally { fs.closeSync(fd); }
+}
 function markerHolds(file: string, directory: string, original: string): boolean {
   if (path.basename(file) === ".delegatus-keep") return true;
   const stat = fs.lstatSync(file);
@@ -561,10 +582,10 @@ const containerClassifier = `
     case "$target" in /attempt/*) ;; *) exit 75;; esac
   done`;
 const utilityImages = ["busybox:*", "alpine:*", "debian:*", "ubuntu:*", "postgres:*", "redis:*"];
-export async function attemptTempUtilityImage(): Promise<string> {
+export async function attemptTempUtilityImage(remaining?: () => number): Promise<string> {
   if (process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE) return process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
   for (const pattern of utilityImages) {
-    const found = (await run("docker", ["image", "ls", "--filter", `reference=${pattern}`, "--format", "{{.ID}}"])).stdout.trim().split(/\s+/)[0];
+    const found = (await run("docker", ["image", "ls", "--filter", `reference=${pattern}`, "--format", "{{.ID}}"], remaining?.())).stdout.trim().split(/\s+/)[0];
     if (found) return found;
   }
   throw new Error("no installed container cleanup utility image");
@@ -603,26 +624,62 @@ export const PRIVILEGED_CLEANUP_UNAVAILABLE = "privileged cleanup unavailable";
 const unavailable = (detail: string) => new Error(`${PRIVILEGED_CLEANUP_UNAVAILABLE}: ${detail}`);
 export const privilegedCleanupUnavailable = (error: unknown) => String((error as Error)?.message ?? error).includes(PRIVILEGED_CLEANUP_UNAVAILABLE);
 
-async function containerCommand(directory: string, operation: "inspect" | "remove" | "measure" | "evidence", original = directory,
-  guard?: () => Promise<boolean>, requireNoEvidence = false, dispatchGuard?: () => boolean): Promise<{ identity: string; stdout: string }> {
+// The same utility computes and verifies this digest. Include sub-second
+// directory timestamps, modes and identities without parsing file names.
+// Each command writes separately so a failed find/stat/sort cannot be hidden
+// by a successful last command in a pipeline.
+const namespaceSnapshot = "find /attempt -xdev -type d -exec stat -c '%d:%i:%f:%y:%z' {} + > /tmp/directories || exit; "
+  + 'test "$(wc -l < /tmp/directories)" -le 10000 || exit 75; '
+  + 'LC_ALL=C sort /tmp/directories > /tmp/sorted || exit; '
+  + 'sha256sum /tmp/sorted > /tmp/digest || exit; read digest rest < /tmp/digest; ';
+export type AttemptNamespaceProtection = { digest: string };
+type NamespaceBudget = { budgetMs?: number; bytes?: number };
+type AttemptRemovalSettings = NamespaceBudget & {
+  /** Called immediately before the first permission write or removal dispatch. */
+  mutationStarted?: () => void;
+  /** Synchronous entry authority; full checkout validation brackets repair. */
+  permissionAuthority?: () => boolean;
+  permissionChange?: AttemptProtection["permissionChange"];
+};
+function namespaceTimeout(settings: NamespaceBudget): number {
+  // At least five seconds, then one second per 16 MiB, clipped to the
+  // caller's remaining observation budget. Large trees get the whole bound.
+  const bytes = settings.bytes && settings.bytes > 0 ? settings.bytes : 512 * 1024 ** 2;
+  const sized = 5_000 + Math.ceil(bytes / (16 * 1024 ** 2)) * 1_000;
+  return Math.max(0, Math.min(30_000, settings.budgetMs ?? 30_000, sized));
+}
+
+async function containerCommand(directory: string, operation: "inspect" | "remove" | "measure" | "evidence" | "snapshot", original = directory,
+  guard?: () => Promise<boolean>, requireNoEvidence = false, dispatchGuard?: () => boolean,
+  settings: NamespaceBudget = {}, protection?: AttemptNamespaceProtection, mutationStarted?: () => void): Promise<{ identity: string; stdout: string }> {
+  // A measurement has no trustworthy size yet: use the remaining maximum.
+  const until = performance.now() + namespaceTimeout(operation === "measure" ? { budgetMs: settings.budgetMs } : settings);
+  const remaining = () => {
+    const ms = Math.floor(until - performance.now());
+    if (ms <= 0) throw new AttemptTempBudgetDeferred("attempt namespace time budget exhausted");
+    return ms;
+  };
   const initial = fs.lstatSync(directory);
   if (!initial.isDirectory() || initial.isSymbolicLink()) throw new Error("attempt namespace root changed");
   const identity = `${initial.dev}:${initial.ino}`;
   // Running containers may hold files through mount aliases that an ordinary
   // proc observer cannot read. Never stop or exec into one for reclamation.
-  if (!await containerMountsClear([directory, original])) throw new Error("container ownership could not be cleared for the attempt tree");
+  if (!await containerMountsClear([directory, original], remaining)) throw new Error("container ownership could not be cleared for the attempt tree");
   let image: string;
-  try { image = await attemptTempUtilityImage(); }
+  try { image = await attemptTempUtilityImage(remaining); }
   catch (error) { throw unavailable(attemptTempFailureDetail(error)); }
   if (!/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(image) || directory.includes(",")) throw unavailable("invalid container cleanup input");
   const inspection = 'export ORIGINAL=$1; shift; find /attempt -xdev "$@" -print > /tmp/markers || exit; '
     + 'test "$(wc -l < /tmp/markers)" -le 10000 || exit 75; '
     + `find /attempt -xdev "$@" -exec /bin/sh -c ${"'" + containerClassifier.replaceAll("'", "'\\''") + "'"} sh {} + || exit; `;
-  const body = operation === "measure" ? 'exec du -skx /attempt'
+  const body = operation === "snapshot" ? namespaceSnapshot + 'printf "%s\\n" "$digest"'
+    : operation === "measure" ? 'exec du -skx /attempt'
     : operation === "evidence" ? noEvidence
       : inspection + (requireNoEvidence ? noEvidence : "")
         + (operation === "remove" ? 'exec find /attempt -xdev -depth -mindepth 1 -delete' : 'exit 0');
-  const script = 'identity=$1; shift; test "$(stat -c %d:%i /attempt)" = "$identity" || exit 75; ' + linkedEvidence + body;
+  if (protection && !/^[a-f0-9]{64}$/.test(protection.digest)) throw new Error("invalid attempt namespace snapshot");
+  const verify = protection ? namespaceSnapshot + `test "$digest" = '${protection.digest}' || exit 75; ` : "";
+  const script = 'identity=$1; shift; test "$(stat -c %d:%i /attempt)" = "$identity" || exit 75; ' + linkedEvidence + verify + body;
   if (guard && !await guard()) throw new Error("attempt authority changed before namespace removal");
   // Read after the guard's awaits, so a picture named meanwhile still counts.
   const linked = operation === "evidence" || requireNoEvidence ? ledgerLinkedEvidence(original) : [];
@@ -633,16 +690,20 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
     throw new Error("attempt temp deferred: authority changed before namespace removal");
   // Only this owned tree is writable. No pull, network, socket, privileged
   // mode or host namespace is granted to the cleanup container.
+  const timeout = remaining();
   let result: { stdout: string };
   try {
-    result = await run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1m",
-      "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
+    if (operation === "remove") mutationStarted?.();
+    result = await run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=4m",
+    "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
       "--mount", `type=bind,source=${directory},target=/attempt${operation !== "remove" ? ",readonly" : ""}`,
-      "--entrypoint", "timeout", image, "12", "/bin/sh", "-c", script, "sh", identity, String(linked.length), ...linked, original, ...markers]);
-  } catch (error) {
+      "--entrypoint", "timeout", image, String(Math.max(1, Math.floor(timeout / 1000))), "/bin/sh", "-c", script, "sh", identity,
+      String(linked.length), ...linked, original, ...markers], timeout);
+  }
+  catch (error) {
     const code = (error as NodeJS.ErrnoException & { code?: unknown }).code;
     if (code === "ENOENT" || [125, 126, 127].includes(Number(code))) throw unavailable(attemptTempFailureDetail(error));
-    throw error;
+    throw new Error(attemptTempFailureDetail(error), { cause: error });
   }
   return { identity, stdout: result.stdout };
 }
@@ -658,70 +719,224 @@ function removeEmptyNamespaceRoot(directory: string, identity: string, postDelet
 /** Native find streams an arbitrarily large owned tree; the owned worker and
  * each command impose time bounds instead of permanently retaining it at an
  * entry-count ceiling. Linked worktrees remain with their preservation owner. */
-export async function inspectAttemptTree(directory: string, original = directory): Promise<boolean> {
+export async function inspectAttemptTree(directory: string, original = directory, settings: NamespaceBudget = {}): Promise<boolean> {
   if (process.platform === "win32") {
     const pending = [directory]; let found = 0;
     while (pending.length) {
       const current = pending.pop()!;
       for (const entry of await fs.promises.readdir(current, { withFileTypes: true })) {
         const file = path.join(current, entry.name);
-        const marker = entry.name === ".delegatus-keep" || entry.name === ".git" && !entry.isDirectory()
-          || entry.name === "gitdir" && /(?:^|\/)worktrees\/.*\/gitdir$/.test(file.replaceAll(path.sep, "/"));
+        const marker = protectionMarker(file, entry.isDirectory());
         if (marker && (++found > MARKER_LIMIT || markerHolds(file, directory, original))) return false;
         if (entry.isDirectory()) pending.push(file);
       }
     }
     return true;
   }
+  const until = performance.now() + namespaceTimeout(settings);
   try {
-    const found = (await run("find", [directory, "-xdev", ...markers, "-print0"])).stdout.split("\0").filter(Boolean);
+    const found = (await run("find", [directory, "-xdev", ...markers, "-print0"], Math.max(1, Math.min(15_000, Math.floor(until - performance.now()))))).stdout.split("\0").filter(Boolean);
     return found.length <= MARKER_LIMIT && !found.some(file => markerHolds(file, directory, original));
   }
   catch (error) {
     if (process.platform !== "linux") throw error;
-    try { await containerCommand(directory, "inspect", original); return true; }
-    catch (failure) { if (privilegedCleanupUnavailable(failure)) throw failure; return false; }
+    try { await containerCommand(directory, "inspect", original, undefined, false, undefined,
+      { ...settings, budgetMs: until - performance.now() }); return true; }
+    catch { return false; }
   }
 }
 
-const unlistable = (error: unknown) => ["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "");
-
-/** An independent directory snapshot protects new markers even when expired
- * evidence is deliberately discarded. Check it synchronously after every
- * awaited observation and again at removal dispatch. Never follow links. */
-export async function snapshotAttemptProtection(directory: string, budgetMs = 30_000): Promise<{ current: () => boolean }> {
+export type AttemptProtection = {
+  current: () => boolean;
+  mutationDirectories?: readonly AttemptMutationWatch[];
+  namespace?: AttemptNamespaceProtection;
+  permissionChange?: (file: string, mode: number, apply: () => void) => void;
+};
+/** An independent directory and marker snapshot protects both new markers and
+ * in-place rewrites even when expired evidence is deliberately discarded. Native metadata is checked synchronously
+ * after awaited observations. Opaque descendants also require their digest
+ * to be checked inside the removal namespace. Never follow links. */
+export async function snapshotAttemptProtection(directory: string, budgetMs = 30_000, namespaceRemoval = false, bytes?: number):
+  Promise<AttemptProtection> {
   const until = performance.now() + Math.max(0, Math.min(30_000, budgetMs));
   const directories = new Map<string, string>();
+  const markerFiles = new Map<string, { version: string; content?: Buffer }>();
+  const readableDirectories: string[] = [];
   const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.mtimeNs, stat.ctimeNs].join(":");
   const pending = [directory];
+  const device = fs.lstatSync(directory).dev;
+  let inaccessible = false;
   while (pending.length) {
     if (performance.now() >= until || directories.size >= 10000) throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
     const current = pending.pop()!, stat = fs.lstatSync(current, { bigint: true });
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("attempt protection directory changed");
     directories.set(current, signature(stat));
-    // A container that ran as another user leaves directories this user cannot
-    // list. Each stays in the snapshot as a leaf, versioned by its own metadata:
-    // an entry made directly in it changes that signature, and the namespace
-    // removal that such a tree needs repeats the keep-marker classification
-    // inside the tree immediately before it deletes anything.
-    let entries: fs.Dir;
-    try { entries = fs.opendirSync(current); }
-    catch (error) { if (unlistable(error)) continue; throw error; }
+    if (stat.dev !== BigInt(device)) continue;
+    let entries: fs.Dir | undefined;
     try {
+      entries = fs.opendirSync(current);
       for (let entry; (entry = entries.readSync());) {
         if (performance.now() >= until || pending.length + directories.size >= 10000)
           throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
         if (entry.isDirectory()) pending.push(path.join(current, entry.name));
+        const file = path.join(current, entry.name);
+        if (protectionMarker(file, entry.isDirectory())) {
+          if (markerFiles.size >= MARKER_LIMIT) throw new AttemptTempBudgetDeferred("attempt protection marker budget exceeded");
+          const marker = fs.lstatSync(file, { bigint: true });
+          markerFiles.set(file, { version: signature(marker),
+            content: marker.isFile() && marker.size <= BigInt(4096) ? markerContent(file) : undefined });
+        }
       }
-    } catch (error) { if (!unlistable(error)) throw error; }
-    finally { entries.closeSync(); }
+      // Some runtimes open the directory on the first read. Only a completed
+      // iteration proves this directory can also be watched from the host.
+      readableDirectories.push(current);
+    } catch (error) {
+      if (process.platform !== "linux" || !["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      inaccessible = true;
+    } finally { entries?.closeSync(); }
   }
-  return { current: () => {
+  let namespace: AttemptNamespaceProtection | undefined;
+  if (inaccessible) {
+    const result = await containerCommand(directory, "snapshot", directory, undefined, false, undefined,
+      { budgetMs: until - performance.now(), bytes });
+    const digest = result.stdout.trim();
+    if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error("invalid attempt namespace protection reply");
+    namespace = { digest };
+  }
+  const current = () => {
+    // Callers using native deletion cannot validate opaque descendants.
+    // The retention adapter opts in only when it passes the digest to the
+    // removal namespace, which rechecks every directory before deletion.
+    if (namespace && !namespaceRemoval) return false;
     try {
       for (const [file, before] of directories) if (signature(fs.lstatSync(file, { bigint: true })) !== before) return false;
+      for (const [file, before] of markerFiles) {
+        if (signature(fs.lstatSync(file, { bigint: true })) !== before.version
+          || before.content && !markerContent(file).equals(before.content)) return false;
+      }
       return true;
     } catch { return false; }
+  };
+  return { namespace, current, mutationDirectories: [...readableDirectories, ...[...markerFiles.keys()].map(file => ({ file }))], permissionChange: (file, mode, apply) => {
+    if (namespace || !current()) throw new AttemptTempBudgetDeferred("protection changed before permission repair");
+    const before = fs.lstatSync(file, { bigint: true });
+    apply();
+    const after = fs.lstatSync(file, { bigint: true });
+    // Only our chmod may advance ctime/mode. A new entry changes mtime;
+    // replacement, ownership and link changes are never absorbed into proof.
+    if (before.dev !== after.dev || before.ino !== after.ino || before.mtimeNs !== after.mtimeNs
+      || before.uid !== after.uid || before.gid !== after.gid || before.nlink !== after.nlink
+      || after.mode !== (before.mode & ~BigInt(0o7777) | BigInt(mode)))
+      throw new AttemptTempBudgetDeferred("directory changed during permission repair");
+    if (before.isDirectory()) directories.set(file, signature(after));
+    if (!current()) throw new AttemptTempBudgetDeferred("protection changed during permission repair");
   } };
+}
+
+/** Refuse even same-device bind mounts, including mounts added while an
+ * awaited guard was running. An unreadable mount table grants no permission. */
+function assertAttemptMountsClear(directory: string) {
+  if (process.platform !== "linux") return;
+  for (const line of fs.readFileSync("/proc/self/mountinfo", "utf8").trim().split("\n")) {
+    const encoded = line.split(" ")[4];
+    if (!encoded) throw new Error("attempt mount inventory is invalid");
+    const mount = encoded.replace(/\\([0-7]{3})/g, (_, octal: string) => String.fromCharCode(parseInt(octal, 8)));
+    if (inside(mount, directory)) throw new AttemptTempBudgetDeferred("mount boundary changed before attempt removal");
+  }
+}
+const descriptorMount = (fd: number) => {
+  const id = /^mnt_id:\s*(\d+)$/m.exec(fs.readFileSync(`/proc/self/fdinfo/${fd}`, "utf8"))?.[1];
+  if (!id) throw new Error("attempt descriptor mount identity unavailable");
+  return id;
+};
+
+/** Repair only directories in an admitted, expired tree. Pin each entry without
+ * following a symlink, then chmod directory descriptors. O_PATH opens mode 000;
+ * the proc descriptor names that inode even if its directory entry changes.
+ * All child paths are relative to a held parent, on the root's device. */
+function repairAttemptPermissions(directory: string, authority: () => boolean, budgetMs: number, permissionChange?: AttemptProtection["permissionChange"], dispatchGuard?: () => boolean, mutationStarted?: () => void) {
+  // Descendant lookup through these pinned descriptors requires Linux procfs.
+  // Other platforms keep their existing native removal path.
+  if (process.platform !== "linux") return;
+  const until = performance.now() + Math.max(0, Math.min(30_000, budgetMs));
+  const uid = process.getuid?.();
+  if (uid === undefined) return;
+  const initial = fs.lstatSync(directory);
+  const physicalRoot = fs.realpathSync(directory);
+  assertAttemptMountsClear(physicalRoot);
+  let rootMount: string | undefined;
+  const check = () => {
+    if (performance.now() >= until) throw new AttemptTempBudgetDeferred("attempt permission repair time budget exhausted");
+    if (!authority()) throw new AttemptTempBudgetDeferred("authority changed before permission repair");
+  };
+  type Entry = { fd: number; pinned: string; expected: string; identity: string };
+  const stack: Array<Entry & { entries: fs.Dir }> = [];
+  const bound = (entry: Entry) => {
+    const mount = descriptorMount(entry.fd);
+    const linked = fs.lstatSync(entry.expected, { throwIfNoEntry: false });
+    if (fs.readlinkSync(entry.pinned) !== entry.expected || !linked || linked.isSymbolicLink()
+      || `${linked.dev}:${linked.ino}` !== entry.identity || mount !== rootMount)
+      throw new AttemptTempBudgetDeferred("permission repair entry left its admitted root or mount");
+  };
+  const enter = (file: string, expected: string, root = false) => {
+    check();
+    // O_PATH is Linux-specific and is intentionally combined with O_NOFOLLOW:
+    // a symlink descriptor is classified and closed without touching its target.
+    const fd = fs.openSync(file, 0x200000 | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    let retained = false;
+    try {
+      const stat = fs.fstatSync(fd);
+      // File modes do not prevent unlink from a writable parent. A file can
+      // gain an external hardlink after fstat, so never chmod regular files.
+      if (stat.isSymbolicLink() || stat.dev !== initial.dev || stat.uid !== uid || !stat.isDirectory()) return;
+      if (root && `${stat.dev}:${stat.ino}` !== `${initial.dev}:${initial.ino}`) throw new Error("attempt permission repair root changed");
+      const mode = stat.mode | 0o700;
+      const pinned = `/proc/self/fd/${fd}`;
+      if (root) rootMount = descriptorMount(fd);
+      const entry = { fd, pinned, expected, identity: `${stat.dev}:${stat.ino}` };
+      const validate = () => {
+        // Inventory can be slow. Recheck the pinned binding and authority
+        // after it, before granting any permission change.
+        assertAttemptMountsClear(physicalRoot);
+        for (const parent of stack) bound(parent);
+        bound(entry);
+        check();
+      };
+      validate();
+      if (mode !== stat.mode) {
+        validate();
+        const apply = () => {
+          check();
+          // Every permission write uses the same final fence as removal.
+          // Complete descriptor/mount/protection observations before it;
+          // no filesystem read may follow admission before this write.
+          if (dispatchGuard && !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed before permission repair");
+          mutationStarted?.();
+          fs.chmodSync(pinned, mode & 0o7777);
+        };
+        if (permissionChange) permissionChange(path.join(directory, path.relative(physicalRoot, expected)), mode & 0o7777, apply);
+        else apply();
+      }
+      validate();
+      stack.push({ ...entry, entries: fs.opendirSync(pinned) });
+      retained = true;
+    } finally { if (!retained) fs.closeSync(fd); }
+  };
+  const close = () => {
+    const frame = stack.pop()!;
+    try { frame.entries.closeSync(); } finally { fs.closeSync(frame.fd); }
+  };
+  try {
+    enter(directory, physicalRoot, true);
+    while (stack.length) {
+      check();
+      const frame = stack[stack.length - 1];
+      for (const parent of stack) bound(parent);
+      const entry = frame.entries.readSync();
+      if (entry) enter(path.join(frame.pinned, entry.name), path.join(frame.expected, entry.name));
+      else close();
+    }
+  } finally { while (stack.length) close(); }
 }
 
 /** An unreadable tree can retire only when the readonly namespace proves it
@@ -731,18 +946,37 @@ export async function attemptTreeHasNoEvidence(directory: string, original: stri
 }
 
 export async function removeAttemptTree(directory: string, original = directory, guard?: () => Promise<boolean>, requireNoEvidence = false,
-  dispatchGuard?: () => boolean, postDeleteGuard = dispatchGuard, discardExpiredEvidence = false): Promise<void> {
-  if (requireNoEvidence) {
-    const { identity } = await containerCommand(directory, "remove", original, guard, true, dispatchGuard);
-    removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
-    return;
-  }
-  if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before native removal");
-  try { await fs.promises.rm(directory, { recursive: true, force: true }); }
-  catch (error) {
-    if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
-    const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard);
-    removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
+  dispatchGuard?: () => boolean, postDeleteGuard = dispatchGuard, discardExpiredEvidence = false,
+  protection?: AttemptNamespaceProtection, settings: AttemptRemovalSettings = {}): Promise<void> {
+  try {
+    if (requireNoEvidence || protection) {
+      const { identity } = await containerCommand(directory, "remove", original, guard, requireNoEvidence || !discardExpiredEvidence, dispatchGuard, settings, protection,
+        settings.mutationStarted);
+      removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
+      return;
+    }
+    if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before native removal");
+    if (discardExpiredEvidence && guard && dispatchGuard && postDeleteGuard) {
+      repairAttemptPermissions(directory, settings.permissionAuthority ?? postDeleteGuard, settings.budgetMs ?? 30_000, settings.permissionChange, dispatchGuard,
+        settings.mutationStarted);
+      // Repeat all observations after repair, including checkout references,
+      // and reauthorize after the last await.
+      if (!await guard() || !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed after permission repair");
+    }
+    assertAttemptMountsClear(fs.realpathSync(directory));
+    // Mount and physical-path reads may observe a changed root or protection.
+    // Admit from the final synchronous snapshots immediately before native rm.
+    if (dispatchGuard && !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed before native removal");
+    settings.mutationStarted?.();
+    try { await fs.promises.rm(directory, { recursive: true, force: true }); }
+    catch (error) {
+      if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
+      const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard, settings, protection);
+      removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
+    }
+  } catch (error) {
+    if (error instanceof AttemptTempBudgetDeferred) throw error;
+    throw new Error(attemptTempFailureDetail(error), { cause: error });
   }
 }
 
@@ -752,28 +986,26 @@ const kibibytes = (output: string | undefined) => {
   return Number.isFinite(value) && value >= 0 ? value * 1024 : null;
 };
 
-/** What `du` can read, and whether part of the tree was unreadable. `du`
- * totals what it can read and exits 1 when a subtree is unreadable; that total
- * is the lower bound, flagged, and the cleanup namespace raises it when it can
- * measure the whole tree. The old fallback kept only the root's own inode and
- * recorded a 51 GiB tree as 4 KiB. */
-export async function measureAttemptAllocation(directory: string): Promise<{ bytes: number; unreadable: boolean }> {
+export async function measureAttemptAllocation(directory: string, settings: NamespaceBudget = {}): Promise<{ bytes: number; unreadable: boolean }> {
   if (process.platform === "win32") return { bytes: await measureTempBytes(directory), unreadable: false };
+  const until = performance.now() + Math.max(0, Math.min(30_000, settings.budgetMs ?? 30_000));
+  if (performance.now() >= until) throw new AttemptTempBudgetDeferred("attempt measurement time budget exhausted");
   let partial: number | null = null;
   try {
-    const bytes = kibibytes((await run("du", ["-skx", "--", directory])).stdout);
+    const bytes = kibibytes((await run("du", ["-skx", "--", directory], Math.max(1, Math.floor(until - performance.now())))).stdout);
     if (bytes !== null) return { bytes, unreadable: false };
   } catch (error) { partial = kibibytes((error as { stdout?: string }).stdout); }
   let bytes = partial ?? fs.lstatSync(directory).blocks * 512;
-  if (process.platform === "linux") {
-    try { bytes = Math.max(bytes, kibibytes((await containerCommand(directory, "measure")).stdout) ?? 0); }
-    catch { /* The readable lower bound stands. */ }
+  if (process.platform === "linux" && performance.now() < until) {
+    try { bytes = Math.max(bytes, kibibytes((await containerCommand(directory, "measure", directory, undefined, false, undefined,
+      { ...settings, budgetMs: until - performance.now() })).stdout) ?? 0); }
+    catch { /* Keep the readable lower bound. */ }
   }
   return { bytes, unreadable: true };
 }
 
-export async function allocatedAttemptBytes(directory: string): Promise<number> {
-  return (await measureAttemptAllocation(directory)).bytes;
+export async function allocatedAttemptBytes(directory: string, settings: NamespaceBudget = {}): Promise<number> {
+  return (await measureAttemptAllocation(directory, settings)).bytes;
 }
 
 /** A directory inside an attempt tree that this user cannot list or empty.
