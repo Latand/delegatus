@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { statePath } from "@/lib/configDir";
 import { loadPipelines, savePipelines } from "@/lib/pipelines/store";
-import { attemptTempJournalPath } from "@/lib/tempSweep";
+import { attemptTempJournalPath, removeTreeViaTrash } from "@/lib/tempSweep";
 import { attemptTempAuthority } from "./attemptTempProduction";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 import { finishedLane } from "./attemptTempRetention.testSupport";
@@ -16,6 +16,91 @@ import { Database } from "bun:sqlite";
 import { RecordedCheckStore } from "@/lib/recordedChecks/store";
 
 const NOW = Date.parse("2030-01-20T00:00:00Z");
+
+test.skipIf(process.platform !== "linux").each([false, true])(
+  "a post-quarantine fence refusal restores consumer links in the same tick (recreate=%s)", async recreate => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-trash-restore-"));
+    cleanup.push(() => fs.rmSync(parent, { recursive: true, force: true }));
+    const container = path.join(parent, "container"), directory = path.join(container, "llv-stage-expired");
+    const consumer = path.join(parent, "consumer"), dependency = path.join(consumer, "node_modules/dependency");
+    fs.mkdirSync(path.join(directory, "cache"), { recursive: true });
+    fs.writeFileSync(path.join(directory, "cache/payload"), "expired");
+    fs.mkdirSync(path.join(consumer, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(consumer, "node_modules"));
+    const store = new AttemptTempStore(path.join(parent, "registry/owners.sqlite"));
+    cleanup.push(() => store.close());
+    store.register({ directory, pipelineId: null, launchId: "fixture", retainUntilClose: true, createdAt: 1 });
+    const previousPath = process.env.PATH, bin = path.join(parent, "bin");
+    fs.mkdirSync(bin);
+    for (const command of ["find", "du"]) fs.symlinkSync(`/usr/bin/${command}`, path.join(bin, command));
+    cleanup.push(() => { process.env.PATH = previousPath; });
+    process.env.PATH = bin;
+    const nativeStat = fs.lstatSync.bind(fs);
+    let injected = false;
+    const stat = spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike, options?: unknown) => {
+      const value = nativeStat(file, options as { bigint: false });
+      if (!injected && String(file).includes(".delegatus-trash-") && String(file).endsWith("/cache")
+        && String(new Error().stack).includes("at attemptMutationCurrent")) {
+        injected = true;
+        fs.symlinkSync(path.join(directory, "cache"), dependency);
+      }
+      return value;
+    }) as typeof fs.lstatSync);
+    cleanup.push(() => { stat.mockRestore(); });
+    const sweep = (now: number) => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, state: async () => "expired",
+      scan: () => ({ ownNamespace: null, processes: [{ pid: 1, namespace: null, stamped: false, paths: [consumer] }] }) });
+    const report = await sweep(NOW);
+    stat.mockRestore();
+    const firstTick = { original: fs.existsSync(directory), link: fs.existsSync(path.join(dependency, "payload")),
+      journal: fs.existsSync(attemptTempJournalPath(directory)), trash: fs.readdirSync(container).filter(name => name.startsWith(".delegatus-trash-")) };
+    // Reproduce the predecessor's stuck-trash variant if the first tick left
+    // the path missing. A correct first tick already owns the original name.
+    if (recreate && !fs.existsSync(directory)) fs.mkdirSync(directory);
+    const next = await sweep(NOW + 120_000);
+    expect(injected).toBeTrue();
+    expect(report).toMatchObject({ removed: 0, errors: 0, deferred: 1 });
+    expect(report.outcomes[0].reason).toContain("attempt mutation fence filesystem proof changed");
+    expect(firstTick).toEqual({ original: true, link: true, journal: false, trash: [] });
+    expect(next).toMatchObject({ removed: 0, errors: 0 });
+    expect(fs.readFileSync(path.join(directory, "cache/payload"), "utf8")).toBe("expired");
+    expect(fs.readFileSync(path.join(dependency, "payload"), "utf8")).toBe("expired");
+    expect(fs.existsSync(attemptTempJournalPath(directory))).toBeFalse();
+    expect(fs.readdirSync(container).filter(name => name.startsWith(".delegatus-trash-"))).toEqual([]);
+    expect(store.has(directory)).toBeTrue();
+  });
+
+test.skipIf(process.platform !== "linux").each([
+  ["proof", "filesystem proof changed"],
+  ["authority", "authority changed"],
+  ["budget", "time budget exhausted"],
+  ["watch", "directory watch unavailable"],
+] as const)("a throwing post-quarantine %s fence restores before returning its reason", async (refusal, reason) => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "llv-trash-fence-"));
+  cleanup.push(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const directory = path.join(parent, "root"), journal = path.join(parent, "intent.json");
+  fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "payload"), "retained");
+  const identity = fs.statSync(directory).ino;
+  let removals = 0, fences = 0;
+  await expect(removeTreeViaTrash(directory, { journal, disposable: true, held: () => false,
+    remove: async () => { removals++; },
+    validate: trash => {
+      if (trash === directory) return true;
+      fences++;
+      return attemptMutationCurrent([refusal === "watch" ? path.join(parent, "missing") : trash], () => {
+        if (refusal === "proof") fs.writeFileSync(path.join(trash, "late"), "preserve");
+        return true;
+      }, refusal === "budget" ? 0 : 30_000, () => refusal !== "authority");
+    },
+  })).rejects.toThrow(`attempt temp deferred: attempt mutation fence ${reason}`);
+  expect(fences).toBe(1);
+  expect(removals).toBe(0);
+  expect(fs.statSync(directory).ino).toBe(identity);
+  expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("retained");
+  if (refusal === "proof") expect(fs.readFileSync(path.join(directory, "late"), "utf8")).toBe("preserve");
+  expect(fs.readdirSync(parent)).toEqual(["root"]);
+});
+
 test.skipIf(process.platform !== "linux")("native removal after the final fence cannot follow a rebound ancestor", async () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "review-ancestor-rm-"));
   const container = path.join(parent, "container"), directory = path.join(container, "llv-stage-expired"), cache = path.join(directory, "cache");

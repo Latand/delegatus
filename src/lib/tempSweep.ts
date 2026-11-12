@@ -425,13 +425,19 @@ export async function removeTreeViaTrash(directory: string, options: {
   const moved = fs.lstatSync(trash);
   let holdError: unknown;
   let held = true;
-  try { const observation = options.held(trash); held = typeof observation === "boolean" ? observation : await observation; } catch (error) { holdError = error; }
+  try {
+    const observation = options.held(trash);
+    held = typeof observation === "boolean" ? observation : await observation;
+    // A throwing final fence refuses this quarantine just like a hold.
+    // Restore before propagating its named reason; removal has not started.
+    held = `${moved.dev}:${moved.ino}` !== identity || held || !!(options.validate && !options.validate(trash))
+      || !!(snapshot && !matchesSnapshot(trash, snapshot)) || mountPointsUnder(trash).length > 0;
+  } catch (error) { holdError = error; held = true; }
   const final = fs.lstatSync(trash);
   // Asynchronous guards can race a replaced quarantine name. Preserve both
   // identities and the intent; never restore or delete the replacement.
   if (!final.isDirectory() || final.isSymbolicLink() || `${final.dev}:${final.ino}` !== identity || final.uid !== uid) return false;
-  if (`${moved.dev}:${moved.ino}` !== identity || held || options.validate && !options.validate(trash)
-    || snapshot && !matchesSnapshot(trash, snapshot) || mountPointsUnder(trash).length) {
+  if (held) {
     try { fs.lstatSync(directory); throw new Error("original path was acquired while trash is held; preserved both paths"); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     fs.renameSync(trash, directory);
