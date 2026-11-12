@@ -124,6 +124,8 @@ const rows = (): KeyedRows<PathEvidence> => keyedRows ??= new KeyedRows<PathEvid
   collection: REAPER_STATE_COLLECTION,
   prefixes: [PATH_PREFIX],
   busyMessage: "reaper state is busy",
+  // The legacy file was replaced without an fsync; so is this commit (keyedRows.ts).
+  durability: "process",
   decode: (_key, value) => evidenceOf(value),
   importLegacy: (filePath, options) => reaperStateDocumentStore.importLegacy(filePath, options),
 });

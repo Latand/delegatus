@@ -20,6 +20,7 @@ import {
   readHistory,
   recordLimitSample,
   resetLimitsHistoryStoreForTests,
+  RETENTION_S,
 } from "@/lib/limitsHistoryStore";
 import { readAuthorshipEvidence } from "@/lib/reaperAuthorship";
 import {
@@ -110,7 +111,10 @@ test("limits history: a production-shaped file imports verified, every reader an
 
   const outcome = importLegacyLimitsHistory(file);
   expect(outcome.state).toBe("imported");
-  expect([outcome.record.gap, outcome.record.rowCount]).toEqual([null, 1 + 14 + 3]);
+  // One row per series and UTC day, the meta row and the three quarantined series.
+  const dayRows = Object.values(body.series as Record<string, { t: number }[]>)
+    .reduce((sum, samples) => sum + new Set(samples.map((sample) => Math.floor(sample.t / 86_400))).size, 0);
+  expect([outcome.record.gap, outcome.record.rowCount]).toEqual([null, 1 + dayRows + 3]);
   expect(fs.statSync(file).isDirectory()).toBe(true);
 
   resetLimitsHistoryStoreForTests();
@@ -128,9 +132,32 @@ test("limits history: a production-shaped file imports verified, every reader an
   const session = limits(10, 20);
   session.weekly = null;
   recordLimitSample("claude", "account-0", session, "live", (FIXTURE_NOW + 300) * 1000);
-  expect(lastCommitKeys(root, "limits_history")).toEqual(["series:claude|account-0|session"]);
+  const today = String(Math.floor((FIXTURE_NOW + 300) / 86_400)).padStart(6, "0");
+  expect(lastCommitKeys(root, "limits_history")).toEqual([`series:claude|account-0|session:${today}`]);
   expect(historySamples("claude", "account-0", "session", FIXTURE_NOW + 300).at(-1)).toEqual({ t: FIXTURE_NOW + 300, remaining: 90 });
   expect(readHistory().series["claude|account-0|session"]!.at(-1)).toEqual({ t: FIXTURE_NOW + 300, remaining: 90 });
+});
+
+test("limits history: a sample two days on deletes the days that left the window and trims the boundary day, as the file's pruning did", () => {
+  const root = sandbox();
+  const body = limitsHistoryFixture();
+  const file = seed(root, "limits-history.json", body);
+  importLegacyLimitsHistory(file);
+  const later = FIXTURE_NOW + 2 * 86_400;
+  const cutoff = later - RETENTION_S;
+  const session = limits(25, 0);
+  session.weekly = null;
+  recordLimitSample("claude", "account-0", session, "live", later * 1000);
+  const legacy = [...(body.series as Record<string, { t: number; remaining: number }[]>)["claude|account-0|session"]!, { t: later, remaining: 75 }]
+    .filter((sample) => sample.t >= cutoff);
+  expect(readHistory().series["claude|account-0|session"]).toEqual(legacy);
+  const day = (t: number) => String(Math.floor(t / 86_400)).padStart(6, "0");
+  const keys = lastCommitKeys(root, "limits_history");
+  expect(keys).toContain(`series:claude|account-0|session:${day(later)}`);
+  expect(keys).toContain(`series:claude|account-0|session:${day(cutoff)}`);
+  expect(keys.every((key) => key.startsWith("series:claude|account-0|session:"))).toBe(true);
+  // Untouched series keep their rows until their own next sample.
+  expect(readHistory().series["claude|account-1|weekly"]).toEqual((body.series as Record<string, { t: number; remaining: number }[]>)["claude|account-1|weekly"]);
 });
 
 test("limits history: the rollback mirror carries the file shape, and samples the older release adds merge with SQLite's", () => {

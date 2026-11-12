@@ -42,6 +42,10 @@ export interface KeyedRowsOptions<V> {
   decode(key: string, value: unknown): V | undefined;
   /** Import the legacy file now (the owning `LegacyDocumentStore`). */
   importLegacy(filePath: string, options: { reconcile: boolean }): LegacyImportOutcome;
+  /** `process`: a commit survives the process but not a power loss and does
+      not wait for the disk, as the store's legacy file, renamed into place
+      without an fsync, did not (`SqliteStateCollection.patchSync`). */
+  durability?: "disk" | "process";
 }
 
 /** The rows as of one collection revision. A view held across a later read
@@ -318,10 +322,18 @@ export class KeyedRows<V> {
       const collection = this.writable(filePath, database);
       let changed = false;
       collection.patchSync(() => {
-        const patch = prepare((key) => collection.get(key)?.value);
+        /* The writer holds the database's write lock, so the shared reader
+           sees exactly what is committed. One parse per row and no copy: a
+           limits series is about 45 KB. */
+        const patch = prepare((key) => {
+          const row = readStateCollectionSelection(database, this.options.collection, { keys: [key] })?.rows[0];
+          if (!row) return undefined;
+          const parsed = JSON.parse(row.valueJson) as DocumentRow;
+          return parsed && parsed.key === key ? parsed.value : undefined;
+        });
         changed = patch.records.length > 0 || (patch.deleteKeys?.length ?? 0) > 0;
         return patch;
-      });
+      }, { durability: this.options.durability ?? "disk" });
       // This process's next read probes again and follows its own commit.
       this.tick?.delete(database);
       this.tickViews?.delete(database);

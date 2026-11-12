@@ -18,15 +18,20 @@ import type { EngineLimits, LimitSample, LimitsSource, LimitWindow } from "@/lib
     The history lives in `state.sqlite`, collection `limits_history` (#1870
     slice 8), imported once from `limits-history.json`:
 
-      meta                  { version, codexAttributionVersion, since }
-      series:<series>       one engine/account/window series, oldest first
-      unattributed:<series> a quarantined legacy Codex series
+      meta                        { version, codexAttributionVersion, since }
+      series:<series>:<day>       one series' samples of one UTC day, oldest first
+      unattributed:<series>       a quarantined legacy Codex series
 
-    `<series>` is `<engine>|<accountId>|<window>`. A recorded sample rewrites
-    only the series it extends; a poll that finds every series inside its
-    five-minute gap writes nothing. Readers keep the rows per collection
-    revision (`KeyedRows`): one series is one keyed read, and the whole
-    history is read once and then followed through the change log. */
+    `<series>` is `<engine>|<accountId>|<window>` and `<day>` the six-digit
+    day number of the samples (`t / 86400`). A series is split by day because
+    a sample every five minutes for eight days is about 45 KB of JSON: a row
+    per series made every sample rewrite all of it, and a tick that extended
+    ten series cost more than rewriting the whole file had. A recorded sample
+    now rewrites its series' current day (at most about 7 KB), and a day that
+    leaves the retention window is deleted. A poll that finds every series
+    inside its five-minute gap writes nothing. Readers keep the rows per
+    collection revision (`KeyedRows`), read them once and then follow only the
+    rows the change log names; the series are put back together per revision. */
 
 /** Keep just over a week so the weekly window is always fully covered. */
 export const RETENTION_S = 8 * 24 * 3600;
@@ -102,12 +107,54 @@ function normalizeHistory(value: unknown): HistoryFile {
     since: typeof raw.since === "string" ? raw.since : null, series };
 }
 
+const DAY_S = 86_400;
+
+function dayOf(t: number): number {
+  return Math.floor(t / DAY_S);
+}
+
+function bucketKey(series: string, day: number): string {
+  return `${SERIES_PREFIX}${series}:${String(day).padStart(6, "0")}`;
+}
+
+/** The series and day of a bucket row; the day is the key's last segment. */
+function bucketOf(rowKey: string): { series: string; day: number } | null {
+  const match = /^series:(.*):(\d{6})$/.exec(rowKey);
+  return match ? { series: match[1]!, day: Number(match[2]) } : null;
+}
+
+/** A series as its day buckets, in day order. */
+function buckets(samples: readonly LimitSample[]): Map<number, LimitSample[]> {
+  const days = new Map<number, LimitSample[]>();
+  for (const sample of samples) {
+    const day = dayOf(sample.t);
+    const held = days.get(day);
+    if (held) held.push(sample); else days.set(day, [sample]);
+  }
+  return days;
+}
+
 function historyRows(history: HistoryFile): DocumentRow[] {
   return [
     { key: META_KEY, value: { version: 1, codexAttributionVersion: 1, since: history.since } },
-    ...Object.entries(history.series).map(([key, samples]) => ({ key: `${SERIES_PREFIX}${key}`, value: samples })),
+    ...Object.entries(history.series).flatMap(([series, samples]) =>
+      [...buckets(samples)].map(([day, held]) => ({ key: bucketKey(series, day), value: held }))),
     ...Object.entries(history.unattributedCodexSeries).map(([key, samples]) => ({ key: `${UNATTRIBUTED_PREFIX}${key}`, value: samples })),
   ];
+}
+
+/** Bucket rows back into series, each in day order. */
+function assembleSeries(rows: Iterable<readonly [string, LimitSample[]]>): Record<string, LimitSample[]> {
+  const days = new Map<string, [number, LimitSample[]][]>();
+  for (const [rowKey, samples] of rows) {
+    const bucket = bucketOf(rowKey);
+    if (!bucket) continue;
+    const held = days.get(bucket.series);
+    if (held) held.push([bucket.day, samples]); else days.set(bucket.series, [[bucket.day, samples]]);
+  }
+  const series: Record<string, LimitSample[]> = {};
+  for (const [key, held] of days) series[key] = held.sort((left, right) => left[0] - right[0]).flatMap(([, samples]) => samples);
+  return series;
 }
 
 function sinceOf(value: unknown): string | null {
@@ -119,13 +166,13 @@ function historyFromRows(rows: readonly DocumentRow[]): HistoryFile {
   const history = emptyHistory();
   for (const row of rows) {
     if (row.key === META_KEY) history.since = sinceOf(row.value);
-    else if (row.key.startsWith(SERIES_PREFIX)) history.series[row.key.slice(SERIES_PREFIX.length)] = samplesOf(row.value);
     else if (row.key.startsWith(UNATTRIBUTED_PREFIX)) history.unattributedCodexSeries[row.key.slice(UNATTRIBUTED_PREFIX.length)] = samplesOf(row.value);
   }
+  history.series = assembleSeries(rows.flatMap((row) => row.key.startsWith(SERIES_PREFIX) ? [[row.key, samplesOf(row.value)] as const] : []));
   return history;
 }
 
-/** Retention and the cap, measured from the newest sample a series holds. */
+/** Retention and the cap, measured from the newest sample a row holds. */
 function retained(samples: LimitSample[], nowS: number): LimitSample[] {
   const cutoff = nowS - RETENTION_S;
   let pruned = samples.filter((s) => s.t >= cutoff);
@@ -166,6 +213,8 @@ const rows = (): KeyedRows<HistoryRow> => keyedRows ??= new KeyedRows<HistoryRow
   collection: LIMITS_HISTORY_COLLECTION,
   prefixes: [META_KEY, SERIES_PREFIX, UNATTRIBUTED_PREFIX],
   busyMessage: "limits history is busy",
+  // The legacy file was replaced without an fsync; so is this commit (keyedRows.ts).
+  durability: "process",
   decode: (key, value) => key === META_KEY ? { kind: "meta", since: sinceOf(value) } : { kind: "samples", samples: samplesOf(value) },
   importLegacy: (filePath, options) => limitsHistoryDocumentStore.importLegacy(filePath, options),
 });
@@ -205,32 +254,33 @@ function historyView(): KeyedRowsView<HistoryRow> | null {
   }
 }
 
-function viewSamples(view: KeyedRowsView<HistoryRow>, key: string): LimitSample[] {
-  const row = view.get(`${SERIES_PREFIX}${key}`);
-  return row?.kind === "samples" ? row.samples : [];
-}
-
 /* The read copy is one live map per database: the same map at the same
-   revision holds the same rows. */
+   revision holds the same rows. Series are put back together from their day
+   rows once per revision. */
 let assembled: { rows: ReadonlyMap<string, HistoryRow>; revision: number; history: HistoryFile } | null = null;
+
+function assembledHistory(view: KeyedRowsView<HistoryRow>): HistoryFile {
+  const all = view.rows();
+  if (assembled?.rows === all && assembled.revision === view.revision) return assembled.history;
+  const history = emptyHistory();
+  const days: [string, LimitSample[]][] = [];
+  for (const [key, row] of all) {
+    if (row.kind === "meta") history.since = row.since;
+    else if (key.startsWith(SERIES_PREFIX)) days.push([key, row.samples]);
+    else history.unattributedCodexSeries[key.slice(UNATTRIBUTED_PREFIX.length)] = row.samples;
+  }
+  history.series = assembleSeries(days);
+  assembled = { rows: all, revision: view.revision, history };
+  return history;
+}
 
 /** The whole history. Series arrays are shared with the store's read copy:
     callers read them and never change them. */
 export function readHistory(): HistoryFile {
-  const filePath = limitsHistoryPath();
   const view = historyView();
-  if (!view) return readLegacyHistory(filePath);
+  if (!view) return readLegacyHistory(limitsHistoryPath());
   try {
-    const all = view.rows();
-    if (assembled?.rows === all && assembled.revision === view.revision) return assembled.history;
-    const history = emptyHistory();
-    for (const [key, row] of all) {
-      if (row.kind === "meta") history.since = row.since;
-      else if (key.startsWith(SERIES_PREFIX)) history.series[key.slice(SERIES_PREFIX.length)] = row.samples;
-      else history.unattributedCodexSeries[key.slice(UNATTRIBUTED_PREFIX.length)] = row.samples;
-    }
-    assembled = { rows: all, revision: view.revision, history };
-    return history;
+    return assembledHistory(view);
   } catch (error) {
     console.warn("[limits] history unavailable", error instanceof Error ? error.message : String(error));
     return emptyHistory();
@@ -239,15 +289,7 @@ export function readHistory(): HistoryFile {
 
 /** Read one engine/account/window series, pruned to the retention window. */
 export function historySamples(engine: EngineName, accountId: string, window: WindowKey, now = Math.round(Date.now() / 1000)): LimitSample[] {
-  const key = seriesKey(engine, accountId, window);
-  const view = historyView();
-  let arr: LimitSample[];
-  try {
-    arr = view ? viewSamples(view, key) : readLegacyHistory(limitsHistoryPath()).series[key] ?? [];
-  } catch (error) {
-    console.warn("[limits] history unavailable", error instanceof Error ? error.message : String(error));
-    arr = [];
-  }
+  const arr = readHistory().series[seriesKey(engine, accountId, window)] ?? [];
   const cutoff = now - RETENTION_S;
   return arr.filter((s) => s.t >= cutoff);
 }
@@ -271,8 +313,46 @@ export function recordLimitSample(engine: EngineName, accountId: string, limits:
   recordLimitSamples(engine, [{ accountId, limits, source }], nowMs);
 }
 
+/**
+ * The rows that keep one series inside the retention window and the cap
+ * after its newest day changed: older days are deleted, the boundary day is
+ * trimmed, and past the cap the oldest samples go. `stored` lists the day
+ * rows the read copy holds for the series; `day` reads one under the lease.
+ */
+function retentionPatch(series: string, nowS: number, stored: ReadonlySet<number>, day: (dayNumber: number) => LimitSample[],
+  changed: Map<string, LimitSample[]>, deleteKeys: Set<string>): void {
+  const cutoff = nowS - RETENTION_S;
+  const cutoffDay = dayOf(cutoff);
+  const days = [...new Set([...stored, ...[...changed.keys()].flatMap((key) => {
+    const bucket = bucketOf(key);
+    return bucket?.series === series ? [bucket.day] : [];
+  })])].sort((left, right) => left - right);
+  const kept: number[] = [];
+  for (const dayNumber of days) {
+    const key = bucketKey(series, dayNumber);
+    if (dayNumber < cutoffDay) { deleteKeys.add(key); changed.delete(key); continue; }
+    if (dayNumber === cutoffDay) {
+      const samples = changed.get(key) ?? day(dayNumber);
+      const inside = samples.filter((sample) => sample.t >= cutoff);
+      if (inside.length === 0) { deleteKeys.add(key); changed.delete(key); continue; }
+      if (inside.length !== samples.length) changed.set(key, inside);
+    }
+    kept.push(dayNumber);
+  }
+  let total = kept.reduce((sum, dayNumber) => sum + (changed.get(bucketKey(series, dayNumber)) ?? day(dayNumber)).length, 0);
+  for (const dayNumber of kept) {
+    if (total <= MAX_POINTS) break;
+    const key = bucketKey(series, dayNumber);
+    const samples = changed.get(key) ?? day(dayNumber);
+    const drop = Math.min(samples.length, total - MAX_POINTS);
+    total -= drop;
+    if (drop === samples.length) { deleteKeys.add(key); changed.delete(key); }
+    else changed.set(key, samples.slice(drop));
+  }
+}
+
 /** The account controller records one whole tick in one transaction. Only
-    the series a sample extends are written. */
+    the current day of each series a sample extends is written. */
 export function recordLimitSamples(engine: EngineName, entries: readonly { accountId: string; limits: EngineLimits; source: LimitsSource }[], nowMs = Date.now()): void {
   if (!entries.length) return;
   const nowS = Math.round(nowMs / 1000);
@@ -287,33 +367,49 @@ export function recordLimitSamples(engine: EngineName, entries: readonly { accou
   /* A poll inside every series' gap writes nothing. The read copy can only
      lag a commit, so a series it shows inside the gap is inside it. */
   const view = historyView();
+  let storedDays = new Map<string, Set<number>>();
   if (view) {
     try {
+      const history = assembledHistory(view);
       const due = (key: string) => {
-        const last = viewSamples(view, key).at(-1);
+        const last = history.series[key]?.at(-1);
         return !last || nowS - last.t >= MIN_GAP_S;
       };
       if (!candidates.some(({ key }) => due(key))) return;
+      storedDays = new Map();
+      for (const rowKey of view.rows().keys()) {
+        const bucket = bucketOf(rowKey);
+        if (!bucket) continue;
+        const held = storedDays.get(bucket.series);
+        if (held) held.add(bucket.day); else storedDays.set(bucket.series, new Set([bucket.day]));
+      }
     } catch { /* the transaction below reads under the lease */ }
   }
   try {
     rows().write(filePath, (read) => {
-      const working = new Map<string, LimitSample[]>();
-      const records: DocumentRow[] = [];
+      const changed = new Map<string, LimitSample[]>();
+      const deleteKeys = new Set<string>();
+      const day = (series: string, dayNumber: number) => changed.get(bucketKey(series, dayNumber)) ?? samplesOf(read(bucketKey(series, dayNumber)));
+      const touched = new Set<string>();
       for (const { key, sample } of candidates) {
-        const rowKey = `${SERIES_PREFIX}${key}`;
-        const arr = working.get(rowKey) ?? samplesOf(read(rowKey));
-        const last = arr[arr.length - 1];
+        /* The last sample within the gap is in today's row or yesterday's,
+           both read under the lease. */
+        const today = dayOf(nowS);
+        const current = day(key, today);
+        const last = current.at(-1) ?? day(key, today - 1).at(-1);
         if (last && nowS - last.t < MIN_GAP_S) continue;
-        const next = retained([...arr, sample], nowS);
-        working.set(rowKey, next);
+        changed.set(bucketKey(key, today), [...current, sample]);
+        touched.add(key);
       }
-      for (const [key, value] of working) records.push({ key, value });
-      if (!records.length) return { records };
+      for (const series of touched) {
+        retentionPatch(series, nowS, storedDays.get(series) ?? new Set(), (dayNumber) => day(series, dayNumber), changed, deleteKeys);
+      }
+      const records: DocumentRow[] = [...changed].map(([key, value]) => ({ key, value }));
+      if (!touched.size) return { records: [] };
       if (sinceOf(read(META_KEY)) === null) {
         records.push({ key: META_KEY, value: { version: 1, codexAttributionVersion: 1, since: new Date(nowMs).toISOString() } });
       }
-      return { records };
+      return { records, deleteKeys: [...deleteKeys] };
     });
   } catch (err) {
     // A busy database or an unpromoted release loses this one poll's point.

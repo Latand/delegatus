@@ -120,6 +120,8 @@ const rows = (): KeyedRows<string> => keyedRows ??= new KeyedRows<string>({
   collection: HANDOFF_LINEAGE_COLLECTION,
   prefixes: [PANE_PREFIX, CHILD_PREFIX, CONVERSATION_PREFIX],
   busyMessage: "handoff lineage is busy",
+  // The legacy file was replaced without an fsync; so is this commit (keyedRows.ts).
+  durability: "process",
   decode: (_key, value) => typeof value === "string" ? value : undefined,
   importLegacy: (filePath, options) => handoffLineageDocumentStore.importLegacy(filePath, options),
 });
