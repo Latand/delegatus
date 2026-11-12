@@ -58,7 +58,7 @@ import { publishFilesRevision } from "@/lib/runtime/filesRevision";
 import { runtimeImageCapability, runtimeImageStore, type RuntimeImageUpload } from "@/lib/runtime/runtimeImageStore";
 import { assertStructuredTextEnvelope, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { composeStructuredFirstMessage } from "@/lib/runtime/structuredFirstMessage";
-import { withRuntimeAdmissionRetry, queuedPinnedSpawnTitle, reconcileStructuredSpawnReplay, resolvePinnedSpawnAdmission, spawnStructuredConversation, structuredClaudePermissionMode } from "@/lib/runtime/structuredSpawn";
+import { withRuntimeAdmissionRetry, queuedPinnedSpawnTitle, reconcileStructuredSpawnReplay, resolvePinnedSpawnAdmission, spawnStructuredConversation, structuredClaudePermissionMode, structuredHostAccessPolicy } from "@/lib/runtime/structuredSpawn";
 import { structuredSpawnGap, spawnTransport, type SpawnTransport } from "@/lib/runtime/spawnTransport";
 import { adoptPipelineAttemptFromSource, pipelineAttemptTargetForSource } from "@/lib/pipelines/engine";
 import { loadPipelines } from "@/lib/pipelines/store";
@@ -474,6 +474,9 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     ? (body.engine as AgentEngine)
     : (role.value?.config.engine ?? null);
   if (!engine) return NextResponse.json({ error: "engine must be claude, codex or copilot" }, { status: 400 });
+  const diskCleaner = role.value?.role === "cleaner" && role.value.params.mode === "disk";
+  if (diskCleaner && engine !== "codex") return refuse("disk cleaner requires the Codex read-only sandbox");
+  if (diskCleaner && body.allowSubagents === true) return refuse("disk cleaner cannot enable subagents");
   /* #1876: a role's launch onto an engine nobody is signed in to is refused in
      words, before a receipt exists, and never moved onto the other engine. */
   const readiness = role.value && (engine === "claude" || engine === "codex")
@@ -720,6 +723,10 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         : conversationWorkspacePrincipal((id: string) => registry.conversation(id as `conversation_${string}`), authenticatedCaller?.kind === "agent"
           ? authenticatedCaller.conversationId : launcher.value?.conversationId ?? pipelineSourceConversationId ?? parentConversationId));
     authorizeLaunch();
+    // Disk mode needs the OS read-only profile, including on idempotent replay.
+    if (diskCleaner && existingAttempt && structuredHostAccessPolicy(existingAttempt.launchProfile) !== true) {
+      return NextResponse.json({ error: "disk cleaner cannot reuse a writable launch" }, { status: 409 });
+    }
     const seatParent = parentRecord?.agentRole === "orchestrator"
       && parentRecord.delegationDepth === 0
       && parentProfile?.parentConversationId == null
@@ -1068,6 +1075,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       title: string | null,
     ) => {
       const specBase = freshSpecFor(engine, cwd, {
+        ...(diskCleaner ? { readOnly: true } : {}),
         ...(engine === "codex" ? { omitSkillsInstructions: sessionOrigin === "delegated" } : {}),
         model: selectedModel.model,
         effort: reasoning.effort,
