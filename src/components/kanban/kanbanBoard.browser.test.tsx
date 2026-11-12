@@ -44808,7 +44808,7 @@ describe("seat tick summary arrives before panel details", () => {
                 for (const r of range.getClientRects()) {
                   if (r.bottom <= 0 || r.top >= innerHeight || r.width === 0 || r.height === 0) continue;
                   let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
-                  for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                  for (let ancestor: HTMLElement | null = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
                     const style = getComputedStyle(ancestor), box = ancestor.getBoundingClientRect();
                     if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left); right = Math.min(right, box.right); }
                     if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom); }

@@ -423,7 +423,7 @@ test("a save on the phone carries maintenance in the footer Save, in one request
   type(mInterval()!, "2");
   expect(save()).not.toBeNull();
   const stored = record({ changed: true });
-  stored.maintenance = { ...stored.maintenance, enabled: true, intervalHours: 2, updatedAt: new Date().toISOString(), waitingOn: null, nextRunAt: new Date(Date.now() + 300_000).toISOString() };
+  stored.maintenance = { ...stored.maintenance!, enabled: true, intervalHours: 2, updatedAt: new Date().toISOString(), waitingOn: null, nextRunAt: new Date(Date.now() + 300_000).toISOString() };
   putAnswers = [{ status: 200, body: stored }];
   press(save());
   await settle(root);
@@ -451,7 +451,7 @@ test("a refused save on the phone shows the module's words beside the Save, in t
 test("N need you opens the last run's card through the board's own task-open event, from the status line", async () => {
   getAnswer = record();
   getAnswer.maintenance = {
-    ...getAnswer.maintenance, enabled: true, waitingOn: "interval", nextRunAt: new Date(Date.now() + 3_600_000).toISOString(),
+    ...getAnswer.maintenance!, enabled: true, waitingOn: "interval", nextRunAt: new Date(Date.now() + 3_600_000).toISOString(),
     lastRun: {
       runId: "run-1", taskId: "hidden-done-card", conversationId: null, state: "succeeded",
       claimedAt: ago(120), launchedAt: ago(119), endedAt: ago(105), failure: null,

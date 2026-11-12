@@ -312,7 +312,7 @@ test("both locales carry every wake reason", () => {
  */
 
 function maintenance(overrides: Partial<BoardMaintenanceAnswer> = {}): BoardMaintenanceAnswer {
-  return { ...answer().maintenance, ...overrides };
+  return { ...answer().maintenance!, ...overrides };
 }
 
 function run(overrides: Partial<BoardMaintenanceRunSummary> = {}): BoardMaintenanceRunSummary {
