@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import { attemptTempJournalPath, finishTreeTrash, mountPointsUnder, removeTreeViaTrash } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { readEnvelope } from "@/lib/recordedChecks/wire";
@@ -27,6 +28,92 @@ export type TemporaryDataPorts = {
 };
 const identity = (stat: fs.Stats) => `${stat.dev}:${stat.ino}`;
 const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+
+/** A private synchronous change queue covers the entire validation interval.
+ * Access/read events are excluded. Missing watches, overflow and watch loss
+ * refuse removal; no descriptor survives dispatch. */
+function mutationCurrent(files: readonly string[], directories: readonly string[], validate: () => boolean, deadline: number) {
+  if (process.platform !== "linux") return false;
+  const ffi = createRequire(import.meta.url)(`bun:${"ffi"}`) as typeof import("bun:ffi");
+  const library = ffi.dlopen("libc.so.6", {
+    inotify_init1: { args: ["i32"], returns: "i32" },
+    inotify_add_watch: { args: ["i32", "cstring", "u32"], returns: "i32" },
+    poll: { args: ["ptr", "u64", "i32"], returns: "i32" },
+  });
+  let fd = -1, mountFd = -1;
+  try {
+    fd = library.symbols.inotify_init1(0x800 | 0x80000); // NONBLOCK | CLOEXEC
+    if (fd < 0) return false;
+    const requested = new Map<string, Set<string> | null>();
+    for (const directory of directories) requested.set(directory, null);
+    // Observe path bindings as well as their objects. Resolve each existing
+    // component, including alias chains and the parent of an absent target.
+    const pending = [...files, ...directories], seen = new Set<string>();
+    while (pending.length) {
+      if (performance.now() >= deadline || seen.size >= MAX_PROTECTION_ENTRIES) return false;
+      const file = pending.pop()!;
+      if (seen.has(file)) continue;
+      seen.add(file);
+      const parent = path.dirname(file);
+      if (parent === file) continue;
+      if (!requested.has(parent)) requested.set(parent, new Set());
+      requested.get(parent)?.add(path.basename(file));
+      pending.push(parent);
+      const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+      if (stat?.isSymbolicLink()) pending.push(path.resolve(parent, fs.readlinkSync(file)));
+    }
+    const watched = new Map<number, Set<string> | null>();
+    const add = (file: string, names: Set<string> | null, directory: boolean) => {
+      // MODIFY, ATTRIB, MOVE, CREATE, DELETE, self changes; do not follow links.
+      const wd = library.symbols.inotify_add_watch(fd, Buffer.from(file + "\0"), 0xfc6 | 0x2000000 | 0x20000000 | (directory ? 0x1000000 : 0));
+      if (wd < 0) return false;
+      const previous = watched.get(wd);
+      watched.set(wd, previous === null || names === null ? null : new Set([...(previous ?? []), ...names]));
+      return true;
+    };
+    for (const [directory, names] of requested) {
+      if (performance.now() >= deadline) return false;
+      const stat = fs.lstatSync(directory, { throwIfNoEntry: false });
+      if (!stat) continue; // Its nearest existing parent watches the missing name.
+      if (stat.isSymbolicLink()) {
+        if (!add(fs.realpathSync(directory), names, true)) return false;
+      } else if (!stat.isDirectory() || !add(directory, names, true)) return false;
+    }
+    // Object watches also detect writes through hardlinks outside the tree.
+    for (const file of files) {
+      if (performance.now() >= deadline) return false;
+      if (fs.lstatSync(file, { throwIfNoEntry: false }) && !add(file, null, false)) return false;
+    }
+    mountFd = fs.openSync("/proc/self/mountinfo", fs.constants.O_RDONLY);
+    const poll = Buffer.alloc(8);
+    poll.writeInt32LE(mountFd); poll.writeInt16LE(2, 4); // POLLPRI
+    if (!validate()) return false;
+    const buffer = Buffer.allocUnsafe(4096);
+    while (performance.now() < deadline) {
+      let count: number;
+      try { count = fs.readSync(fd, buffer, 0, buffer.length, null); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EAGAIN") return false;
+        return library.symbols.poll(ffi.ptr(poll), BigInt(1), 0) === 0;
+      }
+      if (!count) return false;
+      for (let offset = 0; offset < count;) {
+        if (offset + 16 > count) return false;
+        const wd = buffer.readInt32LE(offset), length = buffer.readUInt32LE(offset + 12);
+        if (offset + 16 + length > count || !watched.has(wd)) return false;
+        const name = buffer.subarray(offset + 16, offset + 16 + length).toString().replace(/\0.*$/, "");
+        if (!name || watched.get(wd) === null || watched.get(wd)!.has(name)) return false;
+        offset += 16 + length;
+      }
+    }
+    return false;
+  } catch { return false; }
+  finally {
+    if (fd >= 0) fs.closeSync(fd);
+    if (mountFd >= 0) fs.closeSync(mountFd);
+    library.close();
+  }
+}
 
 /** Protection and measured bytes come from the same bounded, physical walk.
  * Every directory and file is checked again after asynchronous observations.
@@ -72,7 +159,7 @@ export function temporaryDataProtection(row: TemporaryDataCandidate, target: str
       listings.set(file, names);
     }
   }
-  return { bytes, current: () => {
+  return { bytes, files: [...entries.keys()], directories: [...parents.keys(), ...listings.keys()], current: () => {
     try {
       if (![...entries, ...parents].every(([file, before]) => signature(fs.lstatSync(file, { bigint: true })) === before)) return false;
       // Directory clocks can share a kernel granule. Compare the actual names
@@ -123,7 +210,25 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
   return withFileTransactionAsync(admission, "temporary data retention", async () => {
     const now = ports.now ?? Date.now, clock = ports.clock ?? (() => performance.now());
     const deadline = clock() + (ports.budgetMs ?? 5000), mounts = ports.mounts ?? mountPointsUnder;
-    const inventory = new RepositoryLinkInventory({ now: clock, budgetMs: Math.max(0, deadline - clock()), retained: ports.checkoutReads });
+    const retained: RetainedCheckoutReads = ports.checkoutReads ?? new Map();
+    const repositories = new Set<string>(), discoveries = new Set<string>();
+    // Keep the watch inputs local to this consumer; the shared inventory's
+    // discovery, caching and validation contracts remain authoritative.
+    const inventory = new class extends RepositoryLinkInventory {
+      override repositoryOf(cwd: string, pids: readonly (number | null)[] = []) {
+        for (let directory = cwd;;) {
+          discoveries.add(path.join(directory, ".git"));
+          const parent = path.dirname(directory);
+          if (parent === directory) break;
+          directory = parent;
+        }
+        return super.repositoryOf(cwd, pids);
+      }
+      override targets(repository: string, discovered = false) {
+        repositories.add(repository);
+        return super.targets(repository, discovered);
+      }
+    }({ now: clock, budgetMs: Math.max(0, deadline - clock()), retained, freshMs: ports.checkoutReads ? undefined : 10000 });
     const report = { checked: 0, removed: 0, removedBytes: 0, wouldRemove: 0, wouldRemoveBytes: 0, kept: {} as Record<string, number>, errors: 0 };
     for (const row of store.due(now(), 128)) {
       assertRetentionTestPath(row.directory);
@@ -193,17 +298,28 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
         let protection: ReturnType<typeof temporaryDataProtection>;
         const dispatch = (current: string) => {
           assertRetentionTestPath(current);
-          return clock() < deadline
+          const checkouts = [...repositories].flatMap(repository => {
+            const read = retained.get(repository);
+            return read ? [...read.directories.map(directory => directory.path), ...read.lexicalTargets] : [repository];
+          });
+          const files = [...protection.files, ...checkouts, ...discoveries];
+          const directories = [...protection.directories, ...[...repositories].flatMap(repository => retained.get(repository)?.directories.map(directory => directory.path) ?? [])];
+          let admitted = false;
+          try { admitted = mutationCurrent(files, directories, () => clock() < deadline
             && store.get(row.directory)?.identity === row.identity
+            && mounts(current).length === 0
             && inventory.unchangedAll()
             && protection?.current() === true
             // Authority may change during the final filesystem snapshot reads.
             // Keep its current check adjacent to the native removal edge.
-            && due();
+            && due(), performance.now() + Math.max(0, deadline - clock()));
+          } catch { reason = "mutation-fence-unavailable"; return false; }
+          if (!admitted) reason = "fence-changed";
+          return admitted;
         };
         const validate = (current: string) => {
           assertRetentionTestPath(current);
-          return mounts(current).length === 0 && dispatch(current);
+          return dispatch(current);
         };
         const held = async (current: string) => {
           assertRetentionTestPath(current);
