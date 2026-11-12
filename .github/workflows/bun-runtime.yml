@@ -27,8 +27,8 @@ name: Bun runtime pin
 # rather than through the image's `npm install -g`.
 
 on:
-  # Only pull requests into main; a stage pull request carries the whole batch
-  # (docs/stage-branches.md). Pushes to main still run, for the self-update gate.
+  # Only pull requests into main; a batch pull request carries the whole batch
+  # (docs/batch-branches.md). Pushes to main still run, for the self-update gate.
   pull_request:
     branches: [main]
   push:
