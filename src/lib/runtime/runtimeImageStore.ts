@@ -495,6 +495,17 @@ function readWriterLockOwner(lock: string): WriterLockOwner | null {
   return readOwnerFile(path.join(lock, "owner.json"));
 }
 
+function readAcquisitionGateOwner(gate: string): WriterLockOwner | null {
+  try {
+    const stat = fs.lstatSync(gate);
+    if (stat.isDirectory() && !stat.isSymbolicLink()) return readWriterLockOwner(gate);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  return readOwnerFile(gate);
+}
+
 function writerLockOwnerIsAlive(owner: WriterLockOwner | null): boolean {
   if (owner === null) return false;
   if (!procBackend.pidAlive(owner.pid)) return false;
@@ -682,6 +693,7 @@ export class RuntimeImageStore {
       queue,
       `${String(this.now()).padStart(16, "0")}-${process.pid}-${crypto.randomUUID()}.json`,
     );
+    const gateStage = path.join(root.path, `.writer-lock-gate.${owner.token}.partial`);
     // Queue readers retire invalid tickets. Publish only complete owner JSON:
     // writeFileSync creates an empty file before writing its contents, and a
     // peer can otherwise unlink our live ticket in that interval. Keep the
@@ -691,6 +703,7 @@ export class RuntimeImageStore {
     try {
       fs.writeFileSync(partial, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
       fs.renameSync(partial, ticket);
+      fs.writeFileSync(gateStage, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
       while (!acquired) {
         this.assertRootPinned(root);
         const liveTickets: string[] = [];
@@ -705,12 +718,22 @@ export class RuntimeImageStore {
         }
         if (liveTickets[0] === ticket) {
           try {
-            fs.mkdirSync(gate, { mode: 0o700 });
-            fs.writeFileSync(path.join(gate, "owner.json"), JSON.stringify(owner), { flag: "wx", mode: 0o600 });
+            // Publish a complete owner record atomically without replacing an
+            // existing gate. mkdir(gate) followed by owner.json leaves a
+            // window where a queue head can mistake a live gate for debris.
+            fs.linkSync(gateStage, gate);
             acquired = true;
           } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-            if (!writerLockOwnerIsAlive(readWriterLockOwner(gate))) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== "EEXIST" && code !== "ENOTEMPTY" && code !== "EISDIR") throw error;
+            const gateOwner = readAcquisitionGateOwner(gate);
+            let gateAgeMs = 0;
+            try { gateAgeMs = this.now() - fs.lstatSync(gate).mtimeMs; }
+            catch (statError) {
+              if ((statError as NodeJS.ErrnoException).code !== "ENOENT") throw statError;
+            }
+            if (!writerLockOwnerIsAlive(gateOwner)
+              && (gateOwner !== null || gateAgeMs > this.writerLockStaleMs)) {
               fs.rmSync(gate, { recursive: true, force: true });
             }
           }
@@ -722,9 +745,10 @@ export class RuntimeImageStore {
       }
       return run();
     } finally {
-      if (acquired && readWriterLockOwner(gate)?.token === owner.token) {
+      if (acquired && readAcquisitionGateOwner(gate)?.token === owner.token) {
         fs.rmSync(gate, { recursive: true, force: true });
       }
+      fs.rmSync(gateStage, { recursive: true, force: true });
       fs.rmSync(partial, { force: true });
       fs.rmSync(ticket, { force: true });
     }

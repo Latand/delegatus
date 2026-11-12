@@ -41,6 +41,30 @@ if (publicationMode === "maintenance" && controls) {
       return Reflect.apply(target, receiver, args);
     },
   });
+} else if (publicationMode === "gate-owner" && controls) {
+  const writeFile = fs.writeFileSync;
+  const link = fs.linkSync;
+  let paused = false;
+  fs.writeFileSync = (file, contents, options) => {
+    const filename = String(file);
+    if (!paused && path.basename(filename) === "owner.json"
+      && path.basename(path.dirname(filename)) === ".writer-lock-gate") {
+      paused = true;
+      writeFile(path.join(controls, "gate-owner-paused"), "ready");
+      waitForRelease(path.join(controls, "gate-owner-release"));
+    }
+    return writeFile(file, contents, options);
+  };
+  fs.linkSync = (from, to) => {
+    if (!paused && path.basename(String(from)).startsWith(".writer-lock-gate.")
+      && path.basename(String(from)).endsWith(".partial")
+      && path.basename(String(to)) === ".writer-lock-gate") {
+      paused = true;
+      writeFile(path.join(controls, "gate-owner-paused"), "ready");
+      waitForRelease(path.join(controls, "gate-owner-release"));
+    }
+    return link(from, to);
+  };
 } else if (publicationMode && controls) {
   // Reproduce the actual open/write cut in writeFileSync. Hold this process
   // with its descriptor open while a peer scans the acquisition queue.

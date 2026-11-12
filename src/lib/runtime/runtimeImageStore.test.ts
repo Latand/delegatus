@@ -568,6 +568,45 @@ test.each(["empty", "partial"] as const)("concurrent runtime image writers prese
   }
 }, 20_000);
 
+test("a queued head cannot remove a live gate owner during gate publication", async () => {
+  const root = sandbox();
+  const controls = sandbox();
+  const maxBytes = 4 * 1024 * 1024 + 128;
+  const earlier = imageWriter(root, controls, "a", maxBytes, "partial");
+  const writers = [earlier];
+  fs.writeFileSync(path.join(controls, "start"), "go");
+  try {
+    await writerMilestone(path.join(controls, "publication-paused"), earlier);
+    // Ensure the held ticket name sorts ahead of the next writer's ticket.
+    await Bun.sleep(20);
+    const ownerPublisher = imageWriter(root, controls, "b", maxBytes, "gate-owner");
+    writers.push(ownerPublisher);
+    await writerMilestone(path.join(controls, "gate-owner-paused"), ownerPublisher);
+
+    fs.writeFileSync(path.join(controls, "publication-release"), "go");
+    await writerMilestone(path.join(controls, "ticket-published"), earlier);
+    const tickets = fs.readdirSync(path.join(root, ".writer-lock-gate.queue")).sort();
+    expect(tickets[0]).toContain(`-${earlier.child.pid}-`);
+
+    // The earlier ticket becomes the head while its peer is held exactly at
+    // the point where the gate owner becomes visible.
+    fs.writeFileSync(path.join(controls, "gate-owner-release"), "go");
+    const results = await Promise.all(writers.map(writer => writer.result));
+    expect(results.map(result => result.exit).sort(), JSON.stringify(results)).toEqual([0, 2]);
+    expect(results).toEqual(results.map(result => ({ ...result, stdout: "", stderr: "" })));
+    const blobs = fs.readdirSync(root).filter(name => name.endsWith(".png"));
+    expect(blobs).toHaveLength(1);
+    expect(fs.statSync(path.join(root, blobs[0]!)).size).toBeLessThanOrEqual(maxBytes);
+    expect(fs.readdirSync(path.join(root, ".writer-lock-gate.queue"))).toEqual([]);
+    expect(fs.existsSync(path.join(root, ".writer-lock-gate"))).toBe(false);
+    expect(fs.readdirSync(root).filter(name => name.startsWith(".writer-lock-gate.") && name.endsWith(".partial"))).toEqual([]);
+  } finally {
+    fs.writeFileSync(path.join(controls, "publication-release"), "go");
+    fs.writeFileSync(path.join(controls, "gate-owner-release"), "go");
+    await stopImageWriters(writers);
+  }
+}, 20_000);
+
 test("an interrupted image ticket publication permits another process and its partial is retired", async () => {
   const root = sandbox();
   const controls = sandbox();
