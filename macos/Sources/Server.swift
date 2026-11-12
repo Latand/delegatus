@@ -81,9 +81,33 @@ enum Server {
         let pid = lines.first(where: { $0.hasPrefix("p") }).map { String($0.dropFirst()) } ?? "?"
         let name = lines.first(where: { $0.hasPrefix("c") }).map { String($0.dropFirst()) } ?? "?"
         var verified = false
-        if owned, let install, Installations.valid(install), pid != "?",
-           let args = try? await run("/bin/ps", ["-ww", "-p", pid, "-o", "command="], environment: environment) {
-            verified = args.0 == 0 && args.1.contains(install.bun.path) && args.1.contains(install.cli.path)
+        if owned, let install, Installations.valid(install), let listenerPID = Int(pid) {
+            // The CLI owns a child Viewer process. Verify that listener's executable
+            // and its ancestry back to this installation before reusing it or sending a key.
+            let rows = try? await run("/bin/ps", ["-ww", "-axo", "pid=,ppid=,command="], environment: environment)
+            if let rows, rows.0 == 0 {
+                var processes: [Int: (parent: Int, command: String)] = [:]
+                for row in rows.1.split(separator: "\n") {
+                    let fields = row.split(maxSplits: 2, whereSeparator: \.isWhitespace)
+                    if fields.count == 3, let process = Int(fields[0]), let parent = Int(fields[1]) {
+                        processes[process] = (parent, String(fields[2]))
+                    }
+                }
+                let packageRoot = install.cli.deletingLastPathComponent().deletingLastPathComponent().path
+                let serverPath = packageRoot + "/dist/standalone/server.js"
+                var cursor = listenerPID
+                var visited = Set<Int>()
+                var foundViewer = false
+                var foundLauncher = false
+                while visited.insert(cursor).inserted, let process = processes[cursor] {
+                    let command = process.command
+                    if command.contains(install.bun.path), command.contains(serverPath) { foundViewer = true }
+                    if command.contains(install.bun.path), command.contains(install.cli.path) { foundLauncher = true }
+                    if cursor == 1 { break }
+                    cursor = process.parent
+                }
+                verified = foundViewer && foundLauncher
+            }
         }
         return (owned, verified, "\(name) (PID \(pid))")
     }

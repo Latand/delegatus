@@ -62,9 +62,9 @@ function launch(args, label) {
   const diagnostics = () => `app launch exit=${exitCode ?? "running"} signal=${signal ?? "none"}${spawnError ? ` spawnError=${spawnError}` : ""}\nstdout:\n${stdout || "(empty)"}\nstderr:\n${stderr || "(empty)"}`;
   return { process, pidFile, frames, diagnostics };
 }
-async function startViewer(bun, cli) {
+async function startViewer(bun, cli, extraEnvironment = {}) {
   const pidFile = join(home, `viewer-${++serial}.pid`);
-  const args = ["-n", "-u", user, "-H", "/usr/bin/env", "-i", `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "DELEGATUS_TELEMETRY=0", "/bin/sh", "-c", 'echo $$ > "$1"; shift; exec "$@"', "sh", pidFile, bun, cli, "--no-open", "--port", "8898"];
+  const args = ["-n", "-u", user, "-H", "/usr/bin/env", "-i", `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "DELEGATUS_TELEMETRY=0", ...Object.entries(extraEnvironment).map(([key, value]) => `${key}=${value}`), "/bin/sh", "-c", 'echo $$ > "$1"; shift; exec "$@"', "sh", pidFile, bun, cli, "--no-open", "--port", "8898"];
   const child = spawn("sudo", args, { stdio: "ignore" });
   child.on("error", error => { throw error; });
   commands.push({ command: redact(["sudo", ...args].join(" ")), exit: "started" });
@@ -122,6 +122,11 @@ try {
   asUser("/bin/chmod", ["600", tokenPath]);
   asUser("/bin/chmod", ["700", join(home, ".config", "delegatus")]);
   const before = asUser("/bin/ls", ["-A", home]).trim().split("\n");
+  const visualCases = [
+    ...["en", "uk"].flatMap(language => ["Light", "Dark"].flatMap(appearance => [
+      ["minimum", ["--evidence-minimum-size"]], ["intermediate", ["--evidence-intermediate-size"]], ["default", []]
+    ].map(([size, args]) => ({ language, appearance, size, args }))))
+  ];
   await check("confirm-without-install", async () => {
     const app = await register(launch(["--evidence-minimum-size", "-AppleLanguages", "(en)"], "confirm-en-light-minimum"));
     await until("confirmation", () => logs().includes("STATE needs-install"), 60_000, app.diagnostics);
@@ -129,19 +134,21 @@ try {
     assert.throws(() => asUser("/bin/test", ["-e", join(home, "Library/Application Support/Delegatus/Runtime")]));
     await end(app);
   });
-  for (const [language, appearance] of [["en", "Dark"], ["uk", "Light"], ["uk", "Dark"]]) {
-    await check(`confirmation-${language}-${appearance}`, async () => {
+  for (const item of visualCases) {
+    const { language, appearance, size, args } = item;
+    if (language === "en" && appearance === "Light" && size === "minimum") continue;
+    await check(`confirmation-${language}-${appearance}-${size}`, async () => {
       const previous = logs().length;
-      const app = await register(launch(["-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `confirm-${language}-${appearance}-default`));
+      const app = await register(launch([...args, "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `confirm-${language}-${appearance}-${size}`));
       await until("localized confirmation", () => logs().slice(previous).includes("STATE needs-install"), 60_000, app.diagnostics);
       await sleep(1200); await end(app);
     });
   }
-  await check("error-surface", async () => {
+  for (const { language, appearance, size, args } of visualCases) await check(`error-${language}-${appearance}-${size}`, async () => {
     const previous = logs().length;
-    const app = await register(launch(["--evidence-error", "-AppleLanguages", "(en)", "-AppleInterfaceStyle", "Dark"], "error-en-dark-default"));
+    const app = await register(launch([...args, "--evidence-error", "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `error-${language}-${appearance}-${size}`));
     await until("localized error screen", () => logs().slice(previous).includes("STATE failed"), 60_000, app.diagnostics);
-    await sleep(1200); await end(app);
+    await sleep(900); await end(app);
   });
   let original;
   await check("first-run-http-200", async () => {
@@ -155,40 +162,59 @@ try {
     await sleep(4000); await end(app);
     assert.equal((await http())?.status, 200, "server survives app exit");
   });
-  for (const language of ["en", "uk"]) for (const appearance of ["Light", "Dark"]) {
-    await check(`reuse-${language}-${appearance}`, async () => {
+  for (const { language, appearance, size, args } of visualCases) {
+    await check(`reuse-${language}-${appearance}-${size}`, async () => {
       const previous = logs().length;
-      const app = await register(launch(["-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `reuse-${language}-${appearance}`));
+      const app = await register(launch([...args, "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `reuse-${language}-${appearance}-${size}`));
       await until("reuse and language", () => { const tail = logs().slice(previous); return tail.includes("STATE reused") && new RegExp(`WEB language=${language}`).test(tail); });
-      assert.equal(launcherPID(), original); await sleep(4000); await end(app);
+      assert.equal(launcherPID(), original); await sleep(900); await end(app);
     });
   }
-  await check("transient-restart-recovers", async () => {
+  await check("protected-reuse-and-refusal", async () => {
+    const runtime = join(home, "Library/Application Support/Delegatus/Runtime");
+    await asUser(join(runtime, "bun/bin/bun"), [join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"), "stop", "--all"]);
+    await until("port free before protected server", async () => !(await http()));
+    asUser("/usr/bin/tee", [join(home, ".config/delegatus/phone-access")], { input: "enabled\n" });
+    const protectedPID = await startViewer(join(runtime, "bun/bin/bun"), join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"), { LLV_TOKEN: accessKey });
+    original = protectedPID;
+    await until("protected anonymous rejection", async () => (await http())?.status === 401);
     const previous = logs().length;
-    const app = await register(launch(["-AppleLanguages", "(uk)", "-AppleInterfaceStyle", "Dark"], "recovery-uk-dark"));
+    const app = await register(launch(["-AppleLanguages", "(uk)", "-AppleInterfaceStyle", "Dark"], "protected-reuse-uk-dark"));
+    await until("protected saved-key reuse", () => logs().slice(previous).includes("STATE reused") && /WEB language=uk/.test(logs().slice(previous)));
+    assert.equal(launcherPID(), original);
+    await sleep(900); await end(app);
+  });
+  for (const { language, appearance, size, args } of visualCases) await check(`recovery-${language}-${appearance}-${size}`, async () => {
+    const previous = logs().length;
+    const app = await register(launch([...args, "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `recovery-${language}-${appearance}-${size}`));
     await until("recovery app attaches", () => logs().slice(previous).includes("STATE reused"), 60_000, app.diagnostics);
     const runtime = join(home, "Library/Application Support/Delegatus/Runtime");
     asUser(join(runtime, "bun/bin/bun"), [join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"), "stop", "--all"]);
     await until("monitor reports stopped", () => logs().slice(previous).includes("STATE stopped"), 90_000, app.diagnostics);
     await startViewer(join(runtime, "bun/bin/bun"), join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"));
     await until("monitor restores the web view", async () => logs().slice(previous).includes("STATE recovered") && (await http())?.status === 200, 90_000, app.diagnostics);
-    await sleep(1200); await end(app);
+    await sleep(900); await end(app);
   });
-  await check("busy-port", async () => {
+  await check("busy-port-setup", async () => {
     const runtime = join(home, "Library/Application Support/Delegatus/Runtime");
     asUser(join(runtime, "bun/bin/bun"), [join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"), "stop", "--all"]);
     await until("port free", async () => !(await http()));
     const file = join(home, "listener.py");
-    run("sudo", ["-n", "-u", user, "tee", file], { input: 'import http.server,os\nopen(os.path.expanduser("~/listener.pid"),"w").write(str(os.getpid()))\nhttp.server.HTTPServer(("127.0.0.1",8898),http.server.SimpleHTTPRequestHandler).serve_forever()\n' });
+    const foreignAuth = join(home, "foreign-auth-received");
+    run("sudo", ["-n", "-u", user, "tee", file], { input: 'import http.server,os\nopen(os.path.expanduser("~/listener.pid"),"w").write(str(os.getpid()))\nclass Handler(http.server.BaseHTTPRequestHandler):\n def do_GET(self):\n  if self.headers.get("Authorization"): open(os.path.expanduser("~/foreign-auth-received"),"w").write("credential received")\n  self.send_response(401); self.end_headers()\n def log_message(self,*args): pass\nhttp.server.HTTPServer(("127.0.0.1",8898),Handler).serve_forever()\n' });
     const listener = spawn("sudo", ["-n", "-u", user, "-H", "/usr/bin/env", `HOME=${home}`, "/usr/bin/python3", file], { stdio: "ignore" });
     listener.on("error", () => {});
     await until("foreign listener", async () => !!(await http()));
     const pid = Number(sudo(["cat", join(home, "listener.pid")]).trim()); owned.add(pid);
-    const previous = logs().length;
-    const app = await register(launch(["-AppleLanguages", "(uk)", "-AppleInterfaceStyle", "Dark"], "busy-uk-dark"));
-    await until("busy screen", () => logs().slice(previous).includes("STATE port-busy") && logs().slice(previous).includes(String(pid)));
-    assert.throws(launcherPID); sudo(["kill", "-0", String(pid)]);
-    await sleep(2000); await end(app); sudo(["kill", "-TERM", String(pid)]); owned.delete(pid);
+    for (const { language, appearance, size, args } of visualCases) {
+      const previous = logs().length;
+      const app = await register(launch([...args, "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `busy-${language}-${appearance}-${size}`));
+      await until("busy screen", () => logs().slice(previous).includes("STATE port-busy") && logs().slice(previous).includes(String(pid)));
+      assert.throws(launcherPID); sudo(["kill", "-0", String(pid)]);
+      await sleep(900); await end(app);
+    }
+    assert.throws(() => asUser("/bin/test", ["-e", foreignAuth]), "foreign 401 listener never receives the saved key");
+    sudo(["kill", "-TERM", String(pid)]); owned.delete(pid);
   });
 } catch (error) { exit = 1; console.error(redact(error.message)); }
 finally {
@@ -203,8 +229,17 @@ finally {
     try { sudo(["sysadminctl", "-deleteUser", user]); } catch { exit = 1; }
   }
   if (mount) { try { run("hdiutil", ["detach", mount]); } catch { exit = 1; } }
-  const frames = existsSync(join(report, "frames")) ? readdirSync(join(report, "frames"), { recursive: true }).filter(name => name.endsWith(".png")).length : 0;
-  if (exit === 0 && frames < 7) { checks.push({ name: "frames", exit: 1, error: "Missing rendered evidence" }); exit = 1; }
+  const frameNames = existsSync(join(report, "frames")) ? readdirSync(join(report, "frames"), { recursive: true }).filter(name => String(name).endsWith(".png")).map(String) : [];
+  const frames = frameNames.length;
+  const expectedEvidence = visualCases.flatMap(({ language, appearance, size }) => [
+    `confirm-${language}-${appearance}-${size}`,
+    `error-${language}-${appearance}-${size}`,
+    `reuse-${language}-${appearance}-${size}`,
+    `recovery-${language}-${appearance}-${size}`,
+    `busy-${language}-${appearance}-${size}`,
+  ]);
+  const missingEvidence = expectedEvidence.filter(label => !frameNames.some(name => name.includes(label)));
+  if (exit === 0 && missingEvidence.length) { checks.push({ name: "rendered-matrix", exit: 1, error: `Missing screenshots: ${missingEvidence.join(", ")}` }); exit = 1; }
   writeFileSync(join(report, "report.json"), redact(JSON.stringify({ exit, passed: checks.filter(c => c.exit === 0).length, failed: checks.filter(c => c.exit !== 0).length, frames, checks, commands }, null, 2)));
   console.log(`macOS smoke: exit=${exit}, passed=${checks.filter(c => c.exit === 0).length}, failed=${checks.filter(c => c.exit !== 0).length}, frames=${frames}`);
 }

@@ -1,6 +1,6 @@
 // Exercises the shipped installer with real macOS tools and the pinned Bun zip.
 import { spawn, spawnSync, execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, utimesSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
@@ -36,6 +36,12 @@ try {
   assert.equal(refusal.status, 1); assert(refusal.stderr.includes("An installation is already in progress"));
   assert(existsSync(join(locked.runtime, ".install-lock")), "another install owns the lock");
   checks.push({ name: "lock-contention", expectedExit: 1, exit: refusal.status });
+  const abandoned = fixture("abandoned-lock-recovery", manifest => { manifest.bun[process.arch === "arm64" ? "arm64" : "x86_64"].sha256 = "0".repeat(64); });
+  mkdirSync(join(abandoned.runtime, ".install-lock"), { recursive: true });
+  const stale = new Date(Date.now() - 180_000);
+  utimesSync(join(abandoned.runtime, ".install-lock"), stale, stale);
+  run(abandoned, "Bun checksum mismatch");
+  checks.push({ name: "abandoned-lock-recovered", expectedExit: 1, exit: 1 });
   const cancel = fixture("cancel", () => {});
   // A previous package stays byte-for-byte intact across cancellation.
   mkdirSync(join(cancel.runtime, "packages"), { recursive: true });

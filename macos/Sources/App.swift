@@ -45,7 +45,8 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
             NSApp.appearance = NSAppearance(named: CommandLine.arguments.contains("Dark") ? .darkAqua : .aqua)
         }
         let initialSize = CommandLine.arguments.contains("--evidence-minimum-size") ? NSSize(width: 680, height: 500) : NSSize(width: 1100, height: 780)
-        window = NSWindow(contentRect: NSRect(origin: .zero, size: initialSize), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        let windowSize = CommandLine.arguments.contains("--evidence-intermediate-size") ? NSSize(width: 890, height: 640) : initialSize
+        window = NSWindow(contentRect: NSRect(origin: .zero, size: windowSize), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Delegatus"; window.minSize = NSSize(width: 680, height: 500); window.center()
         window.isReleasedWhenClosed = false
         web = Browser(evidence: evidence, window: window)
@@ -139,7 +140,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
             } catch { failed(error) }
         }
     }
-    func portBusy(_ listener: (owned: Bool, description: String)) {
+    func portBusy(_ listener: (owned: Bool, verified: Bool, description: String)) {
         show("port-busy", message: listener.owned ? String(format: text("port-owner"), listener.description) : text("port-other-user"), actions: [("retry", #selector(retry)), ("logs", #selector(logs))])
     }
     func start(_ install: Installation, token: Int) async throws {
@@ -174,6 +175,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         if let key { url.queryItems = [URLQueryItem(name: "k", value: key)] }
         pageURL = url.url!
         web.view.load(URLRequest(url: pageURL))
+        evidence.capture(window, name: "ready")
         monitor = Task {
             var failures = 0
             while !Task.isCancelled {
