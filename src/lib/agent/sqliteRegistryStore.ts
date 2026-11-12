@@ -549,7 +549,7 @@ export function hotRegistryRows<C extends RowCollection>(file: RegistryFile, col
   const rows = file[collection] as Record<string, RegistryFile[C][string]>;
   const cold = coldKeyReaders.get(file)?.(collection);
   if (!cold?.size) return Object.entries(rows);
-  return Object.keys(rows).flatMap((key) => cold.has(key) ? [] : [[key, rows[key]!] as [string, RegistryFile[C][string]]]);
+  return (mergedKeysOf(rows) ?? Object.keys(rows)).flatMap((key) => cold.has(key) ? [] : [[key, rows[key]!] as [string, RegistryFile[C][string]]]);
 }
 
 /**
@@ -995,23 +995,60 @@ function mergedWriterRows(
 }
 
 /** The key list of one merged collection and the frozen object that carries
-    it. Views with the same keys in the same order share one, and a new list
-    takes over the accessor functions of the keys it kept. */
-type MergedKeyShape = { keys: readonly string[]; target: Record<string, unknown>; getters: Map<string, () => unknown> };
+    it. Views with the same keys in the same order share one, whichever store
+    built them. The object gets its accessors, one per key, the first time a
+    caller asks for keys or descriptors; a keyed read never needs them. A new
+    list takes over the accessor functions of an earlier complete list. */
+type MergedKeyShape = {
+  keys: readonly string[];
+  target: Record<string, unknown>;
+  /** Set once every key has its accessor and the object is closed. */
+  getters: Map<string, () => unknown> | null;
+  /** Until then, the accessor functions of an earlier complete list. */
+  inherited: ReadonlyMap<string, () => unknown> | null;
+};
+/** Returned by an archived-row read for a key the collection does not archive. */
+const NOT_ARCHIVED: unique symbol = Symbol("not archived");
+const NO_ARCHIVED_IDS: ReadonlyMap<string, number> = new Map();
+/** The archived rows of one merged collection, with no function and no
+    descriptor per row: each key's immutable version, the grant lists the
+    decision pinned on versions that claim more than the baseline, and for
+    operation owners those synthesized from archived deliveries (operation id
+    to delivery id). `read` answers {@link NOT_ARCHIVED} for any other key. */
+type ArchivedRows = {
+  readonly ids: ReadonlyMap<string, number>;
+  readonly synthetic: ReadonlyMap<string, string> | null;
+  readonly read: (key: string, view: object) => unknown;
+};
 /** What the shared accessors of a merged collection read for one view. */
-type MergedRows = { archived: ReadonlyMap<string, PropertyDescriptor>; rows: Record<string, unknown> };
+type MergedRows = { archived: ArchivedRows; rows: Record<string, unknown>; keys: readonly string[] };
 const mergedRows = new WeakMap<object, MergedRows>();
 /** The deliveries and store stamp an operation owner of one view reads against. */
 type OwnerView = { deliveries: { read: () => RegistryFile["heldDeliveries"] }; stamp: string };
 const ownerViews = new WeakMap<object, OwnerView>();
-type MergedArchiveReader = (() => Record<string, unknown>) & { primeSteps: () => Generator<void>; shape: () => MergedKeyShape | undefined };
+type MergedArchiveReader = (() => Record<string, unknown>) & { primeSteps: () => Generator<void> };
 
 function readMergedRow(view: object, key: string): unknown {
   const state = mergedRows.get(view);
   if (!state) throw new TypeError("registry row accessor read outside its collection");
-  const descriptor = state.archived.get(key);
-  if (descriptor) return descriptor.get ? descriptor.get.call(view) : descriptor.value;
-  return state.rows[key];
+  const archived = state.archived.read(key, view);
+  return archived === NOT_ARCHIVED ? state.rows[key] : archived;
+}
+
+function archivedHas(archived: ArchivedRows, key: string): boolean {
+  return archived.ids.has(key) || archived.synthetic?.has(key) === true;
+}
+
+/** The archived keys in archive order, then the synthesized owners. */
+function* archivedKeys(archived: ArchivedRows): Generator<string> {
+  yield* archived.ids.keys();
+  if (archived.synthetic) for (const key of archived.synthetic.keys()) if (!archived.ids.has(key)) yield key;
+}
+
+/** The keys of a merged collection in its order, read without giving the
+    collection its accessors; undefined for any other object. */
+function mergedKeysOf(collection: object): readonly string[] | undefined {
+  return mergedRows.get(collection)?.keys;
 }
 
 function ownerViewOf(collection: object): OwnerView {
@@ -1160,17 +1197,20 @@ export class SqliteAgentRegistryStore {
     /** Operation owners synthesized from archived deliveries that no stored owner names. */
     syntheticOwners: Map<string, string>;
     /** `built` yields the merged collection, making it on first use when only
-        its hot rows changed; `cold` is the accessors of its archived rows,
+        its hot rows changed; `cold` is the reader of its archived rows,
         carried from build to build while its versions and decisions stand. */
     collections: Map<RowCollection, {
       hot: Map<string, unknown>; deliveries?: Map<string, unknown>; synthetic: string;
-      built: () => Record<string, unknown>; cold?: Map<string, PropertyDescriptor>;
+      built: () => Record<string, unknown>; cold?: ArchivedRows;
       /** The stored key order the collection was built with. */
       order?: readonly string[];
-      /** The key list the merged collection was made with, for the next build to share. */
-      shape?: MergedKeyShape;
     }>;
   } | null = null;
+  /** The key list each merged collection was last made with, for the next
+      build to share. It holds no view and no database state, so the writer
+      and every prepared reader share one: a new reader's first view, and the
+      writer's after a preparation, take over the accessors already made. */
+  private mergedShapes = new Map<RowCollection, MergedKeyShape>();
   /** Counts forgotten cold grant decisions; a change rebuilds the grant-bearing collections. */
   private coldGrantForgets = 0;
   /** Per projector, its result for each current archived version. */
@@ -1776,7 +1816,7 @@ export class SqliteAgentRegistryStore {
       for (const collection of ROW_COLLECTIONS) {
         const rows = view[collection] as Record<string, unknown>;
         const cold = this.coldViewCache?.coldKeys.get(collection);
-        const hotKeys = Object.keys(rows).filter(key => !cold?.has(key));
+        const hotKeys = (mergedKeysOf(rows) ?? Object.keys(rows)).filter(key => !cold?.has(key));
         rowCount += hotKeys.length;
         collections.set(collection, { rows, hotKeys });
       }
@@ -2009,6 +2049,7 @@ export class SqliteAgentRegistryStore {
       // archive versions share one budget across those generations; each view
       // still pins its own grant decision and database identity.
       reader.coldStable = this.coldStable;
+      reader.mergedShapes = this.mergedShapes;
       // Reuse the bounded frozen-row cache across preparations. Stored values,
       // normalized receipt defaults and decided grants determine equality.
       const priorReader = this.preparedReader;
@@ -3143,72 +3184,87 @@ export class SqliteAgentRegistryStore {
     return function (this: object) { return readMergedRow(this,key); };
   }
 
+  /** Give every key of a key list its accessor and close the object. The
+      functions of the earlier list are taken over, so a list that differs by a
+      few keys makes a few functions. */
+  private completeMergedShape(shape: MergedKeyShape): Record<string, unknown> {
+    if (shape.getters) return shape.target;
+    const getters = new Map<string, () => unknown>();
+    for (const key of shape.keys) {
+      const get = shape.inherited?.get(key) ?? this.mergedRowGetter(key);
+      getters.set(key,get);
+      Object.defineProperty(shape.target,key,{ enumerable: true,configurable: false,get });
+    }
+    Object.preventExtensions(shape.target);
+    shape.getters = getters;
+    shape.inherited = null;
+    return shape.target;
+  }
+
   /** A view's merged collection costs one proxy when its keys are the ones
-      `previous` was made with. Making an accessor, a function and a scope per
-      row for every refresh filled the serving heap with millions of them. */
+      the last build of that collection was made with, by this store or by
+      another reader of the same registry. A new key list costs the list
+      itself; its object gets an accessor per key only when a caller first
+      asks for keys or descriptors. Making an accessor, a function and a scope
+      per row for every refresh filled the serving heap with millions of them. */
   private mergedArchiveReader(
-    archived: ReadonlyMap<string, PropertyDescriptor>, order: readonly string[], rows: Record<string, unknown>,
-    previous?: MergedKeyShape, owners?: OwnerView,
+    collection: RowCollection, archived: ArchivedRows, order: readonly string[], rows: Record<string, unknown>,
+    owners?: OwnerView,
   ): MergedArchiveReader {
     let merged: Record<string, unknown> | undefined;
-    let shape: MergedKeyShape | undefined;
     const reader = (() => {
       if (!merged) finishSteps(reader.primeSteps());
       return merged!;
     }) as MergedArchiveReader;
-    reader.shape = () => shape;
-    const mergedRowGetter = (key: string) => this.mergedRowGetter(key);
+    const shapes = this.mergedShapes;
+    const completeShape = (shape: MergedKeyShape) => this.completeMergedShape(shape);
     reader.primeSteps = function* (): Generator<void> {
       if (merged) return;
       const keys: string[] = [];
       for (const key of order) {
-        if (archived.has(key) || Object.hasOwn(rows,key)) keys.push(key);
+        if (archivedHas(archived,key) || Object.hasOwn(rows,key)) keys.push(key);
         yield;
       }
-      let same = previous?.keys.length === keys.length;
+      let made = shapes.get(collection);
+      let same = made?.keys.length === keys.length;
       for (let index = 0; same && index < keys.length; index++) {
-        if (previous!.keys[index] !== keys[index]) same = false;
+        if (made!.keys[index] !== keys[index]) same = false;
         if (index % 64 === 63) yield;
       }
-      let made = previous;
       if (!same || !made) {
-        const target = {} as Record<string, unknown>;
-        const getters = new Map<string, () => unknown>();
-        for (const key of keys) {
-          const get = previous?.getters.get(key) ?? mergedRowGetter(key);
-          getters.set(key,get);
-          Object.defineProperty(target,key,{ enumerable: true,configurable: false,get });
-          yield;
-        }
-        Object.preventExtensions(target);
-        made = { keys,target,getters };
+        /* Only the functions of a complete list are carried: an earlier list
+           that never got its accessors passes on the ones it took over, so no
+           list keeps the list before it. */
+        made = { keys,target: {},getters: null,inherited: made ? made.getters ?? made.inherited : null };
+        shapes.set(collection,made);
       }
-      const { target } = made;
-      const held = made.keys as string[];
+      const shape = made;
+      const held = shape.keys as string[];
+      const complete = () => completeShape(shape);
       /* A keyed read must stay keyed even when the collection has thousands
          of archived rows. Enumerate only when the caller explicitly requests
-         keys or descriptors. */
-      const view = new Proxy(target, {
+         keys or descriptors; until then the target has no own property, which
+         the get and has invariants allow while it stays extensible. */
+      const view: Record<string, unknown> = new Proxy(shape.target, {
         get: (target, property, receiver) => {
           if (typeof property !== "string") return Reflect.get(target,property,receiver);
-          const descriptor = archived.get(property);
-          if (descriptor) return descriptor.get ? descriptor.get.call(view) : descriptor.value;
+          const archivedRow = archived.read(property,view);
+          if (archivedRow !== NOT_ARCHIVED) return archivedRow;
           return Object.hasOwn(rows,property) ? rows[property] : Reflect.get(target,property,receiver);
         },
-        has: (target, property) => (typeof property === "string" && (archived.has(property) || Object.hasOwn(rows,property))) || Reflect.has(target,property),
-        ownKeys: () => held,
+        has: (target, property) => (typeof property === "string" && (archivedHas(archived,property) || Object.hasOwn(rows,property))) || Reflect.has(target,property),
+        ownKeys: () => { complete(); return held; },
         getOwnPropertyDescriptor: (_target, property) => typeof property === "string"
-          ? Reflect.getOwnPropertyDescriptor(target,property) : undefined,
+          ? Reflect.getOwnPropertyDescriptor(complete(),property) : undefined,
+        isExtensible: () => Object.isExtensible(complete()),
+        preventExtensions: () => !Object.isExtensible(complete()),
         set: () => false,
         defineProperty: () => false,
         deleteProperty: () => false,
       });
-      mergedRows.set(view,{ archived,rows });
+      mergedRows.set(view,{ archived,rows,keys: held });
       if (owners) ownerViews.set(view,owners);
-      shape = made;
       merged = view;
-      // This view must not keep the key list of the build before it.
-      previous = undefined;
     };
     return reader;
   }
@@ -3231,119 +3287,121 @@ export class SqliteAgentRegistryStore {
     return read.identity;
   }
 
-  /** Archive accessors survive many refreshes. Capture only the immutable
-      version and its grant lists; retaining a whole snapshot here links the
-      next view to every older view whose accessors it reuses. Operation owners
-      normalize against the deliveries of the view they are read through, so
-      their accessors too are made once for each archived version. */
-  private archivedRowReader(
-    collection: RowCollection, key: string, id: number, identity: string | null,
-    builtStamp: string, pinnedGrants: (string[] | undefined)[] | undefined,
-  ): (this: object) => unknown {
-    const read = this.archivedRowRead(collection, key, id, identity, builtStamp, pinnedGrants);
-    return collection === "deliveryOperationOwners" ? this.ownerRowReader(read) : read as () => unknown;
-  }
-
-  /** The reader of an operation owner takes the view it is called through. */
-  private ownerRowReader(read: (view: OwnerView) => unknown): (this: object) => unknown {
-    return function (this: object) { return read(ownerViewOf(this)); };
-  }
-
-  /* The reader is returned as it is made: a local binding that a second
-     closure captured cost one more scope for every archived row. */
-  private archivedRowRead(
-    collection: RowCollection, key: string, id: number, identity: string | null,
-    builtStamp: string, pinnedGrants: (string[] | undefined)[] | undefined,
-  ): (view?: OwnerView) => unknown {
-    return (view?: OwnerView) => {
-      const stamp = view?.stamp ?? builtStamp;
-      const deliveries = view?.deliveries;
-      // The immutable version id pins payload truth for an already-held view.
-      if (!this.snapshotReadDatabase && this.fileIdentityThisTurn() !== identity) {
-        throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
-      }
-      /* An operation owner normalizes against its delivery, which commits
-         can change; every other archived row reads the same until its
-         pinned grant decision is replaced. */
-      const stable = collection !== "deliveryOperationOwners";
-      if (stable) {
-        const kept = this.coldStable.rows.get(id);
-        if (kept && kept.identity === identity && (kept.pinned === pinnedGrants
-          || kept.pinned?.length === pinnedGrants?.length && kept.pinned?.every((list, index) => {
-            const other = pinnedGrants![index];
-            return list === other || list?.length === other?.length && list?.every((server, at) => server === other![at]);
-          }))) {
-          this.coldStable.rows.delete(id); this.coldStable.rows.set(id,kept);
-          return kept.row;
-        }
-      }
-      const cached = this.coldReaderRows.get(id);
-      if (cached?.stamp === stamp) {
-        this.coldReaderRows.delete(id); this.coldReaderRows.set(id,cached);
-        return cached.row;
-      }
-      /* The identity above may be the answer kept for this synchronous run.
-         The connection makes its own check on every statement and moves to a
-         file that took the name since; the row it then returns, or fails to
-         find, belongs to that other database. */
-      const reopens = this.databaseReopens;
-      const raw = (this.snapshotReadDatabase ?? this.db)
-        .query<{ value_json: string }, [number]>("SELECT value_json FROM registry_archive WHERE id=?").get(id);
-      if (!this.snapshotReadDatabase && reopens !== this.databaseReopens) {
-        throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
-      }
-      if (!raw) throw new Error("registry archive version is missing");
-      this.onRowPayloadRead?.(collection,1);
-      this.onRowPayloadParse?.(collection,1);
-      const value = parseSqliteJson(raw.value_json, this.db) as { deliveryId?: string };
-      const delivery = collection === "deliveryOperationOwners" && value.deliveryId ? deliveries!.read()[value.deliveryId] : undefined;
-      const normalized = this.normalizePartial({ version: 2,entries: {},receipts: {},[collection]: { [key]: value },
-        ...(delivery ? { heldDeliveries: { [delivery.id]: delivery } } : {}) });
-      let row = (normalized[collection] as Record<string, unknown>)[key];
-      if (row === undefined && collection === "deliveryOperationOwners" && deliveries) {
-        // The complete loader also synthesizes an owner from its delivery
-        // when an archived legacy owner is malformed. Keep that behavior for
-        // a lazy archived read, using the delivery set pinned by this view.
-        const matching = Object.values(deliveries.read()).find(candidate => candidate.command.operationId === key);
-        if (matching) row = this.normalizePartial({ version: 2,entries: {},receipts: {},
-          heldDeliveries: { [matching.id]: matching },
-        }).deliveryOperationOwners[key];
-      }
-      if (pinnedGrants) {
-        const candidate = row as GrantProfileRow;
-        const profiles = collection === "conversations" ? (candidate.generations ?? []).map(generation => generation.launchProfile) : [candidate.launchProfile];
-        for (const [index,profile] of profiles.entries()) {
-          const list = pinnedGrants[index];
-          if (profile && list) profile.mcpServers = [...list];
-        }
-      }
-      row = deepFreeze(row);
-      if (stable) {
-        const previous = this.coldStable.rows.get(id);
-        if (previous) { this.coldStable.bytes -= previous.bytes; this.coldStable.rows.delete(id); }
-        this.coldStable.rows.set(id,{ identity,pinned: pinnedGrants,row,bytes: raw.value_json.length });
-        this.coldStable.bytes += raw.value_json.length;
-        while (this.coldStable.bytes > COLD_STABLE_ROW_BYTES && this.coldStable.rows.size > 1) {
-          const [oldest,evicted] = this.coldStable.rows.entries().next().value!;
-          this.coldStable.rows.delete(oldest);
-          this.coldStable.bytes -= evicted.bytes;
-        }
-        return row;
-      }
-      this.coldReaderRows.delete(id);
-      this.coldReaderRows.set(id,{ stamp,row });
-      while (this.coldReaderRows.size > 128) this.coldReaderRows.delete(this.coldReaderRows.keys().next().value!);
-      return row;
+  /** The reader of one collection's archived rows survives many refreshes.
+      It captures only the immutable versions, the pinned grant lists and the
+      owners synthesized from archived deliveries; retaining a whole snapshot
+      here links the next view to every older view that shares it. Operation
+      owners normalize against the deliveries of the view they are read
+      through. One reader serves every row: a function, a scope and a
+      descriptor per archived row, made again for every collection an archive
+      pass touched and for every prepared reader, was most of the serving heap. */
+  private archivedRows(
+    collection: RowCollection, ids: ReadonlyMap<string, number>, pinned: ReadonlyMap<number, (string[] | undefined)[]>,
+    synthetic: ReadonlyMap<string, string> | null, identity: string | null, builtStamp: string,
+  ): ArchivedRows {
+    const owners = collection === "deliveryOperationOwners";
+    return {
+      ids,
+      synthetic,
+      read: (key, view) => {
+        const deliveryId = synthetic?.get(key);
+        if (deliveryId !== undefined) return this.readSyntheticOwner(key, deliveryId, ownerViewOf(view));
+        const id = ids.get(key);
+        if (id === undefined) return NOT_ARCHIVED;
+        return this.readArchivedVersion(collection, key, id, identity, builtStamp, pinned.get(id), owners ? ownerViewOf(view) : undefined);
+      },
     };
   }
 
-  private syntheticOwnerReader(operationId: string, deliveryId: string): (this: object) => unknown {
-    return this.ownerRowReader((view) => {
-      const delivery = view.deliveries.read()[deliveryId];
-      return deepFreeze(this.normalizePartial({ version: 2, entries: {}, receipts: {},
-        heldDeliveries: delivery ? { [deliveryId]: delivery } : {},
-      }).deliveryOperationOwners[operationId]);
-    });
+  private readArchivedVersion(
+    collection: RowCollection, key: string, id: number, identity: string | null,
+    builtStamp: string, pinnedGrants: (string[] | undefined)[] | undefined, view?: OwnerView,
+  ): unknown {
+    const stamp = view?.stamp ?? builtStamp;
+    const deliveries = view?.deliveries;
+    // The immutable version id pins payload truth for an already-held view.
+    if (!this.snapshotReadDatabase && this.fileIdentityThisTurn() !== identity) {
+      throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
+    }
+    /* An operation owner normalizes against its delivery, which commits
+       can change; every other archived row reads the same until its
+       pinned grant decision is replaced. */
+    const stable = collection !== "deliveryOperationOwners";
+    if (stable) {
+      const kept = this.coldStable.rows.get(id);
+      if (kept && kept.identity === identity && (kept.pinned === pinnedGrants
+        || kept.pinned?.length === pinnedGrants?.length && kept.pinned?.every((list, index) => {
+          const other = pinnedGrants![index];
+          return list === other || list?.length === other?.length && list?.every((server, at) => server === other![at]);
+        }))) {
+        this.coldStable.rows.delete(id); this.coldStable.rows.set(id,kept);
+        return kept.row;
+      }
+    }
+    const cached = this.coldReaderRows.get(id);
+    if (cached?.stamp === stamp) {
+      this.coldReaderRows.delete(id); this.coldReaderRows.set(id,cached);
+      return cached.row;
+    }
+    /* The identity above may be the answer kept for this synchronous run.
+       The connection makes its own check on every statement and moves to a
+       file that took the name since; the row it then returns, or fails to
+       find, belongs to that other database. */
+    const reopens = this.databaseReopens;
+    const raw = (this.snapshotReadDatabase ?? this.db)
+      .query<{ value_json: string }, [number]>("SELECT value_json FROM registry_archive WHERE id=?").get(id);
+    if (!this.snapshotReadDatabase && reopens !== this.databaseReopens) {
+      throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
+    }
+    if (!raw) throw new Error("registry archive version is missing");
+    this.onRowPayloadRead?.(collection,1);
+    this.onRowPayloadParse?.(collection,1);
+    const value = parseSqliteJson(raw.value_json, this.db) as { deliveryId?: string };
+    const delivery = collection === "deliveryOperationOwners" && value.deliveryId ? deliveries!.read()[value.deliveryId] : undefined;
+    const normalized = this.normalizePartial({ version: 2,entries: {},receipts: {},[collection]: { [key]: value },
+      ...(delivery ? { heldDeliveries: { [delivery.id]: delivery } } : {}) });
+    let row = (normalized[collection] as Record<string, unknown>)[key];
+    if (row === undefined && collection === "deliveryOperationOwners" && deliveries) {
+      // The complete loader also synthesizes an owner from its delivery
+      // when an archived legacy owner is malformed. Keep that behavior for
+      // a lazy archived read, using the delivery set pinned by this view.
+      const matching = Object.values(deliveries.read()).find(candidate => candidate.command.operationId === key);
+      if (matching) row = this.normalizePartial({ version: 2,entries: {},receipts: {},
+        heldDeliveries: { [matching.id]: matching },
+      }).deliveryOperationOwners[key];
+    }
+    if (pinnedGrants) {
+      const candidate = row as GrantProfileRow;
+      const profiles = collection === "conversations" ? (candidate.generations ?? []).map(generation => generation.launchProfile) : [candidate.launchProfile];
+      for (const [index,profile] of profiles.entries()) {
+        const list = pinnedGrants[index];
+        if (profile && list) profile.mcpServers = [...list];
+      }
+    }
+    row = deepFreeze(row);
+    if (stable) {
+      const previous = this.coldStable.rows.get(id);
+      if (previous) { this.coldStable.bytes -= previous.bytes; this.coldStable.rows.delete(id); }
+      this.coldStable.rows.set(id,{ identity,pinned: pinnedGrants,row,bytes: raw.value_json.length });
+      this.coldStable.bytes += raw.value_json.length;
+      while (this.coldStable.bytes > COLD_STABLE_ROW_BYTES && this.coldStable.rows.size > 1) {
+        const [oldest,evicted] = this.coldStable.rows.entries().next().value!;
+        this.coldStable.rows.delete(oldest);
+        this.coldStable.bytes -= evicted.bytes;
+      }
+      return row;
+    }
+    this.coldReaderRows.delete(id);
+    this.coldReaderRows.set(id,{ stamp,row });
+    while (this.coldReaderRows.size > 128) this.coldReaderRows.delete(this.coldReaderRows.keys().next().value!);
+    return row;
+  }
+
+  private readSyntheticOwner(operationId: string, deliveryId: string, view: OwnerView): unknown {
+    const delivery = view.deliveries.read()[deliveryId];
+    return deepFreeze(this.normalizePartial({ version: 2, entries: {}, receipts: {},
+      heldDeliveries: delivery ? { [deliveryId]: delivery } : {},
+    }).deliveryOperationOwners[operationId]);
   }
 
   /** Every snapshot the shared cache holds is the frozen reader view of it.
@@ -3538,21 +3596,23 @@ export class SqliteAgentRegistryStore {
       ? (collection,key) => this.rowCache.get(collection)?.get(key)?.valueJson : undefined;
     this.readOnlyHotFile = yield* this.readerViews.viewSteps(hot,storedJson);
     const file = { ...this.readOnlyHotFile };
-    const collections = new Map<RowCollection, Map<string, PropertyDescriptor>>();
+    /* Per collection built here, the grant lists pinned on its archived
+       versions that claim more than the baseline. */
+    const collections = new Map<RowCollection, Map<number, (string[] | undefined)[]>>();
     // Bound after all collection descriptors are installed. The narrow cell
     // permits lazy delivery assembly without retaining this view's root.
     const deliveries = { read: this.constantReader(file.heldDeliveries) };
     const ownerView: OwnerView = { deliveries,stamp: snapshot.stamp };
     /* Normalization also synthesizes owners for hot legacy deliveries;
        neither these nor cold synthetic owners have a stored order yet. */
-    const mergedOrder = function* (collection: RowCollection, order: readonly string[], archived: ReadonlyMap<string, PropertyDescriptor>): Generator<void, readonly string[]> {
+    const mergedOrder = function* (collection: RowCollection, order: readonly string[], archived: ArchivedRows): Generator<void, readonly string[]> {
       if (collection !== "deliveryOperationOwners") return order;
       const ordered = new Set(order);
       for (const key in file[collection]) {
         ordered.add(key);
         yield;
       }
-      for (const key of archived.keys()) { ordered.add(key); yield; }
+      for (const key of archivedKeys(archived)) { ordered.add(key); yield; }
       return [...ordered];
     };
     /* A collection is reused only when every input to its getters is the
@@ -3640,29 +3700,27 @@ export class SqliteAgentRegistryStore {
         nextCache.collections.set(collection,{ hot,...(deliveries ? { deliveries } : {}),synthetic,built: () => ({}) });
         continue;
       }
-      /* The accessors of the archived rows and, while no key came or went,
+      /* The reader of the archived rows and, while no key came or went,
          the key list of the last build are taken over: the merged collection
          of this view is then one proxy over them (#2761). */
       const order = yield* this.orderedKeysSteps(collection);
       const rows = file[collection] as Record<string, unknown>;
-      const built = this.mergedArchiveReader(cold, yield* mergedOrder(collection,order,cold), rows,
-        prior?.collections.get(collection)?.shape, collection === "deliveryOperationOwners" ? ownerView : undefined);
+      const built = this.mergedArchiveReader(collection, cold, yield* mergedOrder(collection,order,cold), rows,
+        collection === "deliveryOperationOwners" ? ownerView : undefined);
       yield* built.primeSteps();
       Object.defineProperty(file,collection,{ enumerable: true,configurable: false,get: built });
       coldReused.add(collection);
-      nextCache.collections.set(collection,{ hot,...(deliveries ? { deliveries } : {}),synthetic,built,cold,order,shape: built.shape() });
+      nextCache.collections.set(collection,{ hot,...(deliveries ? { deliveries } : {}),synthetic,built,cold,order });
     }
     for (const collection of coldKeys.keys()) {
       if (reused.has(collection) || coldReused.has(collection)) continue;
-      for (const header of grouped.get(collection) ?? []) {
-      yield;
-      let rows = collections.get(header.collection);
-      if (!rows) collections.set(header.collection,rows = new Map());
-      const { collection,row_key: key,archive_id: id } = header;
-      // Resolve authority while this snapshot's transaction is still open.
-      // Only the effective lists escape; the row payload remains evictable.
-      let pinnedGrants: (string[] | undefined)[] | undefined;
-      if (this.coldRowProjections.get(id)?.claimsGrant) {
+      const pinned = new Map<number, (string[] | undefined)[]>();
+      collections.set(collection,pinned);
+      for (const { row_key: key,archive_id: id } of grouped.get(collection) ?? []) {
+        yield;
+        if (!this.coldRowProjections.get(id)?.claimsGrant) continue;
+        // Resolve authority while this snapshot's transaction is still open.
+        // Only the effective lists escape; the row payload remains evictable.
         let decision = this.coldGrantDecisions.get(id);
         if (!decision) {
           const raw = this.db.query<{ value_json: string }, [number]>("SELECT value_json FROM registry_archive WHERE id=?").get(id)!;
@@ -3678,34 +3736,27 @@ export class SqliteAgentRegistryStore {
             this.coldGrantTargets.set(dependency,targets);
           }
         }
-        pinnedGrants = decision.lists;
-      }
-      rows.set(key,{ enumerable: true, configurable: false,
-        get: this.archivedRowReader(collection, key, id, identity, snapshot.stamp, pinnedGrants) });
+        pinned.set(id,decision.lists);
       }
     }
-    /* Taken-over accessors already include the owners synthesized here. */
-    if (syntheticOwners.size && !reused.has("deliveryOperationOwners") && !coldReused.has("deliveryOperationOwners")) {
-      let rows = collections.get("deliveryOperationOwners");
-      if (!rows) collections.set("deliveryOperationOwners",rows = new Map());
-      for (const [operationId,deliveryId] of syntheticOwners) {
-        rows.set(operationId,{ enumerable: true,
-          get: this.syntheticOwnerReader(operationId, deliveryId) });
-        yield;
-      }
-    }
-    // Initial builds retain descriptors without constructing each collection
-    // twice. Grant decisions above are still pinned inside this transaction.
-    for (const [collection,archived] of collections) {
+    /* A taken-over reader already includes the owners synthesized here. */
+    if (syntheticOwners.size && !reused.has("deliveryOperationOwners") && !coldReused.has("deliveryOperationOwners")
+      && !collections.has("deliveryOperationOwners")) collections.set("deliveryOperationOwners",new Map());
+    // Initial builds retain one reader per collection without constructing
+    // each collection twice. Grant decisions above are still pinned inside
+    // this transaction.
+    for (const [collection,pinned] of collections) {
       const order = yield* this.orderedKeysSteps(collection);
-      nextCache.collections.get(collection)!.order = order;
-      const built = this.mergedArchiveReader(archived,yield* mergedOrder(collection,order,archived),file[collection] as Record<string, unknown>,
-        prior?.collections.get(collection)?.shape, collection === "deliveryOperationOwners" ? ownerView : undefined);
+      const archived = this.archivedRows(collection, coldIds.get(collection) ?? NO_ARCHIVED_IDS, pinned,
+        collection === "deliveryOperationOwners" && syntheticOwners.size ? syntheticOwners : null, identity, snapshot.stamp);
+      const built = this.mergedArchiveReader(collection, archived, yield* mergedOrder(collection,order,archived), file[collection] as Record<string, unknown>,
+        collection === "deliveryOperationOwners" ? ownerView : undefined);
       yield* built.primeSteps();
       Object.defineProperty(file,collection,{ enumerable: true,configurable: false,get: built });
-      nextCache.collections.get(collection)!.built = built;
-      nextCache.collections.get(collection)!.cold = archived;
-      nextCache.collections.get(collection)!.shape = built.shape();
+      const entry = nextCache.collections.get(collection)!;
+      entry.order = order;
+      entry.built = built;
+      entry.cold = archived;
     }
     const deliveryDescriptor = Object.getOwnPropertyDescriptor(file, "heldDeliveries")!;
     deliveries.read = deliveryDescriptor.get as (() => RegistryFile["heldDeliveries"]) | undefined
@@ -3953,7 +4004,7 @@ export class SqliteAgentRegistryStore {
         seen = last;
       }
       const rows = file[collection] as Record<string, Row>;
-      if (!changed) return Object.keys(rows).filter(key => holds(rows[key]!));
+      if (!changed) return (mergedKeysOf(rows) ?? Object.keys(rows)).filter(key => holds(rows[key]!));
       if (!changed.size) return current;
       const owners = current.filter(key => !changed!.has(key));
       for (const key of changed) {
@@ -3961,7 +4012,7 @@ export class SqliteAgentRegistryStore {
         if (row && holds(row)) owners.push(key);
       }
       if (owners.length > 1) {
-        order ??= new Map(Object.keys(rows).map((key,index) => [key,index]));
+        order ??= new Map((mergedKeysOf(rows) ?? Object.keys(rows)).map((key,index) => [key,index]));
         owners.sort((left,right) => (order!.get(left) ?? 0) - (order!.get(right) ?? 0));
       }
       return owners;
@@ -3980,7 +4031,9 @@ export class SqliteAgentRegistryStore {
   ): Array<[string, unknown]> {
     if (collection === "deliveryOperationOwners") throw new Error("operation owners normalize against their deliveries; project them from the rows");
     const rows = file[collection] as Record<string, unknown>;
-    const keys = Object.keys(rows);
+    /* The view's own key list: asking the collection for its keys would give
+       it an accessor per row for one pass over projected values. */
+    const keys = mergedKeysOf(rows) ?? Object.keys(rows);
     if (!cold?.size) return keys.map(key => [key, projector.project(rows[key] as never)]);
     let results = this.coldRowProjectionResults.get(projector.id);
     if (!results) this.coldRowProjectionResults.set(projector.id,results = new Map());
