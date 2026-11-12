@@ -619,20 +619,20 @@ test("slice 2: forged ids are ignored, playback is clamped, and the mint key bin
     await expect(h.service.start({ ...input, requestId: "bad-cursor", cursor: cursor as import("./contract").ResumeCursor })).rejects.toThrow("INVALID_REQUEST");
 });
 
-test("slice 2: many open requests each keep their current status inside the continuation budget", async () => {
+test("A3: 32 open requests remain distinguishable beside a 600-character cut inside the continuation budget", async () => {
   const { continuationBlock } = await import("./callResume");
-  const requests: import("./transcriptRecord").TranscriptEntry[] = Array.from({ length: 8 }, (_, index) => ({
+  const requests: import("./transcriptRecord").TranscriptEntry[] = Array.from({ length: 32 }, (_, index) => ({
     id: `request-${index}`, kind: "request", atMs: index, order: index,
     data: { callId: `call-${index}`, status: index % 2 ? "delivered" : "queued", instruction: `PENDING_${index} ` + "details ".repeat(80) },
   }));
   requests.unshift({ id: "cut", kind: "reply", atMs: 0, order: -1, data: { text: "First. Second. Third.", final: true } });
   const block = continuationBlock([{ id: "part", createdAt: 0, entries: requests }], { now: 0,
-    point: { kind: "reply", resumeOf: { part: "part", item: "cut" }, offset: 7, heard: "First. ", remaining: "Second. Third." } });
+    point: { kind: "reply", resumeOf: { part: "part", item: "cut" }, offset: 7, heard: "Heard words. ".repeat(25), remaining: "Second. Third. ".repeat(22) } });
   expect(block.length).toBeLessThanOrEqual(CONTINUATION_BUDGET);
   expect(block).toContain("Second. Third.");
-  for (let index = 0; index < 8; index++) {
-    const line = block.split("\n").find(line => line.includes(`PENDING_${index}`));
-    expect(line).toBeDefined(); expect(line).toContain(index % 2 ? "delivered" : "queued");
+  for (let index = 0; index < 32; index++) {
+    const line = block.split("\n").find(line => line.startsWith(`r${index + 1} `));
+    expect(line).toBeDefined(); expect(line).toContain(`PENDING_${index}`); expect(line).toContain(index % 2 ? "delivered" : "queued");
   }
 });
 
@@ -651,4 +651,33 @@ test("slice 2: a mint key written before cursors still recovers its answer and t
   const gate = new CompanionAdmission(state, { recipient: () => null, reports: () => [], send: async () => { throw new Error("unexpected send"); } }, h.now);
   await expect(h.build(state, gate).start(input)).rejects.toThrow("SESSION_CLOSED");
   expect(h.provider.sessions).toHaveLength(2);
+});
+
+for (const acknowledged of ["first", "second", "unrelated", "empty"] as const)
+  test(`reconnect: repeated resume handoffs reconcile the ${acknowledged} receipt`, async () => {
+    const { resumeWasSaid } = await import("./callResume");
+    const point = { part: "original-part", item: "cut-item" };
+    const handoff = (id: string): import("./transcriptRecord").TranscriptEntry => ({ id, kind: "handoff", atMs: 0, data: { resumeOf: point } });
+    const reply: import("./transcriptRecord").TranscriptEntry = { id: "answer", kind: "reply", atMs: 1,
+      data: { text: acknowledged === "empty" ? " " : "Go on.", handoffIds: [acknowledged === "empty" ? "second" : acknowledged] } };
+    // Explicit receipts can extend a reply row begun before its handoff.
+    const segments = [{ id: "attempt-one", createdAt: 0, entries: [handoff("first")] },
+      { id: "attempt-two", createdAt: 1, entries: [reply, handoff("second")] }];
+    expect(resumeWasSaid(segments, point)).toBe(acknowledged === "first" || acknowledged === "second");
+    expect(resumeWasSaid(segments, { ...point, part: "another-part" })).toBe(false);
+    expect(resumeWasSaid(segments, { ...point, item: "another-item" })).toBe(false);
+  });
+
+for (const explicit of [true, false]) test(`reconnect: ${explicit ? "explicit receipts" : "legacy row order"} bind recovery to the report and resume actually answered`, async () => {
+  const { recoverReportSpeech, resumeWasSaid } = await import("./callResume");
+  const h = harness();
+  const p = h.admission.create({ project: "receipt-recovery", locale: "en", authority: "live-model" });
+  const point = { part: "previous-part", item: "cut-item" };
+  h.admission.record(p.id, { id: "handoff-unheard", kind: "handoff", atMs: 0, data: { reportId: "unheard-report", reportPart: 0, resumeOf: point } });
+  h.admission.record(p.id, { id: "reply-other", kind: "reply", atMs: 1, data: { text: "An answer to other speech.", ...(explicit ? { handoffIds: ["handoff-other"] } : {}) } });
+  const entries = h.admission.transcriptRecord(p.id).entries;
+  const owed = recoverReportSpeech([{ reportId: "unheard-report", project: p.project, status: "completed", text: "Unheard", parts: ["Unheard"], handed: 1 }], entries);
+  expect(owed.map(row => row.reportId)).toEqual(explicit ? ["unheard-report"] : []);
+  if (explicit) expect(owed[0].handed).toBe(0);
+  expect(resumeWasSaid([{ id: p.id, createdAt: h.now(), entries }], point)).toBe(!explicit);
 });

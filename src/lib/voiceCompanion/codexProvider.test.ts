@@ -656,3 +656,76 @@ test("the operator's zone and the call's local start time reach the Codex voice 
     expect(String(wire(f.root).find(row => row.method === "thread/realtime/start")?.params?.prompt)).toContain(local);
   } finally { await service.close(session.sessionId); await f.provider.hangup("voice_thread", ""); }
 });
+
+for (const [lostStarts, multipart] of [[0, false], [0, true], [2, false]] as const) test(`reconnect: real Codex keeps unsent ${multipart ? "multipart" : "report"} speech owed after ${lostStarts} lost starts`, async () => {
+  let clock = Date.UTC(2026, 10, 11, 12);
+  const now = () => clock;
+  const f = fixture("sdp", now); fs.writeFileSync(path.join(f.root, "sdp"), "ready");
+  process.env.LLV_STATE_DIR = path.join(f.root, "state");
+  const storage = new CompanionStorage(now); storage.updateSettings({ enabled: true, backend: "codex" });
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  const sends: string[] = [];
+  const admission = new CompanionAdmission(storage, {
+    recipient: project => ({ project, conversationId: "conversation_fixture", seatEpoch: 1, engine: "codex" }),
+    send: async input => { sends.push(input.delivery.clientMessageId); return { status: "delivered", operationId: "operation_fixture" }; },
+    reports: () => reports,
+  }, now);
+  const service = new CompanionLiveSessions(storage, admission, fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), f.provider, { now, timers: false, closeTimeoutMs: 1000 });
+  let request = 0;
+  const start = (resume?: string, cursor: import("./contract").ResumeCursor = {}) => service.start({ project: "fixture", locale: "en", sdp: "v=0", requestId: `queued-speech-${++request}`, ...(resume ? { resume, cursor } : {}) });
+  const note = async (text: string, done = false) => {
+    assistant(f.root, done ? "done" : "delta", text);
+    await until(() => fs.readdirSync(f.root).every(name => !/^notify-\d+\.json$/.test(name)));
+    await until(() => admission.transcriptRecord(last!).entries.some(row => row.kind === "reply" && String(row.data.text).includes(text) && (!done || row.data.final === true)));
+    await service.drain(last!);
+  };
+  const fact = (id: string, text: string) => reports.push({ id, seq: reports.length + 1, project: "fixture", at: new Date(now()).toISOString(), class: "completed", body: text,
+    origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+  let last: string | undefined;
+  try {
+    const p = await start(); last = p.sessionId;
+    await note("Ready."); await note("Ready.", true);
+    let reached = p;
+    if (lostStarts) {
+      await admission.delegate(p.sessionId, "open-call", "open-source", "Review the release plan");
+      await service.close(p.sessionId, "transport"); fact("report-one", "FIRST_REPORT"); admission.pollReports(p.sessionId);
+      const reply = admission.transcriptRecord(p.sessionId).entries.find(row => row.kind === "reply")!;
+      for (let i = 0; i < lostStarts; i++) { const lost = await start(p.sessionId, { unplayed: [reply.id] }); last = lost.sessionId; }
+      reached = await start(p.sessionId, { unplayed: [reply.id] }); last = reached.sessionId;
+    } else { fact("report-one", multipart ? `FIRST_REPORT ${"More detail. ".repeat(60)}FINAL_REPORT` : "FIRST_REPORT"); fact("report-two", "SECOND_REPORT"); }
+    const before = spokenTexts(f.root).length;
+    await service.events(reached.sessionId, 0);
+    await until(() => spokenTexts(f.root).length === before + 1);
+    // Cross the resume hold and poll twice while the provider still voices the first item.
+    clock += 16_000; await service.events(reached.sessionId, 0); await service.events(reached.sessionId, 0);
+    expect(spokenTexts(f.root).slice(before)).toHaveLength(1);
+    const firstPart = String(spokenTexts(f.root).at(-1));
+    await note(lostStarts ? "The connection dropped. Shall I go on?" : multipart ? firstPart : "FIRST_REPORT");
+    await service.close(reached.sessionId, "transport");
+    const n = await start(reached.sessionId); last = n.sessionId;
+    const owed = admission.reportSpeech(n.sessionId).map(row => row.reportId);
+    expect(owed).toEqual(multipart ? ["report-one", "report-two"] : [lostStarts ? "report-one" : "report-two"]);
+    const remainingParts = multipart ? admission.reportSpeech(n.sessionId)[0].parts!.slice(1) : [];
+    if (multipart) expect(admission.reportSpeech(n.sessionId)[0].handed).toBe(1);
+    expect(sends).toHaveLength(lostStarts ? 1 : 0);
+    const proposals = Object.values(admission.session(n.sessionId).proposals);
+    expect(proposals).toHaveLength(lostStarts ? 1 : 0);
+    if (lostStarts) expect(proposals[0]).toMatchObject({ status: "delivered", delivery: { clientMessageId: sends[0] } });
+    const recoveredAt = spokenTexts(f.root).length;
+    await service.events(n.sessionId, 0);
+    await until(() => spokenTexts(f.root).length === recoveredAt + 1);
+    const expectedParts = multipart ? [...remainingParts, "SECOND_REPORT"] : [lostStarts ? "FIRST_REPORT" : "SECOND_REPORT"];
+    for (const [index, expected] of expectedParts.entries()) {
+      await until(() => spokenTexts(f.root).length === recoveredAt + index + 1);
+      await until(() => admission.transcriptRecord(n.sessionId).entries.filter(row => row.kind === "handoff").length === index + 1);
+      expect(spokenTexts(f.root).at(-1)).toContain(expected);
+      await note(expected); await note(expected, true);
+      await service.events(n.sessionId, 0);
+    }
+    if (multipart) expect(spokenTexts(f.root).slice(recoveredAt)).not.toContain(firstPart);
+    await service.events(n.sessionId, 0); await service.close(n.sessionId, "transport");
+    const n2 = await start(n.sessionId); last = n2.sessionId;
+    expect(admission.reportSpeech(n2.sessionId)).toEqual([]);
+    expect(sends).toHaveLength(lostStarts ? 1 : 0);
+  } finally { if (last) await service.close(last); await f.provider.hangup("voice_thread", ""); }
+});
