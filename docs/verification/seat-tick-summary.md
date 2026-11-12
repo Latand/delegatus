@@ -19,7 +19,11 @@ The desktop chip and mobile row request the summary. The desktop panel's read
 is enabled only while open; the phone sheet mounts its detailed reader when
 opened. Project and view identify separate cache entries, bounded to 64 entries
 per tab with oldest-entry eviction. A detailed receipt can update the closed
-control; a summary cannot populate the editable form. A refused closed-control
+control; a summary cannot populate the editable form. A cached panel record is
+ignored once a summary read at or after its own time shows a different
+schedule, so reopening the panel never shows or edits a record older than the
+closed control: while the panel read is pending or fails, the face keeps the
+summary's cadence and the form is absent until a panel answer arrives. A refused closed-control
 write keeps its reason in the pending and loaded desktop panel; its next write
 clears that earlier refusal. Closing a reader aborts
 its pending GET. The original full HTTP and MCP consumers retain their default

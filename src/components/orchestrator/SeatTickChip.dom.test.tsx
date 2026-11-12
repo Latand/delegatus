@@ -1467,3 +1467,86 @@ test("a refused summary write keeps its reason through a held panel read and cle
     expect(chip().textContent).toContain("1 h");
   } finally { release?.(json(getAnswer)); globalThis.fetch = served; }
 });
+
+test("reopening the panel with the read held never shows a panel record older than the closed switch reading", async () => {
+  getAnswer = configured();
+  const served = globalThis.fetch;
+  let hold = false;
+  let release!: (response: Response) => void;
+  let enter!: () => void;
+  let entered = new Promise<void>(resolve => { enter = resolve; });
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("/api/monitor/seat-tick/settings") && (!init?.method || init.method === "GET")) {
+      urls.push(url);
+      if (url.includes("view=summary")) return json({ ...getAnswer, view: "summary", maintenance: undefined, curation: undefined });
+      if (hold) { enter(); return new Promise<Response>(resolve => { release = resolve; }); }
+      return json(getAnswer);
+    }
+    return served(input, init);
+  }) as typeof fetch;
+  try {
+    // 1. Card mounts, operator opens the panel once: it loads 30 min, then closes.
+    let { root } = await mount();
+    expect(chip().textContent).toContain("30 min");
+    await open(root);
+    expect(field<HTMLInputElement>("[data-seat-tick-interval]").value).toBe("30");
+    flushSync(() => dom.document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as never));
+    await settle(root);
+    expect(popover()).toBeNull();
+    // 2. Another writer (MCP tool, another tab) moves the cadence to 10 min.
+    //    The closed chip's summary read (poll / remount) shows it.
+    const ten = configured({ settings: { ...configured().settings, wakeIntervalMinutes: 10, updatedAt: ago(1) }, effective: { ...configured().effective, wakeIntervalMinutes: 10, updatedAt: ago(1) } });
+    getAnswer = ten;
+    for (const r of [...roots]) unmount(r);
+    ({ root } = await mount());
+    const fresh = chip().textContent;
+    expect(fresh).toContain("10 min");
+    // 3. Operator opens the panel again; the live panel read is slow (0.6–6 s on the running release).
+    hold = true;
+    entered = new Promise<void>(resolve => { enter = resolve; });
+    chip().focus();
+    flushSync(() => chip().click());
+    await entered;
+    await settle(root);
+    const faceWhileOpening = chip().textContent;
+    const formWhileOpening = field<HTMLInputElement>("[data-seat-tick-interval]")?.value ?? null;
+    expect(faceWhileOpening).toContain("10 min");
+    expect(formWhileOpening === null || formWhileOpening === "10").toBe(true);
+  } finally { release?.(json(getAnswer)); globalThis.fetch = served; }
+});
+
+
+test("reopening the panel after another writer moved the cadence, a failed panel read leaves the newer reading on the face", async () => {
+  getAnswer = configured();
+  const served = globalThis.fetch;
+  let failPanel = false;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("/api/monitor/seat-tick/settings") && (!init?.method || init.method === "GET")) {
+      if (url.includes("view=summary")) return json({ ...getAnswer, view: "summary", maintenance: undefined, curation: undefined });
+      if (failPanel) return json({ error: "curation panel read timed out" }, 500);
+      return json(getAnswer);
+    }
+    return served(input, init);
+  }) as typeof fetch;
+  try {
+    let { root } = await mount();
+    await open(root);
+    expect(field<HTMLInputElement>("[data-seat-tick-interval]").value).toBe("30");
+    flushSync(() => dom.document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as never));
+    await settle(root);
+    getAnswer = configured({ settings: { ...configured().settings, wakeIntervalMinutes: 10, updatedAt: ago(1) }, effective: { ...configured().effective, wakeIntervalMinutes: 10, updatedAt: ago(1) } });
+    for (const r of [...roots]) unmount(r);
+    ({ root } = await mount());
+    expect(chip().textContent).toContain("10 min");
+    failPanel = true;
+    await open(root);
+    await settle(root);
+    const face = chip().textContent;
+    const form = field<HTMLInputElement>("[data-seat-tick-interval]")?.value ?? null;
+    expect(face).toContain("10 min");
+    expect(form === null || form === "10").toBe(true);
+  } finally { globalThis.fetch = served; }
+});

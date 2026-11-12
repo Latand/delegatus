@@ -104,6 +104,31 @@ export function resetSeatTickSettingsCacheForTests(): void {
   readings.clear();
 }
 
+function scheduleSignature(answer: SeatTickSettingsAnswer): string {
+  const { settings, effective } = answer;
+  return JSON.stringify([
+    settings.enabled, settings.wakeIntervalMinutes, settings.reason, settings.until, settings.updatedAt,
+    effective.enabled, effective.wakeIntervalMinutes, effective.reason, effective.until, effective.isDefault, effective.lapsed, effective.updatedAt,
+  ]);
+}
+
+/**
+ * The reading kept for `key`, except a panel record the closed control's
+ * summary has already overtaken: a summary read at or after the panel's own
+ * moment that shows a different schedule means the panel record is older than
+ * what the operator sees on the closed switch. Reopening the panel must never
+ * put that older record on the face or in the form, so it reads as absent until
+ * a panel read answers. The panel entry is not deleted: it stays, ignored,
+ * until the next panel answer replaces it.
+ */
+function keptReading(key: string): SeatTickSettingsAnswer | null {
+  const kept = readings.get(key) ?? null;
+  if (!kept || !key.endsWith(":panel")) return kept;
+  const summary = readings.get(`${key.slice(0, -":panel".length)}:summary`);
+  if (!summary || scheduleSignature(summary) === scheduleSignature(kept)) return kept;
+  return Date.parse(summary.at) >= Date.parse(kept.at) ? null : kept;
+}
+
 const SETTINGS_URL = "/api/monitor/seat-tick/settings";
 
 async function readError(response: Response): Promise<string | null> {
@@ -210,7 +235,7 @@ export function useSeatTickSettings(project: string, enabled: boolean, view: "pa
   const key = `${project}:${view}`;
   const [stored, setStored] = useState<{ project: string; answer: SeatTickSettingsAnswer } | null>(
     () => {
-      const cached = readings.get(key);
+      const cached = keptReading(key);
       return cached ? { project: key, answer: cached } : null;
     },
   );
@@ -226,7 +251,7 @@ export function useSeatTickSettings(project: string, enabled: boolean, view: "pa
   /* Answers carry the project they answered for, so a project switch drops the
      previous project's reading HERE, in render — never a frame of another
      project's schedule under this project's name. */
-  const current = readings.has(key) ? readings.get(key) ?? null : (stored && stored.project === key ? stored.answer : null);
+  const current = readings.has(key) ? keptReading(key) : (stored && stored.project === key ? stored.answer : null);
   const shown = pending && pending.project === key ? pending.answer : current;
 
   const settle = useCallback((target: string, answer: SeatTickSettingsAnswer) => {
@@ -274,7 +299,7 @@ export function useSeatTickSettings(project: string, enabled: boolean, view: "pa
     setError(null);
     const only = (scope: string) => Object.keys(change).length > 0 && Object.keys(change).every((key) => key === scope);
     setErrorScope(only("turbo") ? "turbo" : Object.keys(change).length > 0 && Object.keys(change).every((key) => key === "autoRotate") ? "autoRotate" : Object.keys(change).length > 0 && Object.keys(change).every((key) => key === "maintenance") ? "maintenance" : "tick");
-    const before = readings.get(key) ?? null;
+    const before = keptReading(key);
     if (before) setPending({ project: key, answer: optimistic(before, change) });
     try {
       const response = await fetch(`${SETTINGS_URL}${view === "summary" ? "?view=summary" : ""}`, {
@@ -325,7 +350,7 @@ export function useSeatTickSettings(project: string, enabled: boolean, view: "pa
     /* A save that settles has already put its read-back in `readings`, so the
        record handed over is the one that write came back with. */
     while (inFlight.current) await flight.current;
-    const record = readings.get(key);
+    const record = keptReading(key);
     const change = record ? build(record) : null;
     return change ? save(change) : null;
   }, [key, save]);
