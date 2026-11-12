@@ -16,9 +16,9 @@ name: Platform tests
 # these jobs short.
 
 on:
-  # Only pull requests into main. Work lands on `stage/*` branches first and
-  # reaches main as one stage pull request, which runs this once for the whole
-  # batch (docs/stage-branches.md).
+  # Only pull requests into main. Work lands on `batch/*` branches first and
+  # reaches main as one batch pull request, which runs this once for the whole
+  # batch (docs/batch-branches.md).
   pull_request:
     branches: [main]
   workflow_dispatch:

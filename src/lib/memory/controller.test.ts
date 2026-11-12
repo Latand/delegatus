@@ -15,7 +15,8 @@ import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { writeAsksYouSettings } from "@/lib/asks/settings";
 import { encodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
 import { localRepositoryProjectId, directoryProjectId } from "@/lib/projects/identity";
-import { readOperatorAsks } from "@/lib/asks/store";
+import { OPERATOR_ASKS_COLLECTION, readOperatorAsks } from "@/lib/asks/store";
+import { readStateCollectionRevision } from "@/lib/state/sqliteStateStore";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { offeredMemoryForTranscript } from "./offers";
 import { createFeedSession } from "@/components/feed/parse";
@@ -496,7 +497,7 @@ for (const oldKey of ["directory", "local repository", "path", "alias", "unlinke
   // Unknown deleted paths intentionally contribute no candidate. Same-folder
   // historical keys and explicitly aliased deleted paths contribute both.
   const expectedCandidates = oldKey.startsWith("unlinked") ? 1 : 2;
-  expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "operator-asks.json"))).toBe(false);
+  expect(readStateCollectionRevision(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), OPERATOR_ASKS_COLLECTION)).toBeNull();
   expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "asks-you-settings.json"))).toBe(false);
   let decisionCalls = 0, candidateCount = 0, failDecision = false;
   const endpoint = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
