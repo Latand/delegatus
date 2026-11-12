@@ -14,14 +14,15 @@ import { statePath } from "@/lib/configDir";
 import type { FileCatalogScan } from "./index";
 
 const FILES_RESPONSE_WORKER_TIMEOUT_MS = 60_000;
-/** A cold pinned scope builds the whole catalog (about 50 MB for a member). On
-    the installed Viewer the 60 s cap cut every cold build: four retirements
+/** A cold pinned scope builds the whole catalog (about 50 MB for a member).
+    On the installed Viewer the 60 s cap cut four cold builds: four retirements
     with `timed out` at that cap, and the client saw its 500 51 to 108 s after
     the request. The cap stopped the worker mid-build, threw the work away, and
-    each retry started the same build again. No cold build ran to its end under
-    that cap, so how long one takes is unmeasured; 180 s is headroom to be
-    confirmed by the installed re-acceptance. Seat source reads keep the shorter
-    cap. */
+    each retry started the same build again. Later cold builds of the same
+    scopes finished inside 60 s (the four reruns reached the transcript in 9.9
+    to 23.1 s), so how long the four cut builds would have run is unmeasured,
+    and 180 s is headroom to be confirmed by the installed re-acceptance. Seat
+    source reads keep the shorter cap. */
 export const FILES_PROJECTION_BUILD_TIMEOUT_MS = 180_000;
 const FILES_RESPONSE_WORKER_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
 const FILES_RESPONSE_WORKER_STDERR_MAX_BYTES = 4 * 1024;

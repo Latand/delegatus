@@ -4875,7 +4875,17 @@ setInterval(() => undefined, 1000);`);
   afterEach(async () => { setFilesResponseWorkerRuntimeForTests(null); await stopTestWorker(); });
 
   test("the cap timer's 503 keeps the worker's stderr reason in the journal", async () => {
-    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    /* retire() clears the pool and kills the child without awaiting its exit,
+       so the afterEach cleanup finds nothing to wait for. The retirement line
+       is logged while the worker is still in the pool: take its child there
+       and wait for its exit before the test ends. */
+    let capped: ChildProcess | undefined;
+    const warn = spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
+      if (String(args[0]).includes("retired: timed out")) {
+        capped = (globalThis as typeof globalThis & { __llvFilesResponseWorker?: { child: ChildProcess } | null })
+          .__llvFilesResponseWorker?.child;
+      }
+    });
     silentWorker();
     try {
       const response = await GET(new Request(pinnedUrl("/sessions/cold-one.jsonl")));
@@ -4887,6 +4897,9 @@ setInterval(() => undefined, 1000);`);
       expect(summary).toBeDefined();
       expect(summary).not.toContain("PROBE-DETAIL");
       expect(summary).not.toContain("cold-one");
+      expect(capped, "the retirement line named the cap-killed worker").toBeDefined();
+      await stopFixtureProcess(capped!);
+      expect(capped!.exitCode !== null || capped!.signalCode !== null, "the cap-killed worker was reaped").toBe(true);
     } finally { warn.mockRestore(); }
   });
 

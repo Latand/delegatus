@@ -518,9 +518,11 @@ ended in `500` after 51 to 108 s and the link never reached the transcript.
 The Viewer journal names the cause, `[files response worker] retired: timed
 out` with `DeadlineExceededError` and a 60 s cap. The cap stopped the worker
 mid-build and discarded the work, so each retry began the same build again. The
-four retirements each carry a 60 s cap, so no cold build was seen to finish and
-its full duration is unmeasured until the installed re-acceptance. The queue
-bounds of section 3.1 were not involved.
+journal holds four such retirements at the 60 s cap. Later cold builds of the
+same scopes finished inside it: the four reruns reached the transcript in 9.9
+to 23.1 s. How long the four cut builds would have run is unmeasured, so the
+180 s cap below is headroom to be confirmed by the installed re-acceptance. The
+queue bounds of section 3.1 were not involved.
 
 Two changes, both on the server:
 
