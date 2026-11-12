@@ -5,7 +5,7 @@ import { performanceSpans } from "./performanceSpans";
 export type CacheSize = { name: string; owner: string; count: number; bytes: number; unmeasured: number; basis: string };
 type Counter = { count: number; bytes: number; unmeasured: number; retired: boolean };
 type Registry = { rows: Map<string, CacheSize>; omitted: number; finalizer: FinalizationRegistry<{ row: CacheSize; counter: Counter }> };
-const host = globalThis as typeof globalThis & { __delegatusCacheTelemetry?: Registry };
+const host = process as typeof process & { __delegatusCacheTelemetry?: Registry };
 const registry = host.__delegatusCacheTelemetry ??= {
   rows: new Map<string, CacheSize>(), omitted: 0,
   finalizer: new FinalizationRegistry<{ row: CacheSize; counter: Counter }>(({ row, counter }) => {
