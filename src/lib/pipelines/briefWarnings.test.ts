@@ -38,6 +38,33 @@ test("an explicitly assigned successor owns required regression test edits", () 
   expect(conflicts(pipeline)).toMatchObject([{ stageId: "work", reason: "acceptance-conflict" }]);
 });
 
+test("a successor only resolves the conflict when it can edit that resource", () => {
+  const build = stage("Update the workflow. No test edits. Authority: active parallel owner; Reason: avoid shared edits; Resource: regression tests; Owner: tests stage.");
+  const tests = stage("Update regression tests after the workflow change.");
+  tests.id = "tests";
+  const pipeline = { spec: "Required tests must pass.", stages: [build, tests] };
+
+  tests.effectiveRole.access = "read-only";
+  expect(conflicts(pipeline)).toMatchObject([{ stageId: "work", reason: "acceptance-conflict" }]);
+
+  tests.effectiveRole.access = "read-write";
+  tests.access = "read-only";
+  expect(conflicts(pipeline)).toMatchObject([{ stageId: "work", reason: "acceptance-conflict" }]);
+
+  tests.access = undefined;
+  tests.prompt = "Review regression tests. Update documentation.";
+  expect(conflicts(pipeline)).toMatchObject([{ stageId: "work", reason: "acceptance-conflict" }]);
+
+  tests.prompt = "Update regression tests after the workflow change.";
+  expect(conflicts(pipeline)).toEqual([]);
+
+  tests.effectiveRole.promptScaffold = "Fixture role\n\nSafety fences:\n- No test edits.";
+  expect(conflicts(pipeline)).toMatchObject([
+    { stageId: "work", reason: "acceptance-conflict" },
+    { stageId: "tests", source: "role/controller", reason: "acceptance-conflict" },
+  ]);
+});
+
 test.each(["Do not skip tests.", "Do not weaken tests."])("retaining test integrity is not a ban: %s", fence => {
   const prompt = `${fence} Authority: project policy; Reason: verification; Resource: test coverage; Owner: builder.`;
   expect(conflicts(lane("Required tests must pass.", prompt))).toEqual([]);

@@ -15,6 +15,7 @@ const restriction = /\b(?:no|never|do not|must not|only|forbid\w*|prohibit\w*|ex
 const clauses = (text: string) => text.split(/\n+|(?<=[.!?])\s+(?=[A-Z])/).map(line => line.trim()).filter(Boolean);
 const required = /\b(?:acceptance|must|required|ensure|deliver|implement|update|change|support|complete|pass|verify)\b/i;
 const assignedAction = /\b(?:add|change|create|edit|extend|implement|modify|repair|run|test|update|verify|write)\b/i;
+const resourceEdit = /\b(?:add|change|create|edit|extend|implement|modify|repair|update|write)\b(?:\s+[\w-]+){0,3}\s+\b(?:tests?|checks?)\b/i;
 
 const resources = [
   { name: "tests", subject: /\b(?:tests?|checks?)\b/i, ban: /(?:\bno\b[^\n.]*\btests?|\b(?:do not|never)\s+(?!skip\b|weaken\b)[^\n.]*\btests?|\b(?:forbid\w*|prohibit\w*)\b[^\n.]*\btests?|\btests?\b[^\n.]*\b(?:excluded|forbidden|prohibited)\b)/i },
@@ -26,10 +27,15 @@ function explicitlyAssignedToSuccessor(block: string, current: PipelineStage | u
   const owner = block.match(/\b(?:owner|continuation)\s*:\s*([^\n;]+)/i)?.[1];
   if (!owner) return false;
   const ownerTokens = owner.split(/[^a-z0-9_-]+/i);
-  return stages.some(candidate => candidate.id !== current?.id
-    && ownerTokens.includes(candidate.id)
-    && resource.subject.test(candidate.prompt)
-    && assignedAction.test(candidate.prompt));
+  return stages.some(candidate => {
+    if (candidate.id === current?.id || !ownerTokens.includes(candidate.id)
+      || (candidate.access ?? candidate.effectiveRole.access) !== "read-write") return false;
+    const successorFences = candidate.effectiveRole.promptScaffold?.split("\n\nSafety fences:\n")[1] ?? "";
+    const successorContract = `${candidate.prompt}\n${successorFences}`;
+    if (clauses(successorContract).some(line => resource.ban.test(line))) return false;
+    return clauses(candidate.prompt).some(line => resource.subject.test(line)
+      && (resource.name === "tests" ? resourceEdit.test(line) : assignedAction.test(line)));
+  });
 }
 
 /** Bounded, recomputed from the admitted record, including frozen role access.
