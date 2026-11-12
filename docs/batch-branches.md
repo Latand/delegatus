@@ -24,9 +24,13 @@ staging deployment target, docs/staging.md.)
    or `gh pr edit <n> --base batch/<name>` for an open one. They run only the two
    privacy checks (`privacy-publication`, `privacy-tracker-audit`), which every
    public surface needs. The local pre-push gate still runs types, lint and the
-   touched tests on every push. Merge each one into the batch branch with a squash, so
-   the batch branch holds one commit per pull request. `batch/*` has no branch
-   protection.
+   touched tests on every push. Merge each one into the batch branch with a
+   squash, so the batch branch holds one commit per pull request. Make that
+   squash locally (`git merge --squash`, commit, push) under your no-reply
+   identity: GitHub's squash button records GitHub as the committer, and
+   `privacy-publication` refuses such commits when the batch reaches main. A
+   pull request whose commits reached the batch this way can be closed with a
+   comment naming the batch commit. `batch/*` has no branch protection.
 3. **Ship the batch** when it holds a batch (10 to 20 pull requests) or has to
    go out: open one pull request from `batch/<name>` into `main`. That pull
    request runs the full matrix once for the whole batch, including the
