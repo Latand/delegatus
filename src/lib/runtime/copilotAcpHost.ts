@@ -89,6 +89,7 @@ export interface CopilotSessionIdentity {
 }
 
 export interface CopilotAcpHostOptions {
+  assertCurrent?: () => void;
   cwd: string;
   /** The account home, exported to the child as `COPILOT_HOME`. */
   copilotHome: string;
@@ -453,7 +454,7 @@ export class CopilotAcpHost implements EngineHost {
         cwd: options.cwd,
         env,
         detached: true,
-      }, options.memoryCell, options.spawnProcess, options.env ?? process.env);
+      }, options.memoryCell, options.spawnProcess, options.env ?? process.env, undefined, options.assertCurrent);
     } catch (error) {
       releaseCleanup();
       throw error;

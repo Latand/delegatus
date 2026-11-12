@@ -23,6 +23,9 @@ export interface PrototypeQuestion {
   options: Array<{ label: string; recommended?: boolean }>;
   multiple?: boolean;
   other?: boolean;
+  /** False: the question has no "Already decided" row and takes no skipped answer.
+      Only a form without a task carries it (a task round is replicated). */
+  skippable?: boolean;
   /** Server-built GitHub actions; the agent publication schema rejects these. */
   links?: Array<{ label: string; href: string }>;
 }
