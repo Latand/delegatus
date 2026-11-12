@@ -53,6 +53,16 @@ compatibility raises the major version.
   went from about 20 ms to about 0.1 ms. On first start the file is imported
   and verified, then kept as `orchestrator-seats.json.imported-<release>`,
   and a directory with a README takes its place (#1870).
+- **"Asks you" state is stored in `state.sqlite`** (collection
+  `operator_asks`) instead of `operator-asks.json`: one row per ask, per
+  message already sent and per scored text, and one for the month's spend.
+  Every send and every memory-decision spend settlement used to rewrite the
+  whole 1.5 MB file; a settlement now writes one row, about 70 KB to disk
+  instead of 1.5 MB, and the board's ask overlay is answered without reading
+  anything while the store is unchanged. On first start the file is imported
+  and verified, then kept as `operator-asks.json.imported-<release>`, and a
+  directory with a README takes its place. A file that cannot be read is not
+  imported: nothing is sent until it reads again, as before (#1870).
 - **The project catalog is stored in `state.sqlite`** (collection
   `project_catalog`) instead of `project-catalog.json`: one row per
   catalogued transcript. A scan writes only the records that changed and
@@ -104,6 +114,14 @@ compatibility raises the major version.
   loses seat changes made since the upgrade. Deployed releases rolled back
   through the release fence get the file written back for them automatically,
   and the designations they make are merged at roll-forward.
+- A version older than this one finds a directory where
+  `operator-asks.json` was. Its classifier reads that as a file it cannot
+  read and sends nothing, memory decisions cannot record their spend, and the
+  board shows no asks. Upgrade again to
+  recover, or replace the directory with the `operator-asks.json.imported-*`
+  copy, which loses the asks and spend recorded since the upgrade. Deployed
+  releases rolled back through the release fence get the file written back
+  for them automatically, and what they record is merged at roll-forward.
 - A version older than this one finds no `project-catalog.json`. Its first
   scan describes every transcript again, which takes longer once, and then
   writes the file as before. Upgrading again imports that file.
