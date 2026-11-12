@@ -48,7 +48,7 @@ for (const mode of ["reset", "body-reset", "gateway", "revoked-after-reset", "ma
       }
       if (calls > 2 && mode === "revoked-after-reset") return new Response("private-response-sentinel", { status: 403 });
       return Response.json({ result: { capabilities: { tools: {} } } });
-    }) as typeof fetch);
+    }) as unknown as typeof fetch);
     guardViewerMcpStartup(transport);
     try {
       await transport.start();
