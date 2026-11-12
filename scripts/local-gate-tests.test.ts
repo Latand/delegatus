@@ -30,6 +30,7 @@ test("review evidence names the exact base and head without changing repository 
   expect(cli.stdout).toContain(`touched-tests: base commit ${f.base}`);
   expect(cli.stdout).toContain(`touched-tests: reviewed head commit ${head}`);
   expect(cli.stdout).toContain("PRE-EXISTING example.test.ts: contract > same name & Unicode Ω");
+  expect(cli.stdout).toContain("(base: FAIL; head: FAIL; non-blocking note)");
   expect(cli.stdout).toContain("0 new failures, 1 pre-existing failures");
   expect(f.git("rev-parse", "HEAD")).toBe(head);
   expect(f.git("for-each-ref")).toBe(refs);
@@ -310,6 +311,7 @@ test("real pre-push entry permits PRE-EXISTING and refuses NEW after privacy/typ
   const hook = () => { const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env, encoding: "utf8" }); return { ...result, stdout: result.stdout + result.stderr }; };
   const accepted = hook(); if (accepted.status !== 0) throw new Error(accepted.stdout + accepted.stderr); expect(accepted.status).toBe(0);
   expect(accepted.stdout).toContain("PRE-EXISTING example.test.ts: contract > same name & Unicode Ω");
+  expect(accepted.stdout).toContain("(base: FAIL; head: FAIL; non-blocking note)");
   expect(accepted.stdout).toContain("0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky");
   expect(readFileSync(calls, "utf8")).toContain("--check-commits");
   expect(readFileSync(calls, "utf8")).toContain("tsc --noEmit");
@@ -319,6 +321,25 @@ test("real pre-push entry permits PRE-EXISTING and refuses NEW after privacy/typ
   if (!refused.stdout.includes("NEW")) throw new Error(refused.stdout + refused.stderr);
   expect(refused.stdout).toContain("NEW example.test.ts: new red");
   expect(refused.stdout).toContain("1 new failures, 1 pre-existing failures");
+  // The real shell entry must keep the same verdict for a branch-only file.
+  writeFileSync(path.join(f.dir, "example.test.ts"), `// harmless\n${source(false)}`);
+  writeFileSync(path.join(f.dir, "new.test.ts"), source(false));
+  const newFile = hook(); expect(newFile.status, newFile.stdout).toBe(1);
+  expect(newFile.stdout).toContain("NEW new.test.ts: contract > same name & Unicode Ω");
+  expect(newFile.stdout).toContain("1 new file(s), judged on head alone");
+  expect(newFile.stdout).toContain("1 new failures, 1 pre-existing failures");
+  // A deterministic first-run failure recovers in the existing retry path.
+  const counter = path.join(f.dir, "env", "head-runs");
+  writeFileSync(path.join(f.dir, "new.test.ts"), `import { test, expect } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+const counter = ${JSON.stringify(counter)};
+const run = existsSync(counter) ? Number(readFileSync(counter, "utf8")) + 1 : 1;
+writeFileSync(counter, String(run));
+test("recovers", () => expect(run).toBeGreaterThan(1));`);
+  const flaky = hook(); expect(flaky.status, flaky.stdout).toBe(0);
+  expect(flaky.stdout).toContain("FLAKY new.test.ts: recovers (base 0 pass/0 fail; head 1 pass/1 fail)");
+  expect(flaky.stdout).toContain("0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
+  expect(readFileSync(counter, "utf8")).toBe("2");
 }, 60000);
 
 
