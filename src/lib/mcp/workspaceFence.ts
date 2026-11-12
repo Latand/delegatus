@@ -164,7 +164,7 @@ export function withWorkspaceMcpFence(service: McpToolService, dependencies: Vie
         for (const key of ["account", "accountId", "targetAccountId"]) if (typeof args[key] === "string" && (engine === "claude" || engine === "codex")) {
           const targetProject = typeof args.conversationId === "string" ? conversationProject(args.conversationId) : project;
           const pool = allowedAccountIdsForProject(typeof args.project === "string" ? args.project : targetProject, engine);
-          if (pool && !pool.includes(args[key] as string)) denied();
+          if (!pool || !pool.includes(args[key] as string)) denied();
         }
       };
       assert();

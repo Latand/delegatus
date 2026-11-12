@@ -378,10 +378,14 @@ export function codexAccountsForPrivacy(): readonly { id: string; label: string 
     ...loaded.registry.removals.map((item) => ({ id: item.id, label: "" }))];
 }
 
-export function listCodexAccounts(): CodexAccount[] {
+/** `only` limits the list to those ids BEFORE any account's credentials are
+ *  read, so the work and its timing do not depend on the accounts left out. */
+export function listCodexAccounts(only?: ReadonlySet<string>): CodexAccount[] {
   recoverRemovalsAtStartup();
   const loaded = readRegistry();
-  return [...(loaded.registry.legacyHidden ? [] : [defaultAccount()]), ...loaded.registry.accounts.map(asAccount)]
+  const wanted = (id: string) => !only || only.has(id);
+  return [...(loaded.registry.legacyHidden || !wanted(DEFAULT_ID) ? [] : [defaultAccount()]),
+    ...loaded.registry.accounts.filter(stored => wanted(stored.id)).map(asAccount)]
     .map(account => ({ ...account, spendCredits: !loaded.corrupt && loaded.registry.spendCredits?.includes(account.id) === true }));
 }
 

@@ -819,6 +819,45 @@ exist and are enforced. What is missing is the member's view of them.
 - Whether a provider's plan allows several people to work through one login
   is the owner's check. Provider terms were not examined here.
 
+What W1 built, and where it goes past the list above. The read is
+`GET /api/team/project-accounts?project=<key>` (`src/lib/team/projectAccounts.ts`).
+It answers 401 without a session, 409 on a solo install, 400 for a missing
+project, and 403 with the same bytes for any project the member may not act
+on, decided before any account is read. One rule governs a choice made for a
+member, and its refusal is 409 `project_account_refused` with a `reason` of
+`no_account_list` or `outside_account_list` (an outside pin set by the owner
+now carries the second reason too). It is applied to every path that answers
+a named account for a call bound to a member, not only a new launch:
+`/api/spawn` and `spawn_agent`, the agent fence for `account`, `accountId` and
+`targetAccountId`, switching a running conversation (the browser's reconfigure
+action and the migration route's `select-account`, which the text above did
+not list and which only checked that the account exists), and a member's
+lane (create, add-stage, override-stage and moving a draft). Naming the
+account a conversation already runs on stays allowed, so a waiting choice can
+be withdrawn. Three of those answers read more than a pool, so each one
+re-checks the member's reach at the step that reads it: the switch of a
+running conversation checks live access to the project after it resolves it
+(a project moved to another workspace in between is 403 `workspace_forbidden`
+with no foreign account named), and a lane records the person first editing it
+before the account rule runs. A refusal for a service tier no account offers
+names the model and the tier only, never the accounts evaluated, where the
+project has no list and the pick is automatic. So does every other refusal of
+that automatic pick (no account with capacity, none signed in): the browser,
+a member-bound agent and a lane's launch answer one sentence naming the engine
+and the project, with no account id, label, count, catalog or reset time, and
+the same words for either cause; the owner's refusal keeps all of them. A lane
+that names an account is checked against the list again at launch and after
+the selection, so removing the list between a lane's creation and its start,
+or during the selection, refuses the launch; an account Delegatus itself chose
+(a recovery or a runtime switch) is not a member's naming. The member's read of a set pool
+selects the pool's ids before any account's credentials or quota are read, so
+accounts left out cost it nothing; only the branch with no pool lists every
+account, to say whether the engine has one signed in. The composer's chip, the
+phone's sheet and the workspace page's line are the member's side of it.
+Deferred: the chip of a conversation that
+is already running, the stage and orchestrator pickers, and a control for the
+workspace's allow-list.
+
 **W2. One decision for each owner-only route a member's work touches.** Each
 row is a small change with its own threat cases; none is opened without one.
 

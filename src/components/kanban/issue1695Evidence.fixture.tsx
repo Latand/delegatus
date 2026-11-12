@@ -4188,6 +4188,9 @@ const WORKSPACES = SCENARIO?.startsWith("workspaces") ? workspacesFixture({
   refuseMembership: WORKSPACE_PARAMS.has("membership-refused"),
   refuseInvite: WORKSPACE_PARAMS.has("invite-refused"),
   failMembershipReadOnce: WORKSPACE_PARAMS.has("membership-unavailable"),
+  /* `&nopool=a,b` leaves those projects without an account list; `&poolrefused=a` refuses that project's pool read. */
+  noAccountList: (WORKSPACE_PARAMS.get("nopool") ?? "").split(",").filter(Boolean),
+  refuseAccountList: (WORKSPACE_PARAMS.get("poolrefused") ?? "").split(",").filter(Boolean),
   projects: [{ project: PROJECT, displayName: "Atlas", smt: now - 20 * MIN }, ...railCatalog.map(({ project, displayName, smt }) => ({ project, displayName, smt }))],
   placed: { client: [LEDGER, "harbor-docs"], research: [MESH], long: [RAIL_LONG] },
 }) : null;
