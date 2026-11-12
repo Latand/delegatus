@@ -119,6 +119,9 @@ export class KeyedRows<V> {
      pass probes once. */
   private readonly probes = new Map<string, Probe>();
   private tick: Map<string, Probe> | null = null;
+  /* The view answered during the current synchronous run, per database: a
+     scan's thousands of lookups cost one map read each. */
+  private tickViews: Map<string, KeyedRowsView<V>> | null = null;
   private readonly opened = new Map<string, { identity: string; collection: SqliteStateCollection<DocumentRow> }>();
 
   constructor(private readonly options: KeyedRowsOptions<V>) {}
@@ -144,7 +147,7 @@ export class KeyedRows<V> {
     }
     if (!this.tick) {
       this.tick = new Map();
-      queueMicrotask(() => { this.tick = null; });
+      queueMicrotask(() => { this.tick = null; this.tickViews = null; });
     }
     this.tick.set(database, probe);
     return probe;
@@ -252,6 +255,8 @@ export class KeyedRows<V> {
    * collection is answered from the copy this process holds.
    */
   view(database: string): KeyedRowsView<V> | null {
+    const current = this.tickViews?.get(database);
+    if (current) return current;
     return this.guard(() => {
       const probe = this.probe(database);
       if (!probe || probe.revision === null) return null;
@@ -268,7 +273,7 @@ export class KeyedRows<V> {
         this.follow(state, this.open(database, probe.identity));
       }
       const held = state;
-      return {
+      const view: KeyedRowsView<V> = {
         get revision() { return held.revision; },
         get: (key: string) => {
           const value = held.rows.get(key);
@@ -281,6 +286,9 @@ export class KeyedRows<V> {
           return held.rows as ReadonlyMap<string, V>;
         },
       };
+      // `probe` opened this run's tick; the view lasts as long as it does.
+      if (this.tick) (this.tickViews ??= new Map()).set(database, view);
+      return view;
     });
   }
 
@@ -316,6 +324,7 @@ export class KeyedRows<V> {
       });
       // This process's next read probes again and follows its own commit.
       this.tick?.delete(database);
+      this.tickViews?.delete(database);
       return changed;
     });
   }
@@ -327,6 +336,7 @@ export class KeyedRows<V> {
     this.opened.clear();
     this.probes.clear();
     this.tick = null;
+    this.tickViews = null;
     for (const key of [...indexStates().keys()]) {
       if ((JSON.parse(key) as string[])[0] === this.options.collection) indexStates().delete(key);
     }

@@ -153,13 +153,20 @@ function legacyRows(filePath: string): Map<string, string> {
   return held;
 }
 
+/* A scan asks for thousands of edges in one synchronous run: the view is
+   resolved once per run, and a write here drops it. */
+let tickView: KeyedRowsView<string> | null | undefined;
+
 function lineageView(): KeyedRowsView<string> | null {
+  if (tickView !== undefined) return tickView;
   try {
-    return rows().view(legacyDatabasePath(handoffLineagePath()));
+    tickView = rows().view(legacyDatabasePath(handoffLineagePath()));
   } catch (error) {
     console.warn("[handoff lineage] unavailable", error instanceof Error ? error.message : String(error));
-    return null;
+    tickView = null;
   }
+  queueMicrotask(() => { tickView = undefined; });
+  return tickView;
 }
 
 /** One edge: this process's unwritten one, else the stored one. A scan asks
@@ -249,6 +256,7 @@ export function persistHandoffLineage(): void {
   if (pending.size === 0) return;
   const written = new Map(pending);
   try {
+    tickView = undefined;
     rows().write(handoffLineagePath(), (read) => {
       const records: DocumentRow[] = [];
       for (const [key, parent] of written) if (read(key) !== parent) records.push({ key, value: parent });
@@ -270,7 +278,9 @@ export function persistHandoffLineage(): void {
       return { records, deleteKeys };
     });
     for (const [key, parent] of written) if (pending.get(key) === parent) pending.delete(key);
+    tickView = undefined;
   } catch (error) {
+    tickView = undefined;
     console.warn("[handoff lineage] edges kept for the next write:", error instanceof Error ? error.message : String(error));
   }
 }
@@ -295,4 +305,5 @@ export function resetHandoffLineageForTests(): void {
   rows().resetForTests();
   pending.clear();
   legacyRead = null;
+  tickView = undefined;
 }
