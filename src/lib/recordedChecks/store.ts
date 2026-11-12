@@ -10,7 +10,6 @@ import { descriptorSchema, terminalSchema, reportSchema, identitySchema, writeEn
 import { wakeRecordedChecks } from "./signal";
 import { captureProcessIdentity, processIdentityStatus, processIdentityMayRun, sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
-import { trackSqliteMemory } from "@/lib/sqliteMemoryDiagnostics";
 
 const bindingSchema = z.object({ project: z.string(), pipeline: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/), stage: z.string(), attempt: z.number().int().positive(),
   launch: z.string(), conversation: z.string(), session: z.string(), runtimeFence: z.string(),
@@ -94,13 +93,11 @@ const indexes = declaredIndexes([
 /** A keyed ledger in the existing state DB. History never enters active scans. */
 export class RecordedCheckStore {
   private db: Database;
-  private releaseMemoryTracking: (() => void) | undefined;
   constructor(readonly filename = statePath("state.sqlite"), create = true) {
     if (create) fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite) throw new Error("Recorded checks require Bun");
     this.db = new sqlite.Database(filename, create ? { create: true } : { readonly: true });
-    this.releaseMemoryTracking = trackSqliteMemory(this.db);
     try {
       this.db.exec("PRAGMA busy_timeout=0");
       if (create) {
@@ -130,7 +127,7 @@ export class RecordedCheckStore {
         indexes.install(this.db, path.dirname(filename));
         fs.chmodSync(filename, 0o600);
       }
-    } catch (error) { this.db.close(); this.releaseMemoryTracking(); this.releaseMemoryTracking = undefined; throw error; }
+    } catch (error) { this.db.close(); throw error; }
   }
   get(id: string): CheckRow | null {
     const row = this.db.query<{ value: string }, [string, string]>("SELECT value FROM recorded_checks WHERE id=? UNION ALL SELECT value FROM recorded_checks_history WHERE id=? LIMIT 1").get(id, id);
@@ -351,7 +348,7 @@ export class RecordedCheckStore {
       intent: state === "admitted" ? outcome : previous?.intent ?? null, outcome,
     }), directory, root.id);
   }
-  close() { this.db.close(); this.releaseMemoryTracking?.(); this.releaseMemoryTracking = undefined; }
+  close() { this.db.close(); }
 }
 
 type RecordedReader = { identity: string; store: RecordedCheckStore };
