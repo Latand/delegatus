@@ -101,15 +101,15 @@ function forgetAbandoned(lease: AbandonedLease): void {
 function deleteLease(lease: AbandonedLease): void {
   // If a sandbox or retired database has disappeared, do not recreate it.
   if (!fs.existsSync(lease.filename)) { finishDurableHold(lease.token, lease.collection); return; }
-  const db = connectDatabase(lease.filename);
-  try {
-    stateLockAttempt("state.lease.release", () => db.exec("BEGIN IMMEDIATE"), lease.collection);
-    injectWriteFault("release", lease.collection);
-    db.query("DELETE FROM state_leases WHERE collection = ? AND owner_token = ?").run(lease.collection, lease.token);
-    performanceSpans.sync("state.lease-release", () => db.exec("COMMIT"));
-    finishDurableHold(lease.token, lease.collection);
-  } catch (error) { rollbackQuietly(db); throw error; }
-  finally { db.close(); }
+  withStateWriter(lease.filename, (db) => withLeaseDurability(db, () => {
+    try {
+      stateLockAttempt("state.lease.release", () => db.exec("BEGIN IMMEDIATE"), lease.collection);
+      injectWriteFault("release", lease.collection);
+      db.query("DELETE FROM state_leases WHERE collection = ? AND owner_token = ?").run(lease.collection, lease.token);
+      performanceSpans.sync("state.lease-release", () => db.exec("COMMIT"));
+      finishDurableHold(lease.token, lease.collection);
+    } catch (error) { rollbackQuietly(db); throw error; }
+  }));
 }
 function scheduleAbandonedRetry(): void {
   if (!abandoned.entries.size) return;
@@ -378,12 +378,127 @@ function connectDatabase(filename: string): Database {
   catch (error) { throw classifyStateError(error, "state database connection"); }
 }
 
+/*
+ * One writer connection per database file and process (#3890).
+ *
+ * Every lease, write and lease release used to open its own connection: a
+ * keyed write opened three, and each paid the open, the PRAGMAs, a load of
+ * the whole schema on its first statement and an empty statement cache. The
+ * connection is now kept and reused. What makes a write safe is unchanged:
+ * cross-process exclusion is SQLite's write lock (`BEGIN IMMEDIATE` with
+ * `busy_timeout = 0`) and the lease row, both taken per write; the release
+ * fence is checked per write; and `openCurrentDatabase` still compares the
+ * file at the name with the one the connection opened on every statement,
+ * reopening a replaced file outside a transaction and rolling back inside one.
+ *
+ * Three rules keep a kept connection equivalent to a fresh one:
+ * - A write that starts while this process's connection is in use (a write
+ *   reached from inside another write's callback) gets a connection of its
+ *   own and closes it, as every write used to. Its `BEGIN IMMEDIATE` then
+ *   meets the outer transaction's lock exactly as before.
+ * - A connection is handed out only outside a transaction. One that is still
+ *   in a transaction when its operation returns is closed.
+ * - A connection whose operation failed for any reason other than contention
+ *   (busy, a deferred lock, a lost lease, a moved snapshot) is closed, so a
+ *   connection that met a SQLite error is never reused.
+ */
+type StateWriterSlot = { db: Database; depth: number };
+const writerHost = globalThis as typeof globalThis & { __llvStateWriterConnections?: Map<string, StateWriterSlot> };
+const stateWriters: Map<string, StateWriterSlot> = writerHost.__llvStateWriterConnections ??= new Map();
+/** One database in production; a test process touches one per sandbox. */
+const MAX_STATE_WRITERS = 4;
+let stateWriterOpenCount = 0;
+
+function contentionError(error: unknown): boolean {
+  return error instanceof FileTransactionBusyError || error instanceof StateSnapshotChangedError;
+}
+
+function closeStateWriter(key: string, slot: StateWriterSlot): void {
+  if (stateWriters.get(key) === slot) stateWriters.delete(key);
+  try { slot.db.close(); } catch { /* a moved or failed connection only drops its descriptors */ }
+}
+
+function withStateWriter<T>(filename: string, operation: (db: Database) => T): T {
+  const key = path.resolve(filename);
+  let slot = stateWriters.get(key);
+  if (slot && slot.depth > 0) {
+    const db = connectDatabase(filename);
+    stateWriterOpenCount += 1;
+    try { return operation(db); } finally { db.close(); }
+  }
+  if (slot?.db.inTransaction) { closeStateWriter(key, slot); slot = undefined; }
+  if (!slot) {
+    slot = { db: connectDatabase(filename), depth: 0 };
+    stateWriterOpenCount += 1;
+    for (const [held, candidate] of stateWriters) {
+      if (stateWriters.size < MAX_STATE_WRITERS) break;
+      if (candidate.depth === 0) closeStateWriter(held, candidate);
+    }
+  } else {
+    stateWriters.delete(key);
+  }
+  stateWriters.set(key, slot);
+  slot.depth += 1;
+  try {
+    const result = operation(slot.db);
+    if (slot.db.inTransaction) closeStateWriter(key, slot);
+    return result;
+  } catch (error) {
+    if (slot.db.inTransaction || !contentionError(error)) closeStateWriter(key, slot);
+    throw error;
+  } finally {
+    slot.depth -= 1;
+  }
+}
+
+/**
+ * A lease transaction commits without waiting for the disk (#3890).
+ *
+ * Each write commits three times: the lease row, the rows, the lease release.
+ * With `synchronous = FULL` each commit waited for its own fsync of the WAL,
+ * so a one-row write waited for the disk three times. A lease row protects
+ * nothing across a power loss: every process that held one is gone, and the
+ * next writer reclaims a lease whose owner is not alive. So the two lease
+ * commits use `NORMAL`, which keeps the WAL consistent and leaves the sync to
+ * the next `FULL` commit or checkpoint, and the rows' commit still waits for
+ * the disk, carrying the lease frames before it with it. Exclusion is
+ * unchanged: it is SQLite's write lock, taken by every one of these
+ * transactions, and the lease row itself.
+ */
+function withLeaseDurability<T>(db: Database, operation: () => T): T {
+  db.exec("PRAGMA synchronous = NORMAL");
+  try { return operation(); }
+  /* A restore that fails throws past the writer, which then closes the
+     connection, so a lease setting can never carry over into a write. */
+  finally { db.exec("PRAGMA synchronous = FULL"); }
+}
+
+/** Close this process's kept writer connections. A test calls it before it
+    removes a state root; Windows refuses to remove an open database. */
+export function closeStateWriterConnections(): void {
+  for (const [key, slot] of [...stateWriters]) if (slot.depth === 0) closeStateWriter(key, slot);
+}
+
+/** Test seam: writer connections opened by this process so far. */
+export function stateWriterConnectionOpensForTests(): number {
+  return stateWriterOpenCount;
+}
+
+/** Test seam: the kept writer's `synchronous` setting (2 is FULL), or null
+    when no writer is kept for the file. */
+export function stateWriterSynchronousForTests(filename: string): number | null {
+  const slot = stateWriters.get(path.resolve(filename));
+  return slot ? slot.db.query<{ synchronous: number }, []>("PRAGMA synchronous").get()!.synchronous : null;
+}
+
 function connectRawDatabase(filename: string): Database {
   return stateLockAttempt("state.connection", () => {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+    /* The call site is read when each write transaction begins: a kept
+       connection serves many operations. */
     const db = observeRegistryWriter(
       observeSqlite(new (sqliteDatabase())(filename, { create: true, strict: true }), "state"),
-      filename, viewerLoopMonitor.current() ?? "state database write",
+      filename, () => viewerLoopMonitor.current() ?? "state database write",
     );
     try {
       db.exec("PRAGMA busy_timeout = 0");
@@ -846,21 +961,17 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
 }
 
 async function stateTransactionAsync<T>(filename: string, collection: string, operation: (db: Database) => T, afterCommit?: (result: T) => void): Promise<T> {
-  return waitForStateLock(`state.transaction.${collection}`, () => {
-    const db = connectDatabase(filename);
-    try {
-      const result = withImmediateTransaction(db, "state transaction is busy", () => operation(db), collection);
-      // Apply the committed baseline before yielding to queued edits. Keep
-      // bookkeeping failures from replaying a transaction that already committed.
-      try { afterCommit?.(result); }
-      catch (error) {
-        if (stateLockDeferral(error)) throw new FileTransactionBusyError("state checkpoint bookkeeping failed after commit");
-        throw error;
-      }
-      return result;
+  return waitForStateLock(`state.transaction.${collection}`, () => withStateWriter(filename, (db) => {
+    const result = withImmediateTransaction(db, "state transaction is busy", () => operation(db), collection);
+    // Apply the committed baseline before yielding to queued edits. Keep
+    // bookkeeping failures from replaying a transaction that already committed.
+    try { afterCommit?.(result); }
+    catch (error) {
+      if (stateLockDeferral(error)) throw new FileTransactionBusyError("state checkpoint bookkeeping failed after commit");
+      throw error;
     }
-    finally { db.close(); }
-  }, { subject: collection });
+    return result;
+  }), { subject: collection });
 }
 
 function processAlive(pid: number, expectedStartIdentity: string | null): boolean {
@@ -1214,15 +1325,10 @@ export function reimportStateCollection(filename: string, input: {
 /** Record the rollback mirror last written for a collection. Evidence only, so
     it is written during a release fence, when collection writes are refused. */
 export function recordStateImportMirror(filename: string, collection: string, mirrorSha256: string | null, mirrorRevision: number | null): void {
-  const db = connectDatabase(filename);
-  try {
-    withImmediateTransaction(db, `${collection} import is busy`, () => {
-      db.query("UPDATE state_imports SET mirror_sha256 = ?, mirror_revision = ? WHERE collection = ?")
-        .run(mirrorSha256, mirrorRevision, collection);
-    });
-  } finally {
-    db.close();
-  }
+  withStateWriter(filename, (db) => withImmediateTransaction(db, `${collection} import is busy`, () => {
+    db.query("UPDATE state_imports SET mirror_sha256 = ?, mirror_revision = ? WHERE collection = ?")
+      .run(mirrorSha256, mirrorRevision, collection);
+  }));
 }
 
 /** A cheap invalidation signature that also observes uncheckpointed WAL writes. */
@@ -1791,10 +1897,12 @@ export function stateReadonlyConnectionCountForTests(): number {
 type StateReadonlyReader = { filename: string; db: Database };
 const stateReadonlyReaderOwner = globalThis as typeof globalThis & { __llvStateReadonlyReader?: StateReadonlyReader };
 
-/** Release the test process's shared reader before removing its state root. */
+/** Release the test process's shared reader and kept writers before removing
+    its state root. */
 export function resetStateReadonlyReaderForTests(): void {
   stateReadonlyReaderOwner.__llvStateReadonlyReader?.db.close();
   stateReadonlyReaderOwner.__llvStateReadonlyReader = undefined;
+  closeStateWriterConnections();
 }
 
 /** Shared metadata and controller statements finish synchronously. No transaction or iterator is
@@ -2500,8 +2608,7 @@ export class SqliteStateCollection<T> {
       if (peerFirst) peerLease = peer!.acquireLeaseSync();
       lease ??= this.acquireLeaseSync();
       if (peer && !peerFirst) peerLease = peer.acquireLeaseSync();
-      const db = connectDatabase(this.filename);
-      try {
+      return withStateWriter(this.filename, (db) => {
         const result = withImmediateTransaction(db, this.options.busyMessage, () => {
           assertSqliteWriteAuthority(this.filename);
           this.assertLease(db, lease!);
@@ -2615,7 +2722,7 @@ export class SqliteStateCollection<T> {
         this.invalidateAfterCommit();
         peer?.invalidateAfterCommit();
         return result;
-      } finally { db.close(); }
+      });
     } finally {
       if (peerLease && !peerFirst) peer!.releaseLeaseSync(peerLease);
       if (!heldLease && lease) this.releaseLeaseSync(lease);
@@ -2903,13 +3010,10 @@ export class SqliteStateCollection<T> {
     assertSqliteWriteAuthority(this.filename);
     const lease = this.acquireLeaseSync();
     try {
-      const db = connectDatabase(this.filename);
-      try {
-        withImmediateTransaction(db, this.options.busyMessage, () => {
-          options.beforePersist?.(records);
-          this.persistReplacement(lease, records, options.mergeOmitted === true, options.deleteKeys ?? [], undefined, undefined, undefined, db);
-        }, this.options.collection);
-      } finally { db.close(); }
+      withStateWriter(this.filename, (db) => withImmediateTransaction(db, this.options.busyMessage, () => {
+        options.beforePersist?.(records);
+        this.persistReplacement(lease, records, options.mergeOmitted === true, options.deleteKeys ?? [], undefined, undefined, undefined, db);
+      }, this.options.collection));
     } finally {
       this.releaseLeaseSync(lease);
     }
@@ -2940,18 +3044,15 @@ export class SqliteStateCollection<T> {
     try {
       ownLease = this.acquireLeaseSync();
       if (companion && !first) laterLease = companion.acquireLeaseSync();
-      const db = connectDatabase(this.filename);
-      try {
-        withImmediateTransaction(db, this.options.busyMessage, () => {
-          const patch = prepare();
-          const companionWrite = companion && patch.companion
-            ? { collection: companion, lease: (companionLease ?? laterLease)!, ...patch.companion }
-            : undefined;
-          this.persistReplacement(ownLease!, patch.records, true, patch.deleteKeys ?? [], authorize, new Set(patch.appendKeys ?? []),
-            companionWrite as (CompanionPatch<unknown> & { collection: SqliteStateCollection<unknown>; lease: string }) | undefined, db);
-          options.afterPersist?.(db);
-        }, this.options.collection);
-      } finally { db.close(); }
+      withStateWriter(this.filename, (db) => withImmediateTransaction(db, this.options.busyMessage, () => {
+        const patch = prepare();
+        const companionWrite = companion && patch.companion
+          ? { collection: companion, lease: (companionLease ?? laterLease)!, ...patch.companion }
+          : undefined;
+        this.persistReplacement(ownLease!, patch.records, true, patch.deleteKeys ?? [], authorize, new Set(patch.appendKeys ?? []),
+          companionWrite as (CompanionPatch<unknown> & { collection: SqliteStateCollection<unknown>; lease: string }) | undefined, db);
+        options.afterPersist?.(db);
+      }, this.options.collection));
     } finally {
       if (laterLease) companion!.releaseLeaseSync(laterLease);
       if (ownLease) this.releaseLeaseSync(ownLease);
@@ -2995,9 +3096,8 @@ export class SqliteStateCollection<T> {
     const leases: { collection: SqliteStateCollection<unknown>; token: string }[] = [];
     try {
       for (const patch of ordered) leases.push({ collection: patch.collection, token: patch.collection.acquireLeaseSync() });
-      const db = connectDatabase(filename);
       let changed = false;
-      try {
+      withStateWriter(filename, (db) => {
         withImmediateTransaction(db, options.busyMessage ?? "state is busy", () => {
           assertSqliteWriteAuthority(filename);
           options.beforeMerge?.({
@@ -3009,7 +3109,7 @@ export class SqliteStateCollection<T> {
           }
           options.beforeCommit?.();
         });
-      } finally { db.close(); }
+      });
       if (changed) {
         secureDatabaseFiles(filename);
         for (const patch of ordered) patch.collection.invalidateAfterCommit();
@@ -3493,8 +3593,7 @@ export class SqliteStateCollection<T> {
 
   private persistChangedRows(ownerToken: string, records: readonly T[], admittedDb?: Database): void {
     for (const record of records) this.validate(record);
-    const db = admittedDb ?? connectDatabase(this.filename);
-    try {
+    const persist = (db: Database) => {
       const write = () => {
         assertSqliteWriteAuthority(this.filename);
         this.assertLease(db, ownerToken);
@@ -3547,9 +3646,8 @@ export class SqliteStateCollection<T> {
         secureDatabaseFiles(this.filename);
         this.invalidateAfterCommit();
       }
-    } finally {
-      if (!admittedDb) db.close();
-    }
+    };
+    if (admittedDb) persist(admittedDb); else withStateWriter(this.filename, persist);
   }
 
   private persistReplacement(
@@ -3573,8 +3671,7 @@ export class SqliteStateCollection<T> {
     if (requestedDeletes.size !== deleteKeys.length || [...requestedDeletes].some((key) => !key || seen.has(key))) {
       throw new Error(`invalid ${this.options.collection} row deletion`);
     }
-    const db = admittedDb ?? connectDatabase(this.filename);
-    try {
+    const persist = (db: Database) => {
       const write = () => {
         authorize();
         this.assertLease(db, ownerToken);
@@ -3661,9 +3758,8 @@ export class SqliteStateCollection<T> {
         this.invalidateAfterCommit();
         companion?.collection.invalidateAfterCommit();
       }
-    } finally {
-      if (!admittedDb) db.close();
-    }
+    };
+    if (admittedDb) persist(admittedDb); else withStateWriter(this.filename, persist);
   }
 
   /** Upsert and delete rows of this collection inside a transaction another
@@ -3774,16 +3870,13 @@ export class SqliteStateCollection<T> {
   }
 
   private acquireLeaseSync(_waitMs?: number): string {
-    return stateLockAttempt("state.lease", () => {
-      const db = connectDatabase(this.filename);
+    return stateLockAttempt("state.lease", () => withStateWriter(this.filename, (db) => {
       const ownerToken = crypto.randomUUID();
-      try {
-        const acquired = this.tryAcquireLease(db, ownerToken);
-        if (acquired === true) return ownerToken;
-        this.assertDiskHasSpace();
-        throw new StateLockDeferredError("state.lease", "lease", acquired);
-      } finally { db.close(); }
-    }, this.options.collection);
+      const acquired = withLeaseDurability(db, () => this.tryAcquireLease(db, ownerToken));
+      if (acquired === true) return ownerToken;
+      this.assertDiskHasSpace();
+      throw new StateLockDeferredError("state.lease", "lease", acquired);
+    }), this.options.collection);
   }
 
   private async acquireLease(waitMs?: number): Promise<string> {
