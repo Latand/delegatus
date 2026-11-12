@@ -101,8 +101,7 @@ import {
 import {
   attachRuntimeEvents,
   boundMap,
-  HOST_EVENT_WINDOW,
-  trimHostEventWindow,
+  HostEventWindow,
   type RuntimeEventSubscriber,
 } from "./hostEventWindow";
 import {
@@ -1348,13 +1347,14 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   heapAttribution() {
     let queuedEvents = 0;
     for (const subscriber of this.subscribers) queuedEvents += subscriber.queue.length;
-    return { engine: "codex", events: this.events.length, eventSubscribers: this.subscribers.size,
+    return { engine: "codex", events: this.events.length, ...this.eventWindow.heapAttribution(), eventSubscribers: this.subscribers.size,
       stateSubscribers: this.stateListeners.size, queuedEvents };
   }
 
   private readonly subscribers = new Set<Subscriber>();
   /** The newest events (HOST_EVENT_WINDOW); older ones are in the ledger. */
-  private readonly events: RuntimeEvent[] = [];
+  private readonly eventWindow = new HostEventWindow();
+  private readonly events = this.eventWindow.events;
   private eventWindowReleased = false;
   private eventWindowRevision = 0;
 
@@ -1367,7 +1367,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       transcriptPath,
       eligible: () => this.identity.path === transcriptPath && !this.dead && !this.releasing && !this.released
         && !(this.activeTurnId !== null || this.engineStatus !== "idle" || this.restoredHistoryHeld || this.realtimeSessionId !== null) && canRelease(),
-      onRelease: () => { this.eventWindowReleased = true; },
+      onRelease: () => { this.eventWindow.release(); this.eventWindowReleased = true; },
     });
   }
 
@@ -1375,7 +1375,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (!this.eventWindowReleased) return;
     const stored = this.storedEvents();
     assertReleasedHostEventLedger(this.events, stored);
-    this.events.push(...stored.slice(-HOST_EVENT_WINDOW));
+    this.eventWindow.restore(stored);
     this.eventWindowReleased = false;
   }
 
@@ -3977,9 +3977,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       return;
     }
     this.eventWindowRevision += 1;
-    this.events.push(sequenced);
+    if (this.restoredHistoryHeld) this.events.push(sequenced);
+    else this.eventWindow.append(sequenced);
     this.rememberTurnBoundary(sequenced);
-    if (!this.restoredHistoryHeld) trimHostEventWindow(this.events);
     if (event.kind === "item" && event.phase === "completed" && event.turnId
       && event.codexItemIdentity?.threadId === this.identity.threadId && event.codexItemIdentity.turnId === event.turnId) {
       const item = record(event.item);
@@ -4029,7 +4029,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   /** After adoption has reconciled the thread, keep only the event window. */
   private releaseRestoredHistory(): void {
     this.restoredHistoryHeld = false;
-    if (this.events.length > HOST_EVENT_WINDOW) this.events.splice(0, this.events.length - HOST_EVENT_WINDOW);
+    this.eventWindow.restore(this.events);
   }
 
   private restoreEvents(): number {

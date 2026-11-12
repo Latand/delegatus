@@ -49,7 +49,7 @@ import {
   StructuredCompactError,
   StructuredHostAdoptionCleanupError,
 } from "./engineHost";
-import { attachRuntimeEvents, hostEventWindowOf, trimHostEventWindow, type RuntimeEventSubscriber } from "./hostEventWindow";
+import { attachRuntimeEvents, HostEventWindow, type RuntimeEventSubscriber } from "./hostEventWindow";
 import {
   FileRuntimeEventStore,
   nextRuntimeEventSequence,
@@ -738,12 +738,13 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   heapAttribution() {
     let queuedEvents = 0;
     for (const subscriber of this.subscribers) queuedEvents += subscriber.queue.length;
-    return { engine: "claude", events: this.events.length, eventSubscribers: this.subscribers.size,
+    return { engine: "claude", events: this.events.length, ...this.eventWindow.heapAttribution(), eventSubscribers: this.subscribers.size,
       stateSubscribers: this.stateListeners.size, queuedEvents };
   }
 
   private readonly subscribers = new Set<Subscriber>();
-  private readonly events: RuntimeEvent[] = [];
+  private readonly eventWindow = new HostEventWindow();
+  private readonly events = this.eventWindow.events;
   private eventWindowReleased = false;
   private eventWindowRevision = 0;
 
@@ -755,7 +756,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       transcriptPath,
       eligible: () => this.eventTranscriptPath === transcriptPath && !this.dead && !this.releasing && !this.released
         && !(this.activeTurnId !== null || this.manualCompaction !== null) && canRelease(),
-      onRelease: () => { this.eventWindowReleased = true; },
+      onRelease: () => { this.eventWindow.release(); this.eventWindowReleased = true; },
     });
   }
 
@@ -763,7 +764,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (!this.eventWindowReleased) return;
     const stored = this.eventStore.load(this.identity.sessionId);
     assertReleasedHostEventLedger(this.events, stored);
-    this.events.push(...hostEventWindowOf(stored));
+    this.eventWindow.restore(stored);
     this.eventWindowReleased = false;
   }
 
@@ -1529,7 +1530,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private restore(): void {
     const stored = this.eventStore.load(this.identity.sessionId);
     /* The restore below reads the whole ledger once; only the window stays. */
-    for (const event of hostEventWindowOf(stored)) this.events.push(event);
+    this.eventWindow.restore(stored);
     this.cursor = reconcileRuntimeEventCursor(
       this.identity.sessionId,
       stored.at(-1)?.seq ?? 0,
@@ -1621,8 +1622,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       return;
     }
     this.eventWindowRevision += 1;
-    this.events.push(sequenced);
-    trimHostEventWindow(this.events);
+    this.eventWindow.append(sequenced);
     for (const subscriber of this.subscribers) {
       subscriber.queue.push(sequenced);
       subscriber.wake?.();
