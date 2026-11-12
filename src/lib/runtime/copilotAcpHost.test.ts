@@ -800,3 +800,22 @@ test("heap counters observe events and subscriber queues without consuming them"
     expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
   } finally { stop(); await stream.return?.(); await host.release(); }
 });
+
+
+test("ACP output is previewed only in the retained window and replay keeps its terminal outcome", async () => {
+  const child = new FakeCopilot();
+  const eventStore = new MemoryEventStore();
+  const host = await CopilotAcpHost.start(options(child, { eventStore }));
+  try {
+    child.update({ sessionUpdate: "tool_call_update", toolCallId: "large-output", status: "failed", rawOutput: "output".repeat(10_000) });
+    const stored = eventStore.load(child.sessionId);
+    expect(JSON.stringify(stored)).toContain("output".repeat(10_000));
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    try {
+      const replay: RuntimeEvent[] = [];
+      for (let index = 0; index < stored.length; index++) replay.push((await stream.next()).value as RuntimeEvent);
+      expect(replay.at(-1)).toMatchObject({ phase: "completed", item: { status: "failed", toolCallId: "large-output", rawOutput: expect.stringContaining("[truncated; original UTF-8 bytes: 60000;") } });
+      expect(host.heapAttribution()).toMatchObject({ trimmedEvents: 1 });
+    } finally { await stream.return?.(); }
+  } finally { await host.release(); }
+});

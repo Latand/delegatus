@@ -61,3 +61,21 @@ test("host snapshots retain scalar sizes, include queued subscriber events and b
   expect(tracker.snapshot().hosts.largest).toHaveLength(256);
   expect(tracker.snapshot(0, false).hosts.largest).toEqual([]);
 });
+
+
+test("host byte totals, largest host and trimmed counts survive compact sampling and bounded details", () => {
+  const tracker = createHeapAttribution();
+  const hosts = [100, 500, 200].map((windowBytes, index) => ({ heapAttribution: () => ({
+    engine: index === 2 ? "claude" : "codex", events: index + 1, eventSubscribers: 0, stateSubscribers: 0, queuedEvents: 0,
+    windowBytes, windowByteLimit: 1024, trimmedEvents: index,
+  }) }));
+  for (const host of hosts) tracker.hosts.add(host, null);
+  for (const details of [true, false]) {
+    const snapshot = tracker.snapshot(0, details).hosts;
+    expect(snapshot).toMatchObject({ windowBytes: 800, largestWindowBytes: 500, trimmedEvents: 3,
+      byEngine: { codex: { windowBytes: 600, largestWindowBytes: 500, trimmedEvents: 1 }, claude: { windowBytes: 200, largestWindowBytes: 200, trimmedEvents: 2 } } });
+    if (details) expect(snapshot.largest.map(row => row.windowBytes)).toEqual([500, 200, 100]);
+    else expect(snapshot.largest).toEqual([]);
+  }
+  expect(createHeapAttribution().snapshot().hosts).toMatchObject({ windowBytes: 0, largestWindowBytes: 0, trimmedEvents: 0 });
+});

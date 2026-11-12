@@ -99,8 +99,7 @@ import {
 import {
   attachRuntimeEvents,
   boundMap,
-  HOST_EVENT_WINDOW,
-  trimHostEventWindow,
+  HostEventWindow,
   type RuntimeEventSubscriber,
 } from "./hostEventWindow";
 import {
@@ -1346,13 +1345,14 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   heapAttribution() {
     let queuedEvents = 0;
     for (const subscriber of this.subscribers) queuedEvents += subscriber.queue.length;
-    return { engine: "codex", events: this.events.length, eventSubscribers: this.subscribers.size,
+    return { engine: "codex", events: this.events.length, ...this.eventWindow.heapAttribution(), eventSubscribers: this.subscribers.size,
       stateSubscribers: this.stateListeners.size, queuedEvents };
   }
 
   private readonly subscribers = new Set<Subscriber>();
   /** The newest events (HOST_EVENT_WINDOW); older ones are in the ledger. */
-  private readonly events: RuntimeEvent[] = [];
+  private readonly eventWindow = new HostEventWindow();
+  private readonly events = this.eventWindow.events;
   /** Newest turn-started and turn-ended events, beyond the event window. */
   private readonly turnBoundaries: TurnBoundary[] = [];
   /** Adoption reconciles the thread against the whole ledger it restored. */
@@ -3947,9 +3947,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       this.failWithoutLedger(new Error(`runtime event ledger failed: ${safeError(error)}`));
       return;
     }
-    this.events.push(sequenced);
+    if (this.restoredHistoryHeld) this.events.push(sequenced);
+    else this.eventWindow.append(sequenced);
     this.rememberTurnBoundary(sequenced);
-    if (!this.restoredHistoryHeld) trimHostEventWindow(this.events);
     if (event.kind === "item" && event.phase === "completed" && event.turnId
       && event.codexItemIdentity?.threadId === this.identity.threadId && event.codexItemIdentity.turnId === event.turnId) {
       const item = record(event.item);
@@ -3999,7 +3999,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   /** After adoption has reconciled the thread, keep only the event window. */
   private releaseRestoredHistory(): void {
     this.restoredHistoryHeld = false;
-    if (this.events.length > HOST_EVENT_WINDOW) this.events.splice(0, this.events.length - HOST_EVENT_WINDOW);
+    this.eventWindow.restore(this.events);
   }
 
   private restoreEvents(): number {

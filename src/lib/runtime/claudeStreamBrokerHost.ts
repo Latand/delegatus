@@ -47,7 +47,7 @@ import {
   StructuredCompactError,
   StructuredHostAdoptionCleanupError,
 } from "./engineHost";
-import { attachRuntimeEvents, hostEventWindowOf, trimHostEventWindow, type RuntimeEventSubscriber } from "./hostEventWindow";
+import { attachRuntimeEvents, HostEventWindow, type RuntimeEventSubscriber } from "./hostEventWindow";
 import {
   FileRuntimeEventStore,
   nextRuntimeEventSequence,
@@ -735,12 +735,13 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   heapAttribution() {
     let queuedEvents = 0;
     for (const subscriber of this.subscribers) queuedEvents += subscriber.queue.length;
-    return { engine: "claude", events: this.events.length, eventSubscribers: this.subscribers.size,
+    return { engine: "claude", events: this.events.length, ...this.eventWindow.heapAttribution(), eventSubscribers: this.subscribers.size,
       stateSubscribers: this.stateListeners.size, queuedEvents };
   }
 
   private readonly subscribers = new Set<Subscriber>();
-  private readonly events: RuntimeEvent[] = [];
+  private readonly eventWindow = new HostEventWindow();
+  private readonly events = this.eventWindow.events;
   private readonly deliveries: ClaudeDeliveryState[] = [];
   private readonly turnQueue: string[] = [];
   /** Engine ids of the inputs the running turn read at a tool boundary. */
@@ -1500,7 +1501,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private restore(): void {
     const stored = this.eventStore.load(this.identity.sessionId);
     /* The restore below reads the whole ledger once; only the window stays. */
-    for (const event of hostEventWindowOf(stored)) this.events.push(event);
+    this.eventWindow.restore(stored);
     this.cursor = reconcileRuntimeEventCursor(
       this.identity.sessionId,
       stored.at(-1)?.seq ?? 0,
@@ -1591,8 +1592,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       this.failWithoutLedger(new Error(`runtime event ledger failed: ${safeError(error)}`));
       return;
     }
-    this.events.push(sequenced);
-    trimHostEventWindow(this.events);
+    this.eventWindow.append(sequenced);
     for (const subscriber of this.subscribers) {
       subscriber.queue.push(sequenced);
       subscriber.wake?.();

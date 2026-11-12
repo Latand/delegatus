@@ -3326,8 +3326,12 @@ describe("CodexAppServerHost", () => {
           entry.versions[0]!.input = await host.nativeQueue!.prepare(entry, entry.versions[0]!);
           const peer = { ...entry, entryId: "other-entry", clientUserMessageId: "other-entry" };
           const user = { type: "userMessage", id: "retained-user", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input };
+          server.notify("item/completed", { threadId, turnId: "consuming-turn", item: {
+            type: "commandExecution", id: "preview-before-proof", command: "printf output", exitCode: 0, aggregatedOutput: "output".repeat(10_000),
+          } });
           server.notify("item/completed", { threadId, turnId: "consuming-turn", item: user });
-          await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "item" && event.phase === "completed"), "completed item was not retained");
+          await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "item" && (event.item as { id?: string }).id === user.id), "completed item was not retained");
+          expect(host.heapAttribution().trimmedEvents).toBe(1);
           const turn = (id: string, item: typeof user) => ({ id, status: "completed", items: [item] });
           server.readTurns = scenario === "absent" ? []
             : scenario === "changed-input" ? [turn("consuming-turn", { ...user, content: [{ type: "text", text: "different input" }] })]
@@ -8516,4 +8520,39 @@ test("heap counters observe events and subscriber queues without consuming them"
     stop();
     expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
   } finally { stop(); await stream.return?.(); await host.release(); }
+});
+
+
+test("large tool payloads retain previews after live writes and adoption without duplicate reconciliation", async () => {
+  const threadId = "preview-window-thread";
+  const eventStore = new MemoryEventStore();
+  const item = { id: "large-command", type: "commandExecution", command: "printf output", exitCode: 7, aggregatedOutput: "output".repeat(10_000) };
+  const server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
+  const check = async (current: CodexAppServerHost) => {
+    const stored = eventStore.load(threadId);
+    const stream = current.attach(0)[Symbol.asyncIterator]();
+    try {
+      const replay: RuntimeEvent[] = [];
+      for (let index = 0; index < stored.length; index++) replay.push((await stream.next()).value as RuntimeEvent);
+      const command = replay.find(event => event.kind === "item" && (event.item as { id?: string }).id === item.id);
+      expect(command).toMatchObject({ item: { id: item.id, exitCode: 7, aggregatedOutput: expect.stringContaining("[truncated; original UTF-8 bytes: 60000;") } });
+      expect(stored.find(event => event.kind === "item" && (event.item as { id?: string }).id === item.id)).toMatchObject({ item });
+      expect(current.heapAttribution()).toMatchObject({ trimmedEvents: 1 });
+      expect(current.heapAttribution().windowBytes).toBeLessThanOrEqual(current.heapAttribution().windowByteLimit);
+    } finally { await stream.return?.(); }
+  };
+  try {
+    server.notify("turn/started", { threadId, turn: { id: "preview-turn" } });
+    server.notify("item/completed", { threadId, turnId: "preview-turn", item });
+    server.notify("turn/completed", { threadId, turn: { id: "preview-turn", status: "completed" } });
+    await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "turn-ended"), "preview turn to end");
+    await check(host);
+  } finally { await host.release(); }
+  const resumed = new FakeAppServer(threadId, threadId, false, [{ id: "preview-turn", status: "completed", items: [item] }]);
+  const adopted = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore, spawnProcess: fakeSpawn(resumed) });
+  try {
+    await check(adopted);
+    expect(eventStore.load(threadId).filter(event => event.kind === "item" && (event.item as { id?: string }).id === item.id)).toHaveLength(1);
+  } finally { await adopted.release(); }
 });

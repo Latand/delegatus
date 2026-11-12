@@ -35,7 +35,7 @@ import type {
   SessionMaterializationEvidence,
 } from "./engineHost";
 import { normalizeQueueEntry, StructuredHostAdoptionCleanupError } from "./engineHost";
-import { attachRuntimeEvents, boundMap, hostEventWindowOf, trimHostEventWindow, type RuntimeEventSubscriber } from "./hostEventWindow";
+import { attachRuntimeEvents, boundMap, HostEventWindow, type RuntimeEventSubscriber } from "./hostEventWindow";
 import {
   FileRuntimeEventStore,
   nextRuntimeEventSequence,
@@ -319,12 +319,13 @@ export class CopilotAcpHost implements EngineHost {
   heapAttribution() {
     let queuedEvents = 0;
     for (const subscriber of this.subscribers) queuedEvents += subscriber.queue.length;
-    return { engine: "copilot", events: this.events.length, eventSubscribers: this.subscribers.size,
+    return { engine: "copilot", events: this.events.length, ...this.eventWindow.heapAttribution(), eventSubscribers: this.subscribers.size,
       stateSubscribers: this.stateListeners.size, queuedEvents };
   }
 
   private readonly subscribers = new Set<Subscriber>();
-  private readonly events: RuntimeEvent[] = [];
+  private readonly eventWindow = new HostEventWindow();
+  private readonly events = this.eventWindow.events;
   private readonly pending = new Map<number, PendingRequest>();
   /** Open `session/request_permission` requests by attention id, with the
       JSON-RPC id the answer has to carry. */
@@ -761,7 +762,7 @@ export class CopilotAcpHost implements EngineHost {
   private restore(): void {
     const stored = this.eventStore.load(this.identity.sessionId);
     /* The restore below reads the whole ledger once; only the window stays. */
-    for (const event of hostEventWindowOf(stored)) this.events.push(event);
+    this.eventWindow.restore(stored);
     this.cursor = reconcileRuntimeEventCursor(
       this.identity.sessionId,
       stored.at(-1)?.seq ?? 0,
@@ -806,8 +807,7 @@ export class CopilotAcpHost implements EngineHost {
       this.fail(new Error(`runtime event ledger failed: ${safeError(error)}`));
       return;
     }
-    this.events.push(sequenced);
-    trimHostEventWindow(this.events);
+    this.eventWindow.append(sequenced);
     for (const subscriber of this.subscribers) {
       subscriber.queue.push(sequenced);
       subscriber.wake?.();

@@ -1,3 +1,4 @@
+import { HostEventWindow } from "./hostEventWindow";
 import { describe, expect, test } from "bun:test";
 
 import { assertRuntimeEvent } from "./contracts";
@@ -666,4 +667,42 @@ describe("coalesceReadyEngineDeltas", () => {
     expect(await events.next()).toEqual({ done: false, value: { ...delta(2, "part1 part2 "), foldedTextLengths: [6, 6] } });
     await expect(events.next()).rejects.toBe(failure);
   });
+});
+
+
+test("retained previews cross journal projection and conversation live-turn readers with exact tool identities and failure outcomes", () => {
+  const cases = [
+    { engine: "codex", item: { type: "commandExecution", id: "cmd", command: "printf output", exitCode: 7, aggregatedOutput: "x".repeat(20_000) }, id: "cmd" },
+    { engine: "codex", item: { type: "fileChange", id: "patch", status: "failed", changes: [{ path: "file.ts", diff: "x".repeat(20_000) }] }, id: "patch" },
+    { engine: "codex", item: { type: "mcpToolCall", id: "mcp", tool: "read", server: "fixture", error: { code: 1 }, result: { content: [{ type: "text", text: "x".repeat(20_000) }] } }, id: "mcp" },
+    { engine: "copilot", item: { sessionUpdate: "tool_call_update", toolCallId: "acp", title: "Read", status: "failed", rawOutput: "x".repeat(20_000) }, id: "acp" },
+  ];
+  for (const { engine, item, id } of cases) {
+    const window = new HostEventWindow();
+    window.append({ kind: "item", turnId: "turn", seq: 1, phase: "completed", item });
+    expect(window.heapAttribution().trimmedEvents).toBe(1);
+    const projected = projectEngineHostEvent("conversation_preview", `${engine}:session`, window.events[0]!)!;
+    expect(() => assertRuntimeEvent(projected)).not.toThrow();
+    const live = projectRuntimeLiveTurnItem(null, "turn", projected.payload.item, "completed", "2026-11-12T00:00:00.000Z");
+    if (engine === "copilot") {
+      expect(projected.payload.item).toMatchObject({ toolCallId: id, status: "failed" });
+      expect(runtimeLiveTurnItems(live)).toEqual(runtimeLiveTurnItems(projectRuntimeLiveTurnItem(null, "turn", item, "completed", "2026-11-12T00:00:00.000Z")));
+    } else {
+      expect(runtimeLiveTurnItems(live).find(row => row.tool)).toMatchObject({ itemId: id, tool: { status: "err" } });
+    }
+  }
+  const window = new HostEventWindow();
+  window.append({ kind: "item", turnId: "turn", seq: 1, phase: "completed", item: {
+    type: "assistant", message: { content: [{ type: "tool_use", id: "write", name: "Write", input: { file_path: "file.ts", content: "x".repeat(20_000) } }] },
+  } });
+  window.append({ kind: "item", turnId: "turn", seq: 2, phase: "completed", item: {
+    type: "user", message: { content: [{ type: "tool_result", tool_use_id: "write", is_error: true, content: "x".repeat(20_000) }] },
+  } });
+  let live: ReturnType<typeof projectRuntimeLiveTurnItem> = null;
+  for (const event of window.events) {
+    const projected = projectEngineHostEvent("conversation_preview", "claude:session", event)!;
+    expect(() => assertRuntimeEvent(projected)).not.toThrow();
+    live = projectRuntimeLiveTurnItem(live, "turn", projected.payload.item, "completed", "2026-11-12T00:00:00.000Z");
+  }
+  expect(runtimeLiveTurnItems(live).find(row => row.tool)).toMatchObject({ itemId: "write", tool: { status: "err" } });
 });

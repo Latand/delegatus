@@ -5043,3 +5043,28 @@ test("heap counters observe events and subscriber queues without consuming them"
     expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
   } finally { stop(); await stream.return?.(); await host.release(); }
 });
+
+
+test("large Write inputs retain previews while the durable event keeps complete file content", async () => {
+  const ledger = new RecordingDeliveryLedger();
+  const child = new FakeClaude(ledger);
+  const eventStore = new MemoryEventStore();
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000000091"].join("-");
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", sessionId, eventStore, deliveryLedger: ledger, readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }), spawnProcess: fakeSpawn(child, {}) });
+  try {
+    child.emitJson({ type: "assistant", session_id: sessionId, message: { id: "large-write", role: "assistant", content: [
+      { type: "tool_use", id: "write", name: "Write", input: { file_path: "file.ts", content: "body".repeat(10_000) } },
+    ] } });
+    const stored = eventStore.load(sessionId);
+    expect(JSON.stringify(stored)).toContain("body".repeat(10_000));
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    try {
+      const replay: RuntimeEvent[] = [];
+      for (let index = 0; index < stored.length; index++) replay.push((await stream.next()).value as RuntimeEvent);
+      expect(JSON.stringify(replay)).toContain("[truncated; original UTF-8 bytes: 40000;");
+      expect(JSON.stringify(replay)).not.toContain("body".repeat(10_000));
+      expect(host.heapAttribution()).toMatchObject({ trimmedEvents: 1 });
+    } finally { await stream.return?.(); }
+  } finally { await host.release(); }
+});
