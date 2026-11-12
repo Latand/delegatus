@@ -25,6 +25,12 @@ test("isolated checks remove the stage Git command shim from PATH", () => {
   expect(checkEnvironment({ PATH: [guard, "/usr/bin"].join(path.delimiter) }).PATH).toBe("/usr/bin");
 });
 
+test("pre-push isolation preserves the public CPU headroom setting", () => {
+  const isolated = checkEnvironment({ PATH: "/usr/bin", DELEGATUS_GATE_CPU_HEADROOM: "23" });
+  expect(isolated.DELEGATUS_GATE_CPU_HEADROOM).toBe("23");
+  expect(checkEnvironment(isolated)).toEqual(isolated);
+});
+
 test("publication custody never reaches checks, even as a declared input", () => {
   const env = { PATH: "/usr/bin", LLV_GATE_PUBLICATION_RECEIPT: "/fixture/receipt", LLV_GATE_PUBLICATION_ID: "publication",
     LLV_GATE_CHECK_ENV: "LLV_GATE_PUBLICATION_RECEIPT" };

@@ -4,6 +4,7 @@ import path from "node:path";
 import { machineHome } from "../src/lib/runtime/cpuAdmission";
 import { onlineCpuCount } from "../src/lib/runtime/cpuPlacement";
 import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited } from "../src/lib/runtime/signalSandboxContext";
+import { procBackend } from "../src/lib/proc";
 import type { ProcessIdentity } from "../src/lib/processIdentity";
 import { reportCpuWait } from "../src/lib/runtime/cpuAdmissionBudget";
 import { admissionLockWait } from "./cpu-admission-lock";
@@ -74,6 +75,10 @@ export class CheckAdmission {
       this.db.query("UPDATE checks SET owner = ? WHERE owner = ? AND held = 1").run(JSON.stringify(child), JSON.stringify(owner));
     }).immediate();
   }
+  holds(owner: ProcessIdentity): boolean {
+    return this.db.query<{ held: number }, [string]>("SELECT held FROM checks WHERE owner = ?").get(JSON.stringify(owner))?.held === 1
+      && this.observer.status(owner) === "alive" && !this.observer.exited(owner);
+  }
   cancel(owner: ProcessIdentity): void { this.db.query("DELETE FROM checks WHERE owner = ?").run(JSON.stringify(owner)); }
   close(): void { this.db.close(); }
 }
@@ -109,7 +114,36 @@ export async function acquireCheckSlot(env = process.env, signal?: AbortSignal) 
 const testSlot = Symbol.for("delegatus.checkAdmission.test");
 const globals = globalThis as typeof globalThis & { [testSlot]?: Promise<void> };
 export function admitTestProcess(): Promise<void> {
-  return globals[testSlot] ??= acquireCheckSlot().then(slot => slot.queue.close());
+  return globals[testSlot] ??= (async () => {
+      const inherited = process.env.DELEGATUS_CHECK_ADMISSION_OWNER;
+      if (inherited) {
+        try {
+          const owner = JSON.parse(inherited) as ProcessIdentity, queue = new CheckAdmission(checkAdmissionFile());
+          try { if (queue.holds(owner)) return; } finally { queue.close(); }
+        } catch { /* A stale or malformed inherited ticket must reacquire. */ }
+      }
+      const env = process.env, queue = new CheckAdmission(checkAdmissionFile(env));
+      try {
+        // Child suites are part of the parent's admitted gate tree. Detect the
+        // live ownership chain from process identities so isolated child envs
+        // cannot turn a saturated parent/child wait into a queue cycle.
+        if (queue.hasAdmittedAncestor(process.pid)) return;
+      } finally { queue.close(); }
+      const slot = await acquireCheckSlot(env);
+      process.env.DELEGATUS_CHECK_ADMISSION_OWNER = JSON.stringify(slot.owner);
+    slot.queue.close();
+    })();
+}
+
+export function admittedCheckAncestor(pid: number, env = process.env): ProcessIdentity | undefined {
+  const queue = new CheckAdmission(checkAdmissionFile(env));
+  try {
+    const parents = procBackend.ppidMap(), ancestors = new Set<number>();
+    let parent = parents.get(pid);
+    while (parent && parent > 1 && !ancestors.has(parent)) { ancestors.add(parent); parent = parents.get(parent); }
+    return queue.db.query<Row, []>("SELECT * FROM checks WHERE held = 1").all().map(row => JSON.parse(row.owner) as ProcessIdentity)
+      .find(owner => ancestors.has(owner.pid) && queue.holds(owner));
+  } finally { queue.close(); }
 }
 
 /** Explicit preload travels with this runner, even when its command reads a
@@ -134,6 +168,9 @@ export function isTypecheckCommand(command: readonly string[]): boolean {
   const name = (value = "") => path.basename(value).replace(/\.(?:cmd|exe|js|cjs|mjs)$/, "");
   const binary = name(command[0]);
   if (["bash", "sh"].includes(binary) && command[2] === "--in-cpu-scope") return isTypecheckCommand(command.slice(3));
+  // Shell campaigns often forward their actual command through `exec "$@"`.
+  // Admitting the enclosing owned run keeps the permit through that handoff.
+  if (["bash", "sh"].includes(binary) && command.slice(1).some(part => /(?:^|[/\\])tsc(?:\.(?:cmd|exe|js|cjs|mjs))?(?:\s|$)/.test(part))) return true;
   if (binary === "tsc") return true;
   if (["bunx", "npx"].includes(binary)) return name(command[1]) === "tsc";
   if (["bun", "node"].includes(binary)) return name(command[1]) === "tsc" || command[1] === "x" && name(command[2]) === "tsc";

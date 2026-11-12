@@ -18,7 +18,7 @@ import { sandboxGateEntryCommand } from "../src/lib/runtime/sandboxGateEntry";
 import { gateServiceProperties } from "../src/lib/runtime/cpuPlacement";
 import { GateTasks, GATE_TASKS_MAX, GATE_TASK_LIMIT_EXIT, gateTaskProperties, gateTaskResult, gateTaskFailure, warnGateTaskFallback, type GateTaskSnapshot } from "./gate-tasks";
 import { producerReport, producerCommandIdentity, recordedSupervisorObligation, recordedSupervisorRefusal, supervisorCancellation, reportSchema, readEnvelope, writeEnvelope, digest, type ProducerReport } from "../src/lib/recordedChecks/wire";
-import { acquireCheckSlot, isTestCommand, isTypecheckCommand, withTestAdmission } from "./check-admission";
+import { acquireCheckSlot, admittedCheckAncestor, isTestCommand, isTypecheckCommand, withTestAdmission } from "./check-admission";
 import { admissionLockWait } from "./cpu-admission-lock";
 
 /** `namespace` marks a caller inside an agent signal domain. Its identities
@@ -34,6 +34,10 @@ if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("owned ru
 // portable guardian or namespace leaf. The helper waits within their CPU wait
 // budget and binds the permit to the compiler itself before yielding.
 const offset = ["--portable", "--namespace"].includes(args[0] ?? "") ? 1 : 0;
+if (!process.env.DELEGATUS_CHECK_ADMISSION_OWNER) {
+  const owner = admittedCheckAncestor(process.pid);
+  if (owner) process.env.DELEGATUS_CHECK_ADMISSION_OWNER = JSON.stringify(owner);
+}
 if (!args[offset]?.startsWith("--")) args.splice(offset, args.length - offset, ...withTestAdmission(args.slice(offset), path.join(import.meta.dir, "check-test-preload.ts")));
 // Startup HOME re-entry creates its own final owned run. Admit that launch
 // before spawning Bun; the preload below also covers older/raw launch paths.

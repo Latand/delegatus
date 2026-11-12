@@ -9,6 +9,7 @@ import { onlineCpuCount } from "../src/lib/runtime/cpuPlacement";
 import type { ProcessIdentity, ProcessIdentityStatus } from "../src/lib/processIdentity";
 import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
+import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 
 const identity = (pid: number, start = 1): ProcessIdentity => ({ pid, startIdentity: `${pid}:${start}`, bootEpoch: "fixture" });
 function fixture() {
@@ -88,11 +89,26 @@ test("typecheck launch forms and baseline preloads survive the CPU-scope handoff
     expect(isTypecheckCommand(["bash", "scripts/gate-slot.sh", "--in-cpu-scope", ...command])).toBe(true);
   }
   expect(isTypecheckCommand(["bun", "test", "tsc.test.ts"])).toBe(false);
+  expect(isTypecheckCommand(["bash", "-c", 'exec "$@"', "probe", "bun", "node_modules/typescript/bin/tsc", "--project", "fixture"])).toBe(true);
+  expect(isTypecheckCommand(["sh", "-c", "node ./node_modules/typescript/bin/tsc --noEmit"])).toBe(true);
   const command = ["bash", "scripts/gate-slot.sh", "--in-cpu-scope", "bun", "test", "baseline.test.ts"];
   const wrapped = withTestAdmission(command, "check-test-preload.ts");
   expect(wrapped).toEqual([...command.slice(0, 5), "--preload", "check-test-preload.ts", "baseline.test.ts"]);
   expect(withTestAdmission(wrapped, "check-test-preload.ts")).toEqual(wrapped);
   expect(withTestAdmission(["bun", "run", "test", "branch.test.ts"], "preload.ts")).toEqual(["bun", "run", "test", "--preload", "preload.ts", "branch.test.ts"]);
+});
+
+test("nested test children share their admitted parent suite ticket", async () => {
+  const f = fixture(), queue = new CheckAdmission(f.file);
+  expect(queue.claim(cpuOwnerIdentity(process.pid), 1)).toBe(true);
+  const env = withoutInheritedGate<NodeJS.ProcessEnv>({ ...process.env, LLV_CHECK_ADMISSION_FILE: f.file });
+  const source = `import { admitTestProcess } from ${JSON.stringify(path.join(import.meta.dir, "check-admission.ts"))}; await admitTestProcess(); console.log("child-ready");`;
+  const child = Bun.spawn([process.execPath, "-e", source], { env, stdout: "pipe", stderr: "pipe" });
+  try {
+    const output = await new Response(child.stdout).text();
+    expect(await child.exited).toBe(0);
+    expect(output).toContain("child-ready");
+  } finally { await stopFixtureProcess(child); queue.close(); f.close(); }
 });
 
 async function until(check: () => boolean) {
