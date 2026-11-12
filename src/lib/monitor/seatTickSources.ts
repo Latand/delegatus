@@ -69,6 +69,9 @@ import { pipelineCompletedUnreviewed, pipelineReviewSummary } from "@/lib/pipeli
 import { loadArchivedPipelinesForList, loadArchivedPipelinesForListAsync, loadPipelinesForList, loadPipelinesForListAsync } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline } from "@/lib/pipelines/types";
+import { forgeCacheView } from "@/lib/forge/cache";
+import { pipelineWorkLinks } from "@/lib/forge/resolve";
+import type { ForgeCacheView } from "@/lib/forge/workLinks";
 import { runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
 import { latestLedgerDeployment, ledgerDeployment, ledgerDeployments } from "@/lib/runtime/deploymentLedger";
@@ -1922,12 +1925,51 @@ interface PullRequestEvidence {
 
 const execFileAsync = promisify(execFile);
 
+/** Internal output and comparison lanes owe no main-branch delivery. Legacy
+ * local code lanes still work without a forge or a delivery remote. A linked
+ * PR is an explicit delivery even when the lane otherwise stays internal. */
+function localLaneDelivery(pipeline: Pipeline, cache: ForgeCacheView): "none" | "merged" | "pending" {
+  if (pipeline.delivery?.disposition === "comparison") return "none";
+  if (pipeline.merge?.state === "merged") return "merged";
+  const prs = pipelineWorkLinks(pipeline, cache).links.filter(link => link.kind === "pr");
+  if (prs.some(pr => pr.state === "merged")) return "merged";
+  if (prs.length || pipeline.delivery?.target.pr || pipeline.publication === "remote-branch") return "pending";
+  if (pipeline.publication === "internal") return "none";
+  if (!pipeline.delivery?.target.remote && pipeline.stages.length
+    && pipeline.stages.every(stage => (stage.access ?? stage.effectiveRole?.access) === "read-only")) return "none";
+  return "pending";
+}
+
+/** Compare path, mode and postimage, including deletions. NUL separators keep
+ * arbitrary Git filenames intact. Rename detection is disabled by the caller. */
+function gitPostimages(raw: string): Array<[string, string]> {
+  const parts = raw.split("\0"), images: Array<[string, string]> = [];
+  for (let index = 0; index < parts.length; index++) {
+    const header = /^:\d+ (\d+) [0-9a-f]+ ([0-9a-f]+) [A-Z]\d*$/.exec(parts[index]!.trimStart());
+    if (header && index + 1 < parts.length) images.push([parts[++index]!, `${header[1]}:${header[2]}`]);
+  }
+  return images;
+}
+
+/** Squash and batch merges change commit identity. Main's bounded raw history
+ * proves delivery of each changed path even after later edits replace it.
+ * Failure to complete the read is unknown, never evidence of missing work. */
+async function localLaneContentMissing(base: string, sha: string, ref: string, git: (args: string[]) => Promise<string>): Promise<boolean> {
+  const images = new Map(gitPostimages(await git(["diff", "--raw", "-z", "--no-abbrev", "--no-renames", base, sha, "--"])));
+  if (!images.size) return false;
+  const history = await git(["--literal-pathspecs", "log", "--format=", "--raw", "-z", "--no-abbrev", "--no-renames", "-m", `${base}..${ref}`, "--", ...images.keys()]);
+  // A file can be changed repeatedly; keep every observed postimage.
+  for (const [file, image] of gitPostimages(history)) if (images.get(file) === image) images.delete(file);
+  return images.size > 0;
+}
+
 /** A local lane tip outside its recorded local base is actionable without any
  * forge account, remote, or `gh` response. The lane row and its accepted SHA
  * identify the exact work; the signal version includes that SHA so a later
  * accepted revision is a new item. */
 async function localFinishedLaneSignals(project: string, pipelines: readonly Pipeline[], cursor: string | null): Promise<{ signals: SeatTickSignalInput[]; cursor: string | null }> {
   const canonicalProject = seatProjectResolver();
+  const cache = forgeCacheView();
   const finished = [...new Map(pipelines
     .filter((pipeline) => canonicalProject(pipeline.project) === project && !pipeline.hiddenAt && isFinished(pipeline)
       && !(pipeline.merge && (PIPELINE_MERGE_LIVE_STATES.has(pipeline.merge.state) || pipeline.merge.state === "refreshing")))
@@ -1953,25 +1995,30 @@ async function localFinishedLaneSignals(project: string, pipelines: readonly Pip
     firstLocalProbeFailure ??= detail;
   };
   {
-    const remaining = LOCAL_GIT_TIMEOUT_MS;
     const batch = candidates.slice(0, LOCAL_GIT_BATCH_SIZE);
     const outcomes = await Promise.all(batch.map(async (pipeline) => {
+      if (localLaneDelivery(pipeline, cache) !== "pending") return null;
       const sha = pipeline.lastPassedCommit;
       const base = pipeline.baseBranch;
       if (!pipeline.repoDir || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sha)
         || !base || !/^[A-Za-z0-9._/-]+$/.test(base) || base.includes("..") || base.startsWith("/")) return null;
-      if (pipeline.merge?.state === "merged"
-        && (pipeline.merge.reviewedHead === sha || pipeline.merge.chain.includes(sha) || pipeline.merge.mergedHead === sha)) return null;
+      const deadline = performance.now() + LOCAL_GIT_TIMEOUT_MS;
+      const git = async (args: string[]) => {
+        const remaining = Math.ceil(deadline - performance.now());
+        if (remaining <= 0) throw new Error("local Git deadline expired");
+        return (await execFileAsync("git", args, {
+          cwd: pipeline.repoDir, timeout: remaining, encoding: "utf8", maxBuffer: 256 * 1024,
+        })).stdout;
+      };
       const refs = [`refs/remotes/origin/${base}`, `refs/heads/${base}`];
       for (const ref of refs) {
         try {
-          await execFileAsync("git", ["merge-base", "--is-ancestor", `${sha}^{commit}`, `${ref}^{commit}`], {
-            cwd: pipeline.repoDir, timeout: remaining, encoding: "utf8", maxBuffer: 16 * 1024,
-          });
-          return null;
+          const common = (await git(["merge-base", `${sha}^{commit}`, `${ref}^{commit}`])).trim();
+          if (common === sha) return null;
+          try { return await localLaneContentMissing(common, sha, ref, git) ? { pipeline, sha } : null; }
+          catch { noteLocalProbeFailure(`${pipeline.id}: content unavailable`); return null; }
         } catch (error) {
           const code = String((error as NodeJS.ErrnoException).code);
-          if (code === "1") return { pipeline, sha };
           if (code !== "128") {
             noteLocalProbeFailure(`${pipeline.id}: ${code}`);
             return null;
@@ -3182,23 +3229,26 @@ export async function refreshSeatTickEvidence(input: SeatTickCheckInput, sources
   let fresh = await refreshSeatTickInputCooperatively(input, sources);
   const key = await pullRequestEvidenceKey(fresh, sources);
   fresh = await refreshSeatTickInputCooperatively(fresh, sources);
-  const currentlyOwned = () => {
+  const currentlyOwned = (ids: ReadonlySet<string>) => {
     const canonicalProject = seatProjectResolver();
+    const cache = forgeCacheView();
     const currentLanes = [...sources.pipelines(), ...sources.archivedPipelines()]
-      .filter(lane => canonicalProject(lane.project) === fresh.project && !lane.hiddenAt);
-    return new Set(currentLanes.filter((lane) => lane.merge
-      && (PIPELINE_MERGE_LIVE_STATES.has(lane.merge.state) || lane.merge.state === "refreshing"
-        || (lane.merge.state === "merged" && (lane.merge.reviewedHead === lane.lastPassedCommit
-          || lane.merge.chain.includes(lane.lastPassedCommit) || lane.merge.mergedHead === lane.lastPassedCommit)))).map(lane => lane.id));
+      .filter(lane => ids.has(lane.id) && canonicalProject(lane.project) === fresh.project && !lane.hiddenAt);
+    return new Map(currentLanes.map(lane => [lane.id,
+      lane.merge && (PIPELINE_MERGE_LIVE_STATES.has(lane.merge.state) || lane.merge.state === "refreshing")
+        ? "owned" : localLaneDelivery(lane, cache)] as const));
   };
   const excludeCurrentlyOwned = (value: SeatTickCheckInput): SeatTickCheckInput => {
     if (!value.pullRequests.length && !value.signals.some(signal => signal.id.startsWith("local-unmerged-lane:"))) return value;
-    const owners = currentlyOwned();
+    const owners = currentlyOwned(new Set([...value.pullRequests.map(pr => pr.pipelineId), ...value.signals
+      .filter(signal => signal.id.startsWith("local-unmerged-lane:"))
+      .map(signal => signal.id.slice("local-unmerged-lane:".length))]));
     return {
       ...value,
-      pullRequests: value.pullRequests.filter(pr => !owners.has(pr.pipelineId)),
+      pullRequests: value.pullRequests.filter(pr => owners.get(pr.pipelineId) !== "owned" && owners.get(pr.pipelineId) !== "merged"),
       signals: value.signals.filter(signal => !signal.id.startsWith("local-unmerged-lane:")
-        || !owners.has(signal.id.slice("local-unmerged-lane:".length))),
+        || !owners.has(signal.id.slice("local-unmerged-lane:".length))
+        || owners.get(signal.id.slice("local-unmerged-lane:".length)) === "pending"),
     };
   };
   if (key === input.pullRequestEvidenceKey) return excludeCurrentlyOwned(fresh);
