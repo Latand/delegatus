@@ -5,6 +5,30 @@ Status: design, 2026-11-12. Written from `main` at `cb408fce` (`origin/main` at
 `docs/design/claude-code-cloud.md` (§1.13, §1.14, §4.4) and on the Codex Cloud
 automatic preparation already on `main`.
 
+## Implementation
+
+The preparation slice and revision claims live in
+`src/lib/projects/claudeCloudTasks.ts`. Admission calls that slice through
+`cloudClaudeClient.ts`; `setClaudeCloudTaskFor` preserves sibling and predecessor
+bindings. A known creation or discovery id is persisted before repair and read
+again after restart, even if the list has not caught up. The per-account task fingerprint remains the execution guard, while
+the whole task list no longer participates in the shared lane fence.
+
+Readiness is API-only: settings GET includes `claudeCloudReadiness`, and MCP
+`claude_cloud_task` reads readiness or queues `prepare` through
+`/api/projects/claude-cloud-tasks`. The Viewer owns one sequential queue, capped
+at 256 project/account pairs with a ten-minute execution deadline per pair.
+Preparation rechecks the project pool, repository and account home; provider
+calls also fence the organization after reading the current subscription login.
+Human-only steps are translated when readiness is read. Healthy admission uses
+one provider GET and records the validation in the readiness row; no performance
+gain is claimed.
+
+Claude uses the existing fallback record. The companion runtime-visibility
+lane consumes that record through its shared projection; this implementation
+adds no separate visibility mechanism.
+
+
 ## Originating requirement
 
 Operator, 2026-11-12 about 13:21 UTC, answer on the decision form about Claude

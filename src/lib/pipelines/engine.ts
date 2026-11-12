@@ -13,7 +13,7 @@ import { assertProactiveTaskExecution, proactiveTaskExecutionError, proactiveCon
 import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
 import { prepareLockedDependencies } from "./lockedDependencies";
 import { settledPublicationForHead } from "./publicationEvidence";
-import { claudeCloudTaskFingerprint, claudeCloudTasks, codexCloudEnvironmentId, pipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
+import { claudeCloudTaskFingerprint, codexCloudEnvironmentId, pipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
 import { cloudEnvironmentChoiceFingerprint } from "@/lib/projects/codexCloudEnvironments";
 import { cloudEngine, cloudLabel, cloudPollDelay, cloudStageDeadlineMs, isCloudRuntime, type CloudRuntime, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt } from "./cloudStage";
 import { hostedCloudStageClient, CloudSubmissionNotStartedError } from "./cloudHostedClient";
@@ -9533,7 +9533,7 @@ function attemptCloudRuntime(stage: PipelineStage, attempt: PipelineStageAttempt
 
 /** The choice of target that a live attempt's authority rests on. */
 function cloudTargetChoice(runtime: CloudRuntime, project: string): string {
-  return runtime === "claude-cloud" ? JSON.stringify(claudeCloudTasks(project)) : codexCloudEnvironmentId(project);
+  return runtime === "claude-cloud" ? "" : codexCloudEnvironmentId(project);
 }
 
 function cloudTargetFingerprint(runtime: CloudRuntime, project: string, accountId: string): string {

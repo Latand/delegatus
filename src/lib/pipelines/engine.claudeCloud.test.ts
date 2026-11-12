@@ -6,7 +6,7 @@ import { settlePipelineControllerJobs } from "./controllerJobs";
 import { createClaudeCloudStageClient } from "./cloudClaudeClient";
 import { fakeClaudeCloud } from "./claudeCloud.fixture";
 import { statePath } from "@/lib/configDir";
-import { resetProjectSettingsForTests, setClaudeCloudTasks } from "@/lib/projects/settings";
+import { resetProjectSettingsForTests, setClaudeCloudTaskFor, setClaudeCloudTasks } from "@/lib/projects/settings";
 import type { PipelineStageInput } from "./types";
 
 const reviewer: PipelineStageInput = { id: "review", kind: "run", runtime: "claude-cloud", role: { roleId: "reviewer" },
@@ -14,8 +14,9 @@ const reviewer: PipelineStageInput = { id: "review", kind: "run", runtime: "clau
 const lane = () => loadPipelines()[0]!;
 const attempt = () => lane().runs[0]!.attempts.at(-1)!;
 const advancing = () => ["provisioning", "running"].includes(lane().state);
+let fixtureSequence = 0;
 
-async function fixture(options: Parameters<typeof fakeClaudeCloud>[0] & { stages?: PipelineStageInput[]; repoDir?: string; tasks?: boolean } = {}) {
+async function fixture(options: Parameters<typeof fakeClaudeCloud>[0] & { stages?: PipelineStageInput[]; repoDir?: string; taskBinding?: boolean } = {}) {
   await settlePipelineControllerJobs();
   resetProjectSettingsForTests();
   fs.rmSync(statePath("cloud/claude-write-access.json"), { force: true });
@@ -29,11 +30,12 @@ async function fixture(options: Parameters<typeof fakeClaudeCloud>[0] & { stages
   h.ports.claudeCloudClient = createClaudeCloudStageClient(fake.dependencies);
   await create(h.ports, (options.stages ?? [reviewer]) as never, { publication: "remote-branch", ...(options.repoDir ? { repoDir: options.repoDir } : {}) });
   const record = lane();
+  record.project = `claude-cloud-fixture-${++fixtureSequence}`;
   record.inputContext = { handoffDigest: "Preserve the accepted scope." };
   record.delivery!.target.remote = "https://github.com/sample/project.git";
   record.baseBranch = "main";
   savePipelines([record]);
-  expect(setClaudeCloudTasks(record.project, options.tasks === false ? [] : [{ accountId: "account-a", taskId: "task-1" }])).toBe(true);
+  expect(setClaudeCloudTasks(record.project, options.taskBinding === false ? [] : [{ accountId: "account-a", taskId: "task-1" }])).toBe(true);
   return { h, fake };
 }
 
@@ -87,19 +89,33 @@ test("the session receipt survives a real process restart and the session comple
 });
 
 test.each([
-  ["no task for the account", { tasks: false }, "no Claude cloud scheduled task"],
-  ["connector on the task", { task: { enabled: true, mcp_connections: [{ name: "slack" }], job_config: { ccr: { session_context: { sources: [{ git_repository: { url: "https://github.com/sample/project" } }] } } } } }, "connectors attached"],
-])("an unusable launch (%s) starts nothing, keeps its cause and runs locally exactly once", async (_name, options, cause) => {
+  ["missing binding", { taskBinding: false }],
+  ["connector on the task", { task: { enabled: false, mcp_connections: [{ name: "connector" }], job_config: { ccr: { session_context: { sources: [{ git_repository: { url: "https://github.com/sample/project" } }] } } } } }],
+])("admission prepares %s and executes in Claude Cloud", async (_name, options) => {
   const { h, fake } = await fixture(options as never);
   try {
-    for (let i = 0; i < 6 && !h.spawnInputs.length; i++) await step(h);
+    for (let i = 0; i < 10 && advancing(); i++) { h.advanceWallClock(30_000); await step(h); }
+    expect(fake.runCalls()).toBe(1);
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(attempt().verdict).toMatchObject({ status: "pass" });
+  } finally { fake.stop(); }
+});
+
+test("every unavailable account names its human step; fallback starts once and survives restart", async () => {
+  const { h, fake } = await fixture({ taskBinding: false, githubConnected: false });
+  const resolve = h.ports.resolveProjectSpawn!;
+  h.ports.resolveProjectSpawn = (engine, request) => {
+    const accountId = request.requestedId ?? ["account-a", "account-b"].find(id => !request.unavailableIds?.includes(id));
+    return accountId ? resolve(engine, { ...request, requestedId: accountId }) : { kind: "unavailable", allowedAccountIds: ["account-a", "account-b"] };
+  };
+  try {
+    for (let i = 0; i < 8 && !h.spawnInputs.length; i++) await step(h);
     expect(fake.runCalls()).toBe(0);
-    expect(fake.sent).toEqual([]);
     expect(h.spawnInputs).toHaveLength(1);
-    expect(h.spawnInputs[0]!.role.engine).toBe("claude");
     expect(attempt().executionRuntime).toBe("cloud-then-local");
-    expect(attempt().cloud?.fallback?.reason).toContain(cause);
-    expect(lane().stateDetail ?? "").not.toContain("Codex");
+    expect(attempt().cloud?.fallback?.reason).toContain("Account account-a: GitHub is not connected");
+    expect(attempt().cloud?.fallback?.reason).toContain("Account account-b: GitHub is not connected");
+    expect(attempt().cloud?.fallback?.reason).toContain("https://claude.ai/connect-github");
     const restarted = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id], {
       env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8" });
     expect(restarted.status).toBe(0);
@@ -107,6 +123,23 @@ test.each([
     await step(h); await step(h);
     expect(h.spawnInputs).toHaveLength(1);
   } finally { fake.stop(); }
+});
+
+test("binding account B while account A submits keeps A’s cloud execution authority", async () => {
+  let entered!: () => void, release!: () => void;
+  const submitted = new Promise<void>(resolve => { entered = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const { h, fake } = await fixture({ beforeRun: async () => { entered(); await blocked; } });
+  const progress = (async () => { for (let i = 0; i < 10 && advancing(); i++) { h.advanceWallClock(30_000); await step(h); } })();
+  try {
+    await Promise.race([submitted, progress.then(() => { throw new Error("submission never started"); })]);
+    expect(attempt().cloud?.phase).toBe("submitting");
+    expect(setClaudeCloudTaskFor(lane().project, "account-b", "task-b", null)).toBe("task-b");
+    release(); await progress;
+    expect(fake.runCalls()).toBe(1);
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(attempt().verdict).toMatchObject({ status: "pass" });
+  } finally { release(); await progress; fake.stop(); }
 });
 
 test.each([

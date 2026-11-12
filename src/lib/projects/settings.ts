@@ -223,7 +223,7 @@ export function validClaudeCloudTasks(value: unknown): value is ClaudeCloudTask[
     && new Set(value.map(row => (row as ClaudeCloudTask).accountId)).size === value.length;
 }
 
-/** Like the Codex environment, the canonical choice wins over predecessors. Empty disables the runtime. */
+/** The canonical task list wins over predecessors. Preparation fills missing account bindings. */
 export function claudeCloudTasks(project: string): ClaudeCloudTask[] {
   const projects = readProjects();
   const [current, ...predecessors] = projectAliasKeys(project.trim());
@@ -248,6 +248,23 @@ export function setClaudeCloudTasks(project: string, tasks: ClaudeCloudTask[]): 
     projects[key] = { ...projects[key], claudeCloudTasks: tasks };
     return writeProjects(projects);
   }, false);
+}
+
+/** Upsert one automatic binding while preserving the effective predecessor list. */
+export function setClaudeCloudTaskFor(project: string, accountId: string, taskId: string, replacing: string | null): string | null {
+  if (!validClaudeCloudTasks([{ accountId, taskId }])) return null;
+  return underFileLock(() => {
+    const key = canonicalProject(project.trim());
+    if (!key) return null;
+    const tasks = claudeCloudTasks(project);
+    const current = tasks.find(task => task.accountId === accountId);
+    if (current && current.taskId !== replacing && current.taskId !== taskId) return current.taskId;
+    const next = current ? tasks.map(task => task.accountId === accountId ? { accountId, taskId } : task) : [...tasks, { accountId, taskId }];
+    if (!validClaudeCloudTasks(next)) return null;
+    const projects: Record<string, ProjectSettingsEntry> = Object.assign(Object.create(null), readProjects());
+    projects[key] = { ...projects[key], claudeCloudTasks: next };
+    return writeProjects(projects) ? taskId : null;
+  }, null);
 }
 
 export function validPipelineStageRuntime(value: unknown): value is "local" | "codex-cloud" {

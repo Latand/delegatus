@@ -4837,6 +4837,16 @@ function cloudEnvironmentWriteAuthority(args: McpToolArgs, dependencies: ViewerM
   throw new McpToolRefusal("Cloud environment overrides require the operator or this project's designated seat", { code: "cloud_environment_write_refused", status: 403 });
 }
 
+function claudeCloudTaskWriteAuthority(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): void {
+  if (args.action !== "prepare") return;
+  const caller = authorityOf(dependencies);
+  if (caller.kind === "root") return;
+  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+  if (caller.kind === "worker" && seats.some(seat => seat.conversationId === caller.conversationId && seat.project
+    && canonicalProject(seat.project) === canonicalProject(required(args, "project")))) return;
+  throw new McpToolRefusal("Claude task preparation requires the operator or this project’s designated seat", { code: "claude_cloud_task_write_refused", status: 403 });
+}
+
 /**
  * get_orchestrator (two-axis contract): the designation, its health, and a
  * BOUNDED rotation recommendation. Read-only; every inferred number is
@@ -8872,6 +8882,16 @@ export function viewerMcpBindings(
       cloudEnvironmentWriteAuthority(args, domainDependencies);
       return control.post("/api/projects/cloud-environments", args, callerCapabilityHeaders());
     }, false, false), { authorizeReceipt: (args: McpToolArgs) => cloudEnvironmentWriteAuthority(args, domainDependencies) }),
+    claude_cloud_task: Object.assign(orchestratorProjectBinding(domainDependencies, async (args, context) => {
+      const control = viewerControlForCall(controlDependencies, context);
+      if (args.action === "read") {
+        const query = new URLSearchParams({ project: required(args, "project") });
+        if (args.accountId !== undefined) query.set("accountId", String(args.accountId));
+        return readViewerControl(control, `/api/projects/claude-cloud-tasks?${query}`);
+      }
+      claudeCloudTaskWriteAuthority(args, domainDependencies);
+      return control.post("/api/projects/claude-cloud-tasks", args, callerCapabilityHeaders());
+    }, false, false), { authorizeReceipt: (args: McpToolArgs) => claudeCloudTaskWriteAuthority(args, domainDependencies) }),
     role_presets: async (args) => waitForStateLock("mcp.role-presets", () => rolePresetsTool(args, domainDependencies)),
     auto_updates: (args, context) => autoUpdatesTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     voice_tools: (args, context) => voiceTools(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),

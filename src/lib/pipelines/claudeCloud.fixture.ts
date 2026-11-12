@@ -11,7 +11,11 @@ export const sessionShellEnvironment = (home: string): NodeJS.ProcessEnv => ({ N
 /** The shapes observed on live sessions (docs/design/claude-code-cloud.md §1.14),
  * on an owned loopback listener. Only the injected fetch can reach it. */
 export function fakeClaudeCloud(options: {
-  task?: Row | null; runAnswer?: () => Response; sessionId?: string;
+  task?: Row | null;
+  tasks?: Row[]; hasMore?: boolean; githubConnected?: boolean; environments?: Row[];
+  preparationAnswer?: (method: string, path: string, body: Row | null) => Response | Promise<Response> | null;
+  beforeRun?: () => Promise<void>;
+  runAnswer?: () => Response; sessionId?: string;
   probe?: { comment?: ProbeResult; push?: ProbeResult };
   exportDiff?: string; finalMessage?: string;
   /** Runs the exact export commands the assignment asked for in this checkout, as a session would. */
@@ -60,16 +64,44 @@ export function fakeClaudeCloud(options: {
     push(id, { type: "user", uuid: `result-${useId}`, message: { role: "user", content: [{ type: "tool_result", tool_use_id: useId, content: text, is_error: true }] },
       tool_result_meta: [{ id: useId, non_execution_kind: "automode-blocked", permission_decision: { decision: "reject", reason_type: "classifier", source: "config" } }], tool_use_result: `Error: ${text}` });
   };
+  const tasks = new Map<string, Row>((options.tasks ?? []).map(t => [String(t.id), structuredClone(t)]));
+  let taskOverride = options.task === undefined ? undefined : structuredClone(options.task);
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
     const body = request.method === "POST" ? await request.json().catch(() => null) as Row | null : null;
     const login = request.headers.get("authorization"), organization = request.headers.get("x-organization-uuid");
     calls.push({ method: request.method, path: url.pathname + url.search, login, organization, body });
     if (url.pathname.endsWith("/issues")) return Response.json(options.closedIssue === null ? [] : [{ number: options.closedIssue ?? 7, state: "closed" }]);
+    if (url.pathname.includes("/triggers") && !url.pathname.endsWith("/run") || url.pathname.includes("/environment_providers") || url.pathname.endsWith("/sync/github/auth")) {
+      const replaced = options.preparationAnswer?.(request.method, url.pathname, body);
+      if (replaced) return await replaced;
+    }
+    if (url.pathname.endsWith("/sync/github/auth")) return Response.json({ is_authenticated: options.githubConnected ?? true });
+    if (url.pathname === "/v1/environment_providers") return Response.json({ environment_providers: options.environments ?? [{ environment_id: "env-fixture", kind: "anthropic_cloud", name: "Default", state: "active" }] });
+    if (url.pathname === "/v1/code/triggers") {
+      if (request.method === "GET") return Response.json({ data: [...tasks.values()], has_more: options.hasMore ?? false });
+      const id = `task-created-${tasks.size + 1}`;
+      const created = { ...body, id, created_at: new Date(clock).toISOString(), mcp_connections: [{ name: "default-connector" }] };
+      tasks.set(id, created); return Response.json({ trigger: created });
+    }
     const task = /^\/v1\/code\/triggers\/([^/]+)$/.exec(url.pathname);
-    if (task) return options.task === null ? Response.json({ type: "error" }, { status: 400 }) : Response.json({ trigger: options.task ?? { id: task[1], enabled: true,
-      job_config: { ccr: { session_context: { model: "claude-opus-5-5", sources: [{ git_repository: { url: "https://github.com/sample/project" } }] } } } } });
+    if (task) {
+      if (taskOverride === null && !tasks.has(task[1]!)) return Response.json({ type: "error" }, { status: 404 });
+      let found = tasks.get(task[1]!) ?? taskOverride ?? { id: task[1], enabled: true,
+        job_config: { ccr: { session_context: { model: "claude-opus-5-5", sources: [{ git_repository: { url: "https://github.com/sample/project" } }] } } } };
+      if (request.method === "POST") {
+        found = { ...found, ...(body?.enabled === true ? { enabled: true } : {}) };
+        if (body?.clear_mcp_connections) {
+          found.mcp_connections = [];
+          const job = found.job_config as Row | undefined, ccr = job?.ccr as Row | undefined, context = ccr?.session_context as Row | undefined;
+          if (context) context.mcp_connector_ids = [];
+        }
+        if (tasks.has(task[1]!)) tasks.set(task[1]!, found); else taskOverride = found;
+      }
+      return Response.json({ trigger: found });
+    }
     if (/^\/v1\/code\/triggers\/[^/]+\/run$/.test(url.pathname)) {
+      if (options.beforeRun) await options.beforeRun();
       if (options.runAnswer) return options.runAnswer();
       open(sessionId, `<routine-fire-payload>${String(body?.text)}</routine-fire-payload>`);
       return Response.json({ conversation_id: "", session_id: sessionId, trigger: { id: "task-1", enabled: true } });
@@ -167,6 +199,6 @@ export function fakeClaudeCloud(options: {
     now: () => clock,
     sleep: async milliseconds => { clock += milliseconds; },
   };
-  return { dependencies, calls, sent, sessions, sessionId, open, push, assistant, endTurn, endFailedTurn, deliver, advance: (ms: number) => { clock += ms; },
+  return { dependencies, calls, sent, sessions, tasks, origin, sessionId, open, push, assistant, endTurn, endFailedTurn, deliver, advance: (ms: number) => { clock += ms; },
     runCalls: () => calls.filter(call => call.method === "POST" && call.path.endsWith("/run")).length, stop: () => server.stop(true) };
 }
