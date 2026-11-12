@@ -466,10 +466,16 @@ function withStateWriter<T>(filename: string, operation: (db: Database) => T): T
  * transactions, and the lease row itself.
  */
 function withLeaseDurability<T>(db: Database, operation: () => T): T {
+  return withProcessDurability(db, operation);
+}
+
+/** Commits that survive the process but not a power loss: `NORMAL` leaves
+    the WAL sync to the next `FULL` commit or checkpoint. */
+function withProcessDurability<T>(db: Database, operation: () => T): T {
   db.exec("PRAGMA synchronous = NORMAL");
   try { return operation(); }
   /* A restore that fails throws past the writer, which then closes the
-     connection, so a lease setting can never carry over into a write. */
+     connection, so the setting can never carry over into a later write. */
   finally { db.exec("PRAGMA synchronous = FULL"); }
 }
 
@@ -3025,7 +3031,17 @@ export class SqliteStateCollection<T> {
       order instead of keeping their held position. */
   patchSync<C = never>(
     prepare: () => { records: readonly T[]; deleteKeys?: readonly string[]; appendKeys?: readonly string[]; companion?: CompanionPatch<C> },
-    options: { fenceOwner?: boolean; companion?: SqliteStateCollection<C>; afterPersist?: (db: Database) => void } = {},
+    options: {
+      fenceOwner?: boolean;
+      companion?: SqliteStateCollection<C>;
+      afterPersist?: (db: Database) => void;
+      /** `process`: the commit survives the process ending but not a power
+          loss, and does not wait for the disk. For a store whose legacy file
+          was appended or renamed into place without an fsync, it keeps that
+          store's durability and keeps the disk off the caller's thread. Any
+          later commit that waits for the disk carries it there too. */
+      durability?: "disk" | "process";
+    } = {},
   ): void {
     const authorize = options.fenceOwner
       ? () => assertSqliteInitializationAuthority(this.filename, true)
@@ -3044,7 +3060,10 @@ export class SqliteStateCollection<T> {
     try {
       ownLease = this.acquireLeaseSync();
       if (companion && !first) laterLease = companion.acquireLeaseSync();
-      withStateWriter(this.filename, (db) => withImmediateTransaction(db, this.options.busyMessage, () => {
+      const commitDurability = options.durability === "process"
+        ? withProcessDurability
+        : <R>(_db: Database, operation: () => R) => operation();
+      withStateWriter(this.filename, (db) => commitDurability(db, () => withImmediateTransaction(db, this.options.busyMessage, () => {
         const patch = prepare();
         const companionWrite = companion && patch.companion
           ? { collection: companion, lease: (companionLease ?? laterLease)!, ...patch.companion }
@@ -3052,7 +3071,7 @@ export class SqliteStateCollection<T> {
         this.persistReplacement(ownLease!, patch.records, true, patch.deleteKeys ?? [], authorize, new Set(patch.appendKeys ?? []),
           companionWrite as (CompanionPatch<unknown> & { collection: SqliteStateCollection<unknown>; lease: string }) | undefined, db);
         options.afterPersist?.(db);
-      }, this.options.collection));
+      }, this.options.collection)));
     } finally {
       if (laterLease) companion!.releaseLeaseSync(laterLease);
       if (ownLease) this.releaseLeaseSync(ownLease);
