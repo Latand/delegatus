@@ -144,3 +144,39 @@ test.skipIf(process.platform !== "linux").each(["mountinfo", "fdinfo", "protecti
     expect(fs.readFileSync(path.join(retained, "payload"), "utf8")).toBe("retained cache");
     expect(fs.readlinkSync(path.join(consumer, "dependency"))).toBe(f.directory);
   });
+
+test.skipIf(process.platform !== "linux")(
+  "a keep marker appearing during final checkout validation preserves permissions", async () => {
+    const f = fixture(), consumer = path.join(f.parent, "consumer");
+    fs.mkdirSync(path.join(consumer, ".git"), { recursive: true });
+    const child = Bun.spawn([process.execPath, "-e", "process.stdout.write('ready\\n'); for await (const chunk of process.stdin) {}"],
+      { cwd: consumer, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    cleanup.push(async () => { child.stdin.end(); expect(await child.exited).toBe(0); });
+    const reader = child.stdout.getReader();
+    try { expect(new TextDecoder().decode((await reader.read()).value)).toBe("ready\n"); }
+    finally { reader.releaseLock(); }
+    const nativeStat = fs.lstatSync.bind(fs);
+    let injected = false;
+    const stat = spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike, options?: unknown) => {
+      const value = nativeStat(file, options as { bigint: false });
+      const stack = String(new Error().stack);
+      if (!injected && String(file) === path.join(consumer, ".git")
+        && stack.includes("at permissionChange") && stack.includes("at unchangedAll")) {
+        expect(fs.statSync(path.join(f.journal().trash, "cache")).mode & 0o777).toBe(0o555);
+        fs.writeFileSync(path.join(f.journal().trash, ".delegatus-keep"), "late checkout pin");
+        injected = true;
+      }
+      return value;
+    }) as typeof fs.lstatSync);
+    cleanup.push(() => { stat.mockRestore(); });
+    const report = await f.sweep(() => ({ ownNamespace: null, processes: [
+      { pid: child.pid, namespace: null, stamped: false, paths: [fs.readlinkSync(`/proc/${child.pid}/cwd`)] },
+    ] }));
+    expect(injected).toBeTrue();
+    expect(report).toMatchObject({ removed: 0, deferred: 1, errors: 0 });
+    expect(f.store.has(f.directory)).toBeTrue();
+    const trash = f.journal().trash;
+    expect(fs.readFileSync(path.join(trash, ".delegatus-keep"), "utf8")).toBe("late checkout pin");
+    expect(fs.readFileSync(path.join(trash, "cache/payload"), "utf8")).toBe("retained cache");
+    expect(fs.statSync(path.join(trash, "cache")).mode & 0o777).toBe(0o555);
+  });

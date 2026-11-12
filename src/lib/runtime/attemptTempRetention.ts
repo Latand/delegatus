@@ -510,6 +510,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
                   // Repeat negative checkout discovery after protection's last
                   // read, only for actual writes rather than every tree entry.
                   if (!inventory.unchangedAll()) throw new AttemptTempBudgetDeferred("checkout changed before permission repair");
+                  // Checkout reads can observe a new keep marker in the tree.
+                  // Refresh protection before allowing the permission write.
+                  if (!dispatchEvidence?.current()) throw new AttemptTempBudgetDeferred("protection changed before permission repair");
                   apply();
                 });
               } }),
