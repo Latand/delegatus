@@ -154,6 +154,9 @@ type ResidentWorker = {
   bufferBytes: number;
   stderr: string;
   pending: PendingBuild | null;
+  /** Requests whose caller stopped waiting, by id, each with the timer of the
+      worker's own cap. The worker still owes these answers; they are dropped. */
+  abandoned: Map<string, ReturnType<typeof setTimeout>>;
   rssBytes: number;
   nextId: number;
   retired: boolean;
@@ -210,6 +213,8 @@ function retire(worker: ResidentWorker, reason: string): void {
   if (pool.__llvFilesResponseWorker === worker) pool.__llvFilesResponseWorker = null;
   const pending = worker.pending;
   worker.pending = null;
+  for (const timer of worker.abandoned.values()) clearTimeout(timer);
+  worker.abandoned.clear();
   if (pending) {
     clearTimeout(pending.timer);
     const detail = worker.stderr.trim();
@@ -280,6 +285,19 @@ function answer(worker: ResidentWorker, frame: string): void {
     return;
   }
   if (typeof parsed.rssBytes === "number") worker.rssBytes = parsed.rssBytes;
+  const abandoned = worker.abandoned.get(parsed.id);
+  if (abandoned !== undefined) {
+    /* The caller's deadline passed while the worker was still healthy. Its
+       late answer is dropped, together with the files it points at. */
+    clearTimeout(abandoned);
+    worker.abandoned.delete(parsed.id);
+    worker.stderr = "";
+    const late = parsed.ok === true ? representation(parsed.result) : null;
+    for (const file of [late?.bodyFile, late?.deltaFile]) {
+      if (file && path.dirname(path.resolve(file)) === worker.resultDirectory) fs.rm(file, { force: true }, () => undefined);
+    }
+    return;
+  }
   const pending = worker.pending;
   if (!pending || pending.id !== parsed.id) {
     /* An answer to a build nobody is waiting for means the two sides disagree
@@ -331,6 +349,7 @@ function startWorker(
     bufferBytes: 0,
     stderr: "",
     pending: null,
+    abandoned: new Map(),
     rssBytes: 0,
     nextId: 0,
     retired: false,
@@ -395,6 +414,7 @@ function askWorker(
   worker: ResidentWorker,
   request: WorkerRequest,
   timeoutMs: number,
+  callerDeadlineMs?: number,
 ): Promise<FilesResponseWorkerWireRepresentation> {
   return new Promise<FilesResponseWorkerWireRepresentation>((resolve, reject) => {
     if (worker.retired) {
@@ -402,13 +422,27 @@ function askWorker(
       return;
     }
     const id = String(worker.nextId++);
+    /* The worker's own cap: a worker silent for this long is stopped. */
     const timer = setTimeout(() => {
       const detail = worker.stderr.trim();
-      worker.pending = null;
+      if (worker.pending?.id === id) worker.pending = null;
       retire(worker, "timed out");
       reject(new DeadlineExceededError(`files response worker timed out${detail ? `: ${detail}` : ""}`, timeoutMs));
     }, timeoutMs);
-    worker.pending = { id, resolve, reject, timer };
+    /* The caller's shorter deadline ends the wait and leaves the shared worker
+       running: it also serves `/api/files`, and a replacement starts cold. */
+    const callerTimer = callerDeadlineMs !== undefined && callerDeadlineMs < timeoutMs ? setTimeout(() => {
+      if (worker.pending?.id !== id) return;
+      worker.pending = null;
+      worker.abandoned.set(id, timer);
+      timer.unref?.();
+      reject(new DeadlineExceededError("seat source worker deadline exceeded", callerDeadlineMs));
+    }, callerDeadlineMs) : undefined;
+    worker.pending = {
+      id, timer,
+      resolve: value => { clearTimeout(callerTimer); resolve(value); },
+      reject: error => { clearTimeout(callerTimer); reject(error); },
+    };
     try {
       worker.child.stdin!.write(`${JSON.stringify({ id, request })}\n`);
     } catch (error) {
@@ -432,6 +466,7 @@ async function dispatch(
   request: WorkerRequest,
   runtime: FilesResponseWorkerRuntime,
   previous?: { body: string; etag: string },
+  callerDeadlineMs?: number,
 ): Promise<FilesResponseRepresentation> {
   const worker = residentWorker(runtime);
   let previousFile: string | undefined;
@@ -442,7 +477,7 @@ async function dispatch(
       await fs.promises.writeFile(previousFile, previous.body, { encoding: "utf8", mode: 0o600 });
       request = { ...request, deltaFrom: { bodyFile: previousFile, etag: previous.etag } };
     }
-    const result = await askWorker(worker, request, runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS);
+    const result = await askWorker(worker, request, runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS, callerDeadlineMs);
     const { bodyFile, deltaFile, deltaBase, snapshotEpoch, snapshotGeneration, stateWritesJson, ...metadata } = result;
     const stateWrites = stateWritesJson ? JSON.parse(stateWritesJson) as StateWriteHealth : undefined;
     if (stateWrites && (!record(stateWrites)
@@ -492,7 +527,14 @@ export function buildFilesResponseInWorker(
 /** Use the existing bounded worker queue and lifetime for seat source reads. */
 export function runSeatSourceInWorker(request: SeatSourceWorkerRequest, runtime: FilesResponseWorkerRuntime = testRuntime ?? {}): Promise<FilesResponseRepresentation> {
   assertSeatTickWork();
-  const deadline = Date.now() + Math.min(runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS, seatTickWorkRemainingMs() ?? Infinity);
+  /* The deadline bounds this one request. The worker's cap, which stops the
+     worker, stays `runtime.timeoutMs`. */
+  const budget = seatTickWorkRemainingMs();
+  /* While the worker still owes an answer nobody waits for, a seat check
+     would spend its time behind that work, so it retries on the next check. */
+  const deferred = () => budget !== undefined && (pool.__llvFilesResponseWorker?.abandoned.size ?? 0) > 0;
+  if (deferred()) return Promise.reject(new DeadlineExceededError("seat source worker deferred to the next check", 0));
+  const deadline = Date.now() + Math.min(runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS, budget ?? Infinity);
   const previous = pool.__llvFilesResponseWorkerTail ?? Promise.resolve();
   const endQueue = seatTickQueueSpan(`files.${request.type}.queue`);
   let expired = false;
@@ -502,8 +544,9 @@ export function runSeatSourceInWorker(request: SeatSourceWorkerRequest, runtime:
     assertSeatTickWork();
     const remaining = deadline - Date.now();
     if (expired || remaining <= 0) throw new DeadlineExceededError("seat source worker deadline exceeded in queue", 0);
+    if (deferred()) throw new DeadlineExceededError("seat source worker deferred to the next check", 0);
     const endService = seatTickQueueSpan(`files.${request.type}.service`);
-    try { return await dispatch(request.type === "seat-rule-reports" ? { ...request, deadlineAt: deadline } : request, { ...runtime, timeoutMs: remaining }); }
+    try { return await dispatch(request.type === "seat-rule-reports" ? { ...request, deadlineAt: deadline } : request, runtime, undefined, remaining); }
     finally { endService(); }
   });
   pool.__llvFilesResponseWorkerTail = current.then(() => undefined, () => undefined);

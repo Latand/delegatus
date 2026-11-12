@@ -17,13 +17,13 @@ import { STOPPED_MIGRATION_DELIVERY_REASON } from "@/lib/accounts/migration/inte
 
 const now = Date.parse("2026-10-01T00:00:00Z");
 const operationId = "terminalization-send";
-function seed(journal: RuntimeJournal, conversationId = "conversation_terminalization") {
+function seed(journal: RuntimeJournal, conversationId = "conversation_terminalization", id = operationId) {
   journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
     conversationId, sessionKey: { engine: "codex", sessionId: "terminalization" },
     hostKind: "codex-app-server", host: "hosted", turn: "idle", provenance: "structured",
   } });
-  journal.executeOperation({ kind: "send", operationId, conversationId,
-    idempotencyKey: "terminalization-key", text: "deliver once", policy: "queue" });
+  journal.executeOperation({ kind: "send", operationId: id, conversationId,
+    idempotencyKey: `${id}-key`, text: "deliver once", policy: "queue" });
 }
 function barrier() {
   let release!: () => void;
@@ -119,6 +119,54 @@ test("an older host cannot silently drop confirmation arbitration and receives n
     expect(journal.operationResult(operationId)?.receipt.status).toBe("uncertain");
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
+    journal.close(); fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("pristine failure uses an explicit RPC and an incumbent refusal preserves verify-first", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-pristine-protocol-"));
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true, now: () => now });
+  seed(journal);
+  const currentEndpoint = testEndpoint(directory, "current");
+  const currentServer = serveRuntimeHost(currentEndpoint, new RuntimeHost(journal));
+  await new Promise<void>((resolve, reject) => { currentServer.once("listening", resolve); currentServer.once("error", reject); });
+  try {
+    await new UnixRuntimeHostClient(currentEndpoint).transitionOperation(operationId, "failed", { reason: "stage host is gone" }, {
+      fromStatuses: ["pending", "queued"], requirePristineAdmission: true,
+    });
+    expect(journal.operationResult(operationId)?.receipt).toMatchObject({ status: "failed", reason: "stage host is gone" });
+  } finally {
+    await new Promise<void>(resolve => currentServer.close(() => resolve()));
+  }
+
+  const incumbentOperationId = "incumbent-send";
+  seed(journal, "conversation_incumbent", incumbentOperationId);
+  const incumbent = new RuntimeHost(journal);
+  const methods: string[] = [];
+  const incumbentEndpoint = testEndpoint(directory, "incumbent");
+  const incumbentServer = serveRuntimeHost(incumbentEndpoint, { handle: async (request, options) => {
+    methods.push(request.method);
+    if (request.method === "operation-transition-pristine") {
+      // Model the actuation race before an older listener rejects the unknown RPC.
+      journal.transitionOperation(incumbentOperationId, "delivering");
+      journal.transitionOperation(incumbentOperationId, "queued", { deliveryUnverified: true });
+      return { id: request.id, ok: false, error: "runtime request method is unsupported" };
+    }
+    return incumbent.handle(request, options);
+  } });
+  await new Promise<void>((resolve, reject) => { incumbentServer.once("listening", resolve); incumbentServer.once("error", reject); });
+  const client = new UnixRuntimeHostClient(incumbentEndpoint);
+  try {
+    await expect(client.transitionOperation(incumbentOperationId, "failed", { reason: "stage host is gone" }, {
+      fromStatuses: ["pending", "queued"], requirePristineAdmission: true,
+    })).rejects.toThrow("unsupported");
+    await client.transitionOperation(incumbentOperationId, "uncertain", { deliveryUnverified: true });
+    expect(methods).toEqual(["operation-transition-pristine", "operation-transition"]);
+    expect(journal.operationResult(incumbentOperationId)?.receipt).toMatchObject({
+      status: "uncertain", deliveryUnverified: true,
+    });
+  } finally {
+    await new Promise<void>(resolve => incumbentServer.close(() => resolve()));
     journal.close(); fs.rmSync(directory, { recursive: true, force: true });
   }
 });

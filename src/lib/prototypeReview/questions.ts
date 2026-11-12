@@ -19,6 +19,7 @@ export function normalizePrototypeAnswers(questions: readonly PrototypeQuestion[
   return questions.map(q => {
     const answer = raw.find(a => a.questionId === q.id)!;
     if (answer.skipped !== undefined) {
+      if (q.skippable === false) throw new Error(`${q.id}: this question cannot be skipped`);
       if (answer.skipped !== true || !Array.isArray(answer.options) || answer.options.length || answer.other !== undefined || answer.customText !== undefined)
         throw new Error(`${q.id}: a skipped question takes no answer`);
       return { questionId: q.id, options: [], skipped: true as const };

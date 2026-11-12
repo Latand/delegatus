@@ -333,6 +333,9 @@ export interface RuntimeTransitionOptions {
   retirementClaim?: RuntimeRetirementClaim;
   /** Compare-and-set fence evaluated inside the journal write transaction. */
   fromStatuses?: readonly RuntimeReceiptStatus[];
+  /** A dead-host failure is safe only while the original admission is still
+      untouched. Checked atomically against the journal receipt revision. */
+  requirePristineAdmission?: boolean;
   /** Marks a terminal transition as owed a durable projection, inside the same
       write transaction that commits it (#1612). The caller is saying: the
       answer to this call is what carries the outcome into the delivery record,
@@ -1111,7 +1114,7 @@ export interface RuntimeSocketRequest {
   /** Opt in to serial reuse; older listeners close after the answer. */
   keepAlive?: boolean;
   id: string;
-  method: "runtime-host-health" | "files-revision" | "session-read" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-confirm-delivery" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-reconcile" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
+  method: "runtime-host-health" | "files-revision" | "session-read" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-transition-pristine" | "operation-confirm-delivery" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-reconcile" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
   params?: Record<string, unknown>;
 }
 

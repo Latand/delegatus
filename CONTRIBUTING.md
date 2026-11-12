@@ -533,6 +533,10 @@ contracts, which the hosted `Bun runtime pin` workflow also runs, are stopped
 and named as left to that workflow; a decisive step still running is stopped
 with `no verdict within the push budget`, naming the check, which the
 publication retries as an interrupted push. A manual heavy phase has a fifteen-minute execution limit.
+Comparator budget exhaustion retains green file checkpoints for these bounded
+retries, and privacy reports containing only `configuration_error` retry as
+interruptions when changed paths are known and exclude `scripts/privacy-*` and
+`scripts/generate-privacy-*`; mixed privacy findings retain their refusal.
 Bun and Codex fixtures are cached under
 `${XDG_CACHE_HOME:-$HOME/.cache}/delegatus-gate`. Dependency or allowlist changes
 also run the shared supply-chain check; CI audits weekly and by dispatch.

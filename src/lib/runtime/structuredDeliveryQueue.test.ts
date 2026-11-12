@@ -4185,3 +4185,113 @@ for (const enabled of [false, undefined]) test(`seat inbox scope falls back to i
   expect(h.sends).toHaveLength(3);
   expect(h.sends.every(e => !e.parts)).toBe(true);
 });
+
+
+test.each(["gone", "unknown", "unreadable", "publishing", "actuated", "actuation-wins", "previously-actuated", "previously-actuated-legacy"] as const)("a proven dead stage fails its journaled follow-up once and late recovery cannot revive it: %s", async mode => {
+  const { isolatedStageRegistry, stageFollowup } = await import("./deadStageDelivery.fixture");
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const { procBackend } = await import("@/lib/proc");
+  const { spyOn } = await import("bun:test");
+  const { bindStructuredDeliveryQueue } = await import("./structuredDeliveryController");
+  const { kickStructuredDeliveryQueue } = await import("./structuredDeliverySignal");
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const { StructuredRecoveryHeldForUpdateError } = await import("./structuredRecovery");
+  setSystemTime(new Date("2026-11-01T00:00:00Z"));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "journaled-dead-stage-"));
+  const { registry, conversation } = isolatedStageRegistry(directory);
+  const f = stageFollowup(registry, conversation.id);
+  registry.beginDeliveryAttempt(f.held.id, conversation.generations.at(-1)!.id);
+  const journal = new RuntimeJournal(path.join(directory, "journal.sqlite"), { structuredHosts: true });
+  const progress = new DeliveryProgressStore(path.join(directory, "progress.json"));
+  let commands = 0, recoveries = 0, engineWrites = 0, late = false;
+  const transitions: string[] = [];
+  const client = {
+    readSession: async identity => journal.readSession(identity), snapshot: async () => journal.snapshot(),
+    append: async event => journal.append(event), events: async after => journal.replay(after),
+    effectBatch: async (kinds, after) => journal.effectBatch(100, kinds, after),
+    operationStatus: async id => journal.operationResult(id),
+    command: async command => { commands++; return journal.executeOperation(command); },
+    transitionOperation: async (id, status, details, options) => {
+      if (status === "failed") expect(options?.requirePristineAdmission).toBe(true);
+      if (mode === "actuation-wins" && status === "failed") {
+        journal.transitionOperation(id, "delivering", { reason: "delivering-owner:other-executor@other-writer" });
+        journal.transitionOperation(id, "queued", { reason: "delivery-auto-retry", deliveryUnverified: true });
+      }
+      const result = journal.transitionOperation(id, status, details, options);
+      if (status === "failed") transitions.push(id);
+      if (mode === "actuation-wins" && status === "uncertain") throw new Error("terminal acknowledgement lost");
+      return result;
+    },
+  } as import("./client").RuntimeHostClient;
+  journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: {
+    conversationId: conversation.id, sessionKey: { engine: "codex", sessionId: conversation.generations.at(-1)!.id },
+    hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null, writerClaim: null, provenance: "structured",
+    attentionIds: [], capabilities: { steer: true, structuredAttention: true }, revision: 1,
+  } });
+  journal.executeOperation({ kind: "send", conversationId: conversation.id, operationId: f.held.command.operationId,
+    idempotencyKey: f.held.clientMessageId!, text: f.held.text, policy: "queue",
+    contentDigest: structuredContentDigest({ text: f.held.text, images: [] }) });
+  const key = { engine: conversation.engine, sessionId: conversation.generations.at(-1)!.id };
+  const entry = registry.hostEntry(key)!;
+  let identityRead: ReturnType<typeof spyOn> | undefined;
+  if (mode === "unknown" || mode === "unreadable") registry.upsert({ ...entry, structuredHost: {
+    ...entry.structuredHost!, process: { ...captureProcessIdentity(process.pid),
+      ...(mode === "unknown" ? { startIdentity: null } : {}) } } });
+  if (mode === "unreadable") identityRead = spyOn(procBackend, "processIdentity").mockReturnValue(null);
+  if (mode === "publishing") registry.upsert({ ...entry, status: "starting", pendingAction: "spawn",
+    structuredHost: { ...entry.structuredHost!, process: null } });
+  if (mode === "actuated") journal.transitionOperation(f.held.command.operationId, "delivering", {
+    reason: "delivering-owner:earlier-executor@previous-writer" });
+  if (mode === "previously-actuated" || mode === "previously-actuated-legacy") {
+    journal.transitionOperation(f.held.command.operationId, "delivering");
+    journal.transitionOperation(f.held.command.operationId, "queued", mode === "previously-actuated"
+      ? { reason: "delivery-auto-retry", deliveryUnverified: true } : {});
+  }
+  const dependencies = { registry, client, progress, hostlessSettleIntervalMs: 0, watchdogIntervalMs: 0, settlementSweepMs: 0,
+    recover: async () => { recoveries++; if (late) return { target: null, path: conversation.generations.at(-1)!.path,
+      conversationId: conversation.id, spawned: true }; throw new StructuredRecoveryHeldForUpdateError(); } };
+  try {
+    await bindStructuredDeliveryQueue([], dependencies);
+    const failed = journal.operationResult(f.held.command.operationId)!;
+    if (mode !== "gone") {
+      expect(failed.receipt.status).toBe(mode === "actuated" ? "delivering"
+        : mode === "actuation-wins" || mode === "previously-actuated" || mode === "previously-actuated-legacy" ? "uncertain" : "queued");
+      expect(failed.receipt.reason ?? "").not.toContain("stage host is gone");
+      expect(commands).toBe(0);
+      if (mode === "actuation-wins") {
+        const { sendReceiptFor } = await import("./sendSettlement");
+        expect(sendReceiptFor(registry.snapshot(), f.held.command.operationId)).toMatchObject({
+          duplicateRisk: true, resend: "verify-first",
+        });
+      }
+      return;
+    }
+    expect(failed.receipt.status, failed.receipt.reason ?? "").toBe("failed");
+    expect(failed.receipt.reason).toContain("stage host is gone");
+    expect(failed.receipt.reason).toContain("retry the stage");
+    expect(registry.snapshot().heldDeliveries[f.held.id]).toMatchObject({ state: "failed", text: f.held.text, command: f.held.command });
+    const { sendReceiptFor } = await import("./sendSettlement");
+    expect(sendReceiptFor(registry.snapshot(), f.held.command.operationId)).toMatchObject({ state: "failed", duplicateRisk: false, resend: "safe" });
+    late = true;
+    setSystemTime(new Date("2026-11-01T00:05:00Z"));
+    // A late live host and a fresh controller cannot consume the ended operation.
+    registry.upsert({ ...entry, status: "idle", structuredHost: { ...entry.structuredHost!,
+      process: captureProcessIdentity(process.pid) }, claimOwner: "fixture-writer" });
+    const target = { ...host(async () => { engineWrites++; return { outcome: "turn-started", turnId: "late-turn" }; }),
+      health: async () => ({ ...idleState(key.sessionId), pid: process.pid,
+        processStartIdentity: captureProcessIdentity(process.pid).startIdentity }),
+      onStateChange: () => () => {},
+    };
+    await bindStructuredDeliveryQueue([{ key, host: target }], dependencies);
+    await kickStructuredDeliveryQueue();
+    expect(journal.operationResult(f.held.command.operationId)).toEqual(failed);
+    expect(transitions).toEqual([f.held.command.operationId]);
+    expect(engineWrites).toBe(0);
+    expect(commands).toBe(0);
+    expect(recoveries).toBe(0);
+  } finally {
+    identityRead?.mockRestore();
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close(); registry.close(); fs.rmSync(directory, { recursive: true, force: true }); setSystemTime();
+  }
+});

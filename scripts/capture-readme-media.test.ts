@@ -4,7 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { alignFeedsToWholeLines, assertFrameLayout, assertTextWhole, buildCaptureEnvironment, SHOTS, cropSvg, judgeRenderBack, RENDER_BACK_TILE, RENDER_BACK_TILE_LIMIT, ringClipPath, type RingBox, snapCrop, withPointSize } from "./capture-readme-media";
+import { alignFeedsToWholeLines, assertFrameLayout, assertTextWhole, buildCaptureEnvironment, SHOTS, cropSvg, freezeFrameClock, judgeRenderBack, openTarget, RENDER_BACK_TILE, RENDER_BACK_TILE_LIMIT, ringClipPath, type RingBox, snapCrop, waitForFrameText, withPointSize } from "./capture-readme-media";
+import { seedDemoHome } from "./readme-demo-state";
 
 const box = (overrides: Partial<RingBox> = {}): RingBox => ({
   width: 200,
@@ -148,6 +149,176 @@ test.skipIf(!process.env.CHROME_BIN)("frame geometry accepts a whole subject and
     await page.setContent('<div id="subject" style="width:100px;height:100px"></div>');
     await expect(assertFrameLayout(page, shot, { x: 0, y: 0, width: 50, height: 50 })).rejects.toThrow("clipped");
     await expect(assertFrameLayout(page, { ...shot, subjects: ["#missing"] })).rejects.toThrow();
+  } finally {
+    await browser.close();
+  }
+}, 60_000);
+
+test.skipIf(!process.env.CHROME_BIN)("every capture target is present in the initial document URL before hash listeners mount", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "readme-target-test-"));
+  const { chromium } = await import("playwright-core");
+  let browser: import("playwright-core").Browser | undefined;
+  try {
+    const env = buildCaptureEnvironment(root);
+    const layout = seedDemoHome(env.HOME!, env.LLV_STATE_DIR!, Date.parse("2026-10-19T12:00:00Z"));
+    browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    for (const target of [{ kind: "overview" } as const, ...SHOTS.map(shot => shot.target)]) {
+      const page = await browser.newPage();
+      // Read the target once, as hydration does, without a hashchange listener.
+      await page.route("http://readme.invalid/**", route => route.fulfill({
+        contentType: "text/html",
+        body: '<body><script>document.body.append(location.hash || "overview")</script></body>',
+      }));
+      await openTarget(page, "http://readme.invalid", target, layout);
+      const expected = target.kind === "project" ? `#p=${encodeURIComponent(layout.ids[target.project])}`
+        : target.kind === "conversation" ? `#f=${encodeURIComponent(layout.files[target.key]!.path)}` : "overview";
+      expect(await page.locator("body").innerText()).toBe(expected);
+      await expect(openTarget(page, "http://readme.invalid", { kind: "conversation", key: "missing" }, layout)).rejects.toThrow("no transcript seeded for missing");
+      await page.close();
+    }
+  } finally {
+    await browser?.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 60_000);
+
+test.skipIf(!process.env.CHROME_BIN)("initial target readiness does not require unrelated network idle", async () => {
+  const { chromium } = await import("playwright-core");
+  let release: ((response: Response) => void) | undefined;
+  let requestDeadline: ReturnType<typeof setTimeout> | undefined;
+  let requestStarted!: () => void;
+  const pendingRequest = new Promise<void>(resolve => { requestStarted = resolve; });
+  const server = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    fetch(request) {
+      if (new URL(request.url).pathname === "/pending") {
+        return new Promise<Response>(resolve => {
+          release = resolve;
+          requestStarted();
+        });
+      }
+      return new Response('<body>Seeded row ready<script>if(location.hash.startsWith("#p=")) fetch("/pending")</script></body>', {
+        headers: { "Content-Type": "text/html" },
+      });
+    },
+  });
+  let browser: import("playwright-core").Browser | undefined;
+  try {
+    browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const page = await browser.newPage();
+    page.setDefaultNavigationTimeout(3_000);
+    const layout = { ids: { "harbor-api": "fixture" }, files: {} } as unknown as Parameters<typeof openTarget>[3];
+    await openTarget(page, `http://127.0.0.1:${server.port}`, { kind: "project", project: "harbor-api" }, layout);
+    await Promise.race([
+      pendingRequest,
+      new Promise<never>((_, reject) => {
+        requestDeadline = setTimeout(() => reject(new Error("background request did not start")), 3_000);
+      }),
+    ]);
+    await waitForFrameText(page, { id: "board", requiredText: ["Seeded row ready"] }, 3_000);
+    expect(release).toBeDefined();
+    expect(new URL(page.url()).hash).toBe("#p=fixture");
+  } finally {
+    clearTimeout(requestDeadline);
+    release?.(new Response("done"));
+    server.stop(true);
+    await browser?.close();
+  }
+}, 30_000);
+
+test.skipIf(!process.env.CHROME_BIN)("board preparation waits for the orchestrator fold control to mount", async () => {
+  const { chromium } = await import("playwright-core");
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+  try {
+    const page = await browser.newPage();
+    page.setDefaultTimeout(5_000);
+    await page.setContent("<main></main>");
+    let settled = false;
+    const pending = SHOTS[0]!.prepare!(page).then(() => { settled = true; });
+    await page.evaluate(() => document.querySelector("main")!.setAttribute("data-checked", "true"));
+    expect(settled).toBe(false);
+    await page.evaluate(() => {
+      document.querySelector("main")!.innerHTML = '<section data-orchestrator-panel><button data-seat-collapse aria-expanded="true" aria-label="Collapse the orchestrator chat (O)">Fold</button></section>';
+      const button = document.querySelector("button")!;
+      button.onclick = () => {
+        button.dataset.clicks = String(Number(button.dataset.clicks ?? 0) + 1);
+        button.setAttribute("aria-expanded", "false");
+        button.setAttribute("aria-label", "Expand the orchestrator chat (O)");
+      };
+    });
+    await pending;
+    await SHOTS[0]!.prepare!(page);
+    expect(await page.locator("button").getAttribute("aria-expanded")).toBe("false");
+    expect(await page.locator("button").getAttribute("data-clicks")).toBe("1");
+  } finally {
+    await browser.close();
+  }
+}, 60_000);
+
+test.skipIf(!process.env.CHROME_BIN)("frame readiness waits for all required text together before the clock freezes", async () => {
+  const { chromium } = await import("playwright-core");
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+  try {
+    const page = await browser.newPage();
+    const moment = Date.parse("2026-10-19T12:00:00Z");
+    await page.clock.install({ time: moment });
+    await page.clock.pauseAt(moment + 1_000);
+    await page.setContent("<main>First row</main>");
+    const shot = { id: "board", requiredText: ["First row", "Last row"] };
+    let settled = false;
+    const pending = waitForFrameText(page, shot).then(() => { settled = true; });
+    // A later render replaces the first row: both must exist in one frame.
+    await page.evaluate(() => { document.querySelector("main")!.textContent = "Last row"; });
+    await page.clock.runFor(32);
+    expect(settled).toBe(false);
+    await page.evaluate(() => { document.querySelector("main")!.append(" · First row"); });
+    await page.clock.runFor(32);
+    await pending;
+    expect(settled).toBe(true);
+    await freezeFrameClock(page);
+    expect(await page.locator("main").innerText()).toBe("Last row · First row");
+    // Already prepared frames and frames without required text need no delay.
+    await waitForFrameText(page, shot);
+    await waitForFrameText(page, { id: "empty", requiredText: [] });
+  } finally {
+    await browser.close();
+  }
+}, 60_000);
+
+test.skipIf(!process.env.CHROME_BIN)("frame readiness refuses truly missing or hidden text at its deadline", async () => {
+  const { chromium } = await import("playwright-core");
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<main>First row<span hidden>Last row</span></main>');
+    const shot = { id: "board", requiredText: ["First row", "Last row", "Another missing row"] };
+    await expect(waitForFrameText(page, shot, 250)).rejects.toThrow('board: missing text "Last row"');
+    await page.setContent("<main>First row · Last row</main>");
+    await expect(waitForFrameText(page, shot, 250)).rejects.toThrow('board: missing text "Another missing row"');
+    await page.close();
+    await expect(waitForFrameText(page, shot, 250)).rejects.toThrow("closed");
+  } finally {
+    await browser.close();
+  }
+}, 60_000);
+
+test.skipIf(!process.env.CHROME_BIN)("freezing a frame tolerates a browser delay longer than the pause lead", async () => {
+  const { chromium } = await import("playwright-core");
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+  try {
+    const page = await browser.newPage();
+    await page.clock.install({ time: Date.parse("2026-10-19T12:00:00Z") });
+    const pauseAt = page.clock.pauseAt.bind(page.clock);
+    page.clock.pauseAt = async (moment) => {
+      // Advance the real clock implementation, without sleeping, between the
+      // captured time and the pause arriving at the browser.
+      await page.clock.fastForward(2_000);
+      await pauseAt(moment);
+    };
+    const moment = await freezeFrameClock(page);
+    expect(await page.evaluate(() => Date.now())).toBe(moment);
+    await page.clock.runFor(2_000);
+    expect(await page.evaluate(() => Date.now())).toBe(moment);
   } finally {
     await browser.close();
   }

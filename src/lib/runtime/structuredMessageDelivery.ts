@@ -48,7 +48,7 @@ import {
   runtimeIdleKillMatches,
 } from "./contracts";
 import { republishStructuredDeliveryHost } from "./structuredDeliveryController";
-import { recoverDeadStructuredConversation, StructuredRecoveryHeldForUpdateError, StructuredResumeUnpublishedError } from "./structuredRecovery";
+import { deadStageHostReason, recoverDeadStructuredConversation, StructuredRecoveryHeldForUpdateError, StructuredResumeUnpublishedError } from "./structuredRecovery";
 import { runtimeImageCapability, runtimeImageRefsForUploads, runtimeImageStore, type RuntimeImageUpload } from "./runtimeImageStore";
 import { admitRuntimeImagePayload } from "./runtimeImageAdmission";
 import {
@@ -1192,6 +1192,22 @@ async function deliverHeldAttempt(
        as possibly executed, for a message that provably never left. */
     if (deliverability.condition !== "reclaimed") {
       return heldForRetry(deliverability.reason);
+    }
+    if (!request.reconcileUncertain && !operationId.startsWith("spawn_message_")) {
+      const reservation = reservationFor(registry, operationId);
+      const gone = () => reservation && deadStageHostReason(registry, reservation.conversationId,
+        request.path, reservation.generationId);
+      if (gone()) {
+        // The registry claim alone cannot rule out an earlier journal admission.
+        let journal: RuntimeOperationResult | null;
+        try { journal = await client.operationStatus(operationId); }
+        catch { return "delivery-uncertain"; }
+        const authority = await authorityFence();
+        if (authority !== undefined) return authority;
+        if (journal) return "delivery-uncertain";
+        const cause = gone();
+        if (cause) return { outcome: "rejected", cause };
+      }
     }
     /* Recorded before the recovery is awaited (A5): a recovery that hangs is
        named on the send's record and stalls within the bound. A refused one

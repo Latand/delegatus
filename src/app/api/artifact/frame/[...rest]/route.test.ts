@@ -7,6 +7,8 @@ import { NextRequest } from "next/server";
 
 import { FRAME_SCOPE_TTL_MS, mintFrameScope } from "@/lib/artifact/frameScope";
 import { FRAME_SANDBOX } from "@/components/preview/DocumentPanes";
+import { claimInstall, signOutSession } from "@/lib/team/members";
+import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-artifact-frame-"));
 const { GET: serve } = await import("./route");
@@ -21,6 +23,7 @@ const savedState = process.env.LLV_STATE_DIR;
 let home = "";
 
 beforeEach(() => {
+  resetTeamStoreForTests();
   home = fs.realpathSync(fs.mkdtempSync(path.join(sandbox, "home-")));
   process.env.HOME = path.dirname(home);
   process.env.LLV_STATE_DIR = path.join(home, "state");
@@ -28,6 +31,7 @@ beforeEach(() => {
   fs.writeFileSync(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), JSON.stringify({ files: { fixture: { cwd: home, projectRoot: home } } }));
 });
 afterEach(async () => {
+  resetTeamStoreForTests();
   for (const response of responses.splice(0)) if (response.body && !response.body.locked) await response.body.cancel();
   if (savedState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = savedState;
   process.env.HOME = savedHome;
@@ -74,6 +78,22 @@ test("the meta read of an HTML report mints a frame URL scoped to its directory"
   expect(page.status).toBe(200);
   expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
   expect(await page.text()).toContain('id="decision-graph"');
+});
+
+test("the real metadata route binds a frame to its browser session, whose sign-out refuses the document and assets", async () => {
+  const dir = reportDir();
+  const store = teamStore();
+  const owner = claimInstall(store, "Owner", { surface: "desktop", browser: "chrome" });
+  const url = new URL("http://127.0.0.1:8898/api/artifact");
+  url.searchParams.set("path", path.join(dir, "index.html"));
+  url.searchParams.set("mode", "meta");
+  const metaResponse = await GET_ARTIFACT(new NextRequest(url, { headers: { host: "127.0.0.1:8898", cookie: `llv_member=${owner.cookie}` } }));
+  expect(metaResponse.status).toBe(200);
+  const { frame } = await metaResponse.json() as { frame: string };
+  expect((await GET(frameRequest(frame))).status).toBe(200);
+  signOutSession(store, owner.member, owner.session);
+  expect((await GET(frameRequest(frame))).status).toBe(403);
+  expect((await GET(frameRequest(frame.replace("index.html", "style.css")))).status).toBe(403);
 });
 
 test("relative assets load with their real types, from the same scope", async () => {

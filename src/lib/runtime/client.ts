@@ -313,11 +313,13 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     details?: RuntimeTransitionDetails,
     options: RuntimeTransitionOptions = {},
   ): Promise<RuntimeOperationResult> {
-    return this.call(options.confirmedDelivery ? "operation-confirm-delivery" : "operation-transition", {
+    return this.call(options.confirmedDelivery ? "operation-confirm-delivery"
+      : options.requirePristineAdmission ? "operation-transition-pristine" : "operation-transition", {
       operationId,
       status,
       ...(details ? { details } : {}),
       ...(options.fromStatuses ? { fromStatuses: [...options.fromStatuses] } : {}),
+      ...(options.requirePristineAdmission ? { requirePristineAdmission: true } : {}),
       ...(options.retirementClaim ? { retirementClaim: options.retirementClaim } : {}),
       ...(options.awaitProjection ? { awaitProjection: true } : {}),
       ...(options.confirmedDelivery ? { confirmedDelivery: true } : {}),
