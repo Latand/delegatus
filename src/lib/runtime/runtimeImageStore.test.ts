@@ -882,6 +882,56 @@ test.each([
   if (kind === "unexpected-child") expect(fs.readlinkSync(path.join(staging, "unexpected"))).toBe(outside);
 });
 
+test.each(["outside-link", "live-owner-directory"] as const)("gate staging retirement is safe when its path changes before quarantine (%s)", kind => {
+  const root = sandbox();
+  const outside = sandbox();
+  const token = "00000000-0000-0000-0000-000000000000";
+  const staging = path.join(root, `.writer-lock-gate.${token}.partial`);
+  fs.mkdirSync(staging, { mode: 0o700 });
+  fs.writeFileSync(path.join(staging, "owner.json"), JSON.stringify({
+    pid: 2_147_483_647, startIdentity: null, token,
+  }));
+  fs.utimesSync(staging, new Date(1_000), new Date(1_000));
+  const outsideFile = path.join(outside, "owner.json");
+  const liveReplacement = path.join(root, ".replacement-live-owner");
+  if (kind === "outside-link") fs.writeFileSync(outsideFile, "outside owner");
+  else {
+    fs.mkdirSync(liveReplacement, { mode: 0o700 });
+    fs.writeFileSync(path.join(liveReplacement, "owner.json"), JSON.stringify({
+      pid: process.pid, startIdentity: currentProcessIdentity(), token,
+    }));
+    fs.utimesSync(liveReplacement, new Date(1_000), new Date(1_000));
+  }
+
+  const renameSync = fs.renameSync;
+  let swapped = false;
+  fs.renameSync = ((from: fs.PathLike, to: fs.PathLike) => {
+    if (!swapped && path.basename(String(from)) === path.basename(staging)
+      && String(to).includes(".writer-lock-retire.")) {
+      swapped = true;
+      const displaced = `${staging}.displaced`;
+      renameSync(from, displaced);
+      if (kind === "outside-link") fs.symlinkSync(outside, staging);
+      else renameSync(liveReplacement, staging);
+    }
+    return renameSync(from, to);
+  }) as typeof fs.renameSync;
+  try {
+    new RuntimeImageStore(root, { now: () => 10_000, abandonedPartialMaxAgeMs: 1_000 });
+  } finally {
+    fs.renameSync = renameSync;
+  }
+
+  expect(swapped).toBe(true);
+  expect(fs.existsSync(staging)).toBe(true);
+  if (kind === "outside-link") {
+    expect(fs.readlinkSync(staging)).toBe(outside);
+    expect(fs.readFileSync(outsideFile, "utf8")).toBe("outside owner");
+  } else {
+    expect(fs.readFileSync(path.join(staging, "owner.json"), "utf8")).toContain(`"pid":${process.pid}`);
+  }
+});
+
 test("runtime image storage requires a real private root owned by the current user", () => {
   const parent = sandbox();
   const createdRoot = path.join(parent, "created");

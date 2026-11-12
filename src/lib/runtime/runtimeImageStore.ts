@@ -806,14 +806,40 @@ export class RuntimeImageStore {
         const contents = fs.readdirSync(staging);
         if (contents.length !== 1 || contents[0] !== "owner.json") continue;
         this.assertRootPinned(root);
-        const current = fs.lstatSync(staging, { throwIfNoEntry: false });
-        if (!current?.isDirectory() || current.isSymbolicLink()
-          || current.dev !== stat.dev || current.ino !== stat.ino) continue;
-        // Remove only the file we created, then require an empty directory;
-        // never recurse into unexpected contents or follow directory links.
-        fs.unlinkSync(path.join(staging, "owner.json"));
-        this.assertRootPinned(root);
-        fs.rmdirSync(staging);
+        // Move the candidate out of the attacker-controlled staging name first.
+        // Subsequent deletion uses only this store-created quarantine name;
+        // a swap at `staging` can therefore never redirect unlink outside root.
+        const quarantine = path.join(root.path, `.writer-lock-retire.${crypto.randomUUID()}`);
+        try {
+          fs.renameSync(staging, quarantine);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw error;
+        }
+        let retired = false;
+        try {
+          const moved = fs.lstatSync(quarantine, { throwIfNoEntry: false });
+          if (!moved?.isDirectory() || moved.isSymbolicLink()
+            || moved.dev !== stat.dev || moved.ino !== stat.ino) continue;
+          const movedOwner = readWriterLockOwner(quarantine);
+          const movedContents = fs.readdirSync(quarantine);
+          if (!movedOwner || movedOwner.token !== token || !processIdentityProvenDead(movedOwner)
+            || movedContents.length !== 1 || movedContents[0] !== "owner.json") continue;
+          this.assertRootPinned(root);
+          fs.unlinkSync(path.join(quarantine, "owner.json"));
+          this.assertRootPinned(root);
+          fs.rmdirSync(quarantine);
+          retired = true;
+        } finally {
+          // If the candidate changed during the move, put that exact entry back
+          // when its original name is still vacant. Never recursively remove it.
+          if (!retired && fs.existsSync(quarantine) && !fs.existsSync(staging)) {
+            try { fs.renameSync(quarantine, staging); }
+            catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            }
+          }
+        }
         continue;
       }
       if (!entry.isFile() || !entry.name.endsWith(".partial")) continue;
