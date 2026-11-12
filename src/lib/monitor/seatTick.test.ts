@@ -2743,10 +2743,50 @@ describe("reserved task pages", () => {
     const line = first.taskPage!.rows[0]!.line;
     const plan = seatTickWakeCommitPlan(first, { fingerprint: check.changeFingerprint, eventsThrough: 0, frozenText: line })!;
     const state = seatTickWakeCommit(check.state, plan, check.now);
-    expect(state.itemsShown).toHaveLength(1);
+    expect(state.itemsShown?.filter(version => version.startsWith("reminder:waiting:"))).toHaveLength(1);
     const next = seatTickDecision({ ...check, state, now: check.now + SEAT_TICK_WAKE_INTERVAL_MS }).verdict;
     if (next.kind !== "wake") throw new Error("wake expected");
     expect(next.taskPage!.rows[0]!.item.id).toBe("waiting-01");
+  });
+  test("a waiting sweep reaches unseen work past a day and after its last row disappears", () => {
+    const tasks = Array.from({ length: 260 }, (_, i) => ({ ...waiting(i), id: `waiting-${String(i).padStart(3, "0")}` }));
+    let check = input({ tasks });
+    const ids: string[] = [];
+    for (let n = 0; n < 26; n++) {
+      const page = landed(check);
+      if (page.decision.verdict.kind !== "wake") throw new Error("wake expected");
+      ids.push(...page.decision.verdict.taskPage!.rows.map(row => row.item.id));
+      // A finished cursor row cannot reset the sweep to the oldest rows.
+      check = { ...check, tasks: n === 0 ? tasks.filter(task => task.id !== "waiting-009") : check.tasks,
+        state: page.state, now: check.now + 61 * MINUTE };
+    }
+    expect(ids).toEqual(tasks.map(task => task.id));
+  });
+  test("a waiting sweep survives unrelated history eviction, empty sources and a full-day interval", () => {
+    const tasks = Array.from({ length: 25 }, (_, i) => waiting(i));
+    const check = input({ tasks });
+    const first = landed(check);
+    let state = seatTickWakeCommit(first.state, { proposal: false, reasons: [], fingerprint: "other", eventsThrough: 0, children: [],
+      itemsShown: Array.from({ length: 2001 }, (_, i) => `other-${i}@revision`) }, check.now + 25 * 60 * MINUTE);
+    expect(state.itemsShown?.filter(version => version.startsWith("reminder:waiting-sweep@"))).toHaveLength(1);
+    const empty = seatTickDecision({ ...check, tasks: [], now: check.now + 25 * 60 * MINUTE, state });
+    state = empty.state;
+    const restored = seatTickDecision({ ...check, state, now: check.now + 25 * 60 * MINUTE }).verdict;
+    if (restored.kind !== "wake") throw new Error("wake expected");
+    expect(restored.taskPage!.rows[0]!.item.id).toBe("waiting-10");
+    const malformed = seatTickDecision({ ...check, state: { ...check.state, itemsShown: [`reminder:waiting-sweep@${check.now}@bad-cursor`] } }).verdict;
+    if (malformed.kind !== "wake") throw new Error("wake expected");
+    expect(malformed.taskPage!.rows[0]!.item.id).toBe("waiting-00");
+  });
+  test("the waiting cursor reader accepts a full wide id written by a rendered page", () => {
+    const tasks = [0, 1].map(n => ({ ...waiting(n), id: "Ж".repeat(1000) + n }));
+    const check = input({ tasks });
+    const first = landed(check);
+    if (first.decision.verdict.kind !== "wake") throw new Error("wake expected");
+    expect(first.decision.verdict.taskPage!.rows).toHaveLength(1);
+    const next = seatTickDecision({ ...check, state: first.state, now: check.now + 25 * 60 * MINUTE }).verdict;
+    if (next.kind !== "wake") throw new Error("wake expected");
+    expect(next.taskPage!.rows[0]!.item.id).toBe(tasks[1]!.id);
   });
   test("holds and overdue rows retain ids, dates and hold context outside the shared item bound", () => {
     const until = new Date(NOW + 86_400_000).toISOString();

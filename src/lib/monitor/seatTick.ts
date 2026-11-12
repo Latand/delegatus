@@ -10,7 +10,7 @@ import { isTerminalHighSignalEvent } from "@/lib/lifecycle/vocabulary";
 
 import { seatTickRetryGuardRef, seatTickSourceGapRef, ORCHESTRATOR_ALERT_REF, SEAT_TICK_SETTINGS_REF } from "./cards";
 import { evidenceStallReason } from "./classify";
-import { seatTickReminders, taskHasBlocker, taskIsOverdue, reminderDeliveredVersion, pauseReminderReady, recentReminderVersion } from "./seatTickReminders";
+import { seatTickReminders, taskHasBlocker, taskIsOverdue, reminderDeliveredVersion, pauseReminderReady, recentReminderVersion, retainedWaitingSweepVersion } from "./seatTickReminders";
 import type { EffectiveSeatTickSettings } from "./seatTickSettings";
 import {
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
@@ -2432,12 +2432,14 @@ function mergeAgendaVersions(before: readonly string[], delivered: readonly stri
   const replaced = new Set(delivered.map(key));
   const merged = [...before.filter(token => !replaced.has(key(token))), ...new Set(delivered)];
   const reminders = merged.filter(token => recentReminderVersion(token, now));
-  const ordinary = merged.filter(token => !recentReminderVersion(token, now));
-  if (!activeStallTokens) return [...ordinary.slice(-2000), ...reminders];
+  const sweep = retainedWaitingSweepVersion(merged);
+  const cursor = sweep && !recentReminderVersion(sweep, now) ? [sweep] : [];
+  const ordinary = merged.filter(token => !recentReminderVersion(token, now) && token !== sweep);
+  if (!activeStallTokens) return [...ordinary.slice(-2000), ...cursor, ...reminders];
   const active = new Set(activeStallTokens.map(token => `stall:${createHash("sha256").update(token).digest("hex")}`));
   const retained = ordinary.filter(token => active.has(token));
   const history = ordinary.filter(token => !active.has(token)).slice(-2000);
-  return [...history, ...retained, ...reminders];
+  return [...history, ...retained, ...cursor, ...reminders];
 }
 
 /** Production landings use the exact frozen text. The renderer may have cut

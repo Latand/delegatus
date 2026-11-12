@@ -2435,7 +2435,7 @@ test.skipIf(!!process.env.LLV_TASK_PAGE_RESTART_FILE)("task page ledger continue
     expect(rig.sent).toHaveLength(1);
     expect(rig.sent[0]!.text).toContain(`- page-${String(n * 10).padStart(2, "0")} |`);
   }
-  expect(readSeatTickState(PROJECT, stateFile).itemsShown).toHaveLength(30);
+  expect(readSeatTickState(PROJECT, stateFile).itemsShown?.filter(version => version.startsWith("reminder:waiting:"))).toHaveLength(30);
   const child = Bun.spawn([process.execPath, "test", "src/lib/monitor/seatTickController.agenda.test.ts", "--test-name-pattern", "^task-page restart child$"], {
     env: { ...process.env, LLV_TASK_PAGE_RESTART_FILE: stateFile }, stdout: "pipe", stderr: "pipe",
   });
@@ -2443,12 +2443,12 @@ test.skipIf(!!process.env.LLV_TASK_PAGE_RESTART_FILE)("task page ledger continue
   try {
     const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect(code, out + err).toBe(0);
-    expect(readSeatTickState(PROJECT, stateFile).itemsShown).toHaveLength(40);
+    expect(readSeatTickState(PROJECT, stateFile).itemsShown?.filter(version => version.startsWith("reminder:waiting:"))).toHaveLength(40);
   } finally { clearTimeout(timeout); if (child.exitCode === null) child.kill(); await child.exited; }
 });
 
 test.skipIf(!process.env.LLV_TASK_PAGE_RESTART_FILE)("task-page restart child", async () => {
-  const rig = waitingPageRig(process.env.LLV_TASK_PAGE_RESTART_FILE!, NOW + 3 * 60 * MINUTE);
+  const rig = waitingPageRig(process.env.LLV_TASK_PAGE_RESTART_FILE!, NOW + 25 * 60 * MINUTE);
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.sent).toHaveLength(1);
   expect(rig.sent[0]!.text).toContain("- page-30 |");

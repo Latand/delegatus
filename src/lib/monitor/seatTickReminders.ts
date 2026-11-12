@@ -83,6 +83,23 @@ export function overdueSweepCursor(versions: readonly string[], now: number): Ov
   return null;
 }
 
+type WaitingCursor = readonly [number, number, string];
+function waitingSweep(versions: readonly string[]): { cursor: WaitingCursor; version: string } | null {
+  for (const version of [...versions].reverse()) {
+    if (!version.startsWith(`${PREFIX}waiting-sweep@`) || version.length > 16_384) continue;
+    try {
+      const parts = version.split("@");
+      if (parts.length !== 3 || !parts[1] || !Number.isFinite(Number(parts[1]))) continue;
+      const value: unknown = JSON.parse(Buffer.from(parts[2] ?? "", "base64url").toString());
+      if (Array.isArray(value) && value.length === 3 && [0, 1, 2].includes(value[0]) && Number.isFinite(value[1]) && typeof value[2] === "string" && value[2].length > 0 && value[2].length <= 1500) return { cursor: value as unknown as WaitingCursor, version };
+    } catch { /* Malformed metadata grants no position. */ }
+  }
+  return null;
+}
+/** One bounded position survives ordinary history eviction and daily expiry. */
+export const retainedWaitingSweepVersion = (versions: readonly string[]): string | undefined => waitingSweep(versions)?.version;
+const compareWaiting = (a: WaitingCursor, b: WaitingCursor) => a[0] - b[0] || a[1] - b[1] || a[2].localeCompare(b[2]);
+
 /** One lookup per check over the already bounded delivered agenda. */
 export function seatTickReminders(input: SeatTickCheckInput): SeatTickItem[] {
   const shown = new Map<string, number>();
@@ -159,8 +176,11 @@ export function seatTickTaskPage(input: SeatTickCheckInput, legacy: readonly Sea
   }
   const waiting = input.tasks.filter(task => !used.has(task.id) && !taskIsOverdue(task, input.now) && task.status !== "done" && !task.owned && !task.runsOn && (task.status === "blocked" || !!task.hold));
   const rank = (task: SeatTickTaskInput) => task.hold?.until && Date.parse(task.hold.until) <= input.now ? 0 : !taskHasBlocker(task, input.now) ? 1 : 2;
-  waiting.sort((a, b) => rank(a) - rank(b) || Date.parse(a.hold?.since ?? a.waitingSince ?? a.updatedAt ?? "") - Date.parse(b.hold?.since ?? b.waitingSince ?? b.updatedAt ?? "") || a.id.localeCompare(b.id));
-  for (const task of waiting) all.push({ kind: "task", reminderKind: "waiting", id: task.id, label: task.title, itemVersion: `${taskKey(task.id, "waiting")}@${input.now}` });
+  const position = (task: SeatTickTaskInput): WaitingCursor => [rank(task), Date.parse(task.hold?.since ?? task.waitingSince ?? task.updatedAt ?? "") || 0, task.id];
+  waiting.sort((a, b) => compareWaiting(position(a), position(b)));
+  const cursor = waitingSweep(input.state.itemsShown ?? [])?.cursor;
+  const ordered = cursor ? [...waiting.filter(task => compareWaiting(position(task), cursor) > 0), ...waiting.filter(task => compareWaiting(position(task), cursor) <= 0)] : waiting;
+  for (const task of ordered) all.push({ kind: "task", reminderKind: "waiting", id: task.id, label: task.title, itemVersion: `${taskKey(task.id, "waiting")}@${input.now}` });
   const knownOverdue = [...tasks.values()].filter(task => taskIsOverdue(task, input.now));
   if (!all.length && !knownOverdue.length) return undefined;
   const shown = new Set((input.state.itemsShown ?? []).filter(version => recentReminderVersion(version, input.now)).map(version => version.split("@")[0]));
@@ -187,6 +207,7 @@ export function seatTickTaskPage(input: SeatTickCheckInput, legacy: readonly Sea
       : `${item.reminderKind === "waiting" ? "waiting" : "unstarted"} ${Number.isFinite(since) ? age(input.now - since) : "age unknown"}`;
     const line = `- ${task.id} | ${meta} | due ${task.dueAt?.slice(0, 10) ?? "none"} | hold: ${holdText} | ${singleLine(task.title, 70)}`;
     if (rows.length === 10 || length + line.length + 1 > 1500) break; // 300 reserved for counts and the read command
+    if (item.reminderKind === "waiting") item.creditVersions = [`${PREFIX}waiting-sweep@${input.now}@${Buffer.from(JSON.stringify(position(task))).toString("base64url")}`];
     rows.push({ item, line });
     length += line.length + 1;
   }
