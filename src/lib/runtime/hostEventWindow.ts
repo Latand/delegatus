@@ -7,8 +7,8 @@ import { RuntimeReplayGapError, type RuntimeEvent } from "./engineHost";
  *
  * The window used to be the whole history: each host the Viewer held kept
  * every delta, item, tool output and message it had produced since it started
- * or was adopted, and an orchestrator never idles long enough to be retired.
- * The serving heap's floor rose by about a gigabyte an hour with fifty agents.
+ * or was adopted, and an orchestrator never idles long enough to be retired,
+ * so the arrays grew with the ledgers for as long as the process lived.
  *
  * 2048 covers what the in-memory readers ask for:
  * - the delivery controller attaches at the runtime host's acknowledged
