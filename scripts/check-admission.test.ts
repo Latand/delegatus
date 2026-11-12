@@ -108,7 +108,7 @@ test("nested test children share their admitted parent suite ticket", async () =
     const output = await new Response(child.stdout).text();
     expect(await child.exited).toBe(0);
     expect(output).toContain("child-ready");
-  } finally { await stopFixtureProcess(child); queue.close(); f.close(); }
+  } finally { child.kill(); await child.exited; queue.close(); f.close(); }
 });
 
 async function until(check: () => boolean) {

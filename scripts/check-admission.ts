@@ -79,6 +79,16 @@ export class CheckAdmission {
     return this.db.query<{ held: number }, [string]>("SELECT held FROM checks WHERE owner = ?").get(JSON.stringify(owner))?.held === 1
       && this.observer.status(owner) === "alive" && !this.observer.exited(owner);
   }
+  hasAdmittedAncestor(pid: number): boolean {
+    const parents = procBackend.ppidMap(), ancestors = new Set<number>();
+    let parent = parents.get(pid);
+    while (parent && parent > 1 && !ancestors.has(parent)) { ancestors.add(parent); parent = parents.get(parent); }
+    return this.db.query<Row, []>("SELECT * FROM checks WHERE held = 1").all()
+      .some(row => {
+        const owner = JSON.parse(row.owner) as ProcessIdentity;
+        return ancestors.has(owner.pid) && this.holds(owner);
+      });
+  }
   cancel(owner: ProcessIdentity): void { this.db.query("DELETE FROM checks WHERE owner = ?").run(JSON.stringify(owner)); }
   close(): void { this.db.close(); }
 }

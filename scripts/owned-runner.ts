@@ -18,7 +18,7 @@ import { sandboxGateEntryCommand } from "../src/lib/runtime/sandboxGateEntry";
 import { gateServiceProperties } from "../src/lib/runtime/cpuPlacement";
 import { GateTasks, GATE_TASKS_MAX, GATE_TASK_LIMIT_EXIT, gateTaskProperties, gateTaskResult, gateTaskFailure, warnGateTaskFallback, type GateTaskSnapshot } from "./gate-tasks";
 import { producerReport, producerCommandIdentity, recordedSupervisorObligation, recordedSupervisorRefusal, supervisorCancellation, reportSchema, readEnvelope, writeEnvelope, digest, type ProducerReport } from "../src/lib/recordedChecks/wire";
-import { acquireCheckSlot, admittedCheckAncestor, isTestCommand, isTypecheckCommand, withTestAdmission } from "./check-admission";
+import { CheckAdmission, acquireCheckSlot, admittedCheckAncestor, checkAdmissionFile, isTestCommand, isTypecheckCommand, withTestAdmission } from "./check-admission";
 import { admissionLockWait } from "./cpu-admission-lock";
 
 /** `namespace` marks a caller inside an agent signal domain. Its identities
@@ -58,8 +58,28 @@ if (args[0] === "--check-process") {
     if (child) stopping ??= stopFixtureProcess(child);
   };
   process.on("SIGTERM", () => stop(143)); process.on("SIGINT", () => stop(130));
-  const slot = await acquireCheckSlot(process.env, controller.signal).catch(error => { if (interrupted) process.exit(interrupted); throw error; });
-  let holder = slot.owner;
+  let slot: Awaited<ReturnType<typeof acquireCheckSlot>> | undefined;
+  const inheritedOwner = process.env.DELEGATUS_CHECK_ADMISSION_OWNER;
+  if (inheritedOwner && isTestCommand(command)) {
+    let validated = false;
+    try {
+      const owner = JSON.parse(inheritedOwner) as ProcessIdentity;
+      const queue = new CheckAdmission(checkAdmissionFile());
+      try { validated = queue.holds(owner); }
+      finally { queue.close(); }
+    } catch { delete process.env.DELEGATUS_CHECK_ADMISSION_OWNER; }
+    if (validated) process.env.DELEGATUS_CHECK_ADMISSION_OWNER = inheritedOwner;
+    else delete process.env.DELEGATUS_CHECK_ADMISSION_OWNER;
+  }
+  if (!isTestCommand(command)) delete process.env.DELEGATUS_CHECK_ADMISSION_OWNER;
+  if (!process.env.DELEGATUS_CHECK_ADMISSION_OWNER && isTestCommand(command)) {
+    const ancestor = admittedCheckAncestor(process.pid);
+    if (ancestor) process.env.DELEGATUS_CHECK_ADMISSION_OWNER = JSON.stringify(ancestor);
+  }
+  if (!process.env.DELEGATUS_CHECK_ADMISSION_OWNER) {
+    slot = await acquireCheckSlot(process.env, controller.signal).catch(error => { if (interrupted) process.exit(interrupted); throw error; });
+  }
+  let holder = slot?.owner;
   try {
     controller.signal.throwIfAborted();
     // Replacing the helper preserves the kernel start identity, the runner's
@@ -81,7 +101,7 @@ if (args[0] === "--check-process") {
     });
     if (child.pid) {
       const identity = hostProcessIdentity(captureProcessIdentity(child.pid));
-      await admissionLockWait()(() => slot.queue.bind(slot.owner, identity));
+      if (slot) await admissionLockWait()(() => slot!.queue.bind(slot!.owner, identity));
       holder = identity;
     }
     const code = await closed;
@@ -89,8 +109,10 @@ if (args[0] === "--check-process") {
     process.exitCode = interrupted || code;
   } finally {
     if (child) await stopFixtureProcess(child);
-    await admissionLockWait()(() => slot.queue.cancel(holder));
-    slot.queue.close();
+    if (slot) {
+      await admissionLockWait()(() => slot!.queue.cancel(holder!));
+      slot.queue.close();
+    }
   }
   process.exit(process.exitCode ?? 0);
 }
