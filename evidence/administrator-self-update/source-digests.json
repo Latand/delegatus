@@ -13,6 +13,6 @@
     "src/lib/selfUpdate/routes.test.ts": "b040172f73524d12e901191430fc2217ef1d8979c213b955b00e6efc286e00a1",
     "src/lib/selfUpdate/service.ts": "863e14a697e83c4672393c13a0da01332d1ebb86e54aa95301a976973c1a177f",
     "src/lib/selfUpdate/types.ts": "ea377faf4e1cc829f2214f66f84adcfe13c37af69c98f34a9ca26240206524e6",
-    "src/lib/selfUpdate/__fixtures__/installationPolicy.child.ts": "e18fe8266ab81b94bb87b31c7a3bc4a99570637f37ae50046779788e9efc496f"
+    "src/lib/selfUpdate/__fixtures__/installationPolicy.child.ts": "b3db169b5230f4e30c9bda0dbb34a2743c5c83b4ec8416ac29e534c1298d461f"
   }
 }
