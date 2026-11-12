@@ -63,7 +63,10 @@ compatibility raises the major version.
   5.7 MB (both seat tick rings). Readers follow the journal's change log or
   read a bounded key range: reading the lifecycle journal went from about
   8 ms to 0.1 ms, and the check-error alarm read after every seat tick check
-  from about 17 ms to 4 ms. On first start each file is imported and
+  from about 17 ms to 4 ms. In the Viewer a check's append runs on a worker
+  thread, so it does not hold the Viewer thread while it commits; the seat
+  tick's commits, like the files they replace, do not wait for the disk.
+  On first start each file is imported and
   verified, then kept as `<name>.imported-<release>` (the per-project rings
   as `runs.ndjson.projects.imported-<release>`), and a directory with a
   README takes the file's place. `conversation-monitor/runs.ndjson` stays a
