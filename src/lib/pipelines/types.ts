@@ -419,6 +419,7 @@ export type PipelineRuntimeSwitch = {
 export type PipelineAccountHold = { accountId: string; resetsAt: number | null; observedAt: string | null };
 
 export type PipelineStageAttempt = {
+  accounting?: import("./accounting").AttemptAccounting;
   /** Setup evidence stays with this attempt across failures and explicit retries. */
   setup?: {
     /** Resolved execution cwd; the approved recipe keeps its relative cwd. */
@@ -1237,6 +1238,8 @@ export type Pipeline = {
   taskIds: string[];
   /** Launch-correlated creation evidence reserved before task-spawn actuation. */
   creationIntent?: PipelineCreationIntent;
+  /** Declaration frozen at lane creation; null fields are unknown. */
+  taskClass?: import("./accounting").LaneClass;
   /** Pinned specification and acceptance criteria, matching Flow.spec from #85. */
   spec?: string;
   /** Caller-produced source handoff and tracked skill references, shared by stage runtimes. */
@@ -1264,7 +1267,7 @@ export type Pipeline = {
       the activating edge are persisted in the same atomic write as the verdict
       that advanced here, so a crash between advance and spawn replays the
       identical prompt. */
-  cursor: { stageId: string; state: PipelineCursorState; input: string | null; activatedBy: PipelineEdgeActivation | null; launchedBy?: PipelineHandLaunch } | null;
+  cursor: { repeatReason?: import("./accounting").RepeatReason; admittedAt?: string; stageId: string; state: PipelineCursorState; input: string | null; activatedBy: PipelineEdgeActivation | null; launchedBy?: PipelineHandLaunch } | null;
   state: PipelineState;
   pausedState: Exclude<PipelineState, "paused" | "draft"> | null;
   /** When the pipeline was last paused, and when it was last resumed. Durable
@@ -1455,6 +1458,7 @@ export type PipelineMerge = {
 };
 
 export type CreatePipelineRequest = {
+  taskClass?: import("./accounting").DeclaredClass;
   /** `prRepository`: see {@link PipelineDeliveryTarget}; it must be the checkout's origin. */
   delivery?: { branch: string; remote?: string; pr?: number; prRepository?: string; rejectedHead?: string; comparison?: boolean };
   task: string;
@@ -1519,6 +1523,7 @@ export const PIPELINE_ACTIONS = [
 export type PipelineAction = (typeof PIPELINE_ACTIONS)[number];
 
 export type PatchPipelineRequest = {
+  repeatReason?: import("./accounting").RepeatReason;
   /** Required for resolve-decision, continue-review and accept-head, preserved as its durable receipt key. */
   clientRequestId?: string;
   /** Opaque revision returned by get_pipeline or the pipeline detail route. */

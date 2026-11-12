@@ -397,6 +397,7 @@ test("retry recovers a zero-launch pending replacement after pause/resume with a
   pipeline.runs[0]!.attempts.unshift({ ...structuredClone(attempt), n: 1, activation: undefined,
     state: "failed", completedAt: h.ports.now(), error: "superseded launch failure" });
   attempt.n = 2;
+  attempt.accounting!.repeatReason = "unknown";
   attempt.state = "pending";
   attempt.startedAt = null;
   pipeline.cursor!.state = "pending";
@@ -600,6 +601,7 @@ test.each(["unadmitted", "admitted"] as const)("retry reconciles a stale %s acti
     predecessor.completedAt = h.ports.now();
     predecessor.error = "pipeline paused";
     const replacement = { ...structuredClone(predecessor), n: 2, state: "pending" as const,
+      accounting: { ...predecessor.accounting!, startedAt: null, repeatReason: "unknown" as const, time: null },
       startedAt: null, completedAt: null, error: null, activation: undefined, spawnCalls: undefined };
     predecessor.roleMemoryWait = { revision: "settled-memory", observations: 0, retryAfter: "2099-01-01T00:00:00.000Z" };
     pipeline.runs[0]!.attempts.push(replacement);

@@ -186,6 +186,8 @@ export interface TaskSyncStamps {
 }
 
 export interface BoardTask {
+  /** Creation declaration and explicit acceptance, local to this installation. */
+  accounting?: import("./accounting").TaskAccounting;
   /** Installation-local invention identity. Only atomic admission creates it;
       linked boards never exchange its private sources or execution authority. */
   proactive?: {

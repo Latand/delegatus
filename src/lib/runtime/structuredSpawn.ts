@@ -210,6 +210,9 @@ export function materializeStructuredHostAccess(
     const evidenceDirectory = statePath("evidence", evidenceId);
     fs.mkdirSync(evidenceDirectory, { recursive: true, mode: 0o700 });
     baseEnv.LLV_EVIDENCE_DIR = evidenceDirectory;
+    const timingRoot = fs.lstatSync(scratchDirectory);
+    baseEnv.LLV_ATTEMPT_TIMING_ROOT = scratchDirectory;
+    baseEnv.LLV_ATTEMPT_TIMING_ROOT_IDENTITY = `${timingRoot.dev}:${timingRoot.ino}`;
     const temporaryDirectory = path.join(scratchDirectory, "tmp");
     fs.mkdirSync(temporaryDirectory, { mode: 0o700 });
     if (owner) {

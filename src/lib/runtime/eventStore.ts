@@ -1,3 +1,4 @@
+import { recordNativeTiming } from "./attemptTiming";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { validCodexRequestReceipt } from "./codexRequestReceipt";
 import fs from "node:fs";
@@ -555,6 +556,8 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
      memory. Production #367: deriving the tail by replaying the whole file on
      every append made each streamed delta O(ledger) on the shared event loop,
      starving snapshot and concurrent admission for the length of a turn. */
+  private readonly timingGaps = new Set<string>();
+  private timingOverflow = false;
   private readonly tails = new Map<string, { lastSeq: number; bytes: number }>();
 
   constructor(private readonly directory = statePath("structured-host-events")) {}
@@ -624,6 +627,13 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
       const line = `${JSON.stringify(event)}\n`;
       fs.writeSync(fd, line);
       fs.fsyncSync(fd);
+      if ((event.kind === "turn-started" || event.kind === "turn-ended" || event.kind === "item") && event.accountingAt) {
+        try { recordNativeTiming(this.directory, threadId, event, this.timingOverflow || this.timingGaps.has(threadId), `${fs.fstatSync(fd).dev}:${fs.fstatSync(fd).ino}`); this.timingGaps.delete(threadId); }
+        catch {
+          if (this.timingGaps.size < 128) this.timingGaps.add(threadId); else this.timingOverflow = true;
+          console.warn("[accounting] native timing observation unavailable");
+        }
+      }
       const nextTail = { lastSeq: event.seq, bytes: tail.bytes + Buffer.byteLength(line) };
       this.tails.set(threadId, nextTail);
       const cached = ledgerCache().get(filename);

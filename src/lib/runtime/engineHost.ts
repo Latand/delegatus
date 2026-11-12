@@ -125,9 +125,9 @@ export type RuntimeEvent =
   | { kind: "native-queue-changed"; threadId: string;
     /** Canonical readback invalidated earlier retained items for this exact client. */
     evidenceRejectedFor?: string; seq: number }
-  | { kind: "turn-started"; turnId: string; seq: number }
+  | { kind: "turn-started"; turnId: string; seq: number; accountingAt?: string }
   | { kind: "delta"; turnId: string; text: string; seq: number }
-  | { kind: "item"; viewerMcp?: ViewerMcpObservation; turnId: string | null; item: unknown; phase: "started" | "completed"; voiceResponse?: RuntimeVoiceResponse | null;
+  | { kind: "item"; accountingAt?: string; viewerMcp?: ViewerMcpObservation; turnId: string | null; item: unknown; phase: "started" | "completed"; voiceResponse?: RuntimeVoiceResponse | null;
     /** Explicit identity from a Codex user-message or Viewer MCP notification; projection fallbacks supply none. */
     codexItemIdentity?: { threadId: string; turnId: string };
     /** Raw live user-echo observation, retained through event replay. */
@@ -136,7 +136,7 @@ export type RuntimeEvent =
     activityAt?: string | null; seq: number }
   | { kind: "voice-chunk"; turnId: string; delivery: RuntimeVoiceDelivery; seq: number }
   /** History can infer interruption after a lost process; it carries no operator pause intent. */
-  | { kind: "turn-ended"; turnId: string; status: "completed" | "interrupted" | "error"; interruptionSource?: "history"; claudeResultUuid?: string; seq: number }
+  | { kind: "turn-ended"; accountingAt?: string; turnId: string; status: "completed" | "interrupted" | "error"; interruptionSource?: "history"; claudeResultUuid?: string; seq: number }
   | { kind: "attention"; id: string; method: string; attention: unknown; codexReceipt?: import("./codexRequestReceipt").CodexRequestReceipt; seq: number }
   | { kind: "attention-resolved"; id: string; resolution: "answered" | "host-restarted" | "server-resolved" | "turn-ended"; codexReceipt?: import("./codexRequestReceipt").CodexRequestReceipt; seq: number }
   | { kind: "limits"; snapshot: unknown; seq: number }

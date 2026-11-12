@@ -30,6 +30,7 @@ export type EvidenceCopy = { destination: string; pipelineId: string | null; lau
 export const DEFAULT_ATTEMPT_TEMP_CAP_BYTES = 100 * 1024 ** 3;
 
 const attemptTempIndexes = declaredIndexes([
+  "CREATE INDEX IF NOT EXISTS roots_launch ON roots(launchId,pipelineId,directory)",
   "CREATE INDEX IF NOT EXISTS roots_due ON roots(checkedAt,createdAt,directory)",
   "CREATE INDEX IF NOT EXISTS copies_due ON copies(checkedAt,destination) WHERE kind<>'unattributed'",
   "CREATE INDEX IF NOT EXISTS copies_inspection ON copies(destination) WHERE kind<>'unattributed'",

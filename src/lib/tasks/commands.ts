@@ -1,3 +1,4 @@
+import { taskDeclaration, acceptTaskSchema, retainAccountingHold } from "./accounting";
 import { textLengthError } from "@/lib/textLimits";
 import { matchesShortId } from "@/lib/shortIds";
 import crypto from "node:crypto";
@@ -66,6 +67,7 @@ export type CreateTaskResult =
   | TaskRefusal;
 
 export interface CreateTaskInput {
+  accounting?: unknown;
   /** Integer estimate from 0 to 100; null leaves it absent. */
   progress?: unknown;
   findingKey?: unknown;
@@ -100,6 +102,8 @@ export interface CreateTaskInput {
 }
 
 export interface PatchTaskInput {
+  /** Explicit acceptance against the criteria frozen at creation. */
+  accept?: unknown;
   summary?: unknown;
   /** Integer estimate from 0 to 100; null clears, omitted preserves it. */
   progress?: unknown;
@@ -505,11 +509,14 @@ export function createTask(
   const holdError = validateTaskHoldInput(input.hold);
   if (holdError) return holdError;
   const hold = readTaskHold(input.hold, now, deps.actor ?? "operator", undefined, deps.conversationId, notes);
+  const declaration = taskDeclaration(input.accounting, project, now, hold, existing, canonicalProject);
+  if (!declaration.ok) return declaration;
   const id = deps.id?.() ?? crypto.randomUUID();
   const previous = key === undefined ? undefined : existing
     .filter(row => row.project === project && row.findingKey === key && row.status === "done")
     .sort((a, b) => (b.finding?.lastSeenAt ?? b.updatedAt).localeCompare(a.finding?.lastSeenAt ?? a.updatedAt))[0];
   let task: BoardTask = {
+    accounting: declaration.accounting,
     id,
     project,
     ...(key !== undefined ? { findingKey: key, finding: {
@@ -600,7 +607,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   /* A group hide is fenced on both surfaces: it is decided against the group
      the caller saw, and a group that changed since is the caller's to re-read. */
   const guardRequired = (options.requirePlacementGuards && (Object.hasOwn(input, "pos") || Object.hasOwn(input, "placement")))
-    || Object.hasOwn(input, "hide") || Object.hasOwn(input, "restoreHold");
+    || Object.hasOwn(input, "hide") || Object.hasOwn(input, "restoreHold") || Object.hasOwn(input, "accept");
   if (guardRequired || Object.hasOwn(input, "expectedProject") || Object.hasOwn(input, "expectedRevision")) {
     for (const field of ["expectedProject", "expectedRevision"] as const) {
       if (typeof input[field] !== "string" || !input[field].trim()) {
@@ -616,6 +623,14 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   }
   const notes: string[] = [];
   const patch: Partial<BoardTask> = {};
+  if (Object.hasOwn(input, "accounting")) return { ok: false, status: 400, field: "accounting", error: "task accounting declaration is immutable" };
+  if (Object.hasOwn(input, "accept")) {
+    const acceptance = acceptTaskSchema.safeParse(input.accept);
+    if (!acceptance.success || !task.accounting?.criteria || !task.accounting.readyAt)
+      return { ok: false, status: 400, field: "accept", error: "acceptance requires creation criteria, ready time and evidence" };
+    if (!task.accounting.accepted) patch.accounting = { ...task.accounting,
+      accepted: { at: now, evidence: acceptance.data.evidence, by: options.actor ?? "operator" } };
+  }
   if (Object.hasOwn(input, "summary")) {
     const author = options.noteAuthor ?? (options.actor === "agent" ? { kind: "agent" as const, conversationId: null } : { kind: "operator" as const });
     const summary = readTaskSummaryInput(input.summary, now, author);
@@ -803,7 +818,11 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
      hide records its own instant in `groupHidden.at`. */
   const presentationOnly = Object.keys(input).every((key) => PRESENTATION_KEYS.has(key) || key === "expectedProject" || key === "expectedRevision")
     && Object.keys(input).some((key) => PRESENTATION_KEYS.has(key));
+  if (task.accounting && !task.accounting.readyAt && (patch.status === "inbox" || patch.status === "assigned"))
+    patch.accounting = { ...task.accounting, ...patch.accounting, readyAt: now };
   const updated: BoardTask = withTaskCompletion({ ...task, ...patch, updatedAt: presentationOnly ? task.updatedAt : now }, task);
+  if (updated.accounting) updated.accounting = structuredClone(updated.accounting);
+  retainAccountingHold(updated);
   if (Object.hasOwn(patch, "board")) {
     delete updated.boardAutoHidden;
     updated.boardChoice = true;
