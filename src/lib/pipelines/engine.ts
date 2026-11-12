@@ -3020,12 +3020,15 @@ async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineSt
         && (await attemptTurnTranscript(pipeline, stage.id, { ...attempt, launchId: receipt.launchId,
           conversationId: receipt.conversationId, agentPath: null }, ports,
         projected?.retryClaimId === claimId ? claimId : undefined, true))?.nonExecution === true;
-      const nonExecution = projected?.neverBegan === true || noNativeTurn
+      const journalProofRequired = isPrepublicationSpawnFailure(receipt.error ?? "")
+        || isUnverifiedDeliverySpawnFailure(receipt.error ?? "");
+      const journalProof = journalProofRequired
+        && await ports.unpublishedLaunchRetrySafe?.(receipt.launchId, deadline) === true;
+      const nonExecution = journalProof || !journalProofRequired && (
+        projected?.neverBegan === true || noNativeTurn
         || stopped && !receipt.key && !receipt.artifactPath
         || receipt.error === SEND_LOST_REASON
-          && await ports.fencedFirstMessageRetrySafe?.(receipt.launchId, receipt.conversationId, currentAttemptMatches) === true
-        || (isPrepublicationSpawnFailure(receipt.error ?? "") || isUnverifiedDeliverySpawnFailure(receipt.error ?? ""))
-          && await ports.unpublishedLaunchRetrySafe?.(receipt.launchId, deadline) === true;
+          && await ports.fencedFirstMessageRetrySafe?.(receipt.launchId, receipt.conversationId, currentAttemptMatches) === true);
       if (deadline.aborted) return "stage launch recovery cannot prove no dispatch began: evidence deadline expired; original operations retained";
       if (!currentAttemptMatches() || activationFence(pipeline) !== control || JSON.stringify(attempt) !== expected
         || JSON.stringify(registry.spawnReceipt(receipt.launchId)) !== before

@@ -37,6 +37,7 @@ async function fixture(trigger: "resume" | "takeover" = "resume") {
   h.ports.spawnReceipt = production.spawnReceipt;
   h.ports.claimSpawnRetry = production.claimSpawnRetry;
   h.ports.stopStageAgent = production.stopStageAgent;
+  h.ports.failStoppedStageLaunch = production.failStoppedStageLaunch;
   h.ports.unpublishedLaunchRetrySafe = production.unpublishedLaunchRetrySafe;
   const close = async () => {
     await holder.close(); journal.close(); registry.close(); setAgentRegistryForTests(null);
@@ -186,8 +187,11 @@ test.each([false, true].flatMap(explicit => ["absent", "uncertain", "journal-dow
     const active = replacement.receipt;
     f.journal.executeOperation({ kind: "spawn", operationId: active.launchId, idempotencyKey: active.launchId,
       conversationId: active.conversationId, engine: "codex", cwd: lane.worktreeDir!, prompt: "Review" });
+    f.registry.beginStructuredHostSetup(active.launchId, active.admissionOwner!, Date.parse(f.h.ports.now()));
     f.journal.transitionOperation(active.launchId, "failed", { reason: FAILURE });
     await f.registry.failStructuredSpawnOffLoop(active.launchId, FAILURE);
+    f.registry.confirmStructuredHostSetupCleanup(active.launchId, active.admissionOwner!);
+    f.registry.releaseStructuredSpawnAdmissionOwner(active.launchId, active.admissionOwner!);
     Object.assign(attempt, { launchId: active.launchId, conversationId: active.conversationId, spawnCalls: 1 });
     lane.runs[0]!.attempts.push(attempt);
     lane.state = "needs_decision"; lane.stateDetail = FAILURE; lane.cursor!.state = "spawning";
@@ -215,6 +219,7 @@ test.each([false, true].flatMap(explicit => ["absent", "uncertain", "journal-dow
     }
     const production = defaultPipelinePorts({ spawnRecoveryClient: () => delivery === "journal-down" ? null : f.client });
     f.h.ports.spawnReceipt = production.spawnReceipt;
+    f.h.ports.failStoppedStageLaunch = production.failStoppedStageLaunch;
     f.h.ports.unpublishedLaunchRetrySafe = production.unpublishedLaunchRetrySafe;
     // The SDK uses the current launch, including its explicit receipt selector.
     expect(f.h.ports.spawnReceipt(active.launchId)).toMatchObject({ state: "failed", error: FAILURE });
