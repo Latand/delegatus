@@ -2219,9 +2219,6 @@ export class SelfUpdateService {
 
   private async checkoutPart(record: LauncherRecord, now: number): Promise<Omit<Snapshot, "mode" | "unsupportedReason" | "available" | "check" | "meta">> {
     const runner = this.runnerFor(record);
-    if (this.recoverReadyApply && this.disabledByAdmin && this.apply.cancelSuppressedReady(
-      record, "The administrator disabled built-in updates before this apply was handed to the launcher",
-    )) this.recoverReadyApply = false;
     if (this.recoverReadyApply && !this.disabledByAdmin) {
       this.recoverReadyApply = false;
       const intent = this.apply.current;
@@ -2253,8 +2250,13 @@ export class SelfUpdateService {
     let health: RuntimeHostHealth | null = null;
     let healthError: string | null = null;
     try { health = await this.deps.hostHealth(); } catch (error) { healthError = error instanceof Error ? error.message : String(error); }
-    const settled = this.apply.observe(record, runtimeHostMatches(record.runtimeHost, health, this.deps.processAlive, this.deps.processIdentity)
-      && record.web.pid !== null && record.web.startIdentity !== null && this.deps.processAlive(record.web.pid, record.web.startIdentity), now);
+    const hostHealthy = runtimeHostMatches(record.runtimeHost, health, this.deps.processAlive, this.deps.processIdentity)
+      && record.web.pid !== null && record.web.startIdentity !== null && this.deps.processAlive(record.web.pid, record.web.startIdentity);
+    const settled = this.apply.observe(record, hostHealthy, now);
+    if (this.recoverReadyApply && this.disabledByAdmin && (settled === "done" || settled === "failed")) this.recoverReadyApply = false;
+    if (this.recoverReadyApply && this.disabledByAdmin && this.apply.cancelSuppressedReady(
+      record, "The administrator disabled built-in updates before this apply was handed to the launcher", hostHealthy,
+    )) this.recoverReadyApply = false;
     if (settled) {
       const intent = this.apply.current!;
       appendHistory(this.historyFile, { at: new Date(now).toISOString(), by: intent.trigger, kind: "apply", target: intent.target, from: null,

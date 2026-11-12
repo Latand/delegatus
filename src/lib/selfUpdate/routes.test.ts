@@ -917,6 +917,44 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     } finally { h.service.stop(); }
   });
 
+  test("disabled recovery preserves a ready pointer already serving through a healthy successor bootstrap", async () => {
+    const { ApplyController } = await import("./apply");
+    const h = harness({ relaunch: true });
+    const record = readLauncherRecord(h.recordFile)!;
+    mkdirSync(join(checkout, ".next"), { recursive: true });
+    writeFileSync(join(checkout, ".next", "BUILD_ID"), "fixture-a\n");
+    const baselinePointer = JSON.stringify({ sha: firstSha, dir: checkout, checkoutHead: firstSha });
+    writeFileSync(record.releasePointer, baselinePointer);
+    const candidate = join(h.deps.dir, "successor-release");
+    await git(root, "clone", "--branch", "main", remote, candidate);
+    mkdirSync(join(candidate, ".next"), { recursive: true });
+    writeFileSync(join(candidate, ".next", "BUILD_ID"), "fixture-b\n");
+    const controller = new ApplyController(h.deps.dir);
+    controller.begin(record, tipSha, "operator");
+    controller.patch({ state: "ready" });
+    writeFileSync(record.releasePointer, JSON.stringify({ sha: tipSha, dir: candidate, checkoutHead: firstSha }));
+    const successorIdentity = `${record.launcher.startIdentity}:successor`;
+    writeFileSync(h.recordFile, JSON.stringify({ ...record,
+      launcher: { ...record.launcher, startIdentity: successorIdentity, revision: tipSha, state: "healthy" },
+      web: { ...record.web, revision: tipSha.slice(0, 7), state: "healthy" },
+      runtimeHost: { ...record.runtimeHost, revision: tipSha.slice(0, 7), state: "healthy" },
+    }));
+    h.deps.env = { ...h.deps.env, LLV_DISABLE_SELF_UPDATE: "1" };
+    h.deps.hostHealth = async () => ({ pid: process.pid, startIdentity: procBackend.processIdentity(process.pid)!, hostEpoch: 1 });
+    h.service.stop();
+    h.service = new SelfUpdateService(h.deps);
+    setSelfUpdateServiceForTests(h.service);
+    try {
+      const result = await h.service.snapshot();
+      expect(result.selfUpdateDisabled).toBe(true);
+      expect(result.installed.sha).toBe(tipSha);
+      expect(JSON.parse(readFileSync(record.releasePointer, "utf8"))).toMatchObject({ sha: tipSha, dir: candidate });
+      expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"))).toMatchObject({ state: "done", target: tipSha });
+      expect(existsSync(record.requestFile)).toBe(false);
+      expect(await updatePost(post("/update", { key: "bootstrap-policy-disabled" })).then(response => response.status)).toBe(403);
+    } finally { h.service.stop(); }
+  });
+
   test("real launcher and runtime-host identity readers settle a healthy apply", async () => {
     const { procBackend } = await import("@/lib/proc");
     const { ApplyController } = await import("./apply");

@@ -214,11 +214,19 @@ export class ApplyController {
     if (intent.autoGateId) endRestartGate(restartGateFile(record.requestFile), intent.autoGateId);
   }
 
-  /** A policy-disabled cold ready apply was never handed to the launcher.
-      Restore only its own unpublished pointer and settle its receipt. */
-  cancelSuppressedReady(record: LauncherRecord, detail: string): boolean {
+  /** Cancel a policy-disabled ready apply only while its original healthy
+      launcher still serves the captured source and no handoff was published. */
+  cancelSuppressedReady(record: LauncherRecord, detail: string, hostHealthy: boolean): boolean {
     const intent = this.current;
     if (!intent || intent.state !== "ready") return false;
+    const trialFile = launcherControlFile(record.requestFile, "trial");
+    if (!hostHealthy || record.launcher.pid !== intent.launcherPid
+      || record.launcher.startIdentity !== intent.launcherIdentity || record.launcher.state !== "healthy"
+      || record.launcher.requestId === intent.requestId || existsSync(record.requestFile) || existsSync(trialFile)
+      || record.web.state !== "healthy" || record.runtimeHost.state !== "healthy"
+      || record.web.revision !== (intent.rollbackWebRevision ?? null)
+      || record.runtimeHost.revision !== (intent.rollbackHostRevision ?? null)
+      || intent.rollbackLauncherRevision != null && record.launcher.revision !== intent.rollbackLauncherRevision) return false;
     this.restoreUntaken(record);
     this.patch({ state: "failed", admissionRefused: true, detail });
     this.releaseAdmission(record, intent);
