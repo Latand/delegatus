@@ -42,10 +42,19 @@ function assertNoMarkersOutsideTemp(sandbox: string, tempRoot: string): void {
   expect(escaped).toEqual([]);
 }
 
-function runChild(file: string, env: NodeJS.ProcessEnv, testName?: string) {
+function runChild(file: string, env: NodeJS.ProcessEnv, cwd: string, testName?: string) {
   return Bun.spawnSync([process.execPath, "test", "--timeout=60000", ...(testName ? ["--test-name-pattern", testName] : []), file], {
-    cwd: path.resolve(import.meta.dir, "../../.."), env, stdout: "pipe", stderr: "pipe", timeout: 9 * 60_000,
+    cwd, env, stdout: "pipe", stderr: "pipe", timeout: 9 * 60_000,
   });
+}
+
+function isolatedChild(sandbox: string, extraEnv: Record<string, string | undefined> = {}) {
+  const tempRoot = path.join(sandbox, "tmp"), cwd = path.join(sandbox, "work");
+  fs.mkdirSync(tempRoot, { recursive: true });
+  fs.mkdirSync(cwd, { recursive: true });
+  const env = { ...process.env, HOME: path.join(sandbox, "home"), XDG_CONFIG_HOME: path.join(sandbox, "config"), TMPDIR: tempRoot,
+    LLV_STATE_DIR: path.join(sandbox, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_GATE_RUNNER: "off", ...extraEnv };
+  return { tempRoot, cwd, env };
 }
 
 test("a marker is written inside the test temp root with the human-pin text by default", () => {
@@ -111,12 +120,9 @@ test("real marker writers leave no markers after their isolated child runs", () 
   ];
   for (const file of files) {
     const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-keep-marker-child-"));
-    const tempRoot = path.join(sandbox, "tmp");
-    fs.mkdirSync(tempRoot);
-    const env = { ...process.env, HOME: path.join(sandbox, "home"), XDG_CONFIG_HOME: path.join(sandbox, "config"), TMPDIR: tempRoot,
-      LLV_STATE_DIR: path.join(sandbox, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_GATE_RUNNER: "off" };
+    const { tempRoot, cwd, env } = isolatedChild(sandbox);
     try {
-      const result = runChild(file, env);
+      const result = runChild(path.resolve(file), env, cwd);
       expect(result.exitCode, `${file}\n${result.stderr.toString()}\n${result.stdout.toString()}`).toBe(0);
       assertNoMarkersOutsideTemp(sandbox, tempRoot);
     } finally { fs.rmSync(sandbox, { recursive: true, force: true }); }
@@ -125,11 +131,9 @@ test("real marker writers leave no markers after their isolated child runs", () 
 
 test("the isolated child cleanup runs after an actual assertion failure", () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-keep-marker-failure-"));
-  const tempRoot = path.join(sandbox, "tmp"); fs.mkdirSync(tempRoot);
-  const env = { ...process.env, HOME: path.join(sandbox, "home"), XDG_CONFIG_HOME: path.join(sandbox, "config"), TMPDIR: tempRoot,
-    LLV_STATE_DIR: path.join(sandbox, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_KEEP_MARKER_FAILURE_CONTROL: "1" };
+  const { tempRoot, cwd, env } = isolatedChild(sandbox, { LLV_KEEP_MARKER_FAILURE_CONTROL: "1" });
   try {
-    const result = runChild(import.meta.path, env, "intentional keep-marker assertion failure control");
+    const result = runChild(import.meta.path, env, cwd, "intentional keep-marker assertion failure control");
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr.toString()).toContain("intentional keep-marker assertion failure control");
     assertNoMarkersOutsideTemp(sandbox, tempRoot);
@@ -142,11 +146,45 @@ test("a marker outside the child temp root makes the leak assertion fail", () =>
   expect(() => assertNoMarkersOutsideTemp(sandbox, tempRoot)).toThrow();
 });
 
+test("a multiline cwd marker leak control makes the success leak assertion fail", () => {
+  const sandbox = own(), { tempRoot, cwd, env } = isolatedChild(sandbox, { LLV_KEEP_MARKER_SUCCESS_LEAK_CONTROL: "1" });
+  const result = runChild(import.meta.path, env, cwd, "intentional cwd keep-marker success leak control");
+  expect(result.exitCode, result.stderr.toString()).toBe(0);
+  expect(() => assertNoMarkersOutsideTemp(sandbox, tempRoot)).toThrow();
+});
+
+test("a multiline cwd marker leak control makes the failure leak assertion fail", () => {
+  const sandbox = own(), { tempRoot, cwd, env } = isolatedChild(sandbox, { LLV_KEEP_MARKER_FAILURE_LEAK_CONTROL: "1" });
+  const result = runChild(import.meta.path, env, cwd, "intentional cwd keep-marker failure leak control");
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr.toString()).toContain("intentional cwd keep-marker failure leak control");
+  expect(() => assertNoMarkersOutsideTemp(sandbox, tempRoot)).toThrow();
+});
+
 if (process.env.LLV_KEEP_MARKER_FAILURE_CONTROL === "1") {
   test("intentional keep-marker assertion failure control", () => {
     fs.mkdirSync(path.join(os.tmpdir(), "failure-control"), { recursive: true });
     plantKeepMarker(path.join(os.tmpdir(), "failure-control", KEEP_MARKER));
     expect("intentional keep-marker assertion failure control").toBe("unexpected success");
+  });
+}
+
+if (process.env.LLV_KEEP_MARKER_SUCCESS_LEAK_CONTROL === "1") {
+  test("intentional cwd keep-marker success leak control", () => {
+    const outside = path.join(process.cwd(), "review-success-outside");
+    fs.mkdirSync(outside, { recursive: true });
+    const marker = path.join(outside, KEEP_MARKER);
+    fs.writeFileSync(marker, "operator pin");
+  });
+}
+
+if (process.env.LLV_KEEP_MARKER_FAILURE_LEAK_CONTROL === "1") {
+  test("intentional cwd keep-marker failure leak control", () => {
+    const outside = path.join(process.cwd(), "review-failure-outside");
+    fs.mkdirSync(outside, { recursive: true });
+    const marker = path.join(outside, KEEP_MARKER);
+    fs.writeFileSync(marker, "operator pin");
+    expect("intentional cwd keep-marker failure leak control").toBe("unexpected success");
   });
 }
 
