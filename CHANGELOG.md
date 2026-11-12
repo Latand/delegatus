@@ -43,6 +43,25 @@ compatibility raises the major version.
 ### Changed
 - A launch an older release left in flight on the terminal transport ends
   failed with a reason; launch it again.
+- **Orchestrator seats are stored in `state.sqlite`** (collection
+  `orchestrator_seats`) instead of `orchestrator-seats.json`: one row per
+  seat, pending intent, revocation, lineage entry and history entry, and each
+  distinct mandate or role table once. A seat question reads only the rows it
+  needs, and an unchanged record is answered without reading any row; on a
+  2.4 MB record shaped like a busy installation's, finding a project's seat
+  went from about 20 ms to about 0.1 ms. On first start the file is imported
+  and verified, then kept as `orchestrator-seats.json.imported-<release>`,
+  and a directory with a README takes its place (#1870).
+
+### Downgrading
+- A version older than this one finds a directory where
+  `orchestrator-seats.json` was. It reads that as a seat record it cannot
+  establish: no seat is authorized and no seat host is retired, and its next
+  designation fails on the directory. Upgrade again to recover. Replacing the
+  directory with the `orchestrator-seats.json.imported-*` copy also works, but
+  loses seat changes made since the upgrade. Deployed releases rolled back
+  through the release fence get the file written back for them automatically,
+  and the designations they make are merged at roll-forward.
 
 ## [2.0.0] — 2026-10-27
 

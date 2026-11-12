@@ -32,7 +32,12 @@ import {
   revokedOrchestratorSeatConversationsOrUnknown,
   orchestratorRecipientRefusal,
   orchestratorRecipientRefusalAsync,
+  resetRecipientAuthorityForTests,
+  setRecipientAuthorityLookupHookForTests,
 } from "./seats";
+import { importLegacyOrchestratorSeats, orchestratorSeatStoreSignature } from "./seatStore";
+import { damageStoredSeatRecord, writeStoredSeatRecord } from "./seatStoreFixture";
+import * as sqliteState from "@/lib/state/sqliteStateStore";
 
 let sandbox = "";
 let previousStateDir: string | undefined;
@@ -52,8 +57,8 @@ afterEach(() => {
 
 const AT = "2026-07-29T00:00:00.000Z";
 
-test.each((["initial-stat", "file-stat", "index-stat", "final-stat"] as const)
-  .flatMap(seam => (["successor", "predecessor"] as const).map(recipient => [seam, recipient] as const)))("delivery at %s checks the %s against rotated authority without duplicate delivery", async (seam, recipient) => {
+test.each((["signature", "index", "recheck", "sync"] as const)
+  .flatMap(seam => (["successor", "predecessor"] as const).map(recipient => [seam, recipient] as const)))("delivery with a rotation at the %s step checks the %s against rotated authority without duplicate delivery", async (seam, recipient) => {
   const seed = new AgentRegistry(path.join(sandbox, "seed.json"), undefined, undefined, { sqliteMode: "off" });
   const template = seed.ensureConversation("codex", "/fixture/predecessor.jsonl", null);
   const initial = seed.readOnlySnapshot();
@@ -77,35 +82,19 @@ test.each((["initial-stat", "file-stat", "index-stat", "final-stat"] as const)
   designate("predecessor", predecessor.id);
   expect(await orchestratorRecipientRefusalAsync([successor.id])).toBeNull();
 
-  const seatsPath = path.join(sandbox, "orchestrator-seats.json");
-  if (seam !== "final-stat") {
-    // Keep the producer's bytes but give this lookup a cold file revision.
-    fs.copyFileSync(seatsPath, seatsPath + ".replacement");
-    fs.renameSync(seatsPath + ".replacement", seatsPath);
-  }
+  // A cold lookup: the index the write left behind is forgotten.
+  if (seam !== "sync") resetRecipientAuthorityForTests();
   let recoveries = 0;
-  const asyncStat = fs.promises.stat;
-  const statSync = fs.statSync;
   let rotated = false;
-  let stats = 0;
   const rotate = () => {
     rotated = true;
     expect(recoveries).toBe(0);
     expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toEqual([]);
     designate("successor", successor.id);
   };
-  const asyncStats = spyOn(fs.promises, "stat").mockImplementation((async (...args: Parameters<typeof fs.promises.stat>) => {
-    const result = await asyncStat(...args);
-    if (args[0] === seatsPath && !rotated) {
-      stats++;
-      if (stats === ["initial-stat", "file-stat", "index-stat"].indexOf(seam) + 1) rotate();
-    }
-    return result;
-  }) as typeof fs.promises.stat);
-  const stat = spyOn(fs, "statSync").mockImplementation(((...args: Parameters<typeof fs.statSync>) => {
-    if (args[0] === seatsPath && !rotated && seam === "final-stat") rotate();
-    return statSync(...args);
-  }) as typeof fs.statSync);
+  setRecipientAuthorityLookupHookForTests((step) => {
+    if (step === seam && !rotated) rotate();
+  });
   const send = () => deliverConversationMessage({
     pid: 1, path: "", conversationId: recipient === "successor" ? successor.id : predecessor.id,
     text: "owner relay request", images: [], clientMessageId: "rotation-delivery",
@@ -116,7 +105,11 @@ test.each((["initial-stat", "file-stat", "index-stat", "final-stat"] as const)
     const outcome = await send();
     expect(rotated).toBe(true);
     if (recipient === "predecessor") {
-      expect(outcome).toMatchObject({ ok: false, status: 409, admission: "refused", successorConversationId: successor.id });
+      /* A rotation after the asynchronous check is caught by the guard inside
+         admission, which answers with the refusal's text alone. */
+      expect(outcome).toMatchObject(seam === "sync"
+        ? { ok: false, status: 409, admission: "refused", error: expect.stringContaining(successor.id) }
+        : { ok: false, status: 409, admission: "refused", successorConversationId: successor.id });
       expect(recoveries).toBe(0);
       expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toEqual([]);
       return;
@@ -129,45 +122,36 @@ test.each((["initial-stat", "file-stat", "index-stat", "final-stat"] as const)
     expect(await orchestratorRecipientRefusalAsync([predecessor.id])).toMatchObject({ status: 409, successorConversationId: successor.id });
     expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toEqual([]);
   } finally {
-    asyncStats.mockRestore();
-    stat.mockRestore();
+    setRecipientAuthorityLookupHookForTests(null);
     setAgentRegistryForTests(null);
     registry.close();
   }
 });
 
-test.each(["final-stat", "file-stat"] as const)("authority retries at %s stop after three changing revisions and recover on the next lookup", async seam => {
+test.each(["recheck", "index"] as const)("authority retries with a write at the %s step stop after three changing revisions and recover on the next lookup", async seam => {
   const id = "conversation_rotation_target";
   beginOrchestratorSeatIntent({ project: "rotation-project", mandate: "m", clientRequestId: "first", mode: "existing", now: AT });
   completeOrchestratorSeatIntent({ project: "rotation-project", clientRequestId: "first", conversationId: id, path: null, now: AT });
   expect(await orchestratorRecipientRefusalAsync([id])).toBeNull();
-  const seatsPath = path.join(sandbox, "orchestrator-seats.json");
-  const bytes = fs.readFileSync(seatsPath, "utf8");
+  resetRecipientAuthorityForTests();
   let rewrites = 0;
+  /* Each write is a designation elsewhere: the record's revision moves, this
+     recipient's authority does not. At the index step the write stands for
+     another process's, which leaves this process no index of the state it
+     wrote. */
   const rewrite = () => {
-    fs.writeFileSync(seatsPath + ".replacement", bytes + " ".repeat(++rewrites));
-    fs.renameSync(seatsPath + ".replacement", seatsPath);
+    rewrites += 1;
+    beginOrchestratorSeatIntent({ project: `churn-${rewrites}`, mandate: "m", clientRequestId: `churn-${rewrites}`, mode: "spawn", now: AT });
+    if (seam === "index") resetRecipientAuthorityForTests();
   };
-  if (seam === "file-stat") rewrite();
-  const initialRewrites = rewrites;
-  const syncStat = fs.statSync;
-  const asyncRead = fs.promises.readFile;
-  const stat = spyOn(fs, "statSync").mockImplementation(((...args: Parameters<typeof fs.statSync>) => {
-    if (args[0] === seatsPath && seam === "final-stat") rewrite();
-    return syncStat(...args);
-  }) as typeof fs.statSync);
-  const read = spyOn(fs.promises, "readFile").mockImplementation((async (...args: Parameters<typeof fs.promises.readFile>) => {
-    const result = await asyncRead(...args);
-    if (args[0] === seatsPath && seam === "file-stat") rewrite();
-    return result;
-  }) as typeof fs.promises.readFile);
+  setRecipientAuthorityLookupHookForTests((step) => { if (step === seam) rewrite(); });
   try {
     expect(await orchestratorRecipientRefusalAsync([id])).toEqual({
-      status: 503, error: seam === "final-stat"
+      status: 503, error: seam === "recheck"
         ? "orchestrator seat authority changed during lookup" : "orchestrator seat authority is unavailable",
     });
-    expect(rewrites - initialRewrites).toBe(3);
-  } finally { stat.mockRestore(); read.mockRestore(); }
+    expect(rewrites).toBe(3);
+  } finally { setRecipientAuthorityLookupHookForTests(null); }
   expect(await orchestratorRecipientRefusalAsync([id])).toBeNull();
 });
 
@@ -176,21 +160,15 @@ test("a stable revocation without a successor and unusable authority retain thei
   completeOrchestratorSeatIntent({ project: "rotation-project", clientRequestId: "first", conversationId: "conversation_old", path: null, now: AT });
   beginOrchestratorSeatIntent({ project: "rotation-project", mandate: "m", clientRequestId: "second", mode: "existing", now: AT });
   completeOrchestratorSeatIntent({ project: "rotation-project", clientRequestId: "second", conversationId: "conversation_new", path: null, now: AT });
-  const seatsPath = path.join(sandbox, "orchestrator-seats.json");
   const file = readOrchestratorSeatFile();
   file.seats = {};
   for (const revocation of file.revocations) delete revocation.successorConversationId;
-  fs.writeFileSync(seatsPath, JSON.stringify(file));
-  const reads = spyOn(fs.promises, "readFile");
-  try {
-    expect(await orchestratorRecipientRefusalAsync(["conversation_old"])).toMatchObject({
-      status: 409, error: "This orchestrator was replaced; designate a current orchestrator before sending.",
-    });
-    expect(reads.mock.calls.filter(([file]) => file === seatsPath)).toHaveLength(1);
-    fs.writeFileSync(seatsPath, "{broken");
-    expect(await orchestratorRecipientRefusalAsync(["conversation_old"])).toEqual({ status: 503, error: "orchestrator seat authority is unavailable" });
-    expect(reads.mock.calls.filter(([file]) => file === seatsPath)).toHaveLength(2);
-  } finally { reads.mockRestore(); }
+  writeStoredSeatRecord(file);
+  expect(await orchestratorRecipientRefusalAsync(["conversation_old"])).toMatchObject({
+    status: 409, error: "This orchestrator was replaced; designate a current orchestrator before sending.",
+  });
+  damageStoredSeatRecord();
+  expect(await orchestratorRecipientRefusalAsync(["conversation_old"])).toEqual({ status: 503, error: "orchestrator seat authority is unavailable" });
 });
 
 test.each(["baseline", "complete", "materialize"] as const)("seat %s reads credentials outside the lease and rejects a racing intent", action => {
@@ -251,22 +229,25 @@ test("begin persists a pending intent that grants nothing and is replayable by k
 });
 
 test("a replay-only begin finishes its own key and writes nothing otherwise", () => {
-  const seatFile = path.join(sandbox, "orchestrator-seats.json");
+  const stored = () => JSON.stringify(readOrchestratorSeatFile());
+  const empty = stored();
   expect(beginOrchestratorSeatIntent({ project: "proj-a", mandate: "m", clientRequestId: "req_a", mode: "spawn", replayOnly: true, now: AT })).toEqual({ kind: "not_replayed" });
-  expect(fs.existsSync(seatFile)).toBe(false);
+  expect(stored()).toBe(empty);
 
   beginOrchestratorSeatIntent({ project: "proj-a", mandate: "m", clientRequestId: "req_a", mode: "spawn", now: AT });
-  const written = fs.readFileSync(seatFile, "utf8");
+  const written = stored();
   expect(beginOrchestratorSeatIntent({ project: "proj-a", mandate: "other", clientRequestId: "req_a", mode: "spawn", replayOnly: true, now: AT })).toMatchObject({ kind: "replay", seat: { mandate: "m" } });
   expect(beginOrchestratorSeatIntent({ project: "proj-a", mandate: "m", clientRequestId: "req_b", mode: "spawn", replayOnly: true, now: AT })).toMatchObject({ kind: "in_progress" });
 
   /* Once the key's intent failed, a replay-only begin writes nothing, whichever key. */
   failOrchestratorSeatIntent("proj-a", "req_a", "launch failed", AT);
-  const failed = fs.readFileSync(seatFile, "utf8");
+  const failed = stored();
+  const revision = orchestratorSeatStoreSignature();
   for (const key of ["req_a", "req_b"]) {
     expect(beginOrchestratorSeatIntent({ project: "proj-a", mandate: "m", clientRequestId: key, mode: "spawn", replayOnly: true, now: AT })).toEqual({ kind: "not_replayed" });
   }
-  expect(fs.readFileSync(seatFile, "utf8")).toBe(failed);
+  expect(stored()).toBe(failed);
+  expect(orchestratorSeatStoreSignature()).toBe(revision);
   expect(failed).not.toBe(written);
   expect(orchestratorSeatFor("proj-a").pending).toBeNull();
 });
@@ -344,11 +325,21 @@ test("#1402: a designation's trigger survives the file — on the seat it create
   })]);
 
   /* Provenance is unknown or it is absent — never half-written. */
-  const raw = JSON.parse(fs.readFileSync(path.join(sandbox, "orchestrator-seats.json"), "utf8")) as Record<string, unknown>;
+  const raw = JSON.parse(JSON.stringify(readOrchestratorSeatFile())) as Record<string, unknown>;
   const seats = raw.seats as Record<string, Record<string, unknown>>;
   seats["proj-a"]!.triggeredBy = { kind: "impostor", conversationId: "conversation_z" };
-  fs.writeFileSync(path.join(sandbox, "orchestrator-seats.json"), JSON.stringify(raw), "utf8");
+  writeStoredSeatRecord(raw);
   expect(orchestratorSeatFor("proj-a").active?.triggeredBy).toBeNull();
+});
+
+test("#1402: a half-written trigger in a legacy record is read as unknown before and after its import", () => {
+  const seat = { project: "proj-a", seatEpoch: 1, conversationId: "conversation_a", path: null, mandate: "m", promptVersion: null,
+    predecessorConversationId: null, state: "active", triggeredBy: { kind: "impostor", conversationId: "conversation_z" },
+    intent: { clientRequestId: "req_0000001", mode: "spawn", launchId: null, error: null }, designatedAt: AT, activatedAt: AT };
+  fs.writeFileSync(path.join(sandbox, "orchestrator-seats.json"), JSON.stringify({ schemaVersion: 1, nextSeatEpoch: 2, seats: { "proj-a": seat }, pending: {}, revocations: [] }));
+  expect(orchestratorSeatFor("proj-a").active?.triggeredBy).toBeNull();
+  expect(importLegacyOrchestratorSeats(path.join(sandbox, "orchestrator-seats.json")).state).toBe("imported");
+  expect(orchestratorSeatFor("proj-a").active).toMatchObject({ conversationId: "conversation_a", triggeredBy: null });
 });
 
 test("editing the mandate for the SAME conversation revokes nothing", () => {
@@ -549,9 +540,9 @@ test("a malformed file reads as empty and the epoch counter postdates everything
 
   beginOrchestratorSeatIntent({ project: "proj-a", mandate: "m", clientRequestId: "req_0000001", mode: "spawn", now: AT });
   completeOrchestratorSeatIntent({ project: "proj-a", clientRequestId: "req_0000001", conversationId: "conversation_a", path: null, now: AT });
-  const raw = JSON.parse(fs.readFileSync(path.join(sandbox, "orchestrator-seats.json"), "utf8")) as { nextSeatEpoch: number };
+  const raw = readOrchestratorSeatFile();
   raw.nextSeatEpoch = 0;
-  fs.writeFileSync(path.join(sandbox, "orchestrator-seats.json"), JSON.stringify(raw), "utf8");
+  writeStoredSeatRecord(raw);
   expect(readOrchestratorSeatFile().nextSeatEpoch).toBe(2);
 });
 
@@ -933,8 +924,7 @@ test("a revoked seat still counts as held once nothing is seated (#2170)", () =>
 
 test("recipient authority indexes retained history once across distinct recipients and invalidates safely", async () => {
   const conversations = Array.from({ length: 20 }, (_, index) => ({ id: `conversation_recipient_${index}` }));
-  const seatsPath = path.join(sandbox, "orchestrator-seats.json");
-  const history = (targetRevocationEpoch = 1) => JSON.stringify({
+  const history = (targetRevocationEpoch = 1) => ({
     schemaVersion: 1,
     nextSeatEpoch: 10003,
     seats: {
@@ -972,54 +962,57 @@ test("recipient authority indexes retained history once across distinct recipien
     history: [],
     rollbacks: {},
   });
-  fs.writeFileSync(seatsPath, history(), "utf8");
+  // The record is in the store before the lookups begin.
+  beginOrchestratorSeatIntent({ project: "setup", mandate: "m", clientRequestId: "setup", mode: "spawn", now: AT });
+  writeStoredSeatRecord(history());
+  resetRecipientAuthorityForTests();
 
-  const syncReadSpy = spyOn(fs, "readFileSync");
-  const asyncReadSpy = spyOn(fs.promises, "readFile");
+  const selections = spyOn(sqliteState, "readStateCollectionSelection");
+  const seatReads = () => selections.mock.calls.filter(([, collection]) => collection === "orchestrator_seats").length;
   let aliasCalls = 0;
   const resolveAlias = (id: string) => { aliasCalls += 1; return id; };
   try {
     for (const conversation of conversations) {
       expect(await orchestratorRecipientRefusalAsync([conversation.id], resolveAlias)).toBeNull();
     }
-    expect(asyncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath)).toHaveLength(1);
-    expect(syncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath)).toHaveLength(0);
+    const firstBuild = seatReads();
+    expect(firstBuild).toBeGreaterThan(0);
 
     for (const conversation of conversations) {
       expect(await orchestratorRecipientRefusalAsync([conversation.id], resolveAlias)).toBeNull();
     }
-    expect(asyncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath)).toHaveLength(1);
+    expect(seatReads()).toBe(firstBuild);
 
     const firstRecipient = conversations[0]!;
     expect(await orchestratorRecipientRefusalAsync(["conversation_historic_0", firstRecipient.id], resolveAlias)).toBeNull();
     expect(aliasCalls).toBe(0);
-    expect(asyncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath)).toHaveLength(1);
+    expect(seatReads()).toBe(firstBuild);
 
+    /* A rotation through the store moves the index with it: the synchronous
+       guard answers from it without reading the record. */
     beginOrchestratorSeatIntent({ project: "other-project", mandate: "rotate seat", clientRequestId: "seat-index-rotation", mode: "existing", now: AT });
     completeOrchestratorSeatIntent({ project: "other-project", clientRequestId: "seat-index-rotation",
       conversationId: "conversation_index_successor", path: null, now: AT });
-    const syncReadsBeforeGuard = syncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath).length;
+    const readsBeforeGuard = seatReads();
     expect(orchestratorRecipientRefusal([firstRecipient.id])).toMatchObject({
       status: 409,
       successorConversationId: "conversation_index_successor",
     });
-    expect(syncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath)).toHaveLength(syncReadsBeforeGuard);
-    expect(asyncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath)).toHaveLength(1);
+    expect(seatReads()).toBe(readsBeforeGuard);
 
-    fs.writeFileSync(seatsPath, history(10002), "utf8");
+    writeStoredSeatRecord(history(10002));
+    const readsBeforeChange = seatReads();
     expect(await orchestratorRecipientRefusalAsync(["conversation_historic_0", firstRecipient.id], resolveAlias)).toMatchObject({
       status: 409,
       error: expect.stringContaining("conversation_successor; send there."),
       successorConversationId: "conversation_successor",
     });
-    expect(asyncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath)).toHaveLength(2);
+    expect(seatReads()).toBeGreaterThan(readsBeforeChange);
     expect(aliasCalls).toBe(1);
 
-    fs.writeFileSync(seatsPath, "{broken", "utf8");
+    damageStoredSeatRecord();
     expect(await orchestratorRecipientRefusalAsync([firstRecipient.id], resolveAlias)).toMatchObject({ status: 503 });
-    expect(asyncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath)).toHaveLength(3);
   } finally {
-    asyncReadSpy.mockRestore();
-    syncReadSpy.mockRestore();
+    selections.mockRestore();
   }
 });
