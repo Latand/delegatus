@@ -22,10 +22,20 @@ test("numeric ordering includes major, minor and patch versions", () => {
     .toEqual(["1.10.0", "1.2.10", "1.2.9"]);
 });
 
-test.each([["0.1.0"], ["0.1.0", "0.2.0"]])("a shorter supported inventory stays non-empty: %j", (...versions) => {
+test.each([
+  { versions: ["0.1.0"] },
+  { versions: ["0.1.0", "0.2.0"] },
+])("a shorter supported inventory stays non-empty: %j", ({ versions }) => {
   expect(latestCodexVersions(versions)).toEqual([...versions].reverse());
 });
 
-test.each([[], ["0.1.0", "0.1.0"], ["latest"], ["0.2.0-beta.1"], ["0.2"], [""]])("invalid inventories fail instead of creating a green empty matrix: %j", (...versions) => {
+test.each([
+  { versions: [] },
+  { versions: ["0.1.0", "0.1.0"] },
+  { versions: ["latest"] },
+  { versions: ["0.2.0-beta.1"] },
+  { versions: ["0.2"] },
+  { versions: [""] },
+])("invalid inventories fail instead of creating a green empty matrix: %j", ({ versions }) => {
   expect(() => latestCodexVersions(versions)).toThrow("non-empty list of unique stable versions");
 });
