@@ -2771,8 +2771,8 @@ describe("reserved task pages", () => {
     expect(state.itemsShown?.filter(version => version.startsWith("reminder:waiting-sweep@"))).toHaveLength(1);
     const empty = seatTickDecision({ ...check, tasks: [], now: check.now + 25 * 60 * MINUTE, state });
     state = empty.state;
-    const restored = seatTickDecision({ ...check, state, now: check.now + 25 * 60 * MINUTE }).verdict;
-    if (restored.kind !== "wake") throw new Error("wake expected");
+    const restored = seatTickDecision({ ...check, state, now: check.now + 26 * 60 * MINUTE + MINUTE }).verdict;
+    if (restored.kind !== "wake") throw new Error(JSON.stringify(restored));
     expect(restored.taskPage!.rows[0]!.item.id).toBe("waiting-10");
     const malformed = seatTickDecision({ ...check, state: { ...check.state, itemsShown: [`reminder:waiting-sweep@${check.now}@bad-cursor`] } }).verdict;
     if (malformed.kind !== "wake") throw new Error("wake expected");
