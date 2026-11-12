@@ -57,7 +57,7 @@ describe("Fresh Mac smoke account context", () => {
   });
   test("retains server settings while account isolation wins over copied defaults", () => {
     const invocation = smokeUserArguments(account, "/fixture/bun", [], { LLV_LANG: "uk", HOME: "/foreign", PATH: "/foreign/bin" });
-    const env = Object.fromEntries(invocation.slice(invocation.indexOf("-i") + 1, -1).map(entry => entry.split(/=(.*)/s).slice(0, 2)));
+    const env = Object.fromEntries(invocation.slice(invocation.indexOf("-i") + 1, -1).map(entry => entry.split(/=([\s\S]*)/).slice(0, 2)));
     expect(env).toMatchObject({ HOME: account.home, USER: account.user, LOGNAME: account.user, PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LLV_LANG: "uk" });
   });
   test.each([0, -1, 1.5, NaN, undefined])("refuses an invalid or privileged account UID: %s", uid => {
