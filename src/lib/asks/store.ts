@@ -304,24 +304,30 @@ function rowsPatch(held: OperatorAsksFileV1, next: OperatorAsksFileV1): { record
 
 /* The import, the rollback mirror and the roll-forward merge are the shared
    legacy helper's; reads and writes go through this module's own collection. */
-const legacyStore = new LegacyDocumentStore<OperatorAsksFileV1>({
-  collection: OPERATOR_ASKS_COLLECTION,
-  migrationId: "operator-asks-json-v1",
-  busyMessage: "operator asks state is busy",
-  /* A file that cannot be read holds a month's spend nobody can know: it is
-     never imported as empty, and stays the store until it reads again. */
-  validateLegacyPath: (filePath) => {
-    if (readStateImport(legacyDatabasePath(filePath), OPERATOR_ASKS_COLLECTION)) return;
-    if (!fs.lstatSync(filePath, { throwIfNoEntry: false })?.isFile()) return;
-    loadLegacyOperatorAsks(filePath, new Date());
-  },
-  parse: (raw) => parseOperatorAsks(raw, new Date()),
-  toRows,
-  fromRows: (rows) => fromRows(rows, new Date()),
-  toFile: (document) => document,
-  readLegacy: (filePath) => loadLegacyOperatorAsks(filePath, new Date()),
-  error: (message, cause) => new OperatorAsksUnreadable(cause instanceof Error ? `${message}: ${cause.message}` : message),
-});
+/* Built on first use: a module that reaches this one while the shared helper
+   is still loading (the state store's history projection) must not construct
+   it then. */
+let legacyStoreInstance: LegacyDocumentStore<OperatorAsksFileV1> | null = null;
+function legacyStore(): LegacyDocumentStore<OperatorAsksFileV1> {
+  return legacyStoreInstance ??= new LegacyDocumentStore<OperatorAsksFileV1>({
+    collection: OPERATOR_ASKS_COLLECTION,
+    migrationId: "operator-asks-json-v1",
+    busyMessage: "operator asks state is busy",
+    /* A file that cannot be read holds a month's spend nobody can know: it is
+       never imported as empty, and stays the store until it reads again. */
+    validateLegacyPath: (filePath) => {
+      if (readStateImport(legacyDatabasePath(filePath), OPERATOR_ASKS_COLLECTION)) return;
+      if (!fs.lstatSync(filePath, { throwIfNoEntry: false })?.isFile()) return;
+      loadLegacyOperatorAsks(filePath, new Date());
+    },
+    parse: (raw) => parseOperatorAsks(raw, new Date()),
+    toRows,
+    fromRows: (rows) => fromRows(rows, new Date()),
+    toFile: (document) => document,
+    readLegacy: (filePath) => loadLegacyOperatorAsks(filePath, new Date()),
+    error: (message, cause) => new OperatorAsksUnreadable(cause instanceof Error ? `${message}: ${cause.message}` : message),
+  });
+}
 
 interface AskStoreRuntime {
   collections: Map<string, { identity: string | null; collection: SqliteStateCollection<OperatorAskRow> }>;
@@ -380,7 +386,7 @@ function writableCollection(file: string): SqliteStateCollection<OperatorAskRow>
   const held = openCollection(database);
   if (held) return held;
   if (!legacyImportAllowed(file, database)) throw new FileTransactionBusyError("operator asks state is waiting for release promotion");
-  legacyStore.importLegacy(file, { reconcile: lazyReconcileAllowed(file, database) });
+  legacyStore().importLegacy(file, { reconcile: lazyReconcileAllowed(file, database) });
   const collection = openCollection(database);
   if (!collection) throw new FileTransactionBusyError("operator asks state is not imported");
   return collection;
@@ -458,13 +464,13 @@ export function mutateOperatorAsks(
 /** Import `operator-asks.json` now. The Viewer's activation calls this with
     `reconcile: true`. */
 export function importLegacyOperatorAsks(file = operatorAsksFile(), options: { reconcile: boolean; hooks?: LegacyImportHooks } = { reconcile: true }): LegacyImportOutcome {
-  return legacyStore.importLegacy(file, options);
+  return legacyStore().importLegacy(file, options);
 }
 
 /** Write `operator-asks.json` from SQLite for a rollback release that
     predates the move. */
 export function checkpointOperatorAsksRollbackMirrorForDemotion(file = operatorAsksFile()): void {
-  legacyStore.checkpointRollbackMirror(file);
+  legacyStore().checkpointRollbackMirror(file);
 }
 
 /** Test seam: forget every open collection and cached read, the way a
