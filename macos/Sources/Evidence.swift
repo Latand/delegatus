@@ -62,4 +62,14 @@ import WebKit
             try? png.write(to: destination)
         }
     }
+    func captureScreen(name: String) {
+        guard let directory else { return }
+        frame += 1
+        let destination = directory.appendingPathComponent(String(format: "%03d-%@.png", frame, name))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard let image = CGWindowListCreateImage(.null, .optionOnScreenOnly, kCGNullWindowID, [.bestResolution]),
+                  let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else { return }
+            try? png.write(to: destination)
+        }
+    }
 }

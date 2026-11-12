@@ -7,37 +7,34 @@ set -m
 umask 077
 runtime=$1
 manifest=$2
+if [[ ${1:-} != --locked ]]; then
+  mkdir -p "$runtime"
+  if ! /usr/bin/lockf -k -t 0 "$runtime/.install-lock-v2" /bin/bash "$0" --locked "$runtime" "$manifest"; then
+    echo 'An installation is already in progress or could not complete. Check Open Logs.' >&2
+    exit 1
+  fi
+  exit 0
+fi
+shift
+runtime=$1
+manifest=$2
 resources=$(cd "$(dirname "$manifest")" && pwd)
 read_manifest() { /usr/bin/plutil -extract "$1" raw -o - "$manifest"; }
 case $(uname -m) in arm64) architecture=arm64 ;; x86_64) architecture=x86_64 ;; *) echo 'Unsupported architecture' >&2; exit 1 ;; esac
 mkdir -p "$runtime"
-lock="$runtime/.install-lock"
-acquire_lock() {
-  if mkdir "$lock" 2>/dev/null; then
-    printf '%s\n' "$$" > "$lock/pid"
-    return 0
+legacy_lock="$runtime/.install-lock"
+if [[ -d "$legacy_lock" ]]; then
+  legacy_owner=$(cat "$legacy_lock/pid" 2>/dev/null || true)
+  if [[ "$legacy_owner" =~ ^[0-9]+$ ]] && kill -0 "$legacy_owner" 2>/dev/null; then
+    echo 'An installation is already in progress. Check Open Logs.' >&2; exit 1
   fi
-  local owner age now modified stale="$runtime/.install-lock-stale.$$"
-  owner=$(cat "$lock/pid" 2>/dev/null || true)
-  if [[ "$owner" =~ ^[0-9]+$ ]]; then
-    if kill -0 "$owner" 2>/dev/null; then return 1; fi
-  else
-    # mkdir and writing pid are separate syscalls; leave a recent empty lock alone.
-    modified=$(/usr/bin/stat -f %m "$lock" 2>/dev/null || echo 0)
-    now=$(/bin/date +%s)
-    age=$((now - modified))
-    (( age >= 120 )) || return 1
+  legacy_modified=$(/usr/bin/stat -f %m "$legacy_lock" 2>/dev/null || echo 0)
+  legacy_age=$(( $(/bin/date +%s) - legacy_modified ))
+  if (( legacy_age < 120 )); then
+    echo 'A recent installation lock is incomplete. Wait briefly, then try again.' >&2; exit 1
   fi
-  # Rename first so only one contender can claim and remove a stale directory.
-  if mv "$lock" "$stale" 2>/dev/null; then
-    rm -rf "$stale"
-    mkdir "$lock" 2>/dev/null || return 1
-    printf '%s\n' "$$" > "$lock/pid"
-    return 0
-  fi
-  return 1
-}
-if ! acquire_lock; then echo 'An installation is already in progress. Check Open Logs.' >&2; exit 1; fi
+  rm -rf "$legacy_lock"
+fi
 stage=$(mktemp -d "$runtime/.stage.XXXXXXXX")
 child=''
 published_bun=0
@@ -61,7 +58,6 @@ cleanup() {
     if [ -d "$stage/previous-bun" ]; then mv "$stage/previous-bun" "$runtime/bun"; fi
   fi
   rm -rf "$stage"
-  rm -rf "$lock"
   exit "$status"
 }
 trap cleanup EXIT

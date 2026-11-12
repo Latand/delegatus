@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 struct RuntimeManifest: Decodable {
     struct Archive: Decodable { let url: String; let sha256: String; let bytes: Int }
@@ -23,6 +24,67 @@ enum Installations {
     static func serviceFile(_ home: URL) -> URL { home.appendingPathComponent("Library/LaunchAgents/org.delegatus.server.plist") }
     static func withoutService(_ install: Installation) -> Installation {
         Installation(bun: install.bun, cli: install.cli, environment: install.environment)
+    }
+
+    static func serverPackageRoot(home: URL, environment: [String: String], install: Installation) -> URL {
+        let base = install.cli.deletingLastPathComponent().deletingLastPathComponent()
+        let configRoot = URL(fileURLWithPath: environment["XDG_CONFIG_HOME"] ?? home.appendingPathComponent(".config").path, isDirectory: true)
+        let appConfig = appDirectory(configRoot)
+        let state = environment["LLV_STATE_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? appConfig.appendingPathComponent("state", isDirectory: true)
+        let installID = installID(base)
+        let pointerURL = state.appendingPathComponent("self-update/release-\(installID).json")
+        let cache = environment["XDG_CACHE_HOME"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? home.appendingPathComponent(".cache", isDirectory: true)
+        guard let pointer = try? JSONSerialization.jsonObject(with: Data(contentsOf: pointerURL)) as? [String: Any],
+              pointer["kind"] as? String == "package",
+              let version = pointer["version"] as? String,
+              version.range(of: "^\\d+\\.\\d+\\.\\d+(?:-[A-Za-z0-9.-]+)?$", options: .regularExpression) != nil,
+              let sha = pointer["sha"] as? String,
+              sha.range(of: "^[0-9a-f]{40}$", options: .regularExpression) != nil,
+              let baseVersion = packageVersion(base), pointer["baseVersion"] as? String == baseVersion,
+              let directory = pointer["dir"] as? String,
+              let expectedDirectory = releaseDirectory(cache: cache, installID: installID, version: version),
+              URL(fileURLWithPath: directory).standardizedFileURL == expectedDirectory,
+              packageVersion(expectedDirectory) == version,
+              packageName(expectedDirectory) == "delegatus-cli",
+              FileManager.default.fileExists(atPath: expectedDirectory.appendingPathComponent("dist/standalone/server.js").path),
+              FileManager.default.fileExists(atPath: expectedDirectory.appendingPathComponent("dist/runtime-host.mjs").path) else { return base }
+        return expectedDirectory
+    }
+
+    static func installID(_ packageRoot: URL) -> String {
+        SHA256.hash(data: Data(packageRoot.standardizedFileURL.path.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func appDirectory(_ root: URL) -> URL {
+        let preferred = root.appendingPathComponent("delegatus", isDirectory: true)
+        let legacy = root.appendingPathComponent("agent-log-viewer", isDirectory: true)
+        if isRealDirectory(preferred) { return preferred }
+        if FileManager.default.fileExists(atPath: legacy.path) { return legacy }
+        return preferred
+    }
+
+    private static func releaseDirectory(cache: URL, installID: String, version: String) -> URL? {
+        let appCache = appDirectory(cache)
+        return appCache.appendingPathComponent("self-update/\(installID)/releases/npm-\(version)/node_modules/delegatus-cli", isDirectory: true).standardizedFileURL
+    }
+
+    private static func isRealDirectory(_ url: URL) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { return false }
+        return values.isDirectory == true && values.isSymbolicLink != true
+    }
+
+    private static func packageVersion(_ root: URL) -> String? {
+        guard let data = try? Data(contentsOf: root.appendingPathComponent("package.json")),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object["version"] as? String
+    }
+
+    private static func packageName(_ root: URL) -> String? {
+        guard let data = try? Data(contentsOf: root.appendingPathComponent("package.json")),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object["name"] as? String
     }
 
     static func valid(_ install: Installation) -> Bool {

@@ -93,8 +93,8 @@ enum Server {
                         processes[process] = (parent, String(fields[2]))
                     }
                 }
-                let packageRoot = install.cli.deletingLastPathComponent().deletingLastPathComponent().path
-                let serverPath = packageRoot + "/dist/standalone/server.js"
+                let packageRoot = Installations.serverPackageRoot(home: URL(fileURLWithPath: environment["HOME"] ?? NSHomeDirectory()), environment: environment, install: install)
+                let serverPath = packageRoot.appendingPathComponent("dist/standalone/server.js").path
                 var cursor = listenerPID
                 var visited = Set<Int>()
                 var foundViewer = false

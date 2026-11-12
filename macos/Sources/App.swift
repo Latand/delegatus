@@ -54,10 +54,40 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         window.toolbar = toolbar
         buildMenus()
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        if evidence.directory != nil, let index = CommandLine.arguments.firstIndex(of: "--evidence-surface"), index + 1 < CommandLine.arguments.count {
+            presentEvidenceSurface(CommandLine.arguments[index + 1]); return
+        }
         if evidence.directory != nil && CommandLine.arguments.contains("--evidence-error") {
             failed(LauncherError.message("install-failed")); return
         }
         begin()
+    }
+    func presentEvidenceSurface(_ surface: String) {
+        evidence.log("SURFACE \(surface)")
+        switch surface {
+        case "install":
+            show("needs-install", message: text("install-question"), actions: [("install", #selector(installRuntime)), ("quit", #selector(quit))])
+        case "installing": show("installing", actions: [("cancel", #selector(cancelInstall)), ("logs", #selector(logs))])
+        case "menu":
+            guard let menu = NSApp.mainMenu?.item(at: 0)?.submenu else { return }
+            menu.popUp(positioning: nil, at: NSPoint(x: 18, y: window.frame.height - 42), in: window.contentView)
+            evidence.captureScreen(name: "menu")
+        case "stop", "login", "update", "quit":
+            let title: String
+            let detail: String
+            let buttons: [String]
+            switch surface {
+            case "stop": title = text("stop-question"); detail = text("stop-warning"); buttons = ["stop", "cancel"]
+            case "login": title = text("login-remove-question"); detail = ""; buttons = ["ok", "cancel"]
+            case "update": title = text("app-update"); detail = ""; buttons = ["download", "cancel"]
+            default: title = text("quit-question"); detail = text("quit-detail"); buttons = ["keep-running", "cancel"]
+            }
+            let alert = NSAlert(); alert.messageText = title; alert.informativeText = detail
+            for button in buttons { alert.addButton(withTitle: text(button)) }
+            alert.beginSheetModal(for: window) { _ in }
+            evidence.captureScreen(name: "dialog-\(surface)")
+        default: show("failed", message: text("operation-failed"))
+        }
     }
     func item(_ menu: NSMenu, _ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
         let item = NSMenuItem(title: text(title), action: action, keyEquivalent: key); item.target = self; menu.addItem(item); return item

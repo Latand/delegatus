@@ -34,6 +34,23 @@ import Foundation
         try Data("{\"name\":\"delegatus-cli\",\"version\":\"2.0.0\"}".utf8).write(to: package.appendingPathComponent("package.json"))
         let privateInstall = try Installations.discover(home)
         expect(privateInstall?.bun == bun, "private install with spaces")
+        let state = home.appendingPathComponent("custom-state")
+        let releaseID = Installations.installID(package)
+        let activePackage = home.appendingPathComponent(".cache/delegatus/self-update/\(releaseID)/releases/npm-2.1.0/node_modules/delegatus-cli")
+        for file in ["dist/standalone/server.js", "dist/runtime-host.mjs"] {
+            let destination = activePackage.appendingPathComponent(file)
+            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: destination)
+        }
+        try Data("{\"name\":\"delegatus-cli\",\"version\":\"2.1.0\"}".utf8).write(to: activePackage.appendingPathComponent("package.json"))
+        let pointer = state.appendingPathComponent("self-update/release-\(releaseID).json")
+        try fm.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let published = ["kind": "package", "version": "2.1.0", "sha": String(repeating: "a", count: 40), "baseVersion": "2.0.0", "dir": activePackage.path]
+        try JSONSerialization.data(withJSONObject: published).write(to: pointer)
+        expect(Installations.serverPackageRoot(home: home, environment: ["LLV_STATE_DIR": state.path], install: privateInstall!) == activePackage, "process verification follows the validated installed release pointer")
+        var untrustedPointer = published; untrustedPointer["dir"] = home.appendingPathComponent("foreign-package").path
+        try JSONSerialization.data(withJSONObject: untrustedPointer).write(to: pointer)
+        expect(Installations.serverPackageRoot(home: home, environment: ["LLV_STATE_DIR": state.path], install: privateInstall!) == package, "release pointer cannot redirect process verification outside the private release tree")
         let service = Installations.serviceFile(home)
         try fm.createDirectory(at: service.deletingLastPathComponent(), withIntermediateDirectories: true)
         let serviceObject: [String: Any] = ["Label": "org.delegatus.server", "ProgramArguments": [bun.path, package.appendingPathComponent("bin/cli.mjs").path, "--no-open", "--port", "8898"], "EnvironmentVariables": ["LLV_STATE_DIR": home.appendingPathComponent("custom-state").path, "XDG_CONFIG_HOME": home.appendingPathComponent("custom-config").path]]

@@ -1,8 +1,8 @@
 // One driver for the native launcher. Runs only on disposable macOS CI machines.
 import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, writeFileSync, existsSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { randomBytes } from "node:crypto";
+import { dirname, join, resolve } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
 
 const [image, reportArg] = process.argv.slice(2);
@@ -17,6 +17,11 @@ let created = false;
 let mount;
 const owned = new Set();
 let serial = 0;
+const visualCases = [
+  ...["en", "uk"].flatMap(language => ["Light", "Dark"].flatMap(appearance => [
+    ["minimum", ["--evidence-minimum-size"]], ["intermediate", ["--evidence-intermediate-size"]], ["default", []]
+  ].map(([size, args]) => ({ language, appearance, size, args }))))
+];
 let accountPassphrase = "";
 const accessKey = randomBytes(16).toString("hex");
 function redact(value) {
@@ -47,6 +52,12 @@ async function check(name, action) {
 }
 function logs() {
   try { return asUser("/bin/sh", ["-c", 'cat "$HOME"/Library/Logs/Delegatus/app-*.log']); } catch { return ""; }
+}
+function processLog(pid) {
+  try { return asUser("/bin/sh", ["-c", 'cat "$HOME"/Library/Logs/Delegatus/app-*-' + Number(pid) + '.log']); } catch { return ""; }
+}
+function capturedFrames(directory) {
+  try { return asUser("/usr/bin/find", [directory, "-type", "f", "-name", "*.png"]).trim().split("\n").filter(Boolean).length; } catch { return 0; }
 }
 function launch(args, label) {
   const pidFile = join(home, `app-${++serial}.pid`);
@@ -85,14 +96,35 @@ async function end(app) {
   await until("owned app exit", () => { try { sudo(["kill", "-0", String(app.pid)]); return false; } catch { return true; } });
   owned.delete(app.pid);
 }
-async function http(method = "GET") {
-  try { return await fetch("http://127.0.0.1:8898" + (method === "HEAD" ? "/api/onboarding/diagnostics" : "/"), { method, signal: AbortSignal.timeout(2000) }); } catch { return null; }
+async function http(method = "GET", authorized = false) {
+  try { return await fetch("http://127.0.0.1:8898" + (method === "HEAD" ? "/api/onboarding/diagnostics" : "/"), { method, headers: authorized ? { Authorization: `Bearer ${accessKey}` } : {}, signal: AbortSignal.timeout(2000) }); } catch { return null; }
 }
 function launcherPID() {
   const processes = asUser("/bin/ps", ["-u", user, "-o", "pid=,command="]);
   const root = join(home, "Library/Application Support/Delegatus/Runtime");
   const row = processes.split("\n").find(line => line.includes(join(root, "bun/bin/bun")) && line.includes(join(root, "packages/node_modules/delegatus-cli/bin/cli.mjs")) && !line.includes("stop --all"));
   assert(row, "private launcher belongs to the fresh account"); return Number(row.trim().split(/\s+/)[0]);
+}
+function seedInstalledRelease(runtime) {
+  const packageRoot = join(runtime, "packages/node_modules/delegatus-cli");
+  const installId = createHash("sha256").update(resolve(packageRoot)).digest("hex").slice(0, 16);
+  const sourceManifest = JSON.parse(asUser("/bin/cat", [join(packageRoot, "package.json")]));
+  const releaseVersion = sourceManifest.version.replace(/(\d+)$/, (_, patch) => String(Number(patch) + 1));
+  const release = join(home, ".cache/delegatus/self-update", installId, "releases", `npm-${releaseVersion}`, "node_modules/delegatus-cli");
+  asUser("/bin/mkdir", ["-p", join(release, "dist")]);
+  asUser("/bin/ln", ["-s", join(packageRoot, "dist/standalone"), join(release, "dist/standalone")]);
+  asUser("/bin/ln", ["-s", join(packageRoot, "dist/runtime-host.mjs"), join(release, "dist/runtime-host.mjs")]);
+  sourceManifest.version = releaseVersion;
+  asUser("/usr/bin/tee", [join(release, "package.json")], { input: `${JSON.stringify(sourceManifest)}\n` });
+  const pointer = {
+    kind: "package", version: releaseVersion, sha: randomBytes(20).toString("hex"),
+    baseVersion: JSON.parse(asUser("/bin/cat", [join(packageRoot, "package.json")])).version, dir: release,
+  };
+  const pointerFile = join(home, ".config/delegatus/state/self-update", `release-${installId}.json`);
+  asUser("/bin/mkdir", ["-p", join(home, ".config/delegatus/state/self-update")]);
+  asUser("/usr/bin/tee", [pointerFile], { input: `${JSON.stringify(pointer)}\n` });
+  assert(asUser("/bin/test", ["-f", join(release, "dist/standalone/server.js")]) !== undefined, "updated release contains its Viewer");
+  return { release, pointerFile };
 }
 let exit = 0;
 try {
@@ -122,32 +154,33 @@ try {
   asUser("/bin/chmod", ["600", tokenPath]);
   asUser("/bin/chmod", ["700", join(home, ".config", "delegatus")]);
   const before = asUser("/bin/ls", ["-A", home]).trim().split("\n");
-  const visualCases = [
-    ...["en", "uk"].flatMap(language => ["Light", "Dark"].flatMap(appearance => [
-      ["minimum", ["--evidence-minimum-size"]], ["intermediate", ["--evidence-intermediate-size"]], ["default", []]
-    ].map(([size, args]) => ({ language, appearance, size, args }))))
-  ];
   await check("confirm-without-install", async () => {
     const app = await register(launch(["--evidence-minimum-size", "-AppleLanguages", "(en)"], "confirm-en-light-minimum"));
-    await until("confirmation", () => logs().includes("STATE needs-install"), 60_000, app.diagnostics);
+    await until("confirmation", () => processLog(app.pid).includes("STATE needs-install"), 60_000, app.diagnostics);
     await sleep(20_000);
     assert.throws(() => asUser("/bin/test", ["-e", join(home, "Library/Application Support/Delegatus/Runtime")]));
     await end(app);
   });
+  for (const surface of ["install", "installing", "menu", "stop", "login", "update", "quit"]) {
+    for (const { language, appearance, size, args } of visualCases) await check(`surface-${surface}-${language}-${appearance}-${size}`, async () => {
+      const frames = join(home, "Library", "Evidence", `surface-${surface}-${language}-${appearance}-${size}`);
+      const app = await register(launch([...args, "--evidence-surface", surface, "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `surface-${surface}-${language}-${appearance}-${size}`));
+      await until(`render ${surface}`, () => processLog(app.pid).includes(`SURFACE ${surface}`) && capturedFrames(frames) > 0, 60_000, app.diagnostics);
+      await end(app);
+    });
+  }
   for (const item of visualCases) {
     const { language, appearance, size, args } = item;
     if (language === "en" && appearance === "Light" && size === "minimum") continue;
     await check(`confirmation-${language}-${appearance}-${size}`, async () => {
-      const previous = logs().length;
       const app = await register(launch([...args, "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `confirm-${language}-${appearance}-${size}`));
-      await until("localized confirmation", () => logs().slice(previous).includes("STATE needs-install"), 60_000, app.diagnostics);
+      await until("localized confirmation", () => processLog(app.pid).includes("STATE needs-install"), 60_000, app.diagnostics);
       await sleep(1200); await end(app);
     });
   }
   for (const { language, appearance, size, args } of visualCases) await check(`error-${language}-${appearance}-${size}`, async () => {
-    const previous = logs().length;
     const app = await register(launch([...args, "--evidence-error", "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `error-${language}-${appearance}-${size}`));
-    await until("localized error screen", () => logs().slice(previous).includes("STATE failed"), 60_000, app.diagnostics);
+    await until("localized error screen", () => processLog(app.pid).includes("STATE failed"), 60_000, app.diagnostics);
     await sleep(900); await end(app);
   });
   let original;
@@ -164,9 +197,8 @@ try {
   });
   for (const { language, appearance, size, args } of visualCases) {
     await check(`reuse-${language}-${appearance}-${size}`, async () => {
-      const previous = logs().length;
       const app = await register(launch([...args, "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `reuse-${language}-${appearance}-${size}`));
-      await until("reuse and language", () => { const tail = logs().slice(previous); return tail.includes("STATE reused") && new RegExp(`WEB language=${language}`).test(tail); });
+      await until("reuse and language", () => { const output = processLog(app.pid); return output.includes("STATE reused") && new RegExp(`WEB language=${language}`).test(output); });
       assert.equal(launcherPID(), original); await sleep(900); await end(app);
     });
   }
@@ -174,26 +206,27 @@ try {
     const runtime = join(home, "Library/Application Support/Delegatus/Runtime");
     await asUser(join(runtime, "bun/bin/bun"), [join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"), "stop", "--all"]);
     await until("port free before protected server", async () => !(await http()));
+    seedInstalledRelease(runtime);
     asUser("/usr/bin/tee", [join(home, ".config/delegatus/phone-access")], { input: "enabled\n" });
     const protectedPID = await startViewer(join(runtime, "bun/bin/bun"), join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"), { LLV_TOKEN: accessKey });
     original = protectedPID;
-    await until("protected anonymous rejection", async () => (await http())?.status === 401);
-    const previous = logs().length;
+    await until("protected anonymous rejection", async () => (await http())?.status === 403);
+    const authorized = await fetch("http://127.0.0.1:8898/", { headers: { Authorization: `Bearer ${accessKey}` }, signal: AbortSignal.timeout(2000) });
+    assert.equal(authorized.status, 200, "the saved key opens the protected Viewer");
     const app = await register(launch(["-AppleLanguages", "(uk)", "-AppleInterfaceStyle", "Dark"], "protected-reuse-uk-dark"));
-    await until("protected saved-key reuse", () => logs().slice(previous).includes("STATE reused") && /WEB language=uk/.test(logs().slice(previous)));
+    await until("protected saved-key reuse", () => processLog(app.pid).includes("STATE reused") && /WEB language=uk/.test(processLog(app.pid)));
     assert.equal(launcherPID(), original);
     await sleep(900); await end(app);
   });
   for (const { language, appearance, size, args } of visualCases) await check(`recovery-${language}-${appearance}-${size}`, async () => {
-    const previous = logs().length;
     const app = await register(launch([...args, "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `recovery-${language}-${appearance}-${size}`));
-    await until("recovery app attaches", () => logs().slice(previous).includes("STATE reused"), 60_000, app.diagnostics);
+    await until("recovery app attaches", () => processLog(app.pid).includes("STATE reused"), 60_000, app.diagnostics);
     const runtime = join(home, "Library/Application Support/Delegatus/Runtime");
     asUser(join(runtime, "bun/bin/bun"), [join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"), "stop", "--all"]);
-    await until("monitor reports stopped", () => logs().slice(previous).includes("STATE stopped"), 90_000, app.diagnostics);
+    await until("monitor reports stopped", () => processLog(app.pid).includes("STATE stopped"), 90_000, app.diagnostics);
     await startViewer(join(runtime, "bun/bin/bun"), join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"));
-    await until("monitor restores the web view", async () => logs().slice(previous).includes("STATE recovered") && (await http())?.status === 200, 90_000, app.diagnostics);
-    await sleep(900); await end(app);
+    await until("monitor restores the web view", async () => processLog(app.pid).includes("STATE recovered") && /WEB language=/.test(processLog(app.pid)) && (await http("GET", true))?.status === 200, 90_000, app.diagnostics);
+    await sleep(4000); await end(app);
   });
   await check("busy-port-setup", async () => {
     const runtime = join(home, "Library/Application Support/Delegatus/Runtime");
@@ -208,9 +241,8 @@ try {
     assert.equal((await http("HEAD"))?.status, 401, "foreign listener exercises the app's HEAD authorization path");
     const pid = Number(sudo(["cat", join(home, "listener.pid")]).trim()); owned.add(pid);
     for (const { language, appearance, size, args } of visualCases) {
-      const previous = logs().length;
       const app = await register(launch([...args, "-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", appearance], `busy-${language}-${appearance}-${size}`));
-      await until("busy screen", () => logs().slice(previous).includes("STATE port-busy") && logs().slice(previous).includes(String(pid)));
+      await until("busy screen", () => processLog(app.pid).includes("STATE port-busy") && processLog(app.pid).includes(String(pid)));
       assert.throws(launcherPID); sudo(["kill", "-0", String(pid)]);
       await sleep(900); await end(app);
     }
@@ -221,6 +253,16 @@ try {
 finally {
   if (created) {
     writeFileSync(join(report, "app.log"), redact(logs()));
+    if (exit !== 0) {
+      try {
+        const diagnostic = run("/usr/bin/log", ["show", "--last", "5m", "--style", "compact", "--predicate", 'process == "Delegatus" || eventMessage CONTAINS "Delegatus"'], { timeout: 60_000 });
+        writeFileSync(join(report, "macos-diagnostics.log"), redact(diagnostic.slice(-200_000)));
+      } catch (error) { writeFileSync(join(report, "macos-diagnostics.log"), redact(error.message)); }
+      try {
+        const crashes = asUser("/bin/sh", ["-c", 'for f in "$HOME"/Library/Logs/DiagnosticReports/Delegatus*; do [ -f "$f" ] && cat "$f"; done']);
+        if (crashes) writeFileSync(join(report, "crash-reports.log"), redact(crashes.slice(-200_000)));
+      } catch { /* crash reports are optional on runners that use unified logging only */ }
+    }
     for (const pid of owned) { try { sudo(["kill", "-TERM", String(pid)]); } catch { /* already exited */ } }
     try {
       const runtime = join(home, "Library/Application Support/Delegatus/Runtime");
@@ -239,7 +281,10 @@ finally {
     `recovery-${language}-${appearance}-${size}`,
     `busy-${language}-${appearance}-${size}`,
   ]);
-  const missingEvidence = expectedEvidence.filter(label => !frameNames.some(name => name.includes(label)));
+  for (const surface of ["install", "installing", "menu", "stop", "login", "update", "quit"]) {
+    expectedEvidence.push(...visualCases.map(({ language, appearance, size }) => `surface-${surface}-${language}-${appearance}-${size}`));
+  }
+  const missingEvidence = expectedEvidence.filter(label => !frameNames.some(name => name.toLowerCase().includes(label.toLowerCase())));
   if (exit === 0 && missingEvidence.length) { checks.push({ name: "rendered-matrix", exit: 1, error: `Missing screenshots: ${missingEvidence.join(", ")}` }); exit = 1; }
   writeFileSync(join(report, "report.json"), redact(JSON.stringify({ exit, passed: checks.filter(c => c.exit === 0).length, failed: checks.filter(c => c.exit !== 0).length, frames, checks, commands }, null, 2)));
   console.log(`macOS smoke: exit=${exit}, passed=${checks.filter(c => c.exit === 0).length}, failed=${checks.filter(c => c.exit !== 0).length}, frames=${frames}`);
