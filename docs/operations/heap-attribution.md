@@ -36,7 +36,9 @@ pid, start time, exit time, exit code and signal. A synchronous Bun launch
 produces a result object, represented separately as `Bun.spawnSync`. `exec`
 records a shell label or the underlying shell executable. `fork` records the
 interpreter. Arguments, shell source, environment values and file contents
-never enter the registry. No full stack is retained. Sites keep the first
+never enter the registry. No full stack is retained. The outermost wrapper captures its caller before entering native code; nested
+wrappers reuse that location, so minified bundles preserve distinct callers.
+Sites keep the first
 repository frame as a relative file, line and column. A deployment lacking
 source mappings can show a `.next/server` chunk location; unresolved sites
 are `unknown`. Third-party frames under `node_modules` are skipped.
@@ -106,19 +108,23 @@ Measurements below used pinned Bun 1.4.0 on a shared Linux machine. They are
 synthetic unit costs, with no claim about collection time on a multi-gigabyte
 production heap. The launch measurement substitutes a native-shaped object
 and already resolved exit promise, retaining 10,000 targets so GC cannot erase
-them during the measurement. It measures instrumentation separately from OS
+them during the measurement. The Node measurement replaces the native launch
+method and subtracts a baseline that keeps native argument normalization and
+ChildProcess construction. These measure instrumentation separately from OS
 process creation. No production state was used.
 
 | Part | Measured cost per call | Ongoing work |
 | --- | --- | --- |
-| Launch wrapper | About 8.2 microseconds over a 0.04-microsecond fake launch | One bounded stack, relative-site interning, weak registration, scalar metadata and exit observer per new result; nested Node entry points deduplicate. |
-| Attribution read, 10,000 launch results | About 7.4 ms with oldest-result details; 1.4 ms for series | Linear weak-reference scan, site aggregation; details keep only the oldest 32 results. At capacity an admission can also sweep at most 16,384 weak references. |
+| Bun launch wrapper | About 6.0 microseconds over a 0.07-microsecond fake Bun launch | One bounded stack, relative-site interning, weak registration, scalar metadata and exit observer per new result; nested Node entry points deduplicate. |
+| Node launch wrappers | About 7.7 microseconds above a 2.0-microsecond fake native launch | One outer caller capture, prototype observation and target deduplication; OS launch excluded. |
+| Exit notification | About 0.13 microseconds per Bun promise reaction; 0.9 microseconds per Node exit event plus observer | Scalar lifecycle updates; Node measurement includes event dispatch. |
+| Attribution read, 10,000 launch results | About 8.0 ms with oldest-result details; 1.3 ms for series | Linear weak-reference scan, site aggregation; details keep only the oldest 32 results. At capacity an admission can also sweep at most 16,384 weak references. |
 | Host registration | About 0.8 microseconds for weak registration and scalar metadata | Once per constructed host; reads of 150 launch results and 50 synthetic hosts cost about 119 microseconds with details or 21 microseconds for series. |
 | Cache-counter read | About 0.5 microseconds with an empty registry | Copies at most 256 existing scalar rows. |
-| Pending-operation read | About 0.4 microseconds empty; 7.5 microseconds for 128 operations | Bounded sort and scalar aggregation; existing operation instrumentation supplies the data. |
-| Census | About 46 ms for 1.63 million objects, about 28 ns/object | One heap walk per uncached request or ten-minute sample. |
-| Full GC | About 18 ms on that synthetic heap | Only an explicit `gc=full` request; measured separately on every request. |
-| SQLite append | About 49–59 ms with up to 154 small history rows | One append and retention pruning every ten minutes; includes synchronous filesystem/SQLite work on this machine. Larger rows/history can cost more. |
+| Pending-operation read | About 0.6 microseconds empty; 7.3 microseconds for 128 operations | Bounded sort and scalar aggregation; existing operation instrumentation supplies the data. |
+| Census | About 54 ms for 1.63 million objects, about 33 ns/object | One heap walk per uncached request or ten-minute sample. |
+| Full GC | About 20 ms on that synthetic heap | Only an explicit `gc=full` request; measured separately on every request. |
+| SQLite append | About 17–59 ms across runs with up to 154 small history rows | One append and retention pruning every ten minutes; includes synchronous filesystem/SQLite work on this machine. Larger rows/history can cost more. |
 
 Host event production and subscriber handling gain no per-event work. Each host
 registers once; reads inspect array lengths and subscriber queue lengths.

@@ -4,6 +4,9 @@ import { promisify } from "node:util";
 import { spawn as namedSpawn } from "node:child_process";
 import childProcess from "node:child_process";
 import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
+import { fileURLToPath } from "node:url";
 import { heapAttribution } from "./heapAttribution";
 import { installProcessAttribution } from "./processAttribution";
 
@@ -71,4 +74,43 @@ test("an exited subprocess has the same weak lifetime as an unwrapped native con
     await Bun.sleep(5); Bun.gc(true); live = ref.deref() !== undefined;
   }
   expect(live).toBe(control.deref() !== undefined);
+});
+
+
+test("minified production chunks attribute distinct caller locations without source maps", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "heap-bundle-"));
+  try {
+    const entry = path.join(root, "entry.ts");
+    const outdir = path.join(root, ".next/server/chunks");
+    const observer = fileURLToPath(new URL("./processAttribution.ts", import.meta.url));
+    const registry = fileURLToPath(new URL("./heapAttribution.ts", import.meta.url));
+    fs.writeFileSync(entry, `
+      import { installProcessAttribution } from ${JSON.stringify(observer)};
+      import { heapAttribution } from ${JSON.stringify(registry)};
+      import childProcess, { spawn } from "node:child_process";
+      installProcessAttribution();
+      function first() { return Bun.spawnSync([process.execPath, "-e", "process.exit(0)"]); }
+      function second() { return Bun.spawnSync([process.execPath, "-e", "process.exit(1)"]); }
+      function third() { return childProcess.spawn(process.execPath, ["-e", "process.exit(0)"]); }
+      function fourth() { return childProcess.spawn(process.execPath, ["-e", "process.exit(1)"]); }
+      function fifth() { return spawn(process.execPath, ["-e", "process.exit(0)"]); }
+      function sixth() { return spawn(process.execPath, ["-e", "process.exit(1)"]); }
+      const held = [first(), second(), third(), fourth(), fifth(), sixth()];
+      console.log(JSON.stringify({ groups: heapAttribution.snapshot().processes.groups, held: held.length }));
+    `);
+    const built = await Bun.build({ entrypoints: [entry], outdir, naming: "fixture.js", target: "bun", minify: true, sourcemap: "none" });
+    expect(built.success).toBe(true);
+    const child = Bun.spawn([process.execPath, path.join(outdir, "fixture.js")], { stdout: "pipe", stderr: "pipe" });
+    const output = await new Response(child.stdout).text();
+    expect(await child.exited).toBe(0);
+    const result = JSON.parse(output) as { groups: { api: string; site: string }[]; held: number };
+    expect(result.held).toBe(6);
+    for (const api of ["Bun.spawnSync", "node.spawn"]) {
+      const sites = result.groups.filter(row => row.api === api).map(row => row.site);
+      const count = api === "Bun.spawnSync" ? 2 : 4;
+      expect(sites).toHaveLength(count);
+      expect(new Set(sites).size).toBe(count);
+      expect(sites.every(site => /^\.next\/server\/chunks\/fixture\.js:\d+:\d+$/.test(site))).toBe(true);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

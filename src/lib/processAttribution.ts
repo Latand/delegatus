@@ -16,11 +16,11 @@ function exitObserver(meta: ProcessMetadata) {
   return (code: number | null, signal?: string | null) => { meta.exitedAt = Date.now(); meta.exitCode = code; meta.signal = signal ?? null; };
 }
 
-function observe(target: ProcessObject, api: string, command: string, startedAt: number, status: Status) {
+function observe(target: ProcessObject, api: string, command: string, startedAt: number, status: Status, site: string) {
   try {
     if (heapAttribution.processes.has(target)) return;
     const sync = api === "Bun.spawnSync";
-    const meta: ProcessMetadata = { api, site: heapAttribution.site(new Error().stack ?? ""), command,
+    const meta: ProcessMetadata = { api, site, command,
       pid: target.pid ?? null, startedAt, exitedAt: sync || target.pid == null ? Date.now() : null,
       exitCode: target.exitCode ?? null, signal: target.signalCode ?? null };
     if (heapAttribution.processes.add(target, meta) && !sync) {
@@ -37,12 +37,23 @@ export function installProcessAttribution() {
   if (shared.__delegatusProcessAttribution) return shared.__delegatusProcessAttribution;
   const status = shared.__delegatusProcessAttribution = { installed: [] as string[], errors: 0 };
   let nodeApi: string | undefined;
+  let launchSite: string | undefined;
   const wrap = (owner: Record<string, unknown>, name: string, api: string, prototype = false) => {
     const original = owner[name];
     if (typeof original !== "function") return;
     function attributed(this: unknown, ...args: unknown[]) {
       const startedAt = Date.now();
-      const previousApi = nodeApi;
+      const previousApi = nodeApi, previousSite = launchSite;
+      if (launchSite === undefined) {
+        launchSite = "unknown";
+        try {
+          // Capture before entering native code. Nested launch wrappers share
+          // this site, so equal minified wrapper names cannot hide the caller.
+          const trace = { stack: "" };
+          Error.captureStackTrace(trace, attributed);
+          launchSite = heapAttribution.site(trace.stack);
+        } catch { status.errors++; }
+      }
       if (api.startsWith("node.") && !prototype) nodeApi = api;
       try {
         const result = Reflect.apply(original as (...args: unknown[]) => unknown, this, args);
@@ -54,10 +65,10 @@ export function installProcessAttribution() {
             : typeof first === "object" && first !== null ? (first as { cmd?: string[] }).cmd?.[0] : first;
           const command = name === "exec" ? "shell" : name === "fork" ? path.basename(process.execPath)
             : path.basename(typeof executable === "string" ? executable : "unknown").slice(0, 80);
-          observe((prototype ? this : result) as ProcessObject, prototype ? nodeApi ?? "node.spawn" : api, command, startedAt, status);
+          observe((prototype ? this : result) as ProcessObject, prototype ? nodeApi ?? "node.spawn" : api, command, startedAt, status, launchSite);
         } catch { status.errors++; }
         return result;
-      } finally { nodeApi = previousApi; }
+      } finally { nodeApi = previousApi; launchSite = previousSite; }
     }
     // Preserve native custom promisify and other own function properties.
     // The prototype fallback observes launches performed by lexical natives.
