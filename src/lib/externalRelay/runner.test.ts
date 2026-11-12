@@ -4946,7 +4946,7 @@ test("a Cloud relay answer arrives while local account admission is occupied", a
 });
 
 for (const mode of ["fresh", "resumed", "cloud"] as const)
-test(`owner ${mode} prompt refuses an oversized required parent before native or Cloud dispatch`, async () => {
+test(`owner ${mode} answers an oversized required parent through a context file`, async () => {
   const completions: unknown[] = [];
   const service = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/complete")) completions.push(body);
@@ -4954,23 +4954,50 @@ test(`owner ${mode} prompt refuses an oversized required parent before native or
   });
   const paired = relay(`${service.origin}/v1`);
   paired.targets[0]!.ownerTier = true;
-  if (mode === "cloud") {
-    paired.targets[0]!.engine = "codex-cloud";
-    paired.targets[0]!.cloudEnvironmentId = "answer-env";
-    paired.targets[0]!.project = "fixture-project";
-  }
-  updateRelayStore(store => ({ ...store, relays: [paired] }));
-  let launches = 0, continues = 0, cloud = 0;
-  const first = requestSchema.parse({ ...contextRequest, request_id: `envelope-${mode}-first`,
+  const catalog = path.join(process.env.LLV_STATE_DIR!, "project-catalog.json");
+  const previousCatalog = fs.existsSync(catalog) ? fs.readFileSync(catalog) : null;
+  const { resetProjectDirectoryCacheForTests } = await import("@/lib/scanner/projectDirectories");
+  let launches = 0, continues = 0, cloud = 0, filesRead = 0, sentBytes = 0;
+  const inspect = (prompt: string) => {
+    sentBytes = Buffer.byteLength(prompt);
+    expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(32000);
+    const reference = prompt.match(/<relay_context_file>\n([^]*?)\n<\/relay_context_file>/);
+    if (!reference) return;
+    const context = fs.readFileSync(JSON.parse(reference[1]!), "utf8");
+    const rows = JSON.parse(context.match(/<conversation>\n([^]*?)\n<\/conversation>/)![1]!);
+    expect(rows.find((row: { id: string }) => row.id === "quote").text).toBe("я".repeat(16000));
+    filesRead++;
+  };
+  const first = requestSchema.parse({ ...contextRequest, request_id: `envelope-${mode}-first`, chat: { key: "context-file-thread" },
     answer: { max_chars: 4000, progress: "none" }, input: { ...contextRequest.input,
       requester: { ...contextRequest.input.requester, is_owner: true }, tools: [] } });
   const runtime = { ownerPorts: {
-    launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_size_fixture",
+    launch: async (body: Record<string, unknown>) => { launches++; inspect(String(body.prompt)); return { status: 202, body: { conversationId: "conversation_size_fixture",
       launchId: "launch_size_fixture", initialMessage: "delivered" } }; },
-    continue: async () => { continues++; throw new Error("unexpected continuation"); },
+    continue: async (turn: import("./ownerRun").OwnerSpawnedTurn, prompt: string) => {
+      continues++; inspect(prompt);
+      return { ok: true as const, structured: true as const, target: turn.conversationId!, outcome: "delivered" as const,
+        operationId: turn.clientAttemptId, receipt: { operationId: turn.clientAttemptId, idempotencyKey: turn.clientAttemptId,
+          conversationId: turn.conversationId!, kind: "send" as const, status: "delivered" as const, at: "2026-11-11T12:00:00.000Z", revision: 1 } };
+    },
     observe: async () => ({ state: "ended" as const, finalText: "Ready" }), stop: async () => {}, pollMs: 1,
-  }, cloudTransport: async () => { cloud++; return JSON.stringify({ action: "reply", text: "Ready", reply_to: "m1" }); } };
+  }, cloudTransport: async () => { cloud++; throw new Error("an overflowing context must stay local"); } };
   try {
+    if (mode === "cloud") {
+      const { checkEnvironment } = await import("../../../scripts/gate-cache");
+      const { projectForCwd } = await import("@/lib/scanner/describe");
+      const cwd = path.join(root, "context-file-repository"); fs.mkdirSync(cwd);
+      const env = checkEnvironment(process.env), git = Bun.which("git", { PATH: env.PATH });
+      if (!git) throw new Error("native Git unavailable for repository fixture");
+      expect(Bun.spawnSync([git, "init", "-q", cwd], { env }).exitCode).toBe(0);
+      fs.writeFileSync(catalog, JSON.stringify({ files: { fixture: { cwd } } }));
+      resetProjectDirectoryCacheForTests();
+      paired.targets[0]!.engine = "codex-cloud";
+      paired.targets[0]!.cloudEnvironmentId = "answer-env";
+      paired.targets[0]!.project = projectForCwd(cwd)!;
+    }
+    updateRelayStore(store => ({ ...store, relays: [paired] }));
+    setRelaySwitch("chain_conversations", true);
     if (mode === "resumed") {
       expect(await runClaimedRequest(paired, first, undefined, runtime)).toMatchObject({ outcome: "answered" });
       expect(launches).toBe(1);
@@ -4982,11 +5009,13 @@ test(`owner ${mode} prompt refuses an oversized required parent before native or
         author: { key: "bot", name: "Assistant", self: true } },
       { ...row, id: "follow-up", text: "Explain the quote", reply_to: "quote" }] } };
     const result = await runClaimedRequest(paired, request, undefined, runtime);
-    expect(result).toMatchObject({ outcome: "answered", answer: { reply_to: "follow-up", text: expect.stringContaining("Shorten") } });
-    expect({ launches, continues, cloud }).toEqual({ launches: 0, continues: 0, cloud: 0 });
-    expect(completions).toHaveLength(1);
-    expect(readAnswerRecord(paired.id, first.target_id, request.request_id)).toMatchObject({ diagnostic: {
-      promptBudget: { kind: "mandatory_core_too_large", limitBytes: 32000, mandatoryBytes: expect.any(Number) },
-    } });
-  } finally { await service.close(); }
+    expect(result).toMatchObject({ outcome: "answered", answer: { reply_to: "follow-up", text: "Ready" } });
+    expect({ launches, continues, cloud }).toEqual({ launches: mode === "resumed" ? 0 : 1, continues: mode === "resumed" ? 1 : 0, cloud: 0 });
+    expect(filesRead).toBe(1); expect(completions).toHaveLength(1);
+    expect(readAnswerRecord(paired.id, first.target_id, request.request_id)?.diagnostic).toBeUndefined();
+    if (mode !== "cloud") expect(readAnswerRecord(paired.id, first.target_id, request.request_id)?.chain?.promptBytes).toBe(sentBytes);
+  } finally {
+    if (previousCatalog) fs.writeFileSync(catalog, previousCatalog); else fs.rmSync(catalog, { force: true });
+    resetProjectDirectoryCacheForTests(); await service.close();
+  }
 });
