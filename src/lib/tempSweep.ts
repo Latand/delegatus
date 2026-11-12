@@ -294,7 +294,10 @@ export type TempSweepReport = {
   roots: string[];
   removed: TempSweepRemoval[];
   removedBytes: number;
-  kept: { young: number; inUse: number; worktree: number; deferred: number };
+  /** `ledger` counts roots the attempt ledger owns and retires; this sweep
+      skips them without a walk, so their bytes are the ledger's to report.
+      Absent in reports written before it was separated from `inUse`. */
+  kept: { young: number; inUse: number; worktree: number; deferred: number; ledger?: number };
   /** Allocations retained under each guard; absent in older report versions. */
   keptBytes?: TempSweepReport["kept"];
   /** Git or inspection holds beyond the pipeline worktree list. */
@@ -603,8 +606,8 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     roots: roots.map((root) => root.via ? `${root.path} (via ${root.via})` : root.path),
     removed: [],
     removedBytes: 0,
-    kept: { young: 0, inUse: 0, worktree: 0, deferred: 0 },
-    keptBytes: { young: 0, inUse: 0, worktree: 0, deferred: 0 },
+    kept: { young: 0, inUse: 0, worktree: 0, deferred: 0, ledger: 0 },
+    keptBytes: { young: 0, inUse: 0, worktree: 0, deferred: 0, ledger: 0 },
     held: [],
     errors: [],
   };
@@ -727,18 +730,19 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
           report.errors.push(`${root.path} (via ${root.via}): namespace changed during measurement; skipped`);
           return false;
         }
-        report.kept[reason] += 1;
-        report.keptBytes![reason] += bytes;
+        report.kept[reason] = (report.kept[reason] ?? 0) + 1;
+        report.keptBytes![reason] = (report.keptBytes![reason] ?? 0) + bytes;
         return true;
       };
       // The attempt ledger owns this root: it measures it with one native
       // `du` and decides its retirement. This sweep never removes it, so a
       // walk of its tree here would only repeat that measurement. A marked
       // root the ledger does not list has no owner left; it stays, and the
-      // report names it.
+      // report names it. No process was asked about it, so it is counted as
+      // the ledger's, never as in use.
       if (!options.onlyDirectories && fs.existsSync(path.join(reachable, ".delegatus-attempt-owner"))) {
         const listed = options.attemptLedger?.(candidate) ?? true;
-        if (await keep("inUse", 0) && !listed) report.held!.push({ path: candidate, via: root.via, reason: "attempt-owner-unlisted", bytes: 0 });
+        if (await keep("ledger", 0) && !listed) report.held!.push({ path: candidate, via: root.via, reason: "attempt-owner-unlisted", bytes: 0 });
         continue;
       }
       const inspection = inspect(reachable, root, candidate);
@@ -889,11 +893,26 @@ async function cleanupWorktrees() {
   };
 }
 
+/** Result files the files-response worker and its Viewer left behind, in the
+    same pass and mode, with their own report. A failure here is logged and
+    never stops the temp sweep. */
+async function sweepFilesResponseResultFiles(mode: "on" | "dry-run", now?: () => number): Promise<void> {
+  try {
+    const results = await import("@/lib/scanner/filesResponseResults");
+    const report = results.sweepFilesResponseResults({ mode, ...(now ? { now } : {}) });
+    results.recordFilesResponseSweep(report);
+    console.log(results.filesResponseSweepSummary(report));
+  } catch (error) {
+    console.error("[files response sweep] failed", error instanceof Error ? error.message : String(error));
+  }
+}
+
 /** The production sweep: threshold from the environment, worktrees from the pipelines store. */
 export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env, ports: Pick<TempSweepOptions, "roots" | "scan" | "now" | "inspect" | "mountPoints"> = {}): Promise<TempSweepReport | null> {
   const maxAgeMs = tempSweepMaxAgeMs(env);
   const mode = tempSweepMode(env);
   if (maxAgeMs === null || mode === null) return null;
+  await sweepFilesResponseResultFiles(mode, ports.now);
   let checkouts: Awaited<ReturnType<typeof cleanupWorktrees>>;
   try {
     checkouts = await cleanupWorktrees();
@@ -925,10 +944,10 @@ export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env,
     throw error;
   }
   recordTempSweep(report);
-  const { young, inUse, worktree, deferred } = report.kept;
+  const { young, inUse, worktree, deferred, ledger = 0 } = report.kept;
   console.log(
     `[temp sweep] removed ${report.removed.length} stale director${report.removed.length === 1 ? "y" : "ies"} (${megabytes(report.removedBytes)});`
-    + ` kept ${young} young, ${inUse} in use, ${worktree} worktree, ${deferred} deferred;`
+    + ` kept ${young} young, ${inUse} in use, ${worktree} worktree, ${deferred} deferred, ${ledger} owned by the attempt ledger;`
     + ` ${(report.held ?? []).filter(hold => hold.reason === "attempt-owner-unlisted").length} attempt root(s) outside the ledger; ${report.errors.length} error(s)`,
   );
   return report;
