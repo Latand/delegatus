@@ -1,6 +1,10 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expect, test } from "bun:test";
 
 import { RuntimeReplayGapError, type RuntimeEvent } from "./engineHost";
+import { FileRuntimeEventStore } from "./eventStore";
 import {
   attachRuntimeEvents,
   boundMap,
@@ -79,6 +83,34 @@ test("byte eviction keeps replay gap evidence after the ledger is lost", () => {
   expect(window.events).toEqual([]);
   expect(() => runtimeEventsAfter(window.events, 0, () => [])).toThrow(RuntimeReplayGapError);
   expect(() => runtimeEventsAfter(new HostEventWindow(500).events, 0, () => [])).not.toThrow();
+});
+
+test("a torn ledger tail cannot hide lost sequences behind a recovered prefix", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-window-replay-"));
+  try {
+    const store = new FileRuntimeEventStore(directory);
+    const first = delta(1);
+    const second = { ...delta(2), text: "x".repeat(1000) };
+    store.append("thread", first);
+    store.append("thread", second);
+
+    const window = new HostEventWindow(500);
+    window.append(first);
+    window.append(second);
+    expect(window.events).toEqual([]);
+
+    const filename = path.join(directory, "thread.jsonl");
+    const contents = fs.readFileSync(filename, "utf8");
+    fs.writeFileSync(filename, contents.slice(0, contents.indexOf("\n") + 1) + JSON.stringify(second).slice(0, -1));
+    const tornTailReplay = store.load("thread");
+    expect(tornTailReplay).toEqual([first]);
+    expect(() => runtimeEventsAfter(window.events, 0, () => tornTailReplay)).toThrow(RuntimeReplayGapError);
+
+    expect(runtimeEventsAfter(window.events, 0, () => [first, second])).toEqual([first, second]);
+    expect(runtimeEventsAfter(new HostEventWindow(500).events, 0, () => [])).toEqual([]);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("a stream returned before its first read leaves the host at once", async () => {

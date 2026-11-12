@@ -136,8 +136,10 @@ export function runtimeEventsAfter(
   if (first === undefined) {
     const available = ledger().filter(event => event.seq > afterSeq);
     if (available[0] && available[0].seq > afterSeq + 1) throw new RuntimeReplayGapError(afterSeq, available[0].seq);
-    if (!available.length && (windowWatermarks.get(window) ?? 0) > afterSeq) {
-      throw new RuntimeReplayGapError(afterSeq, afterSeq + 1);
+    const watermark = windowWatermarks.get(window) ?? 0;
+    const lastAvailable = available.at(-1)?.seq ?? afterSeq;
+    if (lastAvailable < watermark) {
+      throw new RuntimeReplayGapError(afterSeq, lastAvailable + 1);
     }
     return available;
   }
