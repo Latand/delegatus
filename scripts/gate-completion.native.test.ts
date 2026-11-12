@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,7 +21,8 @@ function deferred<T>() {
 // The local provider drives the real interpreter, with no credentials or model.
 // Recorder startup and work completion are held by file events beyond exec's
 // yield; neither receipt depends on fitting inside the exec output window.
-for (const delayedStartup of [false, true]) for (const exit of [0, 37]) test.skipIf(!binary)(`native stage uses one exec and one completion wait (exit ${exit}${delayedStartup ? ", delayed recorder" : ""})`, async () => {
+for (const mode of ["normal", "delayed recorder", "missed completion"] as const) for (const exit of [0, 37]) test.skipIf(!binary)(`native stage uses one exec and one completion wait (exit ${exit}, ${mode})`, async () => {
+  const delayedStartup = mode === "delayed recorder";
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gc-"));
   const env = withoutInheritedGate(isolatedEnvironment(root, checkEnvironment(process.env)));
   env.TMPDIR = root;
@@ -95,8 +96,14 @@ process.exit(await child.exited);
     if (message.method) notifications.push(message.method + (message.params?.run ? ":" + JSON.stringify(message.params.run) : ""));
     if (message.method === "item/tool/call") {
       toolCalls.push(message.params.tool);
+      const watch = fs.watch;
+      const notifications = mode === "missed completion" ? spyOn(fs, "watch").mockImplementation(((...args: Parameters<typeof fs.watch>) =>
+        args[0] === path.join(root, "check.log.gate") ? watch(args[0], () => {}) : watch(...args)) as typeof fs.watch) : null;
+      let held: ReturnType<typeof runGateCheckTool>;
+      try { held = runGateCheckTool(message.params.arguments, rootBinding, abort.signal); }
+      finally { notifications?.mockRestore(); }
       waiting.resolve();
-      void runGateCheckTool(message.params.arguments, rootBinding, abort.signal).then(result => {
+      void held.then(result => {
         child.stdin.write(JSON.stringify({id: message.id, result}) + "\n");
       });
     } else if (typeof message.id === "number") pending.get(message.id)?.(message);
