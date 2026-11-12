@@ -275,25 +275,31 @@ function rowsPatch(held: ForgeCacheFile, next: ForgeCacheFile): { records: Docum
 /* The import, the rollback mirror and the roll-forward merge are the shared
    legacy helper's; reads and writes go through this module's own collection.
    At roll-forward a pull request merges as its newer reading. */
-const legacyStore = new LegacyDocumentStore<ForgeCacheFile>({
-  collection: FORGE_LINKS_COLLECTION,
-  migrationId: "forge-links-json-v1",
-  busyMessage: "forge links state is busy",
-  parse: (raw) => parseBody((raw ?? {}) as Partial<ForgeCacheFile>),
-  toRows,
-  fromRows,
-  toFile: (document) => document,
-  mergeRow: (key, held, incoming) => {
-    if (!key.startsWith(PR_PREFIX) && !key.startsWith(ISSUE_PREFIX)) return undefined;
-    const checked = (value: unknown) => String((value as { checkedAt?: unknown } | null)?.checkedAt ?? "");
-    return checked(incoming) > checked(held) ? incoming : held;
-  },
-  readLegacy: (filePath) => {
-    try { return parseFile(fs.readFileSync(filePath, "utf8")); }
-    catch { return EMPTY_FILE(); }
-  },
-  error: (message, cause) => new Error(message, { cause }),
-});
+/* Built on first use: a module that reaches this one while the shared helper
+   is still loading (the state store's history projection) must not construct
+   it then. */
+let legacyStoreInstance: LegacyDocumentStore<ForgeCacheFile> | null = null;
+function legacyStore(): LegacyDocumentStore<ForgeCacheFile> {
+  return legacyStoreInstance ??= new LegacyDocumentStore<ForgeCacheFile>({
+    collection: FORGE_LINKS_COLLECTION,
+    migrationId: "forge-links-json-v1",
+    busyMessage: "forge links state is busy",
+    parse: (raw) => parseBody((raw ?? {}) as Partial<ForgeCacheFile>),
+    toRows,
+    fromRows,
+    toFile: (document) => document,
+    mergeRow: (key, held, incoming) => {
+      if (!key.startsWith(PR_PREFIX) && !key.startsWith(ISSUE_PREFIX)) return undefined;
+      const checked = (value: unknown) => String((value as { checkedAt?: unknown } | null)?.checkedAt ?? "");
+      return checked(incoming) > checked(held) ? incoming : held;
+    },
+    readLegacy: (filePath) => {
+      try { return parseFile(fs.readFileSync(filePath, "utf8")); }
+      catch { return EMPTY_FILE(); }
+    },
+    error: (message, cause) => new Error(message, { cause }),
+  });
+}
 
 interface ForgeStoreRuntime {
   collections: Map<string, { identity: string | null; collection: SqliteStateCollection<DocumentRow> }>;
@@ -362,7 +368,7 @@ function writableCollection(file: string): SqliteStateCollection<DocumentRow> {
   const held = openCollection(database);
   if (held) return held;
   if (!legacyImportAllowed(file, database)) throw new FileTransactionBusyError("forge links state is waiting for release promotion");
-  legacyStore.importLegacy(file, { reconcile: lazyReconcileAllowed(file, database) });
+  legacyStore().importLegacy(file, { reconcile: lazyReconcileAllowed(file, database) });
   const collection = openCollection(database);
   if (!collection) throw new FileTransactionBusyError("forge links state is not imported");
   return collection;
@@ -371,13 +377,13 @@ function writableCollection(file: string): SqliteStateCollection<DocumentRow> {
 /** Import `forge-links.json` now. The Viewer's activation calls this with
     `reconcile: true`. */
 export function importLegacyForgeLinks(file = forgeCacheFile(), options: { reconcile: boolean; hooks?: LegacyImportHooks } = { reconcile: true }): LegacyImportOutcome {
-  return legacyStore.importLegacy(file, options);
+  return legacyStore().importLegacy(file, options);
 }
 
 /** Write `forge-links.json` from SQLite for a rollback release that predates
     the move. */
 export function checkpointForgeLinksRollbackMirrorForDemotion(file = forgeCacheFile()): void {
-  legacyStore.checkpointRollbackMirror(file);
+  legacyStore().checkpointRollbackMirror(file);
 }
 
 /** Index both names of a proven rename together, retaining the freshest PR
