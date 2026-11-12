@@ -758,3 +758,72 @@ retries do not recreate expired copies. Unattributed legacy copies remain
 counted and retained. Read the protected-path outcomes before attributing a
 remaining root to a retention defect. No manual cleanup or deployment is part
 of this implementation stage.
+
+## 16. Follow-up: why the first production pages reclaimed nothing
+
+Read-only observation of a production install on 2026-11-12, one day after
+release: the ledger measured 261.7 GB against the 107.4 GB cap, the scratch
+directory held 526 roots and about 308 GB by `du`, and successive minute
+reports reclaimed almost nothing. Every root was classified by the sweep's own
+rules (lane authority read from the state store, the ledger's failure column,
+recorded-check holds, and about fifteen consecutive reports covering 350
+roots). Five defects explained most of it.
+
+1. **A lane closed while one attempt waited on a decision never finished.**
+   Parking (`parkPipelineState`) leaves the attempt's `completedAt` unset and
+   closing the lane does not stamp it, so §4.2 rule 6 kept 134 roots (51.7 GB)
+   of completed or closed lanes held as `live` for good. `laneFinish` now lets
+   the close bound an attempt that is `needs_decision` or `pending` with no
+   clock at all; an unreadable clock, and a completed attempt without one,
+   still keep the lane open, and so do activations, unresolved terminations
+   and unconfirmed hosts.
+2. **An expired root with a directory written by another user failed on
+   every visit.** Container runs leave root-owned directories (database data,
+   browser profiles, lock directories) inside scratch. The expiry snapshot
+   (`snapshotAttemptProtection`) threw `EACCES` on `opendir`, so such a root
+   could never take the expired path. The snapshot now keeps a directory it
+   cannot list as a leaf versioned by its own metadata; the namespace removal
+   that such a tree needs already repeats the keep-marker classification
+   inside the tree right before it deletes.
+3. **`du` exiting 1 recorded a tree as four kilobytes.** `du` totals what it
+   can read and exits 1 when a subtree is unreadable; the fallback after a
+   failed namespace measurement kept only the root inode. The largest root
+   (51 GiB: a settled attempt of a paused lane holding twelve rehearsal copies
+   of a vendored application source tree and their container-owned database
+   files) counted 4 KiB, so it never weighed on the cap or on any ranking.
+   The partial total is now the lower bound, raised by the namespace
+   measurement when that succeeds.
+4. **Paging had no order across pages.** Rows were visited round robin by
+   `checkedAt` with three quarters of a pressure page reserved for released
+   rows; "outside this page" was simply every row not in the current 32. The
+   cap only enlarged the page, and the in-page order under pressure was
+   largest first. Each page now starts with roots whose recorded lane
+   retention has ended, across the whole ledger, oldest lane finish first, for
+   up to half of the page; under pressure the retirable roots of the page go
+   oldest first. The production state port records `root_retention.expiresAt`
+   whenever a lane is known finished, including for roots that a later
+   observation holds (linked evidence, a failed namespace proof), so those are
+   found first once their seven days end. A root still held after its
+   retention steps back by 30 minutes, and a root the run budget never reached
+   keeps its place for the next tick.
+5. **Exited test processes held roots as live.** Gate checks and test runs
+   remove their working directory right after they exit. Within one reference
+   observation (several seconds with dozens of consumer checkouts) such a cwd
+   vanished between the scan and the discovery, and `ENOENT` held the root as
+   "consumer checkout became unreadable during retirement" (13 finished-lane
+   roots, 17.9 GB, in the sampled reports). A cwd, or a checkout found only
+   through cwds, now counts as abandoned once every process that held it in
+   the scan is gone from `/proc`; a process the scan did not read from `/proc`
+   cannot be proven gone and still holds. The reason now carries the path.
+
+The hourly temp sweep reported the ledger-owned scratch roots it skips as
+`inUse` with zero bytes (508 on that day); they are counted as `ledger` now,
+and `inUse` again means a process holds the directory.
+
+Holds that remain by design, each waiting on an operator's decision:
+roots of lanes left `paused` or waiting on a decision whose stage declares
+outputs, or whose attempt is still marked running (about 25 GB that day);
+lanes whose close left unconfirmed hosts (66 roots, 23.3 GB, most from the same
+day, two since earlier in the month); keep markers that this repository's own
+test fixtures left inside stage scratch; and settled roots of open lanes whose
+tree holds media that the namespace proof cannot copy.
