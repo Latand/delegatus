@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -268,6 +268,70 @@ test("named launch and migration accounts cannot escape the workspace pool", asy
   expect(dispatched).toEqual([]);
   expect((await call("conversation_migration", { conversationId: "conversation_member", action: "select-account", accountId: "account-a", clientRequestId: "allowed-migration" })).ok).toBe(true);
   expect(dispatched).toEqual(["/api/conversations/conversation_member/migration"]);
+});
+
+test("where the project has no account list, a member's agent cannot name an account in any tool", async () => {
+  for (const account of ["account-a", "account-zzz"]) {
+    for (const key of ["account", "accountId", "targetAccountId"]) {
+      expect(await call("spawn_agent", { cwd: root, engine: "codex", [key]: account })).toMatchObject(REFUSED);
+    }
+    expect(await call("conversation_action", { conversationId: "conversation_member", action: "select-account", accountId: account })).toMatchObject(REFUSED);
+    expect(await call("conversation_migration", { conversationId: "conversation_member", action: "select-account", accountId: account })).toMatchObject(REFUSED);
+    expect(await call("agent_fleet", { project: own, engine: "codex", account })).toMatchObject(REFUSED);
+  }
+  expect(dispatched).toEqual([]);
+  /* Naming no account stays allowed: Delegatus picks. */
+  expect(await call("spawn_agent", { cwd: root, engine: "codex", title: "Inspect routing", ["prompt"]: "Inspect routing" })).not.toMatchObject(REFUSED);
+  expect(dispatched).toEqual(["/api/spawn"]);
+});
+
+describe("a member's reconfigure of a running conversation through the browser route", () => {
+  let registry: AgentRegistry;
+  let controlled: string[];
+  let id: string;
+  const reconfigure = (accountId: unknown, actor: { kind: "member"; memberId: string }) => conversationHostPOST(new NextRequest("http://localhost/api/conversation-host", {
+    method: "POST", headers: { host: "localhost", "content-type": "application/json" },
+    body: JSON.stringify({ conversationId: id, action: "reconfigure", model: "gpt-6.1-sol", effort: "high", ...(accountId === undefined ? {} : { accountId }) }),
+  }), { actor });
+  beforeEach(() => {
+    registry = new AgentRegistry(path.join(root, "member-reconfigure.json"), undefined, undefined, { sqliteMode: "off" });
+    registry.reconcileConversations([{ engine: "codex", path: path.join(root, "running.jsonl"), accountId: "account-a",
+      launchProfile: emptyLaunchProfile({ cwd: root, project: own, title: "Running", role: "worker", model: "gpt-6.1-sol", effort: "high", fast: false }),
+      turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: AT }]);
+    id = registry.conversationForPath(path.join(root, "running.jsonl"))!.id;
+    setAgentRegistryForTests(registry);
+    controlled = [];
+    setConversationHostDependenciesForTests({ dispatchStructuredControl: async input => {
+      controlled.push(input.reconfiguration?.accountId ?? "");
+      return { status: 200, body: { ok: true } } as never;
+    } });
+  });
+  afterEach(() => { setConversationHostDependenciesForTests(null); setAgentRegistryForTests(null); registry.close(); });
+
+  test("is refused outside the pool and where there is no pool, the same for an account that exists or not, and reaches no host", async () => {
+    for (const pool of [null, ["account-a"]] as const) {
+      if (pool) await setWorkspaceDefaults(store, owner, W1, { accounts: { codex: [...pool] } });
+      const answers = [];
+      for (const account of ["account-b", "account-zzz"]) {
+        const response = await reconfigure(account, { kind: "member", memberId: member.id });
+        answers.push({ status: response.status, body: await response.json() as unknown as { error: string; reason: string; code: string } });
+      }
+      const reason = pool ? "outside_account_list" : "no_account_list";
+      expect(answers[0]).toMatchObject({ status: 409, body: { code: "project_account_refused", reason } });
+      expect([answers[1]!.status, answers[1]!.body.reason]).toEqual([409, reason]);
+      expect(answers[1]!.body.error.replaceAll("account-zzz", "account-b")).toBe(answers[0]!.body.error);
+    }
+    expect(controlled).toEqual([]);
+  });
+
+  test("keeps the account it already runs on, an account of the pool, a change without an account, and the owner", async () => {
+    await setWorkspaceDefaults(store, owner, W1, { accounts: { codex: ["account-c"] } });
+    expect((await reconfigure("account-a", { kind: "member", memberId: member.id })).status).toBe(200);
+    expect((await reconfigure("account-c", { kind: "member", memberId: member.id })).status).toBe(200);
+    expect((await reconfigure(undefined, { kind: "member", memberId: member.id })).status).toBe(200);
+    expect((await reconfigure("account-b", { kind: "member", memberId: owner.id })).status).toBe(200);
+    expect(controlled).toEqual(["account-a", "account-c", "", "account-b"]);
+  });
 });
 
 test("an external caller without a capability keeps project reads while broken capabilities refuse", async () => {

@@ -25,6 +25,7 @@ import { claimMessageAuthor, recordConversationEvent, refuseAnonymous, settleMes
 import { teamMode } from "@/lib/team/sessions";
 import { existingTeamStore } from "@/lib/team/store";
 import type { TeamActor } from "@/lib/team/contract";
+import { conversationAccountChoiceRefusal } from "@/lib/team/conversationAccountChoice";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { agentRegistry } from "@/lib/agent/registry";
 import { internalServiceClaim } from "@/lib/agent/callerClaims";
@@ -298,6 +299,12 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
      this codebase uses. */
   const caller = callerConversationId(req);
   const actor: AccountChoiceActor = caller ? { kind: "agent", conversationId: caller } : { kind: "operator" };
+  /* A member picks from their project's account list. Checked before the
+     account is looked up, so an unlisted account is refused, not probed. */
+  if (explicitAction === "reconfigure" && typeof body.accountId === "string" && body.accountId.trim()) {
+    const refused = await conversationAccountChoiceRefusal(req, trustedActor, conversationId || filePath, body.accountId);
+    if (refused) return refused as NextResponse<ConversationHostPostBody>;
+  }
   const structuredControl = explicitAction === "reconfigure" && structuredHostsEnabled()
     ? await dependencies.dispatchStructuredControl({
         path: filePath,

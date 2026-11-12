@@ -4,6 +4,7 @@ import { stageGitEnvironment } from "@/lib/runtime/stageGitEnvironment";
 import { storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import path from "node:path";
 import { yieldToRuntime } from "@/lib/cooperative";
 
@@ -537,6 +538,9 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
       codexHome: input.target.home,
       cleanMemory: input.profile.cleanMemory === true,
       nativeMemoryEnabled,
+      omitSkillsInstructions: input.profile.omitSkillsInstructions === true || sessionOriginFor(
+        input.conversationId ? input.registry.conversation(input.conversationId as ViewerConversationId) ?? {} : {},
+      ) === "delegated",
       developerInstructions,
       fileAuthCredentials: input.target.kind === "managed",
       model: input.profile.model ?? undefined,
@@ -1897,6 +1901,11 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     assertLeaseOwned: () => void,
   ): Promise<ProviderReceipt> {
     assertLeaseOwned();
+    // The metadata fork and target validation resume also construct threads.
+    // Legacy profiles recover the launch class from the durable conversation.
+    const skillsOptions = () => profile.omitSkillsInstructions === true || sessionOriginFor(
+      (this.dependencies.registry ?? agentRegistry()).conversation(conversationId as ViewerConversationId) ?? {},
+    ) === "delegated" ? { omitSkillsInstructions: true } : {};
     const prepared = prepareCodexOperationJournal(
       journalRoot,
       operationId,
@@ -1974,7 +1983,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
         assertLeaseOwned();
         writeCodexOperationJournal(journalRoot, journal);
         try {
-          created = await sourceClient.forkThread(sourceNativeId);
+          created = await sourceClient.forkThread(sourceNativeId, skillsOptions());
         } catch (error) {
           const uncertain = error instanceof CodexAppServerError && error.outcome === "unknown";
           if (uncertain) throw new CodexForkOutcomeUnknownError(error.message);
@@ -2067,6 +2076,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
         ? profile.permissionMode
         : null;
       const resumed = await targetClient.resumeThread(fork.id, {
+        ...skillsOptions(),
         path: copied.path,
         cwd: profile.cwd,
         model: profile.model,

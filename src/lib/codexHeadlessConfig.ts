@@ -77,6 +77,7 @@ export function headlessCodexThreadConfig(
   features: readonly CodexFeature[] = [],
   /** A clean launch (src/lib/memory/eligibility.ts): Codex's memories off for this thread. */
   cleanMemory = false,
+  omitSkillsInstructions = false,
 ): JsonObject {
   const config = record(record(configRead)?.config);
   const servers = record(config?.mcp_servers);
@@ -161,5 +162,6 @@ export function headlessCodexThreadConfig(
     ...(!allowSubagents ? { approvals_reviewer: "user" } : {}),
     ...(granted.length > 0 ? { plugins: pluginTable(config, granted) } : {}),
     include_apps_instructions: false,
+    ...(omitSkillsInstructions ? { skills: { include_instructions: false } } : {}),
   };
 }

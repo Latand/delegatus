@@ -1165,6 +1165,9 @@ export interface AccountChoice {
   applying: boolean;
   /** The conversation of a running stage: a pick moves the attempt at once, with no message to wait for. */
   immediate?: boolean;
+  /** A member's pool has no signed-in account: the Account row says «not signed in» in place of «automatic»,
+      because no launch can start on this list. */
+  noneSignedIn?: boolean;
   pick: (accountId: string) => void;
 }
 
@@ -1333,7 +1336,7 @@ export function RuntimePopover({
           {/* Which account the conversation runs on (#1795). The desktop card
               carries the badge in its header; the popover is where the runtime
               is chosen, so it says it here too. */}
-          {engine !== "copilot" || accountStart ? (
+          {(engine !== "copilot" || accountStart) && (error ?? accountStart ?? accountLine(t, account, accountChoice, nameOf)) ? (
             <div className={`px-2 pb-1 pt-1.5 text-label ${error ? "break-words text-danger" : "text-muted"}`} data-runtime-popover-account>
               {error ?? accountStart ?? accountLine(t, account, accountChoice, nameOf)}
             </div>
@@ -1406,6 +1409,9 @@ export interface AccountOption {
   label: string;
   /** The account's own readings from the accounts store, which the sidebar footer draws too. */
   limits?: AccountLimits | null;
+  /** False for an account of a member's pool that is not signed in: listed, but it cannot take a launch
+      and offers no way to sign in. Absent means signed in. */
+  signedIn?: boolean;
 }
 
 /** Feeds the popover's Account panel the engine's signed-in accounts while that panel is open. */
@@ -1458,7 +1464,8 @@ function buildRows({
     /* The account it runs on is always a row, so a waiting pick can be taken back even when that account is
        the legacy home the accounts list does not enumerate. */
     const options = accountOptions ?? [];
-    const listed: readonly AccountOption[] = options.some((option) => option.id === accountChoice.runsOn)
+    /* A new agent that has picked nothing runs on no account yet: there is no row to take back. */
+    const listed: readonly AccountOption[] = !accountChoice.runsOn || options.some((option) => option.id === accountChoice.runsOn)
       ? options
       : [{ id: accountChoice.runsOn, label: nameOf(accountChoice.runsOn) }, ...options];
     const tint = engineTintOf(engine).color;
@@ -1487,8 +1494,10 @@ function buildRows({
           weeklyColumn,
           ...(weekly ? { hint: weeklyLeftHint(t, weekly, now), ariaLabel: [option.label, weeklyLeftAria(t, weekly), detail.detail].filter(Boolean).join(" · ") } : {}),
           checked: option.id === accountChoice.next,
-          /* A move under way cannot be taken back, so the account it leaves is not a choice until it lands. */
-          enabled: !(accountChoice.applying && option.id === accountChoice.runsOn && accountChoice.next !== accountChoice.runsOn),
+          /* A move under way cannot be taken back, so the account it leaves is not a choice until it lands.
+             A pool account that is not signed in is listed and cannot be chosen: a member has no sign-in. */
+          enabled: option.signedIn !== false && !(accountChoice.applying && option.id === accountChoice.runsOn && accountChoice.next !== accountChoice.runsOn),
+          ...(option.signedIn === false ? { unavailable: true, note: t("draft.accountNotSignedIn") } : {}),
           role: "menuitemradio",
           activate: () => accountChoice.pick(option.id),
         };
@@ -1538,7 +1547,7 @@ function buildRows({
   if (accountChoice) {
     submenus.push({
       key: "account", kind: "submenu", label: t("mobile2.composer.accountGroup"),
-      detail: nameOf(accountChoice.next),
+      detail: accountChoice.next ? nameOf(accountChoice.next) : t(accountChoice.noneSignedIn ? "draft.accountNotSignedIn" : "draft.accountAutomatic"),
       checked: false, enabled: true, submenu: "account", role: "menuitem", activate: () => onOpenPanel("account"),
     });
   }
@@ -1595,7 +1604,8 @@ function MenuRow({
         row.checked ? "text-primary" : "text-secondary"
       }`}
     >
-      <span className="min-w-0 flex-1 truncate" data-runtime-row-label>{row.label}</span>
+      {/* An account is named by its label and nothing else tells two of them apart, so a long one wraps between words. */}
+      <span className={`min-w-0 flex-1 ${row.kind === "account" ? "break-words" : "truncate"}`} data-runtime-row-label>{row.label}</span>
       {row.detail ? (
         <span className={`shrink-0 text-caption ${row.detailAction ? "font-semibold text-accent" : "text-muted"}`} data-runtime-row-detail={row.detailAction ? "action" : undefined}>{row.detail}</span>
       ) : null}
@@ -1718,7 +1728,7 @@ export function RuntimeSheet({
         </div>
 
         {engine !== "copilot" ? (
-          <AccountSection t={t} engine={engine} account={account} nameOf={nameOf} limit={limit} choice={accountChoice ?? null} start={accountStart} error={error ?? null} />
+          <AccountSection t={t} engine={engine} account={account} nameOf={nameOf} limit={limit} choice={accountChoice ?? null} start={accountStart} error={error ?? null} listed={ownAccounts} />
         ) : ownAccounts && accountChoice ? (
           <div data-runtime-sheet-accounts>
             <SheetSection label={t("mobile2.composer.accountGroup")}>
@@ -1838,7 +1848,16 @@ function limitResetClock(limit: RateLimitState): string | null {
  * Mounted with the sheet and nothing else, so the ordinary chip still
  * subscribes to the accounts store only while the sheet is open.
  */
-function AccountSection({ t, engine, account, nameOf, limit, choice, start = null, error }: {
+function AccountSection(props: AccountSectionProps & {
+  /** The accounts of a member's pool, for a surface that lists them itself: no accounts store is read, and no
+      sign-in or choice outside `choice` is offered (a member has neither). */
+  listed?: readonly AccountOption[] | null;
+}) {
+  const { listed, ...rest } = props;
+  return listed ? <ListedAccountSection {...rest} listed={listed} /> : <StoreAccountSection {...rest} />;
+}
+
+interface AccountSectionProps {
   t: TFunction;
   engine: "claude" | "codex";
   /** The account this conversation runs on. */
@@ -1851,16 +1870,65 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
   /** See `PanelProps.accountStart`. */
   start?: string | null;
   error: string | null;
+}
+
+/** One account row of the sheet, whichever store or list it came from. */
+interface SheetAccount {
+  id: string;
+  label: string;
+  /** Signed in and able to take a message. */
+  authenticated: boolean;
+  limits?: AccountLimits | null;
+}
+
+/** What the rows may do. A list the caller owns offers no sign-in and no engine-wide select. */
+interface SheetAccountActions {
+  /** The engine's launch account, where a tap moves it. */
+  active: string;
+  /** An account change is under way: the rows wait. */
+  mutating: boolean;
+  signIn: ((id: string) => void) | null;
+  select: ((id: string) => void) | null;
+  challenge: { code: string } | null;
+}
+
+function StoreAccountSection(props: AccountSectionProps) {
+  const state = useEngineAccounts(props.engine);
+  const rows = state.accounts.map((option): SheetAccount => ({
+    id: option.id, label: option.label, limits: option.limits,
+    authenticated: option.authPresent && (option.authHealth ?? "unknown") !== "signed_out" && !option.loginPending,
+  }));
+  return (
+    <AccountSectionRows
+      {...props}
+      rows={rows}
+      actions={{
+        active: state.active, mutating: state.mutation !== null,
+        signIn: (id) => { void state.retryLogin(id); },
+        select: (id) => { void state.select(id); },
+        challenge: state.challenge,
+      }}
+    />
+  );
+}
+
+function ListedAccountSection({ listed, ...props }: AccountSectionProps & { listed: readonly AccountOption[] }) {
+  const rows = listed.map((option): SheetAccount => ({ id: option.id, label: option.label, limits: option.limits, authenticated: option.signedIn !== false }));
+  return <AccountSectionRows {...props} rows={rows} actions={{ active: props.choice?.next ?? "", mutating: false, signIn: null, select: null, challenge: null }} />;
+}
+
+function AccountSectionRows({ t, engine, account, nameOf, limit, choice, start = null, error, rows, actions }: AccountSectionProps & {
+  rows: readonly SheetAccount[];
+  actions: SheetAccountActions;
 }) {
-  const state = useEngineAccounts(engine);
   const reset = limit ? limitResetClock(limit) : null;
   const [now] = useState(() => Date.now() / 1000);
   const tint = engineTintOf(engine).color;
   /* The wall first, then the account this conversation runs on, then the rest
      in the order the accounts screen lists them. */
   const rank = (id: string) => (limit && id === limit.accountId ? 0 : id === account ? 1 : 2);
-  const ordered = [...state.accounts].sort((a, b) => rank(a.id) - rank(b.id));
-  const authenticatedOf = (option: (typeof ordered)[number]) => option.authPresent && (option.authHealth ?? "unknown") !== "signed_out" && !option.loginPending;
+  const ordered = [...rows].sort((a, b) => rank(a.id) - rank(b.id));
+  const authenticatedOf = (option: SheetAccount) => option.authenticated;
   /* An account that cannot take a message shows its state instead of its weekly reading. */
   const weeklies = ordered.map((option) => authenticatedOf(option) ? accountWeeklyLeft(option.limits, now, tint) : null);
   const weeklyColumn = weeklies.some(Boolean);
@@ -1870,7 +1938,7 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
         <span className="shrink-0 text-label font-semibold text-secondary">{t("mobile2.composer.accountGroup")}</span>
         {/* Named even when no row carries it: the legacy home is an account
             the accounts list does not enumerate. */}
-        <span className={`min-w-0 text-label ${error ? "break-words text-danger" : "truncate text-muted"}`} data-runtime-sheet-account-current>
+        <span className={`min-w-0 text-label ${error ? "break-words text-danger" : start !== null ? "break-words text-muted" : "truncate text-muted"}`} data-runtime-sheet-account-current>
           {error ?? start ?? accountLine(t, account, choice, nameOf)}
         </span>
       </div>
@@ -1883,20 +1951,21 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
            screen while only the first was marked (#1795 critique P1). */
         const current = option.id === account;
         const authenticated = authenticatedOf(option);
-        const signInReachable = !authenticated && engine === "claude";
+        const signInReachable = !authenticated && engine === "claude" && actions.signIn !== null;
         /* Credentials outrank the selection. The accounts API keeps an account
            selected across a sign-out and a credential expiry, so the account
            the engine would launch from can be one that cannot take a message:
            marking it «next message» and making it inert took its sign-in row
            away, which is the one thing that could fix it (#1795 review P2). */
-        const next = !blocked && authenticated && option.id === (choice ? choice.next : state.active);
+        const next = !blocked && authenticated && option.id === (choice ? choice.next : actions.active);
         /* Already the target, or walled, or unreachable: nothing to send. */
         /* While a pick waits, the account it runs on is the way back, and says so (#1846); once a message
            engaged the pick and the move is under way, it is too late for that. */
         const leaving = Boolean(choice) && current && !next && choice!.next !== account;
         const switching = leaving && choice!.applying;
         const cancels = leaving && !switching;
-        const inert = blocked || next || switching || (!authenticated && !signInReachable);
+        /* A list the caller owns has no engine-wide select: without a choice its rows are only read. */
+        const inert = blocked || next || switching || (!authenticated && !signInReachable) || (!choice && actions.select === null);
         /* The weekly limit left, as the footer and the launch chips draw it. */
         const weekly = weeklies[index];
         const stateName = blocked
@@ -1919,7 +1988,7 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
             data-runtime-sheet-account={option.id}
             data-runtime-account-state={blocked ? "limit" : !authenticated ? "needs-sign-in" : current ? "current" : "ready"}
             data-runtime-account-next={next ? "true" : undefined}
-            disabled={inert || (!choice && state.mutation !== null)}
+            disabled={inert || (!choice && actions.mutating)}
             aria-disabled={inert || undefined}
             aria-label={weekly ? `${stateName} · ${weeklyLeftAria(t, weekly)}` : stateName}
             title={weekly ? weeklyLeftHint(t, weekly, now) : undefined}
@@ -1927,9 +1996,9 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
               if (inert) return;
               /* An account that is not signed in goes to the device sign-in and
                  stays out of the launch: `select` is never reached from here. */
-              if (!authenticated) void state.retryLogin(option.id);
+              if (!authenticated) actions.signIn?.(option.id);
               else if (choice) choice.pick(option.id);
-              else void state.select(option.id);
+              else actions.select?.(option.id);
             }}
             className={`flex min-h-11 w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-body focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-100 ${
               blocked || (!authenticated && !signInReachable) ? "text-secondary" : "text-primary"
@@ -1952,6 +2021,9 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
                 {t("mobile2.composer.accountSignIn")}
                 <ChevronRight className="h-3.5 w-3.5" aria-hidden />
               </span>
+            ) : !authenticated && actions.signIn === null ? (
+              /* A member has no sign-in: the state is named and carries no action's weight (workspaces W1). */
+              <span className="shrink-0 text-label text-muted" data-runtime-account-not-signed-in>{t("draft.accountNotSignedIn")}</span>
             ) : !authenticated ? (
               <span className="shrink-0 text-label font-semibold text-muted">{t("mobile2.composer.accountNeedsSignIn")}</span>
             ) : next ? (
@@ -1970,9 +2042,9 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
           </button>
         );
       })}
-      {state.challenge ? (
+      {actions.challenge ? (
         <p className="px-2 py-1 text-label leading-snug text-secondary" data-runtime-sheet-device-auth>
-          {t("mobile2.composer.deviceCode", { code: state.challenge.code })}
+          {t("mobile2.composer.deviceCode", { code: actions.challenge.code })}
         </p>
       ) : null}
     </div>

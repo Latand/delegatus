@@ -759,4 +759,3 @@ test("a report filed before background work started is interim, and the answer a
   expect(attempt().state).toBe("failed");
   expect(attempt().verdict).toMatchObject({ status: "fail" });
 });
-

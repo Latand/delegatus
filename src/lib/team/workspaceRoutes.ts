@@ -209,6 +209,7 @@ export const WORKSPACE_ROUTES = {
   "/api/team/join/[code]": "team",
   "/api/team/members/[id]": "team",
   "/api/team/passkeys": "team",
+  "/api/team/project-accounts": "team",
   "/api/team/public": "team",
   "/api/team/session/approval": "team",
   "/api/team/session/approval/[id]": "team",

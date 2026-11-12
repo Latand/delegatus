@@ -280,6 +280,8 @@ export interface ClaudeStreamBrokerHostOptions {
   initialEventCursor?: number;
   onEventCursorRecovery?: RuntimeEventCursorRecoveryReporter;
   memoryCell?: AgentMemoryCell | null;
+  /** Rechecked at native exec admission and after asynchronous preparation. */
+  assertCurrent?: () => void;
   spawnProcess?: (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
   signalProcess?: ProcessSignal;
   processIdentity?: (pid: number) => string | null;
@@ -995,7 +997,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         cwd: options.cwd,
         env: telegram.env,
         detached: true,
-      }, options.memoryCell, options.spawnProcess, options.env ?? process.env);
+      }, options.memoryCell, options.spawnProcess, options.env ?? process.env, undefined, options.assertCurrent);
     } catch (error) {
       relay?.close();
       options.releaseCleanup?.();

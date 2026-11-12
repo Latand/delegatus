@@ -9,6 +9,8 @@ import { productionWorktreeSweepPorts, runWorktreeSweep, type WorktreeSweepMode 
 
 // stdout is a bounded response protocol; application diagnostics keep their origin.
 console.log = (...args) => console.error(...args);
+console.info = (...args) => console.error(...args);
+console.debug = (...args) => console.error(...args);
 const cache = new WorktreeSweepCache(statePath("worktree-sweep-cache.json"));
 cache.discardAllocations();
 const lines = createInterface({ input: process.stdin });

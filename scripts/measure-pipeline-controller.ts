@@ -159,7 +159,7 @@ const ports: PipelinePorts = {
   runtimeSwitchControl: async () => {}, runtimeSwitchOutcome: async () => ({ state: "pending" }),
   runtimeSwitchKilled: async () => false, runtimeSwitchDelivery: async () => ({ state: "pending" }),
   retireRuntimeSwitch: async () => null, cancelRuntimeSwitch: async () => {},
-  deputySeatFor: () => null, 
+  deputySeatFor: () => null,
 };
 const observations = [];
 console.log("PREPARED", new Date().toISOString());

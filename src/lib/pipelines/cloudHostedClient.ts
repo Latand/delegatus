@@ -421,7 +421,7 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       const cwd = await resolveHostedCloudEnvironment(input.environmentId, auth, scope, dependencies, input.environmentScope);
       const started = await client.rpc("thread/start", { model: input.model, allowProviderModelFallback: false, ephemeral: false,
         approvalPolicy: "never", sandbox: "danger-full-access", serviceName: "codex_cloud",
-        config: { "features.mcp_app_ui": true, ...(input.reasoningEffort ? { model_reasoning_effort: input.reasoningEffort } : {}) },
+        config: { "skills.include_instructions": false, "features.mcp_app_ui": true, ...(input.reasoningEffort ? { model_reasoning_effort: input.reasoningEffort } : {}) },
         pluginsMcp: { productSku: "codex" }, environments: [{ environmentConfigId: input.environmentId, cwd }], deferredEnvironment: true });
       requireCloud(started.model === input.model, "resolved model mismatch");
       const thread = row(started.thread), environments = thread.environments;
