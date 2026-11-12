@@ -18,6 +18,7 @@ import type { RuntimeHostClient } from "./client";
 import {
   structuredDeliveryMcpObservation,
   bindStructuredDeliveryQueue,
+  structuredDeliveryHeapCounts,
   publishStructuredHostProjection,
   publishStructuredDeliveryHost,
   terminateStructuredDeliveryHost,
@@ -89,6 +90,7 @@ for (const qualified of [false, true]) test(`${qualified ? "qualified" : "unqual
   try {
     await bindStructuredDeliveryQueue([{ key: f.key, host: registeredHost }], { registry: f.registry, client: f.client,
       watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    expect(structuredDeliveryHeapCounts()).toMatchObject({ hosts: 1, registrations: 1 });
     await holder.hold();
     const termination = terminateStructuredDeliveryHost(f.key, qualified ? { pid: process.pid + 100_000, startIdentity: "expected-old-host" } : undefined);
     await waiting;

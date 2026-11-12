@@ -28,6 +28,7 @@ import { HEAD_READ_CHUNK_BYTES, headFingerprint, readHead, type HeadReadResult }
 import { readJsonResult, recordValue, recordsValue, stringValue } from "./json";
 import { openclawMessage } from "./openclawNative";
 import { copilotWorkspaceTitle } from "./copilotNative";
+import { readProjectCatalogFolders } from "./projectCatalogStore";
 import { projectResolutionStateKey } from "./projectState";
 
 
@@ -432,11 +433,7 @@ function liveWorktreeGitdir(cwd: string, gitFileText: string, accessibleCwd = cw
     const roots = new Set<string>();
     for (const [, , info] of projectInfoCwdCache.values()) if (info?.repo) roots.add(info.repo);
     for (const info of refreshWorktreeMap().values()) roots.add(info.repo);
-    const catalog = recordValue(readStateJson("project-catalog.json"));
-    for (const file of Object.values(recordValue(catalog?.files) ?? {})) {
-      const root = stringValue(recordValue(file)?.projectRoot);
-      if (root) roots.add(root);
-    }
+    for (const root of readProjectCatalogFolders().projectRoots) roots.add(root);
     const curation = readProjectDocument(projectCurationStore, "project-curation.json");
     for (const entry of recordsValue(curation?.manualProjects)) {
       const root = stringValue(entry.root);

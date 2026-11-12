@@ -247,7 +247,7 @@ during `verify-candidate`, so a candidate whose host cannot boot, cannot take
 the fence, or cannot hold what it took is refused before promotion rather than
 after.
 
-**Both halves run on every PR and by CI dispatch** under the pin read
+**Both halves run on every PR into main and by CI dispatch** under the pin read
 from the Dockerfile, with the stable `runtime-gate` context joining both runtime
 and native Codex verdicts. Locally they run when `Dockerfile`,
 `src/runtime-host/**` or `bin/**` changes. After this workflow lands, the seat
