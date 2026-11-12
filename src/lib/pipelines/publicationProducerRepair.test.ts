@@ -4,7 +4,7 @@ import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 
 isolatePublicationGit();
 
-const producerOnly = [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }];
+const producerOnly = [{ id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: null }];
 
 async function refusedFixture(phase = "touched tests", continuation: boolean | "accepted" = false) {
   const f = await fixture(undefined, producerOnly);
@@ -163,7 +163,7 @@ test.each(["transcript", "message", "background"])("an idle producer with live %
     f.h.ports.conversationTurnInterrupted = async () => "idle";
     f.h.ports.durableTurnEvidence = async () => ({ turn: kind === "background" ? "terminal" : "busy",
       ...(kind === "message" ? { message: { text: "repair is still working", ts: Date.parse(f.h.ports.now()) } }
-        : { lastRecordAt: Date.parse(f.h.ports.now()) }), backgroundTasks: kind === "background"
+        : { message: null, lastRecordAt: Date.parse(f.h.ports.now()) }), backgroundTasks: kind === "background"
         ? [{ id: "repair-command", kind: "command", startedAt: Date.parse(f.h.ports.now()), expiresAt: null }] : [] });
     await tickPipelines([], f.h.ports);
     expect((await rawPatchPipeline(current().id, { action: "retry-stage" }, f.h.ports)).status).toBe(409);
