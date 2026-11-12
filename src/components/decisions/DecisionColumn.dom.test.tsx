@@ -810,11 +810,12 @@ for (const lang of ["en", "uk"] as const) for (const decided of [false, true]) {
   });
 }
 
-for (const lang of ["en", "uk"] as const) test(`the saved record explains expired delivery (${lang})`, async () => {
+for (const lang of ["en", "uk"] as const) for (const state of ["pending", "uncertain", "failed", "no-orchestrator"] as const) test(`retired ${state} delivery has a terminal badge and reason (${lang})`, async () => {
   setLocale(lang);
   const record = failedRecord();
-  record.decision!.delivery = { state: "uncertain", retryable: false, phase: "retired", settlement: { at: "2026-10-11T15:16:00.000Z", reason: "delivery-expired" } };
+  record.decision!.delivery = { state, retryable: false, phase: "retired", settlement: { at: "2026-10-11T15:16:00.000Z", reason: "delivery-expired" } };
   const host = await render(<DecisionRecord decision={record} onRetry={() => { throw new Error("retired delivery cannot retry"); }} />);
+  expect(host.querySelector("[data-decision-delivery]")?.textContent).toBe(lang === "uk" ? "припинено" : "retired");
   expect(host.querySelector("[data-decision-retired]")?.textContent).toContain(lang === "uk" ? "30 хвилин" : "30 minutes");
   expect(host.querySelector("[data-decision-retry]")).toBeNull();
 });

@@ -2289,6 +2289,7 @@ export const en = {
   "decisions.state.failed": "not delivered",
   "decisions.state.uncertain": "delivery unconfirmed",
   "decisions.state.no-orchestrator": "no orchestrator",
+  "decisions.state.retired": "retired",
   "decisions.recordAria": "Your answer to «{title}»",
   "decisions.refused": "The answer was not saved: {error}",
   "decisions.retryFailed": "The answer was not sent again: {error}",

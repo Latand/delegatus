@@ -2249,6 +2249,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "decisions.state.failed": "не доставлено",
   "decisions.state.uncertain": "доставку не підтверджено",
   "decisions.state.no-orchestrator": "немає оркестратора",
+  "decisions.state.retired": "припинено",
   "decisions.recordAria": "Ваша відповідь на «{title}»",
   "decisions.refused": "Відповідь не збережено: {error}",
   "decisions.retryFailed": "Відповідь не надіслано ще раз: {error}",

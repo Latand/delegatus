@@ -123,9 +123,11 @@ export function operatorDecisions(project: string, tasks: readonly BoardTask[] =
       .map(round => ({ ...round, taskTitle: firstLineTitle(task.text) }));
   });
   const index = prototypeDismissals();
-  const fromSeat = localRoundViews(loadSeatRounds(key).filter(round => !index.has(`prototype:${round.id}`) && (!round.decision
-    || prototypeDeliveryPhase(round.decision.delivery, Date.now()) === "attention"
-    || (round.nativeAssociation && nativeAssociationDecisionApproves(round.decision) && nativeAssociationCurrent(round.nativeAssociation)))), null);
+  const fromSeat = localRoundViews(loadSeatRounds(key).filter(round => {
+    const activeNativeApproval = isActiveNativeApproval(round);
+    return (!index.has(`prototype:${round.id}`) || activeNativeApproval) && (!round.decision
+      || prototypeDeliveryPhase(round.decision.delivery, Date.now()) === "attention" || activeNativeApproval);
+  }), null);
   return { project: key, decisions: [...fromTasks, ...fromSeat].sort((a, b) => a.createdAt.localeCompare(b.createdAt)) };
 }
 
@@ -148,6 +150,14 @@ export function seatDecisionNotices(project?: string): PrototypeReviewNotice[] {
       return { ...seatRoundNotice({ ...round, project }), ...(round.decision ? { undelivered: true as const } : {}) };
     }); }
   catch { return []; /* The board read never fails on the seat's questions; the column says so on its own read. */ }
+}
+
+/** A withdrawn form cannot hide an access grant whose explicit revocation
+    still needs to be available in Decisions. */
+function isActiveNativeApproval(round: PrototypeReviewRound): boolean {
+  return Boolean(round.decision && round.nativeAssociation
+    && nativeAssociationDecisionApproves(round.decision)
+    && nativeAssociationCurrent(round.nativeAssociation));
 }
 
 function prototypeDismissals(): ReadonlyMap<string, AttentionDismissalV1> {
