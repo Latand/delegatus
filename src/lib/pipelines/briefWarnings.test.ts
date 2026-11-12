@@ -59,8 +59,9 @@ test("bounded warnings preserve failures and successful records", () => {
   expect(briefWarnings(pipeline)).toHaveLength(24);
   const refusal = { error: "workspace denied", status: 403, pipeline: undefined };
   expect(withBriefWarnings(refusal)).toBe(refusal);
-  const result = withBriefWarnings({ pipeline: pipeline as Pipeline, queued: true });
-  expect(result.pipeline).toBe(pipeline);
+  const stored = pipeline as Pipeline;
+  const result = withBriefWarnings({ pipeline: stored, queued: true });
+  expect(result.pipeline).toBe(stored);
   expect(result.queued).toBe(true);
   expect((result as { briefWarnings?: unknown[] }).briefWarnings).toHaveLength(24);
 });

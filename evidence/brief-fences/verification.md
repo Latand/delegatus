@@ -112,3 +112,28 @@ bun run lint 'src/app/api/pipelines/[id]/route.test.ts' \
 
 
 Final whole-file renewal: `bun scripts/privacy-publication-gate.ts --require-known-values --base origin/main --paths src/lib/pipelines/briefWarnings.ts evidence/brief-fences/verification.md`, with the fingerprint/OCR environment above: `brief-privacy-final-files`, exit 0, two files, zero findings. The report-only read-back scan uses the same command with the report as its sole path. Final commit-hook and commit-publication receipts are included in the stage completion handover.
+
+
+## Publication repair
+
+The initial publication stopped at the full type check with TS2769 in `src/lib/pipelines/briefWarnings.test.ts:63`. The helper input was cast to `Pipeline`, while the identity assertion retained the narrower fixture type. The repair binds that typed input once and compares the returned reference against it. The identity assertion and all 38 test expectations remain intact; application source is unchanged.
+
+The branch merged main's stage-panel fixture correction at `f9571ba01c01a06065f177658bfed628a7f4bbd1` with a merge commit, preserving the accepted implementation and its initial base. All three ancestry checks (`git merge-base --is-ancestor` for the initial base, accepted implementation and origin/main against HEAD) exit 0. The only source differences from the accepted implementation are its one repaired test and main's existing stage-panel test correction.
+
+`REPAIR_ROOT` below names the stage's `brief-publication-repair` scratch root. Each row ran through the controller's installed gate, with a fresh HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and TMPDIR, closed loopback control URL and native Git first in PATH:
+
+```sh
+env REPAIR_ROOT="$ROOT" REPAIR_TREE="$tree" LLV_OWNED_RUN_TIMEOUT_MS=1200000 \
+  bash "$GATE" --record "$TMPDIR/$log.log" \
+  bash "$ROOT/run.sh" $arguments
+```
+
+The script executes `bun $arguments` in its selected export. Types use `bun x tsc --noEmit`, the `bunx tsc --noEmit` command used by publication. Each recorded run was reconciled once through `wait_for_check`, through terminal cleanup.
+
+| Log | Tree | Arguments | Exit | Counts |
+| --- | --- | --- | ---: | --- |
+| repair-types-base | merged main plus accepted implementation, before repair | `x tsc --noEmit` | 2 | One TS2769 diagnostic, reproducing the refusal; two overload explanations |
+| repair-brief-tests | repaired export | `run test src/lib/pipelines/briefWarnings.test.ts` | 0 | 19 pass, 0 fail, 38 expectations |
+| repair-types-head | repaired export | `x tsc --noEmit` | 0 | Full project check, zero diagnostics |
+
+The merged and repaired exports share the exact installed dependency graph read-only. The repaired test file was compared byte-for-byte with the delivery worktree after checking: exit 0, one matching file, zero mismatches. The comparison remains valid through this report-only update. Raw repair logs and the input digest are retained in the private stage evidence under `brief-checks/publication-repair/`. Commit hooks and the final `bun run privacy:check` receipt are handed over with the repair; the controller owns the publication retry and its remaining checks.
