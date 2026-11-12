@@ -61,6 +61,7 @@ import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressure
 import { instanceCpuPrioritySource, instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
 import { stateDir } from "@/lib/configDir";
 import crypto from "node:crypto";
+import { settleAttemptAccounting } from "./attemptAccounting";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -8580,6 +8581,9 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           const current = live && runFor(live, stage.id)?.attempts.find(item => item.n === attempt.n);
           if (!live || !current || activationFence(live) !== fence || JSON.stringify(current) !== expectedAttempt) throw new RuntimeSwitchSuperseded();
           if (record.retry && JSON.stringify(attempt) === expectedAttempt && live.state === pipeline.state && live.stateDetail === pipeline.stateDetail) return;
+          // The store settles completion timing on write. Include that same
+          // snapshot in the fence retained across cleanup and dispatch awaits.
+          settleAttemptAccounting(attempt, pipeline.id);
           for (const key of Object.keys(current)) if (!(key in attempt)) Reflect.deleteProperty(current, key);
           Object.assign(current, structuredClone(attempt));
           live.state = pipeline.state; live.stateDetail = pipeline.stateDetail;
