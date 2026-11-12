@@ -351,18 +351,49 @@ export class RecordedCheckStore {
   close() { this.db.close(); }
 }
 
+type RecordedReader = { identity: string; store: RecordedCheckStore };
+// Custody questions come per conversation, per attempt and per temp directory,
+// thousands in one retention pass or startup adoption, all on the event loop.
+// A fresh connection parses the whole state schema before its first statement
+// (about 1.2 ms on a production copy), so one read-only connection per process
+// answers them and keeps its statements prepared. It lives on `process` because
+// compiled bundles each carry their own copy of this module. The inode in its
+// identity reopens it after the file is replaced or the state directory moves.
+const recordedReaderOwner = process as typeof process & { __llvRecordedCheckReader?: RecordedReader };
+function dropRecordedReader() {
+  const held = recordedReaderOwner.__llvRecordedCheckReader;
+  recordedReaderOwner.__llvRecordedCheckReader = undefined;
+  held?.store.close();
+}
+
 /** Missing table means legacy, unverified custody. Corruption refuses retirement. */
 export function readRecorded<T>(read: (store: RecordedCheckStore) => T, absent: T): T {
   const filename = statePath("state.sqlite");
-  if (!fs.existsSync(filename)) return absent;
-  let store: RecordedCheckStore | undefined;
+  let identity: string;
   try {
-    store = new RecordedCheckStore(filename, false);
+    const stat = fs.statSync(filename, { bigint: true });
+    identity = `${filename}:${stat.dev}:${stat.ino}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    dropRecordedReader();
+    return absent;
+  }
+  let store = recordedReaderOwner.__llvRecordedCheckReader?.identity === identity
+    ? recordedReaderOwner.__llvRecordedCheckReader.store : undefined;
+  try {
+    if (!store) {
+      dropRecordedReader();
+      store = new RecordedCheckStore(filename, false);
+      recordedReaderOwner.__llvRecordedCheckReader = { identity, store };
+    }
     return read(store);
   } catch (error) {
-    if (error instanceof Error && /no such table: recorded_check(?:s(?:\b|_)|_roots\b)/.test(error.message) && store && !store.hasLedger()) return absent;
+    const legacy = error instanceof Error && /no such table: recorded_check(?:s(?:\b|_)|_roots\b)/.test(error.message) && !!store && !store.hasLedger();
+    // A failed read keeps no connection; the next question opens a fresh one.
+    dropRecordedReader();
+    if (legacy) return absent;
     throw error;
-  } finally { store?.close(); }
+  }
 }
 export const recordedHostHeld = (conversation: string) => readRecorded(store => store.hostHeld(conversation), false);
 export const recordedSessionHeld = (session: string, expected: ProcessIdentity) => readRecorded(store => store.sessionHeld(session, expected), false);
