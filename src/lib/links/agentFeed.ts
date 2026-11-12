@@ -1,13 +1,12 @@
 import { sharedLinkState } from "./runtimeState";
 /** Ephemeral, bounded agent summaries for one linked-board connection (M.6). */
-import fs from "node:fs";
-import { statePath } from "@/lib/configDir";
 import { createHash, randomBytes } from "node:crypto";
 
 import { agentRegistry, type RegistryFile } from "@/lib/agent/registry";
 import { registryConversationsForPath, registryHasPathIndex } from "@/lib/agent/sqliteRegistryStore";
 import { projectAliasResolver } from "@/lib/projects/aliases";
-import { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
+import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
+import { orchestratorSeatStoreSignature } from "@/lib/orchestrator/seatStore";
 import { lastScannedFiles } from "@/lib/scanner/scanCache";
 import { loadTasksForList } from "@/lib/tasks/store";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
@@ -189,11 +188,8 @@ export class AgentFeed {
     const files = this.source();
     const tasks = this.tasks();
     const projectsKey = [...projects].sort().join("|");
-    const seatRevision = projects.size === 0 ? "" : this.registrySources.seatRevision?.() ?? (() => {
-      if (this.registrySources.seats) return "injected";
-      try { const stat = fs.statSync(statePath("orchestrator-seats.json")); return `${stat.ino}:${stat.size}:${stat.mtimeMs}`; }
-      catch { return "missing"; }
-    })();
+    const seatRevision = projects.size === 0 ? "" : this.registrySources.seatRevision?.()
+      ?? (this.registrySources.seats ? "injected" : orchestratorSeatStoreSignature() ?? "unreadable");
     /* Cached pipeline records also attribute scanned agents whose raw entries
        carry no membership. An unchanged registry retains this array identity. */
     const owns = this.ownership();
@@ -210,7 +206,7 @@ export class AgentFeed {
     this.expiresAt = Infinity;
     // Registry and seat storage are consulted only past the refresh cache fence.
     const seatRows = projects.size > 0
-      ? this.registrySources.seats?.() ?? Object.values(readOrchestratorSeatFileOrNull()?.seats ?? {})
+      ? this.registrySources.seats?.() ?? activeOrchestratorSeats()
       : [];
     const snapshot = projects.size > 0 && (files?.length || seatRows.length)
       ? this.registrySources.snapshot?.() ?? agentRegistry().readOnlySnapshot()

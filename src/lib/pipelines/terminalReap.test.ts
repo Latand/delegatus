@@ -937,6 +937,7 @@ async function socketScenario(named: string, failure?: SetupFailure, ownership: 
     setAgentRegistryForTests(registry);
     const conversationId = begun.receipt.conversationId;
     const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, readOrchestratorSeatFile } = await import("@/lib/orchestrator/seats");
+    const { addStoredSeatRows, clearStoredSeatRecord, writeStoredSeatRecord } = await import("@/lib/orchestrator/seatStoreFixture");
     const { statePath } = await import("@/lib/configDir");
     const seatProject = "fixture-seat-project";
     let designation = 0;
@@ -973,18 +974,21 @@ async function socketScenario(named: string, failure?: SetupFailure, ownership: 
       expect(readOrchestratorSeatFile().seats[seatProject]!.conversationId).toBe(conversationId);
     }
     if (scenario === "legacy-seat") rememberSeat();
-    const seatFile = statePath("orchestrator-seats.json");
-    if (scenario === "unreadable-seat-store") fs.writeFileSync(seatFile, "{");
-    let readableSeatFile: string | null = null;
+    if (scenario === "unreadable-seat-store") writeStoredSeatRecord("{");
+    let readableSeatRecord: ReturnType<typeof readOrchestratorSeatFile> | null = null;
     if (scenario.startsWith("malformed-")) {
-      readableSeatFile = fs.readFileSync(seatFile, "utf8");
-      const damaged = JSON.parse(readableSeatFile);
-      if (scenario === "malformed-seat-collection") damaged.seats = null;
-      else if (scenario === "malformed-revocation") damaged.revocations.push({ project: seatProject, conversationId,
-        seatEpoch: damaged.seats[seatProject].seatEpoch, revokedAt: "2026-07-31T00:15:00.000Z",
-        successorConversationId: { invalid: true } });
-      else (scenario === "malformed-pending-seat" ? damaged.pending : damaged.seats)[seatProject].mandate = null;
-      fs.writeFileSync(seatFile, JSON.stringify(damaged));
+      /* Rows as a damaged store holds them: the tolerant reader drops or
+         repairs each one, the strict evidence the sweep reads refuses. */
+      readableSeatRecord = readOrchestratorSeatFile();
+      if (scenario === "malformed-seat-collection") addStoredSeatRows([{ key: `seat:${seatProject}`, value: null }]);
+      else if (scenario === "malformed-revocation") addStoredSeatRows([{ key: `revocation:${"9".repeat(12)}`, value: { project: seatProject, conversationId,
+        seatEpoch: readableSeatRecord.seats[seatProject]!.seatEpoch, revokedAt: "2026-07-31T00:15:00.000Z",
+        successorConversationId: { invalid: true } } }]);
+      else {
+        const pending = scenario === "malformed-pending-seat";
+        const seat = (pending ? readableSeatRecord.pending : readableSeatRecord.seats)[seatProject]!;
+        addStoredSeatRows([{ key: `${pending ? "pending" : "seat"}:${seatProject}`, value: { ...seat, mandate: null } }]);
+      }
     }
     const { Database } = await import("bun:sqlite");
     const journal = journalResource = new RuntimeJournal(path.join(root, "journal.sqlite"), { structuredHosts: true });
@@ -1261,13 +1265,13 @@ async function socketScenario(named: string, failure?: SetupFailure, ownership: 
         expect(procBackend.pidAlive(recordedPid)).toBe(true);
         expect(signals).toEqual([]);
         expect(loadPipelines()[0]!.terminalReap).toMatchObject({ rounds: 0, stopped: 0, settledAt: null });
-        if (readableSeatFile !== null) fs.writeFileSync(seatFile, readableSeatFile);
+        if (readableSeatRecord !== null) writeStoredSeatRecord(readableSeatRecord);
         if (scenario === "pending-seat" || scenario === "malformed-pending-seat") expect(completeOrchestratorSeatIntent({ project: seatProject,
           clientRequestId: "fixture-seat-1", conversationId, path: transcript }).kind).toBe("activated");
         if (scenario === "legacy-seat") designate(conversationId);
         designate("conversation_seat_successor");
       }
-      if (scenario === "unreadable-seat-store") fs.unlinkSync(seatFile);
+      if (scenario === "unreadable-seat-store") clearStoredSeatRecord();
       if (scenario === "held-autonomous-work") {
         // Repeated sweeps under the hold neither signal the host nor spend the message.
         await tick();

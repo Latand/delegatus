@@ -19,7 +19,7 @@ const { MERGE_POLL_MS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, MERGE_REASONS, prod
 const { refreshRequest, refreshReservation } = await import("./autoRefresh");
 const { defaultPipelinePorts, normalizeStages, patchPipeline } = await import("@/lib/pipelines/engine");
 const { pipelineRoleLookup } = await import("@/lib/pipelines/roles");
-const { assignPipelineDelivery, buildPipeline, archiveSettledPipelines, loadArchivedPipelinesForOwnership, loadPipelines, loadPipelinesForList, pipelineIdentity, savePipelines } = await import("@/lib/pipelines/store");
+const { takeoverPipelineDelivery, assignPipelineDelivery, buildPipeline, archiveSettledPipelines, loadArchivedPipelinesForOwnership, loadPipelines, loadPipelinesForList, pipelineIdentity, savePipelines } = await import("@/lib/pipelines/store");
 const { mergeOnReviewSetting, resetProjectSettingsForTests, setMergeOnReview } = await import("@/lib/projects/settings");
 const { laneNeed } = await import("@/components/attention/needReason");
 const { pipelineAnswers } = await import("@/components/pipelines/pipelineBlockModel");
@@ -1204,7 +1204,7 @@ describe("refresh retry recovery", () => {
     return { waiting, child };
   }
 
-  test.each(["completed", "running", "retired"] as const)("completed refresh refused admission retains the parent seat ask (%s)", async startingState => {
+  test.each(["completed", "running", "retired"] as const)("a successor refused merge admission keeps its predecessor withdrawn (%s)", async startingState => {
     const settingsFile = path.join(sandbox, "project-settings.json");
     const previousSettings = fs.existsSync(settingsFile) ? fs.readFileSync(settingsFile) : null;
     try {
@@ -1233,7 +1233,7 @@ describe("refresh retry recovery", () => {
         await sweepAutoMerge(ports);
         const rows = loadPipelines();
         const parent = rows.find(row => row.id === waiting.id)!;
-        expect(parent.merge!.state).toBe("refreshing");
+        expect(parent.merge!.state).toBe("cancelled");
         expect(workerAsks(parent, rows)).toEqual([]);
         child.state = "completed";
         child.closedAt = iso(T0);
@@ -1267,21 +1267,18 @@ describe("refresh retry recovery", () => {
           stdin: "ignore", stdout: "pipe", stderr: "pipe" });
         const [output, error, code] = await Promise.all([new Response(replay.stdout).text(), new Response(replay.stderr).text(), replay.exited]);
         expectMergeChildSuccess(code, error);
-        expect(JSON.parse(output).state).toBe("blocked");
+        expect(JSON.parse(output).state).toBe("cancelled");
       }
-      let firstKey: string | undefined;
       for (let pass = 0; pass < 2; pass++) {
         await sweepAutoMerge(ports);
         const rows = loadPipelines();
         const parent = rows.find(row => row.id === waiting.id)!;
-        expect(parent.merge!.state).toBe("blocked");
-        expect(parent.merge!.reason).toBe("Refresh was not admitted: lane did not complete after the merge setting was enabled");
+        expect(parent.merge!.state).toBe("cancelled");
+        expect(parent.merge!.reason).toBe(`Merge superseded by delivery owner ${child.id}`);
         expect(rows.find(row => row.id === child.id)!.merge).toBeUndefined();
         for (const lanes of [rows, [...rows].reverse()]) {
           const asks = workerAsks(parent, lanes);
-          expect(asks.map(ask => ask.id)).toEqual([parent.id]);
-          firstKey ??= asks[0]!.key;
-          expect(asks[0]!.key).toBe(firstKey);
+          expect(asks).toEqual([]);
         }
         clock += 60_000;
       }
@@ -1758,4 +1755,61 @@ test("a refresh review that fails at the merge mutation fence refuses dispatch",
   expect(changed).toBe(true);
   expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", reason: MERGE_REASONS.refreshReviewRequired });
   expect(writes).toEqual([]);
+});
+
+
+test.each(["queued", "checking", "waiting-checks", "updating", "refreshing", "blocked"] as const)(
+  "close durably withdraws a %s merge before teardown", async state => {
+    const record = completedLane("close-queue");
+    savePipelines([record]);
+    const ports = productionAutoMergePorts({ now: () => T0, loadPipelines, cachedState: () => null,
+      pullRequestOf: () => ({ repository: REPO, number: 7 }),
+      setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }), log: () => undefined,
+      run: async () => { throw new Error("close fixture does not read the forge"); } });
+    await sweepAutoMerge(ports);
+    const queued = loadPipelines()[0]!;
+    queued.merge!.state = state;
+    if (state === "refreshing") queued.merge!.refresh = refreshReservation(queued, "b".repeat(40), HEAD, T0, "main");
+    queued.merge!.reason = "waiting for repository capacity";
+    queued.merge!.nextReadAt = iso(T0 + MERGE_POLL_MS);
+    savePipelines([queued]);
+    const result = await patchPipeline(record.id, { action: "close" }, { now: () => iso(T0) } as never);
+    expect(result.error).toBeUndefined();
+    expect(loadPipelines()[0]!).toMatchObject({ state: "closed", merge: { state: "cancelled", reason: "Lane is closed", nextReadAt: null } });
+    const child = Bun.spawn([process.execPath, "-e", `
+      const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+      console.log(JSON.stringify(loadPipelines()[0].merge));
+    `], { cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: sandbox }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(code, err).toBe(0);
+    expect(JSON.parse(out)).toMatchObject({ state: "cancelled", reason: "Lane is closed", nextReadAt: null });
+  });
+
+
+test("delivery takeover withdraws the old queue entry in the ownership transaction", async () => {
+  savePipelines([]);
+  const target = { repository: PROJECT, remote: `https://github.com/${REPO}.git`, branch: "refs/heads/takeover", pr: 7 };
+  const original = claimedLane("takeover-original", target);
+  savePipelines([original]);
+  const ports = productionAutoMergePorts({ now: () => T0, loadPipelines, cachedState: () => null,
+    pullRequestOf: () => ({ repository: REPO, number: 7 }),
+    setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }), log: () => undefined,
+    run: async () => { throw new Error("fixture does not read the forge"); } });
+  await sweepAutoMerge(ports);
+  const old = loadPipelines()[0]!;
+  const successor = buildPipeline({ id: "takeover-successor", task: old.task, project: PROJECT, repoDir: old.repoDir,
+    stages: old.stages, srcPath: null, srcConversationId: null, now: iso(T0) });
+  successor.delivery = { ...old.delivery!, disposition: "comparison", journal: [] };
+  savePipelines([old, successor]);
+  const before = loadPipelines();
+  const refused = await takeoverPipelineDelivery(successor.id, old.id, old.delivery!.epoch + 1, "replace delivery", null);
+  expect(refused.status).toBe(409);
+  expect(loadPipelines()).toEqual(before);
+  const result = await takeoverPipelineDelivery(successor.id, old.id, old.delivery!.epoch, "replace delivery", null);
+  expect(result.error).toBeUndefined();
+  expect(loadPipelines().find(row => row.id === old.id)).toMatchObject({
+    delivery: { active: false, publish: "disabled" },
+    merge: { state: "cancelled", reason: `Merge superseded by delivery owner ${successor.id}`, nextReadAt: null },
+  });
+  expect(loadPipelines().find(row => row.id === successor.id)!.delivery).toMatchObject({ active: true, ownerId: successor.id, epoch: old.delivery!.epoch + 1 });
 });
