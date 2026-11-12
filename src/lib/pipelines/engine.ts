@@ -12259,7 +12259,12 @@ function isPrepublicationSpawnFailure(failure: string): boolean {
   const releasedBeforePublication = "staged launch was released before publication completed";
   // A journal outage can park the live failure with our evidence diagnostic.
   // Keep its retry identity so later ticks recheck the same safety fences.
-  return failure === releasedBeforePublication
+  // Setup custody can refuse both before exec and while recording a child.
+  // Reuse journal proof and confirmed host termination before replacing it.
+  const setupWriterBusy = `${REGISTRY_WRITER_BUSY} (spawn.setup-custody)`;
+  return failure === setupWriterBusy
+    || failure === `${setupWriterBusy}${PREPUBLICATION_RETRY_REFUSAL_SUFFIX}`
+    || failure === releasedBeforePublication
     || failure === `${releasedBeforePublication}${PREPUBLICATION_RETRY_REFUSAL_SUFFIX}`
     || failure.startsWith("structured spawn interrupted before identity staging: ")
     || failure.startsWith("structured spawn interrupted before runtime admission: ");
@@ -16963,7 +16968,8 @@ export async function patchPipeline(
         && pipeline.state === "needs_decision"
         && (attempt.error?.startsWith("stage launch recovery cannot prove no dispatch began:")
           || attempt.retiredLaunches?.length && ports.spawnReceipt(attempt.launchId)?.state === "failed"
-          || isUnverifiedDeliverySpawnFailure(ports.spawnReceipt(attempt.launchId)?.error ?? ""));
+          || isUnverifiedDeliverySpawnFailure(ports.spawnReceipt(attempt.launchId)?.error ?? "")
+          || isPrepublicationSpawnFailure(ports.spawnReceipt(attempt.launchId)?.error ?? ""));
       const unreservedSpawnRetry = stage?.kind === "run" && attempt
         && (boundSpawnRetry || !attempt.launchId && (attempt.retiredLaunches?.length || isStructuredSpawnPark(pipeline, attempt))
           && pipeline.state === "needs_decision");
