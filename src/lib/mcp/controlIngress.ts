@@ -70,11 +70,11 @@ export function installControlIngress(target: Emitter, store: ControlEvidenceSto
         else if (chunk instanceof Uint8Array) chunks.push(Buffer.from(chunk));
       };
       const write = response.write, end = response.end;
-      response.write = function (...values: Parameters<ServerResponse["write"]>) {
+      response.write = function (this: ServerResponse, ...values: Parameters<ServerResponse["write"]>) {
         capture(values[0], values[1]);
         return Reflect.apply(write, this, values);
       } as ServerResponse["write"];
-      response.end = function (...values: Parameters<ServerResponse["end"]>) {
+      response.end = function (this: ServerResponse, ...values: Parameters<ServerResponse["end"]>) {
         capture(values[0], values[1]);
         return Reflect.apply(end, this, values);
       } as ServerResponse["end"];

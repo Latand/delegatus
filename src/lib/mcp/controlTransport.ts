@@ -72,11 +72,13 @@ export function controlFetch(input: URL, init: RequestInit = {}): Promise<Respon
       let decoded = body;
       const encoding = responseHeaders.get("content-encoding")?.toLowerCase();
       if (body && encoding && ["gzip", "deflate", "br"].includes(encoding)) {
-        const source = Readable.fromWeb(body as import("node:stream/web").ReadableStream<Uint8Array>);
+        // Bun's DOM and Node declarations describe this shared runtime stream
+        // differently; cross that declaration boundary explicitly.
+        const source = Readable.fromWeb(body as unknown as import("node:stream/web").ReadableStream<Uint8Array>);
         const decoder = encoding === "gzip" ? createGunzip() : encoding === "deflate" ? createInflate() : createBrotliDecompress();
         source.once("error", error => decoder.destroy(error));
         decoder.once("close", () => source.destroy());
-        decoded = Readable.toWeb(source.pipe(decoder)) as ReadableStream<Uint8Array>;
+        decoded = Readable.toWeb(source.pipe(decoder)) as unknown as ReadableStream<Uint8Array>;
       }
       resolve(new Response(decoded, { status, headers: responseHeaders }));
     });

@@ -61,7 +61,7 @@ async function fixture() {
   await evidence.ready();
   let lostSettlement = false, overrideAnswer: unknown = undefined;
   class ReceiptStore extends SqliteMcpReceiptStore {
-    override async settle(...args: Parameters<SqliteMcpReceiptStore["settle"]>) {
+    override settle(...args: Parameters<SqliteMcpReceiptStore["settle"]>) {
       if (lostSettlement) throw new Error("fixture settlement write unavailable");
       return super.settle(...args);
     }
