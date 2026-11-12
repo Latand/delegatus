@@ -20,6 +20,7 @@ const { tickPipelinesController } = await import("./controllerPass");
 const { registerPipelineTick } = await import("./controllerSignal");
 const { isStoredPipeline, loadPipelines, pipelineIdentity, savePipelines } = await import("./store");
 const { laneFinish } = await import("./laneFinish");
+  const { hostTerminationKey } = await import("./hostTerminationProof");
 const { attemptTempAuthority } = await import("@/lib/runtime/attemptTempProduction");
 const { pipelineStageHostTerminated, recordedProcessTerminated, probePipelineStageHostTermination } = await import("./hostTermination");
 const { sessionKeyId } = await import("@/lib/agent/sessionKey");
@@ -171,15 +172,15 @@ test("large identity inputs read only the current durable cursor page and reset 
   }) as ProcessIdentity);
   const target = f.target;
   const first = await probePipelineStageHostTermination(target, { owner: "large-tree", identities: counted, limit: 16 });
-  expect(first.checked).toBe(16);
+  expect(first.checked).toBe(14);
   expect(pidReads).toBeLessThanOrEqual(16 * 8);
   const restarted = await probePipelineStageHostTermination(target, { owner: "large-tree", identities: counted,
     progress: first.progress, limit: 16 });
-  expect(restarted.progress?.next).toBe(32);
+  expect(restarted.progress?.next).toBe(28);
   expect(pidReads).toBeLessThanOrEqual(32 * 8);
   const changedSource = await probePipelineStageHostTermination(target, { owner: "changed-large-tree", identities: counted,
     progress: restarted.progress, limit: 16 });
-  expect(changedSource.progress?.next).toBe(16);
+  expect(changedSource.progress?.next).toBe(14);
   expect(pidReads).toBeLessThanOrEqual(48 * 8);
 });
 
@@ -188,7 +189,7 @@ test("same-length survivor replacement changes the durable proof source", async 
   const old = Array.from({ length: 100 }, (_, index) => ({ pid: MISSING_PID, startIdentity: `old-${index}` }));
   const first = await probePipelineStageHostTermination(f.target, { owner: "same-length", identities: [],
     identitySources: [old], identitySourceRevision: "source-a", limit: 64 });
-  expect(first.progress?.next).toBe(64);
+  expect(first.progress?.next).toBe(62);
   const replacement = [captureProcessIdentity(process.pid), ...old.slice(1)];
   const next = await probePipelineStageHostTermination(f.target, { owner: "same-length", identities: [],
     identitySources: [replacement], identitySourceRevision: "source-b", progress: first.progress, limit: 64 });
@@ -223,6 +224,59 @@ test.each([64, 4096])("zero identity budget does not read elements from a %i sur
     identitySources: [survivors], identitySourceRevision: "zero-budget-source", limit: 0 });
   expect(result.checked).toBe(0);
   expect(reads).toBe(0);
+});
+
+test.serial("generation preparation and scopes share the tick budget and resume at the next page", async () => {
+  const f = host(580, { pid: MISSING_PID, startIdentity: "old-start" });
+  const target = { ...f.target, agentPath: null };
+  const snapshot = structuredClone(registry.readOnlySnapshot());
+  const conversation = snapshot.conversations[f.target.conversationId!]!;
+  const template = snapshot.entries[sessionKeyId(f.key)]!;
+  const generations = [];
+  for (let index = 0; index < 6; index++) {
+    const id = `00000000-0000-4000-8000-${String(5800 + index).padStart(12, "0")}`;
+    const pathname = path.join(root, `${id}.jsonl`);
+    generations.push({ ...conversation.generations.at(-1)!, id, path: pathname });
+    snapshot.entries[`codex:${id}`] = { ...structuredClone(template), key: { engine: "codex", sessionId: id },
+      artifactPath: pathname, structuredHost: { ...structuredClone(template.structuredHost!),
+        process: { ...captureProcessIdentity(process.pid), pid: MISSING_PID, startIdentity: `generation-${index}` },
+        scope: { unit: `delegatus-agent-generation-${String(index).padStart(2, "0")}.scope`, bootEpoch: systemBootEpoch() } } };
+  }
+  conversation.generations = generations;
+  fs.writeFileSync(registry.filename, JSON.stringify(snapshot));
+  let scopes = 0;
+  const first = await probePipelineStageHostTermination(target, { owner: "generation-pages", identities: [], limit: 16,
+    scopeState: async () => { scopes++; return "not-found"; } });
+  expect(scopes).toBe(2);
+  expect(first.checked + scopes + 4).toBeLessThanOrEqual(16); // generation window and registry entries
+  expect(first.progress?.generationNext).toBe(2);
+  const liveScope = await probePipelineStageHostTermination(target, { owner: "generation-pages", identities: [],
+    progress: first.progress, limit: 16,
+    scopeState: async unit => unit.includes("generation-02") ? "loaded" : "not-found" });
+  expect(liveScope.terminated).toBeFalse();
+  const resumed = await probePipelineStageHostTermination(target, { owner: "generation-pages", identities: [],
+    progress: first.progress, limit: 16,
+    scopeState: async () => "not-found" });
+  expect(resumed.progress?.generationNext).toBe(4);
+  expect(resumed.checked).toBeGreaterThan(0);
+
+  const record = lane([f]);
+  record.unconfirmedHosts![0]!.agentPath = null;
+  record.runs[0]!.attempts[0]!.agentPath = null;
+  const proofKey = hostTerminationKey(record.unconfirmedHosts![0]!);
+  const owner = JSON.stringify([record.id, record.project, record.repoDir, null, "queued-stop", proofKey]);
+  const persisted = await probePipelineStageHostTermination(target, { owner, identities: [], identitySourceRevision: "[]",
+    progress: resumed.progress, limit: 16, scopeState: async () => "not-found" });
+  expect(persisted.progress?.generationNext).toBe(4);
+  record.hostTerminationProofs = { [proofKey]: persisted.progress! };
+  savePipelines([record]);
+  const child = Bun.spawn(["bash", process.env.LLV_TEST_GATE_WRAPPER ?? path.resolve("scripts/gate-slot.sh"), process.execPath,
+    "test", "src/lib/pipelines/unconfirmedHosts.test.ts", "--test-name-pattern", "^restart worker$"], {
+    env: { ...process.env, LLV_HOST_RECONCILE_WORKER: "1", LLV_HOST_RECONCILE_PHASE: "30" }, stdout: "pipe", stderr: "pipe" });
+  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect({ code, stdout: code ? stdout : "", stderr: code ? stderr : "" }).toEqual({ code: 0, stdout: "", stderr: "" });
+  expect(loadPipelines()[0]!.unconfirmedHosts).toBeUndefined();
+  expect(laneFinish(loadPipelines()[0]!).finished).toBeTrue();
 });
 
 test("an old lane without delivery custody still reconciles its hosts", async () => {
@@ -283,7 +337,7 @@ test("unreadable kernel identity and registry reads preserve the host", async ()
   restores.push(() => read.mockRestore());
   expect(await pipelineStageHostTerminated(f.target)).toBeFalse();
   read.mockRestore();
-  const snapshot = spyOn(registry, "livenessConversationSnapshot").mockImplementation(() => { throw new Error("read refused"); });
+  const snapshot = spyOn(registry, "livenessConversationPage").mockImplementation(() => { throw new Error("read refused"); });
   restores.push(() => snapshot.mockRestore());
   expect(await pipelineStageHostTerminated(f.target)).toBeFalse();
   savePipelines([lane([f])]);
@@ -367,8 +421,7 @@ test("a later awaited host observation renews earlier termination proofs", async
 });
 
 test.skipIf(process.env.LLV_HOST_RECONCILE_WORKER !== "1")("restart worker", async () => {
-  await tickPipelinesController([], ports());
-  await tickPipelinesController([], ports());
+  for (let pass = 0; pass < 5; pass++) await tickPipelinesController([], ports());
 });
 
 test.skipIf(process.platform !== "linux")("hidden live pids and an unavailable proc view cannot prove absence", () => {
@@ -448,7 +501,7 @@ test("checkpoint admission renews proof after a registry host replacement", asyn
 test.skipIf(worker)("large retained trees persist bounded proof progress through restart and source changes", async () => {
   const f = host(56, { pid: MISSING_PID, startIdentity: "native-old" });
   const snapshot = structuredClone(registry.readOnlySnapshot());
-  snapshot.entries[sessionKeyId(f.key)]!.structuredTerminationSurvivors = Array.from({ length: 100 }, (_, index) =>
+  snapshot.entries[sessionKeyId(f.key)]!.structuredTerminationSurvivors = Array.from({ length: 200 }, (_, index) =>
     ({ pid: MISSING_PID, startIdentity: `child-${String(index).padStart(3, "0")}` }));
   fs.writeFileSync(registry.filename, JSON.stringify(snapshot));
   savePipelines([lane([f])]);
@@ -460,25 +513,35 @@ test.skipIf(worker)("large retained trees persist bounded proof progress through
     return result;
   };
   await tickPipelinesController([], p);
-  expect(checked).toBe(64);
+  expect(checked).toBe(62);
   let held = loadPipelines()[0]!;
   expect(held.unconfirmedHosts).toHaveLength(1);
   const first = Object.values(held.hostTerminationProofs!)[0]!;
-  expect(first.next).toBe(64);
-  const failed = spyOn(registry, "livenessConversationSnapshot").mockImplementation(() => { throw new Error("temporarily unavailable"); });
+  expect(first.next).toBe(62);
+  const unrelated = host(560, captureProcessIdentity(process.pid));
+  expect(registry.recordStructuredTerminationSurvivors(unrelated.key, captureProcessIdentity(process.pid),
+    [captureProcessIdentity(process.pid)])).toBeTrue();
+  checked = 0;
+  await tickPipelinesController([], p);
+  held = loadPipelines()[0]!;
+  expect(held.unconfirmedHosts).toHaveLength(1);
+  expect(Object.values(held.hostTerminationProofs!)[0]!.next).toBe(124);
+  const afterUnrelatedWrite = Object.values(held.hostTerminationProofs!)[0]!;
+  expect(afterUnrelatedWrite.source).toBe(first.source);
+  const failed = spyOn(registry, "livenessConversationPage").mockImplementation(() => { throw new Error("temporarily unavailable"); });
   restores.push(() => failed.mockRestore());
   await tickPipelinesController([], ports());
-  expect(Object.values(loadPipelines()[0]!.hostTerminationProofs!)[0]).toEqual(first);
+  expect(Object.values(loadPipelines()[0]!.hostTerminationProofs!)[0]).toEqual(afterUnrelatedWrite);
   failed.mockRestore();
   held = loadPipelines()[0]!;
   held.project = "other-proof-namespace";
   savePipelines([held]);
   checked = 0;
   await tickPipelinesController([], p);
-  expect(checked).toBe(64);
+  expect(checked).toBe(62);
   const replaced = Object.values(loadPipelines()[0]!.hostTerminationProofs!)[0]!;
   expect(replaced.source).not.toBe(first.source);
-  expect(replaced.next).toBe(64);
+  expect(replaced.next).toBe(62);
   const live = structuredClone(snapshot);
   live.entries[sessionKeyId(f.key)]!.structuredTerminationSurvivors!.push(captureProcessIdentity(process.pid));
   fs.writeFileSync(registry.filename, JSON.stringify(live));

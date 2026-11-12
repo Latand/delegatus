@@ -6560,6 +6560,43 @@ export class AgentRegistry {
     return this.scopedConversationSnapshot({ conversationId }, true, true);
   }
 
+  /** Read a bounded generation window for host liveness reconciliation. The
+      cursor advances through retained history without cloning the full array. */
+  livenessConversationPage(conversationId: string, offset: number, limit: number): {
+    snapshot: RegistryFile; offset: number; totalGenerations: number; currentEvidence: unknown;
+  } {
+    return this.readKeyed(file => {
+      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+      const id = resolveConversationAlias(file, conversationId as ViewerConversationId);
+      const conversation = file.conversations[id];
+      if (!conversation) return { snapshot: result, offset, totalGenerations: 0, currentEvidence: null };
+      for (const identity of conversationIdentities(file, id)) {
+        if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
+      }
+      const totalGenerations = conversation.generations.length;
+      const generations = conversation.generations.slice(offset, offset + limit);
+      // These records are read-only evidence. Keep unrelated retained arrays
+      // by reference and copy only the requested generation window.
+      result.conversations[id] = { ...conversation, generations };
+      result.conversationRevision[conversation.engine] = file.conversationRevision[conversation.engine];
+      const paths = new Set(generations.map(candidate => candidate.path));
+      for (const candidate of generations) {
+        const key = `${conversation.engine}:${candidate.id}`;
+        if (file.entries[key]) result.entries[key] = this.cloneLivenessEntry(file.entries[key]!);
+      }
+      for (const pathname of paths) {
+        for (const entry of registryRowsMatching(file, "entries", "artifactPath", pathname)) {
+          result.entries[`${entry.key.engine}:${entry.key.sessionId}`] = this.cloneLivenessEntry(entry);
+        }
+      }
+      const latest = conversation.generations.at(-1);
+      const latestEntry = latest ? file.entries[`${conversation.engine}:${latest.id}`] : undefined;
+      const currentEvidence = latest ? [latest.id, latest.path, latestEntry?.updatedAt ?? null,
+        latestEntry?.structuredHost?.process ?? null, latestEntry?.structuredTerminationCaptureId ?? null] : null;
+      return { snapshot: result, offset, totalGenerations, currentEvidence };
+    });
+  }
+
   private cloneLivenessEntry(entry: AgentRegistryEntry): AgentRegistryEntry {
     // Survivor sets can be large and immutable during this read. Clone the
     // bounded metadata while retaining the array reference for paged probes.

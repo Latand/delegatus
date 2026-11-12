@@ -1,14 +1,19 @@
 import crypto from "node:crypto";
 import type { Pipeline, PipelineStageHostRef } from "./types";
 
-export type HostTerminationProgress = { source: string; next: number };
+export type HostTerminationProgress = { source: string; next: number; generationNext?: number; sequence?: string;
+  targetPathMatched?: boolean; identitySeen?: boolean };
 export const hostTerminationKey = (host: PipelineStageHostRef) => crypto.createHash("sha256")
   .update(JSON.stringify([host.stageId, host.attempt, host.conversationId, host.agentPath, host.paneId ?? null])).digest("hex");
 
 export function isHostTerminationProgress(value: unknown): value is Record<string, HostTerminationProgress> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     && Object.entries(value).every(([key, item]) => /^[a-f0-9]{64}$/.test(key) && item && typeof item === "object"
-      && /^[a-f0-9]{64}$/.test(item.source) && Number.isSafeInteger(item.next) && item.next >= 0);
+      && /^[a-f0-9]{64}$/.test(item.source) && Number.isSafeInteger(item.next) && item.next >= 0
+      && (item.generationNext === undefined || Number.isSafeInteger(item.generationNext) && item.generationNext >= 0)
+      && (item.sequence === undefined || /^[a-f0-9]{64}$/.test(item.sequence))
+      && (item.targetPathMatched === undefined || typeof item.targetPathMatched === "boolean")
+      && (item.identitySeen === undefined || typeof item.identitySeen === "boolean"));
 }
 
 // Scoped to the exact mutable row. Validation runs synchronously inside the
