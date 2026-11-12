@@ -1,3 +1,5 @@
+import { assertReleasedHostEventLedger } from "./hostEventWindow";
+import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
 import { heapAttribution } from "@/lib/heapAttribution";
 import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { hostExitProcess, observeHostExit, readHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
@@ -47,7 +49,7 @@ import {
   StructuredCompactError,
   StructuredHostAdoptionCleanupError,
 } from "./engineHost";
-import { attachRuntimeEvents, hostEventWindowOf, trimHostEventWindow, type RuntimeEventSubscriber } from "./hostEventWindow";
+import { attachRuntimeEvents, HostEventWindow, type RuntimeEventSubscriber } from "./hostEventWindow";
 import {
   FileRuntimeEventStore,
   nextRuntimeEventSequence,
@@ -714,6 +716,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
 
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly memoryQueuePath?: string;
+  private readonly eventTranscriptPath: string;
   private readonly eventStore: RuntimeEventStore;
   private readonly deliveryLedger: ClaudeDeliveryLedger;
   private readonly readImage: (ref: StructuredImageRef) => Buffer;
@@ -735,12 +738,36 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   heapAttribution() {
     let queuedEvents = 0;
     for (const subscriber of this.subscribers) queuedEvents += subscriber.queue.length;
-    return { engine: "claude", events: this.events.length, eventSubscribers: this.subscribers.size,
+    return { engine: "claude", events: this.events.length, ...this.eventWindow.heapAttribution(), eventSubscribers: this.subscribers.size,
       stateSubscribers: this.stateListeners.size, queuedEvents };
   }
 
   private readonly subscribers = new Set<Subscriber>();
-  private readonly events: RuntimeEvent[] = [];
+  private readonly eventWindow = new HostEventWindow();
+  private readonly events = this.eventWindow.events;
+  private eventWindowReleased = false;
+  private eventWindowRevision = 0;
+
+  releaseIdleEventWindow(canRelease: () => boolean): Promise<boolean> {
+    const transcriptPath = this.eventTranscriptPath;
+    return releaseIdleHostEventWindow({
+      events: this.events,
+      revision: () => this.eventWindowRevision,
+      transcriptPath,
+      eligible: () => this.eventTranscriptPath === transcriptPath && !this.dead && !this.releasing && !this.released
+        && !(this.activeTurnId !== null || this.manualCompaction !== null) && canRelease(),
+      onRelease: () => { this.eventWindow.release(); this.eventWindowReleased = true; },
+    });
+  }
+
+  private refillEventWindow(): void {
+    if (!this.eventWindowReleased) return;
+    const stored = this.eventStore.load(this.identity.sessionId);
+    assertReleasedHostEventLedger(this.events, stored);
+    this.eventWindow.restore(stored);
+    this.eventWindowReleased = false;
+  }
+
   private readonly deliveries: ClaudeDeliveryState[] = [];
   private readonly turnQueue: string[] = [];
   /** Engine ids of the inputs the running turn read at a tool boundary. */
@@ -802,6 +829,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     heapAttribution.hosts.add(this, null);
     this.child = child;
     this.memoryQueuePath = options.memoryQueuePath;
+    this.eventTranscriptPath = claudeTranscriptPath(options.cwd, identity.sessionId, options.claudeProjectsDir);
     this.memoryCell = options.memoryCell ?? null;
     this.memoryCell?.onChange(() => this.notifyStateListeners());
     this.identity = identity;
@@ -1092,6 +1120,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   attach(afterSeq: number): AsyncIterable<RuntimeEvent> {
+    this.eventWindowRevision += 1;
+    this.refillEventWindow();
     return attachRuntimeEvents(afterSeq, {
       window: () => this.events,
       ledger: () => this.eventStore.load(this.identity.sessionId),
@@ -1520,7 +1550,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private restore(): void {
     const stored = this.eventStore.load(this.identity.sessionId);
     /* The restore below reads the whole ledger once; only the window stays. */
-    for (const event of hostEventWindowOf(stored)) this.events.push(event);
+    this.eventWindow.restore(stored);
     this.cursor = reconcileRuntimeEventCursor(
       this.identity.sessionId,
       stored.at(-1)?.seq ?? 0,
@@ -1604,15 +1634,15 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     }
     this.cursor = nextCursor;
     const sequenced = { ...event, seq: nextCursor } as RuntimeEvent;
-    try { this.eventStore.append(this.identity.sessionId, sequenced); }
+    try { this.refillEventWindow(); this.eventStore.append(this.identity.sessionId, sequenced); }
     catch (error) {
       this.cursor = this.events.at(-1)?.seq ?? Math.max(0, this.cursor - 1);
       this.ledgerFailed = true;
       this.failWithoutLedger(new Error(`runtime event ledger failed: ${safeError(error)}`));
       return;
     }
-    this.events.push(sequenced);
-    trimHostEventWindow(this.events);
+    this.eventWindowRevision += 1;
+    this.eventWindow.append(sequenced);
     for (const subscriber of this.subscribers) {
       subscriber.queue.push(sequenced);
       subscriber.wake?.();

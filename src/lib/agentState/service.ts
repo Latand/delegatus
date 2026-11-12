@@ -156,7 +156,9 @@ export class AgentStateService {
     const start = after < 0 ? 0 : after;
     const ordered = entries.slice(start);
     let examined = 0;
-    let failures = 0;
+    // A completed suffix cannot erase failures from the earlier pages of a
+    // scan interrupted by its budget or a serving-process restart.
+    let failures = cursor === null ? 0 : registry.agentStateRead(file => file.agentStateMetrics.scanProgress?.subjectsDeferred ?? 1);
     for (let page = 0; page < ordered.length && allowed() && performance.now() - started < 30_000; page += 32) {
       const batch = ordered.slice(page, page + 32);
       for (let offset = 0; offset < batch.length && allowed(); offset += 4) {
@@ -175,6 +177,7 @@ export class AgentStateService {
           metrics.afterKey = sessionKeyId(batch.at(-1)!.key);
           metrics.subjectsDeferred = Math.max(0, ordered.length - examined) + failures;
           file.agentStateMetrics.current = metrics;
+          file.agentStateMetrics.scanProgress = { ...metrics, subjectsDeferred: failures };
         });
       });
     }
@@ -206,6 +209,7 @@ export class AgentStateService {
         metrics.at = now();
         if (complete) { metrics.afterKey = null; if (!failures) metrics.lastCompleteReconciliationAt = now(); metrics.subjectsDeferred = failures; }
         file.agentStateMetrics.current = metrics;
+        file.agentStateMetrics.scanProgress = { ...metrics, subjectsDeferred: complete ? 0 : failures };
         file.agentStateMetrics.maintenance = { ...metrics, afterKey: maintenance.length === 32 ? maintenance.at(-1)!.subject : null };
         const sampleKey = `series:${String(Math.floor(now() / 60_000)).padStart(14, "0")}`;
         file.agentStateMetrics[sampleKey] = { ...metrics };

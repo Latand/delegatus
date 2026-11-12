@@ -236,3 +236,22 @@ test("a current held question survives an older terminal until its own attention
   expect(settled).toBe(1);
   expect(f.entry().structuredHost!.activeTurnRef).toBeNull();
 });
+
+test("a resumed scan retains earlier-page failures until a fresh complete census succeeds", async () => {
+  const f = fixture();
+  await f.registry.deliveryWriteOrBusy({ label: "fixture.scan-checkpoint" }, () => f.registry.agentStateWrite(file => {
+    const metrics = readAgentStateMetrics(f.registry);
+    metrics.afterKey = "codex:00000000";
+    metrics.subjectsDeferred = 1;
+    file.agentStateMetrics.current = metrics;
+    file.agentStateMetrics.scanProgress = { ...metrics };
+  }));
+  const successorRegistry = new AgentRegistry(path.join(f.root, "registry.json"), undefined, undefined,
+    { sqliteMode: "sqlite", sqliteFilename: path.join(f.root, "registry.sqlite") });
+  registries.push(successorRegistry);
+  const successor = new AgentStateService({ ...f.service.ports, registry: successorRegistry });
+  await successor.request();
+  expect(readAgentStateMetrics(successorRegistry)).toMatchObject({ subjectsDeferred: 1, lastCompleteReconciliationAt: null, afterKey: null });
+  await successor.request();
+  expect(readAgentStateMetrics(successorRegistry)).toMatchObject({ subjectsDeferred: 0, lastCompleteReconciliationAt: FIXTURE_NOW + 2000 });
+});

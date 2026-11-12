@@ -30,6 +30,7 @@ import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import {
   hasStructuredDeliveryHost,
+  releaseIdleStructuredHostEventWindows,
   structuredDeliveryHostForConversation,
   structuredDeliveryPublicationState,
 } from "./structuredDeliveryController";
@@ -965,7 +966,7 @@ function undeliveredHandoffIndex(
     for (const row of readable) {
       const replayed = new Set(row.replayedDeliveryIds ?? []);
       if (!(row.pendingDeliveries ?? []).some((delivery) => !replayed.has(delivery.deliveryId))) continue;
-      if (row.engine === "claude" || row.engine === "codex") index.addKey(`${row.engine}:${row.engineSessionId}`);
+      if (row.engine === "claude" || row.engine === "codex" || row.engine === "copilot") index.addKey(`${row.engine}:${row.engineSessionId}`);
       else index.addConversation(row.conversationId);
     }
     for (const delivery of registryRowsMatching(file, "heldDeliveries", "state", [...UNDELIVERED_HELD_STATES])) {
@@ -1705,7 +1706,10 @@ export function startStructuredHostRetirement(ports: {
 } = {}): void {
   if (retirementHost.__llvStructuredHostRetirementTimer) return;
   const schedule = ports.scheduleInterval ?? ((callback, delayMs) => setInterval(callback, delayMs));
-  const sweep = ports.sweep ?? (() => reconcileStructuredHostRetirement());
+  const sweep = ports.sweep ?? (async () => {
+    await releaseIdleStructuredHostEventWindows();
+    return reconcileStructuredHostRetirement();
+  });
   let running = false;
   const timer = schedule(() => {
     if (running) return;

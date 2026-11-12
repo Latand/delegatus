@@ -113,6 +113,8 @@ Parallel sources were read at `3b4123f3` head `8e6ae802b113`, `ecdbb21e` head `6
 
 Focused evidence lives in `src/lib/agentState/{model,transcript,store,service,restart}.test.ts`, the three existing native host test files, the retirement/resource/registry persistence tests and `src/app/api/operator/agent-state/route.test.ts`. Restart fixtures run owned native/Viewer-successor processes on ephemeral ports and exercise the actual scheduler and retirement ladder. They cover native completion without an owner, publication replay, current accepted delivery custody and successful idle retirement with transcripts preserved. No serving installation is part of these tests.
 
+The S1 integration includes the completed idle-event-window and byte-budget changes from main. Retirement keeps this design’s six-hour central default; the one-hour default introduced by that integration is superseded here. The existing environment override remains supported. Idle event-window release retains its separate allocation policy.
+
 ### Search coverage and exclusions
 
 Inventory procedure: search production files under `src`, `scripts` and `bin` for `activeTurnRef`, `activeTurnId`, `turnBusy`, `activity`, `liveness`, `idle`, `inFlight`, `status` and relatives (`busy`, `alive`, `gone`, `stalled`, `isRunning`, `isWorkingAgent`, `turnLeftOpen`, `entryIsLive`, `conversationIsLive`, `processMayBeRunning`). Follow the imports and callers of the resulting classifiers. Inspect native transcript reducers, registry writers/readers/archive, runtime journal production, and browser fallback overlays separately. Test/fixture matches establish regression owners rather than extra production authorities.

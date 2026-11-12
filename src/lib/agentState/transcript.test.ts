@@ -121,3 +121,24 @@ test("an unnamed prompt after a closed Codex turn cannot reuse the old cached re
   const events = records.map(record => nativeBoundaryEvent(record, "codex")!).filter(Boolean);
   expect(foldNativeBoundaries(events, "codex", FIXTURE_TURN)).toMatchObject({ state: "open", nativeId: null });
 });
+
+for (const engine of ["codex", "claude", "copilot"] as FixtureEngine[]) test(`${engine}: a native record larger than one page cannot strand earlier boundary recovery`, async () => {
+  const file = fixture(), cache = new AgentTranscriptCache(), rows = fixtureRecords(engine);
+  fs.writeFileSync(file, encode(rows.open) + encode([{ type: "metadata", padding: "x".repeat(700_000) }]) + encode(rows.close));
+  const input = { engine, path: file, revision: "large-record", localRef: engine === "codex" ? FIXTURE_TURN : "local-ref", observedAt: FIXTURE_NOW };
+  expect((await cache.acquire(input)).turn).toMatchObject({ determined: true, value: { state: "closed" } });
+  const bytes = cache.counters.payloadBytes;
+  await cache.acquire(input);
+  expect(cache.counters.payloadBytes).toBe(bytes);
+});
+
+test("a record beyond the acquisition budget stays explicitly unknown and unchanged retries acquire no payload", async () => {
+  const file = fixture(), cache = new AgentTranscriptCache(), rows = fixtureRecords("codex");
+  fs.writeFileSync(file, encode(rows.open) + encode([{ type: "metadata", padding: "x".repeat(5 * 1024 * 1024) }]) + encode(rows.close));
+  const input = { engine: "codex" as const, path: file, revision: "oversize-record", localRef: FIXTURE_TURN, observedAt: FIXTURE_NOW };
+  expect((await cache.acquire(input)).turn.determined).toBe(false);
+  expect((await cache.acquire(input)).turn).toMatchObject({ determined: false, why: "native record exceeds acquisition budget" });
+  const bytes = cache.counters.payloadBytes;
+  expect((await cache.acquire(input)).turn.determined).toBe(false);
+  expect(cache.counters.payloadBytes).toBe(bytes);
+});

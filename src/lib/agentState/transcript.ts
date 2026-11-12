@@ -232,8 +232,9 @@ export class AgentTranscriptCache {
       }
       while (!cached.complete && spent < PASS_BYTES) {
         const end = cached.before;
-        const start = Math.max(base, end - PAGE);
-        const buffer = Buffer.alloc(end - start);
+        const recordStartedAt = spent;
+        let start = Math.max(base, end - Math.min(PAGE, PASS_BYTES - spent));
+        let buffer = Buffer.alloc(end - start);
         let offset = 0;
         while (offset < buffer.length) {
           const read = await handle.read(buffer, offset, buffer.length - offset, start + offset);
@@ -242,6 +243,32 @@ export class AgentTranscriptCache {
         }
         spent += offset; this.counters.payloadBytes += offset; this.counters.recoveryPages++;
         if (buffer.length && buffer.at(-1) !== 10) return uncertain("incomplete native record");
+        // A large single JSONL record may occupy an entire page. Expand only
+        // this exceptional record within the acquisition budget, then discard
+        // its body after parsing; skipping its only newline makes no progress.
+        const chunks = [buffer];
+        while (start > base && spent < PASS_BYTES && (chunks[0]!.indexOf(10) < 0
+          || chunks.length === 1 && buffer.indexOf(10) === buffer.length - 1)) {
+          const earlier = Math.max(base, start - Math.min(PAGE, PASS_BYTES - spent));
+          const chunk = Buffer.alloc(start - earlier);
+          let read = 0;
+          while (read < chunk.length) {
+            const part = await handle.read(chunk, read, chunk.length - read, earlier + read);
+            if (!part.bytesRead) return uncertain("short transcript read");
+            read += part.bytesRead;
+          }
+          spent += read; this.counters.payloadBytes += read; this.counters.recoveryPages++;
+          chunks.unshift(chunk); start = earlier;
+        }
+        if (chunks.length > 1) buffer = Buffer.concat(chunks);
+        if (start > base && buffer.indexOf(10) === buffer.length - 1) {
+          if (recordStartedAt === 0) {
+            cached.events = []; cached.turn = null; cached.complete = true; cached.refusal = "native record exceeds acquisition budget";
+          }
+          // An acquisition that already reduced later records retries this
+          // exceptional record with the full next budget and the same cursor.
+          break;
+        }
         const skip = start > base ? buffer.indexOf(10) + 1 : 0;
         if (start > base && skip <= 0) return uncertain("native record exceeds page budget");
         const events = parseBoundaryPage(buffer.subarray(skip), input.engine, input.localRef);
