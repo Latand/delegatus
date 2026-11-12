@@ -10,6 +10,7 @@ test("retry recovers a zero-launch pending replacement after pause/resume with a
   pipeline.runs[0]!.attempts.unshift({ ...structuredClone(attempt), n: 1, activation: undefined,
     state: "failed", completedAt: h.ports.now(), error: "superseded launch failure" });
   attempt.n = 2;
+  attempt.accounting!.repeatReason = "unknown";
   attempt.state = "pending";
   attempt.startedAt = null;
   pipeline.cursor!.state = "pending";

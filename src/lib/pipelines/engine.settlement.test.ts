@@ -233,6 +233,7 @@ test("a pipeline blocked only by a limit-interrupted attempt closes end to end (
   settled.agentPath = "/codex/stage-2.jsonl";
   settled.paneId = "%2";
   parked.n = 2;
+  parked.accounting!.repeatReason = "unknown";
   parked.state = "needs_decision";
   parked.error = "stage verdict recovery exhausted after 3 checks";
   run.attempts = [settled, parked];
@@ -576,7 +577,7 @@ test("an empty draft is created, assembled from zero, and starts with one stage 
   /* One implement conversation is the minimum graph (#353): Start succeeds. */
   const one = await patchPipeline(id, { action: "add-stage", stage: { id: "plan", kind: "run", role: { roleId: "builder" }, prompt: "Plan it", next: null } }, ports);
   expect(one.pipeline?.stages.map((stage) => stage.id)).toEqual(["plan"]);
-  expect(one.pipeline?.cursor).toMatchObject({ stageId: "plan", state: "pending", input: null, activatedBy: null });
+  expect(one.pipeline?.cursor).toEqual({ stageId: "plan", state: "pending", input: null, activatedBy: null });
   const started = await patchPipeline(id, { action: "start" }, ports);
   expect(started.pipeline?.state).toBe("provisioning");
 });
