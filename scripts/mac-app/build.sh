@@ -30,7 +30,7 @@ for arch in arm64 x86_64; do
   fi
 done
 lipo -create "$stage/Delegatus-arm64" "$stage/Delegatus-x86_64" -output "$app/Contents/MacOS/Delegatus"
-lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/Delegatus"
+lipo "$app/Contents/MacOS/Delegatus" -verify_arch arm64 x86_64
 swiftc -swift-version 5 macos/Sources/Install.swift macos/Sources/Server.swift macos/Tests/CoreChecks.swift -o "$stage/core-checks"
 "$stage/core-checks"
 node scripts/mac-app/installer-checks.mjs "$app/Contents/Resources"
