@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { digest, validatePackage, verifiedBun } from "./manifest";
-import { intelIsTranslated, smokeStdio, smokeUserArguments } from "./smoke-platform.mjs";
+import { appSessionData, intelIsTranslated, smokeEnvironment, smokeStdio } from "./smoke-platform.mjs";
 
 describe("Mac runtime manifest", () => {
   const bytes = new TextEncoder().encode("archive fixture");
@@ -40,28 +40,48 @@ describe("Mac smoke fixture input", () => {
   });
 });
 
-describe("Fresh Mac smoke account context", () => {
-  const account = { uid: 502, user: "smoke-fixture", home: "/fixture/home" };
+describe("Mac smoke session environment", () => {
+  const session = { user: "runner-fixture", home: "/fixture/cases/h3" };
+  test("keeps server settings while the case home and fixed session values win", () => {
+    const environment = smokeEnvironment(session, { LLV_LANG: "uk", LLV_TOKEN: "fixture", HOME: "/foreign", PATH: "/foreign/bin", DELEGATUS_TELEMETRY: "1" });
+    expect(environment).toEqual({
+      LLV_LANG: "uk", LLV_TOKEN: "fixture",
+      HOME: session.home, USER: session.user, LOGNAME: session.user,
+      PATH: "/usr/bin:/bin:/usr/sbin:/sbin", DELEGATUS_TELEMETRY: "0",
+    });
+  });
+  test("inherits nothing from the driver's own environment", () => {
+    expect(Object.keys(smokeEnvironment(session)).sort()).toEqual(["DELEGATUS_TELEMETRY", "HOME", "LOGNAME", "PATH", "USER"]);
+  });
   test.each([
-    ["/fixture/Delegatus.app/Contents/MacOS/Delegatus", ["--evidence-dir", "/fixture/frames with spaces"]],
-    ["/fixture/private bun", ["/fixture/private cli", "--no-open"]],
-    ["/bin/launchctl", ["manageruid"]],
-  ])("joins the account context before dropping credentials for %s", (command, args) => {
-    const invocation = smokeUserArguments(account, command, args);
-    expect(invocation.slice(0, 9)).toEqual(["-n", "/bin/launchctl", "asuser", "502", "/usr/bin/sudo", "-n", "-u", account.user, "-H"]);
-    const env = invocation.indexOf("/usr/bin/env");
-    expect(invocation[env + 1]).toBe("-i");
-    expect(invocation).toContain(`HOME=${account.home}`);
-    expect(invocation).toContain("PATH=/usr/bin:/bin:/usr/sbin:/sbin");
-    expect(invocation.slice(-args.length - 1)).toEqual([command, ...args]);
+    { user: "", home: "/fixture/home" },
+    { user: "runner-fixture", home: "relative/home" },
+    { user: "runner-fixture", home: undefined },
+  ])("refuses a session without a user or an absolute home %#", context => {
+    expect(() => smokeEnvironment(context)).toThrow("Invalid smoke session context");
   });
-  test("retains server settings while account isolation wins over copied defaults", () => {
-    const invocation = smokeUserArguments(account, "/fixture/bun", [], { LLV_LANG: "uk", HOME: "/foreign", PATH: "/foreign/bin" });
-    const env = Object.fromEntries(invocation.slice(invocation.indexOf("-i") + 1, -1).map(entry => entry.split(/=([\s\S]*)/).slice(0, 2)));
-    expect(env).toMatchObject({ HOME: account.home, USER: account.user, LOGNAME: account.user, PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LLV_LANG: "uk" });
+});
+
+describe("Mac smoke app session data", () => {
+  test("names only the bundle's own preferences, restored windows and web data under the runner home", () => {
+    const paths = appSessionData("/fixture/runner", "org.delegatus.app");
+    expect(paths).toEqual([
+      "/fixture/runner/Library/Preferences/org.delegatus.app.plist",
+      "/fixture/runner/Library/Saved Application State/org.delegatus.app.savedState",
+      "/fixture/runner/Library/WebKit/org.delegatus.app",
+      "/fixture/runner/Library/Caches/org.delegatus.app",
+      "/fixture/runner/Library/HTTPStorages/org.delegatus.app",
+      "/fixture/runner/Library/HTTPStorages/org.delegatus.app.binarycookies",
+    ]);
   });
-  test.each([0, -1, 1.5, NaN, undefined])("refuses an invalid or privileged account UID: %s", uid => {
-    expect(() => smokeUserArguments({ ...account, uid }, "/usr/bin/true")).toThrow("Invalid smoke account context");
+  test.each([
+    ["relative", "org.delegatus.app"],
+    ["/fixture/runner", ""],
+    ["/fixture/runner", "../Library"],
+    ["/fixture/runner", "org/delegatus"],
+    ["/fixture/runner", "single"],
+  ])("refuses an owner that could reach beyond the bundle's data %#", (runnerHome, bundle) => {
+    expect(() => appSessionData(runnerHome, bundle)).toThrow("Invalid app session data owner");
   });
 });
 

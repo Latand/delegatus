@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 export function intelIsTranslated({ status, stdout = "", stderr = "" }) {
   if (status === 0) {
     const value = String(stdout).trim();
@@ -17,15 +19,32 @@ export function smokeStdio(input) {
   return [input === undefined ? "ignore" : "pipe", "pipe", "pipe"];
 }
 
-// asuser selects the bootstrap/audit context; sudo separately drops credentials.
-// Keep both steps for the fresh standard account, including its child servers.
-export function smokeUserArguments({ uid, user, home }, command, args = [], environment = {}) {
-  if (!Number.isSafeInteger(uid) || uid <= 0 || !user || !home.startsWith("/")) {
-    throw new Error("Invalid smoke account context");
+// Every process the smoke starts runs as the runner user, inside the runner's
+// one graphical session, so the app reaches the window server. Isolation is
+// the data: each case names its own fresh home and inherits nothing else.
+/** @returns {Record<string, string>} */
+export function smokeEnvironment({ user, home }, settings = {}) {
+  if (!user || typeof home !== "string" || !home.startsWith("/")) throw new Error("Invalid smoke session context");
+  return {
+    ...settings,
+    HOME: home, USER: user, LOGNAME: user,
+    PATH: "/usr/bin:/bin:/usr/sbin:/sbin", DELEGATUS_TELEMETRY: "0",
+  };
+}
+
+// AppKit and WebKit keep these under the session user's own home, whatever
+// HOME says. The smoke removes them before each launch so no case reads
+// preferences, restored windows or web data an earlier case left.
+export function appSessionData(runnerHome, bundle) {
+  if (typeof runnerHome !== "string" || !runnerHome.startsWith("/") || !/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(bundle ?? "")) {
+    throw new Error("Invalid app session data owner");
   }
-  return ["-n", "/bin/launchctl", "asuser", String(uid), "/usr/bin/sudo", "-n", "-u", user, "-H",
-    "/usr/bin/env", "-i", ...Object.entries(environment).map(([key, value]) => `${key}=${value}`),
-    `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`,
-    "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "DELEGATUS_TELEMETRY=0",
-    command, ...args];
+  return [
+    `Library/Preferences/${bundle}.plist`,
+    `Library/Saved Application State/${bundle}.savedState`,
+    `Library/WebKit/${bundle}`,
+    `Library/Caches/${bundle}`,
+    `Library/HTTPStorages/${bundle}`,
+    `Library/HTTPStorages/${bundle}.binarycookies`,
+  ].map(path => join(runnerHome, path));
 }

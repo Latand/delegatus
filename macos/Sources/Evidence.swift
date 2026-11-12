@@ -67,7 +67,11 @@ import WebKit
         // Screen Recording permission prompt.
         // A nested tracking loop can run before the menu window is published.
         // Keep the menu open through a bounded set of attempts in that loop.
+        // Each refusal names its guard (owner, layer, number, window-image,
+        // png-encoding, png-write); a repeated reason is logged once.
         var attempts = 0
+        var lastReason = ""
+        let menuLevel = Int(CGWindowLevelForKey(.popUpMenuWindow))
         let timer = Timer(fire: Date().addingTimeInterval(0.5), interval: 0.1, repeats: true) { timer in
             MainActor.assumeIsolated {
                 attempts += 1
@@ -79,16 +83,17 @@ import WebKit
                     }
                 }
                 let windows = (CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]]) ?? []
-                let menuWindow = windows.first { row in
-                    (row[kCGWindowOwnerPID as String] as? Int) == Int(getpid())
-                        && (row[kCGWindowLayer as String] as? Int ?? 0) > 0
-                        && (row[kCGWindowNumber as String] as? Int) != nil
-                }?[kCGWindowNumber as String] as? Int
-                guard let menuWindow else { self.log("CAPTURE failed \(name): window-lookup"); return }
-                captured = self.writeWindow(CGWindowID(menuWindow), to: destination, name: name)
+                switch MenuWindowLookup.select(windows, ownerPID: Int(getpid()), menuLevel: menuLevel) {
+                case .found(let menuWindow):
+                    captured = self.writeWindow(CGWindowID(menuWindow), to: destination, name: name)
+                case .refused(let reason):
+                    if reason != lastReason || attempts == 20 { self.log("CAPTURE failed \(name): \(reason) (attempt \(attempts))") }
+                    lastReason = reason
+                }
             }
         }
-        RunLoop.main.add(timer, forMode: .eventTracking)
+        // Menu tracking runs the main loop in event-tracking mode.
+        for mode in [RunLoop.Mode.common, .eventTracking] { RunLoop.main.add(timer, forMode: mode) }
         return timer
     }
     private func scheduleCapture(name: String, completion: (() -> Void)?, capture: @escaping () -> Void) {

@@ -145,7 +145,7 @@ jobs:
         with:
           name: mac-app-dmg
           path: ${{ runner.temp }}/mac-app
-      - name: Install and launch in a fresh standard account
+      - name: Install and launch in the runner's session with fresh data
         run: |
           test "$(uname -m)" = '${{ matrix.arch }}'
           cd "$RUNNER_TEMP/mac-app"

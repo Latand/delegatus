@@ -138,6 +138,26 @@ import Foundation
             let free = await Server.probe(home: home, environment: [:], install: probeInstall, address: address)
             expect(free == .free, "closed fixture is free")
         }
+        func refusal(_ result: MenuWindowLookup) -> String {
+            if case .refused(let reason) = result { return reason }
+            return ""
+        }
+        let menuRows: [[String: Any]] = [
+            ["kCGWindowOwnerPID": 7, "kCGWindowLayer": 0, "kCGWindowNumber": 10],
+            ["kCGWindowOwnerPID": 7, "kCGWindowLayer": 24, "kCGWindowNumber": 11],
+            ["kCGWindowOwnerPID": 8, "kCGWindowLayer": 101, "kCGWindowNumber": 12, "kCGWindowOwnerName": "Other"],
+            ["kCGWindowOwnerPID": 7, "kCGWindowLayer": 101, "kCGWindowNumber": 13],
+        ]
+        expect(MenuWindowLookup.select(menuRows, ownerPID: 7, menuLevel: 101) == .found(13), "menu capture takes the owned pop-up window, never the menu bar or another process")
+        let bridged: [[String: Any]] = [["kCGWindowOwnerPID": NSNumber(value: 7), "kCGWindowLayer": NSNumber(value: 101), "kCGWindowNumber": NSNumber(value: 5)]]
+        expect(MenuWindowLookup.select(bridged, ownerPID: 7, menuLevel: 101) == .found(5), "window-list numbers bridge from NSNumber")
+        let layerRefusal = refusal(MenuWindowLookup.select(Array(menuRows.prefix(3)), ownerPID: 7, menuLevel: 101))
+        expect(layerRefusal.hasPrefix("layer:") && layerRefusal.contains("0,24") && layerRefusal.contains("Other"), "menu capture names the layer guard, the owned layers and the foreign menu window")
+        let ownerRefusal = refusal(MenuWindowLookup.select([menuRows[2]], ownerPID: 7, menuLevel: 101))
+        expect(ownerRefusal.hasPrefix("owner:") && ownerRefusal.contains("Other"), "a foreign menu window is refused under the owner guard")
+        expect(refusal(MenuWindowLookup.select([], ownerPID: 7, menuLevel: 101)).hasPrefix("owner:"), "an empty window list refuses under the owner guard")
+        let unnumbered: [[String: Any]] = [["kCGWindowOwnerPID": 7, "kCGWindowLayer": 101]]
+        expect(refusal(MenuWindowLookup.select(unnumbered, ownerPID: 7, menuLevel: 101)).hasPrefix("number:"), "an owned menu window without a number refuses under the number guard")
         let timed = try await Server.run("/bin/sleep", ["30"], environment: [:], timeout: 0.1)
         expect(timed.0 != 0, "bounded child probe exits")
         print("Swift core checks: \(count) passed, 0 failed")
