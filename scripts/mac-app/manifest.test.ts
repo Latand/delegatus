@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { digest, validatePackage, verifiedBun } from "./manifest";
+import { intelIsTranslated } from "./smoke-platform.mjs";
 
 describe("Mac runtime manifest", () => {
   const bytes = new TextEncoder().encode("archive fixture");
@@ -28,5 +29,22 @@ describe("Mac runtime manifest", () => {
   });
   test("refuses integrity different from the publisher", () => {
     expect(() => validatePackage(valid, "2.0.0", revision, "sha512-different")).toThrow();
+  });
+});
+
+describe("Intel smoke architecture guard", () => {
+  test.each([
+    { status: 0, stdout: "0\n", stderr: "", translated: false },
+    { status: 1, stdout: "", stderr: "sysctl: unknown oid 'sysctl.proc_translated'\n", translated: false },
+    { status: 0, stdout: "1\n", stderr: "", translated: true },
+  ])("classifies documented translation probe result %#", ({ status, stdout, stderr, translated }) => {
+    expect(intelIsTranslated({ status, stdout, stderr })).toBe(translated);
+  });
+  test.each([
+    { status: 2, stdout: "", stderr: "permission denied" },
+    { status: 1, stdout: "", stderr: "sysctl: permission denied for sysctl.proc_translated" },
+    { status: 0, stdout: "unexpected\n", stderr: "" },
+  ])("refuses a genuine or malformed translation probe failure %#", result => {
+    expect(() => intelIsTranslated(result)).toThrow();
   });
 });

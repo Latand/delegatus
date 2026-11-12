@@ -21,9 +21,13 @@ cp -R macos/Resources/. "$app/Contents/Resources/"
 cp LICENSE "$app/Contents/Resources/LICENSE"
 printf APPL???? > "$app/Contents/PkgInfo"
 for arch in arm64 x86_64; do
-  cpu=()
-  if [ "$arch" = x86_64 ]; then cpu=(-Xllvm -mcpu=x86-64); fi
-  swiftc -swift-version 5 -O -target "$arch-apple-macos13.0" "${cpu[@]}" -framework AppKit -framework WebKit macos/Sources/*.swift -o "$stage/Delegatus-$arch"
+  if [ "$arch" = x86_64 ]; then
+    # Keep Intel code at the generic x86_64 baseline; the array-free branch
+    # also works with macOS's Bash 3.2 under `set -u`.
+    swiftc -swift-version 5 -O -target "$arch-apple-macos13.0" -Xllvm -mcpu=x86-64 -framework AppKit -framework WebKit macos/Sources/*.swift -o "$stage/Delegatus-$arch"
+  else
+    swiftc -swift-version 5 -O -target "$arch-apple-macos13.0" -framework AppKit -framework WebKit macos/Sources/*.swift -o "$stage/Delegatus-$arch"
+  fi
 done
 lipo -create "$stage/Delegatus-arm64" "$stage/Delegatus-x86_64" -output "$app/Contents/MacOS/Delegatus"
 lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/Delegatus"

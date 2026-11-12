@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, statSy
 import { dirname, join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
+import { intelIsTranslated } from "./smoke-platform.mjs";
 
 const [image, reportArg] = process.argv.slice(2);
 if (process.platform !== "darwin" || !image || !reportArg || process.env.CI !== "true") throw new Error("Usage on disposable macOS CI: node smoke.mjs DMG REPORT");
@@ -26,10 +27,6 @@ const visualCases = [
 ];
 let accountPassphrase = "";
 const accessKey = randomBytes(16).toString("hex");
-if (run("/usr/bin/uname", ["-m"]).trim() === "x86_64") {
-  assert.equal(process.arch, "x64", "Intel smoke driver runs as x86_64");
-  assert.equal(run("/usr/sbin/sysctl", ["-n", "sysctl.proc_translated"]).trim(), "0", "Intel smoke is native, not translated by Rosetta");
-}
 function redact(value) {
   return String(value).replaceAll(accountPassphrase || "\0", "[redacted]").replaceAll(home || "\0", "$HOME")
     .replaceAll(process.env.HOME || "\0", "$RUNNER_HOME")
@@ -134,6 +131,22 @@ function seedInstalledRelease(runtime) {
 }
 let exit = 0;
 try {
+  await check("intel-translation-probe", () => {
+    const machine = run("/usr/bin/uname", ["-m"]).trim();
+    if (machine !== "x86_64") return;
+    assert.equal(process.arch, "x64", "Intel smoke driver runs as x86_64");
+    let status = 0, stdout = "", stderr = "";
+    try {
+      stdout = execFileSync("/usr/sbin/sysctl", ["-n", "sysctl.proc_translated"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    } catch (error) {
+      status = error.status ?? -1;
+      stdout = error.stdout?.toString("utf8") ?? "";
+      stderr = error.stderr?.toString("utf8") ?? "";
+    }
+    commands.push({ command: "/usr/sbin/sysctl -n sysctl.proc_translated", exit: status });
+    assert.equal(intelIsTranslated({ status, stdout, stderr }), false,
+      "Intel smoke must run natively; an arm64 process under Rosetta is refused");
+  });
   await check("fresh-account", () => {
     try { run("id", [user]); } catch { /* expected absent */ }
     assert.throws(() => execFileSync("id", [user], { stdio: "ignore" }));
