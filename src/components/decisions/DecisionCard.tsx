@@ -331,6 +331,7 @@ export function DecisionRecord({ decision, onRetry, retrying = false, retryError
             {t(state === "no-orchestrator" ? "proto.delivery.sendNow" : "proto.delivery.retry")}
           </button>
         ) : null}
+        {decision.decision?.delivery.settlement ? <p data-decision-retired="" role="status" className="m-0 text-label text-secondary">{t(decision.decision.delivery.settlement.reason === "delivery-expired" ? "decisions.deliveryExpired" : "decisions.deliveryRetired")}</p> : null}
         {retryError ? <p role="alert" data-decision-retry-error="" className="m-0 min-w-0 text-label font-semibold text-danger">{t("decisions.retryFailed", { error: retryError })}</p> : null}
       </footer>
     </section>

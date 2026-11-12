@@ -139,8 +139,8 @@ function rowOf(entry: MobileAttentionEntry, ports: NeedsYouEvidencePorts, option
     : entry.kind === "pipeline" ? { pipelineId: entry.row.pipeline.id, ...(entry.row.pipeline.cursor?.stageId ? { stageId: entry.row.pipeline.cursor.stageId } : {}) }
     : entry.kind === "prototype" ? { reviewId: entry.notice.reviewId } : { decisionId: entry.decision.id };
   const facts = needsYouEvidence(entry, ports);
-  /* A seat's own question is answered, never hidden: it has no dismissal. */
-  const target: DismissalTarget | null = entry.kind === "update" ? null : entry.kind === "prototype" ? entry.notice.taskId === null || entry.notice.undelivered ? null : { kind: "prototype", taskId: entry.notice.taskId, reviewId: entry.notice.reviewId }
+  /* Every round has the same exact-round withdrawal target, including saved answers. */
+  const target: DismissalTarget | null = entry.kind === "update" ? null : entry.kind === "prototype" ? { kind: "prototype", taskId: entry.notice.taskId, reviewId: entry.notice.reviewId }
     : needsYouSubject(entry) as DismissalTarget;
   return { id: entry.id, kind: entry.kind === "conversation" ? entry.item.reason.kind : entry.kind === "pipeline" ? entry.row.pipeline.state === "needs_review" ? "lane-review" : "lane-decision" : entry.kind,
     title: clip(text.title, 90), line: clip(text.line, 400),

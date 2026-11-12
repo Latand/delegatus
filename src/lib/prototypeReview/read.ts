@@ -11,7 +11,7 @@ import { firstLineTitle } from "@/lib/tasks/helpers";
 import { loadTasksForList } from "@/lib/tasks/store";
 import { loadSeatRounds } from "./seatRounds";
 import type { OperatorDecisionView, OperatorDecisionsRead, PrototypeReviewNotice, PrototypeReviewRead, PrototypeMediaView, PrototypeReviewRound, PrototypeReviewSummary, PrototypeRoundRead, PrototypeRoundView } from "./types";
-import { currentPrototypeSummary, prototypeDeliveryPhase, prototypeReviewSummary, prototypeRoundMetadata, prototypeRoundsSuperseded, seatRoundNotice } from "./model";
+import { currentPrototypeSummary, prototypeDeliveryPhase, prototypeReviewSummary, prototypeRoundMetadata, prototypeRoundsSuperseded, prototypeWaitsOnOperator, seatRoundNotice } from "./model";
 export { prototypeReviewSummary, prototypeReviewNotices } from "./model";
 export function withPrototypeReviewSummaries<T extends BoardTask>(tasks: readonly T[], index: ReadonlyMap<string, AttentionDismissalV1> = prototypeDismissals(), now = Date.now()): Array<Omit<T, "prototypeReviews" | "prototypeReviewReplica"> & { prototypeReview?: PrototypeReviewSummary }> {
   return tasks.map(({ prototypeReviews, prototypeReviewReplica, ...task }) => {
@@ -22,7 +22,7 @@ export function withPrototypeReviewSummaries<T extends BoardTask>(tasks: readonl
     /* Only this installation drives a decision's delivery, so only its own rounds say how it goes. */
     const held = prototypeReviews?.at(-1)?.decision;
     return { ...task, prototypeReview: { ...current, ...(current.decision && held ? { decision: { ...current.decision, phase: prototypeDeliveryPhase(held.delivery, now) } } : {}),
-      ...(prototypeReviews ? { undelivered: prototypeReviews.filter(round => round.decision && prototypeDeliveryPhase(round.decision.delivery, now) === "attention").map(round => ({ reviewId: round.id, title: round.title, at: round.decision!.at })) } : {}),
+      ...(prototypeReviews ? { undelivered: prototypeReviews.filter(round => round.decision && !index.has(`prototype:${round.id}`) && prototypeDeliveryPhase(round.decision.delivery, now) === "attention").map(round => ({ reviewId: round.id, title: round.title, at: round.decision!.at })) } : {}),
       ...(record?.kind === "prototype" && record.taskId === task.id ? { waitingDismissal: { at: record.at, by: record.by } } : {}) } };
   });
 }
@@ -46,8 +46,8 @@ export function taskForResponse<T extends BoardTask>(request: { headers: Headers
 }
 /** A round a later decision retired names that decision's round; it stays in
     the history and can still be decided, but nothing waits on it. */
-function withSuperseded(rounds: PrototypeRoundView[], taskId: string): PrototypeRoundRead[] {
-  const superseded = prototypeRoundsSuperseded(rounds);
+function withSuperseded(rounds: PrototypeRoundView[], taskId: string | null): PrototypeRoundRead[] {
+  const superseded = taskId === null ? new Map<string, string>() : prototypeRoundsSuperseded(rounds);
   const index = prototypeDismissals();
   return rounds.map(round => {
     const record = index.get(`prototype:${round.id}`);
@@ -85,7 +85,7 @@ export function localRoundViews(stored: readonly PrototypeReviewRound[], taskId:
   return stored.map(round => {
     const metadata = prototypeRoundMetadata(round);
     const publicRound = metadata.decision && round.decision
-      ? { ...metadata, decision: { ...metadata.decision, delivery: { ...metadata.decision.delivery, phase: prototypeDeliveryPhase(round.decision.delivery, now) } } } : metadata;
+      ? { ...metadata, decision: { ...metadata.decision, delivery: { ...metadata.decision.delivery, phase: prototypeDeliveryPhase(round.decision.delivery, now), ...(round.decision.delivery.settlement ? { settlement: round.decision.delivery.settlement } : {}) } } } : metadata;
     const mediaView = (media: PrototypeMediaView) => {
       const image = media.mime.startsWith("image/");
       const available = !round.mediaRemovedAt && (image || taskId !== null) && held(round.id,media);
@@ -103,8 +103,8 @@ export function localRoundViews(stored: readonly PrototypeReviewRound[], taskId:
     unanswered one waits: a seat round answers one question of its own and
     retires no other (docs/design/operator-decision-forms.md §2.2). */
 export function readSeatRounds(project: string): PrototypeReviewRead {
-  const rounds = localRoundViews(loadSeatRounds(project), null);
-  const waiting = rounds.filter(round => !round.decision);
+  const rounds = withSuperseded(localRoundViews(loadSeatRounds(project), null), null);
+  const waiting = rounds.filter(round => !round.decision && !round.hidden);
   return { taskId: null, rounds, waitingReviewId: waiting.at(-1)?.id ?? null };
 }
 
@@ -119,12 +119,13 @@ export function operatorDecisions(project: string, tasks: readonly BoardTask[] =
     if (!prototypeReviewSummary(rounds)?.waitingReviewId
       && !rounds.some(round => round.decision && prototypeDeliveryPhase(round.decision.delivery, now) === "attention")) return [];
     const read = readPrototypeReviews(task);
-    return read.rounds.filter(round => round.id === read.waitingReviewId || round.decision?.delivery.phase === "attention")
+    return read.rounds.filter(round => !round.hidden && (round.id === read.waitingReviewId && prototypeWaitsOnOperator(read.summary, task) || round.decision?.delivery.phase === "attention"))
       .map(round => ({ ...round, taskTitle: firstLineTitle(task.text) }));
   });
-  const fromSeat = localRoundViews(loadSeatRounds(key).filter(round => !round.decision
+  const index = prototypeDismissals();
+  const fromSeat = localRoundViews(loadSeatRounds(key).filter(round => !index.has(`prototype:${round.id}`) && (!round.decision
     || prototypeDeliveryPhase(round.decision.delivery, Date.now()) === "attention"
-    || (round.nativeAssociation && nativeAssociationDecisionApproves(round.decision) && nativeAssociationCurrent(round.nativeAssociation))), null);
+    || (round.nativeAssociation && nativeAssociationDecisionApproves(round.decision) && nativeAssociationCurrent(round.nativeAssociation)))), null);
   return { project: key, decisions: [...fromTasks, ...fromSeat].sort((a, b) => a.createdAt.localeCompare(b.createdAt)) };
 }
 
@@ -140,7 +141,8 @@ export function operatorDecisionRound(project: string, reviewId: string, tasks: 
 
 /** The seat's waiting forms and undelivered answers, beside the tasks' rounds. */
 export function seatDecisionNotices(project?: string): PrototypeReviewNotice[] {
-  try { return loadSeatRounds(project).filter(round => !round.decision || prototypeDeliveryPhase(round.decision.delivery, Date.now()) === "attention")
+  try { const index = prototypeDismissals();
+    return loadSeatRounds(project).filter(round => !index.has(`prototype:${round.id}`) && (!round.decision || prototypeDeliveryPhase(round.decision.delivery, Date.now()) === "attention"))
     .map(round => {
       const project = canonicalProject(round.project);
       return { ...seatRoundNotice({ ...round, project }), ...(round.decision ? { undelivered: true as const } : {}) };

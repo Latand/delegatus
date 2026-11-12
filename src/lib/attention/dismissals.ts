@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
+import { findSeatRound } from "@/lib/prototypeReview/seatRounds";
 import { currentPrototypeSummary, prototypeReviewSummary } from "@/lib/prototypeReview/model";
 import { redactMonitorText } from "@/lib/monitor/redact";
 
@@ -62,7 +63,7 @@ export interface AttentionDismissalV1 {
       round key prefixed with `prototype:`, or a seat's escalation of one
       routed wait prefixed with `escalation:` (docs/design/attention-auto-resolve.md). */
   kind?: "conversation" | "prototype" | "escalation";
-  taskId?: string;
+  taskId?: string | null;
   note?: string;
   subject: string;
   conversationId: string | null;
@@ -122,7 +123,7 @@ function parseRecord(value: unknown): AttentionDismissalV1 | null {
       ...(typeof record.operationKey === "string" && record.operationKey ? { operationKey: record.operationKey } : {}) };
   }
   return {
-    ...(record.kind === "prototype" ? { kind: "prototype" as const, taskId: typeof record.taskId === "string" ? record.taskId : undefined } : {}),
+    ...(record.kind === "prototype" ? { kind: "prototype" as const, taskId: typeof record.taskId === "string" || record.taskId === null ? record.taskId : undefined } : {}),
     ...(typeof record.note === "string" ? { note: record.note } : {}),
     subject: record.subject,
     conversationId: nullableString(record.conversationId) ? record.conversationId : null,
@@ -323,6 +324,8 @@ export interface DismissalPorts {
 }
 
 export interface DismissOptions {
+  /** Recheck caller authority after asynchronous store preparation and before writing. */
+  assertCurrent?: () => void;
   undo?: boolean;
   reason?: string;
   project?: string;
@@ -403,7 +406,7 @@ export function parseDismissalTarget(value: unknown, options: { allowSubjects: b
     case "pipeline":
       return parsePipeline(target);
     case "prototype":
-      return { kind: "prototype", taskId: requiredId(target.taskId, "taskId"), reviewId: requiredId(target.reviewId, "reviewId") };
+      return { kind: "prototype", taskId: target.taskId === null ? null : requiredId(target.taskId, "taskId"), reviewId: requiredId(target.reviewId, "reviewId") };
     case "report":
       return parseSubject(target) as DismissalTarget;
     case "update":
@@ -476,6 +479,7 @@ function subjectsOf(target: DismissalTarget, ports: DismissalPorts): Array<Dismi
 export async function dismissAttention(target: DismissalTarget, by: DismissedBy, options: DismissOptions = {}): Promise<DismissalOutcome> {
   const note = dismissalNote(options.reason);
   const ports = options.ports ?? await productionDismissalPorts();
+  options.assertCurrent?.();
   const undo = options.undo === true;
   const now = ports.now();
   const at = now.toISOString();
@@ -546,16 +550,18 @@ export async function dismissAttention(target: DismissalTarget, by: DismissedBy,
   for (const request of requested) {
     if (request.kind !== "prototype" || seen.has(`prototype:${request.reviewId}`)) continue;
     seen.add(`prototype:${request.reviewId}`);
-    const task = ports.task(request.taskId);
-    if (!task) throw new DismissalError("TASK_NOT_FOUND", "prototype task not found", 404);
-    const summary = currentPrototypeSummary(task.prototypeReview ?? prototypeReviewSummary(task.prototypeReviews ?? []) ?? task.prototypeReviewReplica?.summary);
+    const task = request.taskId === null ? null : ports.task(request.taskId);
+    const round = request.taskId === null ? findSeatRound(request.reviewId)
+      : (task?.prototypeReviews ?? task?.prototypeReviewReplica?.rounds ?? []).find(round => round.id === request.reviewId);
+    if (request.taskId === null ? !round : !task) throw new DismissalError("REVIEW_NOT_FOUND", "prototype review not found", 404);
+    const summary = task ? currentPrototypeSummary(task.prototypeReview ?? prototypeReviewSummary(task.prototypeReviews ?? []) ?? task.prototypeReviewReplica?.summary) : undefined;
     const answer: DismissalSubject = { ...request };
     const subject = `prototype:${request.reviewId}`;
     const result = mutate((records) => {
-      const held = records.find(record => record.subject === subject && record.taskId === task.id);
+      const held = records.find(record => record.subject === subject && record.taskId === request.taskId);
       if (undo) return held ? { records: records.filter(record => record !== held), result: true } : { result: false };
-      if (summary?.waitingReviewId !== request.reviewId || held) return { result: false };
-      return { records: [...records, { kind: "prototype", taskId: task.id, subject, conversationId: null, path: null, at, by, reason: null, reasonId: null,
+      if ((!round && summary?.waitingReviewId !== request.reviewId) || held) return { result: false };
+      return { records: [...records, { kind: "prototype", taskId: request.taskId, subject, conversationId: null, path: null, at, by, reason: null, reasonId: null,
         ...(note ? { note } : {}), ...(options.operationKey ? { operationKey: options.operationKey } : {}) }], result: true };
     }, now);
     (result ? dismissed : alreadyClear).push(answer);
