@@ -11,6 +11,7 @@ import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from 
 import type { FileEntry } from "@/lib/types";
 
 import { runReaperCycle, terminalizeStaleUndeliverableHeldDeliveries } from "./reaperRuntime";
+import { readReaperStateDocument } from "@/lib/reaperState";
 
 const originalStateDir = process.env.LLV_STATE_DIR;
 const originalEnabled = process.env.LLV_REAPER_ENABLED;
@@ -84,10 +85,7 @@ test("a sticky owner-authored verdict prevents later full transcript rescans (is
       now: now + 1_000,
     });
 
-    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
-      scannedAt?: Record<string, number>;
-      userAuthoredPaths?: Record<string, true>;
-    };
+    const state = readReaperStateDocument();
     expect(state.userAuthoredPaths?.[pathname]).toBe(true);
     expect(state.scannedAt?.[pathname]).toBeUndefined();
   } finally {
