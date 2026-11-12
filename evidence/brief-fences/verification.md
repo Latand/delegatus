@@ -193,3 +193,41 @@ The initial campaign exited 1, with 153 passes, 16 failures and 1,213 expectatio
 The privacy command for each whole-file scan is `bun scripts/privacy-publication-gate.ts --require-known-values --base origin/main --paths <listed paths>`, with `LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE=scripts/privacy-known-value-fingerprints.json` and `LLV_PRIVACY_OCR_LANGUAGES=eng+ukr`. The final report receives its own whole-file scan; commit-hook and post-commit `bun run privacy:check` receipts are included in the stage handoff. The controller owns remote publication, PR creation and its publication gates; the PR body must retain `Closes #3916`.
 
 Verification evidence read-back: 2026-11-12T09:35:20Z. This documentation-only handoff retains the checked code and configuration.
+
+
+## Publication refusal repair
+
+The publication of the accepted `820b17d7` tree was refused on November 12, 2026: privacy, types and lint passed; touched tests reported six new failures, 25 pre-existing failures, two removed/skipped cases and two flaky cases. The controller retained a truncated output tail without the six new failure names. Its refused operation did not publish the branch. The focused nine-file observations above remain historical evidence for that selection, and do not establish a passing publication gate.
+
+This repair fetched main at `2614b079b3` and merged it with the normal two-parent commit `563cd13e92`. There were no conflicts. Both `bad7b57d` and fetched main remain ancestors; all 14 accepted feature files match the accepted tree byte-for-byte. The merge adds main's seat SQLite migration. The normal commit hook checked staged whitespace and 37 TypeScript files, exiting 0 with zero introduced lint errors.
+
+Checks used fresh HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and TMPDIR per command, native Git first in PATH, a closed loopback control URL and the identical installed dependency graph. They ran only in scratch exports. `GATE` is the installed controller-supplied wrapper and `ROOT` is the stage-owned `brief-publication-refusal` scratch directory. Every recorded wrapper received exactly one terminal `wait_for_check` reconciliation. The actual child exit and full output were retained separately from the wrapper's exit.
+
+```sh
+LLV_OWNED_RUN_TIMEOUT_MS=1200000 bash "$GATE" --record "$TMPDIR/refusal-recover.log" bash "$ROOT/recover.sh"
+LLV_OWNED_RUN_TIMEOUT_MS=2400000 bash "$GATE" --record "$TMPDIR/refusal-full-publication.log" bash "$ROOT/run.sh" gate full-publication bun scripts/local-gate.ts pre-push
+LLV_OWNED_RUN_TIMEOUT_MS=1200000 bash "$GATE" --record "$TMPDIR/refusal-targeted.log" bash "$ROOT/targeted.sh"
+```
+
+The recovery script invokes `bun run test` for the settlement and MCP server files below in sequence. The targeted script invokes the provider-reset and busy-route files on head and main, one file per fresh process. The full publication procedure is unmodified and runs without a push. Its code inputs are the committed merged tree. Outer execution allowances retain cleanup room; the project's own file and test-run budgets remain unchanged.
+
+| Command | Tree | Actual exit | Counts |
+| --- | --- | ---: | --- |
+| `bun run test src/lib/pipelines/engine.settlement.test.ts` | merged head | 0 | 121 pass, 0 fail, 1,016 expectations |
+| `bun run test src/lib/mcp/server.test.ts` | merged head | 0 | 103 pass, 0 fail, 2,672 expectations |
+| `bun run test src/lib/pipelines/engine.providerReset.part3.test.ts` | merged head | 0 | 27 pass, 0 fail, 177 expectations |
+| Same provider-reset command | main | 0 | 27 pass, 0 fail, 177 expectations |
+| `bun run test src/app/api/pipelines/route.busy.test.ts` | merged head | 1 | 0 pass, 1 fail, 1 between-tests error before collection |
+| Same busy-route command | main | 1 | 0 pass, 1 fail, same fixture error before collection |
+| `bun scripts/local-gate.ts pre-push` | merged head | 1 | Complete procedure failed; no push attempted |
+| Publication privacy phase | merged head | 0 | Zero findings |
+| Publication types phase (`bunx tsc --noEmit`) | merged head | 0 | Zero diagnostics; 415 seconds |
+| Publication eslint phase | merged head | 0 | Zero introduced errors; 13 seconds |
+| Publication touched-test phase | merged head | 1 | 83 selected paths; head budget expired with 65 complete |
+| Publication Linux backend and Linux tests | merged head | unjudged | Both stopped after touched tests failed |
+
+The hook failed before it could produce a complete head/base comparison. Several files hit runner deadlines; late files were interrupted when the shared 15-minute head-run budget expired. The busy-route file produced no JUnit report. Its direct head/base runs both fail while creating the caller transcript because the effective fixture transcript directory is absent. The provider-reset file's 26 assertions that failed in the concurrent hook sample all pass in its separate complete-file head and base runs. These observations do not establish that every remaining hook failure is inherited or fixed.
+
+The hook also printed surviving-owned-process diagnostics. A subsequent read of all 23 exact recorded process/start identities found none still alive; zero processes were stopped by this repair. This reconciles the reported identities after terminal cleanup and does not turn the failed gate into a pass.
+
+The unchanged pre-push procedure remains red. This repair has not established publication acceptance. Finishing it requires a separate investigation of the shared test-runner budget/diagnostics and inherited fixture setup; no gate, hook, timeout policy or accepted feature file was changed to obtain a pass. Raw procedures, manifests, source preservation proof, full logs, command exits, terminal receipts and process-identity reconciliation are retained under the stage evidence directory `brief-publication-refusal/`. No performance gain is claimed.
