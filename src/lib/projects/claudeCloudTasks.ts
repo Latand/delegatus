@@ -246,7 +246,7 @@ export async function prepareClaudeCloudTask(input: PrepareCloudEnvironmentInput
     }
     if (task.enabled !== true || connectors(task) || !sameRepo(task, repository)) throw new ClaudeTaskError("task_invalid");
     await guard();
-    if (setClaudeCloudTaskFor(project, accountId, taskId, replacing) !== taskId) {
+    if (replacing !== taskId && setClaudeCloudTaskFor(project, accountId, taskId, replacing) !== taskId) {
       await save({ state: "preparing", code: "binding_busy", retryAt: now() + 2000 }); return result("binding_busy");
     }
     await save({ taskId, state: "ready", code: null, status: undefined, validatedAt: now(), retryAt: 0, retries: 0, create: { intent: row.create.intent } });

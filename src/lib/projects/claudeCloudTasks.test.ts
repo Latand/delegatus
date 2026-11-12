@@ -278,12 +278,13 @@ test("a known creation id survives a failed repair and a restart even when the l
 });
 
 
-test("an operator binding change during readiness persistence cannot pair an old task with a new fingerprint", async () => {
+test.each([false, true])("an operator binding change cannot pair an old task with a new fingerprint (bound: %s)", async prebound => {
   const f = fixture();
+  if (prebound) setClaudeCloudTasks(f.input.project, [{ accountId: "default", taskId: "previous-choice" }]);
   let changed = false;
   const provider = { ...f.provider, identity: async (account: Parameters<typeof f.provider.identity>[0]) => {
     const identity = await f.provider.identity(account);
-    if (!changed && claudeCloudTasks(f.input.project).length) {
+    if (!changed && claudeCloudTasks(f.input.project).length && (!prebound || f.fake.calls.some(call => call.path.endsWith("/previous-choice")))) {
       changed = true;
       setClaudeCloudTasks(f.input.project, [{ accountId: "default", taskId: "operator-choice" }]);
     }
@@ -291,9 +292,9 @@ test("an operator binding change during readiness persistence cannot pair an old
   } };
   expect(await prepareClaudeCloudTask(f.input, provider)).toMatchObject({ state: "pending", reason: "Claude task binding changed; retrying" });
   expect(claudeCloudTasks(f.input.project)).toEqual([{ accountId: "default", taskId: "operator-choice" }]);
-  expect(f.posts()).toHaveLength(1);
+  expect(f.posts()).toHaveLength(prebound ? 0 : 1);
   expect(await f.prepare()).toMatchObject({ state: "ready", environmentId: "operator-choice", selection: JSON.stringify("operator-choice") });
-  expect(f.posts()).toHaveLength(1);
+  expect(f.posts()).toHaveLength(prebound ? 0 : 1);
 });
 
 
