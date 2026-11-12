@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { RuntimeImageStore } from "../runtimeImageStore";
 
-const [root, maxBytesValue, tag, readyFile, startFile, writerLockWaitValue, publicationMode, controls] = process.argv.slice(2);
+const [root, maxBytesValue, tag, readyFile, startFile, writerLockWaitValue, publicationMode, controls, clockValue] = process.argv.slice(2);
 if (!root || !maxBytesValue || !tag || !readyFile || !startFile) process.exit(64);
 
 const header = Buffer.from(
@@ -70,10 +70,33 @@ if (publicationMode === "maintenance" && controls) {
   // with its descriptor open while a peer scans the acquisition queue.
   const writeFile = fs.writeFileSync;
   const rename = fs.renameSync;
+  if (publicationMode === "delayed-gate-head") {
+    const remove = fs.rmSync;
+    let observedForeignRemoval = false;
+    fs.rmSync = (file, options) => {
+      const filename = String(file);
+      let gateOwner: { pid?: number } | null = null;
+      if (path.basename(filename) === ".writer-lock-gate") {
+        try {
+          const stat = fs.lstatSync(filename);
+          const ownerFile = stat.isDirectory() ? path.join(filename, "owner.json") : filename;
+          gateOwner = JSON.parse(fs.readFileSync(ownerFile, "utf8")) as { pid?: number };
+        } catch { /* An empty gate is the publication race under test. */ }
+      }
+      const result = remove(file, options);
+      if (!observedForeignRemoval && path.basename(filename) === ".writer-lock-gate"
+        && (!gateOwner || gateOwner.pid !== process.pid)) {
+        observedForeignRemoval = true;
+        writeFile(path.join(controls, "gate-retired"), "ready");
+        waitForRelease(path.join(controls, "gate-removal-release"));
+      }
+      return result;
+    };
+  }
   fs.renameSync = (from, to) => {
     rename(from, to);
     if (path.dirname(String(to)).endsWith(".writer-lock-gate.queue")) {
-      writeFile(path.join(controls, "ticket-published"), "ready");
+      writeFile(path.join(controls, "ticket-published"), String(to));
     }
   };
   let paused = false;
@@ -102,6 +125,7 @@ try {
   new RuntimeImageStore(root, {
     maxBytes: Number(maxBytesValue),
     ...(writerLockWaitValue ? { writerLockWaitMs: Number(writerLockWaitValue) } : {}),
+    ...(clockValue ? { now: () => Number(clockValue) } : {}),
   }).putMany([{
     base64: data.toString("base64"),
     mime: "image/png",

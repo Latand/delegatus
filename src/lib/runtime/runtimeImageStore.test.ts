@@ -19,11 +19,11 @@ import {
 
 const WRITER_FIXTURE = path.join(import.meta.dir, "fixtures", "runtimeImageStoreWriter.ts");
 
-function imageWriter(root: string, controls: string, tag: string, maxBytes: number, publicationMode?: string) {
+function imageWriter(root: string, controls: string, tag: string, maxBytes: number, publicationMode?: string, clockValue?: number) {
   const child = Bun.spawn([
     process.execPath, WRITER_FIXTURE, root, String(maxBytes), tag,
     path.join(controls, `ready-${tag}`), path.join(controls, "start"), "",
-    ...(publicationMode ? [publicationMode, controls] : []),
+    ...(publicationMode ? [publicationMode, controls, ...(clockValue ? [String(clockValue)] : [])] : []),
   ], { stdout: "pipe", stderr: "pipe" });
   // Drain diagnostics while the writer runs, including unexpected refusals.
   const result = Promise.all([
@@ -572,26 +572,47 @@ test("a queued head cannot remove a live gate owner during gate publication", as
   const root = sandbox();
   const controls = sandbox();
   const maxBytes = 4 * 1024 * 1024 + 128;
-  const earlier = imageWriter(root, controls, "a", maxBytes, "partial");
+  const earlier = imageWriter(root, controls, "a", maxBytes, "delayed-gate-head", 1_000);
   const writers = [earlier];
   fs.writeFileSync(path.join(controls, "start"), "go");
   try {
     await writerMilestone(path.join(controls, "publication-paused"), earlier);
-    // Ensure the held ticket name sorts ahead of the next writer's ticket.
-    await Bun.sleep(20);
-    const ownerPublisher = imageWriter(root, controls, "b", maxBytes, "gate-owner");
+    // Fixed clocks make the held ticket's earlier queue position independent
+    // of process scheduling and timestamp resolution.
+    const ownerPublisher = imageWriter(root, controls, "b", maxBytes, "gate-owner", 2_000);
     writers.push(ownerPublisher);
     await writerMilestone(path.join(controls, "gate-owner-paused"), ownerPublisher);
+    expect(earlier.child.exitCode).toBeNull();
+    expect(ownerPublisher.child.exitCode).toBeNull();
+
+    const queued = fs.readdirSync(path.join(root, ".writer-lock-gate.queue"));
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toContain(`0000000000002000-${ownerPublisher.child.pid}-`);
 
     fs.writeFileSync(path.join(controls, "publication-release"), "go");
     await writerMilestone(path.join(controls, "ticket-published"), earlier);
-    const tickets = fs.readdirSync(path.join(root, ".writer-lock-gate.queue")).sort();
-    expect(tickets[0]).toContain(`-${earlier.child.pid}-`);
+    expect(fs.readFileSync(path.join(controls, "ticket-published"), "utf8"))
+      .toContain("0000000000001000-");
 
-    // The earlier ticket becomes the head while its peer is held exactly at
-    // the point where the gate owner becomes visible.
-    fs.writeFileSync(path.join(controls, "gate-owner-release"), "go");
-    const results = await Promise.all(writers.map(writer => writer.result));
+    // Let the earlier head inspect the held publication. On the directory
+    // implementation this reaches the exact empty-gate removal; keep the
+    // second process at its owner write until that removal is observed.
+    while (!fs.existsSync(path.join(controls, "gate-retired")) && earlier.child.exitCode === null) await Bun.sleep(2);
+    const retiredGate = fs.existsSync(path.join(controls, "gate-retired"));
+    let results: Array<Awaited<ImageWriter["result"]>>;
+    if (retiredGate) {
+      expect(fs.existsSync(path.join(root, ".writer-lock-gate"))).toBe(false);
+      expect(ownerPublisher.child.exitCode).toBeNull();
+      fs.writeFileSync(path.join(controls, "gate-owner-release"), "go");
+      const ownerResult = await ownerPublisher.result;
+      fs.writeFileSync(path.join(controls, "gate-removal-release"), "go");
+      results = [await earlier.result, ownerResult];
+    } else {
+      expect(await earlier.result).toEqual({ exit: 0, stdout: "", stderr: "" });
+      expect(ownerPublisher.child.exitCode).toBeNull();
+      fs.writeFileSync(path.join(controls, "gate-owner-release"), "go");
+      results = await Promise.all(writers.map(writer => writer.result));
+    }
     expect(results.map(result => result.exit).sort(), JSON.stringify(results)).toEqual([0, 2]);
     expect(results).toEqual(results.map(result => ({ ...result, stdout: "", stderr: "" })));
     const blobs = fs.readdirSync(root).filter(name => name.endsWith(".png"));
@@ -603,6 +624,7 @@ test("a queued head cannot remove a live gate owner during gate publication", as
   } finally {
     fs.writeFileSync(path.join(controls, "publication-release"), "go");
     fs.writeFileSync(path.join(controls, "gate-owner-release"), "go");
+    fs.writeFileSync(path.join(controls, "gate-removal-release"), "go");
     await stopImageWriters(writers);
   }
 }, 20_000);
