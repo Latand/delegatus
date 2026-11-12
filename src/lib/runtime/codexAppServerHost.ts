@@ -1,3 +1,5 @@
+import { assertReleasedHostEventLedger } from "./hostEventWindow";
+import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
 import { heapAttribution } from "@/lib/heapAttribution";
 import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "./engineHost";
 import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
@@ -1353,6 +1355,30 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private readonly subscribers = new Set<Subscriber>();
   /** The newest events (HOST_EVENT_WINDOW); older ones are in the ledger. */
   private readonly events: RuntimeEvent[] = [];
+  private eventWindowReleased = false;
+  private eventWindowRevision = 0;
+
+  releaseIdleEventWindow(canRelease: () => boolean): Promise<boolean> {
+    const transcriptPath = this.identity.path;
+    if (!transcriptPath) return Promise.resolve(false);
+    return releaseIdleHostEventWindow({
+      events: this.events,
+      revision: () => this.eventWindowRevision,
+      transcriptPath,
+      eligible: () => this.identity.path === transcriptPath && !this.dead && !this.releasing && !this.released
+        && !(this.activeTurnId !== null || this.engineStatus !== "idle" || this.restoredHistoryHeld || this.realtimeSessionId !== null) && canRelease(),
+      onRelease: () => { this.eventWindowReleased = true; },
+    });
+  }
+
+  private refillEventWindow(): void {
+    if (!this.eventWindowReleased) return;
+    const stored = this.storedEvents();
+    assertReleasedHostEventLedger(this.events, stored);
+    this.events.push(...stored.slice(-HOST_EVENT_WINDOW));
+    this.eventWindowReleased = false;
+  }
+
   /** Newest turn-started and turn-ended events, beyond the event window. */
   private readonly turnBoundaries: TurnBoundary[] = [];
   /** Adoption reconciles the thread against the whole ledger it restored. */
@@ -1895,6 +1921,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   attach(afterSeq: number): AsyncIterable<RuntimeEvent> {
+    this.eventWindowRevision += 1;
+    this.refillEventWindow();
     return attachRuntimeEvents(afterSeq, {
       window: () => this.events,
       ledger: () => this.storedEvents(),
@@ -2143,7 +2171,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private nativeQueueEventHistory(): CodexDeliveryHistoryResult {
     if (!this.identity.path) return { state: "unknown", reason: "identity" };
     const turns: Extract<CodexDeliveryHistoryResult, { state: "observed" }>["turns"] = [];
-    for (const event of this.events.slice(-NATIVE_QUEUE_EVENT_PROOF_LIMIT).reverse()) {
+    for (const event of (this.eventWindowReleased ? this.storedEvents() : this.events).slice(-NATIVE_QUEUE_EVENT_PROOF_LIMIT).reverse()) {
       if (event.kind !== "item" || event.phase !== "completed" || !event.turnId) continue;
       if (event.codexItemIdentity?.threadId !== this.identity.threadId || event.codexItemIdentity.turnId !== event.turnId) continue;
       const item = record(event.item);
@@ -3053,6 +3081,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       throw new Error("A valid WebRTC SDP offer is required");
     }
     if (this.pendingRealtimeStart) throw new Error("A realtime session is already starting");
+    const realtimeContext = selectRealtimeContext(this.eventWindowReleased ? this.storedEvents() : this.events);
     /* A new call owns the failure slot: the previous call's reason must never
        be reported against this one. */
     this.realtimeFailure = null;
@@ -3075,7 +3104,6 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     this.pendingRealtimeStart = pendingStart;
     void answer.catch(() => undefined);
 
-    const realtimeContext = selectRealtimeContext(this.events);
     console.info("[realtime context] selected", {
       providerStartupContext: true,
       personaVariant: persona.variant,
@@ -3940,6 +3968,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     const sequenced = { ...event, seq: nextCursor } as RuntimeEvent;
     if (sequenced.kind === "item") this.observeViewerMcp(sequenced);
     try {
+      this.refillEventWindow();
       this.eventStore.append(this.identity.threadId, sequenced);
     } catch (error) {
       this.ledgerFailed = true;
@@ -3947,6 +3976,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       this.failWithoutLedger(new Error(`runtime event ledger failed: ${safeError(error)}`));
       return;
     }
+    this.eventWindowRevision += 1;
     this.events.push(sequenced);
     this.rememberTurnBoundary(sequenced);
     if (!this.restoredHistoryHeld) trimHostEventWindow(this.events);
@@ -4831,6 +4861,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private acceptNotification(method: string, params: JsonObject, reconcileBufferedLifecycle = false, receivedAt?: string): void {
+    if (method.startsWith("turn/") || method.startsWith("item/")) this.refillEventWindow();
     const accountingAt = reconcileBufferedLifecycle ? undefined : receivedAt ?? new Date().toISOString();
     /* #1629: the canonical transcript. These are the app-server's own
        notifications, so they survive a data-channel drop and are what the

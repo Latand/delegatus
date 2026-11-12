@@ -33,6 +33,21 @@ export function hostEventWindowOf(events: readonly RuntimeEvent[]): RuntimeEvent
   return events.slice(-HOST_EVENT_WINDOW);
 }
 
+// A released payload array still remembers the sequence its ledger owes.
+const releasedWindowTails = new WeakMap<readonly RuntimeEvent[], number>();
+
+export function releaseHostEventWindow(events: RuntimeEvent[]): void {
+  releasedWindowTails.set(events, events.at(-1)?.seq ?? releasedWindowTails.get(events) ?? 0);
+  events.length = 0;
+}
+
+/** A shortened or missing ledger cannot replace a released window. Leave
+ * it released so a later reader can retry after the ledger is available. */
+export function assertReleasedHostEventLedger(window: readonly RuntimeEvent[], ledger: readonly RuntimeEvent[]): void {
+  const tail = releasedWindowTails.get(window) ?? 0;
+  if ((ledger.at(-1)?.seq ?? 0) < tail) throw new RuntimeReplayGapError(0, tail);
+}
+
 /**
  * Every event after `afterSeq`: the in-memory window, preceded by the ledger's
  * events older than it when the window begins later. The ledger is read only
@@ -45,7 +60,14 @@ export function runtimeEventsAfter(
 ): RuntimeEvent[] {
   const newer = window.filter(event => event.seq > afterSeq);
   const first = window[0]?.seq;
-  if (first === undefined || afterSeq + 1 >= first) return newer;
+  if (first === undefined) {
+    const available = ledger().filter(event => event.seq > afterSeq);
+    if (available[0] && available[0].seq > afterSeq + 1) throw new RuntimeReplayGapError(afterSeq, available[0].seq);
+    const tail = releasedWindowTails.get(window) ?? 0;
+    if ((available.at(-1)?.seq ?? afterSeq) < tail) throw new RuntimeReplayGapError(afterSeq, tail);
+    return available;
+  }
+  if (afterSeq + 1 >= first) return newer;
   const older = ledger().filter(event => event.seq > afterSeq && event.seq < first);
   const available = older[0]?.seq ?? first;
   if (afterSeq + 1 < available) throw new RuntimeReplayGapError(afterSeq, available);

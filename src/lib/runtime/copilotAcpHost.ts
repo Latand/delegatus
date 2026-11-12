@@ -1,3 +1,5 @@
+import { assertReleasedHostEventLedger } from "./hostEventWindow";
+import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
 import { heapAttribution } from "@/lib/heapAttribution";
 import { hostExitProcess, observeHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
@@ -325,6 +327,29 @@ export class CopilotAcpHost implements EngineHost {
 
   private readonly subscribers = new Set<Subscriber>();
   private readonly events: RuntimeEvent[] = [];
+  private eventWindowReleased = false;
+  private eventWindowRevision = 0;
+
+  releaseIdleEventWindow(canRelease: () => boolean): Promise<boolean> {
+    const transcriptPath = this.identity.path;
+    return releaseIdleHostEventWindow({
+      events: this.events,
+      revision: () => this.eventWindowRevision,
+      transcriptPath,
+      eligible: () => this.identity.path === transcriptPath && !this.dead && !this.releasing && !this.released
+        && !(this.running !== null) && canRelease(),
+      onRelease: () => { this.eventWindowReleased = true; },
+    });
+  }
+
+  private refillEventWindow(): void {
+    if (!this.eventWindowReleased) return;
+    const stored = this.eventStore.load(this.identity.sessionId);
+    assertReleasedHostEventLedger(this.events, stored);
+    this.events.push(...hostEventWindowOf(stored));
+    this.eventWindowReleased = false;
+  }
+
   private readonly pending = new Map<number, PendingRequest>();
   /** Open `session/request_permission` requests by attention id, with the
       JSON-RPC id the answer has to carry. */
@@ -523,6 +548,8 @@ export class CopilotAcpHost implements EngineHost {
   }
 
   attach(afterSeq: number): AsyncIterable<RuntimeEvent> {
+    this.eventWindowRevision += 1;
+    this.refillEventWindow();
     return attachRuntimeEvents(afterSeq, {
       window: () => this.events,
       ledger: () => this.eventStore.load(this.identity.sessionId),
@@ -799,13 +826,14 @@ export class CopilotAcpHost implements EngineHost {
     }
     this.cursor = nextCursor;
     const sequenced = { ...event, seq: nextCursor } as RuntimeEvent;
-    try { this.eventStore.append(this.identity.sessionId, sequenced); }
+    try { this.refillEventWindow(); this.eventStore.append(this.identity.sessionId, sequenced); }
     catch (error) {
       this.cursor = this.events.at(-1)?.seq ?? Math.max(0, this.cursor - 1);
       this.ledgerFailed = true;
       this.fail(new Error(`runtime event ledger failed: ${safeError(error)}`));
       return;
     }
+    this.eventWindowRevision += 1;
     this.events.push(sequenced);
     trimHostEventWindow(this.events);
     for (const subscriber of this.subscribers) {
