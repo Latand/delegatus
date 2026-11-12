@@ -64,6 +64,7 @@ import {
   hasStructuredDeliveryController,
   hasStructuredDeliveryHost,
   handOverHostForDemotion,
+  onStructuredDeliveryHostReleased,
   releaseStructuredDeliveryHostsForDemotion,
   releaseStructuredDeliveryHost,
   type DemotionInterruptionOptions,
@@ -127,6 +128,44 @@ const processStartup = process as typeof process & {
   __llvStructuredStartupPasses?: WeakMap<AgentRegistry, StartupPassState>;
 };
 const startupPasses = processStartup.__llvStructuredStartupPasses ??= new WeakMap<AgentRegistry, StartupPassState>();
+/* The pass states this module made, weakly, so a released host can be taken
+   out of the hosts they carry to the next pass. */
+const startupPassStates = new Set<WeakRef<StartupPassState>>();
+
+function startupPassState(registry: AgentRegistry): StartupPassState {
+  let state = startupPasses.get(registry);
+  if (!state) {
+    state = {};
+    startupPasses.set(registry, state);
+    startupPassStates.add(new WeakRef(state));
+  }
+  return state;
+}
+
+/** A host the delivery controller released, terminated or detached after
+    retirement is gone for good: no later pass may retain or publish it.
+    Held here, every host adopted at boot stayed reachable for the life of
+    the process with all it kept in memory. */
+const releasedStartupHosts = new WeakSet<object>();
+
+/** The hosts of a pass, less any released while the pass was running. */
+function unreleasedStartupHosts(hosts: AdoptedStructuredHost[]): AdoptedStructuredHost[] {
+  return hosts.some((item) => releasedStartupHosts.has(item.host)) ? hosts.filter((item) => !releasedStartupHosts.has(item.host)) : hosts;
+}
+
+function forgetReleasedStartupHost(host: object): void {
+  releasedStartupHosts.add(host);
+  const kept = (item: AdoptedStructuredHost) => item.host !== host;
+  adoptedHosts = adoptedHosts.filter(kept);
+  retryAdoptedHosts = retryAdoptedHosts.filter(kept);
+  for (const reference of startupPassStates) {
+    const state = reference.deref();
+    if (!state) { startupPassStates.delete(reference); continue; }
+    if (state.ready) state.ready = state.ready.filter(kept);
+    if (state.retained) state.retained = state.retained.filter(kept);
+  }
+}
+onStructuredDeliveryHostReleased(forgetReleasedStartupHost);
 
 /** Rows a completed pass left exactly as they were because their pipeline's
     evidence (an alive or unverifiable survivor, an unreadable record) does not
@@ -324,6 +363,7 @@ function rememberStructuredStartupRetry(
   hosts: AdoptedStructuredHost[],
   recoveries: readonly OrchestratorRestartRecoveryTarget[],
 ): void {
+  hosts = unreleasedStartupHosts(hosts);
   retryAdoptedHosts = hosts;
   const retainedHostKeys = new Set(hosts.map((item) => sessionKeyId(item.key)));
   retryOrchestratorRecoveries = recoveries.filter((target) => retainedHostKeys.has(target.hostKey));
@@ -2270,8 +2310,7 @@ export function prepareStructuredStartupRecipient(
   const conversation = registry.conversation(conversationId);
   const generation = conversation?.generations.at(-1);
   const key = JSON.stringify([conversation?.id,generation?.id,operationId]);
-  const state = startupPasses.get(registry) ?? {};
-  startupPasses.set(registry,state);
+  const state = startupPassState(registry);
   const recipients = state.recipients ??= new Map();
   const existing = recipients.get(key);
   const verify = (authority: RecipientStartupAuthority) => {
@@ -2439,11 +2478,7 @@ function startStructuredHostPass(
 ): Promise<AdoptedStructuredHost[]> {
   dependencies.assertActive?.();
   const registry = dependencies.registry ?? agentRegistry();
-  let state = startupPasses.get(registry);
-  if (!state) {
-    state = {};
-    startupPasses.set(registry, state);
-  }
+  const state = startupPassState(registry);
   if (state.pending) return rowRetry
     ? state.pending.catch(() => {}).then(() => startStructuredHostPass(dependencies, resumeDeferred, admitHeldPendingWork, rowRetry))
     : state.pending;
@@ -2476,7 +2511,7 @@ function startStructuredHostPass(
         adoptStructuredHostsPass({ ...dependencies, registry, client }, scope, admitHeldPendingWork, isolatedRowRetry, dependencies));
     }));
     current.generation = generation;
-    current.ready = hosts;
+    current.ready = unreleasedStartupHosts(hosts);
     return hosts;
   }).finally(() => { current.pending = undefined; current.recipientDependencies = undefined; });
   return current.pending;
@@ -2869,7 +2904,7 @@ async function adoptStructuredHostsPass(
        and retained hosts are kept for the next attempt, and the startup retry
        loop runs the pass again once a client exists. */
     if (!controllerBoundEarly && adoptionCandidates.length > 0) {
-      retryAdoptedHosts = nextAdoptedHosts;
+      retryAdoptedHosts = unreleasedStartupHosts(nextAdoptedHosts);
       retryOrchestratorRecoveries = [...orchestratorRecoveries];
       const keys = adoptionCandidates.map((entry) => sessionKeyId(entry.key));
       if (!deferredAdoptionLogged) {
@@ -3442,7 +3477,7 @@ async function adoptStructuredHostsPass(
     nextAdoptedHosts = await revalidateRetainedStartupHosts(
       registry, nextAdoptedHosts, undefined, retainedRecoveryHostKeys(), orchestratorSeats,
     );
-    adoptedHosts = nextAdoptedHosts;
+    adoptedHosts = unreleasedStartupHosts(nextAdoptedHosts);
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     if (rowRetry) {
       if (deferredHostKeys.size > 0 || fencedReceipts.length > 0 || held.size > 0 || retryHostKeys.size > 0) {
@@ -3458,7 +3493,7 @@ async function adoptStructuredHostsPass(
          completes — throwing here made the boot's retry loop rerun the whole
          adoption every second for as long as one stray process lived, kept the
          startup axis failed and never reached pending-spawn recovery. */
-      retryAdoptedHosts = nextAdoptedHosts;
+      retryAdoptedHosts = unreleasedStartupHosts(nextAdoptedHosts);
       retryOrchestratorRecoveries = [...orchestratorRecoveries];
       rememberDeferredStructuredStartup(
         dependencies, registry, [...deferredHostKeys], pipelineEvidence.deferred, fencedReceipts.length, held, admitHeldPendingWork, retryHostKeys,
