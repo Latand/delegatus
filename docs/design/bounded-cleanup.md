@@ -37,6 +37,21 @@ on, and what triggers it.
 D7–D9 delete only files the same call created or exact control files; they
 are out of scope and stay as they are.
 
+Added later: the hourly temp sweep pass also unlinks result files the
+files-response worker and its Viewer leave in `state/files-response-results`
+when a worker is stopped or a Viewer restarts mid-request
+(`src/lib/scanner/filesResponseResults.ts`, report
+`state/files-response-sweep-report.json`). It keys on the exact names those
+two write (`<pid>-<uuid>.json`, `.delta.json`, `.base.json`,
+`delta-base-<scope>.json.<pid>.tmp`, `seat-agenda-<uuid>.json`), a regular
+file of this user older than an hour, and, for a name with a pid, a writer
+proven gone: no live process at that pid, a process there that started after
+the file last changed, or a file from before this boot. `delta-base-<scope>.json`
+stays under the worker's own `DELTA_BASES_KEPT` rule. Every reader reads a
+whole file within its request, which ends within the worker's 60-second cap,
+so an hour leaves sixty such windows. `LLV_TEMP_SWEEP=off` and `dry-run`
+apply to it too.
+
 Nothing in `steps.ts` or `package.ts` deletes a build cache or a release.
 `package.ts` creates `releasesDir/npm-<version>` containers (`:81`) that no
 path ever removes.
@@ -180,7 +195,9 @@ token or **any** environment value that contains the release path as a
 substring, because releases are named inside larger values
 (`LLV_TELEGRAM_VENDOR_DIR=<release>/…`, `bun <release>/bin/…`).
 A process this user cannot read answers nothing and cannot be using a
-directory of ours (unchanged rule).
+directory of ours (unchanged rule). Release retention is stricter: a process
+procfs refuses keeps installation-wide uncertainty unless its world-readable
+lineage rules it out ([the rule](../verification/self-update-retention.md#retention-contract)).
 
 ## 4. Temp sweep (#2889)
 
