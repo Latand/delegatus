@@ -19,7 +19,7 @@ import { isNonblockingCodexQuestion } from "./codexAttention";
 import { CodexPinnedProtocol, installedCodexVersion, resolveCodexProtocol, type CodexSchemaGenerator } from "@/lib/accounts/codexPinnedProtocol";
 import { parseAppServerMessage } from "@/lib/accounts/codexAppServerProtocol";
 import { decodeCodexServerRequest, encodeCodexServerResponse, resolveCodexAttentionResponse } from "./codexServerRequests";
-import { bindGateCheckRoot, gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV, runGateCheckTool, socketGateCheckRoot, type GateCheckRoot } from "./gateCheckTool";
+import { bindGateCheckRoot, gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV, GATE_CHECK_ROOTS_ENV, runGateCheckTool, socketGateCheckRoot, type GateCheckRoot } from "./gateCheckTool";
 import { codexAnswerMatchesDispatch, codexRequestDigest, codexRequestIdentity, sameCodexRequest, type CodexRequestReceipt } from "./codexRequestReceipt";
 import { normalizeCodexProtocolReceipt } from "./codexProtocolReceipt";
 import { assertCatalogOffersTier, codexTurnProfile } from "./codexTurnProfile";
@@ -1626,9 +1626,17 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
     const childEnv = { ...telegram.env };
     const gateCheckLaunchRoot = childEnv.TMPDIR ?? os.tmpdir();
-    const gateCheckLaunchBinding = bindGateCheckRoot(gateCheckLaunchRoot);
-    if (gateCheckLaunchBinding) childEnv[GATE_CHECK_ROOT_IDENTITY_ENV] = gateCheckLaunchBinding.rootDirectoryIdentity;
-    else delete childEnv[GATE_CHECK_ROOT_IDENTITY_ENV];
+    const gateCheckLaunchBinding = bindGateCheckRoot(gateCheckLaunchRoot,
+      [options.env?.LLV_ATTEMPT_TIMING_ROOT, options.env?.LLV_AGENT_SANDBOX_ROOT]
+        .filter((root): root is string => !!root));
+    if (gateCheckLaunchBinding) {
+      childEnv[GATE_CHECK_ROOT_IDENTITY_ENV] = gateCheckLaunchBinding.rootDirectoryIdentity;
+      if (gateCheckLaunchBinding.additionalRoots) childEnv[GATE_CHECK_ROOTS_ENV] = JSON.stringify(gateCheckLaunchBinding);
+      else delete childEnv[GATE_CHECK_ROOTS_ENV];
+    } else {
+      delete childEnv[GATE_CHECK_ROOT_IDENTITY_ENV];
+      delete childEnv[GATE_CHECK_ROOTS_ENV];
+    }
     let child: CodexTransport;
     try {
       options.assertCurrent?.();

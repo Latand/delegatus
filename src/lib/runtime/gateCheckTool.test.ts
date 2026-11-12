@@ -198,3 +198,45 @@ test("a root replaced after the asynchronous wait refuses the result", async () 
     expect(answer.contentItems[0].text).toContain("root identity changed");
   } finally { wait.mockRestore(); }
 });
+
+for (const shape of ["attempt-temp", "separate-tmpdir", "scratch", "symlink"] as const) test(`stage-owned ${shape} log is readable with multiple launch roots`, async () => {
+  const tmp = fixture(), scratch = fixture(), attempt = fixture();
+  let extra = attempt.root;
+  if (shape === "symlink") {
+    extra = path.join(scratch.root, "attempt-link"); fs.symlinkSync(attempt.root, extra, "dir");
+  }
+  const binding = bindGateCheckRoot(tmp.root, [scratch.root, extra]);
+  const target = shape === "separate-tmpdir" ? tmp : shape === "scratch" ? scratch : attempt;
+  finish(target.dir, 37);
+  const result = await runGateCheckTool({ log: target.log, reason: "owned roots" }, binding, new AbortController().signal);
+  expect(result.success).toBe(true);
+  expect(JSON.parse(result.contentItems[0].text)).toMatchObject({ terminal: true, code: 37 });
+  const other = fixture(); finish(other.dir, 0);
+  const refused = await runGateCheckTool({ log: other.log, reason: "foreign root" }, binding, new AbortController().signal);
+  expect(refused.success).toBe(false);
+  for (const root of [tmp.root, scratch.root, extra]) expect(refused.contentItems[0].text).toContain(JSON.stringify(root));
+  expect((await other.call()).success).toBe(true);
+});
+
+test("an additional launch root substituted after the wait refuses the result", async () => {
+  const tmp = fixture(), attempt = fixture(); finish(attempt.dir, 0);
+  const binding = bindGateCheckRoot(tmp.root, [attempt.root]);
+  const original = gateWait.waitForGateCompletion;
+  const wait = spyOn(gateWait, "waitForGateCompletion").mockImplementation(async (...args) => {
+    const result = await original(...args);
+    fs.renameSync(attempt.root, `${attempt.root}.retained`); roots.push(`${attempt.root}.retained`);
+    fs.mkdirSync(attempt.root);
+    return result;
+  });
+  try {
+    const answer = await runGateCheckTool({ log: attempt.log, reason: "root race" }, binding, new AbortController().signal);
+    expect(answer.success).toBe(false);
+    expect(answer.contentItems[0].text).toContain("root identity changed");
+  } finally { wait.mockRestore(); }
+});
+
+for (const fault of ["missing", "relative", "too-many"] as const) test(`unusable ${fault} additional roots fail closed at binding`, () => {
+  const f = fixture();
+  const extra = fault === "missing" ? [path.join(f.root, "missing")] : fault === "relative" ? ["relative"] : [fixture().root, fixture().root, fixture().root];
+  expect(bindGateCheckRoot(f.root, extra)).toBeNull();
+});

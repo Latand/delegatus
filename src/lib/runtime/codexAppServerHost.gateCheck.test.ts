@@ -11,26 +11,37 @@ import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { custodyClock, physical } from "../recordedChecks/wire";
 import * as wire from "../recordedChecks/wire";
 
+// Keep Unix socket addresses short even when the stage scratch path is long.
+// The descriptor holds only this test's directory and stays open for its children.
+function fixtureSocket(directory: string) {
+  const parent = path.join(directory, "socket"); fs.mkdirSync(parent, { mode: 0o700 });
+  const descriptor = fs.openSync(directory, "r");
+  return { descriptor, filename: path.join(parent, "gate-root.json"),
+    socket: process.platform === "linux" ? `/proc/${process.pid}/fd/${descriptor}/socket/rpc.sock` : path.join(parent, "rpc.sock") };
+}
+
 // Every subprocess is owned by this explicit-file runner and gets only isolated state.
 test.skipIf(process.platform !== "linux")("a restarted Viewer waits on the retained stage root with a different or absent TMPDIR", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "gc-"));
   const originalRoot = path.join(directory, "stage"), replacementRoot = path.join(directory, "viewer");
-  for (const root of [originalRoot, replacementRoot]) fs.mkdirSync(root);
+  const scratchRoot = path.join(directory, "scratch"), attemptRoot = path.join(directory, "attempt-temp");
+  for (const root of [originalRoot, replacementRoot, scratchRoot, attemptRoot]) fs.mkdirSync(root);
   fs.chmodSync(directory, 0o700);
   const descriptor = path.join(directory, "descriptor.json"), result = path.join(directory, "result.json");
-  const rootBinding = path.join(directory, "gate-root.json");
-  const log = path.join(originalRoot, "check.log"), ticket = `${log}.gate`;
+  const address = fixtureSocket(directory), rootBinding = address.filename;
+  const log = path.join(attemptRoot, "check.log"), ticket = `${log}.gate`;
   fs.mkdirSync(ticket); fs.writeFileSync(log, "stage check finished\n");
   const recorder = cpuOwnerIdentity(process.pid);
   fs.writeFileSync(path.join(ticket, "owner.json"), JSON.stringify(recorder));
   fs.writeFileSync(path.join(ticket, "completion.json"), JSON.stringify({ recorder, directoryIdentity: physical(ticket), deadlineUptimeMs: custodyClock() + 60_000 }));
   fs.writeFileSync(path.join(ticket, "exit"), "37\n");
-  const config = { socket: path.join(directory, "rpc.sock"), directory, log, result, events: path.join(directory, "events") };
+  const config = { socket: address.socket, directory, log, result, events: path.join(directory, "events") };
   fs.writeFileSync(descriptor, JSON.stringify(config));
   const children: ReturnType<typeof spawn>[] = [];
   const launch = (mode: string, temporaryRoot?: string) => {
     const env = { ...process.env, TMPDIR: temporaryRoot,
-      ...(mode === "engine" && temporaryRoot ? { [gateTool.GATE_CHECK_ROOT_IDENTITY_ENV]: physical(temporaryRoot) } : {}) };
+      ...(mode === "engine" && temporaryRoot ? { [gateTool.GATE_CHECK_ROOT_IDENTITY_ENV]: physical(temporaryRoot),
+        [gateTool.GATE_CHECK_ROOTS_ENV]: JSON.stringify(gateTool.bindGateCheckRoot(temporaryRoot, [scratchRoot, attemptRoot])) } : {}) };
     const child = spawn(process.execPath, [path.join(import.meta.dir, "fixtures/gateCheckHost.ts"), mode, descriptor], { env, stdio: ["ignore", "pipe", "pipe"] });
     children.push(child);
     let errors = ""; child.stderr!.on("data", bytes => { errors += String(bytes); });
@@ -100,6 +111,16 @@ test.skipIf(process.platform !== "linux")("a restarted Viewer waits on the retai
     fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner }));
 
     const savedBinding = fs.readFileSync(rootBinding, "utf8");
+    const savedRoots = JSON.parse(savedBinding);
+    fs.writeFileSync(rootBinding, JSON.stringify({ ...savedRoots, additionalRoots: [gateTool.bindGateCheckRoot(replacementRoot)] }));
+    fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner, log: foreignLog }));
+    fs.unlinkSync(result);
+    const extraSubstitution = launch("host", replacementRoot);
+    const extraAnswer = JSON.parse(await extraSubstitution.line);
+    expect(await extraSubstitution.closed, extraSubstitution.errors()).toBe(0);
+    expect(extraAnswer.success).toBe(false);
+    expect(extraAnswer.contentItems[0].text).not.toContain("foreign recording");
+    fs.writeFileSync(rootBinding, savedBinding);
     fs.writeFileSync(rootBinding, JSON.stringify({ ...JSON.parse(savedBinding), root: replacementRoot,
       physicalRoot: fs.realpathSync(replacementRoot), rootDirectoryIdentity: physical(replacementRoot) }));
     fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner, log: foreignLog, unavailableLaunchEnvironment: true }));
@@ -166,6 +187,7 @@ test.skipIf(process.platform !== "linux")("a restarted Viewer waits on the retai
   } finally {
     for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await Promise.all(children.filter(child => child.exitCode === null && child.signalCode === null).map(child => new Promise<void>(resolve => child.once("close", () => resolve()))));
+    fs.closeSync(address.descriptor);
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }, 60_000);
@@ -175,7 +197,7 @@ test.skipIf(process.platform === "win32")(`callback root binding survives a new 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gb-")); fs.chmodSync(root, 0o700);
   const launchRoot = path.join(root, "stage-root"), foreignRoot = path.join(root, "foreign-root");
   fs.mkdirSync(launchRoot); fs.mkdirSync(foreignRoot);
-  const socket = path.join(root, "rpc.sock"), filename = path.join(root, "gate-root.json");
+  const address = fixtureSocket(root), { socket, filename } = address;
   const server = net.createServer(connection => connection.end());
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
   fs.chmodSync(socket, 0o600);
@@ -238,6 +260,7 @@ test.skipIf(process.platform === "win32")(`callback root binding survives a new 
   } finally {
     restoreProof(); readEnv.mockRestore();
     await new Promise<void>(resolve => server.close(() => resolve()));
+    fs.closeSync(address.descriptor);
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
@@ -245,7 +268,7 @@ test.skipIf(process.platform === "win32")(`callback root binding survives a new 
 test.skipIf(process.platform === "win32")("fresh socket launch keeps its pre-spawn root when listener environment reads are unavailable", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gb-")); fs.chmodSync(root, 0o700);
   const launchRoot = path.join(root, "stage-root"); fs.mkdirSync(launchRoot);
-  const socket = path.join(root, "rpc.sock");
+  const address = fixtureSocket(root), { socket } = address;
   const server = net.createServer(connection => connection.end());
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
   fs.chmodSync(socket, 0o600);
@@ -255,10 +278,51 @@ test.skipIf(process.platform === "win32")("fresh socket launch keeps its pre-spa
     const binding = gateTool.bindGateCheckRoot(launchRoot);
     expect(gateTool.socketGateCheckRoot(owner, binding)).toEqual(binding);
     expect(readEnv).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(root, "gate-root.json"))).toBe(true);
+    expect(fs.existsSync(address.filename)).toBe(true);
   } finally {
     readEnv.mockRestore();
     await new Promise<void>(resolve => server.close(() => resolve()));
+    fs.closeSync(address.descriptor);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const fault of ["none", "saved-substitution", "root-substitution", "invalid-proof", "missing-proof"] as const)
+test.skipIf(process.platform === "win32")(`multiple launch roots recover and refuse ${fault}`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gr-")); fs.chmodSync(root, 0o700);
+  const tmp = path.join(root, "tmp"), scratch = path.join(root, "scratch"), attempt = path.join(root, "attempt"), foreign = path.join(root, "foreign");
+  for (const directory of [tmp, scratch, attempt, foreign]) fs.mkdirSync(directory);
+  const binding = gateTool.bindGateCheckRoot(tmp, [scratch, attempt]);
+  const address = fixtureSocket(root), { socket, filename } = address;
+  const server = net.createServer(connection => connection.end());
+  const proof = JSON.stringify(binding);
+  const readEnv = spyOn(procBackend, "readEnvVar").mockImplementation((_pid, name) => {
+    if (name === "TMPDIR") return tmp;
+    if (name === gateTool.GATE_CHECK_ROOT_IDENTITY_ENV) return physical(tmp);
+    if (name === gateTool.GATE_CHECK_ROOTS_ENV) return fault === "invalid-proof" ? "{}" : fault === "missing-proof" ? null : proof;
+    return null;
+  });
+  try {
+    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+    fs.chmodSync(socket, 0o600);
+    const owner = { endpoint: `codex-unix:${socket}`, process: captureProcessIdentity(process.pid) };
+    expect(gateTool.socketGateCheckRoot(owner, binding)).toEqual(binding);
+    if (fault === "saved-substitution") {
+      const saved = JSON.parse(fs.readFileSync(filename, "utf8"));
+      fs.writeFileSync(filename, JSON.stringify({ ...saved, additionalRoots: [gateTool.bindGateCheckRoot(foreign)] }));
+    }
+    if (fault === "root-substitution") {
+      fs.renameSync(attempt, `${attempt}.retained`); fs.symlinkSync(foreign, attempt, "dir");
+    }
+    expect(gateTool.socketGateCheckRoot(owner)).toEqual(fault === "none" ? binding : null);
+    if (fault === "none") {
+      fs.unlinkSync(filename);
+      expect(gateTool.socketGateCheckRoot(owner)).toEqual(binding);
+    }
+  } finally {
+    readEnv.mockRestore();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    fs.closeSync(address.descriptor);
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

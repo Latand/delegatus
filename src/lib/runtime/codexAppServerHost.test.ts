@@ -39,7 +39,7 @@ import { adoptCodexRegistryHosts, bindCodexHostPersistence, codexHostColumns, pe
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
-import { gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV } from "./gateCheckTool";
+import { gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV, GATE_CHECK_ROOTS_ENV } from "./gateCheckTool";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { custodyClock, physical } from "../recordedChecks/wire";
 import { settleNativeQueueEntry } from "./nativeQueueSettlement";
@@ -128,14 +128,24 @@ class MemoryEventStore implements RuntimeEventStore {
   }
 }
 
-test("every native host offers one gate completion callback without opening operator attention", async () => {
+test.each(["tmpdir", "scratch", "attempt-temp"] as const)("every native host waits on its materialized %s root without opening operator attention", async location => {
   const server = new FakeAppServer("gate-wait-thread");
-  const host = await CodexAppServerHost.start({ cwd: metadataState, env: { ...process.env, TMPDIR: metadataState },
-    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  const access = materializeStructuredHostAccess(false, { ...process.env, HOME: metadataState }, null,
+    path.join(metadataState, "scratch"), { pipelineId: "gate-fixture", launchId: "gate-launch", retainUntilClose: false });
+  let host: CodexAppServerHost | undefined;
   try {
+    host = await CodexAppServerHost.start({ cwd: metadataState, env: access.env,
+      eventStore: new MemoryEventStore(), spawnProcess: (binary, args, options) => {
+        const proof = JSON.parse(options.env![GATE_CHECK_ROOTS_ENV]!);
+        expect(proof.root).toBe(access.env.TMPDIR);
+        expect(proof.additionalRoots.map((root: { root: string }) => root.root))
+          .toEqual([access.scratchDirectory, access.env.LLV_AGENT_SANDBOX_ROOT]);
+        return fakeSpawn(server)(binary, args, options);
+      } });
     expect((server.requests.find(row => row.method === "thread/start")!.params as { dynamicTools: unknown[] }).dynamicTools).toContainEqual(gateCheckTool);
     await host.send({ id: "gate-opening", text: "run a check" });
-    const log = path.join(metadataState, "check.log"), dir = `${log}.gate`;
+    const directory = location === "tmpdir" ? access.env.TMPDIR! : location === "scratch" ? access.scratchDirectory! : access.env.LLV_AGENT_SANDBOX_ROOT!;
+    const log = path.join(directory, "check.log"), dir = `${log}.gate`;
     fs.mkdirSync(dir); fs.writeFileSync(log, "work\n");
     const recorder = cpuOwnerIdentity(process.pid);
     fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify(recorder));
@@ -159,7 +169,7 @@ test("every native host offers one gate completion callback without opening oper
     server.request("foreign-wait", "item/tool/call", { ...params, threadId: "foreign-thread" });
     expect((await foreignReply).result).toMatchObject({ success: false });
     expect((await host.health()).pendingAttention).toEqual([]);
-  } finally { await host.release(); }
+  } finally { await host?.release(); access.cleanup(); }
 });
 
 test.each(["allowed", "protocol", "publication", "telegram", "resume-retry", "initialize", "account/read", "model/list", "modelProvider/capabilities/read", "config/read", "thread/resume", "mcpServerStatus/list", "thread/queue/list", "thread/turns/list"] as const)("adoption stops after authority changes at %s", async boundary => {
