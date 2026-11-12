@@ -166,7 +166,7 @@ test("a sweep removes old owned directories and keeps young, foreign, shared, in
   for (const kept of [young, foreign, shared, cwdHeld, fdHeld, envHeld, worktree, linkTarget, path.join(root, "llv-link"), path.join(root, "llv-plain-file")]) {
     expect(fs.existsSync(kept)).toBeTrue();
   }
-  expect(report.kept).toEqual({ young: 1, inUse: 3, worktree: 1, deferred: 0 });
+  expect(report.kept).toEqual({ young: 1, inUse: 3, worktree: 1, deferred: 0, ledger: 0 });
   expect(report.errors).toEqual([]);
 });
 
@@ -216,7 +216,7 @@ test("young nested temp allocations belong to their retention reason", async () 
   const options = { scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY };
   const single = await sweepStaleTempDirs({ ...options, roots: [{ path: root, via: "" }] });
   const report = await sweepStaleTempDirs({ ...options, roots: [{ path: root, via: "" }, { path: jobs, via: "" }, { path: root, via: "" }] });
-  expect(report.kept).toEqual({ young: 1, inUse: 0, worktree: 1, deferred: 0 });
+  expect(report.kept).toEqual({ young: 1, inUse: 0, worktree: 1, deferred: 0, ledger: 0 });
   expect(report.keptBytes?.young).toBeGreaterThanOrEqual(fs.statSync(payload).blocks * 512);
   expect(report.keptBytes?.worktree).toBeGreaterThan(0);
   expect(Object.values(report.keptBytes!).reduce((sum, bytes) => sum + bytes, 0)).toBe(single.keptBytes!.worktree);
@@ -1022,7 +1022,7 @@ test("a root owned by the attempt ledger is kept without a walk of its tree", as
   expect(report.removed.map(removal => removal.path)).toEqual([plain]);
   expect(fs.existsSync(plain)).toBeFalse();
   expect(fs.readFileSync(path.join(owned, "payload"), "utf8")).toBe("kept");
-  expect(report.kept.inUse).toBe(1); expect(report.held).toEqual([]);
+  expect(report.kept.ledger).toBe(1); expect(report.kept.inUse).toBe(0); expect(report.held).toEqual([]);
   expect(inspected).not.toContain(owned); expect(measured).not.toContain(owned);
 });
 
@@ -1033,7 +1033,7 @@ test("a marked root the attempt ledger does not list stays and is reported as he
   const report = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: root, via: "" }],
     scan: { ownNamespace: null, processes: [] }, attemptLedger: directory => directory === listed });
   expect(report.removed).toEqual([]); expect(fs.existsSync(unlisted)).toBeTrue();
-  expect(report.kept.inUse).toBe(2);
+  expect(report.kept.ledger).toBe(2); expect(report.kept.inUse).toBe(0);
   expect(report.held).toEqual([{ path: unlisted, via: "", reason: "attempt-owner-unlisted", bytes: 0 }]);
   expect(tempSweepStatus(report)?.heldCounts).toEqual({ "attempt-owner-unlisted": 1 });
 });
