@@ -18,15 +18,78 @@ import { sandboxGateEntryCommand } from "../src/lib/runtime/sandboxGateEntry";
 import { gateServiceProperties } from "../src/lib/runtime/cpuPlacement";
 import { GateTasks, GATE_TASKS_MAX, GATE_TASK_LIMIT_EXIT, gateTaskProperties, gateTaskResult, gateTaskFailure, warnGateTaskFallback, type GateTaskSnapshot } from "./gate-tasks";
 import { producerReport, producerCommandIdentity, recordedSupervisorObligation, recordedSupervisorRefusal, supervisorCancellation, reportSchema, readEnvelope, writeEnvelope, digest, type ProducerReport } from "../src/lib/recordedChecks/wire";
+import { acquireCheckSlot, isTestCommand, isTypecheckCommand, withTestAdmission } from "./check-admission";
+import { admissionLockWait } from "./cpu-admission-lock";
 
 /** `namespace` marks a caller inside an agent signal domain. Its identities
  * are translated to the host, where the service checks them, and the service
  * runs the command inside the owner's namespaces. */
 type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; unit: string; timeoutMs: number; namespace?: true };
 const args = process.argv.slice(2);
-if (!["--service", "--namespace-guardian"].includes(args[0] ?? "")) ownGateSandboxes();
+if (!["--service", "--namespace-guardian", "--check-process"].includes(args[0] ?? "")) ownGateSandboxes();
 const timeoutMs = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
 if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("owned runner needs a positive finite deadline");
+
+// Wrap at the dispatch boundary, so the same command runs inside the service,
+// portable guardian or namespace leaf. The helper waits within their CPU wait
+// budget and binds the permit to the compiler itself before yielding.
+const offset = ["--portable", "--namespace"].includes(args[0] ?? "") ? 1 : 0;
+if (!args[offset]?.startsWith("--")) args.splice(offset, args.length - offset, ...withTestAdmission(args.slice(offset), path.join(import.meta.dir, "check-test-preload.ts")));
+// Startup HOME re-entry creates its own final owned run. Admit that launch
+// before spawning Bun; the preload below also covers older/raw launch paths.
+if (isTypecheckCommand(args.slice(offset)) || isTestCommand(args.slice(offset)) && process.env.LLV_TEST_STARTUP_HOME === os.homedir()) {
+  args.splice(offset, args.length - offset, process.execPath, import.meta.path, "--check-process", ...args.slice(offset));
+}
+
+if (args[0] === "--check-process") {
+  const command = args.slice(1);
+  if (!command.length) throw new Error("check process needs a command");
+  const controller = new AbortController();
+  let child: ReturnType<typeof spawn> | undefined;
+  let stopping: Promise<void> | undefined;
+  let interrupted = 0;
+  const stop = (code: number) => {
+    interrupted ||= code;
+    controller.abort();
+    if (child) stopping ??= stopFixtureProcess(child);
+  };
+  process.on("SIGTERM", () => stop(143)); process.on("SIGINT", () => stop(130));
+  const slot = await acquireCheckSlot(process.env, controller.signal).catch(error => { if (interrupted) process.exit(interrupted); throw error; });
+  let holder = slot.owner;
+  try {
+    controller.signal.throwIfAborted();
+    // Replacing the helper preserves the kernel start identity, the runner's
+    // PID-bound cleanup proof and its stdio. No extra test supervisor remains
+    // in the service cgroup. A failed exec retires the permit below.
+    if (process.platform !== "win32" && typeof process.execve === "function") {
+      const executable = Bun.which(command[0]!);
+      if (!executable) throw new Error("check command executable was not found");
+      process.execve(executable, [executable, ...command.slice(1)], process.env);
+    }
+    // The surrounding runner owns cleanup. Preserve its PID-bound admission
+    // through this extra exec, so the final test need not enter another unit.
+    const launch = isTestCommand(command) && process.platform === "linux"
+      ? ["/bin/bash", "-c", 'export LLV_OWNED_TEST_RUNNER_PID=$$ LLV_PORTABLE_TEST_RUNNER_PID=$$; exec "$@"', "admitted-test", ...command] : command;
+    child = spawn(launch[0]!, launch.slice(1), { stdio: "inherit" });
+    const closed = new Promise<number>(resolve => {
+      child!.once("exit", (code, signal) => resolve(code ?? (signal === "SIGTERM" ? 143 : 137)));
+      child!.once("error", error => { console.error(`owned runner: compiler launch failed: ${error.message}`); resolve(1); });
+    });
+    if (child.pid) {
+      const identity = hostProcessIdentity(captureProcessIdentity(child.pid));
+      await admissionLockWait()(() => slot.queue.bind(slot.owner, identity));
+      holder = identity;
+    }
+    const code = await closed;
+    await stopping;
+    process.exitCode = interrupted || code;
+  } finally {
+    if (child) await stopFixtureProcess(child);
+    await admissionLockWait()(() => slot.queue.cancel(holder));
+    slot.queue.close();
+  }
+  process.exit(process.exitCode ?? 0);
+}
 
 // Resolve automatic admission before dispatch so fallback has the same owner,
 // deadline and signal handlers as an explicitly portable invocation.

@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import { setHeadlessSpawnForTests } from "./src/lib/runtime/agentSignalSandbox";
 import { darwinProcessArgv } from "./src/lib/proc/darwinArgv";
 import { windowsBackend } from "./src/lib/proc/windows";
+import { admitTestProcess } from "./scripts/check-admission";
 
 const homeKeys = ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "LLV_CLAUDE_HOME", "LLV_CODEX_HOME", "COPILOT_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "OPENCLAW_STATE_DIR", "CLAUDE_CODE_TMPDIR"] as const;
 const accountAliasKeys = ["DELEGATUS_CLAUDE_HOME", "DELEGATUS_CODEX_HOME"] as const;
@@ -72,6 +73,12 @@ if (!admitted) {
   process.on("SIGINT", () => runner.kill("SIGINT"));
   process.exit(await runner.exited);
 }
+
+// Each actual test process spends one machine permit, including comparator
+// branch/base runs and children of an already admitted gate. No inherited
+// lease can bypass it. Hold through all repetitions and asynchronous cleanup;
+// the next waiter reclaims the row once this exact process has exited.
+await admitTestProcess();
 
 // Bun preserves an ambient NODE_ENV. Pin the test runtime before JSX modules load.
 Object.assign(process.env, { NODE_ENV: "test" });

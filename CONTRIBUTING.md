@@ -541,7 +541,23 @@ Bun and Codex fixtures are cached under
 `${XDG_CACHE_HOME:-$HOME/.cache}/delegatus-gate`. Dependency or allowlist changes
 also run the shared supply-chain check; CI audits weekly and by dispatch.
 
-Heavy commands run through `scripts/gate-slot.sh`: six slots by default,
+Run heavy commands through `scripts/gate-slot.sh`. Individual Bun test and
+TypeScript workers also share a machine-wide FIFO permit pool, including both
+sides of touched-test comparisons and nested owned runners. Its capacity is
+online logical CPUs minus `DELEGATUS_GATE_CPU_HEADROOM` (or
+`LLV_GATE_CPU_HEADROOM`), defaulting to one quarter of the CPUs rounded up,
+with at least two reserved and at least one worker allowed. On 24 CPUs the
+default is 18 workers. Set the headroom consistently in gate environments;
+the smallest capacity requested by concurrent callers takes precedence for
+new admissions. Existing workers finish before a lower capacity admits more.
+Waiting workers do not execute tests or load the compiler. Wait time is
+excluded from execution deadlines. Permits belong to kernel start identities;
+dead holders and waiters are reclaimed by the next admission. The database is
+under the native user's cache, independent of sandbox HOME, state and outer
+gate locks. `LLV_CHECK_ADMISSION_FILE` selects a private pool for admission
+regression fixtures; normal gates leave it unset.
+
+Outer gates have six slots by default,
 `LLV_GATE_SLOTS` to change the count, `LLV_GATE_MEM` for the systemd memory cap
 (default `14G`), and a default Node heap of 11264 MiB (11 GiB). The pipeline
 publisher passes both defaults to hooks on older branches; explicit caller
