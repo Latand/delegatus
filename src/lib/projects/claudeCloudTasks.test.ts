@@ -5,7 +5,7 @@ import path from "node:path";
 import { fakeClaudeCloud } from "@/lib/pipelines/claudeCloud.fixture";
 import { createClaudeCloudTaskProvider } from "@/lib/pipelines/cloudClaudeClient";
 import { CLAUDE_CLOUD_TASK_PROMPT } from "@/lib/pipelines/claudeCloudTaskPrompt";
-import { prepareClaudeCloudTask, readClaudeCloudReadiness, claudeTaskStep } from "./claudeCloudTasks";
+import { prepareClaudeCloudTask, readClaudeCloudReadiness } from "./claudeCloudTasks";
 import { updateOperatorSettings } from "@/lib/operator/settings";
 import { claudeCloudTasks, setClaudeCloudTasks, setClaudeCloudTaskFor } from "./settings";
 import { persistProjectAliases, recordProjectRemote } from "./aliases";
