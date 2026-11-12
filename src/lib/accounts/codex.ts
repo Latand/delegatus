@@ -920,4 +920,3 @@ export function setCodexAccountLoginPane(id: string, loginPane: LoginPane | null
     writeRegistry({ ...registry, accounts });
   });
 }
-

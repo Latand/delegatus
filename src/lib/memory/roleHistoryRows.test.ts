@@ -608,4 +608,3 @@ test("every production line that names a history in a file about role memory is 
   for (const directory of ["src", "scripts"]) walk(directory);
   expect(found).toEqual(HISTORY_TOUCHES);
 });
-

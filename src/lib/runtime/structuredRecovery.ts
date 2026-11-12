@@ -1,4 +1,5 @@
 import { withHostStopOrigin } from "./hostExit";
+import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -542,6 +543,8 @@ async function recoverCandidate(
               authorize();
               const retainedProtocolVersion = claim.structuredHost.protocolVersion;
               host = await CodexAppServerHost.adopt(current.key.sessionId, {
+                omitSkillsInstructions: current.spec.launchProfile?.omitSkillsInstructions === true
+                  || sessionOriginFor(registry.conversation(current.conversationId) ?? {}) === "delegated",
                 cwd: current.spec.cwd, codexHome: account.home,
                 mcpServers: current.spec.launchProfile?.mcpServers ?? ["viewer"],
                 plugins: current.spec.launchProfile?.plugins ?? [],

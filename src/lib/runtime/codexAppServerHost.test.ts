@@ -23,6 +23,7 @@ import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/pr
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
 import { CodexAppServerHost, redactCodexHostDiagnostic, rolloutTurnsFromDisk } from "./codexAppServerHost";
+import { CodexSocketTransport } from "./codexSocketTransport";
 import { encodeCodexStructuredUserText, decodeCodexStructuredUserText as decodeStoredUser } from "./codexStructuredUserText.server";
 import { decodeCodexStructuredUserText } from "./codexStructuredUserText";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
@@ -1093,6 +1094,40 @@ test("Codex verifies Viewer tools from the opened thread", async () => {
     .then(value => { host = value; return null; }, reason => reason);
   try { expect(String(error)).toContain("viewer has no tools"); }
   finally { if (host) await (host as CodexAppServerHost).release(); }
+});
+
+test.each([false, true])("skills policy reaches fresh and resumed Codex threads (omit=%s)", async (omitSkillsInstructions) => {
+  for (const resumed of [false, true]) {
+    const server = new FakeAppServer();
+    const options = { cwd: "/repo", omitSkillsInstructions,
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) };
+    const host = resumed ? await CodexAppServerHost.adopt("thread-149", options) : await CodexAppServerHost.start(options);
+    try {
+      const params = server.requests.find(request => request.method === (resumed ? "thread/resume" : "thread/start"))!.params as { config: Record<string, unknown> };
+      expect(params.config.skills).toEqual(omitSkillsInstructions ? { include_instructions: false } : undefined);
+    } finally { await host.release(); }
+  }
+});
+
+for (const stdioViewer of [false, true])
+test.each([false, true])(`socket resume restores the delegated skills decision (stdio=${stdioViewer}, omitted=%s)`, async (omitSkillsInstructions) => {
+  const server = new FakeAppServer();
+  server.mcpServers = stdioViewer ? { viewer: { command: "fixture-viewer" } } : {};
+  const reconnect = spyOn(CodexSocketTransport, "reconnect").mockResolvedValue(server as unknown as CodexSocketTransport);
+  let host: CodexAppServerHost | undefined;
+  try {
+    host = await CodexAppServerHost.adopt("thread-149", { cwd: "/repo", omitSkillsInstructions,
+      socketOwner: { endpoint: "codex-unix:/fixture/rpc.sock", process: { pid: 4242, startIdentity: "fixture" } },
+      readProtocolVersion: () => "0.162.1", spawnProcess: fakeSpawn(server), eventStore: new MemoryEventStore() });
+    const params = server.requests.find(request => request.method === "thread/resume")!.params as Record<string, unknown>;
+    const config = params.config as Record<string, unknown> | undefined;
+    expect(Object.keys(params).sort()).toEqual(stdioViewer || omitSkillsInstructions ? ["config", "threadId"] : ["threadId"]);
+    expect(Object.keys(config ?? {}).sort()).toEqual([
+      ...(stdioViewer ? ["mcp_servers"] : []), ...(omitSkillsInstructions ? ["skills"] : []),
+    ]);
+    expect(config?.skills).toEqual(omitSkillsInstructions ? { include_instructions: false } : undefined);
+    if (stdioViewer) expect(config?.mcp_servers).toMatchObject({ viewer: { command: "fixture-viewer" } });
+  } finally { await host?.release(); reconnect.mockRestore(); }
 });
 
 test("Codex drains resume notifications before awaiting Viewer discovery", async () => {
