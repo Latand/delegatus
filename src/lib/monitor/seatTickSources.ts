@@ -63,7 +63,7 @@ import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
 import viewerPackageManifest from "../../../package.json";
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { orchestratorMandateCarriesTickContract } from "@/lib/orchestrator/prompt";
-import { canonicalOrchestratorProject, orchestratorSeatEverHeld, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { canonicalOrchestratorProject, orchestratorSeatEverHeld, orchestratorSeatFor, orchestratorSeatRevocationSource } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
 import { pipelineCompletedUnreviewed, pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 import { loadArchivedPipelinesForList, loadArchivedPipelinesForListAsync, loadPipelinesForList, loadPipelinesForListAsync } from "@/lib/pipelines/store";
@@ -2636,7 +2636,7 @@ async function childWork(
   let catchUpPending = false;
   try {
     const active = await seatTickMutation("owner", () => accounting.owner(seat.conversationId, seat.seatEpoch));
-    if (await seatTickMutation("discoverRevokedOwners", () => accounting.discoverRevokedOwners(statePath("orchestrator-seats.json"), (ownerProject) => canonicalOrchestratorProject(ownerProject) === project))) {
+    if (await seatTickMutation("discoverRevokedOwners", () => accounting.discoverRevokedOwners(orchestratorSeatRevocationSource(), (ownerProject) => canonicalOrchestratorProject(ownerProject) === project))) {
       gaps.add("discovery-incomplete");
     }
     if (await discover(active)) {

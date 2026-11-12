@@ -16,6 +16,7 @@ import {
   type EngineReadiness,
 } from "@/lib/accounts/engineConnection";
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { agentRegistry, identityMaterializationFence } from "@/lib/agent/registry";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { defaultModelFor, normalizeClaudeLaunchModel } from "@/lib/agent/models";
@@ -929,7 +930,11 @@ const SEAT_STORE_BUSY_REPLAYS = 3;
 export const SEAT_STORE_BUSY_REASON = "the account store stayed busy, so the designation could not be recorded; try again";
 
 /** SQLite reports contention either as a driver code or as an HTTP error. */
+/** A state database another writer holds, whichever store reported it. The
+    seat record lives in `state.sqlite`, so a seat write that meets another
+    collection's open transaction is answered busy and retried like any other. */
 function isSqliteBusy(error: unknown): boolean {
+  if (error instanceof FileTransactionBusyError) return true;
   const code = error && typeof error === "object" && "code" in error ? error.code : null;
   const message = error instanceof Error ? error.message : typeof error === "string" ? error :
     error && typeof error === "object" && "error" in error ? String(error.error) : "";
