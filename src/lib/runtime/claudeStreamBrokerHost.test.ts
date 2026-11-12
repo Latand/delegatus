@@ -5020,3 +5020,26 @@ test("native accounting clocks reach the retained time reader through the real C
       .toMatchObject({ modelMs: 2000, toolsMs: 2000, unknownMs: 0 });
   } finally { setSystemTime(); await host.release(); }
 });
+
+
+test("heap counters observe events and subscriber queues without consuming them", async () => {
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", sessionId: crypto.randomUUID(), env: { NODE_ENV: "test" },
+    eventStore: new MemoryEventStore(), deliveryLedger: new RecordingDeliveryLedger(), readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), {}) });
+  const before = host.heapAttribution();
+  const stop = host.onStateChange(() => {});
+  const stream = host.attach(0)[Symbol.asyncIterator]();
+  try {
+    expect(before.engine).toBe("claude");
+    expect(before.events).toBeGreaterThan(0);
+    expect(host.heapAttribution()).toMatchObject({ events: before.events,
+      eventSubscribers: before.eventSubscribers + 1, stateSubscribers: before.stateSubscribers + 1,
+      queuedEvents: before.queuedEvents + before.events });
+    await stream.next();
+    expect(host.heapAttribution().queuedEvents).toBe(before.queuedEvents + before.events - 1);
+    await stream.return?.();
+    stop();
+    expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
+  } finally { stop(); await stream.return?.(); await host.release(); }
+});

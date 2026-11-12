@@ -1,3 +1,4 @@
+import { heapAttribution } from "@/lib/heapAttribution";
 import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "./engineHost";
 import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { hostExitProcess, observeHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
@@ -1340,6 +1341,15 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private readonly lateThreadReadResponses = new Map<number, number>();
   private readonly replayEnvelopeRequestIds = new Set<number>();
   private replayReduction: CodexReplayFrameReducer | null = null;
+
+  /** Scalar reads only; independent of event-window retention policy. */
+  heapAttribution() {
+    let queuedEvents = 0;
+    for (const subscriber of this.subscribers) queuedEvents += subscriber.queue.length;
+    return { engine: "codex", events: this.events.length, eventSubscribers: this.subscribers.size,
+      stateSubscribers: this.stateListeners.size, queuedEvents };
+  }
+
   private readonly subscribers = new Set<Subscriber>();
   /** The newest events (HOST_EVENT_WINDOW); older ones are in the ledger. */
   private readonly events: RuntimeEvent[] = [];
@@ -1474,6 +1484,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
 
   private constructor(child: CodexTransport, identity: CodexThreadIdentity, options: CodexAppServerHostOptions) {
     this.tierAccountHome = options.codexHome;
+    heapAttribution.hosts.add(this, null);
     this.child = child;
     this.reconnecting = !!options.socketOwner;
     this.callbackGeneration = child instanceof CodexSocketTransport
