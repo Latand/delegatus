@@ -388,7 +388,7 @@ export type SeatTickVerdict =
     reportLines?: string[];
   }
   /** No work, and the proposal slot is due. */
-  | { kind: "proactive"; detail: string }
+  | { kind: "proactive"; detail: string; formPage?: SeatTickFormPage }
   /**
    * The check could not establish that nothing is owed, and nothing else was
    * owed either.

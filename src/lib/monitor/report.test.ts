@@ -409,3 +409,13 @@ test("reserved task and form rows add exactly their rendered budget and survive 
   expect(roster.length).toBeLessThanOrEqual(4000 + added);
   for (const row of [...taskPage.lines, ...formPage.lines]) expect(roster.split("\n")).toContain(row);
 });
+
+
+test("proposal forms remain complete beside a long issue list", () => {
+  const line = "- prototype proposal-choice | seat form | asked 24h ago | current | Choose a direction";
+  const formPage = { lines: ["Open decision forms: 1 waiting on the operator", line], rows: [{ id: "prototype:proposal-choice", line }] };
+  const text = seatTickProposalMessage({ project: PROJECT, issues: Array.from({ length: 200 }, (_, n) => ({ number: 2000 + n, title: "Issue ".repeat(30), labels: [], updatedAt: null })), signals: [], items: 5, slot: "20693", formPage });
+  expect(text.split("\n")).toContain(line);
+  expect(text).toContain(`monitor-ref: ${seatTickProposalRef("20693")}`);
+  expect(text.length).toBeLessThanOrEqual(4000 + formPage.lines.join("\n").length + 2);
+});

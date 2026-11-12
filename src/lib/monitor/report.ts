@@ -568,6 +568,7 @@ export function seatTickProposalMessage(input: {
   operatorInstructions?: string | null;
   instructionLines?: SeatTickInstructionLine[];
   instructionReview?: string;
+  formPage?: import("./types").SeatTickFormPage;
   /** The project's own monitor prompt (#1280), or nothing. The proposal slot is
       a scheduler-fired wake like any other, so a note about what this project's
       monitor should look at is owed here too — a prompt that silently went
@@ -580,6 +581,8 @@ export function seatTickProposalMessage(input: {
       wake carries its clauses. */
   mandateCarriesContract?: boolean;
 }): string {
+  const added = input.formPage?.lines.length ? ["", ...input.formPage.lines] : [];
+  const extra = (added.length ? redactMonitorText(added.join("\n")).length + 1 : 0) + (input.instructionReview ? input.instructionReview.length + 2 : 0);
   const lines = [
     `Seat tick — ${input.project}. No lane is open and no board task is waiting, and the proposal slot is due.`,
     "",
@@ -596,6 +599,7 @@ export function seatTickProposalMessage(input: {
      the next tick reads to recognize the card it already asked for, so losing
      it to a long issue list would mint a second proposal card. */
   return boundedSeatTickMessage(lines, [
+    ...added,
     ...(input.sourceBudgetNote ? ["", input.sourceBudgetNote] : []),
     ...snapshotSection(input.snapshotAt, !!input.workers),
     "",
@@ -607,5 +611,5 @@ export function seatTickProposalMessage(input: {
     ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, SEAT_TICK_PROMPT_PREVIEW_LIMIT, !!input.workers),
     ...workerSection(input.workers),
     ...seatTickContractLines(input.mandateCarriesContract === true),
-  ], input.instructionReview ? input.instructionReview.length + 2 : 0);
+  ], extra);
 }

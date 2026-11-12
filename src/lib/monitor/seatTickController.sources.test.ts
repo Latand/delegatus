@@ -452,3 +452,18 @@ test("a decided form with failed delivery is identified as answered in the contr
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.sent[0]!.text).toContain("answered; delivery pending");
 });
+
+
+for (const delivered of [false, true]) test(`proposal wakes carry forms and credit only delivery: ${delivered}`, async () => {
+  const { readSeatTickState } = await import("./seatTickState");
+  const file = path.join(SANDBOX, `proposal-form-${delivered}.json`);
+  const rig = harness({ pipelines: [], tasks: [], state: { ...OVERDUE, lastProposalAt: null }, stateFile: file,
+    ...(delivered ? {} : { delivery: { ok: false, outcome: "failed" as const, error: "fixture refusal", status: 503 } }) });
+  rig.deps.sources!.workerAsks = async () => ({ asks: [], forms: { count: 1, rows: [{ id: "prototype:proposal-choice", kind: "prototype", title: "Choose a direction", line: "Choose", since: "2026-08-26T12:00:00Z", taskId: null,
+    subject: { reviewId: "proposal-choice" }, target: null, stale: false, evidence: [] }] } });
+  const result = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(result?.verdict).toBe("proactive");
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.sent[0]!.text).toContain("- prototype proposal-choice |");
+  expect(readSeatTickState(PROJECT, file).formPageAfter).toBe(delivered ? "prototype:proposal-choice" : undefined);
+});

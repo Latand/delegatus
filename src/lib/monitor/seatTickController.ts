@@ -1714,6 +1714,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       signals: input.signals,
       items: input.policy.itemsPerWake,
       slot: String(Math.floor(input.now / input.policy.proposalIntervalMs)),
+      formPage: verdict.formPage,
       operatorInstructions: input.settings.reason,
       instructionLines: input.settings.instructionLines,
       instructionReview: input.instructionReview,

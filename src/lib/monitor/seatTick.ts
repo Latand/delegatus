@@ -1669,7 +1669,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
        waits out the same hour on top of its own 24-hour slot. */
     if (!autonomous && wakeDue && elapsed(input.state.lastProposalAt, input.now, input.policy.proposalIntervalMs)) {
       return {
-        verdict: { kind: "proactive", detail: `no open lane, no unblocked task, and the proposal slot is due${unplaced}` },
+        verdict: { kind: "proactive", detail: `no open lane, no unblocked task, and the proposal slot is due${unplaced}`, formPage: seatTickFormPage(input) },
         state: idle,
         cards: [],
       };
@@ -2155,11 +2155,13 @@ export function seatTickWakeCommitPlan(
 ): SeatTickWakeCommit | null {
   const { fingerprint, eventsThrough } = context;
   const note = { ...(context.autonomyShown ? { autonomyShown: context.autonomyShown } : {}), ...(context.turboShown ? { turboShown: context.turboShown } : {}), ...(context.noteShown === undefined ? {} : { noteShown: context.noteShown }), ...(context.autonomySummaryFor ? { autonomySummaryFor: context.autonomySummaryFor } : {}) };
-  if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], announcedDeploys: [], announcedMaintenance: [], shownChildren: [], ...note, ...(context.wakeIntervalMs ? { wakeIntervalMs: context.wakeIntervalMs } : {}) };
-  if (verdict.kind !== "wake") return null;
+  if (verdict.kind !== "wake" && verdict.kind !== "proactive") return null;
   const framed = context.frozenText === undefined ? null : `\n${context.frozenText}\n`;
   const carriedLines = context.frozenText === undefined ? null : new Set(context.frozenText.split("\n"));
   const carries = (line: string) => carriedLines === null || (!line.includes("\n") ? carriedLines.has(line) : framed!.includes(`\n${line}\n`));
+  const formPage = verdict.formPage ? { lines: verdict.formPage.lines.map(redactMonitorText),
+    rows: verdict.formPage.rows.filter(row => carries(redactMonitorText(row.line))).map(row => ({ ...row, line: redactMonitorText(row.line) })) } : undefined;
+  if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], announcedDeploys: [], announcedMaintenance: [], shownChildren: [], ...note, ...(formPage ? { formPage } : {}), ...(context.wakeIntervalMs ? { wakeIntervalMs: context.wakeIntervalMs } : {}) };
   const items = verdict.items.filter(item => carries(redactMonitorText(item.manifestLine ?? seatTickBullet(item))));
   // Delivery advances past only the merges its complete bullets carried.
   // A merge held back by the item or text bound keeps the cursor in front of it.
@@ -2230,8 +2232,7 @@ export function seatTickWakeCommitPlan(
     ...(catchUp ? { catchUp } : {}),
     ...(context.wakeIntervalMs ? { wakeIntervalMs: context.wakeIntervalMs } : {}),
     ...(deployResumeThrough ? { deployResumeThrough } : {}),
-    formPage: verdict.formPage ? { lines: verdict.formPage.lines.map(redactMonitorText),
-      rows: verdict.formPage.rows.filter(row => carries(redactMonitorText(row.line))).map(row => ({ ...row, line: redactMonitorText(row.line) })) } : undefined,
+    formPage,
     proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough: deliveredThrough, children, announcedLanes, announcedDeploys, announcedMaintenance, shownChildren, ...note,
     ...(verdict.activeStallTokens ? { activeStallTokens: verdict.activeStallTokens } : {}),
     ...(disk ? { diskPressure: { episode: disk.diskPressureEpisode!, version: disk.itemVersion! } } : {}),
@@ -2293,6 +2294,7 @@ export function seatTickWakeCommit(
       unreachableBacklogSince: clearsOutage ? null : state.unreachableBacklogSince,
       lastWakeAt: received,
       lastProposalAt: at,
+      ...(formPageAfter ? { formPageAfter } : {}),
       lastWakeReasons: [],
       lastWakeFingerprint: commit.fingerprint,
       quietSince: null,
