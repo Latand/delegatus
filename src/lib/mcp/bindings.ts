@@ -1,4 +1,6 @@
 import { textLengthError } from "@/lib/textLimits";
+import { controlFetch } from "./controlTransport";
+import { CONTROL_REQUEST_HEADER, CONTROL_RECOVERY_PATH, controlRequestId, type ControlEvidence } from "./controlEvidence";
 import { keepReportPicturesSoon } from "@/lib/reportMedia/paths";
 import { AsyncResource } from "node:async_hooks";
 import { redactMonitorText } from "@/lib/monitor/redact";
@@ -370,10 +372,11 @@ export interface ViewerControlDependencies {
   ): Promise<Record<string, unknown>>;
 }
 
-const CONTROL_ATTEMPT_TIMEOUT_MS = 5_000;
-const CONTROL_READ_RECOVERY_BUDGET_MS = 12_000;
-const CONTROL_RECOVERY_BUDGET_MS = 8_000;
-const CONTROL_UNSCOPED_RECOVERY_BUDGET_MS = 5_000;
+const CONTROL_ATTEMPT_TIMEOUT_MS = 15_000;
+const CONTROL_READ_RECOVERY_BUDGET_MS = 30_000;
+const CONTROL_RECOVERY_BUDGET_MS = 30_000;
+const CONTROL_UNSCOPED_RECOVERY_BUDGET_MS = 30_000;
+const CONTROL_EVIDENCE_LOOKUP_BUDGET_MS = 15_000;
 // Publication copies bounded media and awaits the Telegram receipt. Give that
 // operation the MCP call's remaining budget, including the settlement reserve.
 const PROTOTYPE_CONTROL_BUDGET_MS = 30_000;
@@ -471,7 +474,7 @@ async function requestViewerControl(
         headers.set("origin", baseUrl);
         headers.set("sec-fetch-site", "same-origin");
       }
-      const response = await fetch(new URL(pathname, baseUrl), { ...init, headers, signal: attempt.signal });
+      const response = await controlFetch(new URL(pathname, baseUrl), { ...init, headers, signal: attempt.signal });
       if (TRANSIENT_CONTROL_STATUSES.has(response.status)) {
         if (init.method === "POST") uncertainPriorPost = true;
         lastFailure = `status ${response.status}`;
@@ -703,6 +706,8 @@ async function dispatchViewerControl(
   const requestHeaders = controlRequestHeaders({ "content-type": "application/json", ...headers }, token);
   requestHeaders.set("origin", baseUrl);
   requestHeaders.set("sec-fetch-site", "same-origin");
+  const transportId = controlRequestId(context.binding, pathname);
+  requestHeaders.set(CONTROL_REQUEST_HEADER, transportId);
   let response: Response;
   let attempt: ReturnType<typeof deadlineSignal>;
   let attempts = 0;
@@ -729,7 +734,7 @@ async function dispatchViewerControl(
     });
     attempts += 1;
     try {
-      response = await fetch(new URL(pathname, baseUrl), {
+      response = await controlFetch(new URL(pathname, baseUrl), {
         method: "POST",
         // Redirects can repeat a POST after the first endpoint accepted it.
         redirect: "error",
@@ -737,7 +742,7 @@ async function dispatchViewerControl(
         body: JSON.stringify(body),
         signal: attempt.signal,
       });
-      // fetch owns the socket pool; record the observable response age instead.
+      // Keep the last healthy endpoint observation for refusal diagnostics.
       controlLastResponseAt.delete(baseUrl);
       controlLastResponseAt.set(baseUrl, Date.now());
       if (controlLastResponseAt.size > 32) controlLastResponseAt.delete(controlLastResponseAt.keys().next().value!);
@@ -763,10 +768,23 @@ async function dispatchViewerControl(
         }
         throw refusedSend();
       }
+      // A lookup atomically closes an id absent at ingress, so even a delayed
+      // original packet can no longer execute. A completed response is read
+      // back instead of dispatching another mutation.
+      const evidence = await readControlEvidence(transportId, context, pinConfiguredEndpoint);
+      context.assertCaller?.();
+      if (evidence?.state === "fenced") throw new McpDispatchNotExecutedError(
+        "the Viewer fenced this request before route invocation; resend is safe",
+        { evidence: "http-ingress-fence", requestId: transportId },
+      );
+      if (evidence?.state === "seen" && typeof evidence.status === "number" && typeof evidence.outcome === "string") {
+        response = new Response(evidence.outcome, { status: evidence.status, headers: { "content-type": "application/json" } });
+        break;
+      }
       throw new McpDispatchUncertainError(
         attempt.signal.aborted
           ? "the Viewer did not answer before the dispatch deadline; the request may have been received"
-          : `the connection failed after the request may have been sent (${code ? String(code) : "connection failed"})`,
+          : `the connection failed after the request may have been sent (${code ? String(code) : "connection failed"}; request ${transportId})`,
       );
     }
   }
@@ -827,6 +845,22 @@ async function dispatchViewerControl(
     });
   }
   return result;
+}
+
+async function readControlEvidence(id: string, context: McpToolCallContext = {}, pinConfiguredEndpoint = false): Promise<ControlEvidence | null> {
+  const remaining = (context.deadlineAt ?? Date.now() + CONTROL_EVIDENCE_LOOKUP_BUDGET_MS) - Date.now();
+  if (remaining <= 0 || context.signal?.aborted) return null;
+  const deadline = deadlineSignal(Math.min(CONTROL_EVIDENCE_LOOKUP_BUDGET_MS, remaining), { signal: context.signal });
+  try {
+    context.assertCaller?.();
+    const base = viewerControlOrigin(process.env, pinConfiguredEndpoint);
+    const headers = controlRequestHeaders(undefined, viewerControlToken(process.env, base));
+    const response = await controlFetch(new URL(`${CONTROL_RECOVERY_PATH}?id=${encodeURIComponent(id)}`, base), { headers, signal: deadline.signal });
+    const evidence = await response.json() as ControlEvidence;
+    context.assertCaller?.();
+    return response.ok && ["seen", "fenced", "unknown"].includes(evidence.state) ? evidence : null;
+  } catch { return null; }
+  finally { deadline.release(); }
 }
 
 export function productionViewerControlDependencies(
@@ -1924,19 +1958,11 @@ async function sendMessage(
     }
     throw error;
   }
-  const receipt = objectRecord(outcome.receipt) ? outcome.receipt : null;
-  const operationId = text(outcome.operationId) || text(receipt?.operationId);
-  const settledOutcome = text(outcome.outcome);
-  if (!operationId
-    || !["delivered-to-live", "resumed", "held", "pending", "reconfigured", "queued", "delivering", "delivered"].includes(settledOutcome)
-    || (outcome.ok !== undefined && outcome.ok !== true)
-    || (outcome.operationId !== undefined && outcome.operationId !== operationId)
-    || (outcome.receipt !== undefined && (!receipt
-      || receipt.operationId !== operationId
-      || !["queued", "delivered"].includes(receipt.status as string)
-      || (settledOutcome === "delivered") !== (receipt.status === "delivered")))) {
+  const accepted = sendAcceptance(outcome);
+  if (!accepted) {
     throw new McpDispatchUncertainError("the send response lacks consistent acceptance evidence; recover the original request from its durable receipt");
   }
+  const { receipt, operationId, settledOutcome } = accepted;
   /* The registry's OWN lookup over the projection this call already holds (#845),
      rather than a local reimplementation of it. The alias walk is multi-hop and
      cycle-guarded and the path index covers continuity paths, so a send addressed by
@@ -1960,6 +1986,22 @@ async function sendMessage(
     deliveryConfirmed: settledOutcome === "delivered",
     ...(settledOutcome !== "delivered" ? { notice: "Accepted for delivery; arrival is unconfirmed." } : {}),
   };
+}
+
+/** One acceptance contract for the live reply and retained HTTP evidence. */
+function sendAcceptance(outcome: Record<string, unknown>) {
+  const receipt = objectRecord(outcome.receipt) ? outcome.receipt : null;
+  const operationId = text(outcome.operationId) || text(receipt?.operationId);
+  const settledOutcome = text(outcome.outcome);
+  if (!operationId
+    || !["delivered-to-live", "resumed", "held", "pending", "reconfigured", "queued", "delivering", "delivered"].includes(settledOutcome)
+    || (outcome.ok !== undefined && outcome.ok !== true)
+    || (outcome.operationId !== undefined && outcome.operationId !== operationId)
+    || (outcome.receipt !== undefined && (!receipt
+      || receipt.operationId !== operationId
+      || !["queued", "delivered"].includes(receipt.status as string)
+      || (settledOutcome === "delivered") !== (receipt.status === "delivered")))) return null;
+  return { receipt, operationId, settledOutcome };
 }
 
 /**
@@ -8280,6 +8322,7 @@ async function recoverSend(
   dependencies: ViewerMcpDomainDependencies,
   args?: McpToolArgs,
   fenceAdmission = true,
+  context?: McpToolCallContext,
 ): Promise<McpRecoveryEvidence> {
   /* A send carries no durable sender identity of its own, so a claim made
      before bindings existed has no evidence that establishes its owner. */
@@ -8325,7 +8368,45 @@ async function recoverSend(
   if (found.kind === "unreadable") {
     return { outcome: "unknown", evidence: "delivery-record", reason: `the delivery record could not be read: ${found.reason}`, ids: {} };
   }
-  if (found.kind === "absent") return { outcome: "unknown", evidence: "none", reason: RECOVERY_ABSENT_REASON, ids: {} };
+  if (found.kind === "absent") {
+    if (binding.toolName === "send_message" && fenceAdmission) {
+      const id = controlRequestId(binding, "/api/conversation-host");
+      const evidence = await readControlEvidence(id, context);
+      if (evidence?.state === "fenced") return {
+        outcome: "not-executed", evidence: "http-ingress-fence",
+        reason: "the Viewer fenced this request id before route invocation; resend is safe",
+        ids: {}, facts: { requestId: id },
+      };
+      if (evidence?.state === "seen" && typeof evidence.outcome === "string" && typeof evidence.status === "number") {
+        try {
+          const response: unknown = JSON.parse(evidence.outcome);
+          if (objectRecord(response)) {
+            const accepted = sendAcceptance(response);
+            const operationId = text(response.operationId);
+            const facts = { status: evidence.status, requestId: id };
+            if (response.admission === "refused" && !operationId && evidence.status >= 400) return {
+              outcome: "not-executed", evidence: "http-response", reason: text(response.error) || "the route refused before admission", ids: {}, facts,
+            };
+            if (accepted && evidence.status >= 200 && evidence.status < 300 && !response.error) return {
+              outcome: accepted.settledOutcome === "delivered" ? "settled" : "accepted", evidence: "http-response", reason: null,
+              ids: { operationId: accepted.operationId }, facts: { ...facts, state: accepted.settledOutcome,
+                deliveryConfirmed: accepted.settledOutcome === "delivered", settled: accepted.settledOutcome === "delivered" },
+            };
+            if (operationId && response.error) return {
+              outcome: "accepted", evidence: "http-response", reason: text(response.error), ids: { operationId },
+              facts: { ...facts, state: "unresolved", duplicateRisk: true },
+            };
+          }
+        } catch { /* An incomplete response cannot establish an outcome. */ }
+        return { outcome: "unknown", evidence: "http-response",
+          reason: "the route answered this request id, but its response did not prove a send outcome", ids: {},
+          facts: { requestId: id, status: evidence.status } };
+      }
+      if (evidence?.state === "seen") return { outcome: "unknown", evidence: "http-ingress",
+        reason: "the Viewer recorded this request id; no completed send verdict is available yet", ids: {}, facts: { requestId: id } };
+    }
+    return { outcome: "unknown", evidence: "none", reason: RECOVERY_ABSENT_REASON, ids: {} };
+  }
   if (found.kind === "unresolved") {
     return { outcome: "unknown", evidence: "none", reason: "the bound target names no conversation the registry knows, so no delivery record can be matched to it", ids: {} };
   }
@@ -8576,12 +8657,12 @@ export function viewerMcpRecoverableTools(
       currentCaller: () => recoveryCaller(domainDependencies, true),
       bind: (args) => bindOrchestratorSend(args, domainDependencies),
       bindForRecovery: (args) => bindOrchestratorSend(args, domainDependencies, true),
-      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args, options.fenceAdmission),
+      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args, options.fenceAdmission, options.context),
     },
     send_message: {
       currentCaller: () => recoveryCaller(domainDependencies, true),
       bind: (args) => bindSend(args, domainDependencies),
-      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args, options.fenceAdmission),
+      recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args, options.fenceAdmission, options.context),
     },
   };
 }

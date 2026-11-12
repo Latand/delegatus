@@ -1,4 +1,6 @@
 import type { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { controlFetch } from "./controlTransport";
+import { existingInternalServiceHeaders } from "@/lib/agent/callerClaims";
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { stateDir } from "@/lib/configDir";
@@ -8,7 +10,7 @@ import { MCP_CHECK_HEADER, MCP_REFUSAL_HEADER, MCP_REFUSAL_LABELS } from "./http
 
 /** The Viewer authenticates the launch capability, including successor
  * generations. No registry import, tool execution or local identity cache. */
-async function checkCapability(method: "initialize" | "tools/list"): Promise<void> {
+async function checkCapability(method: "initialize" | "tools/list", request = controlFetch): Promise<void> {
   const capability = process.env.LLV_SPAWN_CAPABILITY;
   // Interactive clients without a launch capability retain native attribution.
   if (capability === undefined) return;
@@ -20,13 +22,13 @@ async function checkCapability(method: "initialize" | "tools/list"): Promise<voi
   }
   const check = crypto.randomUUID();
   const headers = new Headers({ "content-type": "application/json", accept: "application/json, text/event-stream", [MCP_CHECK_HEADER]: check,
-    origin: endpoint.origin, "sec-fetch-site": "same-origin", [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+    origin: endpoint.origin, "sec-fetch-site": "same-origin", [VIEWER_SPAWN_CAPABILITY_HEADER]: capability, ...existingInternalServiceHeaders("mcp") });
   const token = viewerControlToken(process.env, origin);
   if (token) headers.set("authorization", `Bearer ${token}`);
   const deadline = deadlineSignal(10_000);
   let failure = "Viewer control is unavailable";
   try {
-    const response = await fetch(endpoint, { method: "POST", redirect: "error", headers, signal: deadline.signal,
+    const response = await request(endpoint, { method: "POST", redirect: "error", headers, signal: deadline.signal,
       body: JSON.stringify({ jsonrpc: "2.0", id: "viewer-mcp-startup", method: "initialize",
         params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "delegatus-stdio", version: "1" } } }) });
     if (!response.ok) {
@@ -49,7 +51,7 @@ async function checkCapability(method: "initialize" | "tools/list"): Promise<voi
 /** Preserve the SDK's initialize handler and tool schemas. Refuse discovery
  * before it reaches that handler when the launch cannot identify itself. Each
  * discovery rechecks authority, so rotation also invalidates a connected pipe. */
-export function guardViewerMcpStartup(transport: StdioServerTransport): void {
+export function guardViewerMcpStartup(transport: StdioServerTransport, request = controlFetch): void {
   const start = transport.start.bind(transport);
   transport.start = async () => {
     const receive = transport.onmessage;
@@ -58,7 +60,7 @@ export function guardViewerMcpStartup(transport: StdioServerTransport): void {
         receive?.(message);
         return;
       }
-      void checkCapability(message.method as "initialize" | "tools/list").then(() => receive?.(message), error => transport.send({ jsonrpc: "2.0", id: message.id,
+      void checkCapability(message.method as "initialize" | "tools/list", request).then(() => receive?.(message), error => transport.send({ jsonrpc: "2.0", id: message.id,
         error: { code: -32002, message: `Viewer MCP: ${error instanceof Error ? error.message : "startup failed"}; state directory ${stateDir()}` } }))
         .catch(error => transport.onerror?.(error instanceof Error ? error : new Error("MCP startup reply failed")));
     };

@@ -5,6 +5,7 @@ import { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpoint
 export { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import { installServingNextRenderMonitor } from "@/lib/nextRenderMonitor";
+import { installServingControlIngress } from "@/lib/mcp/controlIngress";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -995,6 +996,7 @@ export async function registerViewerRuntime(): Promise<void> {
   // Background diagnostics never hold readiness or reach the runtime host.
   void import("./loopProfilerServing").then(({ startServingLoopProfiler }) => startServingLoopProfiler(viewerLoopMonitor)).catch(() => {});
   await installServingNextRenderMonitor();
+  await installServingControlIngress();
   discardUnsupportedApiCredentials();
 
   await installSpawnCapabilityResolverAtStartup();

@@ -252,7 +252,7 @@ for (const mode of ["refusal", "cancel-error", "fetch-error", "parse-error", "mi
       }, { highWaterMark: 0 }), { status: 503, headers: { [MCP_REFUSAL_HEADER]: privateBody } });
     }) as typeof fetch);
     transport.onmessage = () => { accepted++; };
-    guardViewerMcpStartup(transport);
+    guardViewerMcpStartup(transport, globalThis.fetch);
     try {
       await transport.start();
       for (const method of ["initialize", "tools/list"]) {
