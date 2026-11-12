@@ -1,3 +1,4 @@
+import { idleWindowFixture } from "./fixtures/idleEventWindow";
 import { readNativeTiming } from "./attemptTiming";
 import { splitAttemptTime } from "@/lib/pipelines/accounting";
 import { readHostExit, withHostStopOrigin } from "./hostExit";
@@ -5042,4 +5043,56 @@ test("heap counters observe events and subscriber queues without consuming them"
     stop();
     expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
   } finally { stop(); await stream.return?.(); await host.release(); }
+});
+
+test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
+  const ledger = new RecordingDeliveryLedger();
+  const child = new FakeClaude(ledger);
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", sessionId: "idle-window-session", env: { NODE_ENV: "test" },
+    eventStore: new MemoryEventStore(), deliveryLedger: ledger, readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    spawnProcess: fakeSpawn(child, {}) });
+  const idle = idleWindowFixture(host);
+  try {
+    const count = host.heapAttribution().events;
+    expect(count).toBeGreaterThan(0);
+    expect(await host.releaseIdleEventWindow(() => false)).toBeFalse();
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    expect(host.heapAttribution().events).toBe(0);
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    try {
+      expect(host.heapAttribution().events).toBeGreaterThan(0);
+      for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
+    } finally { await stream.return?.(); }
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    const sent = host.send({ id: "next-idle-turn", text: "continue" });
+    const frame = await child.userFrameWritten;
+    child.emitJson({ type: "user", session_id: host.identity.sessionId, uuid: "next-idle-echo", message: frame.message });
+    await sent;
+    expect(host.heapAttribution().events).toBeGreaterThan(0);
+  } finally { idle.cleanup(); await host.release(); }
+});
+
+test("large Write inputs retain previews while the durable event keeps complete file content", async () => {
+  const ledger = new RecordingDeliveryLedger();
+  const child = new FakeClaude(ledger);
+  const eventStore = new MemoryEventStore();
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000000091"].join("-");
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", sessionId, eventStore, deliveryLedger: ledger, readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }), spawnProcess: fakeSpawn(child, {}) });
+  try {
+    child.emitJson({ type: "assistant", session_id: sessionId, message: { id: "large-write", role: "assistant", content: [
+      { type: "tool_use", id: "write", name: "Write", input: { file_path: "file.ts", content: "body".repeat(10_000) } },
+    ] } });
+    const stored = eventStore.load(sessionId);
+    expect(JSON.stringify(stored)).toContain("body".repeat(10_000));
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    try {
+      const replay: RuntimeEvent[] = [];
+      for (let index = 0; index < stored.length; index++) replay.push((await stream.next()).value as RuntimeEvent);
+      expect(JSON.stringify(replay)).toContain("[truncated; original UTF-8 bytes: 40000;");
+      expect(JSON.stringify(replay)).not.toContain("body".repeat(10_000));
+      expect(host.heapAttribution()).toMatchObject({ trimmedEvents: 1 });
+    } finally { await stream.return?.(); }
+  } finally { await host.release(); }
 });
