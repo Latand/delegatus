@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -48,7 +49,8 @@ import {
   SEAT_STORE_BUSY_REASON,
   type SeatCommandDependencies,
 } from "./seatCommand";
-import { activeOrchestratorSeats, beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, failOrchestratorSeatIntent, orchestratorRevocations, orchestratorSeatFor, type OrchestratorSeat } from "./seats";
+import { activeOrchestratorSeats, beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, failOrchestratorSeatIntent, orchestratorRevocations, orchestratorSeatFor, readOrchestratorSeatFile, type OrchestratorSeat } from "./seats";
+import { clearStoredSeatRecord, damageStoredSeatRecord, writeStoredSeatRecord } from "./seatStoreFixture";
 
 let sandbox = "";
 let previousStateDir: string | undefined;
@@ -225,7 +227,7 @@ function seedPendingLaunchIntent(input: {
   legacyTelegramShape?: boolean;
   telegramGrant?: boolean;
 }): void {
-  fs.writeFileSync(path.join(sandbox, "orchestrator-seats.json"), JSON.stringify({
+  writeStoredSeatRecord({
     schemaVersion: 1,
     nextSeatEpoch: 2,
     seats: {},
@@ -250,11 +252,11 @@ function seedPendingLaunchIntent(input: {
       },
     },
     revocations: [],
-  }), "utf8");
+  });
 }
 
 function seedLegacyActiveSeat(clientRequestId: string): void {
-  fs.writeFileSync(path.join(sandbox, "orchestrator-seats.json"), JSON.stringify({
+  writeStoredSeatRecord({
     schemaVersion: 1,
     nextSeatEpoch: 2,
     seats: {
@@ -274,7 +276,7 @@ function seedLegacyActiveSeat(clientRequestId: string): void {
     },
     pending: {},
     revocations: [],
-  }), "utf8");
+  });
 }
 
 const spawnRequest = (clientRequestId = "req_00000001") => ({
@@ -2382,6 +2384,31 @@ test("AC5: retrying a failed existing-mode designation with its OWN key clears i
   expect(history).toMatchObject([{ reason: "terminal_error", seat: { intent: { clientRequestId: "req_00001066" } } }]);
 });
 
+/* The seat record shares state.sqlite with every other store. A designation
+   that meets another writer's open transaction is answered busy and retried
+   inside the request; it seats once and delivers once. */
+test("an adoption whose seat write meets another state writer's transaction is retried and seats once", async () => {
+  await seatIncumbent("own the board", "req_00001070");
+  const blocker = new Database(path.join(sandbox, "state.sqlite"));
+  blocker.exec("BEGIN IMMEDIATE");
+  const released = new Promise<void>((resolve) => setTimeout(() => { blocker.exec("ROLLBACK"); resolve(); }, 40));
+  try {
+    const { deps, recorded } = dependencies();
+    const result = await executeOrchestratorSeatRequest({
+      project: "proj-a",
+      mandate: "adopt me",
+      clientRequestId: "req_00001071",
+      conversationId: OLD_ID,
+    }, deps);
+    expect(result.status).toBe(200);
+    expect(recorded.deliveries).toHaveLength(1);
+    expect(orchestratorSeatFor("proj-a")).toMatchObject({ active: { conversationId: OLD_ID }, pending: null, history: [] });
+  } finally {
+    await released;
+    blocker.close();
+  }
+});
+
 /** Twelve rotations, each with the maximum handoff payload the caps allow. */
 async function rotateTwelveTimes(
   project: string,
@@ -2510,8 +2537,7 @@ test("a rotation whose summarizer is slow cannot revoke the designation that set
     launch was accepted, but the request that accepted it never activated the
     intent, so only reconciliation can seat it. */
 function seedPendingBesideIncumbent(input: { clientRequestId: string; launchId: string }): void {
-  const file = path.join(sandbox, "orchestrator-seats.json");
-  const state = JSON.parse(fs.readFileSync(file, "utf8")) as { nextSeatEpoch: number; pending: Record<string, unknown> };
+  const state = readOrchestratorSeatFile() as unknown as { nextSeatEpoch: number; pending: Record<string, unknown> };
   state.pending["proj-a"] = {
     project: "proj-a",
     seatEpoch: state.nextSeatEpoch,
@@ -2529,7 +2555,7 @@ function seedPendingBesideIncumbent(input: { clientRequestId: string; launchId: 
     activatedAt: null,
   };
   state.nextSeatEpoch += 1;
-  fs.writeFileSync(file, JSON.stringify(state), "utf8");
+  writeStoredSeatRecord(state);
 }
 
 test("a pending launch that settles DURING summarization is seated, and the stale rotation cannot replace it", async () => {
@@ -2685,10 +2711,9 @@ test("a newly activated seat publishes identity when request replay is disabled"
 
 test("reconcileCompletedSeatReplay waits out a short foreign holder without needing a request replay", async () => {
   seedLegacyActiveSeat("req_completed_holder");
-  const seatsFile = path.join(sandbox, "orchestrator-seats.json");
-  const file = JSON.parse(fs.readFileSync(seatsFile, "utf8"));
-  file.seats["proj-a"].path = null;
-  fs.writeFileSync(seatsFile, JSON.stringify(file));
+  const file = readOrchestratorSeatFile();
+  file.seats["proj-a"]!.path = null;
+  writeStoredSeatRecord(file);
   const holder = await foreignAccountHolder();
   let armed = false;
   const { deps, recorded } = dependencies({
@@ -3141,7 +3166,7 @@ test("a designation made by an agent never gets the instruction", async () => {
 });
 
 test("a seat file that cannot be read grants no first run", async () => {
-  fs.writeFileSync(path.join(sandbox, "orchestrator-seats.json"), "{");
+  damageStoredSeatRecord();
   const { deps, recorded } = dependencies();
   await executeOrchestratorSeatRequest(spawnRequest(), deps);
   expect(recorded.spawns.every((body) => !String(body.prompt).includes(ORCHESTRATOR_FIRST_RUN_DIRECTIVE))).toBe(true);
@@ -3165,7 +3190,7 @@ test("a pending replay of the first intent sends the same bytes, and a stillborn
   expect(promptOf(recorded, 1)).toContain(ORCHESTRATOR_FIRST_RUN_DIRECTIVE);
 
   /* A first attempt that failed before any seat existed is not "a seat the installation had": the retry still is the first. */
-  fs.rmSync(path.join(sandbox, "orchestrator-seats.json"), { force: true });
+  clearStoredSeatRecord();
   const failing = dependencies({ spawn: async (body) => { failing.recorded.spawns.push(body); return { status: 500, body: { error: "transient" } }; } });
   await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000009"), project: "proj-z" }, failing.deps);
   const retry = dependencies();
