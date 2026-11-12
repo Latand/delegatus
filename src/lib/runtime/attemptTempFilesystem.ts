@@ -243,6 +243,8 @@ async function repositoryLinkTargets(repository: string, timeout?: number): Prom
 export class RepositoryLinkInventory {
   private readonly reads = new Map<string, RepositoryLinkRead>();
   private readonly repositoriesOf = new Map<string, RepositoryDiscovery>();
+  private readonly holders = new Map<string, readonly (number | null)[]>();
+  private readonly direct = new Set<string>();
   private readonly deadline: number;
   readonly walks: string[] = [];
   private readonly freshMs: number;
@@ -301,6 +303,12 @@ export class RepositoryLinkInventory {
       if (!same && !this.abandoned(cwd)) return false;
     }
     return true;
+  }
+  abandoned(cwd: string) { return allExited(this.holders.get(cwd)); }
+  private released(repository: string) {
+    if (this.direct.has(repository) || fs.existsSync(repository)) return false;
+    const cwds = [...this.repositoriesOf].filter(([, discovery]) => discovery.repository === repository).map(([cwd]) => cwd);
+    return cwds.length > 0 && cwds.every(cwd => this.abandoned(cwd));
   }
   /** Directory proofs used by the final synchronous mutation fence. Include
    * negative checkout discoveries, whose missing .git can become present. */
@@ -657,8 +665,10 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
   // Running containers may hold files through mount aliases that an ordinary
   // proc observer cannot read. Never stop or exec into one for reclamation.
   if (!await containerMountsClear([directory, original], remaining)) throw new Error("container ownership could not be cleared for the attempt tree");
-  const image = await attemptTempUtilityImage(remaining);
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(image) || directory.includes(",")) throw new Error("invalid container cleanup input");
+  let image: string;
+  try { image = await attemptTempUtilityImage(remaining); }
+  catch (error) { throw unavailable(attemptTempFailureDetail(error)); }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(image) || directory.includes(",")) throw unavailable("invalid container cleanup input");
   const inspection = 'export ORIGINAL=$1; shift; find /attempt -xdev "$@" -print > /tmp/markers || exit; '
     + 'test "$(wc -l < /tmp/markers)" -le 10000 || exit 75; '
     + `find /attempt -xdev "$@" -exec /bin/sh -c ${"'" + containerClassifier.replaceAll("'", "'\\''") + "'"} sh {} + || exit; `;
@@ -669,7 +679,7 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
         + (operation === "remove" ? 'exec find /attempt -xdev -depth -mindepth 1 -delete' : 'exit 0');
   if (protection && !/^[a-f0-9]{64}$/.test(protection.digest)) throw new Error("invalid attempt namespace snapshot");
   const verify = protection ? namespaceSnapshot + `test "$digest" = '${protection.digest}' || exit 75; ` : "";
-  const script = 'identity=$1; shift; test "$(stat -c %d:%i /attempt)" = "$identity" || exit 75; ' + verify + body;
+  const script = 'identity=$1; shift; test "$(stat -c %d:%i /attempt)" = "$identity" || exit 75; ' + linkedEvidence + verify + body;
   if (guard && !await guard()) throw new Error("attempt authority changed before namespace removal");
   // Read after the guard's awaits, so a picture named meanwhile still counts.
   const linked = operation === "evidence" || requireNoEvidence ? ledgerLinkedEvidence(original) : [];
@@ -687,9 +697,14 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
     result = await run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=4m",
     "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
       "--mount", `type=bind,source=${directory},target=/attempt${operation !== "remove" ? ",readonly" : ""}`,
-      "--entrypoint", "timeout", image, String(Math.max(1, Math.floor(timeout / 1000))), "/bin/sh", "-c", script, "sh", identity, original, ...markers], timeout);
+      "--entrypoint", "timeout", image, String(Math.max(1, Math.floor(timeout / 1000))), "/bin/sh", "-c", script, "sh", identity,
+      String(linked.length), ...linked, original, ...markers], timeout);
   }
-  catch (error) { throw new Error(attemptTempFailureDetail(error), { cause: error }); }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException & { code?: unknown }).code;
+    if (code === "ENOENT" || [125, 126, 127].includes(Number(code))) throw unavailable(attemptTempFailureDetail(error));
+    throw new Error(attemptTempFailureDetail(error), { cause: error });
+  }
   return { identity, stdout: result.stdout };
 }
 
@@ -965,24 +980,32 @@ export async function removeAttemptTree(directory: string, original = directory,
   }
 }
 
-export async function allocatedAttemptBytes(directory: string, settings: NamespaceBudget = {}): Promise<number> {
-  if (process.platform === "win32") return measureTempBytes(directory);
+const kibibytes = (output: string | undefined) => {
+  const field = output?.trim().split(/\s+/)[0];
+  const value = field ? Number(field) : NaN;
+  return Number.isFinite(value) && value >= 0 ? value * 1024 : null;
+};
+
+export async function measureAttemptAllocation(directory: string, settings: NamespaceBudget = {}): Promise<{ bytes: number; unreadable: boolean }> {
+  if (process.platform === "win32") return { bytes: await measureTempBytes(directory), unreadable: false };
   const until = performance.now() + Math.max(0, Math.min(30_000, settings.budgetMs ?? 30_000));
   if (performance.now() >= until) throw new AttemptTempBudgetDeferred("attempt measurement time budget exhausted");
-  let output: string | undefined;
-  try { output = (await run("du", ["-skx", "--", directory], Math.max(1, Math.min(15_000, Math.floor(until - performance.now()))))).stdout; }
-  catch {
-    if (process.platform === "linux") {
-      try { output = (await containerCommand(directory, "measure", directory, undefined, false, undefined,
-        { ...settings, budgetMs: until - performance.now() })).stdout; }
-      catch { /* Preserve a lower bound if namespace measurement is unavailable. */ }
-    }
+  let partial: number | null = null;
+  try {
+    const bytes = kibibytes((await run("du", ["-skx", "--", directory], Math.max(1, Math.floor(until - performance.now())))).stdout);
+    if (bytes !== null) return { bytes, unreadable: false };
+  } catch (error) { partial = kibibytes((error as { stdout?: string }).stdout); }
+  let bytes = partial ?? fs.lstatSync(directory).blocks * 512;
+  if (process.platform === "linux" && performance.now() < until) {
+    try { bytes = Math.max(bytes, kibibytes((await containerCommand(directory, "measure", directory, undefined, false, undefined,
+      { ...settings, budgetMs: until - performance.now() })).stdout) ?? 0); }
+    catch { /* Keep the readable lower bound. */ }
   }
   return { bytes, unreadable: true };
 }
 
-export async function allocatedAttemptBytes(directory: string): Promise<number> {
-  return (await measureAttemptAllocation(directory)).bytes;
+export async function allocatedAttemptBytes(directory: string, settings: NamespaceBudget = {}): Promise<number> {
+  return (await measureAttemptAllocation(directory, settings)).bytes;
 }
 
 /** A directory inside an attempt tree that this user cannot list or empty.

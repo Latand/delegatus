@@ -5,7 +5,9 @@ import { statePath } from "@/lib/configDir";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { attemptTempJournalPath, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
-import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, snapshotAttemptProtection, removeAttemptTree, RepositoryLinkInventory, type RetainedCheckoutReads, type AttemptNamespaceProtection, type AttemptProtection } from "./attemptTempFilesystem";
+import { allocatedAttemptBytes, attemptReferencesClear, blockedSubtrees, inspectAttemptTree, measureAttemptAllocation,
+  privilegedCleanupUnavailable, snapshotAttemptProtection, removeAttemptTree, RepositoryLinkInventory,
+  type BlockedSubtree, type RetainedCheckoutReads, type AttemptNamespaceProtection, type AttemptProtection } from "./attemptTempFilesystem";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
 import { recordedRootHeld, recordRootRetirement, expireRecordedRootHolds, type CheckRow } from "@/lib/recordedChecks/store";
@@ -396,7 +398,11 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         if (owner.pipelineId && hasAttemptRetirementClaim(owner.pipelineId)) await claim();
         if (stat && options.mode !== "dry-run") restoreRefusedAttemptTrash(owner.directory, owner.identity);
       }
-      bytes = stat ? await allocatedAttemptBytes(owner.directory, { budgetMs: deadline - now(), bytes: owner.bytes }) : pendingTrash ? owner.bytes : 0;
+      if (stat) {
+        const measured = await measureAttemptAllocation(owner.directory, { budgetMs: deadline - now(), bytes: owner.bytes });
+        bytes = measured.bytes;
+        if (measured.unreadable) partiallyRead.add(owner.directory);
+      } else bytes = pendingTrash ? owner.bytes : 0;
       if (!stat && !pendingTrash) store.measure(owner.directory, 0);
       if (stat) {
         const measured = fs.lstatSync(owner.directory, { throwIfNoEntry: false });

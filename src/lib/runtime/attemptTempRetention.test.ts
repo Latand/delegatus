@@ -798,6 +798,7 @@ if (args[0] !== "run") process.exit(61);
 const source = /source=([^,]+)/.exec(args[args.indexOf("--mount") + 1])?.[1];
 if (!source || !source.startsWith(${JSON.stringify(f.root + path.sep)})) process.exit(62);
 const script = args[args.indexOf("-c") + 1];
+if (script.includes('printf "%s\\n" "$digest"')) { process.stdout.write("a".repeat(64) + "\\n"); process.exit(0); }
 // The namespace holds DAC_OVERRIDE: it lists what this user cannot.
 const grant = file => { if (!fs.lstatSync(file).isDirectory()) return; fs.chmodSync(file, 0o700); for (const entry of fs.readdirSync(file)) grant(file + "/" + entry); };
 // The no-evidence proof: the paths the evidence ledger links, passed after
