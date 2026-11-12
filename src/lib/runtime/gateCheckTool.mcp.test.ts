@@ -81,13 +81,25 @@ test("SDK client waits on scratch, attempt-temp and distinct TMPDIR logs while f
       for (const directory of [tmp, scratch, alias]) expect(text).toContain(JSON.stringify(directory));
     }
     expect(wait).toHaveBeenCalledTimes(4);
+    const sidecarLog = path.join(attempt, "queued-check.log"), sidecarDir = `${sidecarLog}.gate`;
+    fs.writeFileSync(sidecarLog, "gate-slot: Waiting for a heavy command slot\n");
+    fs.mkdirSync(sidecarDir);
+    fs.writeFileSync(path.join(sidecarDir, "owner.json"), JSON.stringify(recorder));
+    fs.writeFileSync(path.join(sidecarDir, "completion.json"), JSON.stringify({ recorder,
+      directoryIdentity: physical(sidecarDir), deadlineUptimeMs: custodyClock() - 120_000 }));
+    fs.writeFileSync(path.join(root, "private.txt"), "FOREIGN_STAGE_SIDECAR_CONTENT");
+    fs.symlinkSync(path.join(root, "private.txt"), path.join(sidecarDir, "queued"));
+    const sidecar = await call(sidecarLog);
+    expect(sidecar.isError).toBe(true);
+    expect((sidecar.content as Array<{ text: string }>)[0].text).not.toContain("FOREIGN_STAGE_SIDECAR_CONTENT");
+    expect(wait).toHaveBeenCalledTimes(5);
     // A failure in the actual reader propagates once, with no effects.
     wait.mockImplementationOnce(async () => { throw new Error("injected gate read failure"); });
     const failed = await call(logs[0]);
     expect(failed.isError).toBe(true);
     expect((failed.content as Array<{ text: string }>)[0].text).toContain("injected gate read failure");
-    expect(wait).toHaveBeenCalledTimes(5);
-    expect(calls).toBe(8);
+    expect(wait).toHaveBeenCalledTimes(6);
+    expect(calls).toBe(9);
     expect((await runGateCheckTool({ log: logs[3], reason: "foreign owner control" }, bindGateCheckRoot(other), new AbortController().signal)).success).toBe(true);
     for (const log of logs) expect(fs.readFileSync(`${log}.gate/exit`, "utf8")).toBe("37\n");
   } finally {

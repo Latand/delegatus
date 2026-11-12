@@ -131,17 +131,33 @@ export async function runGateCheckTool(args: unknown, binding: GateCheckRoot | n
     const log = path.join(parent, path.basename(input.log));
     const contained = roots.some(owner => {
       const relative = path.relative(owner.physicalRoot, log);
-      return relative && relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative);
+      return relative === "" || (relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative));
     });
     if (!contained)
       throw new Error(`gate log is outside this stage's temporary roots (root=${JSON.stringify(root)}, allowedRoots=${JSON.stringify(roots)}, log=${JSON.stringify(input.log)}, resolvedLog=${JSON.stringify(log)})`);
     validateGateCheckRoot(binding);
-    const result = await waitForGateCompletion(log, signal);
+    // Keep the checked directory open. The reader follows this descriptor for
+    // the log and every .gate record, so replacing a path component cannot
+    // redirect a later read to another stage.
+    const parentFd = fs.openSync(parent, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+    try {
+    const openedParent = fs.realpathSync(`/proc/self/fd/${parentFd}`);
+    const stillContained = roots.some(owner => {
+      const relative = path.relative(owner.physicalRoot, openedParent);
+      return relative === "" || (relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative));
+    });
+    if (!stillContained) throw new Error(`gate log directory changed outside this stage's temporary roots (allowedRoots=${JSON.stringify(roots)}, log=${JSON.stringify(input.log)})`);
+    validateGateCheckRoot(binding);
+    const pinnedLog = `/proc/self/fd/${parentFd}/${path.basename(log)}`;
+    const result = await waitForGateCompletion(pinnedLog, signal);
+    if (fs.realpathSync(path.dirname(input.log)) !== openedParent)
+      throw new Error(`gate log directory changed during the wait (allowedRoots=${JSON.stringify(roots)}, log=${JSON.stringify(input.log)})`);
     validateGateCheckRoot(binding);
     return { success: true, contentItems: [{ type: "inputText" as const, text: JSON.stringify({ reason: input.reason, ...result,
       terminal: result.state.startsWith("finished"),
       ...(!result.state.startsWith("finished") ? { instruction: "No terminal result. Preserve this run and its evidence; do not poll or restart it." } : {}),
     }) }] };
+    } finally { fs.closeSync(parentFd); }
   } catch (error) {
     return { success: false, contentItems: [{ type: "inputText" as const, text: `Check result unknown: ${error instanceof Error ? error.message : String(error)}. Preserve the original run and evidence.` }] };
   }
