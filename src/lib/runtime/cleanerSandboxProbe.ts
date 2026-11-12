@@ -11,13 +11,14 @@ export async function assertCleanerSandboxAvailable(options: {
   permissionProfile?: string;
   permissionProfileConfig?: string;
 }): Promise<void> {
-  if (!options.permissionProfile || !options.permissionProfileConfig) {
+  const { permissionProfile, permissionProfileConfig } = options;
+  if (!permissionProfile || !permissionProfileConfig) {
     throw new Error("disk cleaner sandbox unavailable: missing permission profile");
   }
   await new Promise<void>((resolve, reject) => {
     const child = spawn(process.env.LLV_CODEX_BINARY ?? "codex", [
-      "sandbox", "-C", options.cwd, "-P", options.permissionProfile,
-      "-c", options.permissionProfileConfig, "--", "/bin/sh", "-c",
+      "sandbox", "-C", options.cwd, "-P", permissionProfile,
+      "-c", permissionProfileConfig, "--", "/bin/sh", "-c",
       `printf ${CLEANER_SANDBOX_READY}`,
     ], { cwd: options.cwd, env: options.env, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "", timedOut = false;

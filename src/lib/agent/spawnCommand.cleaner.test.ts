@@ -204,7 +204,7 @@ test.each(["bwrap: loopback RTM_NEWADDR: Operation not permitted", "bwrap: setti
   const reopened = new AgentRegistry(registry.filename, undefined, undefined, { sqliteMode: "off" });
   try {
     host = await captureHost(id);
-    const observation = { mode: "unsandboxed", reason: `disk cleaner sandbox unavailable: ${reason}` };
+    const observation = { mode: "unsandboxed", reason: `disk cleaner sandbox unavailable: ${reason}` } as const;
     expect(host.sandbox).toBe("danger-full-access");
     expect(host.permissionProfile).toBeUndefined();
     expect(host.permissionProfileConfig).toBeUndefined();
@@ -282,7 +282,7 @@ test.skipIf(process.platform !== "linux" || process.env.LLV_CLEANER_NATIVE_FALLB
     host = await captureHost(id);
     const observation = registry.spawnReceiptForClientAttempt(id)?.cleanerSandbox;
     expect(observation?.mode).toBe("unsandboxed");
-    expect(observation?.reason).toMatch(/bwrap.*(?:RTM_NEWADDR|uid map)/s);
+    expect(observation?.reason).toMatch(/bwrap[\s\S]*(?:RTM_NEWADDR|uid map)/);
     expect(host.sandbox).toBe("danger-full-access");
     expect(host.runtimeInstructions).toContain(JSON.stringify({ cleanerSandbox: observation }));
   } finally { process.env.LLV_CODEX_BINARY = env.LLV_CODEX_BINARY; host?.releaseCleanup?.(); }
