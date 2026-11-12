@@ -311,7 +311,7 @@ test.skipIf(process.platform !== "linux" || process.env.LLV_CLEANER_SANDBOX_TEST
   fs.symlinkSync(cwd, path.join(workingDirectory, "outside"));
   const codexHome = path.join(root, "codex-sandbox");
   fs.mkdirSync(codexHome, { recursive: true });
-  fs.writeFileSync(path.join(codexHome, "config.toml"), `[permissions.llv-stage.filesystem]\nwritable_roots = [${JSON.stringify(cwd)}]\n[permissions.llv-stage.network]\nenabled = true\n`);
+  fs.writeFileSync(path.join(codexHome, "config.toml"), `permissions.llv-stage={filesystem={${JSON.stringify(cwd)}="write"}}\n`);
   const scratchProbe = path.join(access.scratchDirectory!, "writable.txt");
   const evidenceProbe = path.join(access.env.LLV_EVIDENCE_DIR!, "writable.txt");
   const before = fs.statSync(probe);
