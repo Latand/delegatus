@@ -362,13 +362,8 @@ interface CanonicalView {
 }
 
 function databaseIdentity(database: string): string | null {
-  try {
-    const stat = fs.statSync(database, { bigint: true });
-    return `${stat.dev}:${stat.ino}`;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
+  const stat = fs.statSync(database, { bigint: true, throwIfNoEntry: false });
+  return stat ? `${stat.dev}:${stat.ino}` : null;
 }
 
 /** A stored row whose JSON does not parse, or does not name its own key,
@@ -414,15 +409,45 @@ function absorb(snapshot: StoreSnapshot, parts: readonly SeatPart[], selection: 
   if (parts.length > 0) snapshot.view = null;
 }
 
+/* The collection revision, read again only when the database or its WAL
+   changed since the last read: an unchanged database costs two stats and no
+   query, as the state collections' own revision reads do. A writer asks
+   fresh. */
+const revisionProbes = new Map<string, { signature: string; revision: number | null }>();
+
+function databaseSignature(database: string): { identity: string; signature: string } | null {
+  const db = fs.statSync(database, { bigint: true, throwIfNoEntry: false });
+  if (!db) return null;
+  const wal = fs.statSync(`${database}-wal`, { bigint: true, throwIfNoEntry: false });
+  const identity = `${db.dev}:${db.ino}`;
+  return { identity, signature: `${identity}:${db.mtimeNs}:${db.size}:${wal ? `${wal.mtimeNs}:${wal.size}` : "-"}` };
+}
+
+/** The database's identity and the collection's revision (null before the
+    import), or null when there is no database at all. */
+function probeDatabase(database: string, fresh: boolean): { identity: string; revision: number | null } | null {
+  const before = databaseSignature(database);
+  if (!before) return null;
+  const held = revisionProbes.get(database);
+  if (!fresh && held?.signature === before.signature) return { identity: before.identity, revision: held.revision };
+  const revision = readStateCollectionRevision(database, ORCHESTRATOR_SEAT_COLLECTION);
+  if (databaseSignature(database)?.signature === before.signature) {
+    revisionProbes.delete(database);
+    revisionProbes.set(database, { signature: before.signature, revision });
+    while (revisionProbes.size > SNAPSHOT_CACHE_ENTRIES) revisionProbes.delete(revisionProbes.keys().next().value!);
+  }
+  return { identity: before.identity, revision };
+}
+
 /** The selected parts at the current revision, or null while the collection
     does not exist (the legacy file is still the record). */
-function storeSnapshot(database: string, parts: readonly SeatPart[], textKeys: boolean): StoreSnapshot | null {
-  const identity = databaseIdentity(database);
-  if (identity === null) return null;
+function storeSnapshot(database: string, parts: readonly SeatPart[], textKeys: boolean, fresh = false): StoreSnapshot | null {
+  const probed = probeDatabase(database, fresh);
+  if (probed === null) return null;
+  const { identity, revision } = probed;
   const cache = caches();
   let snapshot: StoreSnapshot | undefined = cache.snapshots.get(database);
   if (snapshot && snapshot.identity !== identity) snapshot = undefined;
-  const revision = readStateCollectionRevision(database, ORCHESTRATOR_SEAT_COLLECTION);
   if (revision === null) return null;
   if (snapshot && snapshot.revision !== revision) snapshot = undefined;
   const missing = parts.filter((part) => !snapshot?.parts.has(part));
@@ -570,10 +595,9 @@ interface LegacySnapshot {
 
 function legacySignature(filePath: string): string | null {
   try {
-    const stat = fs.statSync(filePath, { bigint: true });
-    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    const stat = fs.statSync(filePath, { bigint: true, throwIfNoEntry: false });
+    return stat ? `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}` : "missing";
+  } catch {
     return null;
   }
 }
@@ -645,11 +669,15 @@ function storeDatabase(filePath: string): string {
 export function readOrchestratorSeatStore(parts: readonly SeatPart[]): SeatStoreRead {
   const filePath = orchestratorSeatsLegacyPath();
   const database = storeDatabase(filePath);
-  const resolve = projectAliasResolver();
+  /* The alias map is read only when a stored project key has to be resolved:
+     a record that names no project answers without it. */
+  let resolver: ProjectResolver | null = null;
+  const resolve: ProjectResolver = (project) => (resolver ??= projectAliasResolver())(project);
   try {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    let absent = false;
+    for (let attempt = 0; attempt < 3 && !absent; attempt += 1) {
       const snapshot = storeSnapshot(database, parts, false);
-      if (!snapshot) break;
+      if (!snapshot) { absent = true; break; }
       if (!viewCurrent(snapshot.view, parts, resolve)) {
         if (loadTexts(snapshot) === "stale") {
           caches().snapshots.delete(database);
@@ -659,9 +687,8 @@ export function readOrchestratorSeatStore(parts: readonly SeatPart[]): SeatStore
       }
       return { signature: `sqlite:${database}:${snapshot.identity}:${snapshot.revision}`, file: snapshot.view!.file };
     }
-    if (readStateCollectionRevision(database, ORCHESTRATOR_SEAT_COLLECTION) !== null) {
-      return { signature: null, file: null };
-    }
+    // Three reads in a row moved past their own snapshot: answer unknown.
+    if (!absent) return { signature: null, file: null };
   } catch (error) {
     console.error("[orchestrator seats] the seat store could not be read", error instanceof Error ? error.message : String(error));
     return { signature: null, file: null };
@@ -677,9 +704,8 @@ export function orchestratorSeatStoreSignature(): string | null {
   const filePath = orchestratorSeatsLegacyPath();
   const database = storeDatabase(filePath);
   try {
-    const identity = databaseIdentity(database);
-    const revision = identity === null ? null : readStateCollectionRevision(database, ORCHESTRATOR_SEAT_COLLECTION);
-    if (revision !== null) return `sqlite:${database}:${identity}:${revision}`;
+    const probed = probeDatabase(database, false);
+    if (probed?.revision != null) return `sqlite:${database}:${probed.identity}:${probed.revision}`;
   } catch {
     return null;
   }
@@ -773,7 +799,7 @@ interface WritableState {
 
 function writableState(database: string, resolve: ProjectResolver): WritableState {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const snapshot = storeSnapshot(database, ALL_SEAT_PARTS, true);
+    const snapshot = storeSnapshot(database, ALL_SEAT_PARTS, true, true);
     if (!snapshot) throw new FileTransactionBusyError("orchestrator seat state is not imported");
     if (loadTexts(snapshot) === "stale") {
       caches().snapshots.delete(database);
@@ -1189,6 +1215,7 @@ export function resetOrchestratorSeatStoreForTests(): void {
   cache.texts.clear();
   cache.textBytes = 0;
   cache.digests.clear();
+  revisionProbes.clear();
 }
 
 /** Test seam: the open write collection, for fixtures that seed or damage
