@@ -13,6 +13,7 @@ const { registerPipelineTick } = await import("./controllerSignal");
 const { loadPipelines, savePipelines, pipelineRevision } = await import("./store");
 const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
 const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+const { clearStoredSeatRecord } = await import("@/lib/orchestrator/seatStoreFixture");
 const { createMcpToolService, FileMcpReceiptStore } = await import("@/lib/mcp/server");
 type McpReceiptStore = import("@/lib/mcp/server").McpReceiptStore;
 type ViewerMcpDomainDependencies = import("@/lib/mcp/bindings").ViewerMcpDomainDependencies;
@@ -423,7 +424,7 @@ test("a rotated seat's successor preserves the answer and resumes its predecesso
     expect(current().decisionAnswers).toHaveLength(1);
     expect((await patchPipeline(h.id, h.request, h.ports, agent("conversation_successor"))).replayed).toBe(true);
   } finally {
-    fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json"), { force: true });
+    clearStoredSeatRecord();
   }
 });
 

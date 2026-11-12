@@ -31,6 +31,7 @@ import { decodeCodexStructuredUserText } from "./codexStructuredUserText";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
+import { HOST_EVENT_WINDOW } from "./hostEventWindow";
 import { projectEngineHostEvent } from "./engineHostEvents";
 import type { DeliveryTimingMark, HostState, RuntimeEvent } from "./engineHost";
 import { appendRuntimeLiveTurnDelta, runtimeLiveTurnItems, type RuntimeLiveTurn } from "./liveTurn";
@@ -8450,4 +8451,69 @@ test("native accounting clocks reach the retained time reader through the real C
     expect(splitAttemptTime(at(1000), at(5000), readNativeTiming(threadId, root)))
       .toMatchObject({ modelMs: 3000, toolsMs: 1000, unknownMs: 0 });
   } finally { setSystemTime(); await host.release(); }
+});
+
+test("a Codex host keeps a bounded event window, replays older events from its ledger and keeps turn boundaries", async () => {
+  const threadId = "event-window-thread";
+  const eventStore = new MemoryEventStore();
+  const retained = (host: CodexAppServerHost) => (host as unknown as { events: RuntimeEvent[] }).events.length;
+  const replay = async (host: CodexAppServerHost, count: number) => {
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    const events: RuntimeEvent[] = [];
+    while (events.length < count) events.push((await stream.next()).value as RuntimeEvent);
+    await stream.return?.(undefined);
+    return events;
+  };
+  const server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
+  server.notify("turn/started", { threadId, turn: { id: "turn-first" } });
+  server.notify("turn/completed", { threadId, turn: { id: "turn-first", status: "interrupted" } });
+  server.notify("turn/started", { threadId, turn: { id: "turn-long" } });
+  const deltas = HOST_EVENT_WINDOW * 2;
+  for (let index = 0; index < deltas; index++) {
+    server.notify("item/agentMessage/delta", { threadId, turnId: "turn-long", delta: `part ${index} ` });
+  }
+  server.notify("turn/completed", { threadId, turn: { id: "turn-long", status: "completed" } });
+  await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "turn-ended" && event.turnId === "turn-long"), "the long turn to end");
+  const ledger = eventStore.load(threadId);
+  expect(ledger.length).toBeGreaterThan(deltas);
+  expect(retained(host)).toBeLessThanOrEqual(HOST_EVENT_WINDOW * 1.25);
+  // A reader from the start gets every event, the older ones from the ledger.
+  expect(await replay(host, ledger.length)).toEqual(ledger);
+  // The first turn's boundaries left the window long ago and still answer.
+  expect(host.tierCutEvidence("turn-first")).toBe("turn-ended");
+  await host.release();
+
+  // Adoption reconciles against the whole ledger, then keeps only the window.
+  const resumed = new FakeAppServer(threadId, threadId, false, [
+    { id: "turn-first", status: "interrupted", items: [] },
+    { id: "turn-long", status: "completed", items: [] },
+  ]);
+  const adopted = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore, spawnProcess: fakeSpawn(resumed) });
+  const after = eventStore.load(threadId);
+  expect(after.filter(event => event.kind === "turn-started" && event.turnId === "turn-first")).toHaveLength(1);
+  expect(after.filter(event => event.kind === "turn-started" && event.turnId === "turn-long")).toHaveLength(1);
+  expect(retained(adopted)).toBeLessThanOrEqual(HOST_EVENT_WINDOW * 1.25);
+  expect(await replay(adopted, after.length)).toEqual(after);
+  expect(adopted.tierCutEvidence("turn-first")).toBe("turn-ended");
+  await adopted.release();
+});
+
+test("heap counters observe events and subscriber queues without consuming them", async () => {
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(new FakeAppServer("heap-counter-thread")) });
+  const before = host.heapAttribution();
+  const stop = host.onStateChange(() => {});
+  const stream = host.attach(0)[Symbol.asyncIterator]();
+  try {
+    expect(before.engine).toBe("codex");
+    expect(before.events).toBeGreaterThan(0);
+    expect(host.heapAttribution()).toMatchObject({ events: before.events,
+      eventSubscribers: before.eventSubscribers + 1, stateSubscribers: before.stateSubscribers + 1,
+      queuedEvents: before.queuedEvents + before.events });
+    await stream.next();
+    expect(host.heapAttribution().queuedEvents).toBe(before.queuedEvents + before.events - 1);
+    await stream.return?.();
+    stop();
+    expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
+  } finally { stop(); await stream.return?.(); await host.release(); }
 });

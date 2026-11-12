@@ -15,6 +15,7 @@ import { withTaskCompletion } from "@/lib/tasks/completion";
 import type { FileEntry } from "@/lib/types";
 import { DONE_TASK_BOARD_RETENTION_MS, taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
+import { orchestratorSeatStoreSignature } from "@/lib/orchestrator/seatStore";
 import { lastScannedFiles } from "@/lib/scanner/scanCache";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { initializeStateCollections, readStateCollectionRevision, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
@@ -218,15 +219,10 @@ function readEligibilityRevisions(source: NonNullable<ReturnType<typeof taskFeed
   return revisions;
 }
 
+/** The seat store's committed revision: a designation or a rotation changes
+    which tasks hold a seat without a task edit. */
 function seatSignature(): string {
-  try {
-    const stat = fs.statSync(statePath("orchestrator-seats.json"), { bigint: true, throwIfNoEntry: false });
-    if (!stat) return "absent";
-    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
-    throw error;
-  }
+  return orchestratorSeatStoreSignature() ?? "unreadable";
 }
 function omittedTasks(database: string, create = false): SqliteStateCollection<OmittedTask> | null {
   const held = omittedCollections.get(database);
