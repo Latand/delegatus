@@ -25,7 +25,7 @@ import { initialAuto, writeAuto } from "./auto";
 import { GreenReader, type GreenVerdict } from "./green";
 import { buildEnv } from "./env";
 import { checkForUpdate, readRevision, runGit } from "./git";
-import { readLauncherRecord, requestRestart } from "./launcher";
+import { launcherControlFile, readLauncherRecord, requestRestart } from "./launcher";
 import { deploymentsEnabled, detectMode } from "./mode";
 import { readStartIdentity, sameProcess } from "./pid";
 import { getEvents, getSnapshot, getStepLog, postAuto, postCheck, postRestart, postUpdate, postInstallAction } from "./routes";
@@ -1325,6 +1325,68 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
   /* An ordinary systemd install: the unit is written with a specifier, and
      after the first self-update its main process is the bootstrap whose child
      is the recorded launcher. Either is this launcher's service. */
+  for (const disabled of [false, true]) test.each(["completed", "rolled-back", "refused"] as const)(`external legacy service deployment is %s with built-in updates disabled=${disabled}`, async outcome => {
+    const h = harness();
+    const record = readLauncherRecord(h.recordFile)!;
+    const calls: string[][] = [];
+    h.deps.env = { ...h.deps.env, DELEGATUS_DISABLE_SELF_UPDATE: disabled ? "1" : "0" };
+    h.deps.install = {
+      action: decision => installAction(decision, { cgroup: () => "0::/user.slice/user-1000.slice/user@1000.service/app.slice/delegatus.service", ready: () => true, env: {}, proven: () => true }),
+      run: action => runInstallAction(action, args => {
+        calls.push(args);
+        if (outcome === "refused") throw new Error("fixture service manager refusal");
+      }, undefined, { root: checkout, launcherPid: record.launcher.pid }, () => true),
+      entry: () => join(checkout, "bin", "cli.mjs"), unit: () => "delegatus.service",
+    };
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const intentFile = join(h.deps.dir, "apply.json");
+    const drainFile = join(h.deps.dir, "auto-drain.json");
+    const intent = () => JSON.parse(readFileSync(intentFile, "utf8"));
+    try {
+      if (disabled) {
+        for (const result of [await h.service.startUpdate("direct-update"), await h.service.retry("direct-retry"),
+          await h.service.setAuto(true), await h.service.performInstallAction()])
+          expect(result).toMatchObject({ ok: false, status: 403, code: "updates-disabled" });
+        expect(calls).toEqual([]);
+        expect(existsSync(intentFile)).toBe(false);
+      }
+      expect(await h.service.deployRevision({ revision: tipSha, idempotencyKey: `external-legacy-${disabled}-${outcome}` }))
+        .toMatchObject({ state: "accepted", revision: tipSha });
+      await until(() => existsSync(intentFile) && ["switching", "failed"].includes(intent().state));
+      expect(calls).toHaveLength(1);
+      expect(checkoutDeployments(h.deps.dir)[0]).toMatchObject({ phase: outcome === "refused" ? "failed" : "host-handoff", terminal: outcome === "refused" });
+      if (outcome === "refused") {
+        expect(intent()).toMatchObject({ state: "failed", detail: expect.stringContaining("service manager") });
+        expect(existsSync(record.releasePointer)).toBe(false);
+        expect(existsSync(launcherControlFile(record.requestFile, "trial"))).toBe(false);
+        return;
+      }
+      expect(intent()).toMatchObject({ state: "switching", externalRestart: true, trigger: "seat" });
+      // A replacement Viewer reads the real persisted apply and hold before
+      // the launcher reports either a coherent target or a verified rollback.
+      h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+      await h.service.autoTick();
+      expect(intent().state).toBe("switching");
+      expect(JSON.parse(readFileSync(drainFile, "utf8")).id).toBe(intent().requestId);
+      const revision = outcome === "completed" ? tipSha : firstSha;
+      writeFileSync(h.recordFile, JSON.stringify({ ...record,
+        launcher: { ...record.launcher, relaunch: 1, state: "healthy", revision, requestId: intent().requestId },
+        web: { ...record.web, revision: revision.slice(0, 7) }, runtimeHost: { ...record.runtimeHost, revision: revision.slice(0, 7) },
+      }));
+      if (outcome === "rolled-back") {
+        rmSync(record.releasePointer);
+        const trialFile = launcherControlFile(record.requestFile, "trial");
+        writeFileSync(trialFile, JSON.stringify({ ...JSON.parse(readFileSync(trialFile, "utf8")), state: "rolled-back", detail: "fixture candidate failed health" }));
+      }
+      await h.service.snapshot();
+      expect(intent()).toMatchObject({ state: outcome === "completed" ? "done" : "failed", rolledBack: outcome === "rolled-back" });
+      expect(checkoutDeployments(h.deps.dir)[0]).toMatchObject({ phase: outcome === "completed" ? "succeeded" : "rolled-back", terminal: true });
+      expect(existsSync(drainFile)).toBe(false);
+      expect(calls).toHaveLength(1);
+    } finally { h.service.stop(); }
+  });
+
   test.each(["expanded command", "bootstrap parent"] as const)("a unit proven by its %s is offered for restart and lets a seat deploy", async proof => {
     const h = harness(); const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
     const unit = "delegatus.service", entry = join(checkout, "bin", "cli.mjs"), bootstrap = 4242;

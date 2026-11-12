@@ -1678,7 +1678,7 @@ export class SelfUpdateService {
       });
       this.apply.patch({ externalRestart: true });
       if (action?.id === "restart-service") {
-        const result = await this.performInstallAction();
+        const result = await this.executeInstallAction();
         if (!result.ok) throw new Error(result.error);
       }
     }
@@ -1699,6 +1699,13 @@ export class SelfUpdateService {
 
   async performInstallAction(): Promise<ActionResult> {
     if (this.disabledByAdmin) return this.adminRefusal();
+    return this.executeInstallAction();
+  }
+
+  /** Shared handoff for the public action and an already admitted apply.
+      External deployments have their own admission, independent of the
+      administrator's policy for new built-in update requests. */
+  private async executeInstallAction(): Promise<ActionResult> {
     const decision = await this.decide();
     const action = await this.actionFor(decision);
     if (!action || !action.button || action.id === "update-first") return refuse(409, "cannot-restart", "The install action must be performed from its terminal");
