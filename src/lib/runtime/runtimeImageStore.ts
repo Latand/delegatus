@@ -495,6 +495,10 @@ function readWriterLockOwner(lock: string): WriterLockOwner | null {
   return readOwnerFile(path.join(lock, "owner.json"));
 }
 
+function directoryFdPath(fd: number, procSelfFdPaths: boolean): string {
+  return `${procSelfFdPaths ? "/proc/self/fd" : "/dev/fd"}/${fd}`;
+}
+
 function writerLockOwnerIsAlive(owner: WriterLockOwner | null): boolean {
   if (owner === null) return false;
   if (!procBackend.pidAlive(owner.pid)) return false;
@@ -688,6 +692,7 @@ export class RuntimeImageStore {
     // staging file beside other partials so startup also cleans crash debris.
     const partial = path.join(root.path, `.writer-ticket.${owner.token}.partial`);
     let acquired = false;
+    let gateFd: number | null = null;
     try {
       fs.writeFileSync(partial, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
       fs.renameSync(partial, ticket);
@@ -711,30 +716,75 @@ export class RuntimeImageStore {
           } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
           }
-          if (created) {
+          this.assertRootPinned(root);
+          let candidateFd: number;
+          try {
+            candidateFd = fs.openSync(gate, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+          } catch (error) {
+            // A replaced or disappearing gate is never followed. Retry it
+            // while holding our queue ticket, under the original deadline.
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== "ENOENT" && code !== "ELOOP" && code !== "ENOTDIR") throw error;
+            if (this.now() >= deadline) throw new RuntimeImageWriterBusyError();
+            sleepSync(5);
+            continue;
+          }
+          let candidateOwned = false;
+          let linkedByUs = false;
+          const candidatePath = directoryFdPath(candidateFd, this.procSelfFdPaths);
+          try {
+            const candidateStat = fs.fstatSync(candidateFd);
+            const pathStat = fs.lstatSync(gate);
+            if (!candidateStat.isDirectory() || pathStat.isSymbolicLink()
+              || candidateStat.dev !== pathStat.dev || candidateStat.ino !== pathStat.ino) {
+              continue;
+            }
+            const gateOwner = readWriterLockOwner(candidatePath);
+            const gateAgeMs = this.now() - candidateStat.mtimeMs;
+            const staleOwner = !writerLockOwnerIsAlive(gateOwner);
+            let released = false;
+            const releaseMarker = path.join(candidatePath, ".released");
             try {
-              // The published ticket already holds this owner's complete JSON.
-              // A hard link places it at gate/owner.json in one step, so no
-              // reader sees an empty owner and no owner is ever replaced.
-              fs.linkSync(ticket, path.join(gate, "owner.json"));
-              acquired = true;
+              const markerStat = fs.lstatSync(releaseMarker);
+              if (!markerStat.isFile() || markerStat.isSymbolicLink()) {
+                throw new Error("runtime image writer gate release marker is unsafe");
+              }
+              fs.unlinkSync(releaseMarker);
+              released = true;
             } catch (error) {
-              // ENOENT: an older writer retired the gate before the link.
-              // EEXIST: another writer's owner landed first. Both retry.
-              const code = (error as NodeJS.ErrnoException).code;
-              if (code !== "ENOENT" && code !== "EEXIST") throw error;
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
             }
-          } else {
-            const gateOwner = readWriterLockOwner(gate);
-            let gateAgeMs = 0;
-            try { gateAgeMs = this.now() - fs.lstatSync(gate).mtimeMs; }
-            catch (statError) {
-              if ((statError as NodeJS.ErrnoException).code !== "ENOENT") throw statError;
+            if (gateOwner && staleOwner) {
+              // The fd keeps this operation attached to the exact directory
+              // whose dead owner was read, even if its public name changes.
+              fs.unlinkSync(path.join(candidatePath, "owner.json"));
             }
-            // An ownerless gate can be mid-publication; retire it only once stale.
-            if (!writerLockOwnerIsAlive(gateOwner)
-              && (gateOwner !== null || gateAgeMs > this.writerLockStaleMs)) {
-              fs.rmSync(gate, { recursive: true, force: true });
+            const mayPublish = !gateOwner
+              ? created || released || gateAgeMs > this.writerLockStaleMs
+              : staleOwner;
+            if (mayPublish) {
+              try {
+                fs.linkSync(ticket, path.join(candidatePath, "owner.json"));
+                linkedByUs = true;
+                const current = fs.lstatSync(gate);
+                if (current.isSymbolicLink() || current.dev !== candidateStat.dev || current.ino !== candidateStat.ino) {
+                  continue;
+                }
+                gateFd = candidateFd;
+                candidateOwned = true;
+                acquired = true;
+              } catch (error) {
+                const code = (error as NodeJS.ErrnoException).code;
+                if (code !== "EEXIST" && code !== "ENOENT") throw error;
+              }
+            }
+          } finally {
+            try {
+              if (!candidateOwned && linkedByUs && readWriterLockOwner(candidatePath)?.token === owner.token) {
+                fs.unlinkSync(path.join(candidatePath, "owner.json"));
+              }
+            } finally {
+              if (!candidateOwned) fs.closeSync(candidateFd);
             }
           }
         }
@@ -745,11 +795,24 @@ export class RuntimeImageStore {
       }
       return run();
     } finally {
-      if (acquired && readWriterLockOwner(gate)?.token === owner.token) {
-        fs.rmSync(gate, { recursive: true, force: true });
+      try {
+        if (acquired && gateFd !== null) {
+          const gatePath = directoryFdPath(gateFd, this.procSelfFdPaths);
+          try {
+            if (readWriterLockOwner(gatePath)?.token === owner.token) {
+              fs.unlinkSync(path.join(gatePath, "owner.json"));
+              // A fixed marker distinguishes completed release from a crash
+              // after mkdir. Its parent mtime stays fresh for older readers.
+              fs.writeFileSync(path.join(gatePath, ".released"), "released", { flag: "wx", mode: 0o600 });
+            }
+          } finally {
+            fs.closeSync(gateFd);
+          }
+        }
+      } finally {
+        fs.rmSync(partial, { force: true });
+        fs.rmSync(ticket, { force: true });
       }
-      fs.rmSync(partial, { force: true });
-      fs.rmSync(ticket, { force: true });
     }
   }
 

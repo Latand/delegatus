@@ -49,8 +49,10 @@ if (publicationMode === "maintenance" && controls) {
   let paused = false;
   fs.linkSync = (from, to) => {
     const target = String(to);
+    let targetDirectory = path.dirname(target);
+    try { targetDirectory = fs.realpathSync(targetDirectory); } catch { /* Keep the lexical path for non-filesystem targets. */ }
     const gateOwner = path.basename(target) === "owner.json"
-      && path.basename(path.dirname(target)) === ".writer-lock-gate";
+      && path.basename(targetDirectory) === ".writer-lock-gate";
     const hold = !paused && gateOwner;
     if (hold) paused = true;
     if (hold && publicationMode === "gate-unowned") {

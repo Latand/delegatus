@@ -610,7 +610,7 @@ test("a queued legacy reader can share the atomically published gate with a new 
     expect(blobs).toHaveLength(1);
     expect(fs.statSync(path.join(root, blobs[0]!)).size).toBeLessThanOrEqual(maxBytes);
     expect(fs.readdirSync(path.join(root, ".writer-lock-gate.queue"))).toEqual([]);
-    expect(fs.existsSync(path.join(root, ".writer-lock-gate"))).toBe(false);
+    expect(fs.readdirSync(path.join(root, ".writer-lock-gate"))).toEqual([".released"]);
   } finally {
     fs.writeFileSync(path.join(controls, "publication-release"), "go");
     fs.writeFileSync(path.join(controls, "gate-owner-release"), "go");
@@ -669,7 +669,8 @@ test("an earlier queue head leaves a fresh gate alone until its owner links", as
     const results = await Promise.all(writers.map(writer => writer.result));
     expect(results.map(result => result.exit).sort(), JSON.stringify(results)).toEqual([0, 2]);
     expect(results).toEqual(results.map(result => ({ ...result, stdout: "", stderr: "" })));
-    expect(fs.existsSync(gate)).toBe(false);
+    expect(fs.existsSync(gate)).toBe(true);
+    expect(fs.readdirSync(gate)).toEqual([".released"]);
     expect(fs.readdirSync(path.join(root, ".writer-lock-gate.queue"))).toEqual([]);
   } finally {
     fs.writeFileSync(path.join(controls, "publication-release"), "go");
@@ -678,7 +679,7 @@ test("an earlier queue head leaves a fresh gate alone until its owner links", as
   }
 }, 20_000);
 
-test("a gate left ownerless by a killed writer is retired once stale", async () => {
+test("a gate left ownerless by a killed writer can be reused once stale", async () => {
   const root = sandbox();
   const controls = sandbox();
   const maxBytes = 4 * 1024 * 1024 + 128;
@@ -695,7 +696,8 @@ test("a gate left ownerless by a killed writer is retired once stale", async () 
     fs.utimesSync(gate, new Date(1_000), new Date(1_000));
     const refs = new RuntimeImageStore(root, { maxBytes }).putMany([{ base64: PNG.toString("base64"), mime: "image/png" }]);
     expect(refs).toHaveLength(1);
-    expect(fs.existsSync(gate)).toBe(false);
+    expect(fs.existsSync(gate)).toBe(true);
+    expect(fs.readdirSync(gate)).toEqual([".released"]);
     expect(fs.readdirSync(path.join(root, ".writer-lock-gate.queue"))).toEqual([]);
     expect(fs.readdirSync(root).filter(name => name.endsWith(".partial"))).toEqual([]);
   } finally {
@@ -703,6 +705,65 @@ test("a gate left ownerless by a killed writer is retired once stale", async () 
     await stopImageWriters([publisher]);
   }
 }, 20_000);
+
+for (const procSelfFdPaths of [true, false]) {
+  test(`gate retirement leaves a replacement live owner untouched (proc=${procSelfFdPaths})`, () => {
+    const root = sandbox();
+    const gate = path.join(root, ".writer-lock-gate");
+    fs.mkdirSync(gate, { mode: 0o700 });
+    fs.writeFileSync(path.join(gate, "owner.json"), JSON.stringify({ pid: 2_147_483_647, startIdentity: null, token: "dead" }));
+
+    const unlink = fs.unlinkSync;
+    let replaced = false;
+    fs.unlinkSync = ((filename: fs.PathLike) => {
+      if (!replaced && path.basename(String(filename)) === "owner.json" && String(filename).includes("/fd/")) {
+        replaced = true;
+        fs.renameSync(gate, path.join(root, ".examined-dead-gate"));
+        fs.mkdirSync(gate, { mode: 0o700 });
+        fs.writeFileSync(path.join(gate, "owner.json"), JSON.stringify({ pid: process.pid, startIdentity: null, token: "live" }));
+      }
+      return unlink(filename);
+    }) as typeof fs.unlinkSync;
+    try {
+      expect(() => new RuntimeImageStore(root, { writerLockWaitMs: 100, procSelfFdPaths })).toThrow(RuntimeImageWriterBusyError);
+    } finally {
+      fs.unlinkSync = unlink;
+    }
+
+    expect(replaced).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(gate, "owner.json"), "utf8"))).toMatchObject({ token: "live" });
+  });
+
+  test(`gate publication refuses a replaced symlink without writing outside the root (proc=${procSelfFdPaths})`, () => {
+    const area = sandbox();
+    const root = path.join(area, "images");
+    const outside = path.join(area, "outside");
+    fs.mkdirSync(root, { mode: 0o700 });
+    fs.mkdirSync(outside, { mode: 0o700 });
+
+    const mkdir = fs.mkdirSync;
+    let replaced = false;
+    fs.mkdirSync = ((filename: fs.PathLike, options?: fs.MakeDirectoryOptions) => {
+      const result = mkdir(filename, options);
+      if (!replaced && path.basename(String(filename)) === ".writer-lock-gate") {
+        replaced = true;
+        fs.renameSync(filename, path.join(root, ".displaced-gate"));
+        fs.symlinkSync(outside, filename);
+      }
+      return result;
+    }) as typeof fs.mkdirSync;
+    try {
+      expect(() => new RuntimeImageStore(root, { writerLockWaitMs: 100, procSelfFdPaths }).putMany([{
+        base64: PNG.toString("base64"), mime: "image/png",
+      }])).toThrow(RuntimeImageWriterBusyError);
+    } finally {
+      fs.mkdirSync = mkdir;
+    }
+
+    expect(replaced).toBe(true);
+    expect(fs.readdirSync(outside)).toEqual([]);
+  });
+}
 
 test("concurrent runtime image writers tolerate publication during partial cleanup", async () => {
   const root = sandbox();

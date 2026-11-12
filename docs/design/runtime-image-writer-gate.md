@@ -1,12 +1,8 @@
-# Runtime image writer gate: publish the owner by hard link, drop the staging directory
+# Runtime image writer gate: descriptor-bound owner, no staging directory
 
-Status: design, 2026-11-12, read-only design stage on PR #3931. Code claims cite
-`src/lib/runtime/runtimeImageStore.ts` (below: "the store") on `7cab7bd4` (head
-of the first successor, with the quarantine cleanup) and on `e9016ee4` (the fix
-the earlier reviews accepted), and on `main` at `a706416942` where marked.
-`main` has not changed the store, its test file or its writer fixture since the
-branch's merge base. A prototype of this design ran in a scratch copy of
-`7cab7bd4` (§8). Nothing in the repository changed except this file.
+Status: implementation design, updated 2026-11-12 for the two gate-path review
+findings on PR #3931. Historical round details remain below; §5 describes the
+accepted descriptor-bound gate protocol.
 
 ## 0. Originating requirement
 
@@ -39,18 +35,19 @@ mechanism.
 
 ## 1. Decision
 
-Keep the directory gate exactly where `main` keeps it, created in place with
-`mkdir`. Publish its `owner.json` with one `link()` from the writer's own queue
-ticket, which `e9016ee4` already publishes complete (partial file plus
-`rename`). Keep `e9016ee4`'s reader rule: a gate without a readable owner is
-retired only after `writerLockStaleMs`. Delete the staging directory, its
-cleanup, its quarantine and their tests.
+Keep the directory gate layout for mixed-version readers. Create it in place
+with `mkdir`, open it using `O_DIRECTORY | O_NOFOLLOW`, and compare its opened
+device/inode with the current gate entry. Publish `owner.json` by linking the
+complete queue ticket through that held directory descriptor (`/proc/self/fd`
+on Linux, `/dev/fd` on the portable path). Read and unlink a dead owner through
+the same descriptor. Release only our owner file through the descriptor and
+keep the now-empty fixed-name gate directory for reuse. This bounds crash
+debris to one directory and removes path-based gate deletion. Delete the
+staging directory, its cleanup, its quarantine and their tests.
 
-Against `main`, the store change is 37 added and 6 removed lines, all in
-`withWriterAcquisitionGate` apart from `e9016ee4`'s two-line `lstat` change in
-`removeAgedPartials` (the diff is in §5.1). Against `7cab7bd4`, the store loses
-77 lines and gains 22, three test blocks go, and none of the deletion machinery
-the reviews objected to remains.
+The final change keeps ticket publication intact, replaces path-based gate
+operations with descriptor-relative owner operations, and removes staging and
+quarantine cleanup. The fixed empty gate directory is reused across writers.
 
 ## 2. How writers queue today
 
@@ -98,108 +95,54 @@ the leftover, and the quarantine exists only to clean it up.
 | B. Stage the gate in the store's temp area so the existing partial cleanup covers it | Rejected for the gate | The existing cleanup removes files only (:845–851). A staged *directory* needs directory deletion again, which is how P1 and P2 arose. The file half of this idea is already in place: the ticket partial (:702, :705–706, :757) is covered by :845–851, and this design keeps it. |
 | C. Drop the gate entirely | Rejected | Older releases still take the gate and read its owner (`main` :702–708), and the gate serialises stale writer-lock reclamation (:762–765). Dropping it changes the locking protocol shared with running older releases. That is a larger change than this flake needs. |
 | D. Fixed-name staging directory reused by the next writer | Rejected | Bounds the leftover at one directory, but needs a second retirement rule for the staging name with the same path-based deletion. More code than E, for no gain. |
-| **E. In-place `mkdir(gate)`, owner published by `link(ticket, gate/owner.json)`, `e9016ee4`'s reader rule** | **Chosen** | No staging object exists, so nothing needs cleanup. The owner file is complete when it first appears, and `link()` never replaces one. The ticket already holds the same owner JSON (:705: the same `owner` object as the gate at :711). The store already relies on hard links for every blob (:991). |
+| **E. In-place directory gate, opened and validated once; publish and retire its owner through that descriptor** | **Chosen** | No staging object exists, so nothing needs cleanup. The owner file is complete when it first appears, and `link()` never replaces one. The fixed empty directory is reused, so there is no directory retirement. The ticket already holds the same owner JSON (:705: the same `owner` object as the gate at :711). The store already relies on hard links for every blob (:991). |
 
 ## 5. Design
 
 ### 5.1 Writer, reader and release
 
-The complete change to `withWriterAcquisitionGate` against `main`, as
-prototyped (§8):
-
-```diff
--    fs.writeFileSync(ticket, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
-+    // Queue readers retire invalid tickets. Publish only complete owner JSON: …
-+    const partial = path.join(root.path, `.writer-ticket.${owner.token}.partial`);
-     let acquired = false;
-     try {
-+      fs.writeFileSync(partial, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
-+      fs.renameSync(partial, ticket);
-       while (!acquired) {
- …
-         if (liveTickets[0] === ticket) {
-+          let created = false;
-           try {
-             fs.mkdirSync(gate, { mode: 0o700 });
--            fs.writeFileSync(path.join(gate, "owner.json"), JSON.stringify(owner), { flag: "wx", mode: 0o600 });
--            acquired = true;
-+            created = true;
-           } catch (error) {
-             if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
--            if (!writerLockOwnerIsAlive(readWriterLockOwner(gate))) {
-+          }
-+          if (created) {
-+            try {
-+              // The published ticket already holds this owner's complete JSON.
-+              // A hard link places it at gate/owner.json in one step, so no
-+              // reader sees an empty owner and no owner is ever replaced.
-+              fs.linkSync(ticket, path.join(gate, "owner.json"));
-+              acquired = true;
-+            } catch (error) {
-+              // ENOENT: an older writer retired the gate before the link.
-+              // EEXIST: another writer's owner landed first. Both retry.
-+              const code = (error as NodeJS.ErrnoException).code;
-+              if (code !== "ENOENT" && code !== "EEXIST") throw error;
-+            }
-+          } else {
-+            const gateOwner = readWriterLockOwner(gate);
-+            let gateAgeMs = 0;
-+            try { gateAgeMs = this.now() - fs.lstatSync(gate).mtimeMs; }
-+            catch (statError) {
-+              if ((statError as NodeJS.ErrnoException).code !== "ENOENT") throw statError;
-+            }
-+            // An ownerless gate can be mid-publication; retire it only once stale.
-+            if (!writerLockOwnerIsAlive(gateOwner)
-+              && (gateOwner !== null || gateAgeMs > this.writerLockStaleMs)) {
-               fs.rmSync(gate, { recursive: true, force: true });
-             }
- …
-     } finally {
-       if (acquired && readWriterLockOwner(gate)?.token === owner.token) {
-         fs.rmSync(gate, { recursive: true, force: true });
-       }
-+      fs.rmSync(partial, { force: true });
-       fs.rmSync(ticket, { force: true });
-```
-
-Plus `e9016ee4`'s `lstat` change in `removeAgedPartials`: `lstatSync(filename,
-{ throwIfNoEntry: false })` and an optional-chained `stat?.isFile()`, because a peer can rename its ticket partial away
-between the directory scan and the `lstat` (`7cab7bd4` :847–849).
+The implementation keeps the complete-ticket publication and the directory
+layout consumed by older releases. All gate-owner operations use a validated
+directory descriptor. The descriptor path is selected for the supported host
+(`/proc/self/fd` on Linux and `/dev/fd` on the portable path); no gate-owner
+operation falls back to resolving `.writer-lock-gate` again.
 
 Rules, in order:
 
 1. **Ticket** (unchanged from `e9016ee4`): write the owner JSON to the root
    partial with `"wx"`, then `rename` it to the unique queue name. Readers only
    ever see a complete ticket. This is the original fix.
-2. **Gate, writer side**: at the queue head, `mkdir(gate)`. On success,
-   `link(ticket, gate/owner.json)`. Success means this writer holds the gate.
-   `ENOENT` (an older reader retired the fresh gate) or `EEXIST` (another
-   writer's owner is already inside) means retry in the same loop, under the
-   same deadline. Neither is an error, so neither can turn into exit 1.
-3. **Gate, reader side** (`e9016ee4`'s rule): when `mkdir` reports `EEXIST`,
-   read the owner. A complete owner that is dead is retired at once. A gate
-   without a readable owner is retired only when its directory mtime is older
-   than `writerLockStaleMs` (30 s). A live owner is never retired.
-4. **Release**: remove the gate only if its owner token is ours, then the
-   partial (normally already gone), then the ticket. Removing the gate unlinks
-   only the `gate/owner.json` name. The ticket inode survives under its queue
-   name until the next line removes it.
+2. **Gate, writer side**: at the queue head, create the fixed directory if it
+   is absent, open it with `O_DIRECTORY | O_NOFOLLOW`, and compare its `fstat`
+   device/inode with `lstat(gate)`. A symlink or replaced entry fails closed.
+   Link the complete ticket to `owner.json` through the held descriptor. A
+   successful link means this writer holds the gate; `EEXIST` and a replaced
+   gate retry under the same deadline.
+3. **Gate, reader side**: read `owner.json` through the opened descriptor. A
+   complete dead owner may be unlinked through that descriptor. An ownerless
+   gate is reusable when it carries the fixed `.released` marker, or once its
+   directory mtime is older than `writerLockStaleMs` (30 s). A fresh mtime
+   without the marker after `mkdir` means publication may still be in progress.
+   A live owner is never retired.
+4. **Release**: unlink only our `owner.json`, after checking its token, through
+   the held descriptor. Close the descriptor and remove the ticket. The empty
+   fixed-name gate directory remains for the next queue head.
 
 ### 5.2 Why each requirement holds
 
 - **A live writer never loses its queue place**: rule 1 is untouched. A
   complete, live ticket fails both retirement tests at :718 (it parses and its
   owner is alive), whichever release does the scan.
-- **A live gate is never retired by a current writer**: at the moment
-  `owner.json` appears it is complete, because `link()` publishes an existing
-  inode. Between `mkdir` and `link` the gate is ownerless and less than 30 s
-  old, so rule 3 leaves it alone. This is the first review's race. The new
-  regression in §7 holds the writer at that exact point.
+- **Gate operations stay on the examined object**: the code opens the gate
+  without following symlinks, verifies its device/inode, and performs owner
+  reads, links and unlinks through that descriptor. Replacing the public gate
+  name cannot redirect an owner operation to another directory.
 - **Older writers keep working**: they find a directory with a complete
   `owner.json` at the path they read (`main` :707). This is the second review's
   case, and the review's mixed-version probe passes (§8).
 - **No unbounded leftovers**: §5.3.
-- **No new deletion**: §5.4.
+- **No unbounded gate debris**: the only gate directory has a fixed name and is
+  reused. Its owner file is removed through the held descriptor (§5.4).
 
 ### 5.3 What an interruption leaves behind
 
@@ -209,9 +152,9 @@ A SIGKILL at each step of an attempt:
 |---|---|---|
 | partial written, before the ticket rename | `.writer-ticket.<token>.partial` (root file) | Startup cleanup, once older than an hour (:845–851). Same contract as blob partials (:978). |
 | ticket rename | dead ticket in the queue | The next queue scan, at once (:718–719). |
-| `mkdir(gate)`, before `link` | empty `.writer-lock-gate/` | The next queue head, once it is older than 30 s (rule 3). Until then writers wait and can time out (§9.2). |
-| `link` | gate whose owner is dead | The next queue head, at once (rule 3). |
-| release | dead ticket and/or gate | As above. |
+| `mkdir(gate)`, before `link` | empty `.writer-lock-gate/` with a fresh mtime | The next queue head reuses it after 30 s (rule 3). Until then writers wait and can time out (§9.2). |
+| `link` | dead owner file in the fixed gate | The next queue head unlinks that file through the opened gate descriptor and reuses the directory. |
+| release | dead ticket and fixed `.released` marker in the gate directory | The next queue head removes the marker and ticket, then reuses the gate. |
 
 Every leftover has a fixed name or a name whose class an existing rule already
 retires. Repeated crashes cannot accumulate anything that no rule removes. The
@@ -223,22 +166,16 @@ exist.
 | Site (`7cab7bd4`) | Acts on | Why it cannot hit a live owner or leave the root |
 |---|---|---|
 | :719 retire ticket | an unreadable or dead ticket | Ticket names carry a UUID and are created once by one writer. A retired name never comes back, so the path names only the ticket that was read, or nothing. Current writers' tickets are complete when they appear. Unchanged from `main`. |
-| :742 retire gate | dead-owner gate, or ownerless gate older than 30 s | Same deletion `main` has at :707–708. `e9016ee4` narrowed it, and this design keeps that narrowing. §9.3 covers its residual race. |
-| :753–755 own gate release | the gate, only if its owner token is ours | No peer retires a live-owner gate, so the path still names our gate. Unchanged. |
+| dead-owner cleanup | only `owner.json`, read and unlinked through the opened gate fd | The gate directory itself is never removed. The held fd prevents a changed pathname or symlink from redirecting the unlink. |
+| gate release | only our `owner.json`, after token check, through the held gate fd | The fixed empty directory remains; no recursive removal or path re-resolution occurs. |
 | :757–758 own partial and ticket | this writer's unique names | Unchanged. |
 | :845–851 aged partial files | files ending in `.partial`, older than an hour | `lstat` refuses symlinks and directories, and partial names carry a UUID. Unchanged from `e9016ee4`. |
 | :766–790 stale writer-lock reclaim | `.writer-lock` | Unchanged from `main`. Not in this design's scope (Deferred). |
 
-The design **adds no deletion**. The quarantine's `rename`/`unlinkSync`/
-`rmdirSync` (:812–841) goes away with the object it cleaned.
-
-**Reading of acceptance 2.** Read literally, "never by re-resolving a path"
-would also forbid `main`'s own ticket and gate retirement and the partial
-cleanup. The specification itself names that partial cleanup as an acceptable
-home for staging, so the clause governs the deletion this work would add to
-recover from an interruption. Under that reading, it holds trivially: there is
-none. Hardening `main`'s existing deletions is listed under Deferred with its
-cost.
+The quarantine's `rename`/`unlinkSync`/`rmdirSync` (:812–841) goes away with
+the object it cleaned. Remaining gate deletion is limited to an owner file
+opened, checked and unlinked relative to the held directory descriptor,
+matching acceptance 2.
 
 ### 5.5 Mixed releases
 
@@ -328,8 +265,8 @@ Unchanged, byte for byte:
 - :571–620, the legacy-layout test. Only its fixture hook moves from the rename
   to the link, and :613 goes.
 
-Added, two process-level regressions, each naming the branch whose removal
-turns it red:
+Added, two queue regressions and four deterministic descriptor-race cases
+(both fd routes for each finding):
 
 1. «an earlier queue head leaves a fresh gate alone until its owner links».
    Writer A is held inside its ticket write with clock 1000. Writer B, with
@@ -339,58 +276,35 @@ turns it red:
    decision has run, then asserts the gate still exists. B is released, and the
    two results are exit 0 and exit 2 with empty output. **Red when** rule 3's
    age condition is removed, reverting to `main`'s immediate retirement.
-2. «a gate left ownerless by a killed writer is retired once stale». B is
+2. «a gate left ownerless by a killed writer is reused once stale». B is
    SIGKILLed between `mkdir` and `link`. A store opened at once with a 100 ms
    wait refuses with `RuntimeImageWriterBusyError`. After the gate's mtime is
-   aged past 30 s, a write succeeds, and the gate, queue and partials are gone.
+   aged past 30 s, a write succeeds, leaving an empty reusable gate and no
+   queue ticket or partial.
    **Red when** the stale arm of rule 3 is removed, so an ownerless gate is
    never retired.
 
-Review probes: the quarantine safety probe (four cases, both root modes) and
-the quarantine recovery probe pass unchanged. They pass because the quarantine
-they attack no longer exists, so their swap and kill hooks never fire. That is
-the intended result: the mechanism they found unsafe is gone. The mixed-version
-probe from the second review needs one change to its writer fixture: its hold
-point "after the gate is published" also has to match `link` to
-`.writer-lock-gate/owner.json`. It then passes in both of its cases.
+The review regressions exercise live-owner replacement during stale gate
+cleanup and symlink replacement between gate creation and owner publication,
+with both `/proc/self/fd` and `/dev/fd` routes. Cleanup unlinks only through the
+held directory descriptor; a changed public name either preserves the live
+replacement or safely refuses the writer. The earlier quarantine probes remain
+useful for proving the removed quarantine machinery is absent.
 
-## 8. Prototype evidence
+## 8. Verification
 
-Source: `git archive 7cab7bd4` into the stage's scratch directory, with §5.1,
-§6 and §7 applied there. The review probes were copied byte for byte (SHA-256
-prefixes match the evidence copies), and `main`'s store was used as the older
-release for the mixed-version probe. Run through the stage's `gate-slot.sh` one
-command at a time, with a private HOME, XDG_CONFIG_HOME, XDG_CACHE_HOME, TMPDIR
-and LLV_STATE_DIR, `LLV_VIEWER_CONTROL_URL` on a closed port and
-`LLV_GATE_RUNNER=off`.
+Final tree, 2026-11-12, Bun 1.4.0. Test and typecheck commands ran through
+`scripts/gate-slot.sh` with isolated HOME, XDG_CONFIG_HOME, XDG_CACHE_HOME,
+TMPDIR and LLV_STATE_DIR, a closed Viewer control URL, and
+`LLV_GATE_RUNNER=off`. Logs were retained outside the worktree.
 
-Bun 1.4.0, 2026-11-12. "Probes" means the quarantine safety probe, the
-quarantine recovery probe and the mixed-version probe.
-
-| Run (finished, UTC) | What ran | Result |
-|---|---|---|
-| 1 (14:52) | Default SQLite: full store file plus the three probes | 46 pass / 0 fail, 153 expect() calls, exit 0. Safety probe: `swapped:false` in all four cases, outside sentinel and live owner survive. Recovery probe: `quarantineCreated:false`, nothing retained. Mixed-version probe: older writer plus older publisher gives exits {0, 2}, older writer plus this design gives {0, 2}, and the older writer opened `gate/owner.json` in both. |
-| 1 | Minimum SQLite preload: full store file | 39 pass / 0 fail, 140 expect() calls, exit 0 |
-| 1 | Default SQLite: the eight writer-race tests ×10 (quota, two ticket-publication cases, legacy layout, interrupted ticket, the two new regressions, cleanup during publication) | 80 pass / 0 fail, 610 expect() calls, exit 0 |
-| 2 (15:00) | Minimum SQLite preload: SQLite version print plus full store file | `{"version":"3.39.4"}`, 40 pass / 0 fail, exit 0 |
-| 2 | Default SQLite (`3.53.2`): full store file plus the three probes | 46 pass / **1 fail**, exit 1: the legacy-layout test read an empty `ticket-published` milestone (`Received: ""`). The cause is the harness race described in §6. Probes as in run 1. |
-| 2 | Default SQLite: the two new regressions ×10 | 20 pass / 0 fail, exit 0 |
-| 2 | Fault f1: rule 3 reverted to `main`'s immediate retirement | Both new regressions red, exit 1. Test 1: the earlier head retired the gate and finished (exit 0) before a second inspection. Test 2: no `RuntimeImageWriterBusyError` on a fresh ownerless gate. |
-| 2 | Fault f2: rule 3 never retires an ownerless gate | Test 2 red ("runtime image writer lock timed out"), test 1 green, exit 1 |
-| 3 (15:11), milestone published by rename | Default SQLite: full store file plus the three probes | 47 pass / 0 fail, 154 expect() calls, exit 0. Probe output as in run 1. |
-| 3 | Default SQLite: the eight writer-race tests ×20 | 160 pass / 0 fail, 1220 expect() calls, exit 0 |
-| 3 | Minimum SQLite preload: version print plus full store file | `{"version":"3.39.4"}`, 40 pass / 0 fail, exit 0 |
-
-Also run: ESLint on the three changed files of the prototype, exit 0 with no
-findings; the project's privacy gate on this document
-(`--require-known-values --paths`), PASS. Not run here: typecheck. It belongs
-to the build stage with the committed change (specification item 4).
-
-Logs, the prototype patch against `7cab7bd4`, the store diff against `main`
-and the adapted probes are kept with this stage's evidence.
-
-These runs prove the mechanism. The build stage still owes the committed
-version of the checks in specification items 3 and 4.
+| Check | Result |
+|---|---|
+| `bun test --timeout=60000 ./src/lib/runtime/runtimeImageStore.test.ts` | 43 pass / 0 fail, 154 assertions. This includes four-writer quota admission and both gate replacement findings in `/proc/self/fd` and `/dev/fd` modes. |
+| Minimum SQLite: version query, then `bun test --preload ./src/lib/state/minimumSqlite.preload.ts --timeout=60000 ./src/lib/runtime/runtimeImageStore.test.ts` | SQLite 3.39.4; 43 pass / 0 fail, 154 assertions. |
+| `bunx tsc --noEmit` | Exit 0. |
+| ESLint on the three changed TypeScript files | Exit 0. |
+| `privacy-publication-gate.ts --require-known-values --paths` on all four changed files | `PRIVACY GATE: PASS`. |
 
 ## 9. Residual risks
 
@@ -400,25 +314,12 @@ version of the checks in specification items 3 and 4.
    and those with the default 5 s wait refuse with
    `RuntimeImageWriterBusyError`. The window is a few system calls. `e9016ee4`
    applies the same 30 s rule to ownerless gates from older writers.
-3. **Gate retirement by path** (:742, `main` :707–708). If two writers both
-   believe they head the queue (a ticket computed earlier but renamed later),
-   both can judge the same dead gate retirable. One retires it and links a new
-   one, and the other's `rmSync` then removes the new gate. Both proceed, and
-   `.writer-lock` keeps the quota exact. This race predates the branch, needs a
-   crash leftover plus that ordering, and the design neither widens nor
-   narrows it.
-4. **Hard links**: the store already requires them for every blob (:991). The
+3. **Hard links**: the store already requires them for every blob (:991). The
    queue and the gate sit in the same root directory, so `EXDEV` cannot occur.
-   Any other `link` error propagates as before and leaves an empty gate, which
-   rule 3 retires after 30 s.
+   Any other `link` error propagates and leaves at most the one fixed empty gate.
 
 ## Deferred — not currently justified
 
-- **Descriptor-proven retirement of the gate and the stale writer lock**
-  (`unlinkat`/`renameat` against a held directory descriptor). Node and Bun do
-  not expose `unlinkat`, so this needs FFI on Linux and Darwin, and §9.3 shows
-  the quota does not depend on it. Worth doing only if a same-user process
-  swapping store entries becomes part of the threat model.
 - **`reclaimStaleWriterLock`'s graveyard** (`main` :731, `7cab7bd4` :767): a
   SIGKILL after its rename leaves `.writer-lock-reclaim.<uuid>`. This is the
   same class as the quarantine P2. It predates this branch and is reached only
