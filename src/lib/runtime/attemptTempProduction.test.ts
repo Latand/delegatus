@@ -12,6 +12,7 @@ import { attemptReferencesClear } from "./attemptTempFilesystem";
 import { holdFinishedRoot, finishedLane } from "./attemptTempRetention.testSupport";
 import { RecordedCheckStore, recordedRootHeld } from "@/lib/recordedChecks/store";
 import { attemptTempJournalPath } from "@/lib/tempSweep";
+import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 
 test.each([false, true])("all roots of an acknowledged check await expiry after clock rollback (restart=%s)", async restart => {
   const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
@@ -127,6 +128,7 @@ test.each([["root", false], ["copy", false], ["root", true], ["copy", true]] as 
   const { sweepEvidenceCopies } = await import("./attemptEvidenceCopies");
   const { digest } = await import("@/lib/recordedChecks/wire");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-protected-replay-")); roots.push(root);
+  isolateState(root); // The copy case writes its marker through statePath().
   const now = Date.parse("2026-11-01T00:00:01Z"), p = finishedLane(root, "2026-10-01T00:00:00Z");
   p.merge = { state: "blocked", by: null, repository: "fixture/repository", prNumber: 1,
     policyChangedAt: p.closedAt!, reviewedHead: "a".repeat(40), chain: [], updates: [], seenChecks: [], head: null, headSeenAt: null,
@@ -135,7 +137,7 @@ test.each([["root", false], ["copy", false], ["root", true], ["copy", true]] as 
   savePipelines([p]);
   const directory = kind === "root" ? path.join(root, "llv-stage-protected-replay") : statePath("evidence", "attempt-temp", digest(root));
   fs.mkdirSync(path.join(directory, "nested"), { recursive: true });
-  fs.writeFileSync(path.join(directory, "nested", ".delegatus-keep"), "operator pin");
+  plantKeepMarker(path.join(directory, "nested", ".delegatus-keep"));
   fs.writeFileSync(path.join(directory, "payload"), "keep data");
   const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
   if (kind === "root") store.register({ directory, pipelineId: p.id, launchId: "retention-launch", retainUntilClose: true, createdAt: 1 });
@@ -333,7 +335,7 @@ test.each([false, true])("six-day retention keeps the check and excludes human p
   const now = Date.parse("2026-11-01T00:00:00Z"), expiresAt = now + 86400000;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-six-days-")); roots.push(root);
   const directory = path.join(root, "llv-stage-held"); fs.mkdirSync(directory);
-  if (keep) fs.writeFileSync(path.join(directory, ".delegatus-keep"), "operator pin");
+  if (keep) plantKeepMarker(path.join(directory, ".delegatus-keep"));
   const p = finishedLane(root, "2026-10-26T00:00:00Z"); savePipelines([p]);
   const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
   try {
@@ -481,7 +483,14 @@ test.each(["running", "paused", "needs_decision", "teardown", "merge", "attempt"
 });
 
 const roots: string[] = [];
-afterEach(() => { savePipelines([]); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+const stateRestores: Array<() => void> = [];
+/** Points LLV_STATE_DIR inside a test's own root until the test ends, passed or failed. */
+function isolateState(root: string): void {
+  const prior = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  stateRestores.push(() => { if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior; });
+}
+afterEach(() => { removeKeepMarkers(); for (const restore of stateRestores.splice(0).reverse()) restore(); savePipelines([]); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 const modeledBytesPerHour = (removedBytes: number, elapsedMs: number) => removedBytes * 3600000 / (60000 + elapsedMs);
 
 test("hourly reclaim model includes sweep duration before the scheduler's minute wait", () => {
@@ -776,7 +785,7 @@ test.each(["due", "upcoming"] as const)("the persisted %s forecast clears after 
   savePipelines([pipeline]);
   const destination = statePath("evidence", "attempt-temp", digest("report-pin"));
   fs.mkdirSync(destination, { recursive: true });
-  fs.writeFileSync(path.join(destination, ".delegatus-keep"), "operator pin");
+  plantKeepMarker(path.join(destination, ".delegatus-keep"));
   const store = new AttemptTempStore();
   store.registerCopy({ destination, pipelineId: pipeline.id, launchId: "copy", kind: "lane",
     createdAt: 1, expiresAt, checkedAt: 0, bytes: 4096 });

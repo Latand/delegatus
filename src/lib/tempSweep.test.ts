@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { procBackend } from "@/lib/proc";
 import { agentRegistry } from "@/lib/agent/registry";
+import { plantKeepMarker, removeKeepMarkers } from "./runtime/keepMarker.testSupport";
 
 import {
   isOwnedTempConsumerName,
@@ -32,6 +33,7 @@ const made: string[] = [];
 const children: ChildProcess[] = [];
 
 afterEach(async () => {
+  removeKeepMarkers();
   /* Only the children this file started, by the handle it kept. */
   await Promise.all(children.splice(0).map(child => new Promise<void>(resolve => {
     if (child.exitCode !== null || child.signalCode !== null) return resolve();
@@ -806,7 +808,7 @@ test("a device boundary is held and mountinfo octal escapes are decoded", () => 
 
 test("a .delegatus-keep file pins a stale tree", async () => {
   const { directory, options } = boundedFixture();
-  fs.writeFileSync(path.join(directory, ".delegatus-keep"), "");
+  plantKeepMarker(path.join(directory, ".delegatus-keep"), "");
   const report = await sweepStaleTempDirs(options);
   expect(report.held?.[0]?.reason).toBe("pinned");
   expect(fs.existsSync(directory)).toBeTrue();
@@ -864,7 +866,7 @@ test.each(["fresh-write", "pin", "git-metadata", "worktree-owner", "entry-limit"
   expect(interrupted.errors).toHaveLength(1);
   const trash = path.join(root, fs.readdirSync(root).find(name => name.startsWith(".delegatus-trash-"))!);
   if (kind === "fresh-write") fs.writeFileSync(path.join(trash, "unique.txt"), "new operator data");
-  if (kind === "pin") fs.writeFileSync(path.join(trash, ".delegatus-keep"), "");
+  if (kind === "pin") plantKeepMarker(path.join(trash, ".delegatus-keep"), "");
   if (kind === "git-metadata") fs.mkdirSync(path.join(trash, ".git"));
   if (kind === "worktree-owner") options.currentWorktrees = () => [directory];
   if (kind === "post-scan-new" || kind === "post-scan-change") {
