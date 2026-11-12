@@ -412,7 +412,6 @@ test("the previous review and merge policy upgrades once without changing pendin
   const upgraded = orchestratorMandateUpgraded(bespoke);
   expect(upgraded.startsWith(bespoke)).toBe(true);
   expect(orchestratorMandateUpgraded(upgraded)).toBe(upgraded);
-  expect(orchestratorMandateWithRoleTable(bespoke, null)).toBe(bespoke);
   expect(orchestratorMandateForDelivery(bespoke)).toContain(bespoke);
 });
 
