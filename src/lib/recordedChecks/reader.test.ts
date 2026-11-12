@@ -53,13 +53,13 @@ test("a replaced state file is read through a new connection", () => {
 });
 
 test("a missing file and a state file without the ledger read as absent", () => {
-  expect(readRecorded(store => store.rootHeld("/work/a"), "absent")).toBe("absent");
+  expect(readRecorded<boolean | "absent">(store => store.rootHeld("/work/a"), "absent")).toBe("absent");
   const plain = new Database(path.join(root, "state.sqlite"), { create: true });
   plain.exec("CREATE TABLE unrelated(id INTEGER)");
   plain.close();
-  expect(readRecorded(store => store.rootHeld("/work/a"), "absent")).toBe("absent");
+  expect(readRecorded<boolean | "absent">(store => store.rootHeld("/work/a"), "absent")).toBe("absent");
   ledger(path.join(root, "state.sqlite"), ["/work/a"]).close();
-  expect(readRecorded(store => store.rootHeld("/work/a"), "absent")).toBe(true);
+  expect(readRecorded<boolean | "absent">(store => store.rootHeld("/work/a"), "absent")).toBe(true);
 });
 
 test("a failed read closes the connection it used", () => {
