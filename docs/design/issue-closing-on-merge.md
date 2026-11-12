@@ -54,7 +54,7 @@ summary, copied verbatim (`src/lib/pipelines/stagePullRequest.ts:213`, `:220`).
 | Batch landing | the runner's verified receipt (`reconcileBatchLanding`, `autoMerge.ts:1630`; `readBatchLanding`, `src/lib/forge/batchLanding.ts:58`) and the cache reading (`landedPullRequests`, `src/lib/done/candidates.ts:91`) |
 | Batch PR | `scripts/merge-batch.ts` forwards `Closes #N` for every carried PR's closing references (`:1020-1024`) and closes the originals (`:1263-1269`) |
 | Work after a landing | `scheduleAutoMerge` (`autoMerge.ts:1849`): post-merge recovery on its own slot, and the task-finish sweep chained after the merge pass (`:1907-1911`) |
-| Forge writes | `forgeWriter` (`src/lib/forge/appWrite.ts:140`). The issue-scoped App token set is `FORGE_APP_ISSUE_PERMISSIONS` (`bin/forge-app-token.mjs:34`), already used by issue reports (`src/lib/issueReports/publish.ts:40`) |
+| Forge writes | `forgeWriter` (`src/lib/forge/appWrite.ts`). Settlement selects `FORGE_APP_ISSUE_DELIVERY_PERMISSIONS`; approved reports select `FORGE_APP_ISSUE_PERMISSIONS` (`bin/forge-app-token.mjs`) |
 
 ## 3. Options
 
@@ -260,11 +260,11 @@ line.
 
 ### 4.7 Identity, permission, text
 
-**Writer.** The writer is `forgeWriter(run, forgeAppWriter(…, issue-scoped
-tokens))`, as issue reports use it:
+**Writer and reader.** Settlement uses `forgeWriter` and `githubRunner` with
+one issue-delivery App token source:
 
 - In a repository declared for the Delegatus App, the App writes with
-  `issues: write` and `metadata: read` only.
+  `issues: write`, `pull_requests: read` and `metadata: read`.
 - Elsewhere, the machine's `gh` writes, as the merge runner already does.
 - A refused App sends nothing as a person.
 
@@ -272,6 +272,22 @@ tokens))`, as issue reports use it:
 opened by the App, the newest on 2026-11-10, so the installation already grants
 `issues: write`. Another installation without the grant ends in
 `refused/app-permission` and an orchestrator line.
+
+The PR-read permission is needed for private repositories: GitHub's
+[Get a pull request endpoint](https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request)
+requires it. The same token reads issue-closure events and the PR named by
+the closer. `FORGE_APP_ISSUE_DELIVERY_PERMISSIONS` is selected by
+`token --issue-delivery`. Approved issue reports retain their separate
+`--issues` purpose and its issues-only permission set. Ordinary PR and Git
+writes retain `FORGE_APP_PERMISSIONS`.
+
+`mintForgeAppToken` is the producer of those CLI arguments; the token helper
+validates the installation grant and the exact returned permissions. The
+engine's issue scheduler selects the delivery purpose. `agentForgeDir`
+copies the helper into a directory addressed by its current contents; an
+older installed helper directory remains intact. Private-repository tests
+exercise this production path with an old copy present, including full
+delivery, partial reopening, missing grants and conflicting purposes.
 
 **Text.** Notes use fixed English sentences and numbers. The one variable part
 is the PR title, which is already published. It passes `inspectPullRequestText`

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  FORGE_APP_API_WRITES, FORGE_APP_GH_COMMANDS, FORGE_APP_ISSUE_PERMISSIONS, FORGE_APP_PERMISSIONS, FORGE_PUSH_BASE, FORGE_REPOSITORIES_ENV, ForgeAppRefusal, classifyGh, declaredRepositories, gitCredential,
+  FORGE_APP_API_WRITES, FORGE_APP_GH_COMMANDS, FORGE_APP_ISSUE_PERMISSIONS, FORGE_APP_ISSUE_DELIVERY_PERMISSIONS, FORGE_APP_PERMISSIONS, FORGE_PUSH_BASE, FORGE_REPOSITORIES_ENV, ForgeAppRefusal, classifyGh, declaredRepositories, gitCredential,
   isDeclaredRepository, mintInstallationToken, parseRepository, productionPorts, revokeInstallationToken, runGh, runGit, FORGE_PUSH_MINT_MARKER,
 } from "./forge-app-token.mjs";
 
@@ -219,6 +219,35 @@ describe("minting", () => {
     expect(await runGh(["pr", "create", "--fill"], gh)).toBe(0);
     expect(gh.github.calls[1]!.body).toEqual({ repositories: ["widgets"], permissions: { ...FORGE_APP_PERMISSIONS } });
     expect(gh.started).toHaveLength(1);
+  });
+
+  test("issue delivery reads private PRs and writes issues with its exact permission set", async () => {
+    const permissions = { ...FORGE_APP_ISSUE_DELIVERY_PERMISSIONS };
+    const github = githubWithPermissions(permissions, permissions);
+    const issued = await mintInstallationToken(REPO, ports({ github }), permissions);
+    expect(issued).toMatchObject({ token: ISSUED, repository: REPO });
+    expect(github.calls[1]!.body).toEqual({ repositories: ["widgets"], permissions: { issues: "write", pull_requests: "read", metadata: "read" } });
+    expect(FORGE_APP_ISSUE_PERMISSIONS).toEqual({ issues: "write", metadata: "read" });
+    expect(FORGE_APP_PERMISSIONS).toEqual({ contents: "write", pull_requests: "write", metadata: "read" });
+  });
+
+  test.each(["issues", "pull_requests"] as const)("issue delivery refuses a missing %s grant before minting", async missing => {
+    const granted: Record<string, string> = { ...FORGE_APP_ISSUE_DELIVERY_PERMISSIONS };
+    delete granted[missing];
+    const github = githubWithPermissions(granted, FORGE_APP_ISSUE_DELIVERY_PERMISSIONS);
+    const error = await mintInstallationToken(REPO, ports({ github }), FORGE_APP_ISSUE_DELIVERY_PERMISSIONS).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ForgeAppRefusal);
+    expect(github.calls.some(call => call.method === "POST")).toBe(false);
+  });
+
+  test.each([
+    ["PR write", { ...FORGE_APP_ISSUE_DELIVERY_PERMISSIONS, pull_requests: "write" }],
+    ["contents read", { ...FORGE_APP_ISSUE_DELIVERY_PERMISSIONS, contents: "read" }],
+  ] as const)("issue delivery revokes an issued token with unrequested %s", async (_name, issued) => {
+    const github = githubWithPermissions(FORGE_APP_ISSUE_DELIVERY_PERMISSIONS, issued);
+    const error = await mintInstallationToken(REPO, ports({ github }), FORGE_APP_ISSUE_DELIVERY_PERMISSIONS).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ForgeAppRefusal);
+    expect(github.calls.at(-1)).toMatchObject({ method: "DELETE", target: "installation/token", token: ISSUED });
   });
 
   test("an installation that was not granted issues refuses the issue token before any token exists", async () => {

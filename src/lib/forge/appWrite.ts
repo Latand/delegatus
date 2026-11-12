@@ -77,12 +77,12 @@ function refusalFrom(error: unknown, repository: string): ForgeAppWriteRefused {
  * the credential store lives; the copy under the launching home is the path
  * both sides can read.
  */
-export async function mintForgeAppToken(repository: string, source: NodeJS.ProcessEnv = process.env, kind: "write" | "issues" = "write"): Promise<ForgeAppToken> {
+export async function mintForgeAppToken(repository: string, source: NodeJS.ProcessEnv = process.env, kind: "write" | "issues" | "issue-delivery" = "write"): Promise<ForgeAppToken> {
   let stdout: string;
   try {
     const helper = path.join(agentForgeDir(source), "forge-app-token.mjs");
-    /* `issues` asks for the permission set that files an issue and no other (#2518). */
-    ({ stdout } = await execFileAsync("bun", [helper, "token", "--repository", repository, "--json", ...(kind === "issues" ? ["--issues"] : [])], { timeout: MINT_TIMEOUT_MS, maxBuffer: 64 * 1024,
+    const purpose = kind === "issue-delivery" ? ["--issue-delivery"] : kind === "issues" ? ["--issues"] : [];
+    ({ stdout } = await execFileAsync("bun", [helper, "token", "--repository", repository, "--json", ...purpose], { timeout: MINT_TIMEOUT_MS, maxBuffer: 64 * 1024,
       // Keyring attributes are case-sensitive; preserve the installation's spelling.
       env: { ...source, [FORGE_REPOSITORIES_ENV]: forgeAppRepositories().join(","), [FORGE_AUDIT_ENV]: source[FORGE_AUDIT_ENV] || statePath("forge-app-tokens.ndjson") } }));
   } catch (error) {

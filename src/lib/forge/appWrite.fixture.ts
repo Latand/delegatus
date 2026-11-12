@@ -4,13 +4,15 @@ import path from "node:path";
 
 /** Real helper and case-sensitive keyring lookup; only GitHub's HTTP replies
  * are replaced. The child starts outside any checkout, like a Viewer release. */
-export function caseSensitiveAppFixture(root: string) {
+export function caseSensitiveAppFixture(root: string, granted: Record<string, string> = { contents: "write", pull_requests: "write", metadata: "read" }) {
   fs.mkdirSync(root, { recursive: true });
   const cwd = path.join(root, "release");
   fs.mkdirSync(cwd);
   const credential = path.join(root, "credential.json");
   const lookups = path.join(root, "lookups.jsonl");
   const requests = path.join(root, "requests.jsonl");
+  const tokenRequests = path.join(root, "token-requests.jsonl");
+  const issuedPermissions = path.join(root, "issued-permissions.json");
   const preload = path.join(root, "github.mjs");
   const repository = "Acme/Widgets";
   const pem = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" }).toString();
@@ -28,12 +30,14 @@ Date.now = () => Date.parse("2030-01-01T00:00:00Z");
 globalThis.fetch = async (url, options) => {
   const target = new URL(url).pathname;
   fs.appendFileSync(process.env.FIXTURE_REQUESTS, JSON.stringify([options.method, target]) + "\\n");
-  const permissions = { contents: "write", pull_requests: "write", metadata: "read" };
+  const permissions = ${JSON.stringify(granted)};
   let body;
   if (/^\\/repos\\/acme\\/widgets\\/installation$/i.test(target)) {
     body = { id: 42, app_id: 7, account: { login: "Acme" }, suspended_at: null, permissions };
   } else if (target === "/app/installations/42/access_tokens") {
     const request = JSON.parse(options.body);
+    fs.appendFileSync(process.env.FIXTURE_TOKEN_REQUESTS, JSON.stringify(request) + "\\n");
+    fs.writeFileSync(process.env.FIXTURE_ISSUED_PERMISSIONS, JSON.stringify(request.permissions));
     if (request.repositories.length !== 1 || request.repositories[0].toLowerCase() !== "widgets") throw new Error("unexpected repository scope");
     body = { token: "fixture", expires_at: "2030-01-01T01:00:00Z", permissions: request.permissions };
   } else if (target === "/installation/repositories") {
@@ -47,8 +51,11 @@ globalThis.fetch = async (url, options) => {
     NODE_ENV: "test", HOME: root, PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
     FIXTURE_BUN: process.execPath, FIXTURE_CWD: cwd, FIXTURE_PRELOAD: preload,
     FIXTURE_CREDENTIAL: credential, FIXTURE_LOOKUPS: lookups, FIXTURE_REQUESTS: requests,
+    FIXTURE_TOKEN_REQUESTS: tokenRequests, FIXTURE_ISSUED_PERMISSIONS: issuedPermissions,
     LLV_STATE_DIR: path.join(root, "state"), XDG_CONFIG_HOME: path.join(root, "config"), TMPDIR: root,
   };
   const rows = (file: string): string[][] => fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line)) : [];
-  return { repository, source, cwd, lookups: () => rows(lookups), requests: () => rows(requests) };
+  const tokens = (): Array<{ permissions: Record<string, string> }> => fs.existsSync(tokenRequests)
+    ? fs.readFileSync(tokenRequests, "utf8").trim().split("\n").map(line => JSON.parse(line)) : [];
+  return { repository, source, cwd, lookups: () => rows(lookups), requests: () => rows(requests), tokens };
 }

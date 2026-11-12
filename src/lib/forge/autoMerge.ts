@@ -1896,7 +1896,7 @@ export function scheduleAutoMerge(overrides: Partial<AutoMergePorts> & Pick<Auto
   if (!scheduleHost.__llvIssueDeliveryRunning && ports.now() - (scheduleHost.__llvIssueDeliveryStartedAt ?? -Infinity) >= MERGE_SCHEDULE_DEBOUNCE_MS) {
     scheduleHost.__llvIssueDeliveryStartedAt = ports.now();
     const issueApp = forgeAppWriter(os.tmpdir(), GH_TIMEOUT_MS, {
-      tokens: new ForgeAppTokenSource(repository => mintForgeAppToken(repository, process.env, "issues")),
+      tokens: new ForgeAppTokenSource(repository => mintForgeAppToken(repository, process.env, "issue-delivery")),
     });
     const issueRead = overrides.run ?? githubRunner(os.tmpdir(), GH_TIMEOUT_MS, { asApp: issueApp });
     const issueRun = sweepIssueDelivery({
