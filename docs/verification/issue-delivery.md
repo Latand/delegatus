@@ -9,7 +9,7 @@ used a fresh HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR, a closed
 `wait_for_check`, including cleanup. The application test runner was Bun 1.4.0.
 
 The source was exported with `bun scripts/review-export.ts HEAD`, overlaid
-through a counted tar archive, and checked from scratch. Final source:
+through a counted tar archive, and checked from scratch. Source snapshot at original build acceptance:
 16 TypeScript files, aggregate SHA-256 `29d9ee147b834bbdda8eeb799baa9a5a9633ca44ee4d619ff958a1ce7dce915c` (sorted file-to-SHA-256
 JSON, with the default JSON separators). No performance gain is claimed.
 
@@ -149,3 +149,31 @@ The stage ran no full test suite, build or standalone publication typecheck.
 The final guard retry and the privacy rescan of this updated ledger and the
 whitespace-only helper correction are recorded in the stage handoff. No test
 behaviour changed after the passing focused selections.
+
+
+## Publication repair
+
+The first publication passed privacy, typecheck and lint. Its touched-test
+head run exhausted the comparator's fifteen-minute execution budget. Five
+owned test services exited with status 124 at the same deadline. The retained
+baseline samples for those files completed successfully. The smallest affected
+file, `src/lib/pipelines/engine.terminalBudget.test.ts`, was rerun separately
+on the accepted implementation and on its original base: both exit 0, eleven
+passing tests, 136 assertions.
+
+Current main was merged with a merge commit, preserving the design and accepted
+implementation. The issue delivery sweep now uses the existing `forge.sweep`
+monitor label. This removes the central monitor-type edit and the 96 root-level
+test files that edit added to publication's sibling selection. The gate,
+test selection algorithm and execution budgets retain their committed policy.
+
+Repair checks use the same isolated, recorded wrapper procedure above:
+
+| Command | Exit | Counts |
+|---|---:|---|
+| `G bun test --timeout=60000 src/lib/pipelines/engine.terminalBudget.test.ts` on the accepted head | 0 | 11 pass, 0 fail, 136 assertions |
+| The same command on the original base | 0 | 11 pass, 0 fail, 136 assertions |
+| `G bun test --timeout=60000 src/lib/forge/issueDelivery.test.ts` | 0 | 51 pass, 0 fail, 107 assertions |
+
+The durable-store run and the full pre-push rehearsal are retained with their
+terminal exit status in the publication-repair handoff.

@@ -134,7 +134,7 @@ const notFound = (error: unknown) => /\b404\b/.test(String((error as { stderr?: 
 /** Independent of publication, merge and task completion. At most ten issues
  * incur I/O per pass. Each production gh call has a 30 second deadline. */
 export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<void> {
-  return withViewerOperation("forge.issue-delivery", async () => {
+  return withViewerOperation("forge.sweep", async () => {
     const since = Date.parse(ports.since());
     await ports.prepareRead?.();
     const lanes = ports.loadPipelines();
