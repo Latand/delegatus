@@ -199,6 +199,26 @@ const state: ControllerState = controllerStore.__llvStructuredDeliveryController
   everPublished: false,
 };
 
+/* Told about each host the controller has released, terminated or detached
+   after its retirement. Shared like the controller state, across the bundle
+   copies of this module in one process. */
+const releasedHostListeners: Set<(host: EngineHost) => void> = (process as typeof process & {
+  __llvStructuredHostReleaseListeners?: Set<(host: EngineHost) => void>;
+}).__llvStructuredHostReleaseListeners ??= new Set();
+
+/** Hear about every host whose lifecycle the controller ended, so a module
+    that also held it can let it go. Returns the unsubscribe. */
+export function onStructuredDeliveryHostReleased(listener: (host: EngineHost) => void): () => void {
+  releasedHostListeners.add(listener);
+  return () => { releasedHostListeners.delete(listener); };
+}
+
+function announceHostReleased(host: EngineHost): void {
+  for (const listener of releasedHostListeners) {
+    try { listener(host); } catch { /* A listener cannot keep a host's lifecycle from ending. */ }
+  }
+}
+
 const CONTROLLER_UNAVAILABLE_CODE = "structured-delivery-controller-unavailable";
 /** Names this controller's kills in the host termination journal. */
 const CONTROLLER_STOP_SOURCE = "controller-stop";
@@ -1970,12 +1990,17 @@ export async function bindStructuredDeliveryQueue(
     const entry = entryForHost(registry, item);
     const conversationId = entry ? conversationIdForEntry(registry, entry) : null;
     if (conversationId) permissionGuard.adopt(key, item.host, conversationId, initialState);
-    const events = coalesceReadyEngineDeltas(item.host.attach(acknowledgedEventCursor)[Symbol.asyncIterator](), conversationId ?? "");
+    /* Events are projected into a conversation. A host with none gets no
+       stream: one attached and never read stayed subscribed for the host's
+       life and kept a reference to every event it emitted after. */
+    const events = conversationId
+      ? coalesceReadyEngineDeltas(item.host.attach(acknowledgedEventCursor)[Symbol.asyncIterator](), conversationId)
+      : null;
     let eventsStopped = false;
     // The accepted host continues consuming its event stream after the
     // controller pass that published it has ended.
     withoutOperationLease(() => void (async () => {
-      if (!conversationId) return;
+      if (!conversationId || !events) return;
       while (!eventsStopped) {
         const next = await events.next();
         if (next.done) return;
@@ -2015,7 +2040,7 @@ export async function bindStructuredDeliveryQueue(
     const stopEvents = async () => {
       if (eventsStopped) return;
       eventsStopped = true;
-      void events.return?.().catch(() => {});
+      void events?.return?.().catch(() => {});
     };
     /* The carried-over seat gains its attachment in place, so a concurrent
        registration of the same host sees a seat that is already filled in and
@@ -2125,6 +2150,7 @@ export async function bindStructuredDeliveryQueue(
     } finally {
       await withHostStopOrigin({ path: "structured-delivery-release", operationId: id }, () => registered.host.release());
       await flushStructuredHostPersistence(registered.host);
+      announceHostReleased(registered.host);
     }
     return true;
   };
@@ -2149,6 +2175,7 @@ export async function bindStructuredDeliveryQueue(
          identity inside that signal boundary. */
       if (!releaseIfOwned || !await releaseIfOwned.call(current.host, expected)) return false;
       const registered = takeRegistration(id, current.host);
+      announceHostReleased(current.host);
       (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" },
         () => registry.terminateStructuredHost(key, expected, [], capturedCustody)));
       if (registered) await detachRegistration(id, registered);
@@ -2164,6 +2191,7 @@ export async function bindStructuredDeliveryQueue(
     const registered = takeRegistration(id, current.host);
     if (!registered) return false;
     await withHostStopOrigin({ path: "structured-delivery-termination", operationId: id }, () => registered.host.release());
+    announceHostReleased(registered.host);
     (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" },
       () => registry.terminateStructuredHost(key, undefined, [], capturedCustody)));
     await detachRegistration(id, registered);
@@ -2177,6 +2205,7 @@ export async function bindStructuredDeliveryQueue(
     if (!registration) return false;
     const taken = takeRegistration(id, registration.host);
     if (!taken) return false;
+    announceHostReleased(taken.host);
     await detachRegistration(id, taken);
     return true;
   };
