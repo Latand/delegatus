@@ -644,8 +644,7 @@ test.each(["same-repository", "changed-repository"])("worktree map imports dupli
     + `console.log(JSON.stringify({state:worktreeMapStore.importLegacy(file).state,map:worktreeMapStore.read(file),`
     + `groups:${JSON.stringify(Object.keys(expected))}.map(cwd=>projectInfoFromCwd(cwd)?.project)}));`;
   const restarted = spawnSync(process.execPath, ["-e", script], { env: { ...process.env, LLV_STATE_DIR: state }, encoding: "utf8" });
-  expect(restarted.stderr).toBe("");
-  expect(restarted.status).toBe(0);
+  assertStateChildSuccess(restarted.status, restarted.stderr);
   expect(JSON.parse(restarted.stdout)).toEqual({ state: "already-imported", map: expected, groups: Array(3).fill(identity.project) });
 });
 
