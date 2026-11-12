@@ -72,7 +72,7 @@ test.skipIf(!binary).each([
       for (let i = 0; i < 1200 && !done(); i++) await Bun.sleep(25);
       expect(done()).toBe(true);
     };
-    const driveUntilReceipt = async (deliveryQueue: StructuredDeliveryQueue, operationId: string, expected: string) => {
+    const driveUntilReceipt = async (deliveryQueue: StructuredDeliveryQueue, operationId: string, expected: "interrupted" | "answered") => {
       for (let attempt = 0; attempt < 1200; attempt++) {
         await deliveryQueue.drain();
         if (journal.operationResult(operationId)?.receipt.status === expected) {
