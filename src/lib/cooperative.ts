@@ -3,6 +3,24 @@ import { performance } from "node:perf_hooks";
 const DEFAULT_BATCH_SIZE = 16;
 const DEFAULT_TIME_BUDGET_MS = 32;
 
+export interface CooperativeSliceOptions {
+  now?: () => number;
+  turn?: (signal?: AbortSignal) => Promise<void>;
+}
+
+/** Share one elapsed-work budget across phases. A cheap checkpoint stays
+ * synchronous; only exhausted slices enter the runtime's cooperative queue. */
+export function cooperativeSlice(signal: AbortSignal, options: CooperativeSliceOptions = {}): () => Promise<void> | undefined {
+  const now = options.now ?? (() => performance.now());
+  const turn = options.turn ?? yieldToRuntime;
+  let started = now();
+  return () => {
+    signal.throwIfAborted();
+    if (now() - started < DEFAULT_TIME_BUDGET_MS) return;
+    return turn(signal).then(() => { signal.throwIfAborted(); started = now(); });
+  };
+}
+
 export interface CooperativeBatchOptions {
   batchSize?: number;
   timeBudgetMs?: number;

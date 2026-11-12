@@ -1041,13 +1041,15 @@ export function roleRowsWithPrefix(prefix: "r:" | "q:"): RoleMemoryRow[] {
     after = page.at(-1)!.key as typeof prefix;
   }
 }
-/** Every scope's membership and revision counters, in stored order, without its history. */
-export function scopeMembershipRows(): Pick<RoleMemoryScopeRow, "scope" | "revision" | "revisionScope" | "active">[] {
-  if (!roleMemoryCollection()) return [];
-  return reader("__llvCurationVersionReader").query<{ fields: string | null }, []>(`
-    SELECT json_extract(value_json, '$.kind', '$.scope', '$.revision', '$.revisionScope', '$.active') AS fields FROM state_rows
-    WHERE collection='role_memory' AND row_key > 's:' AND row_key < 's;' ORDER BY row_order, row_key
-  `).all().map(row => {
+/** Only the requested scopes' membership and revision counters, in stored
+ * order. CROSS JOIN makes each wanted key an indexed lookup, before JSON. */
+export function scopeMembershipRows(scopes: readonly string[]): Pick<RoleMemoryScopeRow, "scope" | "revision" | "revisionScope" | "active">[] {
+  if (!scopes.length || !roleMemoryCollection()) return [];
+  return reader("__llvCurationVersionReader").query<{ fields: string | null }, [string]>(`
+    SELECT json_extract(s.value_json, '$.kind', '$.scope', '$.revision', '$.revisionScope', '$.active') AS fields
+    FROM json_each(?) wanted CROSS JOIN state_rows s
+    WHERE s.collection='role_memory' AND s.row_key='s:' || wanted.value ORDER BY s.row_order, s.row_key
+  `).all(JSON.stringify([...new Set(scopes)])).map(row => {
     const [kind, scope, revision, revisionScope, active] = JSON.parse(row.fields ?? "[]") as [unknown, string, number, string | null, string[]];
     if (kind !== "scope" || typeof scope !== "string" || !Array.isArray(active)) throw new Error("role_memory SQLite row is malformed");
     return { scope, revision, ...(revisionScope === null ? {} : { revisionScope }), active };
