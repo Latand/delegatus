@@ -96,9 +96,12 @@ afterEach(() => {
 
 function journalClient(journal: RuntimeJournal): RuntimeHostClient {
   return {
-    operationStatus: async (operationId: string) => journal.operationResult(operationId),
-    transitionOperation: async (operationId: string, status: Parameters<RuntimeJournal["transitionOperation"]>[1], details?: Parameters<RuntimeJournal["transitionOperation"]>[2]) =>
-      journal.transitionOperation(operationId, status, details),
+    operationStatus: async (operationId: string, options?: { currentRetryLeaf?: boolean }) =>
+      (options?.currentRetryLeaf ? journal.currentRetryResult(operationId) : journal.operationResult(operationId)),
+    /* Production forwards the whole call: the confirmed-delivery flag is what
+       lets the journal accept `delivered` after an `uncertain` ending. */
+    transitionOperation: async (operationId: string, status: Parameters<RuntimeJournal["transitionOperation"]>[1], details?: Parameters<RuntimeJournal["transitionOperation"]>[2], options?: Parameters<RuntimeJournal["transitionOperation"]>[3]) =>
+      journal.transitionOperation(operationId, status, details, options),
     claimDeliveryAction: async (...args: Parameters<RuntimeHostClient["claimDeliveryAction"]>) => journal.claimDeliveryAction(...args),
   } as unknown as RuntimeHostClient;
 }
