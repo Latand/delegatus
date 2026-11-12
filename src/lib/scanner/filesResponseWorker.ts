@@ -12,8 +12,8 @@ import { startupDiagnostic } from "@/lib/startupDiagnostics";
 import { statePath } from "@/lib/configDir";
 
 import type { FileCatalogScan } from "./index";
+import { FILES_RESPONSE_WORKER_TIMEOUT_MS } from "./filesResponseResults";
 
-const FILES_RESPONSE_WORKER_TIMEOUT_MS = 60_000;
 const FILES_RESPONSE_WORKER_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
 const FILES_RESPONSE_WORKER_STDERR_MAX_BYTES = 4 * 1024;
 // Keep one warm projection process for this Viewer generation. RSS after a
