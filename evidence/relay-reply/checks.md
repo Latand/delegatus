@@ -102,3 +102,59 @@ ownerEnvelope.test.ts. Original privacy paths include the eight TypeScript
 paths and docs/design/relay-v2-rich-media-out.md. Final publication privacy,
 final native-file lint and the repository commit hook are reported in the
 stage handover after this record.
+
+## Sources footer cause, 2026-11-12
+
+Claude Code 2.1.322, Bun 1.4.0, base `1a85f5eb78`.
+
+### Where the footer comes from
+
+An isolated probe sent the real owner prompt (`prepareOwnerPrompt` over
+`rich.fixture.ts`) to `claude -p` with a private copy of the account
+credentials, private HOME, XDG_CONFIG_HOME and TMPDIR, and
+`ANTHROPIC_BASE_URL` pointed at a loopback pass-through that recorded the
+request bodies. No chat transport was involved.
+
+- The Delegatus prompt and the system prompt in the recorded requests do not
+  mention sources.
+- The `WebSearch` tool definition sent by Claude Code ends with: `After
+  answering from results, end with a "Sources:" list of the URLs you used as
+  markdown links.` The other description variant in the same binary carries
+  `CRITICAL REQUIREMENT ... you MUST include a "Sources:" section at the end of
+  your response`.
+- Every `WebSearch` result ends with `REMINDER: You MUST include the sources
+  above in your response to the user using markdown hyperlinks.`
+- The binary's internal `CLAUDE_CODE_WEBSEARCH_CITATIONS` switch replaces the
+  description line, but snippet-free results still carry the reminder. It is
+  not a Delegatus setting, so the fix does not use it.
+
+The owner relay posted the agent's final message, its "response to the user",
+to the chat, so this engine convention reached the group. The native probe at
+the base reproduced it: the first reply ended with `Джерела: [IANA: Example
+Domains](…), [RFC 2606 …](…).` and failed `hasInlineCitations`.
+
+### Change
+
+With rich-message negotiation the chat reply is `relay_answer` `text`; the
+final message stays in the session and is posted only when no call supplied
+text. Without negotiation nothing changes. The native probe now serves the
+production `relay_answer` description and schema from a recording stdio stub
+(`ownerReply.native.fixture.ts`) and checks the text that the owner turn would
+post. `--safe-mode` was dropped from the probe because it skips MCP servers;
+`--restricted`, `--setting-sources ""`, `--strict-mcp-config` and the private
+configuration keep it isolated. `ToolSearch` is allowed because Claude Code
+defers MCP tools behind it, as in a real session.
+
+### Native probe series
+
+Each series runs `bun test --timeout=60000
+src/lib/externalRelay/ownerReply.native.test.ts` three times with
+`LLV_RELAY_REPLY_PROBE=1`, each run under fresh HOME, XDG_CONFIG_HOME,
+LLV_STATE_DIR and TMPDIR, through the gate-slot wrapper.
+
+| Series | Tree | Runs passed | Notes |
+| --- | --- | ---: | --- |
+| Base | `1a85f5eb78` | 0 of 1 | `Джерела:` closing sentence |
+| 1 | change, first heuristic | 2 of 3 | run 3: a link after `пише так:` inside a continuing sentence, rejected by the colon rule |
+| 2 | change, refined heuristic | 1 of 3 | run 1: continuation answered without `relay_answer`; run 3: `Офіційні джерела: […] та […].` inside the composed text |
+| 3 | continuation names `relay_answer` | 3 of 3 | |

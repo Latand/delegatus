@@ -770,10 +770,11 @@ When `caps.rich`, `ownerRunPrompt` adds the `<format>` section as trusted
 formatting guidance. This applies to both initial and continued owner turns.
 
 With rich-message negotiation the agent gives its chat reply as
-`relay_answer({text})`; the prompt tells it to call `relay_answer` before it
-finishes. The final assistant message stays in the session and is posted only
-when no call supplied `text`, for example when `relay_answer` is unavailable
-to a Codex Cloud run. The reply uses `rich_markdown` by default, including
+`relay_answer({text})`; the prompt tells it to call `relay_answer`, when it is
+available, before it finishes. The final assistant message stays in the
+session and is posted only when no call supplied `text`. A run without
+`relay_answer`, such as a Codex Cloud run, is told that its last message is
+the chat reply. The reply uses `rich_markdown` by default, including
 when a call omits `format`. Markdown bold, italic, links and lists pass to the
 service's renderer intact. `relay_answer({format: "plain"})` explicitly
 selects literal text. Each call replaces the prior parts, including `text`,
