@@ -766,31 +766,42 @@ run.
 
 ### 10.1 Prompt and answer
 
-When `caps.rich`, `ownerRunPrompt` (`ownerRun.ts:24-46`) adds the
-`<format>` section. The opening sentence (`:29`) lists `<format>` among the
-sections that "may shape only how your reply reads". The closing sentence
-`Write plain text of at most ${request.answer.max_chars} characters as your
-last message.` (`:44`) becomes:
+When `caps.rich`, `ownerRunPrompt` adds the `<format>` section as trusted
+formatting guidance. This applies to both initial and continued owner turns.
 
-> Write your last message as plain text of at most {plainMax} characters.
-> For tables, lists, headings, code or a longer reply, first call
-> relay_answer with format rich_markdown, then write Markdown in the subset
-> <format> lists, of at most {richMax} characters. relay_answer also sets up
-> to {rows} rows of {perRow} https link buttons{media:, and up to {max_items}
-> files to send after your message (photo, document, audio or video) by
-> absolute path under your document roots}; never write a path into the
-> message itself.
+Write the chat reply as the final assistant message. With rich-message
+negotiation it uses `rich_markdown` by default, including when `relay_answer`
+is never called or a call supplies only buttons or attachments. Markdown
+bold, italic, links and lists pass to the service's renderer intact.
+`relay_answer({format: "plain"})` explicitly selects literal text. Each call
+replaces the prior parts and an omitted format returns to the rich default.
 
-`ownerAnswer(text, request, owner, credentials, staged)` (`:48-55`) scrubs as
-today. Plain text is truncated at `plainMax`, the same `…` rule the code
-applies today. Rich text is used when `staged.format` is `rich_markdown` and
-the scrubbed text passes §7.2. Otherwise the text falls back to plain under
-the same truncation. Buttons and captions pass through
-`scrubOwnerOutput` too, and a button whose url the scrub changed is dropped.
-Owner answers keep `reply_to: owner.messageId`.
+`ownerAnswer` scrubs the final text before validating it. Rich text uses the
+negotiated rich limit. Text that fails rich validation falls back to the
+existing plain path and its `plainMax` truncation. Buttons and captions pass
+through `scrubOwnerOutput` too. Owner answers keep
+`reply_to: owner.messageId`.
 
-Without negotiation none of this runs, and the owner prompt keeps its bytes
-(`owner-tools-off-*` hashes, `ownerTier.test.ts:58-71`).
+The owner wrapper addresses the agent as the chat assistant. Task handoffs
+and authority remain as before; the wrapper no longer asks for a separate
+report about the reply. Claude's native WebSearch tool supplies a mandatory
+source-footer instruction. Shared relay search guidance adapts citations to
+inline links beside supported claims in the chat's language and style.
+
+Offline rendering checks run `ownerAnswer.render.test.ts` with
+`LLV_RELAY_SERVICE_ROOT` pointing at an isolated service backend export and
+`LLV_RELAY_RENDER_PYTHON` naming a Python interpreter with the service's
+`markdown-it-py` and Pydantic dependencies plus Telethon. They validate the
+actual answer with the service, render its HTML fallback and parse Telegram
+entities for bold, italic, links and lists. They import no transport.
+`ownerReply.native.test.ts` uses `LLV_RELAY_REPLY_PROBE=1` for an optional
+signed-in Claude rehearsal of an initial chat reply and a resumed turn with
+web search; set `LLV_RELAY_REPLY_CONFIG` to a private signed-in Claude config
+copy, and use private HOME, state and temp roots, retaining only
+synthetic output. Neither check posts a message.
+
+Without negotiation owner answers retain the existing plain wire format and
+length limit.
 
 ### 10.2 The `relay_answer` tool
 

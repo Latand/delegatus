@@ -18,7 +18,7 @@ export function sealOwnerAnswer(requestId:string) {
 }
 export function openOwnerAnswer(relayId:string,request:ExternalRelayRequest,runDir:string,credentials:readonly string[],authorize:()=>boolean,signal?:AbortSignal) {
   if (!answerCapabilities(request, "").rich || entries.has(request.request_id)) throw new ExternalRelayError("relay_answer_unavailable");
-  const entry:Entry={relayId,request,runDir,credentials,authorize,...(signal?{signal}:{}),open:true,sequence:0,parts:{format:"plain",buttons:[],attachments:[]},drops:[]};
+  const entry:Entry={relayId,request,runDir,credentials,authorize,...(signal?{signal}:{}),open:true,sequence:0,parts:{format:"rich_markdown",buttons:[],attachments:[]},drops:[]};
   entries.set(request.request_id,entry);
   return {parts:()=>entry.parts, drops:entry.drops,
     close:()=>{entry.open=false;},
@@ -39,7 +39,8 @@ export async function relayAnswerOp(conversationId:string,args:unknown) {
     throw new ExternalRelayError("invalid_answer_parts");
   }
   const value=parsed.data, caps=answerCapabilities(entry.request,"");
-  if (value.mentions?.length && (!caps.mentions || value.format !== "rich_markdown")) throw new ExternalRelayError("malformed", 400);
+  const format=value.format??"rich_markdown";
+  if (value.mentions?.length && (!caps.mentions || format !== "rich_markdown")) throw new ExternalRelayError("malformed", 400);
   const sequence=++entry.sequence;
   const drops:AnswerDrop[]=[];
   const scrub=(text:string)=>scrubOwnerOutput(text,entry.credentials);
@@ -53,7 +54,7 @@ export async function relayAnswerOp(conversationId:string,args:unknown) {
   const files=await stageOwnerAttachments(refs,entry.runDir,caps,drops,undefined,undefined,entry.signal);
   if(!available() || sequence!==entry.sequence) {await removeStaged(files);return null;}
   const old=entry.parts.attachments;
-  entry.parts={format:value.format??"plain",buttons,...(value.mentions ? {mentions:value.mentions} : {}),attachments:files}; entry.drops.push(...drops);
+  entry.parts={format,buttons,...(value.mentions ? {mentions:value.mentions} : {}),attachments:files}; entry.drops.push(...drops);
   await removeStaged(old);
   return {format:entry.parts.format,buttons,attachments:files.map((file,index)=>({index,attachment_id:file.id,kind:file.kind,filename:file.filename,bytes:file.size})),limits:{plain:caps.plainMax,rich_markdown:caps.richMax,max_items:caps.maxItems}};
 }
