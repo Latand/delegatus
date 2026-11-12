@@ -144,7 +144,7 @@ export async function prepareClaudeCloudTask(input: PrepareCloudEnvironmentInput
     await guard(); const response = await provider.request(input.account, input.signal, method, target, body, { principal: identity!, assertCurrent: syncGuard });
     const parsed = await response.json().catch(() => null) as unknown; await guard();
     if (response.status === 401 && record(record(parsed).error).reason === "github_token_missing") throw new ClaudeTaskError("github_not_connected", 401);
-    return { response, body: record(parsed), readable: !!parsed && typeof parsed === "object" };
+    return { response, body: target === "/v1/environment_providers" && Array.isArray(parsed) ? { environments: parsed } as Row : record(parsed), readable: !!parsed && typeof parsed === "object" };
   };
   const get = async (target: string) => {
     const answer = await call("GET", target);
@@ -197,8 +197,11 @@ export async function prepareClaudeCloudTask(input: PrepareCloudEnvironmentInput
         });
         if (auth.is_authenticated === false) throw new ClaudeTaskError("github_not_connected");
         const environments = await get("/v1/environment_providers");
-        const active = (Array.isArray(environments.environment_providers) ? environments.environment_providers : Array.isArray(environments.data) ? environments.data : []).map(record)
-          .filter(e => e.kind === "anthropic_cloud" && e.state === "active" && typeof e.environment_id === "string");
+        const providers = environments.environments ?? environments.data;
+        if (!Array.isArray(providers) || providers.some(value => !value || typeof value !== "object" || Array.isArray(value))) throw new ClaudeTaskError("provider_unavailable", undefined, true);
+        const rows = providers.map(record);
+        if (rows.some(e => e.kind === "anthropic_cloud" && e.state === "active" && (typeof e.environment_id !== "string" || !e.environment_id))) throw new ClaudeTaskError("provider_unavailable", undefined, true);
+        const active = rows.filter(e => e.kind === "anthropic_cloud" && e.state === "active" && typeof e.environment_id === "string");
         const environment = active.find(e => e.name === "Default") ?? active[0];
         if (!environment) throw new ClaudeTaskError("no_environment");
         await save({ state: "preparing", code: null, create: { intent: randomUUID(), dispatchedAt: now() } });

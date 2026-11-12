@@ -77,7 +77,7 @@ export function fakeClaudeCloud(options: {
       if (replaced) return await replaced;
     }
     if (url.pathname.endsWith("/sync/github/auth")) return Response.json({ is_authenticated: options.githubConnected ?? true });
-    if (url.pathname === "/v1/environment_providers") return Response.json({ environment_providers: options.environments ?? [{ environment_id: "env-fixture", kind: "anthropic_cloud", name: "Default", state: "active" }] });
+    if (url.pathname === "/v1/environment_providers") return Response.json({ environments: options.environments ?? [{ environment_id: "env-fixture", kind: "anthropic_cloud", name: "Default", state: "active" }] });
     if (url.pathname === "/v1/code/triggers") {
       if (request.method === "GET") return Response.json({ data: [...tasks.values()], has_more: options.hasMore ?? false });
       const id = `task-created-${tasks.size + 1}`;

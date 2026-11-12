@@ -316,3 +316,19 @@ test("an authenticated GitHub connection needs no permission-change remedy", asy
   expect(readClaudeCloudReadiness(f.input.project)[0]).toMatchObject({ state: "ready", code: null, step: null });
   expect(f.fake.runCalls()).toBe(0);
 });
+
+
+test.each(["environments", "data", "array"])("the observed environment response (%s) supplies the task environment", async shape => {
+  const rows = [{ environment_id: "environment-observed", kind: "anthropic_cloud", state: "active", name: "Default" }];
+  const f = fixture({ preparationAnswer: (_method, target) => target === "/v1/environment_providers"
+    ? Response.json(shape === "array" ? rows : { [shape]: rows }) : null });
+  expect(await f.prepare()).toMatchObject({ state: "ready" });
+  expect(f.posts()[0]?.body).toMatchObject({ job_config: { ccr: { environment_id: "environment-observed" } } });
+});
+
+test("an unreadable environment response asks for no human setup and creates nothing", async () => {
+  const f = fixture({ preparationAnswer: (_method, target) => target === "/v1/environment_providers" ? Response.json({ unexpected: [] }) : null });
+  expect(await f.prepare()).toMatchObject({ state: "pending" });
+  expect(readClaudeCloudReadiness(f.input.project)[0]).toMatchObject({ code: "provider_unavailable", step: null });
+  expect(f.posts()).toHaveLength(0);
+});
