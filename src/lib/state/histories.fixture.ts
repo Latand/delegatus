@@ -44,11 +44,12 @@ export function limitsHistoryFixture(end = T0): Record<string, unknown> {
 
 function transcriptPath(index: number): string {
   const hex = (index * 2_654_435_761 >>> 0).toString(16).padStart(8, "0");
-  return `/sessions/fixture-project-${index % 97}/subagents/${hex}-${hex.slice(0, 4)}-4${hex.slice(1, 4)}-8${hex.slice(2, 5)}-${hex}${hex.slice(0, 4)}.jsonl`;
+  // About 145 characters, the average transcript path length measured.
+  return `/sessions/fixture-user/projects/-fixture-workspace-lane-${index % 97}/${hex}-${hex.slice(0, 4)}-4${hex.slice(1, 4)}-8${hex.slice(2, 5)}-${hex}${hex.slice(0, 4)}/subagents/agent-${hex}${hex.slice(0, 6)}.jsonl`;
 }
 
 /** 14,887 owner-authored transcripts and 4,976 clean stamps, 325 of them on
-    authored paths: about 3 MB pretty-printed. */
+    authored paths: about 3 MB pretty-printed, as measured. */
 export function reaperStateFixture(): Record<string, unknown> {
   const userAuthoredPaths: Record<string, true> = {};
   const scannedAt: Record<string, number> = {};
