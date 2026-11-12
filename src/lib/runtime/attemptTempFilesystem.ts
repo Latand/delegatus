@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { measureTempBytes, resolvePhysicalPath, type ProcessScan, isUvCacheMarker } from "@/lib/tempSweep";
 import { PRESERVED_MEDIA_EXTENSIONS } from "@/lib/artifact/evidenceFormats";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
+import { attemptPathWatches, type AttemptMutationWatch } from "./attemptMutationFence";
 
 const exec = promisify(execFile);
 const inside = (file: string, root: string) => file === root || file.startsWith(root + path.sep);
@@ -288,6 +289,23 @@ export class RepositoryLinkInventory {
       } catch { return false; }
     }
     return true;
+  }
+  /** Directory proofs used by the final synchronous mutation fence. Include
+   * negative checkout discoveries, whose missing .git can become present. */
+  mutationDirectories(): AttemptMutationWatch[] {
+    const paths: AttemptMutationWatch[] = [];
+    for (const read of this.reads.values()) {
+      for (const directory of read.directories ?? []) paths.push(directory.path);
+      paths.push(...attemptPathWatches([...(this.lexicalTargets.get(read) ?? []), ...(read.physicalTargets ?? [])]));
+    }
+    for (const [cwd, observed] of this.repositoriesOf) {
+      paths.push(...attemptPathWatches([cwd]));
+      for (let current = cwd;; current = path.dirname(current)) {
+        paths.push({ directory: current, entries: [".git"] });
+        if (current === observed.repository || current === path.dirname(current)) break;
+      }
+    }
+    return paths;
   }
   private readonly lexicalTargets = new WeakMap<object, string[]>();
   /** The signature lists what decides the answer: for each directory from the
@@ -636,6 +654,7 @@ export async function inspectAttemptTree(directory: string, original = directory
 
 export type AttemptProtection = {
   current: () => boolean;
+  mutationDirectories?: readonly string[];
   namespace?: AttemptNamespaceProtection;
   permissionChange?: (file: string, mode: number, apply: () => void) => void;
 };
@@ -647,6 +666,7 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
   Promise<AttemptProtection> {
   const until = performance.now() + Math.max(0, Math.min(30_000, budgetMs));
   const directories = new Map<string, string>();
+  const readableDirectories: string[] = [];
   const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.mtimeNs, stat.ctimeNs].join(":");
   const pending = [directory];
   const device = fs.lstatSync(directory).dev;
@@ -665,6 +685,9 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
           throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
         if (entry.isDirectory()) pending.push(path.join(current, entry.name));
       }
+      // Some runtimes open the directory on the first read. Only a completed
+      // iteration proves this directory can also be watched from the host.
+      readableDirectories.push(current);
     } catch (error) {
       if (process.platform !== "linux" || !["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
       inaccessible = true;
@@ -688,7 +711,7 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
       return true;
     } catch { return false; }
   };
-  return { namespace, current, permissionChange: (file, mode, apply) => {
+  return { namespace, current, mutationDirectories: readableDirectories, permissionChange: (file, mode, apply) => {
     if (namespace || !current()) throw new AttemptTempBudgetDeferred("protection changed before permission repair");
     const before = fs.lstatSync(file, { bigint: true });
     apply();
@@ -725,7 +748,7 @@ const descriptorMount = (fd: number) => {
  * following a symlink, then chmod directory descriptors. O_PATH opens mode 000;
  * the proc descriptor names that inode even if its directory entry changes.
  * All child paths are relative to a held parent, on the root's device. */
-function repairAttemptPermissions(directory: string, authority: () => boolean, budgetMs: number, permissionChange?: AttemptProtection["permissionChange"]) {
+function repairAttemptPermissions(directory: string, authority: () => boolean, budgetMs: number, permissionChange?: AttemptProtection["permissionChange"], dispatchGuard?: () => boolean) {
   // Descendant lookup through these pinned descriptors requires Linux procfs.
   // Other platforms keep their existing native removal path.
   if (process.platform !== "linux") return;
@@ -776,9 +799,14 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
       validate();
       if (mode !== stat.mode) {
         validate();
-        // Protection must observe changes made during the last inventory too.
-        // Only the synchronous authority fence remains inside its apply callback.
-        const apply = () => { check(); fs.chmodSync(pinned, mode & 0o7777); };
+        const apply = () => {
+          check();
+          // Every permission write uses the same final fence as removal.
+          // Complete descriptor/mount/protection observations before it;
+          // no filesystem read may follow admission before this write.
+          if (dispatchGuard && !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed before permission repair");
+          fs.chmodSync(pinned, mode & 0o7777);
+        };
         if (permissionChange) permissionChange(path.join(directory, path.relative(physicalRoot, expected)), mode & 0o7777, apply);
         else apply();
       }
@@ -821,7 +849,7 @@ export async function removeAttemptTree(directory: string, original = directory,
     }
     if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before native removal");
     if (discardExpiredEvidence && guard && dispatchGuard && postDeleteGuard) {
-      repairAttemptPermissions(directory, settings.permissionAuthority ?? postDeleteGuard, settings.budgetMs ?? 30_000, settings.permissionChange);
+      repairAttemptPermissions(directory, settings.permissionAuthority ?? postDeleteGuard, settings.budgetMs ?? 30_000, settings.permissionChange, dispatchGuard);
       // Repeat all observations after repair, including checkout references,
       // and reauthorize after the last await.
       if (!await guard() || !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed after permission repair");

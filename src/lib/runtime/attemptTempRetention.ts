@@ -13,6 +13,7 @@ import { AttemptRetentionReporting } from "./attemptRetentionReporting";
 import { FINISHED_LANE_RETENTION_MS } from "@/lib/pipelines/laneFinish";
 import { claimAttemptRetirement } from "@/lib/pipelines/store";
 import { hasAttemptRetirementClaim, restoreRefusedAttemptTrash } from "@/lib/pipelines/retirementClaim";
+import { attemptMutationCurrent, attemptPathWatches } from "./attemptMutationFence";
 
 export type AttemptTempState = "live" | "settled" | "closed" | "expired" | "orphan" | "unknown";
 export type AttemptTempAuthority = { state: AttemptTempState; expiresAt?: number | null; revision: string; isCurrent: () => boolean };
@@ -363,7 +364,11 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       let dispatchEvidence: AttemptProtection | undefined;
       const retirementAuthorityCurrent = (directory: string, validateCheckouts = true) => {
         const current = fs.lstatSync(directory, { throwIfNoEntry: false });
-        return !recordedRootHeld(owner.directory)
+        const binding = store.owner(owner.directory);
+        requiredExpiry = store.requiredRootExpiry(owner.directory);
+        return binding?.identity === owner.identity && binding.pipelineId === owner.pipelineId && binding.launchId === owner.launchId
+          && binding.createdAt === owner.createdAt && binding.retainUntilClose === owner.retainUntilClose
+          && !recordedRootHeld(owner.directory)
           && !!current?.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === owner.identity
           && (dispatchAuthority?.isCurrent() ?? true)
           && (dispatchAuthority?.state ?? dispatchState) === dispatchState
@@ -374,8 +379,16 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       // The evidence snapshot must match until content deletion dispatches.
       // Its directory metadata and entries change during our own cleanup;
       // the final empty-root fence retains the independent authority checks.
-      const dispatchEligible = (directory: string) => retirementAuthorityCurrent(directory)
-        && dispatchEvidence?.current() === true;
+      const authorityWatches = () => attemptPathWatches([store.filename, store.filename + "-wal", statePath("state.sqlite"),
+        statePath("state.sqlite-wal"), statePath("project-aliases.json")]);
+      const mutationDirectories = (directory: string) => [directory, ...authorityWatches(),
+        ...(dispatchEvidence?.mutationDirectories ?? []), ...inventory.mutationDirectories()];
+      const dispatchEligible = (directory: string) => attemptMutationCurrent(
+        mutationDirectories(directory),
+        () => retirementAuthorityCurrent(directory) && dispatchEvidence?.current() === true, deadline - now());
+      const emptyRootEligible = (directory: string) => attemptMutationCurrent(
+        [directory, ...authorityWatches(), ...inventory.mutationDirectories()],
+        () => retirementAuthorityCurrent(directory), deadline - now());
       const scan = () => options.scan([owner.directory, currentDirectory]);
       const observeReferences = async (directory: string) => {
         try {
@@ -488,7 +501,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         }
         dispatchAuthority = typeof authorityObservation === "string" ? undefined : authorityObservation;
         dispatchState = authority;
-        dispatchEvidence = { current: () => protection.current() && evidence.current(), permissionChange: protection.permissionChange };
+        dispatchEvidence = { current: () => protection.current() && evidence.current(),
+          mutationDirectories: protection.mutationDirectories, permissionChange: protection.permissionChange };
         return true;
       };
       if (stat && !await eligible()) { outcome(owner.directory, disposition, bytes, reason); continue; }
@@ -501,20 +515,12 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         remove: directory => options.remove
           ? options.remove(directory, () => eligible(directory), () => dispatchEligible(directory))
           : removeAttemptTree(directory, owner.directory, () => eligible(directory), namespaceOnly,
-            () => dispatchEligible(directory), () => retirementAuthorityCurrent(directory), dispatchState === "expired", namespaceProtection,
+            () => dispatchEligible(directory), () => emptyRootEligible(directory), dispatchState === "expired", namespaceProtection,
             { budgetMs: deadline - now(), bytes,
               permissionAuthority: () => retirementAuthorityCurrent(directory, false),
               permissionChange: (file, mode, apply) => {
                 if (!dispatchEvidence?.permissionChange) throw new AttemptTempBudgetDeferred("permission protection unavailable");
-                dispatchEvidence.permissionChange(file, mode, () => {
-                  // Repeat negative checkout discovery after protection's last
-                  // read, only for actual writes rather than every tree entry.
-                  if (!inventory.unchangedAll()) throw new AttemptTempBudgetDeferred("checkout changed before permission repair");
-                  // Checkout reads can observe a new keep marker in the tree.
-                  // Refresh protection before allowing the permission write.
-                  if (!dispatchEvidence?.current()) throw new AttemptTempBudgetDeferred("protection changed before permission repair");
-                  apply();
-                });
+                dispatchEvidence.permissionChange(file, mode, apply);
               } }),
         measure: async () => bytes,
         // Settlement owns freshness. Preserve the full mount/Git/readability

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -97,8 +98,8 @@ test.skipIf(process.platform !== "linux").each(["keep", "swap"] as const)(
     }
   });
 
-test.skipIf(process.platform !== "linux").each(["mountinfo", "fdinfo", "protection"] as const)(
-  "a live checkout link appearing at the last permission observation holds mode and custody (%s)", async observation => {
+test.skipIf(process.platform !== "linux").each(["mountinfo", "fdinfo", "protection", "protection-refresh", "protection-refresh-keep"] as const)(
+  "a dependency or keep marker at the last permission observation holds mode and custody (%s)", async observation => {
     const f = fixture(), consumer = path.join(f.parent, "consumer");
     fs.mkdirSync(path.join(consumer, ".git"), { recursive: true });
     const child = Bun.spawn([process.execPath, "-e", "process.stdout.write('ready\\n'); for await (const chunk of process.stdin) {}"],
@@ -108,8 +109,18 @@ test.skipIf(process.platform !== "linux").each(["mountinfo", "fdinfo", "protecti
     try { expect(new TextDecoder().decode((await reader.read()).value)).toBe("ready\n"); }
     finally { reader.releaseLock(); }
     const nativeOpen = fs.openSync.bind(fs), nativeRead = fs.readFileSync.bind(fs), nativeStat = fs.lstatSync.bind(fs);
-    let pinned: number | undefined, reads = 0, injected = false;
-    const inject = () => { fs.symlinkSync(f.directory, path.join(consumer, "dependency"), "dir"); injected = true; };
+    let pinned: number | undefined, reads = 0, injected = false, checked = false, refreshes = 0;
+    const inject = () => {
+      expect(fs.statSync(path.join(f.journal().trash, "cache")).mode & 0o777).toBe(0o555);
+      // The reviewer's reproduction writes from another process while the
+      // final protection lstat is returning its earlier observation.
+      if (observation === "protection-refresh-keep")
+        execFileSync(process.execPath, ["-e", 'require("node:fs").writeFileSync(process.argv[1], "late pin")',
+          path.join(f.journal().trash, ".delegatus-keep")]);
+      else execFileSync(process.execPath, ["-e", 'require("node:fs").symlinkSync(process.argv[1], process.argv[2], "dir")',
+        f.directory, path.join(consumer, "dependency")]);
+      injected = true;
+    };
     const open = spyOn(fs, "openSync").mockImplementation(((file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
       const fd = nativeOpen(file, flags, mode);
       if (String(file).startsWith("/proc/self/fd/") && String(file).endsWith("/cache")) pinned = fd;
@@ -118,7 +129,7 @@ test.skipIf(process.platform !== "linux").each(["mountinfo", "fdinfo", "protecti
     cleanup.push(() => { open.mockRestore(); });
     const read = spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) => {
       const value = nativeRead(file, options as BufferEncoding);
-      if (!injected && pinned !== undefined && observation !== "protection"
+      if (!injected && pinned !== undefined && (observation === "mountinfo" || observation === "fdinfo")
         && file === (observation === "mountinfo" ? "/proc/self/mountinfo" : `/proc/self/fdinfo/${pinned}`)
         && ++reads === 2) inject();
       return value;
@@ -127,9 +138,18 @@ test.skipIf(process.platform !== "linux").each(["mountinfo", "fdinfo", "protecti
     const stat = spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike, options?: unknown) => {
       const value = nativeStat(file, options as { bigint: false });
       // The protection callback's final inode read is later than mount/fd inventory.
-      const stack = observation === "protection" ? String(new Error().stack) : "";
+      const stack = String(new Error().stack);
+      if (String(file) === path.join(consumer, ".git") && stack.includes("at permissionChange") && stack.includes("at unchangedAll")) checked = true;
       if (!injected && observation === "protection" && pinned !== undefined
         && String(file).endsWith("/cache") && stack.includes("at permissionChange") && !stack.includes("at current")) inject();
+      if (!injected && observation === "protection-refresh" && pinned !== undefined && checked
+        && String(file).endsWith("/cache") && stack.includes("at permissionChange") && stack.includes("at current")) inject();
+      // The final proof reads protection and expired evidence. Mutate after
+      // the last returned cache stat, so another ordering of those reads
+      // cannot pass this case without a common change fence.
+      if (!injected && observation === "protection-refresh-keep" && pinned !== undefined && checked
+        && String(file).endsWith("/cache") && stack.includes("at permissionChange") && stack.includes("at current")
+        && ++refreshes === 2) inject();
       return value;
     }) as typeof fs.lstatSync);
     cleanup.push(() => { stat.mockRestore(); });
@@ -142,7 +162,8 @@ test.skipIf(process.platform !== "linux").each(["mountinfo", "fdinfo", "protecti
     const retained = path.join(f.journal().trash, "cache");
     expect(fs.statSync(retained).mode & 0o777).toBe(0o555);
     expect(fs.readFileSync(path.join(retained, "payload"), "utf8")).toBe("retained cache");
-    expect(fs.readlinkSync(path.join(consumer, "dependency"))).toBe(f.directory);
+    if (observation === "protection-refresh-keep") expect(fs.readFileSync(path.join(f.journal().trash, ".delegatus-keep"), "utf8")).toBe("late pin");
+    else expect(fs.readlinkSync(path.join(consumer, "dependency"))).toBe(f.directory);
   });
 
 test.skipIf(process.platform !== "linux")(
