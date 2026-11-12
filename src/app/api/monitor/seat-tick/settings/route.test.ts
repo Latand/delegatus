@@ -1,5 +1,5 @@
 import { soloBrowserSession } from "@/lib/agent/operatorSession";
-import { afterAll, afterEach, beforeEach, expect, setSystemTime, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -798,4 +798,49 @@ test("the operator browser edits lines with no known author and removes seat not
   const last = await put({ project: PROJECT, removeSeatNotes: [{ index: 2, text: "Second seat note.", at: seeded[3]!.at }] });
   expect(last.status).toBe(200);
   expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual([afterEdit[0]!, afterEdit[1]!]);
+});
+
+
+test("the closed switch reads persisted state without any panel computation or episode history", async () => {
+  setSystemTime(new Date("2026-11-12T10:00:00Z"));
+  writeSeatTickSettings(PROJECT, { ...readSeatTickSettings(PROJECT), enabled: true, wakeIntervalMinutes: 10,
+    reason: "Review queued work", updatedAt: "2026-11-12T09:00:00Z", monitorPrompt: "Monitor note. ".repeat(1000) });
+  const expected = await (await get(`?project=${PROJECT}`)).json();
+  const curation = await import("@/lib/memory/curation/answer");
+  const turbo = await import("@/lib/monitor/turboRuntime");
+  const panel = spyOn(curation, "curationAnswerCooperatively").mockImplementation(async () => { throw Error("panel must stay deferred"); });
+  const accounts = spyOn(turbo, "turboAnswer").mockImplementation(async () => { throw Error("accounts must stay deferred"); });
+  try {
+    const response = await get(`?project=${PROJECT}&view=summary&turboPreview=1`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const compact = await response.json();
+    expect(compact.view).toBe("summary");
+    expect(compact.effective).toEqual({ ...expected.effective, monitorPrompt: null });
+    for (const key of ["state", "stateError", "policy", "lastRun", "lastDelivery", "journalError"]) expect(compact[key]).toEqual(expected[key]);
+    for (const key of ["curation", "maintenance", "release", "autoRotate", "turbo", "autonomy"]) expect(compact[key]).toBeUndefined();
+    expect(compact.settings.monitorPrompt).toBeNull();
+    expect(compact.monitorPromptLength).toBe(14000);
+    expect(compact.switchState).toMatchObject({ autonomy: { active: false }, turbo: { active: false, paid: false } });
+    expect(JSON.stringify(compact).length).toBeLessThan(4000);
+    expect(panel).not.toHaveBeenCalled();
+    expect(accounts).not.toHaveBeenCalled();
+    expect(readSeatTickSettings(PROJECT).monitorPrompt).toHaveLength(14000);
+    const write = await PUT(new NextRequest(`${URL_BASE}?view=summary`, { method: "PUT", headers: { ...browser, cookie: `llv_operator=${soloBrowserSession()}` },
+      body: JSON.stringify({ project: PROJECT, enabled: false, reason: "Wait for queued work" }) }));
+    const saved = await write.json();
+    expect(saved.error ?? write.status).toBe(200);
+    expect(saved.effective.enabled).toBe(false);
+    expect(readSeatTickSettings(PROJECT).enabled).toBe(false);
+    expect(panel).not.toHaveBeenCalled();
+    expect(accounts).not.toHaveBeenCalled();
+    const hostile = await PUT(new NextRequest(`${URL_BASE}?view=summary`, { method: "PUT",
+      headers: { ...browser, origin: "https://untrusted.invalid" }, body: JSON.stringify({ project: PROJECT, enabled: true }) }));
+    expect(hostile.status).toBe(403);
+    expect(readSeatTickSettings(PROJECT).enabled).toBe(false);
+    const failedPanel = await get(`?project=${PROJECT}`);
+    expect(failedPanel.status).toBe(500);
+    expect((await failedPanel.json()).error).toBe("panel must stay deferred");
+    expect((await get("?view=summary")).status).toBe(400);
+  } finally { panel.mockRestore(); accounts.mockRestore(); }
 });

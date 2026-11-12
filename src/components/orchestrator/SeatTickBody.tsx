@@ -615,6 +615,17 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
     ? "h-11 rounded-control border border-border bg-card px-2.5 text-body text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
     : "h-7 rounded-control border border-border bg-card px-2 text-ui text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
 
+  // The summary deliberately contains no editable panel record. Wait for the
+  // full read before offering fields that could otherwise submit defaults.
+  if (!record || record.view === "summary") return (
+    <div data-seat-tick-body={project} className={phone ? "px-4 pb-3" : "p-3"}>
+      <p role="status" data-seat-tick-summary className="text-ui text-secondary">
+        {reading.status.headline}
+      </p>
+      {actions}
+    </div>
+  );
+
   /* Until belongs to a tick that leaves the defaults. Instructions stand at
      every cadence. The interval is shown while wakes are enabled. */
   const leavesDefaults = !draft.enabled || draft.interval.trim() !== "";

@@ -1,0 +1,519 @@
+{
+  "procedure": "Each run uses the installed gate wrapper, scratch exports, a separate HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and TMPDIR per file. The retained procedures directory contains each runner. Exit statuses come from durable receipts or directly owned commands.",
+  "earlierRuns": [
+    {
+      "run": "browser-base-320.log",
+      "gateRevision": "34b741354731",
+      "command": "rtk proxy env LLV_CHECK_BASE=1 CHROME_BIN=\"$CHROME_BIN\" LLV_KANBAN_BROWSER_TEST=1 LLV_TICK_BASELINE=1 bash \"$GATE\" --record \"$TMPDIR/browser-base-320.log\" bash \"$TMPDIR/run-file.sh\" src/components/kanban/kanbanBoard.browser.test.tsx -t 'seat tick summary arrives'",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "filtered out": 306,
+        "fail": 1,
+        "assertions": 9
+      },
+      "phase": "development-or-comparison",
+      "finishedAt": "2026-11-12T10:29:48.817Z"
+    },
+    {
+      "run": "browser-base.log",
+      "gateRevision": "34b741354731",
+      "command": "rtk proxy env LLV_CHECK_BASE=1 CHROME_BIN=\"$CHROME_BIN\" LLV_KANBAN_BROWSER_TEST=1 LLV_TICK_BASELINE=1 bash \"$GATE\" --record \"$TMPDIR/browser-base.log\" bash \"$TMPDIR/run-file.sh\" src/components/kanban/kanbanBoard.browser.test.tsx -t 'seat tick summary arrives'",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "filtered out": 306,
+        "fail": 0,
+        "assertions": 48
+      },
+      "phase": "development-or-comparison",
+      "finishedAt": "2026-11-12T10:14:26.162Z"
+    },
+    {
+      "run": "browser-final.log",
+      "gateRevision": "34b741354731",
+      "command": "rtk proxy env CHROME_BIN=\"$CHROME_BIN\" LLV_KANBAN_BROWSER_TEST=1 bash \"$GATE\" --record \"$TMPDIR/browser-final.log\" bash \"$TMPDIR/run-file.sh\" src/components/kanban/kanbanBoard.browser.test.tsx -t 'seat tick summary arrives'",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "filtered out": 306,
+        "fail": 1,
+        "assertions": 32
+      },
+      "phase": "development-or-comparison",
+      "finishedAt": "2026-11-12T10:28:07.278Z"
+    },
+    {
+      "run": "browser-first.log",
+      "gateRevision": "34b741354731",
+      "command": "rtk proxy env LLV_BROWSER_PROBE=1 CHROME_BIN=\"$CHROME_BIN\" LLV_KANBAN_BROWSER_TEST=1 bash \"$GATE\" --record \"$TMPDIR/browser-first.log\" bash \"$TMPDIR/run-file.sh\" src/components/kanban/kanbanBoard.browser.test.tsx -t 'seat tick summary arrives'",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "filtered out": 306,
+        "fail": 1,
+        "assertions": 60
+      },
+      "phase": "development-or-comparison",
+      "finishedAt": "2026-11-12T10:09:54.416Z"
+    },
+    {
+      "run": "browser-release.log",
+      "gateRevision": "34b741354731",
+      "command": "rtk proxy env CHROME_BIN=\"$CHROME_BIN\" LLV_KANBAN_BROWSER_TEST=1 bash \"$GATE\" --record \"$TMPDIR/browser-release.log\" bash \"$TMPDIR/run-file.sh\" src/components/kanban/kanbanBoard.browser.test.tsx -t 'seat tick summary arrives'",
+      "exitStatus": 143,
+      "counts": {
+        "assertions": null
+      },
+      "phase": "development-or-comparison",
+      "finishedAt": null,
+      "execution": "interrupted during admission; no runner banner, no test result"
+    },
+    {
+      "run": "browser-second.log",
+      "gateRevision": "34b741354731",
+      "command": "rtk proxy env CHROME_BIN=\"$CHROME_BIN\" LLV_KANBAN_BROWSER_TEST=1 bash \"$GATE\" --record \"$TMPDIR/browser-second.log\" bash \"$TMPDIR/run-file.sh\" src/components/kanban/kanbanBoard.browser.test.tsx -t 'seat tick summary arrives'",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "filtered out": 306,
+        "fail": 0,
+        "assertions": 372
+      },
+      "phase": "development-or-comparison",
+      "finishedAt": "2026-11-12T10:11:45.047Z"
+    },
+    {
+      "run": "chip-base-failure.log",
+      "gateRevision": "34b741354731",
+      "command": "rtk proxy env LLV_CHECK_BASE=1 bash \"$GATE\" --record \"$TMPDIR/chip-base-failure.log\" bash \"$TMPDIR/run-file.sh\" src/components/orchestrator/SeatTickChip.dom.test.tsx -t 'read that does not answer'",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "filtered out": 54,
+        "fail": 0,
+        "assertions": 10
+      },
+      "phase": "development-or-comparison",
+      "finishedAt": "2026-11-12T10:07:52.268Z"
+    },
+    {
+      "run": "chip-dom-final.log",
+      "gateRevision": "34b741354731",
+      "command": "rtk proxy bash \"$GATE\" --record \"$TMPDIR/chip-dom-final.log\" bash \"$TMPDIR/run-file.sh\" src/components/orchestrator/SeatTickChip.dom.test.tsx",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 56,
+        "fail": 0,
+        "assertions": 374
+      },
+      "phase": "development-or-comparison",
+      "finishedAt": "2026-11-12T10:08:02.879Z"
+    },
+    {
+      "run": "chip-dom.log",
+      "gateRevision": "34b741354731",
+      "command": "rtk proxy bash \"$GATE\" --record \"$TMPDIR/chip-dom.log\" bash \"$TMPDIR/run-file.sh\" src/components/orchestrator/SeatTickChip.dom.test.tsx",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 55,
+        "fail": 1,
+        "assertions": 371
+      },
+      "phase": "development-or-comparison",
+      "finishedAt": "2026-11-12T10:07:23.781Z"
+    },
+    {
+      "run": "mobile-dom.log",
+      "gateRevision": "34b741354731",
+      "command": "rtk proxy bash \"$GATE\" --record \"$TMPDIR/mobile-dom.log\" bash \"$TMPDIR/run-file.sh\" src/components/mobile/MobileSeatTickSheet.dom.test.tsx",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 20,
+        "fail": 0,
+        "assertions": 128
+      },
+      "phase": "development-or-comparison",
+      "finishedAt": "2026-11-12T10:08:50.794Z"
+    },
+    {
+      "run": "replay-after.log",
+      "gateRevision": "34b741354731",
+      "command": "rtk proxy bash \"$GATE\" --record \"$TMPDIR/replay-after.log\" bash \"$TMPDIR/run-replay.sh\" after",
+      "exitStatus": 0,
+      "counts": {
+        "requests": 5,
+        "http200": 5
+      },
+      "phase": "development-or-comparison",
+      "finishedAt": "2026-11-12T10:08:22.231Z"
+    },
+    {
+      "run": "replay-before.log",
+      "gateRevision": "34b741354731",
+      "command": "rtk proxy bash \"$GATE\" --record \"$TMPDIR/replay-before.log\" bash \"$TMPDIR/run-replay.sh\" before",
+      "exitStatus": 0,
+      "counts": {
+        "requests": 5,
+        "http200": 5
+      },
+      "phase": "development-or-comparison",
+      "finishedAt": "2026-11-12T10:08:12.398Z"
+    },
+    {
+      "run": "replay-paired.log",
+      "gateRevision": "34b741354731",
+      "command": "rtk proxy bash \"$GATE\" --record \"$TMPDIR/replay-paired.log\" bash \"$TMPDIR/run-comparison.sh\"",
+      "exitStatus": 0,
+      "counts": {
+        "requests": 30,
+        "http200": 30
+      },
+      "phase": "development-or-comparison",
+      "finishedAt": "2026-11-12T10:18:39.727Z"
+    },
+    {
+      "run": "route-base-regression.log",
+      "gateRevision": "34b741354731",
+      "command": "rtk proxy env LLV_CHECK_BASE=1 bash \"$GATE\" --record \"$TMPDIR/route-base-regression.log\" bash \"$TMPDIR/run-file.sh\" src/app/api/monitor/seat-tick/settings/route.test.ts -t 'closed switch reads persisted'",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "filtered out": 33,
+        "fail": 1,
+        "assertions": 1
+      },
+      "phase": "development-or-comparison",
+      "finishedAt": "2026-11-12T10:07:13.187Z"
+    },
+    {
+      "run": "route-corrected.log",
+      "gateRevision": "34b741354731",
+      "command": "rtk proxy bash \"$GATE\" --record \"$TMPDIR/route-corrected.log\" bash \"$TMPDIR/run-file.sh\" src/app/api/monitor/seat-tick/settings/route.test.ts",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 34,
+        "fail": 0,
+        "assertions": 268
+      },
+      "phase": "development-or-comparison",
+      "finishedAt": "2026-11-12T10:07:01.006Z"
+    },
+    {
+      "run": "route-final.log",
+      "gateRevision": "34b741354731",
+      "command": "rtk proxy bash \"$GATE\" --record \"$TMPDIR/route-final.log\" bash \"$TMPDIR/run-file.sh\" src/app/api/monitor/seat-tick/settings/route.test.ts",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 33,
+        "fail": 1,
+        "assertions": 259
+      },
+      "phase": "development-or-comparison",
+      "finishedAt": "2026-11-12T10:06:38.897Z"
+    },
+    {
+      "run": "route-test.log",
+      "gateRevision": "34b741354731",
+      "command": "rtk proxy bash \"$GATE\" --record \"$TMPDIR/route-test.log\" bash \"$TMPDIR/run-file.sh\" src/app/api/monitor/seat-tick/settings/route.test.ts",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 33,
+        "fail": 1,
+        "assertions": 253
+      },
+      "phase": "development-or-comparison",
+      "finishedAt": "2026-11-12T10:04:49.084Z"
+    }
+  ],
+  "recoveredAttemptRuns": [
+    {
+      "run": "browser-verified.log",
+      "gateRevision": "2614b079b3f1",
+      "command": "rtk proxy env LLV_OWNED_RUN_TIMEOUT_MS=900000 CHROME_BIN=\"$CHROME_BIN\" LLV_KANBAN_BROWSER_TEST=1 LLV_BROWSER_PROBE=1 bash \"$GATE\" --record \"$TMPDIR/browser-verified.log\" bash \"$TMPDIR/run-file.sh\" src/components/kanban/kanbanBoard.browser.test.tsx -t 'seat tick summary arrives'",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "filtered out": 306,
+        "fail": 1,
+        "assertions": 54
+      }
+    },
+    {
+      "run": "browser-geometry.log",
+      "gateRevision": "2614b079b3f1",
+      "command": "rtk proxy env LLV_OWNED_RUN_TIMEOUT_MS=900000 CHROME_BIN=\"$CHROME_BIN\" LLV_KANBAN_BROWSER_TEST=1 bash \"$GATE\" --record \"$TMPDIR/browser-geometry.log\" bash \"$TMPDIR/run-file.sh\" src/components/kanban/kanbanBoard.browser.test.tsx -t 'seat tick summary arrives'",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "filtered out": 306,
+        "fail": 1,
+        "assertions": 54
+      }
+    },
+    {
+      "run": "browser-base-panel-edge.log",
+      "gateRevision": "2614b079b3f1",
+      "command": "rtk proxy env LLV_OWNED_RUN_TIMEOUT_MS=900000 CHROME_BIN=\"$CHROME_BIN\" LLV_KANBAN_BROWSER_TEST=1 LLV_CHECK_BASE=1 LLV_TICK_BASELINE=1 bash \"$GATE\" --record \"$TMPDIR/browser-base-panel-edge.log\" bash \"$TMPDIR/run-file.sh\" src/components/kanban/kanbanBoard.browser.test.tsx -t 'seat tick summary arrives'",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "filtered out": 306,
+        "fail": 1,
+        "assertions": 3
+      }
+    },
+    {
+      "run": "browser-final-matrix.log",
+      "gateRevision": "2614b079b3f1",
+      "command": "rtk proxy env LLV_OWNED_RUN_TIMEOUT_MS=900000 CHROME_BIN=\"$CHROME_BIN\" LLV_KANBAN_BROWSER_TEST=1 bash \"$GATE\" --record \"$TMPDIR/browser-final-matrix.log\" bash \"$TMPDIR/run-file.sh\" src/components/kanban/kanbanBoard.browser.test.tsx -t 'seat tick summary arrives'",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "filtered out": 306,
+        "fail": 0,
+        "assertions": 624
+      }
+    },
+    {
+      "run": "focused-final.log",
+      "gateRevision": "2614b079b3f1",
+      "command": "rtk proxy env LLV_OWNED_RUN_TIMEOUT_MS=900000 bash \"$GATE\" --record \"$TMPDIR/focused-final.log\" bash \"$TMPDIR/run-focused.sh\"",
+      "exitStatus": 1,
+      "counts": {
+        "subruns": 5
+      }
+    },
+    {
+      "run": "switch-base-refusal.log",
+      "gateRevision": "2614b079b3f1",
+      "command": "rtk proxy env LLV_CHECK_BASE=1 LLV_OWNED_RUN_TIMEOUT_MS=900000 bash \"$GATE\" --record \"$TMPDIR/switch-base-refusal.log\" bash \"$TMPDIR/run-file.sh\" src/components/orchestrator/SeatTickSwitch.dom.test.tsx -t 'a move the route refuses'",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "filtered out": 24,
+        "fail": 0,
+        "assertions": 6
+      }
+    },
+    {
+      "run": "release-checks.log",
+      "gateRevision": "2614b079b3f1",
+      "command": "rtk proxy env LLV_OWNED_RUN_TIMEOUT_MS=900000 bash \"$GATE\" --record \"$TMPDIR/release-checks.log\" bash \"$TMPDIR/run-release-checks.sh\"",
+      "exitStatus": 0,
+      "counts": {
+        "subruns": 4
+      }
+    },
+    {
+      "run": "final-MobileSeatTickSheet.dom.test.tsx.log",
+      "command": "bash \"$TMPDIR/run-file.sh\" src/components/mobile/MobileSeatTickSheet.dom.test.tsx",
+      "admission": "focused-final.log",
+      "phase": "before-refusal-repair",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 20,
+        "fail": 0,
+        "assertions": 128
+      }
+    },
+    {
+      "run": "final-SeatTickChip.dom.test.tsx.log",
+      "command": "bash \"$TMPDIR/run-file.sh\" src/components/orchestrator/SeatTickChip.dom.test.tsx",
+      "admission": "focused-final.log",
+      "phase": "before-refusal-repair",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 57,
+        "fail": 0,
+        "assertions": 379
+      }
+    },
+    {
+      "run": "final-SeatTickSwitch.dom.test.tsx.log",
+      "command": "bash \"$TMPDIR/run-file.sh\" src/components/orchestrator/SeatTickSwitch.dom.test.tsx",
+      "admission": "focused-final.log",
+      "phase": "before-refusal-repair",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 24,
+        "fail": 1,
+        "assertions": 170
+      }
+    },
+    {
+      "run": "final-route.test.ts.log",
+      "command": "bash \"$TMPDIR/run-file.sh\" src/app/api/monitor/seat-tick/settings/route.test.ts",
+      "admission": "focused-final.log",
+      "phase": "before-refusal-repair",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 34,
+        "fail": 0,
+        "assertions": 268
+      }
+    },
+    {
+      "run": "final-seatTickView.test.ts.log",
+      "command": "bash \"$TMPDIR/run-file.sh\" src/components/orchestrator/seatTickView.test.ts",
+      "admission": "focused-final.log",
+      "phase": "before-refusal-repair",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 25,
+        "fail": 0,
+        "assertions": 200
+      }
+    },
+    {
+      "run": "repaired-MobileSeatTickSheet.dom.test.tsx.log",
+      "command": "bash \"$TMPDIR/run-file.sh\" src/components/mobile/MobileSeatTickSheet.dom.test.tsx",
+      "admission": "release-checks.log",
+      "phase": "final",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 20,
+        "fail": 0,
+        "assertions": 128
+      }
+    },
+    {
+      "run": "repaired-SeatTickChip.dom.test.tsx.log",
+      "command": "bash \"$TMPDIR/run-file.sh\" src/components/orchestrator/SeatTickChip.dom.test.tsx",
+      "admission": "release-checks.log",
+      "phase": "final",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 58,
+        "fail": 0,
+        "assertions": 384
+      }
+    },
+    {
+      "run": "repaired-SeatTickSwitch.dom.test.tsx.log",
+      "command": "bash \"$TMPDIR/run-file.sh\" src/components/orchestrator/SeatTickSwitch.dom.test.tsx",
+      "admission": "release-checks.log",
+      "phase": "final",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 25,
+        "fail": 0,
+        "assertions": 173
+      }
+    },
+    {
+      "run": "browser-release-final.log",
+      "command": "CHROME_BIN=\"$CHROME_BIN\" LLV_KANBAN_BROWSER_TEST=1 bash \"$TMPDIR/run-file.sh\" src/components/kanban/kanbanBoard.browser.test.tsx -t 'seat tick summary arrives'",
+      "admission": "release-checks.log",
+      "phase": "final",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "filtered out": 306,
+        "fail": 0,
+        "assertions": 752
+      }
+    },
+    {
+      "run": "lint-final.log",
+      "command": "bash \"$TMPDIR/run-lint.sh\"",
+      "admission": "not required: repository exemption for lint on up to 40 files",
+      "exitStatus": 1,
+      "counts": {
+        "files": 10,
+        "errors": 3,
+        "warnings": 3
+      }
+    },
+    {
+      "run": "lint-base.log",
+      "command": "bash \"$TMPDIR/run-lint-base.sh\"",
+      "admission": "not required: repository exemption for lint on up to 40 files",
+      "exitStatus": 1,
+      "counts": {
+        "files": 10,
+        "errors": 3,
+        "warnings": 2
+      }
+    },
+    {
+      "run": "lint-policy.log",
+      "command": "bash \"$TMPDIR/run-lint-policy.sh\"",
+      "admission": "not required: repository exemption for lint on up to 40 files",
+      "exitStatus": 0,
+      "counts": {
+        "files": 10,
+        "introducedErrors": 0,
+        "baseErrors": 3
+      }
+    },
+    {
+      "run": "contrast-darkControls.contrast.test.ts.log",
+      "command": "bash \"$TMPDIR/run-file.sh\" src/styles/darkControls.contrast.test.ts",
+      "admission": "contrast-final.log",
+      "phase": "final",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 20,
+        "fail": 0,
+        "assertions": 253
+      }
+    },
+    {
+      "run": "contrast-tokens.contrast.test.ts.log",
+      "command": "bash \"$TMPDIR/run-file.sh\" src/styles/tokens.contrast.test.ts",
+      "admission": "contrast-final.log",
+      "phase": "final",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 8,
+        "fail": 0,
+        "assertions": 230
+      }
+    },
+    {
+      "run": "contrast-final.log",
+      "gateRevision": "2614b079b3f1",
+      "command": "rtk proxy env LLV_OWNED_RUN_TIMEOUT_MS=900000 bash \"$GATE\" --record \"$TMPDIR/contrast-final.log\" bash \"$TMPDIR/run-contrast.sh\"",
+      "exitStatus": 0,
+      "counts": {
+        "subruns": 2
+      }
+    },
+    {
+      "run": "browser-support-probe",
+      "command": "bun browser-probe.ts",
+      "admission": "browser-verified.log",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "fail": 0
+      },
+      "phase": "setup"
+    }
+  ],
+  "finalCore": {
+    "pass": 163,
+    "fail": 0,
+    "assertions": 1905,
+    "files": 6
+  },
+  "finalVerification": {
+    "pass": 191,
+    "fail": 0,
+    "assertions": 2388,
+    "files": 8,
+    "core": {
+      "pass": 163,
+      "fail": 0,
+      "assertions": 1905,
+      "files": 6
+    },
+    "contrast": {
+      "pass": 28,
+      "fail": 0,
+      "assertions": 483,
+      "files": 2
+    }
+  }
+}
