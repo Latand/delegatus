@@ -160,11 +160,45 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     importAtActivation: async () => (await import("@/lib/session/titleStore")).sessionTitleStore.importLegacy(statePath("session-titles.json"), { reconcile: true }),
     checkpointMirrorForDemotion: async () => (await import("@/lib/session/titleStore")).sessionTitleStore.checkpointRollbackMirror(statePath("session-titles.json")),
   },
+  {
+    collection: "forge_links",
+    importAtActivation: async () => (await import("@/lib/forge/cache")).importLegacyForgeLinks(statePath("forge-links.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/forge/cache")).checkpointForgeLinksRollbackMirrorForDemotion(statePath("forge-links.json")),
+  },
+  {
+    collection: "operator_asks",
+    importAtActivation: async () => (await import("@/lib/asks/store")).importLegacyOperatorAsks(statePath("operator-asks.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/asks/store")).checkpointOperatorAsksRollbackMirrorForDemotion(statePath("operator-asks.json")),
+  },
+  /* A cache: the import deletes the file and the demotion writes no mirror,
+     because an older release that finds no catalog rescans once and writes
+     its own (src/lib/scanner/projectCatalogStore.ts). */
+  {
+    collection: "project_catalog",
+    importAtActivation: async () => (await import("@/lib/scanner/projectCatalogStore")).importLegacyProjectCatalog(statePath("project-catalog.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => {},
+  },
   // Slice 8a; inventory: docs/design/state-sqlite-journals.md.
   {
     collection: "lifecycle_digests",
     importAtActivation: async () => (await import("@/lib/lifecycle/digest")).lifecycleDigestStore.importLegacy(statePath("lifecycle-digests.json"), { reconcile: true }),
     checkpointMirrorForDemotion: async () => (await import("@/lib/lifecycle/digest")).lifecycleDigestStore.checkpointRollbackMirror(statePath("lifecycle-digests.json")),
+  },
+  // Slice 8: histories; each store module documents its layout.
+  {
+    collection: "limits_history",
+    importAtActivation: async () => (await import("@/lib/limitsHistoryStore")).importLegacyLimitsHistory(statePath("limits-history.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/limitsHistoryStore")).checkpointLimitsHistoryRollbackMirrorForDemotion(statePath("limits-history.json")),
+  },
+  {
+    collection: "reaper",
+    importAtActivation: async () => (await import("@/lib/reaperState")).importLegacyReaperState(statePath("reaper-state.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/reaperState")).checkpointReaperStateRollbackMirrorForDemotion(statePath("reaper-state.json")),
+  },
+  {
+    collection: "handoff_lineage",
+    importAtActivation: async () => (await import("@/lib/handoffLineage")).importLegacyHandoffLineage(statePath("handoff-lineage.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/handoffLineage")).checkpointHandoffLineageRollbackMirrorForDemotion(statePath("handoff-lineage.json")),
   },
   /* The conversation-migration journal roots: a directory of per-operation
      files rather than one file, so the entry names the root and the store keys
@@ -176,6 +210,29 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     checkpointMirrorForDemotion: async () => (await import("@/lib/accounts/migration/provider"))
       .checkpointMigrationOperationJournalMirrorForDemotion(statePath(root)),
   })),
+  // Slice 8b: the append journals; layouts in their store modules.
+  {
+    collection: "lifecycle",
+    importAtActivation: async () => (await import("@/lib/lifecycle/journal")).importLegacyLifecycleJournal(statePath("lifecycle-journal.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/lifecycle/journal")).checkpointLifecycleJournalRollbackMirrorForDemotion(statePath("lifecycle-journal.json")),
+  },
+  /* The seat tick's global ring; its per-project rings beside it move with it. */
+  {
+    collection: "seat_tick_runs",
+    importAtActivation: async () => {
+      const store = await import("@/lib/monitor/journalStore");
+      return store.importLegacySeatTickJournal(store.seatTickJournalPath(), { reconcile: true });
+    },
+    checkpointMirrorForDemotion: async () => {
+      const store = await import("@/lib/monitor/journalStore");
+      store.checkpointSeatTickJournalRollbackMirrorForDemotion(store.seatTickJournalPath());
+    },
+  },
+  {
+    collection: "reset_credits",
+    importAtActivation: async () => (await import("@/lib/accounts/resetCreditJournal")).importLegacyResetCreditJournal(statePath("codex-reset-credits.ndjson"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/accounts/resetCreditJournal")).checkpointResetCreditJournalRollbackMirrorForDemotion(statePath("codex-reset-credits.ndjson")),
+  },
 ];
 
 /** Import (or finish importing, or reconcile) every moved store. One store's

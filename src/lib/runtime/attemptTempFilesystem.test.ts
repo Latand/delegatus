@@ -7,14 +7,76 @@ import { promisify } from "node:util";
 import { statePath } from "@/lib/configDir";
 import { execFile } from "node:child_process";
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { attemptReferencesClear, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
+import { attemptReferencesClear, blockedSubtrees, measureAttemptAllocation, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
   RETAINED_CHECKOUT_READ_MAX_AGE_MS, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
+import { nameInReport } from "./attemptTempRetention.testSupport";
+import type { ProcessScan } from "@/lib/tempSweep";
 const exec = promisify(execFile);
 const roots: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
 const root = () => { const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-filesystem-")); roots.push(directory); return directory; };
+
+/** A directory left by a container that ran as another user: this user can
+ * stat it and cannot list it. Mode 000 on our own directory models that. */
+function foreignSubtree(directory: string) {
+  const locked = path.join(directory, "tmp", "pgdata");
+  fs.mkdirSync(locked, { recursive: true }); fs.writeFileSync(path.join(locked, "base"), "database files"); fs.chmodSync(locked, 0);
+  cleanups.push(async () => { try { fs.chmodSync(locked, 0o700); } catch { /* Already removed. */ } });
+  return locked;
+}
+const listsAsOwner = process.platform === "win32" || process.getuid?.() === 0;
+
+test.skipIf(listsAsOwner)("a tree with a subtree this user cannot list is measured by what du could read and flagged", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-measured"), bin = path.join(parent, "bin");
+  fs.mkdirSync(directory); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(directory, "payload"), Buffer.alloc(4 * 1024 ** 2, 1));
+  const locked = foreignSubtree(directory);
+  // The cleanup container is unavailable here; the readable total stands.
+  const log = path.join(parent, "docker.log");
+  fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh\necho "$@" >> ${JSON.stringify(log)}\nexit 1\n`, { mode: 0o700 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = bin + path.delimiter + (previousPath ?? "");
+  try {
+    const measured = await measureAttemptAllocation(directory);
+    expect(measured.unreadable).toBeTrue(); expect(measured.bytes).toBeGreaterThanOrEqual(4 * 1024 ** 2);
+    expect(await blockedSubtrees(directory)).toMatchObject({ count: 1, entries: [{ path: locked, uid: process.getuid!(), unreadable: true }] });
+    fs.chmodSync(locked, 0o700);
+    expect(await measureAttemptAllocation(directory)).toMatchObject({ unreadable: false });
+    expect(await blockedSubtrees(directory)).toEqual({ count: 0, entries: [] });
+    // The namespace measurement was asked and could not run; nothing ran in it.
+    expect((fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "").split("\n").filter(line => line.startsWith("run"))).toEqual([]);
+  } finally { if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath; }
+});
+
+test.skipIf(process.platform !== "linux")("a consumer cwd removed after its process exited no longer holds the root; a live one still does", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-consumed"); fs.mkdirSync(directory);
+  const exited = Bun.spawnSync(["true"]).pid;
+  expect(fs.existsSync(`/proc/${exited}`)).toBeFalse();
+  const consumer = (name: string) => {
+    const cwd = path.join(parent, name, "repository", "work"); fs.mkdirSync(path.join(parent, name, "repository", ".git"), { recursive: true });
+    fs.mkdirSync(cwd); return cwd;
+  };
+  const containers = async () => true;
+  // A test run's cwd, already gone by the first discovery.
+  const gone = consumer("gone"); fs.rmSync(path.join(parent, "gone"), { recursive: true });
+  // Read from /proc: the namespace is what proves the process was there.
+  const scan = (pid: number, cwd: string): ProcessScan => ({ ownNamespace: null, processes: [{ pid, namespace: "mnt:[fixture]", stamped: false, paths: [cwd] }] });
+  expect(await attemptReferencesClear(directory, directory, scan(exited, gone), containers)).toBeTrue();
+  await expect(attemptReferencesClear(directory, directory, scan(process.pid, gone), containers)).rejects.toMatchObject({ code: "ENOENT" });
+  // A cwd removed between the observation and the dispatch fence.
+  for (const [pid, unchanged] of [[exited, true], [process.pid, false]] as const) {
+    const later = consumer(`later-${pid}`), inventory = new RepositoryLinkInventory();
+    expect(await attemptReferencesClear(directory, directory, scan(pid, later), containers, inventory)).toBeTrue();
+    expect(inventory.unchangedAll()).toBeTrue();
+    fs.rmSync(path.join(parent, `later-${pid}`), { recursive: true });
+    expect(inventory.unchangedAll()).toBe(unchanged);
+  }
+  // A process the scan did not read from /proc cannot be proven gone.
+  const synthetic: ProcessScan = { ownNamespace: null, processes: [{ pid: exited, namespace: null, stamped: false, paths: [gone] }] };
+  await expect(attemptReferencesClear(directory, directory, synthetic, containers)).rejects.toMatchObject({ code: "ENOENT" });
+});
 
 test.skipIf(process.platform !== "linux")("a bound Unix socket keeps its attempt root", async () => {
   const parent = root(), directory = path.join(parent, "actual/llv-stage-holder");
@@ -789,7 +851,9 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.
     fs.unlinkSync(pin);
     const writeCapture = () => exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
       "--mount", `type=bind,source=${directory},target=/attempt`, "--entrypoint", "/bin/sh", image, "-c",
-      `mkdir -p /attempt/private/deep; printf 'private capture' > /attempt/private/deep/frame.${extension}`], { timeout: 15000 });
+      `mkdir -p /attempt/private/deep; printf 'private capture' > /attempt/private/deep/frame.${extension}`], { timeout: 15000 })
+      // A report named the capture: the evidence ledger links it.
+      .then(result => { nameInReport(path.join(directory, `private/deep/frame.${extension}`)); return result; });
     const readCapture = async () => (await exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
       "--mount", `type=bind,source=${directory},target=/attempt,readonly`, "--entrypoint", "/bin/cat", image,
       `/attempt/private/deep/frame.${extension}`], { timeout: 15000 })).stdout;
