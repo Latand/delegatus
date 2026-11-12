@@ -276,3 +276,22 @@ test("a known creation id survives a failed repair and a restart even when the l
   expect(await f.restart()).toMatchObject({ state: "ready", environmentId: "task-created-1" });
   expect(f.posts()).toHaveLength(1);
 });
+
+
+test("an operator binding change during readiness persistence cannot pair an old task with a new fingerprint", async () => {
+  const f = fixture();
+  let changed = false;
+  const provider = { ...f.provider, identity: async (account: Parameters<typeof f.provider.identity>[0]) => {
+    const identity = await f.provider.identity(account);
+    if (!changed && claudeCloudTasks(f.input.project).length) {
+      changed = true;
+      setClaudeCloudTasks(f.input.project, [{ accountId: "default", taskId: "operator-choice" }]);
+    }
+    return identity;
+  } };
+  expect(await prepareClaudeCloudTask(f.input, provider)).toMatchObject({ state: "pending", reason: "Claude task binding changed; retrying" });
+  expect(claudeCloudTasks(f.input.project)).toEqual([{ accountId: "default", taskId: "operator-choice" }]);
+  expect(f.posts()).toHaveLength(1);
+  expect(await f.prepare()).toMatchObject({ state: "ready", environmentId: "operator-choice", selection: JSON.stringify("operator-choice") });
+  expect(f.posts()).toHaveLength(1);
+});

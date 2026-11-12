@@ -248,9 +248,11 @@ export async function prepareClaudeCloudTask(input: PrepareCloudEnvironmentInput
       await save({ state: "preparing", code: "binding_busy", retryAt: now() + 2000 }); return result("binding_busy");
     }
     await save({ taskId, state: "ready", code: null, status: undefined, validatedAt: now(), retryAt: 0, retries: 0, create: { intent: row.create.intent } });
+    const selection = JSON.stringify(taskId);
+    if (claudeCloudTaskFingerprint(project, accountId) !== selection) return { state: "pending", retryAt: now() + 2000, reason: "Claude task binding changed; retrying" };
     const hold = claudeTaskWriteAccess(accountId, taskId, now());
     if (hold?.held) return { state: "unavailable", reason: `${CLAUDE_TASK_REASONS.github_write_access}; ${claudeTaskStep("github_write_access")!.url}` };
-    return { state: "ready", environmentId: taskId, revision: row.revision, selection: claudeCloudTaskFingerprint(project, accountId), principal: identity };
+    return { state: "ready", environmentId: taskId, revision: row.revision, selection, principal: identity };
   } catch (error) {
     if (error instanceof Superseded) return { state: "pending", retryAt: now() + 2000, reason: "Claude task preparation changed; retrying" };
     if (input.signal.aborted) throw error;

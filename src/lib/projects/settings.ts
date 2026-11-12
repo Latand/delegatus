@@ -258,6 +258,7 @@ export function setClaudeCloudTaskFor(project: string, accountId: string, taskId
     if (!key) return null;
     const tasks = claudeCloudTasks(project);
     const current = tasks.find(task => task.accountId === accountId);
+    if (current?.taskId === taskId) return taskId;
     if (current && current.taskId !== replacing && current.taskId !== taskId) return current.taskId;
     const next = current ? tasks.map(task => task.accountId === accountId ? { accountId, taskId } : task) : [...tasks, { accountId, taskId }];
     if (!validClaudeCloudTasks(next)) return null;
