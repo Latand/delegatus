@@ -5,7 +5,9 @@ import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { RegistryConversation } from "@/lib/agent/registry";
-import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
+import * as seatStore from "@/lib/orchestrator/seatStore";
+import { clearStoredSeatRecord, damageStoredSeatRecord, writeStoredSeatRecord } from "@/lib/orchestrator/seatStoreFixture";
 import { resetTeamStoreForTests, teamStore } from "./store";
 import { createWorkspace } from "./workspaces";
 import { conversationWorkspacePrincipal } from "./workspacePrincipal";
@@ -42,25 +44,23 @@ test("unchanged seats reuse one parsed map across deep chains; rebinding and rev
   store.putWorkspaceMember(W, "m_member", "member", owner.id, AT);
   beginOrchestratorSeatIntent({ project: "project-alpha", mandate: "Run work", clientRequestId: "seat", mode: "existing", conversationId: "conversation_9", workspace, now: AT });
   completeOrchestratorSeatIntent({ project: "project-alpha", clientRequestId: "seat", conversationId: "conversation_9", path: "seat.jsonl", now: AT });
-  const file = statePath("orchestrator-seats.json");
-  const read = spyOn(fs, "readFileSync");
+  const read = spyOn(seatStore, "readOrchestratorSeatStore");
   try {
     expect(conversationWorkspacePrincipal(chain(10), "conversation_0", store)).toEqual(workspace);
     for (const depth of [1, 4, 10]) {
       for (let n = 0; n < 5; n++) conversationWorkspacePrincipal(chain(depth), "conversation_0", store);
     }
-    expect(read.mock.calls.filter(([name]) => name === file)).toHaveLength(1);
-    const seats = JSON.parse(fs.readFileSync(file, "utf8"));
-    seats.seats["project-alpha"].workspace = { ...workspace, workspaceId: null };
-    fs.writeFileSync(`${file}.replacement`, JSON.stringify(seats));
-    fs.renameSync(`${file}.replacement`, file);
+    expect(read.mock.calls).toHaveLength(1);
+    const seats = readOrchestratorSeatFile();
+    seats.seats["project-alpha"]!.workspace = { ...workspace, workspaceId: null as unknown as string };
+    writeStoredSeatRecord(seats);
     expect(conversationWorkspacePrincipal(chain(10), "conversation_0", store)).toEqual({ ...workspace, workspaceId: null });
     delete seats.seats["project-alpha"];
-    fs.writeFileSync(file, JSON.stringify(seats));
+    writeStoredSeatRecord(seats);
     expect(conversationWorkspacePrincipal(chain(10), "conversation_0", store)).toBeNull();
-    fs.writeFileSync(file, "{");
+    damageStoredSeatRecord();
     expect(() => conversationWorkspacePrincipal(chain(10), "conversation_0", store)).toThrow("workspace seat authority is unavailable");
-    fs.unlinkSync(file);
+    clearStoredSeatRecord();
     expect(conversationWorkspacePrincipal(chain(10), "conversation_0", store)).toBeNull();
   } finally { read.mockRestore(); }
 });
@@ -68,11 +68,13 @@ test("unchanged seats reuse one parsed map across deep chains; rebinding and rev
 for (const mode of ["solo", "team without workspaces"] as const) {
   test(`${mode} resolves without reading seats`, () => {
     const store = mode === "solo" ? null : teamStore();
-    const read = spyOn(fs, "readFileSync");
+    const read = spyOn(seatStore, "readOrchestratorSeatStore");
+    const revision = spyOn(seatStore, "orchestratorSeatStoreSignature");
     try {
       expect(conversationWorkspacePrincipal(chain(10), "conversation_0", store)).toBeNull();
-      expect(read.mock.calls.filter(([name]) => name === statePath("orchestrator-seats.json"))).toEqual([]);
-    } finally { read.mockRestore(); }
+      expect(read.mock.calls).toEqual([]);
+      expect(revision.mock.calls).toEqual([]);
+    } finally { read.mockRestore(); revision.mockRestore(); }
   });
 }
 
