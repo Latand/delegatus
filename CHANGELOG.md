@@ -53,6 +53,21 @@ compatibility raises the major version.
   went from about 20 ms to about 0.1 ms. On first start the file is imported
   and verified, then kept as `orchestrator-seats.json.imported-<release>`,
   and a directory with a README takes its place (#1870).
+- **The lifecycle journal, the seat tick's run journal and the reset-credit
+  ledger move into `state.sqlite`** (collections `lifecycle`,
+  `seat_tick_runs` and `reset_credits`), out of `lifecycle-journal.json`,
+  `seat-tick/runs.ndjson` with its per-project rings in
+  `runs.ndjson.projects/`, and `codex-reset-credits.ndjson`. Each event,
+  check or entry is one row, so an append writes its own rows and the trim it
+  owes; on a busy installation it used to rewrite 1.35 MB (lifecycle) or
+  5.7 MB (both seat tick rings). Readers follow the journal's change log or
+  read a bounded key range: reading the lifecycle journal went from about
+  8 ms to 0.1 ms, and the check-error alarm read after every seat tick check
+  from about 17 ms to 4 ms. On first start each file is imported and
+  verified, then kept as `<name>.imported-<release>` (the per-project rings
+  as `runs.ndjson.projects.imported-<release>`), and a directory with a
+  README takes the file's place. `conversation-monitor/runs.ndjson` stays a
+  file (#1870).
 
 ### Downgrading
 - A version older than this one finds a directory where
@@ -63,6 +78,16 @@ compatibility raises the major version.
   loses seat changes made since the upgrade. Deployed releases rolled back
   through the release fence get the file written back for them automatically,
   and the designations they make are merged at roll-forward.
+- A version older than this one finds directories where
+  `lifecycle-journal.json`, `seat-tick/runs.ndjson` and
+  `codex-reset-credits.ndjson` were. Its lifecycle surfaces (the
+  `lifecycle_events` tool, the digest and the projector) report the journal
+  as unreadable, its seat tick checks fail to record their line, and its
+  reset-credit redemptions answer `recorded: false`. Upgrade again to
+  recover. Replacing a directory with its `.imported-*` copy also works, but
+  loses what was recorded since the upgrade. Deployed releases rolled back
+  through the release fence get the files written back for them
+  automatically, and what they append is merged at roll-forward.
 
 ## [2.0.0] — 2026-10-27
 

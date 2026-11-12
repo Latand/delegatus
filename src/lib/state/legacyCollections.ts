@@ -176,6 +176,29 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     checkpointMirrorForDemotion: async () => (await import("@/lib/accounts/migration/provider"))
       .checkpointMigrationOperationJournalMirrorForDemotion(statePath(root)),
   })),
+  // Slice 8b: the append journals; layouts in their store modules.
+  {
+    collection: "lifecycle",
+    importAtActivation: async () => (await import("@/lib/lifecycle/journal")).importLegacyLifecycleJournal(statePath("lifecycle-journal.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/lifecycle/journal")).checkpointLifecycleJournalRollbackMirrorForDemotion(statePath("lifecycle-journal.json")),
+  },
+  /* The seat tick's global ring; its per-project rings beside it move with it. */
+  {
+    collection: "seat_tick_runs",
+    importAtActivation: async () => {
+      const store = await import("@/lib/monitor/journalStore");
+      return store.importLegacySeatTickJournal(store.seatTickJournalPath(), { reconcile: true });
+    },
+    checkpointMirrorForDemotion: async () => {
+      const store = await import("@/lib/monitor/journalStore");
+      store.checkpointSeatTickJournalRollbackMirrorForDemotion(store.seatTickJournalPath());
+    },
+  },
+  {
+    collection: "reset_credits",
+    importAtActivation: async () => (await import("@/lib/accounts/resetCreditJournal")).importLegacyResetCreditJournal(statePath("codex-reset-credits.ndjson"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/accounts/resetCreditJournal")).checkpointResetCreditJournalRollbackMirrorForDemotion(statePath("codex-reset-credits.ndjson")),
+  },
 ];
 
 /** Import (or finish importing, or reconcile) every moved store. One store's
