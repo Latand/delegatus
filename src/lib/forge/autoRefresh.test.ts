@@ -1883,7 +1883,7 @@ test.each(["closed", "paused", "needs_decision", "running"] as const)("a %s mech
     expect(h.merges().map(args => args[2])).toEqual(["12"]);
     expect(h.merge("queued-1")!.state).toBe("merged");
     if (state === "closed") {
-      expect({ ...h.pipeline("queued-0"), merge: owner.merge }).toEqual(owner);
+      expect(owner).toEqual({ ...h.pipeline("queued-0"), merge: owner.merge });
       expect(h.merge("queued-0")).toMatchObject({ state: "cancelled", reason: "Lane is closed", nextReadAt: null });
     } else expect(h.pipeline("queued-0")).toEqual(owner);
     expect(h.creates).toEqual([]);
