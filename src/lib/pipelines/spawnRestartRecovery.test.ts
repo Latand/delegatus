@@ -156,7 +156,7 @@ async function fixture(unstaged = false, admissionRestarts = 0, sqliteMode: "off
     durableTurnEvidence: async () => null,
     lastMessage: () => null,
     headCwd: () => loadPipelines()[0]?.worktreeDir ?? null,
-    patchFlow: () => ({}), closeFlow: async () => ({}), getFlow: () => null, 
+    patchFlow: () => ({}), closeFlow: async () => ({}), getFlow: () => null,
     projectForCwd: () => "viewer",
     worktreePresent: () => true,
     scheduleTick: () => {},

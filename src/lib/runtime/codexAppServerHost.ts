@@ -235,6 +235,7 @@ export interface CodexAppServerHostOptions {
   operatorDecisionForms?: boolean;
   /** No automatic memory: no shared-memory hook and Codex's memories feature off. */
   cleanMemory?: boolean;
+  omitSkillsInstructions?: boolean;
   /** Effective native-memory decision shared with the delivery ledger. */
   nativeMemoryEnabled?: boolean;
   developerInstructions?: string;
@@ -1683,6 +1684,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         viewerMcpTransportForLaunch(childEnv),
         features,
         options.cleanMemory === true,
+        options.omitSkillsInstructions === true,
       );
       const viewer = record(record(config.mcp_servers)?.viewer);
       provisional.viewerMcpTransport = viewer?.enabled === true
@@ -1723,12 +1725,15 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         }
         : {};
       // A reconnect can recreate the registered stdio MCP child. Restore its
-      // installation and caller binding without changing the thread's policy.
+      // installation and caller binding. The delegated skills decision also
+      // applies when resuming a surviving thread from an older release.
       const registeredViewer = record(record(record(configRead)?.config)?.mcp_servers)?.viewer;
-      const reconnectConfig = typeof record(registeredViewer)?.command === "string" && viewer
-        ? { mcp_servers: { viewer } } : undefined;
+      const reconnectConfig = {
+        ...(typeof record(registeredViewer)?.command === "string" && viewer ? { mcp_servers: { viewer } } : {}),
+        ...(options.omitSkillsInstructions ? { skills: config.skills } : {}),
+      };
       const result = threadId
-        ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId, ...(reconnectConfig ? { config: reconnectConfig } : {}) } : {
+        ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId, ...(Object.keys(reconnectConfig).length ? { config: reconnectConfig } : {}) } : {
           threadId,
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...launchAccess,

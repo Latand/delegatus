@@ -60,6 +60,7 @@ import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
 import { CodexAppServerHost } from "./codexAppServerHost";
+import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { setTelegramLaunchRepairForTests } from "@/lib/telegram/launchReadiness";
 import { clearTelegramConnection, deleteTelegramSession, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
@@ -87,7 +88,8 @@ function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
   } as RuntimeHostClient;
 }
 
-test.each(["full", "restricted"] as const)("startup replays durable Codex sandbox=%s and permission mode", async (sandbox) => {
+for (const omitSkillsInstructions of [false, true])
+test.each(["full", "restricted"] as const)(`startup replays durable Codex sandbox=%s and permission mode (skills omitted=${omitSkillsInstructions})`, async (sandbox) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-access-"));
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(directory, "state");
@@ -95,7 +97,7 @@ test.each(["full", "restricted"] as const)("startup replays durable Codex sandbo
   const artifactPath = path.join(directory, "access-thread.jsonl");
   const key = { engine: "codex" as const, sessionId: "access-thread" };
   registry.upsert({ key, artifactPath, cwd: directory, accountId: null,
-    launchProfile: emptyLaunchProfile({ cwd: directory, sandbox, readOnly: false, permissionMode: "on-request" }),
+    launchProfile: emptyLaunchProfile({ cwd: directory, sandbox, omitSkillsInstructions, readOnly: false, permissionMode: "on-request" }),
     status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
   try {
     await adoptStructuredHostsAtStartup({ registry, client: null,
@@ -104,6 +106,7 @@ test.each(["full", "restricted"] as const)("startup replays durable Codex sandbo
       adopt: async (store, optionsFor) => {
         const options = await optionsFor(store.readOnlySnapshot().entries["codex:access-thread"]!);
         try {
+          expect(options.omitSkillsInstructions).toBe(omitSkillsInstructions);
           expect(options).toMatchObject({ sandbox: sandbox === "full" ? "danger-full-access" : "workspace-write", approvalPolicy: "on-request", nativeMemoryEnabled: false });
         } finally { options.releaseCleanup?.(); }
         return [];
@@ -113,6 +116,42 @@ test.each(["full", "restricted"] as const)("startup replays durable Codex sandbo
     await bindStructuredDeliveryQueue([]);
     if (previousState === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.each([false, true])("startup socket adoption preserves skills policy (delegated=%s)", async (delegated) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "startup-skills-"));
+  const socket = path.join(directory, "rpc.sock");
+  const server = net.createServer(connection => connection.end());
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  fs.chmodSync(directory, 0o700); fs.chmodSync(socket, 0o600);
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const key = { engine: "codex" as const, sessionId: "skills-socket" };
+  registry.upsert({ key, artifactPath: path.join(directory, "rollout.jsonl"), cwd: directory, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: directory, omitSkillsInstructions: delegated, mcpServers: ["viewer"], plugins: [] }),
+    status: "idle", host: null, claimEpoch: 1, claimOwner: null, pendingAction: null,
+    structuredHost: { kind: "codex-app-server", endpoint: `codex-unix:${socket}`, process: captureProcessIdentity(process.pid)!,
+      eventCursor: 0, protocolVersion: "fixture", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+  let observed = false;
+  try {
+    expect(verifiedCodexSocketOwner({ endpoint: `codex-unix:${socket}`, process: captureProcessIdentity(process.pid)! })).toBe(true);
+    await adoptStructuredHostsAtStartup({ registry, client: null, orchestratorSeats: () => [],
+      resolveCodexOwner: () => null, refreshTranscriptState: async () => {},
+      adopt: async (store, optionsFor) => {
+        const options = await optionsFor(store.readOnlySnapshot().entries["codex:skills-socket"]!);
+        expect(options.omitSkillsInstructions).toBe(delegated);
+        expect(options.mcpServers).toEqual(["viewer"]);
+        expect(options.plugins).toEqual([]);
+        observed = true;
+        return [];
+      }, adoptClaude: async () => [],
+    });
+    expect(observed).toBe(true);
+  } finally {
+    await bindStructuredDeliveryQueue([]);
+    registry.close();
+    await new Promise<void>(resolve => server.close(() => resolve()));
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -193,7 +232,7 @@ test.each(["codex", "claude"] as const)("startup keeps an undesignated pipeline 
     cwd: directory, accountId: "account", status: "dead", host: null,
     claimEpoch: 0, claimOwner: null, pendingAction: null,
   });
-  let options: { cleanMemory?: boolean; developerInstructions?: string; appendSystemPrompt?: string } | undefined;
+  let options: { cleanMemory?: boolean; omitSkillsInstructions?: boolean; developerInstructions?: string; appendSystemPrompt?: string } | undefined;
   try {
     await adoptStructuredHostsAtStartup({
       registry, client: null, refreshTranscriptState: async () => {}, orchestratorSeats: () => [],
@@ -214,6 +253,7 @@ test.each(["codex", "claude"] as const)("startup keeps an undesignated pipeline 
     fs.rmSync(directory, { recursive: true, force: true });
   }
   expect(options?.cleanMemory).toBe(true);
+  if (engine === "codex") expect(options?.omitSkillsInstructions).toBe(true);
   expect(options?.developerInstructions ?? options?.appendSystemPrompt ?? "").not.toContain("Read the latest transcript tail");
 });
 

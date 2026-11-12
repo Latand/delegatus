@@ -41,7 +41,7 @@ process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
 for (const mode of ["startup", "foreground"] as const)
-for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-attachment", "revoked", "pipeline-busy", "pipeline-changed", "pipeline-unrelated",
+for (const scenario of ["released", "delegated", "stale-owner", "foreign-owner", "failed-attachment", "revoked", "pipeline-busy", "pipeline-changed", "pipeline-unrelated",
   "claim-owner-replaced", "claim-epoch-replaced", "claim-writer-replaced"] as const) test.skipIf(process.platform === "win32")(`${mode} recovery reconnects a verified live native host without spawning a successor (${scenario})`, async () => {
   loadPipelines();
   const cwd = fs.mkdtempSync(path.join(sandbox, "native-reconnect-"));
@@ -59,7 +59,7 @@ for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-atta
   const key = { engine: "codex" as const, sessionId };
   const identity = captureProcessIdentity(process.pid);
   const endpoint = `codex-unix:${socketPath}`;
-  registry.upsert({ key, artifactPath, cwd, accountId: "default", launchProfile: emptyLaunchProfile({ cwd }),
+  registry.upsert({ key, artifactPath, cwd, accountId: "default", launchProfile: emptyLaunchProfile({ cwd, omitSkillsInstructions: scenario === "delegated" }),
     status: "idle", host: null, claimEpoch: 2, claimOwner: null, pendingAction: null,
     structuredHost: { kind: "codex-app-server", endpoint, process: identity, eventCursor: 73,
       protocolVersion: "fixture", writerClaimEpoch: 2, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
@@ -178,6 +178,7 @@ for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-atta
     expect(result?.reconnected).toBeTrue();
     expect(adopt.mock.calls[0]?.[1].socketOwner).toMatchObject({ endpoint, process: identity });
     expect(adopt.mock.calls[0]?.[1].initialEventCursor).toBe(73);
+    expect(adopt.mock.calls[0]?.[1].omitSkillsInstructions === true).toBe(scenario === "delegated");
     expect(await adopt.mock.calls[0]?.[1].readProtocolVersion?.("unused", { NODE_ENV: "test" })).toBe("fixture");
     expect(hasStructuredDeliveryHost(key)).toBeTrue();
     expect(spawned).toBe(0);

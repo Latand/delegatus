@@ -911,6 +911,7 @@ async function spawnPipelineAgent(
   const scopeReview = !!proactiveLane?.proactiveTaskIds?.length && proactiveLane.stages[0]?.id === input.membership.stageId
     && input.role.roleId === "reviewer" && input.role.access === "read-only";
   const specBase = freshSpecFor(input.role.engine, input.cwd, {
+    ...(input.role.engine === "codex" ? { omitSkillsInstructions: true } : {}),
     model: input.role.model,
     effort: input.role.effort,
     serviceTier,
