@@ -160,6 +160,11 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     importAtActivation: async () => (await import("@/lib/session/titleStore")).sessionTitleStore.importLegacy(statePath("session-titles.json"), { reconcile: true }),
     checkpointMirrorForDemotion: async () => (await import("@/lib/session/titleStore")).sessionTitleStore.checkpointRollbackMirror(statePath("session-titles.json")),
   },
+  {
+    collection: "operator_asks",
+    importAtActivation: async () => (await import("@/lib/asks/store")).importLegacyOperatorAsks(statePath("operator-asks.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/asks/store")).checkpointOperatorAsksRollbackMirrorForDemotion(statePath("operator-asks.json")),
+  },
   // Slice 8a; inventory: docs/design/state-sqlite-journals.md.
   {
     collection: "lifecycle_digests",
