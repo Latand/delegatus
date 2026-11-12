@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { createPipelineFromRequest, rawPatchPipeline, loadPipelines, savePipelines, tickPipelines,
   projectPipelineEvents, fs, path } from "./engine.fixture";
 import { fixture, isolatePublicationGit, stages } from "./publicationRecovery.fixture";
-import { buildPipeline, createPipelineWithDelivery, findPipelineRecord, pipelineArtifactsDir, takeoverPipelineDelivery, withPipelineMutation } from "./store";
+import { archiveSettledPipelines, buildPipeline, createPipelineWithDelivery, findPipelineRecord, loadArchivedPipelines, loadPipelines, pipelineArtifactsDir, takeoverPipelineDelivery, withPipelineMutation } from "./store";
 import { settlePendingRemoteActions } from "./engine";
 import { acquirePublicationFileLock, releasePublicationFileLock } from "./git";
 
@@ -67,6 +67,17 @@ test("a completed comparison takes over a closed owner's PR and publishes its pa
     expect(findPipelineRecord(id)!.state).toBe("completed");
     expect(findPipelineRecord(id)!.publishedCommit).not.toBe(head);
     expect((await rawPatchPipeline(owner.id, { action: "close" }, f.h.ports)).error).toBeUndefined();
+    await withPipelineMutation(async (pipelines, persist) => {
+      const archivedOwner = pipelines.find(pipeline => pipeline.id === owner.id)!;
+      archivedOwner.closedAt = "2026-10-01T10:00:00.000Z";
+      archivedOwner.closeTeardown = undefined;
+      archivedOwner.closeReport = undefined;
+      archivedOwner.terminalReap = { rounds: 1, stopped: 0, lastAt: CLOCK, settledAt: CLOCK, settledAttempts: [] };
+      await persist();
+    });
+    expect(await archiveSettledPipelines(Date.parse(CLOCK) + 4 * 86_400_000)).toBe(1);
+    expect(loadPipelines().some(pipeline => pipeline.id === owner.id)).toBe(false);
+    expect(loadArchivedPipelines().some(pipeline => pipeline.id === owner.id)).toBe(true);
     expect((await rawPatchPipeline(id, { action: "takeover", expectedOwner: owner.id,
       expectedEpoch: 1, reason: "Deliver the passed comparison" }, f.h.ports)).error).toBeUndefined();
     // A fresh controller reads the pending intent and reopens the real stored
@@ -81,6 +92,7 @@ test("a completed comparison takes over a closed owner's PR and publishes its pa
     await tickPipelines([], f.h.ports);
     expect(await f.git(f.remote, "rev-parse", target.branch)).toBe(head);
     expect(findPipelineRecord(id)).toMatchObject({ state: "completed", publishedCommit: head });
+    expect(loadPipelines().some(pipeline => pipeline.id === owner.id)).toBe(false);
   } finally { f.close(); }
 });
 

@@ -2336,7 +2336,11 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
     if (!previous?.delivery || previous.delivery.ownerId !== expectedOwner || previous.delivery.epoch !== expectedEpoch) {
       return { error: `delivery owner changed: current owner ${previous?.delivery?.ownerId ?? "none"}, epoch ${previous?.delivery?.epoch ?? 0}`, status: 409 };
     }
-    const old = tx.get(expectedOwner);
+    const activeOld = tx.get(expectedOwner);
+    // Closed owners can be archived while a comparison lane remains active.
+    // Read by id from both collections in this same transaction to retain the
+    // exact owner record and its epoch fence after that move.
+    const old = activeOld ?? tx.pipelineGet(expectedOwner);
     if (old?.delivery?.operation?.state === "running") return { error: `publisher ${expectedOwner} at epoch ${expectedEpoch} is in flight or its outcome is uncertain; reconcile it before takeover`, status: 409 };
     const completedStage = old?.state === "closed" ? completedComparisonPass(pipeline) : null;
     if (pipeline.state === "closed" || (pipeline.state === "completed" && !completedStage)) return { error: "a terminal lane cannot take ownership without a passed comparison and a closed owner", status: 409 };
@@ -2350,7 +2354,7 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
       publicationInterrupted(refused.result) && !refused.result.failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
     }
     pipeline.publicationRecovery = mergePublicationRecovery(old?.publicationRecovery, pipeline.publicationRecovery);
-    if (old?.delivery) {
+    if (old?.delivery && activeOld) {
       old.delivery.active = false;
       old.delivery.publish = "disabled";
       old.delivery.releasedAt = new Date().toISOString();
