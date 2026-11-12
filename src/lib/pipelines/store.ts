@@ -2165,8 +2165,10 @@ export function deliveryJournal(pipeline: Pipeline, kind: NonNullable<Pipeline["
 }
 
 function releaseTerminalDelivery(pipeline: Pipeline): void {
-  if (pipeline.closeTeardown && (pipeline.closeTeardown.phase !== "settled" || pipeline.closeReport?.stillRunning.length || pipeline.closeReport?.unconfirmed.length)) return;
   const delivery = pipeline.delivery;
+  // Host teardown keeps its own durable custody. Closing withdraws this
+  // lane's right to start a publisher immediately; an existing writer below
+  // still fences the target until its outcome has been reconciled.
   // Parks retain the lane's claim so its cursor can resume and publish.
   if (!delivery?.active || (pipeline.state !== "closed" && pipeline.state !== "completed")) return;
   // An interrupted external write remains fenced until its result is known.
@@ -2175,6 +2177,19 @@ function releaseTerminalDelivery(pipeline: Pipeline): void {
   delivery.publish = "disabled";
   delivery.releasedAt = pipeline.closedAt ?? new Date().toISOString();
   deliveryJournal(pipeline, "release", `pipeline ${pipeline.state}`);
+}
+
+/** A completed comparison can resume delivery at its passed terminal stage,
+ * without repeating the work or inventing a review verdict. */
+export function completedComparisonPass(pipeline: Pipeline): string | null {
+  if (pipeline.state !== "completed" || pipeline.delivery?.disposition !== "comparison"
+    || pipeline.hiddenAt || !/^[0-9a-f]{40}$/i.test(pipeline.lastPassedCommit)) return null;
+  const terminal = pipeline.stages.filter(stage => {
+    const attempt = pipeline.runs.find(run => run.stageId === stage.id)?.attempts.at(-1);
+    return stage.next === null && attempt?.state === "passed" && attempt.verdict?.status === "pass"
+      && attempt.completedAt && !attempt.historical;
+  });
+  return terminal.length === 1 ? terminal[0]!.id : null;
 }
 
 export function pipelineDeliveryLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): Pipeline | null {
@@ -2323,7 +2338,8 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
     }
     const old = tx.get(expectedOwner);
     if (old?.delivery?.operation?.state === "running") return { error: `publisher ${expectedOwner} at epoch ${expectedEpoch} is in flight or its outcome is uncertain; reconcile it before takeover`, status: 409 };
-    if (pipeline.state === "closed" || pipeline.state === "completed") return { error: "a terminal lane cannot take ownership", status: 409 };
+    const completedStage = old?.state === "closed" ? completedComparisonPass(pipeline) : null;
+    if (pipeline.state === "closed" || (pipeline.state === "completed" && !completedStage)) return { error: "a terminal lane cannot take ownership without a passed comparison and a closed owner", status: 409 };
     const refused = old?.delivery?.operation;
     if (old && refused?.state === "settled" && refused.result?.ok === false) {
       const attempt = old.runs.find(run => run.stageId === old.cursor?.stageId)?.attempts.at(-1);
@@ -2345,6 +2361,13 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
       ownerId: pipeline.id, epoch: expectedEpoch + 1, journal: pipeline.delivery.journal };
     delete pipeline.publication;
     pipeline.publishedCommit = null;
+    if (completedStage) {
+      pipeline.state = "running";
+      pipeline.closedAt = null;
+      pipeline.pausedState = null;
+      pipeline.cursor = { stageId: completedStage, state: "committing", input: null, activatedBy: null };
+      pipeline.stateDetail = null;
+    }
     deliveryJournal(pipeline, "takeover", reason, conversationId);
     const action = pipeline.remoteAction;
     if (action?.state === "pending" && action.action === "takeover"

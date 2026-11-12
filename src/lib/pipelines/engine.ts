@@ -188,7 +188,7 @@ import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLi
 import { recordedAttemptReceipts, recordedHostHeld } from "@/lib/recordedChecks/store";
 import { recordedReportReceipts } from "@/lib/recordedChecks/reportGate";
 import { pipelineRecordRevalidator } from "./revalidation";
-import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
+import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, completedComparisonPass, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
@@ -12730,6 +12730,22 @@ async function applySkippedStage(pipeline: Pipeline, stage: PipelineStage, attem
   }
 }
 
+function parkFailedTakeover(pipeline: Pipeline, superseded: boolean): void {
+  const action = pipeline.remoteAction;
+  if (action?.action !== "takeover" || !action.error) return;
+  // A newer pause, close or decision remains authoritative. Its refusal is
+  // still visible in the remote receipt, delivery journal and lifecycle event.
+  if (pipeline.state !== "provisioning" && pipeline.state !== "running" && pipeline.state !== "completed"
+    && !(pipeline.state === "needs_decision" && !superseded)) return;
+  const stage = completedComparisonPass(pipeline);
+  if (stage) {
+    pipeline.cursor = { stageId: stage, state: "committing", input: null, activatedBy: null };
+    pipeline.closedAt = null;
+  }
+  if (pipeline.state === "completed" && !stage) return;
+  parkPipelineState(pipeline, `publishing the passed stage: delivery takeover failed: ${action.error}`);
+}
+
 /** Remote repair runs outside the registry lease, under an inherited kernel
     lock. A restart rechecks pending intent only after its old children stop. */
 export async function settlePendingRemoteActions(ports: PipelinePorts = defaultPipelinePorts()): Promise<void> {
@@ -12746,8 +12762,10 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
       await withPipelineMutation(async (pipelines, persist) => {
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || current.remoteAction?.id !== action.id || current.remoteAction.state !== "pending") return;
+        const superseded = remoteActionFence(current) !== action.fence;
         current.remoteAction = { ...action, state: "settled", settledAt: ports.now(), error: detail };
-        if (remoteActionFence(current) === action.fence) current.stateDetail = detail;
+        if (!superseded) current.stateDetail = detail;
+        parkFailedTakeover(current, superseded);
         if (current.delivery) deliveryJournal(current, "recovery", `${action.action} remote verification refused: ${detail}`, action.actor?.kind === "agent" ? action.actor.conversationId : null);
         await persist();
       });
@@ -12845,10 +12863,14 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
       const stale = Boolean(refusal) || !matches(pipeline) || !receiptMatches()
         || (action.retryReceipt?.claimId !== undefined && (await ports.claimSpawnRetry(action.retryReceipt.launchId, action.retryReceipt.claimId)) !== "claimed");
       pipeline.remoteAction = { ...action, state: "settled", settledAt: ports.now(), ...(!result.ok || stale ? { error: refusal?.error ?? (stale ? "remote action superseded" : (result as { error: string }).error) } : {}) };
+      parkFailedTakeover(pipeline, stale);
       if (pipeline.delivery) deliveryJournal(pipeline, "recovery", stale ? `${action.action} remote verification superseded`
         : result.ok ? `${action.action} remote verification settled` : `${action.action} remote verification failed: ${result.error}`, action.actor?.kind === "agent" ? action.actor.conversationId : null);
       if (stale) { await persist(); return; }
-      if (!result.ok) { pipeline.stateDetail = result.error; await persist(); return; }
+      if (!result.ok) {
+        if (action.action !== "takeover") pipeline.stateDetail = result.error;
+        await persist(); return;
+      }
       if (action.action === "retry-stage") {
         const stage = currentStage(pipeline)!;
         if (pipeline.delivery?.operation?.state === "settled") {
@@ -13613,6 +13635,9 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         const lanePorts = controllerSnapshotPorts(controllerPorts, () => assertCurrent(pipeline));
         if (publishesRemoteBranch(pipeline) && !pipeline.delivery) return;
         const persistPipeline = async () => await persist([pipeline]);
+        // The delivery request owns this boundary until its durable outcome.
+        // A comparison must not finish locally while takeover is pending.
+        if (pipeline.remoteAction?.state === "pending" && pipeline.remoteAction.action === "takeover") return;
         const operation = pipeline.delivery?.operation;
         const passed = pipeline.cursor?.state === "committing" ? currentAttempt(pipeline, pipeline.cursor.stageId) : null;
         const deliveryRefusalCleared = pipeline.delivery
