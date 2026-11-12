@@ -150,15 +150,16 @@ title was the only place the reported lanes named their issue.
 
 ### 4.3 Partial delivery
 
-**Marking.** `pipeline_action attach-link` takes `part: boolean`:
+**Marking.** Partial marking is API-only. `pipeline_action attach-link` takes
+`part: boolean`:
 
 - `true` sets the marker and `false` clears it;
 - leaving it out keeps the current value.
 
 The marker is stored as `StoredWorkLink.part?: true`, and only on lane records.
 To mark an issue inherited from a task, attach it to the lane with
-`part: true`. `editStoredWorkLinks` treats an attach of an existing link as a
-no-op today (`workLinks.ts:391`), so it must compare `part` and report a change.
+`part: true`. `editStoredWorkLinks` compares the existing marker and reports
+a change when it is set or cleared.
 
 **On landing.** The step posts `Part of this issue landed in #P: <PR title>.`
 and leaves the issue open. If the PR's own closing reference closed the issue,
@@ -169,7 +170,8 @@ reopen when another lane landed the same issue with mode `close`.
 
 ### 4.4 When a lane has landed
 
-**In-memory evidence comes first**, with no I/O. Any one of these counts:
+**In-memory evidence comes first**, with no I/O. Any one of these identifies
+a candidate:
 
 - `merge.state === "merged"`. This covers a runner merge and a batch landing
   the runner verified.
@@ -178,8 +180,10 @@ reopen when another lane landed the same issue with mode `close`.
 - The cache shows that PR closed, and its number appears in the title of a
   merged `merge-batch/` PR. `landedPullRequests` moves to `src/lib/forge/` so
   both readers share it.
+- A completed lane has a closed cached work PR. The carrier proof in §4.6
+  determines whether its reviewed change landed.
 
-**Then one read of the primary record** comes before any write:
+**Then an authoritative read of the primary record** comes before any write:
 `repos/R/pulls/P`, or the batch PR for a batch landing. `merged_at` must be set
 before settlement. A merge into another branch waits until its merge commit is
 an ancestor of the repository default branch; it writes no issue while waiting.

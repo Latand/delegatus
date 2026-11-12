@@ -905,3 +905,315 @@ privacy with zero findings.
 | Command | Exit | Counts | Seconds | Invoked UTC |
 |---|---:|---|---:|---|
 | `G bun scripts/privacy-publication-gate.ts --require-known-values --paths docs/verification/issue-delivery.md docs/verification/stage-report-preview.txt` | 0 | 2 files; zero findings | 2.571 | 2026-11-12T18:55:39+00:00 |
+
+
+## Integration-branch repair
+
+Main advanced to `b457a858`, introducing the workflow in
+`docs/batch-branches.md`. It was integrated with merge commit `fc706ff9`.
+The earlier campaign sections are historical observations of their named
+revisions. The following campaign renews the compiler and all 88 test files
+selected by the project on the final implementation, `48887c3e`. The
+integration repair is `672b2e9f`; `8c083a8f` adds the invalid-hint guard,
+and `48887c3e` uses the carrier merge time for rollout.
+
+Closed work PRs can now settle through verified carrier merges, including
+locally squashed work. Non-default merges wait for default-branch ancestry.
+The App uses a separate contents-read token for proof. Persisted hints and
+attempt times survive restart and preserve progress across the work quota.
+The existing native batch verifier keeps its exact-patch rule. No speed gain
+is claimed.
+
+The negative control below overlays only new batch behavior tests on the
+unmodified merged implementation. Its failures demonstrate the missing path.
+The first repair observation passed the compiler and 17 focused files; its
+remaining test expected a closed cache row to suppress an authoritative PR
+read. That expectation was corrected, with a separate test for authoritative
+merge evidence. These intermediate results remain historical and are not
+adopted as final verification.
+
+| Observation | Command | Exit | Pass / fail / skip | Assertions | Seconds | Invoked UTC |
+|---|---|---:|---|---:|---:|---|
+| negative control | `T bun test --timeout=60000 src/lib/forge/issueDelivery.test.ts` | 1 | 56 / 9 / 0 | 133 | 1.46 | 2026-11-12T19:09:21+00:00 |
+| intermediate repair | `T bun test --timeout=60000 src/lib/forge/issueDelivery.app.test.ts` | 0 | 7 / 0 / 0 | 36 | 3.523 | 2026-11-12T20:01:19+00:00 |
+| intermediate repair | `T bun test --timeout=60000 bin/forge-app-token.test.ts` | 0 | 196 / 0 / 0 | 644 | 1.41 | 2026-11-12T20:01:23+00:00 |
+| intermediate repair | `T bun test --timeout=60000 src/lib/forge/appWrite.test.ts` | 0 | 19 / 0 / 0 | 70 | 2.076 | 2026-11-12T20:01:24+00:00 |
+| intermediate repair | `T bun test --timeout=60000 src/lib/forge/issueDelivery.test.ts` | 1 | 68 / 1 / 0 | 169 | 1.214 | 2026-11-12T20:01:26+00:00 |
+| intermediate repair | `T bun test --timeout=60000 src/lib/forge/issueDeliveryStore.test.ts` | 0 | 11 / 0 / 0 | 85 | 10.978 | 2026-11-12T20:01:27+00:00 |
+| intermediate repair | `T bun test --timeout=60000 src/lib/forge/autoMerge.test.ts` | 0 | 176 / 0 / 0 | 2879 | 42.321 | 2026-11-12T20:01:38+00:00 |
+| intermediate repair | `T bun test --timeout=60000 src/lib/forge/postMerge.taskBinding.test.ts` | 0 | 10 / 0 / 0 | 55 | 3.226 | 2026-11-12T20:02:21+00:00 |
+| intermediate repair | `T bun test --timeout=60000 src/lib/mcp/workLinks.test.ts` | 0 | 3 / 0 / 0 | 23 | 2.374 | 2026-11-12T20:02:24+00:00 |
+| intermediate repair | `T bun test --timeout=60000 src/lib/monitor/githubEvidence.test.ts` | 0 | 56 / 0 / 0 | 249 | 1.347 | 2026-11-12T20:02:26+00:00 |
+| intermediate repair | `T bun test --timeout=60000 src/lib/git/agentForgeCredentials.test.ts` | 0 | 82 / 0 / 1 | 799 | 25.546 | 2026-11-12T20:02:28+00:00 |
+| intermediate repair | `T bun test --timeout=60000 src/lib/forge/appConnect.test.ts` | 0 | 46 / 0 / 0 | 276 | 12.555 | 2026-11-12T20:02:53+00:00 |
+| intermediate repair | `T bun test --timeout=60000 bin/forge-app-connect.test.ts` | 0 | 10 / 0 / 0 | 48 | 2.579 | 2026-11-12T20:03:06+00:00 |
+| intermediate repair | `T bun test --timeout=60000 src/lib/mcp/issueReport.test.ts` | 0 | 54 / 0 / 0 | 800 | 24.428 | 2026-11-12T20:03:08+00:00 |
+| intermediate repair | `T bun test --timeout=60000 src/lib/forge/batchLanding.test.ts` | 0 | 35 / 0 / 0 | 43 | 3.671 | 2026-11-12T20:03:33+00:00 |
+| intermediate repair | `T bun test --timeout=60000 src/lib/forge/autoMergeStore.test.ts` | 0 | 146 / 0 / 0 | 1428 | 60.759 | 2026-11-12T20:03:36+00:00 |
+| intermediate repair | `T bun test --timeout=60000 src/lib/forge/cache.test.ts` | 0 | 7 / 0 / 0 | 32 | 1.15 | 2026-11-12T20:04:37+00:00 |
+| intermediate repair | `T bun test --timeout=60000 src/lib/forge/cacheStore.test.ts` | 0 | 4 / 0 / 0 | 24 | 4.672 | 2026-11-12T20:04:38+00:00 |
+| intermediate repair | `T bun test --timeout=60000 src/lib/forge/sweep.test.ts` | 0 | 20 / 0 / 0 | 90 | 2.773 | 2026-11-12T20:04:43+00:00 |
+
+Intermediate compiler: `G bunx tsc --noEmit`, exit 0, 361.448 seconds, invoked 2026-11-12T19:55:18+00:00.
+
+
+The permission split was checked against GitHub's primary REST documentation:
+[branch reads](https://docs.github.com/en/rest/branches/branches#get-a-branch)
+and [commit comparison](https://docs.github.com/en/rest/commits/commits#compare-two-commits)
+require contents-read access; [associated PR lookup](https://docs.github.com/en/rest/commits/commits#list-pull-requests-associated-with-a-commit)
+uses PR-read access. These are separate minimal token purposes in the
+production scheduler and the private-repository fixture.
+
+
+## Focused renewal before final committed campaign
+
+| Observation | Command | Exit | Pass / fail / skip | Assertions | Seconds | Invoked UTC |
+|---|---|---:|---|---:|---:|---|
+| batchcurrent (head) | `T bun test --timeout=60000 src/lib/forge/issueDelivery.app.test.ts` | 0 | 7 / 0 / 0 | 36 | 5.088 | 2026-11-12T20:28:30+00:00 |
+| batchcurrent (head) | `T bun test --timeout=60000 bin/forge-app-token.test.ts` | 0 | 196 / 0 / 0 | 644 | 1.87 | 2026-11-12T20:28:35+00:00 |
+| batchcurrent (head) | `T bun test --timeout=60000 src/lib/forge/appWrite.test.ts` | 0 | 19 / 0 / 0 | 70 | 2.818 | 2026-11-12T20:28:37+00:00 |
+| batchcurrent (head) | `T bun test --timeout=60000 src/lib/forge/issueDelivery.test.ts` | 0 | 79 / 0 / 0 | 191 | 1.758 | 2026-11-12T20:28:39+00:00 |
+| batchcurrent (head) | `T bun test --timeout=60000 src/lib/forge/issueDeliveryStore.test.ts` | 0 | 11 / 0 / 0 | 83 | 25.058 | 2026-11-12T20:28:41+00:00 |
+| batchcurrent (head) | `T bun test --timeout=60000 src/lib/forge/autoMerge.test.ts` | 0 | 176 / 0 / 0 | 2879 | 63.408 | 2026-11-12T20:29:06+00:00 |
+| batchcurrent (head) | `T bun test --timeout=60000 src/lib/forge/postMerge.taskBinding.test.ts` | 0 | 10 / 0 / 0 | 55 | 8.73 | 2026-11-12T20:30:10+00:00 |
+| batchcurrent (head) | `T bun test --timeout=60000 src/lib/mcp/workLinks.test.ts` | 0 | 3 / 0 / 0 | 23 | 6.891 | 2026-11-12T20:30:18+00:00 |
+| batchcurrent (head) | `T bun test --timeout=60000 src/lib/monitor/githubEvidence.test.ts` | 0 | 56 / 0 / 0 | 249 | 5.176 | 2026-11-12T20:30:25+00:00 |
+| batchcurrent (head) | `T bun test --timeout=60000 src/lib/git/agentForgeCredentials.test.ts` | 0 | 82 / 0 / 1 | 799 | 61.118 | 2026-11-12T20:30:30+00:00 |
+| batchcurrent (head) | `T bun test --timeout=60000 src/lib/forge/appConnect.test.ts` | 1 | 44 / 2 / 0 | 268 | 27.123 | 2026-11-12T20:31:32+00:00 |
+| batchcurrent (head) | `T bun test --timeout=60000 bin/forge-app-connect.test.ts` | 0 | 10 / 0 / 0 | 48 | 5.507 | 2026-11-12T20:31:59+00:00 |
+| batchcurrent (head) | `T bun test --timeout=60000 src/lib/mcp/issueReport.test.ts` | 0 | 54 / 0 / 0 | 800 | 36.355 | 2026-11-12T20:32:04+00:00 |
+| batchcurrent (head) | `T bun test --timeout=60000 src/lib/forge/batchLanding.test.ts` | 0 | 36 / 0 / 0 | 46 | 5.253 | 2026-11-12T20:32:41+00:00 |
+| batchcurrent (head) | `T bun test --timeout=60000 src/lib/forge/autoMergeStore.test.ts` | 0 | 146 / 0 / 0 | 1439 | 108.409 | 2026-11-12T20:32:46+00:00 |
+| batchcurrent (head) | `T bun test --timeout=60000 src/lib/forge/cache.test.ts` | 0 | 7 / 0 / 0 | 32 | 2.5 | 2026-11-12T20:34:34+00:00 |
+| batchcurrent (head) | `T bun test --timeout=60000 src/lib/forge/cacheStore.test.ts` | 0 | 4 / 0 / 0 | 24 | 8.015 | 2026-11-12T20:34:37+00:00 |
+| batchcurrent (head) | `T bun test --timeout=60000 src/lib/forge/sweep.test.ts` | 0 | 20 / 0 / 0 | 90 | 6.157 | 2026-11-12T20:34:45+00:00 |
+| basebatchapp (base) | `T bun test --timeout=60000 src/lib/forge/appConnect.test.ts` | 0 | 46 / 0 / 0 | 276 | 13.598 | 2026-11-12T20:38:06+00:00 |
+
+The focused renewal used the immutable `fc706ff9` overlay with the corrected
+cache test and the additional closed-PR proof tests. Its compiler command
+`G bunx tsc --noEmit` exited 0 in 501.466 seconds, invoked 2026-11-12T20:20:08+00:00.
+All delivery and batch cases passed. The App-connection file had two child
+stderr assertions fail after timing diagnostics; its complete main observation
+above passed all 46 tests. The final committed campaign renews that file.
+The later committed fairness, invalid-hint and carrier-rollout repairs are
+covered by the final campaign below; the focused overlay is historical.
+
+
+## Final committed campaign
+
+| Observation | Command | Exit | Pass / fail / skip | Assertions | Seconds | Invoked UTC |
+|---|---|---:|---|---:|---:|---|
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/forge/issueDelivery.test.ts` | 0 | 81 / 0 / 0 | 198 | 2.201 | 2026-11-12T20:45:10+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/forge/batchLanding.test.ts` | 0 | 37 / 0 / 0 | 47 | 6.955 | 2026-11-12T20:45:12+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/forge/issueDelivery.app.test.ts` | 0 | 7 / 0 / 0 | 36 | 6.244 | 2026-11-12T20:45:19+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/forge/issueDeliveryStore.test.ts` | 0 | 11 / 0 / 0 | 83 | 19.198 | 2026-11-12T20:45:25+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 bin/forge-app-token.test.ts` | 0 | 196 / 0 / 0 | 644 | 2.11 | 2026-11-12T20:45:44+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/forge/appWrite.test.ts` | 0 | 19 / 0 / 0 | 70 | 2.954 | 2026-11-12T20:45:46+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/forge/autoMerge.test.ts` | 0 | 176 / 0 / 0 | 2879 | 48.345 | 2026-11-12T20:45:49+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/forge/postMerge.taskBinding.test.ts` | 0 | 10 / 0 / 0 | 55 | 5.155 | 2026-11-12T20:46:38+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/forge/workLinks.test.ts` | 0 | 40 / 0 / 0 | 112 | 2.076 | 2026-11-12T20:46:43+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/mcp/server.test.ts` | 0 | 103 / 0 / 0 | 2640 | 50.119 | 2026-11-12T20:46:45+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/mcp/workLinks.test.ts` | 0 | 3 / 0 / 0 | 23 | 3.21 | 2026-11-12T20:47:35+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/monitor/seatTickSources.test.ts` | 0 | 166 / 0 / 0 | 1051 | 27.029 | 2026-11-12T20:47:38+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.accountGuard.test.ts` | 0 | 31 / 0 / 0 | 161 | 52.229 | 2026-11-12T20:48:05+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.accounting.test.ts` | 0 | 8 / 0 / 0 | 66 | 14.695 | 2026-11-12T20:48:58+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.activation.test.ts` | 1 | 52 / 1 / 0 | 332 | 40.675 | 2026-11-12T20:49:12+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.capacity.test.ts` | 0 | 25 / 0 / 0 | 410 | 26.835 | 2026-11-12T20:49:53+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.claudeCloud.test.ts` | 0 | 11 / 0 / 0 | 93 | 13.508 | 2026-11-12T20:50:20+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.closeAttempts.test.ts` | 0 | 50 / 0 / 0 | 323 | 8.902 | 2026-11-12T20:50:33+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.cloud.test.ts` | 1 | 132 / 2 / 0 | 1301 | 243.132 | 2026-11-12T20:50:42+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.containment.test.ts` | 0 | 55 / 0 / 0 | 402 | 110.464 | 2026-11-12T20:54:45+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.controllerPass.test.ts` | 0 | 74 / 0 / 0 | 732 | 110.356 | 2026-11-12T20:56:36+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.controllerSnapshot.test.ts` | 0 | 2 / 0 / 0 | 7 | 8.94 | 2026-11-12T20:58:26+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.cpuAdmissionPolling.test.ts` | 1 | 14 / 1 / 0 | 110 | 82.731 | 2026-11-12T20:58:35+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.cpuQueue.test.ts` | 0 | 2 / 0 / 0 | 36 | 10.053 | 2026-11-12T20:59:58+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.creation.test.ts` | 0 | 113 / 0 / 0 | 722 | 89.082 | 2026-11-12T21:00:08+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.dependencies.test.ts` | 0 | 4 / 0 / 0 | 19 | 11.794 | 2026-11-12T21:01:37+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.fencedMessage.test.ts` | 0 | 24 / 0 / 0 | 229 | 63.843 | 2026-11-12T21:01:49+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.historyWrites.test.ts` | 0 | 10 / 0 / 0 | 108 | 15.896 | 2026-11-12T21:02:53+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.launchLease.test.ts` | 0 | 15 / 0 / 0 | 15 | 75.537 | 2026-11-12T21:03:09+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.mechanicalRecovery.test.ts` | 0 | 42 / 0 / 0 | 822 | 186.109 | 2026-11-12T21:04:24+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.missingWorktree.test.ts` | 0 | 35 / 0 / 0 | 352 | 17.217 | 2026-11-12T21:07:30+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.pauseMetadata.test.ts` | 0 | 19 / 0 / 0 | 47 | 2.73 | 2026-11-12T21:07:47+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.ports.part2.test.ts` | 0 | 51 / 0 / 0 | 426 | 48.424 | 2026-11-12T21:07:50+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.ports.part3.test.ts` | 0 | 18 / 0 / 0 | 658 | 124.985 | 2026-11-12T21:08:39+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.ports.test.ts` | 0 | 81 / 0 / 0 | 1735 | 79.514 | 2026-11-12T21:10:44+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.privacyCorrelation.test.ts` | 0 | 1 / 0 / 0 | 5 | 1.803 | 2026-11-12T21:12:03+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.proactive.part2.test.ts` | 1 | 50 / 2 / 0 | 445 | 61.907 | 2026-11-12T21:12:05+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.proactive.test.ts` | 0 | 41 / 0 / 0 | 170 | 36.743 | 2026-11-12T21:13:07+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudget.test.ts` | 0 | 42 / 0 / 0 | 172 | 18.86 | 2026-11-12T21:13:43+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetChains.part2.test.ts` | 0 | 18 / 0 / 0 | 82 | 38.98 | 2026-11-12T21:14:02+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetChains.part3.test.ts` | 0 | 26 / 0 / 0 | 94 | 40.055 | 2026-11-12T21:14:41+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetChains.test.ts` | 0 | 18 / 0 / 0 | 82 | 50.215 | 2026-11-12T21:15:21+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetKinds.test.ts` | 0 | 28 / 0 / 0 | 147 | 17.001 | 2026-11-12T21:16:12+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts` | 0 | 5 / 0 / 0 | 15 | 63.218 | 2026-11-12T21:16:29+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts` | 0 | 6 / 0 / 0 | 18 | 61.791 | 2026-11-12T21:17:32+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetOutput.test.ts` | 0 | 5 / 0 / 0 | 15 | 64.361 | 2026-11-12T21:18:34+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts` | 0 | 5 / 0 / 0 | 15 | 64.11 | 2026-11-12T21:19:38+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts` | 0 | 6 / 0 / 0 | 18 | 43.742 | 2026-11-12T21:20:42+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts` | 0 | 5 / 0 / 0 | 15 | 52.403 | 2026-11-12T21:21:26+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerChains.part2.test.ts` | 0 | 32 / 0 / 0 | 304 | 26.994 | 2026-11-12T21:22:18+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerChains.test.ts` | 0 | 16 / 0 / 0 | 96 | 29.408 | 2026-11-12T21:22:45+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerReset.part2.test.ts` | 0 | 5 / 0 / 0 | 25 | 41.913 | 2026-11-12T21:23:15+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerReset.part3.test.ts` | 0 | 27 / 0 / 0 | 177 | 42.047 | 2026-11-12T21:23:57+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerReset.test.ts` | 1 | 2 / 16 / 0 | 9 | 77.853 | 2026-11-12T21:24:39+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerSignals.test.ts` | 0 | 28 / 0 / 0 | 128 | 29.117 | 2026-11-12T21:25:56+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.provisioning.test.ts` | 0 | 73 / 0 / 0 | 388 | 24.718 | 2026-11-12T21:26:26+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.publication.test.ts` | 0 | 36 / 0 / 0 | 454 | 46.926 | 2026-11-12T21:26:50+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.recoveredPending.test.ts` | 0 | 43 / 0 / 0 | 622 | 17.52 | 2026-11-12T21:27:37+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.recovery.part2.test.ts` | 0 | 85 / 0 / 0 | 605 | 30.077 | 2026-11-12T21:27:55+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.recovery.test.ts` | 0 | 67 / 0 / 1 | 521 | 27.662 | 2026-11-12T21:28:25+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.recoveryAdmission.part2.test.ts` | 0 | 116 / 0 / 0 | 306 | 26.103 | 2026-11-12T21:28:52+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.recoveryAdmission.test.ts` | 0 | 65 / 0 / 0 | 411 | 18.326 | 2026-11-12T21:29:19+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.recoveryAuthority.part2.test.ts` | 0 | 86 / 0 / 0 | 478 | 28.386 | 2026-11-12T21:29:37+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.recoveryAuthority.test.ts` | 0 | 98 / 0 / 0 | 388 | 38.779 | 2026-11-12T21:30:05+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.restoreContinuation.test.ts` | 0 | 78 / 0 / 0 | 296 | 25.294 | 2026-11-12T21:30:44+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.roleMemoryDispatch.test.ts` | 0 | 110 / 0 / 0 | 1155 | 59.243 | 2026-11-12T21:31:09+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.rolePrivacy.test.ts` | 0 | 20 / 0 / 1 | 178 | 19.066 | 2026-11-12T21:32:09+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.rolePrivacyEffects.part2.test.ts` | 0 | 26 / 0 / 0 | 26 | 59.378 | 2026-11-12T21:32:28+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.rolePrivacyEffects.part3.test.ts` | 0 | 26 / 0 / 0 | 26 | 78.902 | 2026-11-12T21:33:27+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.rolePrivacyEffects.test.ts` | 0 | 27 / 0 / 0 | 27 | 117.994 | 2026-11-12T21:34:46+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.routing.test.ts` | 1 | 99 / 8 / 0 | 700 | 80.769 | 2026-11-12T21:36:44+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.settlement.test.ts` | 0 | 121 / 0 / 0 | 1016 | 130.835 | 2026-11-12T21:38:05+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.settlementAuthority.test.ts` | 0 | 1 / 0 / 0 | 15 | 4.294 | 2026-11-12T21:40:16+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.settlementPreparation.test.ts` | 0 | 31 / 0 / 0 | 544 | 56.982 | 2026-11-12T21:40:20+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.setupRecipe.test.ts` | 0 | 7 / 0 / 0 | 52 | 7.035 | 2026-11-12T21:41:17+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.spawnRetry.test.ts` | 0 | 103 / 0 / 0 | 1091 | 63.791 | 2026-11-12T21:41:24+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.spawnSilence.test.ts` | 0 | 25 / 0 / 0 | 132 | 22.807 | 2026-11-12T21:42:28+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.succession.part2.test.ts` | 0 | 99 / 0 / 0 | 651 | 98.21 | 2026-11-12T21:42:50+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.succession.part3.test.ts` | 0 | 105 / 0 / 0 | 530 | 64.608 | 2026-11-12T21:44:29+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.succession.test.ts` | 0 | 32 / 0 / 0 | 149 | 61.882 | 2026-11-12T21:45:33+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.suspendedRetry.test.ts` | 0 | 21 / 0 / 0 | 193 | 10.15 | 2026-11-12T21:46:35+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.terminalBudget.test.ts` | 0 | 11 / 0 / 0 | 136 | 23.436 | 2026-11-12T21:46:45+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.watchdogRegression.test.ts` | 0 | 5 / 0 / 0 | 17 | 6.504 | 2026-11-12T21:47:09+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/store.archiveText.test.ts` | 0 | 3 / 0 / 0 | 36 | 1.545 | 2026-11-12T21:47:15+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/store.cooperativeFreeze.test.ts` | 0 | 2 / 0 / 0 | 20 | 2.694 | 2026-11-12T21:47:17+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/store.reads.test.ts` | 0 | 4 / 0 / 0 | 71 | 2.697 | 2026-11-12T21:47:20+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/store.schemaCompatibility.test.ts` | 0 | 13 / 0 / 0 | 45 | 2.003 | 2026-11-12T21:47:22+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/pipelines/store.test.ts` | 0 | 61 / 0 / 0 | 382 | 6.751 | 2026-11-12T21:47:24+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/forge/autoMergeStore.test.ts` | 0 | 146 / 0 / 0 | 1428 | 50.005 | 2026-11-12T21:47:31+00:00 |
+| batchfinal (head) | `T bun test --timeout=60000 src/lib/forge/appConnect.test.ts` | 0 | 46 / 0 / 0 | 276 | 11.802 | 2026-11-12T21:48:21+00:00 |
+
+The final campaign uses an immutable export of `48887c3e` against main
+`b457a858`. Its compiler command `G bunx tsc --noEmit` exited 0 in
+326.164 seconds, invoked 2026-11-12T20:39:44+00:00. All 88 paths selected by
+the project ran in full, with two additional direct consumers: App connection
+and the batch verifier's store. The parent driver exited 1: 84 files green,
+six red; 3974 pass, 30 fail, two skips in the raw observations above.
+Every file returned complete runner counts. No interrupted file was adopted.
+
+Each file had its own owned runner and fresh isolated state. The diagnostic
+owned-run allowance was 900000 ms because earlier complete Cloud and
+role-memory observations exceeded 300000 ms under this machine's CPU share.
+The Bun per-test limit stayed 60000 ms. The serial parent had three hours of
+execution headroom. Publication budgets and project gate policy were unchanged.
+The one native recorder wait covered admission, execution and cleanup.
+
+The four direct delivery files passed all 136 tests and 364 assertions. They
+cover full and partial delivery, native and locally squashed batches, arbitrary
+branch names and comment languages, old installed helper copies, minimal App
+grants, missing grants, stale and declined carriers, invalid commit hints,
+restart recovery, backoff, quota fairness, head/link races and carrier-time
+rollout. The App-connection renewal passed all 46 tests and 276 assertions;
+the earlier stderr timing failures did not recur.
+
+Fresh complete main/head observations below determine the final classification
+of the six raw red files. The provider-reset observation timed out in its
+watchdog case before subsequent fixture setup failed; both the initial failure
+and the resulting setup errors remain recorded. No unrelated test was edited.
+
+
+The implementation commits used ordinary `git commit` in the assigned checkout.
+Their normal pre-commit hooks passed staged whitespace and changed-file lint.
+
+| Command | Commit | Exit | Hook counts |
+|---|---|---:|---|
+| `git commit -F "$TMPDIR/batch-commit-message.txt"` | `672b2e9f` | 0 | 12 code/test files linted; zero introduced errors |
+| `git commit -F "$TMPDIR/hint-commit-message.txt"` | `8c083a8f` | 0 | 2 code/test files linted; zero introduced errors |
+| `git commit -F "$TMPDIR/rollout-commit-message.txt"` | `48887c3e` | 0 | 2 code/test files linted; zero introduced errors |
+| `git merge-base --is-ancestor b457a8585518e382bec595c3103d5b0bedf9a0fd HEAD` | `48887c3e` | 0 | refreshed main is an ancestor |
+| `git merge-base --is-ancestor 8137d2fa HEAD` | `48887c3e` | 0 | original feature is an ancestor |
+
+No hook override was used. The later documentation commit changes no compiler
+or test input; its publication privacy result is retained with the final handoff.
+
+
+## Final main and head comparison
+
+| Observation | Command | Exit | Pass / fail / skip | Assertions | Seconds | Invoked UTC |
+|---|---|---:|---|---:|---:|---|
+| batchcompare (head) | `T bun test --timeout=60000 src/lib/done/project.test.ts` | 0 | 31 / 0 / 0 | 122 | 3.251 | 2026-11-12T21:49:16+00:00 |
+| batchcompare (base) | `T bun test --timeout=60000 src/lib/pipelines/engine.activation.test.ts` | 1 | 52 / 1 / 0 | 332 | 19.452 | 2026-11-12T21:49:19+00:00 |
+| batchcompare (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.activation.test.ts` | 1 | 52 / 1 / 0 | 332 | 15.748 | 2026-11-12T21:49:39+00:00 |
+| batchcompare (base) | `T bun test --timeout=60000 src/lib/pipelines/engine.cloud.test.ts` | 0 | 134 / 0 / 0 | 1301 | 138.25 | 2026-11-12T21:49:55+00:00 |
+| batchcompare (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.cloud.test.ts` | 0 | 134 / 0 / 0 | 1301 | 168.067 | 2026-11-12T21:52:13+00:00 |
+| batchcompare (base) | `T bun test --timeout=60000 src/lib/pipelines/engine.cpuAdmissionPolling.test.ts` | 0 | 15 / 0 / 0 | 112 | 71.515 | 2026-11-12T21:55:01+00:00 |
+| batchcompare (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.cpuAdmissionPolling.test.ts` | 0 | 15 / 0 / 0 | 112 | 72.708 | 2026-11-12T21:56:12+00:00 |
+| batchcompare (base) | `T bun test --timeout=60000 src/lib/pipelines/engine.proactive.part2.test.ts` | 1 | 50 / 2 / 0 | 445 | 115.866 | 2026-11-12T21:57:25+00:00 |
+| batchcompare (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.proactive.part2.test.ts` | 1 | 50 / 2 / 0 | 445 | 100.444 | 2026-11-12T21:59:21+00:00 |
+| batchcompare (base) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerReset.test.ts` | 0 | 18 / 0 / 0 | 96 | 69.402 | 2026-11-12T22:01:01+00:00 |
+| batchcompare (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.providerReset.test.ts` | 0 | 18 / 0 / 0 | 96 | 69.34 | 2026-11-12T22:02:11+00:00 |
+| batchcompare (base) | `T bun test --timeout=60000 src/lib/pipelines/engine.routing.test.ts` | 1 | 99 / 8 / 0 | 700 | 45.923 | 2026-11-12T22:03:20+00:00 |
+| batchcompare (head) | `T bun test --timeout=60000 src/lib/pipelines/engine.routing.test.ts` | 1 | 99 / 8 / 0 | 700 | 41.598 | 2026-11-12T22:04:06+00:00 |
+
+
+## Final classification
+
+All 88 required test paths have complete observations on the frozen code:
+**3801 pass, 11 matching baseline failures, 2 skips and
+30726 reported parent assertions**. Three additional direct
+consumers (App connection, batch store and Done projection) pass all
+223 tests and 1826 assertions. There are zero introduced failed
+identifiers. The classification compares full relative file paths and failure
+multiplicity, retaining duplicate parameterized names.
+
+The remaining failures match the complete main observations exactly:
+
+| File | Matching failed tests |
+|---|---:|
+| `src/lib/pipelines/engine.activation.test.ts` | 1 |
+| `src/lib/pipelines/engine.proactive.part2.test.ts` | 2 |
+| `src/lib/pipelines/engine.routing.test.ts` | 8 |
+
+Cloud passes all 134 tests and 1301 assertions on both main and head, including
+the reported remaining-stage-deadline cases. CPU admission polling passes all
+15 tests and 112 assertions on both sides. Provider reset passes all 18 tests
+and 96 assertions on both sides. Their earlier failures remain historical;
+no product or test change was made between those observations.
+
+The scoped comparison driver exits 1 because each side retains the same
+activation, proactive-recovery and routing failures. This follows the project
+policy that matching main failures do not block a change. No failed or
+incomplete receipt was represented as green.
+
+| Check | Command | Exit | Counts | Seconds | Invoked UTC |
+|---|---|---:|---|---:|---|
+| changed-file lint | `G bun scripts/eslint-changes.ts --base b457a8585518e382bec595c3103d5b0bedf9a0fd ./bin/forge-app-token.mjs ./bin/forge-app-token.test.ts ./src/lib/done/candidates.ts ./src/lib/forge/appWrite.fixture.ts ./src/lib/forge/appWrite.ts ./src/lib/forge/autoMerge.test.ts ./src/lib/forge/autoMerge.ts ./src/lib/forge/batchLanding.fixture.ts ./src/lib/forge/batchLanding.test.ts ./src/lib/forge/batchLanding.ts ./src/lib/forge/issueDelivery.app.test.ts ./src/lib/forge/issueDelivery.test.ts ./src/lib/forge/issueDelivery.ts ./src/lib/forge/issueDeliveryStore.test.ts ./src/lib/forge/landedPullRequests.ts ./src/lib/forge/postMerge.taskBinding.test.ts ./src/lib/forge/workLinks.ts ./src/lib/mcp/server.ts ./src/lib/mcp/workLinks.test.ts ./src/lib/monitor/seatTickSources.ts ./src/lib/pipelines/engine.ts ./src/lib/pipelines/store.ts ./src/lib/pipelines/types.ts` | 1 | archive lacks Git metadata; lint did not run | 0.800 | 2026-11-12T22:04:58+00:00 |
+| changed-file lint | `G bun scripts/eslint-changes.ts --base b457a8585518e382bec595c3103d5b0bedf9a0fd ./bin/forge-app-token.mjs ./bin/forge-app-token.test.ts ./src/lib/done/candidates.ts ./src/lib/forge/appWrite.fixture.ts ./src/lib/forge/appWrite.ts ./src/lib/forge/autoMerge.test.ts ./src/lib/forge/autoMerge.ts ./src/lib/forge/batchLanding.fixture.ts ./src/lib/forge/batchLanding.test.ts ./src/lib/forge/batchLanding.ts ./src/lib/forge/issueDelivery.app.test.ts ./src/lib/forge/issueDelivery.test.ts ./src/lib/forge/issueDelivery.ts ./src/lib/forge/issueDeliveryStore.test.ts ./src/lib/forge/landedPullRequests.ts ./src/lib/forge/postMerge.taskBinding.test.ts ./src/lib/forge/workLinks.ts ./src/lib/mcp/server.ts ./src/lib/mcp/workLinks.test.ts ./src/lib/monitor/seatTickSources.ts ./src/lib/pipelines/engine.ts ./src/lib/pipelines/store.ts ./src/lib/pipelines/types.ts` | 0 | 23 files; zero introduced errors | 5.987 | 2026-11-12T22:05:52+00:00 |
+
+The successful lint used the assigned checkout under isolated state because
+the archive has no Git metadata. Its 23 code/test inputs match the tested
+export byte for byte. No build or test ran against the assigned checkout or
+the operator state.
+
+After the prose-only evidence commit, the exact typecheck and six focused
+security/delivery test files are renewed from a fresh export of that commit.
+The stage handoff supplies their final exits and counts; all six explicit paths
+and earlier per-file observations are listed above. Publication privacy then
+runs against the committed checkout. These last observations are retained
+without another documentation edit.
+
+Remote read-back: `git ls-remote origin refs/heads/main`, exit 0, one matching
+ref (`b457a858`), 0.552 seconds, invoked 2026-11-12T22:08:09+00:00.
+The integrated and compared main snapshot was still current at that read.
+
+
+## Final public-text checks
+
+| Command | Exit | Counts | Seconds | Invoked UTC |
+|---|---:|---|---:|---|
+| `G bun scripts/privacy-publication-gate.ts --require-known-values --paths CONTRIBUTING.md bin/forge-app-token.mjs bin/forge-app-token.test.ts docs/design/issue-closing-on-merge.md docs/verification/issue-delivery.md src/lib/done/candidates.ts src/lib/forge/appWrite.fixture.ts src/lib/forge/appWrite.ts src/lib/forge/autoMerge.test.ts src/lib/forge/autoMerge.ts src/lib/forge/batchLanding.fixture.ts src/lib/forge/batchLanding.test.ts src/lib/forge/batchLanding.ts src/lib/forge/issueDelivery.app.test.ts src/lib/forge/issueDelivery.test.ts src/lib/forge/issueDelivery.ts src/lib/forge/issueDeliveryStore.test.ts src/lib/forge/landedPullRequests.ts src/lib/forge/postMerge.taskBinding.test.ts src/lib/forge/workLinks.ts src/lib/mcp/server.ts src/lib/mcp/workLinks.test.ts src/lib/monitor/seatTickSources.ts src/lib/pipelines/engine.ts src/lib/pipelines/store.ts src/lib/pipelines/types.ts docs/verification/stage-report-preview.txt` | 0 | 27 text/code paths; zero findings | 148.500 | 2026-11-12T22:08:41+00:00 |
+
+The ledger row and exact stage-report preview are checked once more after
+this result is added. That final two-file scan is reported with its command,
+exit and counts in the stage handoff; no later code/test input changes.
