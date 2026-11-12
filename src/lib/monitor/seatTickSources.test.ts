@@ -3551,7 +3551,7 @@ test("project liveness completes and refreshes catalogue discovery before using 
 
 
 test("task page facts and finished-reference review survive gathering and both refresh paths", async () => {
-  const task = boardCard({ id: "task-review-facts", priority: "high", dueAt: new Date(NOW - 1000).toISOString(), dueHistory: { firstAt: new Date(NOW - 86_400_000).toISOString(), slips: 3 } });
+  const task = boardCard({ id: "task-review-facts", priority: "high", dueAt: new Date(NOW - 1000).toISOString(), dueHistory: { firstAt: new Date(NOW - 86_400_000).toISOString(), slips: 3 } }) as unknown as import("@/lib/tasks/types").BoardTask;
   const ports = sources({ tasks: [], pipelines: [] });
   const tasks = Object.freeze([Object.freeze(task)]);
   const pipelines = Object.freeze([]);
