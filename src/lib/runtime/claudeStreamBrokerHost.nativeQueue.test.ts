@@ -42,6 +42,7 @@ test.skipIf(!binary).each([
     let apiCalls = 0;
     let releaseFirst!: () => void;
     const firstResponse = new Promise<void>(resolve => { releaseFirst = resolve; });
+    const delayedWrites = new Set<Promise<void>>();
 
     const event = (type: string, data: unknown) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
     const api = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
@@ -72,12 +73,14 @@ test.skipIf(!binary).each([
       for (let i = 0; i < 1200 && !done(); i++) await Bun.sleep(25);
       expect(done()).toBe(true);
     };
-    const driveUntilReceipt = async (deliveryQueue: StructuredDeliveryQueue, operationId: string, expected: "interrupted" | "answered") => {
+    const driveUntilReceipt = async (deliveryQueue: StructuredDeliveryQueue, operationId: string,
+      expected: "delivered" | "interrupted" | "answered") => {
       for (let attempt = 0; attempt < 1200; attempt++) {
         await deliveryQueue.drain();
         if (journal.operationResult(operationId)?.receipt.status === expected) {
-          // Join one more controller pass before teardown so a lane that
-          // outlived its pass budget cannot still be using the journal.
+          // Join one more controller pass before teardown. That pass may make
+          // progress on a later queued message; callers assert by receipt and
+          // order instead of assuming the host remains idle here.
           await deliveryQueue.drain();
           return;
         }
@@ -138,6 +141,17 @@ test.skipIf(!binary).each([
               return Reflect.apply(write, child.stdin, [inputs.map(input => JSON.stringify(input) + "\n").join(""), ...rest]);
             }
             wireInputs.push(frame);
+            if (mode === "interruption" && frame.type === "control_request"
+              && (frame as { request?: { subtype?: string } }).request?.subtype === "interrupt") {
+              let finish!: () => void;
+              const pending = new Promise<void>(resolve => { finish = resolve; });
+              delayedWrites.add(pending);
+              setTimeout(() => {
+                try { Reflect.apply(write, child.stdin, [chunk, ...rest]); }
+                finally { delayedWrites.delete(pending); finish(); }
+              }, 60);
+              return true;
+            }
             if (permission && frame.type === "control_response") {
               // Keep the permission-control lane active beyond its 20 ms
               // pass budget while still sending the real frame to the CLI.
@@ -181,12 +195,10 @@ test.skipIf(!binary).each([
         if (mode === "interruption") {
           journal.executeOperation({ kind: "interrupt", operationId: "stop-incumbent", idempotencyKey: "stop-incumbent",
             conversationId, turnId: incumbent.operationId });
-          // The preceding queued effects can spend this pass's budget before
-          // its control lane runs; drive the next passes as the controller does.
-          for (let attempt = 0; attempt < 1200 && journal.operationResult("stop-incumbent")?.receipt.status === "pending"; attempt++) {
-            await queue.drain(); await Bun.sleep(25);
-          }
-          expect(journal.operationResult("stop-incumbent")?.receipt.status).toBe("interrupted");
+          // The CLI control write is deliberately delayed beyond the queue's
+          // pass budget. Keep driving until its durable terminal receipt; it
+          // may be pending or delivering while that write is in flight.
+          await driveUntilReceipt(queue, "stop-incumbent", "interrupted");
         }
         releaseFirst();
         if (permission) {
@@ -210,11 +222,10 @@ test.skipIf(!binary).each([
             await driveUntilReceipt(queue, "answer-permission", "answered");
           }
         }
-        await wait(() => rawKinds.filter(kind => kind === "result").length === 1);
-        expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null, pendingAttention: [] });
+        await wait(() => rawKinds.filter(kind => kind === "result").length >= 1);
         const initialEnd = store.load(host.identity.sessionId).filter(frame => frame.kind === "turn-ended");
-        expect(initialEnd).toEqual([expect.objectContaining({ turnId: incumbent.operationId,
-          status: mode === "interruption" || mode === "permission-cancel" ? "interrupted" : "completed" })]);
+        expect(initialEnd).toContainEqual(expect.objectContaining({ turnId: incumbent.operationId,
+          status: mode === "interruption" || mode === "permission-cancel" ? "interrupted" : "completed" }));
         if (permission) {
           expect(fs.existsSync(permissionFile)).toBe(mode === "permission-allow");
           if (mode === "permission-allow") expect(fs.readFileSync(permissionFile, "utf8")).toBe("fixture permission content");
@@ -235,13 +246,19 @@ test.skipIf(!binary).each([
         // order. Each wait follows an actual result, not one slot per echo.
         const commands = [...pending, ...[0, 1, 2].map(i => command(`lifecycle-second-${i}`, i === 1))];
         commands.slice(3).forEach(input => journal.executeOperation(input));
-        for (const [index, input] of commands.entries()) {
-          await queue.drain();
-          await wait(() => rawKinds.filter(kind => kind === "result").length === index + 2);
+        for (const input of commands) {
+          await driveUntilReceipt(queue, input.operationId, "delivered");
           expect(journal.operationResult(input.operationId)?.receipt).toMatchObject({ status: "delivered", turnId: input.operationId });
-          expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
           queue = newQueue();
         }
+        await wait(() => rawKinds.filter(kind => kind === "result").length >= 7);
+        let finalHealth: Awaited<ReturnType<ClaudeStreamBrokerHost["health"]>> | undefined;
+        for (let attempt = 0; attempt < 1200; attempt++) {
+          finalHealth = await host.health();
+          if (finalHealth.status === "idle") break;
+          await Bun.sleep(25);
+        }
+        expect(finalHealth).toMatchObject({ status: "idle", activeTurnRef: null });
         const rows = new FileClaudeDeliveryLedger(path.join(directory, "deliveries")).load(host.identity.sessionId);
         expect(rows.map(row => row.entry.id)).toEqual([incumbent, ...commands].map(input => input.operationId));
         expect(rows.every(row => row.delivered && row.engineMessageId)).toBe(true);
@@ -365,6 +382,7 @@ test.skipIf(!binary).each([
       expect(new Set(rows.map(row => row.engineMessageId)).size).toBe(4);
       expect(replays.every(blocks => blocks.filter(block => block.type === "text").length === 1)).toBe(true);
     } finally {
+      await Promise.all(delayedWrites);
       releaseFirst(); await host?.release(); api.stop(true); journal.close(); fs.rmSync(directory, { recursive: true, force: true });
     }
   }, 60_000,
