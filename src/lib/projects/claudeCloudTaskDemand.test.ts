@@ -26,10 +26,10 @@ test("a Claude Cloud admission queues every allowed project account without exec
   const queued = queueClaudeCloudTasks(project, undefined, () => {}, {
     accounts: () => accounts,
     allowed: (_project, _engine, id) => id !== "account-denied",
-    remote: () => "https://github.com/sample/project.git",
+    remote: () => null,
     resolve: (_project, id) => ({ kind: "available", account: contexts.get(id)! }),
     prepare: async input => { prepared.push(input.account.accountId); return { state: "unavailable", reason: "fixture readiness" }; },
-  });
+  }, "sample/project");
   await settleClaudeCloudTaskDemands();
   expect(queued.queued).toEqual(["account-a", "account-b"]);
   expect(prepared).toEqual(["account-a", "account-b"]);

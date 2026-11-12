@@ -19,9 +19,12 @@ type Job = { promise: Promise<void>; abort: AbortController };
 const globalStore = globalThis as typeof globalThis & { __llvClaudeTaskDemands?: Map<string, Job>; __llvClaudeTaskTail?: Promise<void> };
 const jobs = () => globalStore.__llvClaudeTaskDemands ??= new Map();
 /** The Viewer owns a bounded demand queue. No discovery walk creates unused routines. */
-export function queueClaudeCloudTasks(project: string, accountId: string | undefined, assertCurrent: () => void, ports: Ports = claudeCloudTaskDemandPorts()) {
+export function queueClaudeCloudTasks(project: string, accountId: string | undefined, assertCurrent: () => void, ports: Ports = claudeCloudTaskDemandPorts(), repositoryHint?: string) {
   project = canonicalProject(project);
-  const repository = githubRepositoryOfRemote(ports.remote(project));
+  const selectedRemote = ports.remote(project);
+  const recordedRepository = selectedRemote === null ? null : githubRepositoryOfRemote(selectedRemote);
+  if (repositoryHint && recordedRepository && recordedRepository !== repositoryHint) throw new Error("Claude preparation selection changed");
+  const repository = repositoryHint ?? recordedRepository;
   if (!repository) throw new Error("Claude Cloud requires a GitHub repository");
   const accounts = ports.accounts().filter(a => (!accountId || a.id === accountId) && ports.allowed(project, "claude", a.id));
   if (accountId && !accounts.length) throw new Error("Claude account is unavailable or not allowed for this project");
@@ -39,7 +42,12 @@ export function queueClaudeCloudTasks(project: string, accountId: string | undef
       try {
         const guard = () => {
           abort.signal.throwIfAborted(); assertStateMutationAllowed(stateDir());
-          if (!ports.allowed(project, "claude", account.id) || githubRepositoryOfRemote(ports.remote(project)) !== repository) throw new Error("Claude preparation selection changed");
+          const currentRemote = ports.remote(project);
+          const currentRepository = currentRemote === null ? null : githubRepositoryOfRemote(currentRemote);
+          const remoteMatches = selectedRemote === null
+            ? currentRemote === null || currentRepository === repository
+            : currentRepository === repository;
+          if (!ports.allowed(project, "claude", account.id) || !remoteMatches) throw new Error("Claude preparation selection changed");
           const current = ports.resolve(project, account.id);
           if (current.kind !== "available" || current.account.home !== account.home) throw new Error("Claude preparation account changed");
         };

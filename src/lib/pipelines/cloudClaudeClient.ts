@@ -431,7 +431,7 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
       if (dependencies.queueTaskPreparation) dependencies.queueTaskPreparation(input.project, input.assertCurrent);
       else {
         const { queueClaudeCloudTasks } = await import("@/lib/projects/claudeCloudTaskDemand");
-        queueClaudeCloudTasks(input.project, undefined, input.assertCurrent);
+        queueClaudeCloudTasks(input.project, undefined, input.assertCurrent, undefined, input.repository);
       }
       return prepareClaudeCloudTask({ ...input, now: input.now ?? dependencies.now }, provider);
     },
