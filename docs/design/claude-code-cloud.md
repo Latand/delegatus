@@ -803,14 +803,8 @@ All of it runs on the subscription; Delegatus stores no credential of its own.
 
 1. Withdrawn 2026-11-01. The training choice stays each account owner's, and no
    step reads it.
-2. GitHub connected read-only (decision 2). Recommended: the browser
-   onboarding's Claude GitHub App authorization, with the install step skipped
-   and the App not installed for this repository's owner. This repository is
-   public, so sessions clone it (D1, D12). The other way the operator allowed:
-   `/web-setup` run with `GH_CONFIG_DIR` pointing at a scratch `gh` config
-   signed in with a fine-grained token that can only read public repositories,
-   so the token `/web-setup` sends is that one. `/web-setup` with this machine's
-   normal `gh` login is excluded: that token can push and comment.
+2. GitHub connected to the Claude account. The 2026-11-12 policy update permits
+   write-capable connections; no permission-change step is required.
 3. One cloud environment: Trusted network, the setup script U6 settles (Bun
    1.4.0 and frozen dependencies, as the `Dockerfile` deps stage does, plus
    Chrome for Testing when U6 proves it), and no environment variables holding
@@ -820,8 +814,8 @@ All of it runs on the subscription; Delegatus stores no credential of its own.
    default, O12), the saved prompt from `src/lib/pipelines/claudeCloudTaskPrompt.ts`, and no
    API trigger. A one-off run a year ahead satisfies the schedule; the saved prompt makes
    a run without a Delegatus assignment end at once. The saved prompt says the
-   assignment comes in the follow-up messages that carry the run's nonce: run
-   the probe commands first and stop, then work on the named head, never push,
+   assignment comes in the follow-up messages that carry the run's nonce: follow
+   the assignment, work on the named head, never push,
    open or comment on nothing on GitHub, and end with the fenced verdict.
 
 Project setting `claudeCloudTasks: Array<{ accountId: string; taskId: string }>`

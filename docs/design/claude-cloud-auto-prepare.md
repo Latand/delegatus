@@ -5,6 +5,20 @@ Status: design, 2026-11-12. Written from `main` at `cb408fce` (`origin/main` at
 `docs/design/claude-code-cloud.md` (§1.13, §1.14, §4.4) and on the Codex Cloud
 automatic preparation already on `main`.
 
+## Policy update — 2026-11-12, about 15:55 UTC
+
+The operator permits a GitHub connection with write access. That capability
+has no readiness penalty, human remedy or local fallback in this design.
+Preparation never reads the old probe or hold artifacts. A separate execution
+policy lane removes the legacy write probe and six-hour hold; this lane keeps
+that code with its owner.
+
+Agents and the designated seat record bindings through automatic admission and
+`claude_cloud_task prepare`. The operator only completes identity-bound GitHub
+connection or environment setup, when required. No console or manual binding
+step is part of the workflow.
+
+
 ## Implementation
 
 The preparation slice and revision claims live in
@@ -64,13 +78,13 @@ A spawned agent did this install's setup by hand on the three Claude accounts.
 Its report sits in that agent's private evidence directory; the task ids and
 environment ids it names stay there. In this document the accounts are the
 **main account**, the **S0 account** (account A of `claude-code-cloud.md`
-§1.14, whose GitHub connection was shown to write on 2026-11-01) and the
+§1.14) and the
 **third account**.
 
 | Account | Task | GitHub | Environment | Connectors |
 | --- | --- | --- | --- | --- |
 | main | one task named `Delegatus pipeline stages`, created 2026-11-11 through the CLI's own `RemoteTrigger`, enabled, one-off run a year ahead | connected, `auth_source: oauth` | one `anthropic_cloud` environment named Default | 0 |
-| S0 | one task with the same name, created 2026-11-01, paused on 2026-11-11 by an earlier operator decision; the agent re-enabled it at 13:30:43 with `POST /v1/code/triggers/{id}` and body `{"enabled": true}` (200) | connected, `oauth`; the 2026-11-01 probe pushed a branch | Default | 0 |
+| S0 | one task with the same name, created 2026-11-01, paused on 2026-11-11 by an earlier operator decision; the agent re-enabled it at 13:30:43 with `POST /v1/code/triggers/{id}` and body `{"enabled": true}` (200) | connected, `oauth` | Default | 0 |
 | third | none: `POST /v1/code/triggers` answered **401** with `error.reason: "github_token_missing"` twice; a list afterwards was empty | not connected (`is_authenticated: false`) | Default | — |
 
 Both existing tasks have exactly one source (this repository), model
@@ -91,10 +105,9 @@ The agent could not record the binding:
 So the five points the brief lists are facts on this install: (a) no agent can
 write `claudeCloudTasks`; (b) creating a task on an account without GitHub
 answers 401 `github_token_missing`; (c) an existing task can be paused;
-(d) a connection that can write holds the account's stages locally for six hours
-after each probe; (e) two tasks already exist and must be adopted.
+(d) the old execution restriction is withdrawn by the policy update above; (e) two tasks already exist and must be adopted.
 
-## Current state on `main`
+## Historical baseline before automatic preparation
 
 ### Claude admission
 
@@ -103,9 +116,6 @@ after each probe; (e) two tasks already exist and must be adopted.
 
 - `:417-418` reads the account's task from `claudeCloudTasks` and refuses with
   "no Claude cloud scheduled task is set for this account";
-- `:420-421` refuses for six hours after a write probe (`WRITE_ACCESS_HOLD_MS`,
-  `:38`; holds file `cloud/claude-write-access.json`, `:180-188`; written by the
-  probe at `:367-376`);
 - `:423-433` reads `GET /v1/code/triggers/{id}` and refuses a paused task, any
   connector, or a different repository;
 - `:438-439` answers ready with `selection: claudeCloudTaskFingerprint(...)`.
@@ -326,7 +336,7 @@ credential and no organization id in clear.
 ```
 { key, project, accountId, repository,
   organization: sha256 | null,
-  taskId: string | null,          // the task this row last proved, for the hold overlay
+  taskId: string | null,          // the task this row last proved
   state: "preparing" | "ready" | "unavailable",
   code: ClaudeTaskReason | null,
   validatedAt: number | null, retryAt: number, deadlineAt: number,
@@ -342,7 +352,6 @@ credential and no organization id in clear.
 | `login_expired` | the account's claude.ai sign-in expired; it refreshes on the account's next local run | — |
 | `third_party_provider` | this account uses a third-party provider; Claude Cloud needs a claude.ai subscription | — |
 | `github_not_connected` | GitHub is not connected to this Claude account | `connect_github` |
-| `github_write_access` | this account's GitHub connection can write; its stages stay local for six hours after each probe | `github_read_only` |
 | `no_environment` | this Claude account has no cloud environment | `create_environment` |
 | `task_list_incomplete` | the account's task list has a further page that Delegatus does not read; nothing was created | — |
 | `create_uncertain` | a task creation may have succeeded; Delegatus is reconciling and creates no other | — |
@@ -351,22 +360,15 @@ credential and no organization id in clear.
 | `provider_unavailable` | Claude Cloud could not be reached or answered with an error | — |
 | `binding_busy` | project settings were busy; the binding is retried | — |
 
-`github_write_access` is an overlay, computed at read time and at admission from
-the existing holds file keyed `<accountId>/<taskId>`: an entry younger than six
-hours makes the account `unavailable`; an older entry leaves it `ready`, since
-the next stage probes again, and keeps the code and step so the fact stays
-visible until a probe is refused. The holds file and its writer stay as they are.
-
 ### 4. Stage admission (acceptance 3)
 
 The Claude client's `prepareEnvironment` becomes the Codex shape: run one slice
-inline, then the existing hold check.
+inline and return its preparation result.
 
 ```
 prepareEnvironment(input):
   prepared = prepareClaudeCloudTask(input, provider)   // §2
   if prepared is not ready: return prepared            // pending or unavailable, with the table's reason and step URL
-  if hold(account, taskId) < 6 h: return unavailable(github_write_access + step URL)
   return ready { environmentId: taskId, selection: claudeCloudTaskFingerprint(project, account), revision, principal }
 ```
 
@@ -376,7 +378,7 @@ joins each account's reason. When no account is ready the joined reasons go
 through `fallback()` (`:9625-9643`) into `attempt.cloud.fallback.reason`,
 `executionRuntime` and `stateDetail`. An account that needs a human step adds
 the step's URL to its reason, for example `Account <id>: GitHub is not
-connected to this Claude account; connect it read-only at
+connected to this Claude account; connect it at
 https://claude.ai/connect-github`.
 
 That is the whole of acceptance 3 on the Claude side: the stage says at
@@ -386,8 +388,8 @@ it. The fallback itself stays, as the operator decided on 2026-10-24 and 2026-10
 its own (§9).
 
 Cost on the hot path: an account with a usable bound task costs one `GET` per
-admission, as today, plus local reads of the row, the settings cache and the
-holds file. Discovery, environment and GitHub reads happen only for an account
+admission, plus local reads of the row and settings cache and a readiness
+validation write. Discovery, environment and GitHub reads happen only for an account
 without a usable binding. A cooldown answers without any request.
 
 ### 5. Writing `claudeCloudTasks` and the fence
@@ -432,7 +434,7 @@ anything. For everything else there is one new MCP tool beside
 `claude_cloud_task`
 
 - `read {project, accountId?, after?, limit?}`: one projection per allowed
-  Claude account (§7), from the store, the settings and the holds file. It
+  Claude account (§7), from the store and settings. It
   contacts no provider. Without `clientRequestId` it is receipt-free, like the
   Codex read (`server.ts:2935`).
 - `prepare {project, accountId?, clientRequestId}`: asks for one slice for the
@@ -489,14 +491,14 @@ unchanged.
   because the API cannot delete them. Each is inert: its only scheduled run is a
   year ahead, and its saved prompt makes any run without an assignment end at once.
 
-### 7. Readiness projection and the human steps (points b and d)
+### 7. Readiness projection and the human steps (point b)
 
 ```
 { project, accountId, label,
   state: "not_prepared" | "preparing" | "ready" | "unavailable",
   code, reason,                                  // English, from the table
   step: null | { code, text, url },              // text in the operator's language
-  taskId, writeAccess: null | { observedAt, heldUntil },
+  taskId,
   validatedAt, retryAt, revision }
 ```
 
@@ -507,16 +509,12 @@ Each human-only cause has exactly one step:
 
 | Step | Link | en | uk |
 | --- | --- | --- | --- |
-| `connect_github` | `https://claude.ai/connect-github` | Connect GitHub to this Claude account on claude.ai with read access only: allow GitHub access there and skip installing the Claude GitHub App for the repository's owner. | Підключіть GitHub до цього акаунта Claude на claude.ai лише для читання: дозвольте доступ до GitHub і пропустіть встановлення Claude GitHub App для власника репозиторію. |
-| `github_read_only` | `https://github.com/settings/installations` | This account's GitHub connection can write. Make it read-only: uninstall the Claude GitHub App for the repository's owner. The public repository stays readable. | Підключення GitHub цього акаунта має право запису. Залиште йому лише читання: видаліть Claude GitHub App у власника репозиторію. Публічний репозиторій і далі буде доступний для читання. |
+| `connect_github` | `https://claude.ai/connect-github` | Connect GitHub to this Claude account on claude.ai. | Підключіть GitHub до цього акаунта Claude на claude.ai. |
 | `create_environment` | `https://claude.ai/code/onboarding?magic=env-setup` | Create a cloud environment for this Claude account on claude.ai. | Створіть хмарне середовище для цього акаунта Claude на claude.ai. |
 
 Sources of the links: the installed CLI prints `${CLAUDE_AI_ORIGIN}/connect-github`
 when GitHub is not connected and names `…/code/onboarding?magic=env-setup` for
-environment setup (read from the CLI binary on 2026-11-12). The read-only remedy
-is the one §1.14 gave after S0: remove the App, which a public repository does
-not need for reading. A probe that is refused afterwards clears the hold and the
-step.
+environment setup (read from the CLI binary on 2026-11-12).
 
 The readiness answers acceptance 2 through the seat: the seat reads
 `claude_cloud_task`, relays each `step.text` with its link to the operator in
@@ -539,7 +537,7 @@ done. Nothing else reaches the human.
 | The project's entries live under a predecessor key | upsert reads the effective list | all entries move to the canonical key with the new one |
 | A different claude.ai login is signed into the same account home | organization digest | the row resets; the bound task answers 404 on the new login and is replaced for this account only |
 | The bound task was set by hand to another repository | step 3 | the account is rebound to a Delegatus task of this repository; the old task is left as it is |
-| The connection can write | probe hold overlay | `unavailable` for six hours with the `github_read_only` step, then `ready` with the same step until a probe is refused |
+| The connection can write | ordinary preparation | `ready`; no permission-change remedy |
 | A worker agent calls `prepare` | MCP authority | 403 `claude_cloud_task_write_refused`; the route refuses as well |
 | The MCP server retries a `prepare` POST after its five-second attempt deadline | route queue | the retry joins the queued pair; one slice runs |
 
@@ -596,7 +594,7 @@ and count every POST by path.
   need the engine; the claim with two concurrent slices on one store (one POST);
   the uncertain creation adopted on a later list, and released only after the
   window; the upsert keeping other accounts and predecessor entries; the 401
-  mapping; the hold overlay.
+  mapping; authenticated connections have no permission-change remedy.
 - `src/lib/pipelines/cloudClaudeClient.test.ts`: the admission test at
   `:591-600` changes, since admission now prepares: no binding with an empty
   list creates one task; a paused or connector-bearing task is fixed; a refused
@@ -652,11 +650,8 @@ either way one account and one recorded run.
 
 After slice 1 alone, the next `claude-cloud` stage on this project binds the
 existing tasks of the main and S0 accounts, runs in the cloud on one of them,
-and names the third account's GitHub step in its reasons. If the reservation
-picks the S0 account first, its probe is expected to find write access again
-(no change to its connection is recorded since 2026-11-01), and that stage runs
-locally with the cause; later stages skip that account for six hours. After
-slice 2 the seat reads all three accounts and relays the two human steps.
+and names the third account's GitHub step in its reasons. After slice 2 the
+seat reads every account and relays only missing identity-bound prerequisites.
 
 ## What of the Codex path this reuses
 
@@ -686,12 +681,11 @@ repository), and the draft and approval operations (Claude tasks have none).
   engine port (accounts, pool engine, account version, slice) and a demand queue
   per engine, since today's single queue would hand a Claude demand to the Codex
   controller under the same account id.
-- **A standalone readiness probe session** (§4.4's «Check»). Each stage session
-  already probes; a separate probe costs a session for a fact the next stage
-  learns anyway.
-- **Updating the saved prompt of an existing task** when the shipped prompt
-  changes. The update shape for `job_config.ccr.events` is unobserved, and the
-  name marker keeps such tasks adoptable.
+- **Updating the saved prompt of an existing task** through
+  `job_config.ccr.events`: that update shape is unobserved. The name marker keeps
+  existing tasks adoptable. The companion execution-policy lane must override
+  any superseded routine instruction in its assignment, including the withdrawn
+  capability check; preparation adds no eligibility check for it.
 - **Renewing `run_once_at`** before it fires (the first existing task fires in
   2027-11). Readiness will show a task that ended.
 - **A Settings UI row for Claude readiness.** Codex readiness has none; the seat
@@ -702,9 +696,8 @@ repository), and the draft and approval operations (Claude tasks have none).
   stage.
 - **Translating engine fallback reasons on the board.** That belongs to the
   shared fallback display (ccda75f5); readiness steps are already translated.
-- **Private repositories.** The write probe reads a closed issue without
-  credentials (`cloudClaudeClient.ts:398-408`), so Claude Cloud stages work only
-  on public repositories today; preparation does not change that.
+- **Repository execution support.** This lane prepares scheduled tasks;
+  execution capabilities remain with the execution client and its policy lane.
 - **Choosing among several environments by setup script** (§4.4 step 3). Every
   account here has one Default environment.
 
@@ -723,7 +716,7 @@ repository), and the draft and approval operations (Claude tasks have none).
 | a: agent path with its gate and consent | §6 |
 | b: GitHub not connected names one step with its link | §2 step 6 and 8, §7 |
 | c: a paused task is found and enabled | §2 fix, §8 |
-| d: write access shown with its remedy | §3 overlay, §7 |
+| d: write access has no readiness penalty or remedy | Policy update, §7 |
 | e: existing tasks adopted; their ids stay out of this text | §2 step 4, §11 |
 
 ## Unobserved, each failing safe
@@ -737,9 +730,7 @@ repository), and the draft and approval operations (Claude tasks have none).
 - Whether creation honours `clear_mcp_connections` every time: on 2026-11-11 it
   did, on 2026-11-01 (without the flag) two connectors appeared. The fix step
   reads the answer and clears again when needed.
-- Whether uninstalling the App makes the S0 account's session refuse both
-  probes. The next probe after the change decides it, and the hold clears only
-  then.
+
 
 ## Questions for the operator
 

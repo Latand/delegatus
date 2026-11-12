@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs";
 import { z } from "zod";
 import { CLAUDE_ALIAS_RELEASES } from "@/lib/agent/models";
 import type { AccountContext } from "@/lib/accounts/contracts";
@@ -21,7 +20,6 @@ export const CLAUDE_TASK_REASONS = {
   third_party_provider: "this account uses a third-party provider; Claude Cloud needs a claude.ai subscription",
   login_refused: "Claude Cloud login was refused",
   github_not_connected: "GitHub is not connected to this Claude account",
-  github_write_access: "this account’s GitHub connection can write; its stages stay local for six hours after each probe",
   no_environment: "this Claude account has no cloud environment",
   task_list_incomplete: "the account’s task list has a further page that Delegatus does not read; nothing was created",
   create_uncertain: "a task creation may have succeeded; Delegatus is reconciling and creates no other",
@@ -74,33 +72,24 @@ export function claudeCloudTasksRevision(): number | null { return readStateColl
 
 const steps = {
   github_not_connected: { code: "connect_github", key: "claudeCloud.connectGithub", url: "https://claude.ai/connect-github" },
-  github_write_access: { code: "github_read_only", key: "claudeCloud.githubReadOnly", url: "https://github.com/settings/installations" },
   no_environment: { code: "create_environment", key: "claudeCloud.createEnvironment", url: "https://claude.ai/code/onboarding?magic=env-setup" },
 } as const;
 export function claudeTaskStep(code: ClaudeTaskReason | null) {
   const step = code && code in steps ? steps[code as keyof typeof steps] : null;
   return step ? { code: step.code, text: translate(operatorLocale() ?? "en", step.key), url: step.url } : null;
 }
-/** Reads the probe artifact without modifying it. An expired hold still explains the remedy. */
-export function claudeTaskWriteAccess(accountId: string, taskId: string | null, now = Date.now()) {
-  if (!taskId) return null;
-  try { const observedAt = record(JSON.parse(fs.readFileSync(statePath("cloud/claude-write-access.json"), "utf8")))[`${accountId}/${taskId}`];
-    return typeof observedAt === "number" && Number.isFinite(observedAt) ? { observedAt, heldUntil: observedAt + 6 * 3_600_000, held: now < observedAt + 6 * 3_600_000 } : null;
-  } catch { return null; }
-}
 export function readClaudeCloudReadiness(project: string, options: { accountId?: string; now?: number } = {}) {
   return listClaudeAccounts().filter(a => (!options.accountId || a.id === options.accountId) && projectAllowsAccount(project, "claude", a.id)).map(account => {
     const row = read(project, account.id), repository = recordedProjectRemote(project);
     const selected = claudeCloudTasks(project).find(task => task.accountId === account.id)?.taskId;
     const current = row && normalizeClaudeGithubUrl(repository) === row.repository && (row.state !== "ready" || selected === row.taskId) ? row : null;
-    const writeAccess = claudeTaskWriteAccess(account.id, current?.taskId ?? null, options.now);
     const expired = current?.state === "preparing" && current.deadlineAt <= (options.now ?? Date.now());
-    const code = writeAccess?.held ? "github_write_access" : expired ? "provider_unavailable" : current?.code ?? null;
+    const code = expired ? "provider_unavailable" : current?.code ?? null;
     return { project: canonicalProject(project), accountId: account.id, label: account.label,
-      state: writeAccess?.held || expired ? "unavailable" : current?.state ?? "not_prepared", code,
+      state: expired ? "unavailable" : current?.state ?? "not_prepared", code,
       reason: code ? CLAUDE_TASK_REASONS[code] + (current?.status ? ` (${current.status})` : "") : null,
-      step: claudeTaskStep(code ?? (writeAccess ? "github_write_access" : null)), taskId: current?.taskId ?? null,
-      writeAccess, validatedAt: current?.validatedAt ?? null, retryAt: current?.retryAt ?? 0, revision: current?.revision ?? 0 };
+      step: claudeTaskStep(code), taskId: current?.taskId ?? null,
+      validatedAt: current?.validatedAt ?? null, retryAt: current?.retryAt ?? 0, revision: current?.revision ?? 0 };
   });
 }
 export function normalizeClaudeGithubUrl(value: unknown): string | null {
@@ -252,8 +241,6 @@ export async function prepareClaudeCloudTask(input: PrepareCloudEnvironmentInput
     await save({ taskId, state: "ready", code: null, status: undefined, validatedAt: now(), retryAt: 0, retries: 0, create: { intent: row.create.intent } });
     const selection = JSON.stringify(taskId);
     if (claudeCloudTaskFingerprint(project, accountId) !== selection) return { state: "pending", retryAt: now() + 2000, reason: "Claude task binding changed; retrying" };
-    const hold = claudeTaskWriteAccess(accountId, taskId, now());
-    if (hold?.held) return { state: "unavailable", reason: `${CLAUDE_TASK_REASONS.github_write_access}; ${claudeTaskStep("github_write_access")!.url}` };
     return { state: "ready", environmentId: taskId, revision: row.revision, selection, principal: identity };
   } catch (error) {
     if (error instanceof Superseded) return { state: "pending", retryAt: now() + 2000, reason: "Claude task preparation changed; retrying" };

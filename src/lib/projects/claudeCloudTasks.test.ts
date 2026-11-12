@@ -209,20 +209,6 @@ test("a principal changed inside the login await cannot send a creation on the r
   expect(f.fake.calls).toHaveLength(0);
 });
 
-test("write access overlays readiness during its hold and keeps one linked remedy after expiry", async () => {
-  const f = fixture({ tasks: [task()] });
-  await f.prepare();
-  fs.mkdirSync(path.join(process.env.LLV_STATE_DIR!, "cloud"), { recursive: true });
-  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "cloud/claude-write-access.json"), JSON.stringify({ "default/task-existing": f.input.now() }));
-  expect(await f.prepare()).toMatchObject({ state: "unavailable", reason: expect.stringContaining("https://github.com/settings/installations") });
-  expect(readClaudeCloudReadiness(f.input.project, { now: f.input.now() })[0]).toMatchObject({ state: "unavailable", code: "github_write_access", step: { code: "github_read_only" } });
-  f.advance(6 * 3_600_000 + 1);
-  expect(await f.restart()).toMatchObject({ state: "ready" });
-  expect(readClaudeCloudReadiness(f.input.project, { now: f.input.now() })[0]).toMatchObject({ state: "ready", step: { code: "github_read_only" } });
-  expect(claudeTaskStep("github_not_connected")?.url).toBe("https://claude.ai/connect-github");
-});
-
-
 test("human-only readiness exposes one action in the operator’s current language without provider reads", async () => {
   const f = fixture({ githubConnected: false });
   await f.prepare();
@@ -320,4 +306,13 @@ test("a peer’s pending checkpoint cannot discard the successful creation recei
   setClaudeCloudTasks(f.input.project, []);
   expect(await f.restart()).toMatchObject({ state: "ready", environmentId: "task-created" });
   expect(f.posts()).toHaveLength(1);
+});
+
+
+test("an authenticated GitHub connection needs no permission-change remedy", async () => {
+  const f = fixture({ preparationAnswer: (_method, target) => target.endsWith("/sync/github/auth")
+    ? Response.json({ is_authenticated: true, permissions: { contents: "write" } }) : null });
+  expect(await f.prepare()).toMatchObject({ state: "ready" });
+  expect(readClaudeCloudReadiness(f.input.project)[0]).toMatchObject({ state: "ready", code: null, step: null });
+  expect(f.fake.runCalls()).toBe(0);
 });

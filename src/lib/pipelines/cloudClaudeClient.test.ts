@@ -376,25 +376,6 @@ test.each([
   expect(fake.sessions.get(fake.sessionId)!.status).toBe("archived");
 });
 
-test("proven write access holds later stages off a run across a restart, until the hold ends and a refusal clears it", async () => {
-  const project = "write-hold-project";
-  setClaudeCloudTasks(project, [{ accountId: account.accountId, taskId: "task-1" }]);
-  const writer = provider({ probe: { comment: "write" } });
-  await createClaudeCloudStageClient(writer.dependencies).submit(submitInput()).catch(failure => failure);
-
-  /* A new client reads only what was written: nothing here lives in the first one. */
-  const held = provider();
-  const restarted = createClaudeCloudStageClient({ ...held.dependencies, now: writer.dependencies.now });
-  expect(await prepare(restarted, project)).toMatchObject({ state: "unavailable", reason: expect.stringContaining("GitHub connection can write") });
-  expect(held.calls.map(call => call.path)).toEqual(["/v1/code/triggers/task-1"]);
-
-  const later = provider();
-  const afterHold = createClaudeCloudStageClient({ ...later.dependencies, now: () => writer.dependencies.now!() + 6 * 3_600_000 });
-  expect(await prepare(afterHold, project)).toMatchObject({ state: "ready" });
-  await afterHold.submit(submitInput());
-  expect(await prepare(createClaudeCloudStageClient({ ...provider().dependencies, now: writer.dependencies.now }), project)).toMatchObject({ state: "ready" });
-});
-
 test.each([
   ["the session's permission check stops the comment", { comment: "blocked" }, "permission check"],
   ["the session's permission check stops the push", { push: "blocked" }, "permission check"],
