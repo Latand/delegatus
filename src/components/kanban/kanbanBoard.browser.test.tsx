@@ -833,7 +833,7 @@ describe("board timeline hybrid", () => {
         const lane = buildPipeline({ id: `scroll-lane-${index}`, task: task.text, taskIds: [task.id], project: task.project, repoDir: "/fixture/atlas", srcPath: null, srcConversationId: null, now: iso(1500 - index * 40), stages });
         const running = index % 3 === 0;
         lane.state = running ? "running" : "needs_decision";
-        lane.cursor = { stageId: "fix", state: running ? "running" : "needs_decision", input: null, activatedBy: null };
+        lane.cursor = { stageId: "fix", state: running ? "running" : "pending", input: null, activatedBy: null };
         lane.runs.forEach((run, stageIndex) => {
           const start = 1490 - index * 40 - stageIndex * 100 + (index === count - 1 ? -1480 + 6 + stageIndex * 100 : 0);
           const live = stageIndex === 2 && running;
@@ -1074,7 +1074,7 @@ describe("board timeline hybrid", () => {
           // thumb itself starts no drag in headless Chromium, with or without this change, so the track is the input.)
           await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
           await settle(page);
-          const gutter = await scroller.evaluate(element => element.offsetWidth - element.clientWidth);
+          const gutter = await scroller.evaluate(element => (element as HTMLElement).offsetWidth - element.clientWidth);
           check(gutter >= 12, `${mode}: scrollbar gutter is ${gutter}px, so the scrollbar is not exercised`);
           const barX = box.x + box.width - gutter / 2;
           await startRec(page);
