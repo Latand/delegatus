@@ -6,6 +6,7 @@ import { Window } from "happy-dom";
 import { installActEnv } from "@/test-helpers/actEnv";
 import type { DictationPhase, UseDictationOptions } from "@/hooks/useDictation";
 import type { PrototypeReviewRead } from "@/lib/prototypeReview/types";
+import { setLocale } from "@/lib/i18n";
 
 const dom = new Window({ url: "http://localhost/" });
 installActEnv();
@@ -73,6 +74,7 @@ afterEach(async () => {
   root = null;
   heldPhase = null;
   phoneLayout = false;
+  setLocale("en");
   globalThis.fetch = realFetch;
   dom.document.body.innerHTML = "";
   /* Drafts persist in this browser, and the cases share review ids. */
@@ -304,6 +306,19 @@ async function mountReview(read: PrototypeReviewRead, posts?: Record<string, unk
   await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task" onClose={() => {}} />); });
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
 }
+
+for (const lang of ["en", "uk"] as const) test(`task review history explains why saved delivery retired (${lang})`, async () => {
+  setLocale(lang);
+  const read = reviewRead({ chosen: [1], comment: "Saved answer." });
+  read.rounds[0]!.decision!.delivery = { state: "pending", retryable: false, phase: "retired",
+    settlement: { at: "2026-10-11T15:16:00.000Z", reason: "delivery-expired" } };
+  await mountReview(read);
+  const reason = document.querySelector("[data-prototype-delivery-retirement]")!;
+  expect(reason.textContent).toContain(lang === "uk" ? "30 хвилин" : "30 minutes");
+  expect(document.querySelector("[data-prototype-delivery-said]")?.textContent).toContain(lang === "uk" ? "доставку припинено" : "delivery retired");
+  expect(document.querySelector("[data-prototype-retry]")).toBeNull();
+  expect(document.querySelector("[data-prototype-comment]")?.textContent).toBe("Saved answer.");
+});
 
 test("every gallery tile names its variant and caption, with no stage or strip", async () => {
   await mountReview(reviewRead());

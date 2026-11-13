@@ -2,6 +2,7 @@ import type { Database, SQLQueryBindings, Statement } from "bun:sqlite";
 import { emptyReadTotals, readAttribution, type ReadTotals } from "./readAttribution";
 import path from "node:path";
 import { classifySchemaStatementError } from "./state/schemaCompatibility";
+import { trackSqliteMemory } from "./sqliteMemoryDiagnostics";
 
 type Connection = { id: number; reader: string; counters: ReadTotals };
 type Shared = { next: number; connections: WeakMap<object, () => Connection | undefined>; observed: WeakSet<object> };
@@ -40,6 +41,7 @@ export function observeSqlite<T extends Database>(db: T, reader: string): T {
   if (shared.connections.has(db)) return db;
   const identity = { id: ++shared.next, reader, counters: emptyReadTotals() };
   shared.connections.set(db, () => identity);
+  const closed = trackSqliteMemory(db);
   const measure = <R>(name: string, work: () => R) => readAttribution.sync(name, work, identity.id, 0, true, identity.counters);
   const nativeCall = (method: "query" | "prepare" | "exec" | "run" | "serialize" | "close") => {
     const original = db[method], own = Object.hasOwn(db, method), prototype = Object.getPrototypeOf(db);
@@ -98,7 +100,19 @@ export function observeSqlite<T extends Database>(db: T, reader: string): T {
   for (const method of ["exec", "run", "serialize", "close"] as const) {
     const original = nativeCall(method);
     Object.defineProperty(db, method, { configurable: true, writable: true, value: (...args: unknown[]) =>
-      measure(`${reader}.${method}`, () => original(...args)) });
+      measure(`${reader}.${method}`, () => {
+        const result = original(...args);
+        if (method === "close") closed();
+        return result;
+      }) });
+  }
+  const dispose = db[Symbol.dispose];
+  if (typeof dispose === "function") {
+    Object.defineProperty(db, Symbol.dispose, { configurable: true, writable: true, value: () => {
+      const result = Reflect.apply(dispose, db, []);
+      closed();
+      return result;
+    } });
   }
   return db;
 }

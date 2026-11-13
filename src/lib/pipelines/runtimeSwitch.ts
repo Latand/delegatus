@@ -5,6 +5,7 @@ import { hardenedRedact } from "@/lib/view/compactText";
 import { readMessagesPage } from "@/lib/session/messagesPage";
 import { stagedLaunchRecovery } from "@/lib/runtime/structuredSpawn";
 import { prepareControllerArtifactDirectory } from "./controllerArtifacts";
+import { settleAttemptAccounting } from "./attemptAccounting";
 import { switchOperationKey } from "./runtimeSwitchFence";
 import type { PipelinePorts } from "./engine";
 import type { AgentRegistry } from "@/lib/agent/registry";
@@ -55,6 +56,9 @@ export function parkRuntimeSwitch(pipeline: Pipeline, attempt: PipelineStageAtte
   attempt.state = "needs_decision"; attempt.error = reason; attempt.completedAt ??= now;
   attempt.verdict ??= { status: "needs_decision", findings: [] };
   record.outcome = reason;
+  // Retain the same completion snapshot the store writes, so a caller's
+  // checkpoint fence survives its own save during retry or recovery.
+  settleAttemptAccounting(attempt, pipeline.id);
 }
 
 export function requestRuntimeSwitchRetry(pipeline: Pipeline, attempt: PipelineStageAttempt, record: PipelineRuntimeSwitch, reason: string, now: string): void {
