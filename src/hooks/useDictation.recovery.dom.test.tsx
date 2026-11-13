@@ -29,7 +29,8 @@ async function advance(ms: number) {
 }
 const track = { enabled: true, stop() {} };
 const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
-Object.defineProperty(dom.navigator, "mediaDevices", { value: { getUserMedia: async () => stream } });
+const mediaDevices = { getUserMedia: async () => stream };
+Object.defineProperty(dom.navigator, "mediaDevices", { value: mediaDevices });
 class AudioFixture {
   static processors: Array<{ onaudioprocess: ((e: unknown) => void) | null; connect(): void; disconnect(): void }> = [];
   sampleRate = 16000; destination = {};
@@ -561,13 +562,13 @@ test.each(["complete", "drop", "deadline"])("OpenAI handoff retains capture and 
 test.each(["offer-created", "local-description", "offer-response", "answer-body", "remote-description", "channel-open"])(
   "retiring an OpenAI start at %s preserves the next peer and its own tracks", seam => withReviewPeer(async () => {
     mount();
-    const previousFetch = globalThis.fetch; const previousMic = dom.navigator.mediaDevices.getUserMedia;
+    const previousFetch = globalThis.fetch; const previousMic = mediaDevices.getUserMedia;
     let release!: () => void; const held = new Promise<void>(r => { release = r; });
     let entered!: () => void; const atBarrier = new Promise<void>(r => { entered = r; });
     const pause = async (step: string) => { if (step === seam) { entered(); await held; } };
     const tracks = [0, 1].map(() => ({ enabled: true, stops: 0, stop() { this.stops++; } }));
     let mic = 0; let offers = 0;
-    dom.navigator.mediaDevices.getUserMedia = (async () => { const t = tracks[mic++]; return { getTracks: () => [t], getAudioTracks: () => [t] }; }) as unknown as typeof previousMic;
+    mediaDevices.getUserMedia = (async () => { const t = tracks[mic++]; return { getTracks: () => [t], getAudioTracks: () => [t] }; }) as unknown as typeof previousMic;
     ReviewPeer.barrier = (peer, step) => peer === ReviewPeer.all[0] ? pause(step) : Promise.resolve();
     globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
       if (String(url) !== "https://api.openai.com/v1/realtime/calls") return previousFetch(url as string, init);
@@ -588,7 +589,7 @@ test.each(["offer-created", "local-description", "offer-response", "answer-body"
       const stopped = current.stop(); completed(next); completed(next);
       expect(await stopped).toBe("new words"); expect(next.closed).toBe(true); expect(next.channel.closed).toBe(true);
       expect(tracks[1].stops).toBe(1); expect(unclaimed).toEqual([]);
-    } finally { release(); globalThis.fetch = previousFetch; dom.navigator.mediaDevices.getUserMedia = previousMic; }
+    } finally { release(); globalThis.fetch = previousFetch; mediaDevices.getUserMedia = previousMic; }
   }),
 );
 
@@ -629,9 +630,9 @@ test.each(["refused", "deadline"])("OpenAI %s connection checkpoints survive bat
 }));
 
 test("OpenAI unmount stops only its owned peer, microphone and sample observer", () => withReviewPeer(async () => {
-  mount(); const previousFetch = globalThis.fetch; const previousMic = dom.navigator.mediaDevices.getUserMedia;
+  mount(); const previousFetch = globalThis.fetch; const previousMic = mediaDevices.getUserMedia;
   const owned = { enabled: true, stops: 0, stop() { this.stops++; } };
-  dom.navigator.mediaDevices.getUserMedia = (async () => ({ getTracks: () => [owned], getAudioTracks: () => [owned] })) as unknown as typeof previousMic;
+  mediaDevices.getUserMedia = (async () => ({ getTracks: () => [owned], getAudioTracks: () => [owned] })) as unknown as typeof previousMic;
   globalThis.fetch = (async (url: unknown, init?: RequestInit) => String(url) === "https://api.openai.com/v1/realtime/calls"
     ? new Response("v=0 answer") : previousFetch(url as string, init)) as typeof fetch;
   try {
@@ -641,7 +642,7 @@ test("OpenAI unmount stops only its owned peer, microphone and sample observer",
     expect(peer.closed).toBe(true); expect(peer.channel.closed).toBe(true); expect(owned.stops).toBe(1);
     expect(traces.at(-1)).toMatchObject({ capturedSamples: 1600, sentSamples: 1600, outcome: "discarded" });
     const snapshot = traces.at(-1); audio(); completed(peer); expect(traces.at(-1)).toEqual(snapshot);
-  } finally { globalThis.fetch = previousFetch; dom.navigator.mediaDevices.getUserMedia = previousMic; }
+  } finally { globalThis.fetch = previousFetch; mediaDevices.getUserMedia = previousMic; }
 }));
 
 
