@@ -3887,6 +3887,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "dictation.silence": "тиша — нічого не розпізналось",
   "dictation.unsupported": "запис не підтримується в цьому браузері",
   "dictation.liveError": "помилка live-транскрипції",
+  "dictation.tailMissing": "Останні слова не отримано. Підтверджений текст залишився в чернетці. Перевірте його перед надсиланням.",
+  "dictation.bufferLimit": "Диктовку зупинено: буфер аудіо заповнено. Відновлений текст у чернетці. Перевірте його перед продовженням.",
   "dictation.connectionLost": "зʼєднання з транскрипцією обірвалось",
   "dictation.noMic": "немає доступу до мікрофона",
 
