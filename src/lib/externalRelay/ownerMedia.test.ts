@@ -131,12 +131,12 @@ test("A3: only evidence directories, feature and owner switch admit a read; serv
 });
 
 test("A3: a growing part stays unpublished, identical calls join, and switching off cleans it", async () => {
-  const f = await fixture();
   const paused = barrier(), probed = barrier(), allowProbe = barrier(), written = barrier();
-  const statfs = fs.statfs.bind(fs), open = fs.open.bind(fs);
-  const probe = spyOn(fs, "statfs").mockImplementation(async (...args: Parameters<typeof fs.statfs>) => {
-    probed.release(); await allowProbe.promise; return statfs(...args);
-  });
+  const f = await fixture({ freeBytes: async directory => {
+    probed.release(); await allowProbe.promise;
+    const stat = await fs.statfs(directory); return stat.bavail * stat.bsize;
+  } });
+  const open = fs.open.bind(fs);
   const writes: Array<{ mockRestore(): void }> = [];
   const opening = spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
     const handle = await open(...args);
@@ -165,7 +165,7 @@ test("A3: a growing part stays unpublished, identical calls join, and switching 
     expect(await f.call()).toMatchObject({ reason: "switch_off" });
   } finally {
     allowProbe.release(); paused.release(); await f.close();
-    probe.mockRestore(); opening.mockRestore(); for (const write of writes) write.mockRestore();
+    opening.mockRestore(); for (const write of writes) write.mockRestore();
   }
 });
 
