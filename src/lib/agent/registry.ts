@@ -140,6 +140,7 @@ export type StructuredHostClaimRefusal = typeof STRUCTURED_CLAIM_REFUSALS[number
 export interface StructuredHostClaimDecision { refusal: StructuredHostClaimRefusal | null }
 
 const STRUCTURED_TERMINATION_CALLERS = ["claude-adoption", "codex-adoption", "startup-demotion", "terminal-recovery"] as const;
+const STRUCTURED_TERMINATION_STATUSES: readonly AgentHostStatus[] = ["starting", "live", "idle", "handoff", "unhosted", "dead"];
 export interface StructuredTerminationDecisionContext {
   caller: typeof STRUCTURED_TERMINATION_CALLERS[number];
   claimRefusal: StructuredHostClaimRefusal | null;
@@ -9204,11 +9205,15 @@ export class AgentRegistry {
       if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot)) return null;
       if (decision) {
         const owner = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
+        // Stored rows can predate validation; diagnostics accept bounded values only.
+        const epoch = (value: unknown): number | null =>
+          typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
         observedDecision = {
           caller: STRUCTURED_TERMINATION_CALLERS.includes(decision.caller) ? decision.caller : null,
           claimRefusal: decision.claimRefusal && STRUCTURED_CLAIM_REFUSALS.includes(decision.claimRefusal) ? decision.claimRefusal : null,
-          ownerPid: owner?.pid ?? null, claimEpoch: entry.claimEpoch,
-          writerClaimEpoch: entry.structuredHost?.writerClaimEpoch ?? null, status: entry.status,
+          ownerPid: owner?.pid ?? null, claimEpoch: epoch(entry.claimEpoch),
+          writerClaimEpoch: epoch(entry.structuredHost?.writerClaimEpoch),
+          status: STRUCTURED_TERMINATION_STATUSES.includes(entry.status) ? entry.status : null,
         };
       }
       const identityKey = (identity: Readonly<ProcessIdentity>) => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`;

@@ -155,6 +155,69 @@ test("decision records retain fixed fields and discard unexpected text", async (
     claimEpoch: 1, writerClaimEpoch: 1, status: "live" });
 }), 20_000);
 
+test("malformed persisted row values produce a bounded decision and still complete the orphan stop", async () => scenario(async s => {
+  const filename = path.join(s.directory, "registry.json");
+  const raw = JSON.parse(fs.readFileSync(filename, "utf8"));
+  const payload = "unexpected-payload-".repeat(1000);
+  raw.entries["claude:planned-succession"].claimEpoch = { payload };
+  raw.entries["claude:planned-succession"].status = payload;
+  fs.writeFileSync(filename, JSON.stringify(raw));
+  fs.writeFileSync(path.join(s.directory, "exit-owner"), "exit");
+  expect(await settled(s.owner)).toBe(0);
+  expect(processIdentityStatus(s.native)).toBe("alive");
+  expect(processIdentityStatus(s.child)).toBe("alive");
+  const successor = s.launch("adoption");
+  const output = collect(successor.stdout!);
+  const error = collect(successor.stderr!);
+  expect(await settled(successor), await error).toBe(0);
+  await output;
+  const records = fs.readFileSync(path.join(s.directory, "host-termination-journal.ndjson"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+  const decision = records.find(record => record.event === "captured").decision;
+  const serialized = JSON.stringify(decision);
+  expect(serialized).not.toContain(payload);
+  expect(Buffer.byteLength(serialized)).toBeLessThanOrEqual(256);
+  expect(decision).toEqual({ caller: "claude-adoption", claimRefusal: "live-native", ownerPid: s.owner.pid,
+    claimEpoch: null, writerClaimEpoch: 1, status: null });
+  expect(records.at(-1).event).toBe("settled");
+  expect(processIdentityStatus(s.native)).toBe("dead");
+  expect(processIdentityStatus(s.child)).toBe("dead");
+}), 20_000);
+
+test("persisted decision epochs and statuses retain only bounded values", async () => scenario(async s => {
+  const filename = path.join(s.directory, "registry.json");
+  const raw = JSON.parse(fs.readFileSync(filename, "utf8"));
+  const entry = raw.entries["claude:planned-succession"];
+  const journal = path.join(s.directory, "host-termination-journal.ndjson");
+  const cases: Array<{ epoch: unknown; expected: number | null; status: unknown; expectedStatus: string | null }> = [
+    { epoch: 0, expected: 0, status: "starting", expectedStatus: "starting" },
+    { epoch: Number.MAX_SAFE_INTEGER, expected: Number.MAX_SAFE_INTEGER, status: "live", expectedStatus: "live" },
+    { epoch: 1, expected: 1, status: "idle", expectedStatus: "idle" },
+    { epoch: 1, expected: 1, status: "handoff", expectedStatus: "handoff" },
+    { epoch: 1, expected: 1, status: "unhosted", expectedStatus: "unhosted" },
+    { epoch: 1, expected: 1, status: "dead", expectedStatus: "dead" },
+    { epoch: -1, expected: null, status: "unknown", expectedStatus: null },
+    { epoch: 0.5, expected: null, status: { payload: "unexpected-object" }, expectedStatus: null },
+    { epoch: Number.MAX_SAFE_INTEGER + 1, expected: null, status: ["live"], expectedStatus: null },
+    { epoch: "1", expected: null, status: 1, expectedStatus: null },
+    { epoch: null, expected: null, status: null, expectedStatus: null },
+    { epoch: { payload: "unexpected-object" }, expected: null, status: "LIVE", expectedStatus: null },
+  ];
+  for (const sample of cases) {
+    entry.claimEpoch = sample.epoch;
+    entry.structuredHost.writerClaimEpoch = sample.epoch;
+    entry.status = sample.status;
+    fs.writeFileSync(filename, JSON.stringify(raw));
+    expect(s.registry.captureStructuredTerminationSurvivors(key, s.native, [s.child], "decision-test",
+      { caller: "terminal-recovery", claimRefusal: null })).not.toBeNull();
+    const record = JSON.parse(fs.readFileSync(journal, "utf8").trim().split("\n").at(-1)!);
+    expect(record.decision).toEqual({ caller: "terminal-recovery", claimRefusal: null, ownerPid: s.owner.pid,
+      claimEpoch: sample.expected,
+      // The host reader already replaces invalid writer epochs with zero.
+      writerClaimEpoch: sample.expected ?? 0, status: sample.expectedStatus });
+    expect(Buffer.byteLength(JSON.stringify(record.decision))).toBeLessThanOrEqual(256);
+  }
+}), 20_000);
+
 test("a reused claim decision clears its earlier refusal when a claim succeeds", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claim-decision-"));
   const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
