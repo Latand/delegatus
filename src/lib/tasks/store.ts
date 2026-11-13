@@ -717,10 +717,37 @@ const listRows = taskListReaders.rows;
 const listSnapshots = taskListReaders.snapshots;
 // Weak references add no retained payload beyond the existing read cache.
 const latestListSnapshots = taskListOwner.__delegatusTaskListLatestV1 ??= new Map();
-function rememberTaskList(collection: SqliteStateCollection<TaskStateRow>, snapshot: TaskListSnapshot): void {
+function rememberTaskList(collection: SqliteStateCollection<TaskStateRow>, snapshot: TaskListSnapshot, identity: string | null, revision: number): void {
+  const current = () => databaseFileIdentity(collection.filename) === identity && collection.revision() === revision
+    && JSON.stringify(projectAliasSnapshot().aliases) === snapshot.aliases;
+  if (!current()) return;
+  const previous = latestListSnapshots.get(collection.filename);
+  if (previous?.identity === identity && previous.revision === revision && previous.snapshot.deref() === snapshot) return;
   latestListSnapshots.delete(collection.filename);
-  latestListSnapshots.set(collection.filename, { identity: databaseFileIdentity(collection.filename), revision: collection.revision(), snapshot: new WeakRef(snapshot) });
+  latestListSnapshots.set(collection.filename, { identity, revision, snapshot: new WeakRef(snapshot) });
   while (latestListSnapshots.size > 8) latestListSnapshots.delete(latestListSnapshots.keys().next().value!);
+  // A list reader already owns the full revision. Build its reusable command
+  // projections here so the next single-row transaction never pays for them.
+  const discard = () => {
+    latestListSnapshots.delete(collection.filename);
+    for (const cache of [mutationHistories, projectEvidence]) for (const key of cache.keys()) {
+      if (JSON.parse(key)[0] === collection.filename) cache.delete(key);
+    }
+  };
+  try {
+    const canonical = projectAliasResolver(), aliases = Object.keys(projectAliasSnapshot().aliases);
+    mutationHistory(collection, snapshot.aliases, canonical);
+    const now = Date.now();
+    for (const project of snapshot.projects) {
+      const projects = [project, ...aliases.filter(alias => alias !== project && canonical(alias) === project)];
+      const evidence = taskProjectEvidence(collection, projects, canonical, snapshot.aliases);
+      if (!evidence.admission || now < evidence.admission.observedAt) evidence.admission = new TaskAdmissionEvidence(evidence.rows.values(), now);
+    }
+  } catch (error) {
+    discard();
+    if (current()) throw error;
+  }
+  if (!current()) discard();
 }
 /** Immutable list source. SQLite refreshes changed rows by revision; a repeated
  * list does not clone and validate every task and assignment again.
@@ -744,15 +771,17 @@ export function loadTasksForList(filePath = TASKS_FILE): readonly BoardTask[] {
     replaceProjectKeySource(`tasks:${filePath}`, canonicalProjectKeys(tasks.map(task => task.project)));
     return tasks;
   }
+  const identity = databaseFileIdentity(collection.filename), revision = collection.revision();
   const rows = collection.loadReadonly();
-  const aliases = JSON.stringify(projectAliasSnapshot().aliases);
+  const aliasSnapshot = projectAliasSnapshot();
+  const aliases = JSON.stringify(aliasSnapshot.aliases);
   const cached = listSnapshots.get(rows);
   if (cached?.aliases === aliases) {
-    rememberTaskList(collection, cached);
+    rememberTaskList(collection, cached, identity, revision);
     replaceProjectKeySource(`tasks:${filePath}`, cached.projects);
     return cached.tasks;
   }
-  const canonical = projectAliasResolver();
+  const canonical = projectAliasResolver(aliasSnapshot);
   const tasks: BoardTask[] = [];
   for (const row of rows) {
     if (!taskRowKey(row).startsWith("t:")) continue;
@@ -779,7 +808,7 @@ export function loadTasksForList(filePath = TASKS_FILE): readonly BoardTask[] {
   const projects = canonicalProjectKeys(resolved.map(task => task.project));
   const snapshot = { aliases, tasks: resolved, projects, byProject };
   listSnapshots.set(rows, snapshot);
-  rememberTaskList(collection, snapshot);
+  rememberTaskList(collection, snapshot, identity, revision);
   replaceProjectKeySource(`tasks:${filePath}`, projects);
   return resolved;
 }
@@ -870,12 +899,120 @@ function writeTaskState<R>(
 
 const writeSnapshots = new WeakMap<object, { aliases: string; state: TasksFileState }>();
 
+type MutationHistory = { revision: number; rows: Map<string, BoardTask>; tasks: BoardTask[]; indices: Map<string, number>; orders: Map<string, number>; sizes: Map<string, number>; bytes: number };
+const mutationHistoryOwner = globalThis as typeof globalThis & { __delegatusTaskMutationHistoriesV1?: Map<string, MutationHistory> };
+const mutationHistories = mutationHistoryOwner.__delegatusTaskMutationHistoriesV1 ??= new Map<string, MutationHistory>();
+
+/** Array readers reuse immutable rows and refresh only journal entries. The
+ * bounded owner holds references to reader payloads, never mutable drafts. */
+function mutationHistory(collection: SqliteStateCollection<TaskStateRow>, aliases: string, canonical: (project: string) => string): MutationHistory {
+  const key = JSON.stringify([collection.filename, databaseFileIdentity(collection.filename), aliases]);
+  const revision = collection.revision();
+  let held = mutationHistories.get(key);
+  const fill = (): MutationHistory => {
+    const latest = latestListSnapshots.get(collection.filename);
+    const list = latest?.identity === databaseFileIdentity(collection.filename) && latest.revision === revision ? latest.snapshot.deref() : undefined;
+    let tasks: BoardTask[];
+    if (list?.aliases === aliases) tasks = list.tasks.slice();
+    else {
+      const committed = collection.loadReadonly();
+      let baseline = writeSnapshots.get(committed);
+      if (baseline?.aliases !== aliases) {
+        baseline = { aliases, state: deepFreeze(stateFromBody(bodyFromRows(committed))) };
+        writeSnapshots.set(committed, baseline);
+      }
+      tasks = baseline.state.tasks.slice();
+    }
+    const metadata = collection.keyMetadata(tasks.map(task => `t:${task.id}`));
+    const sizes = new Map([...metadata].map(([key, value]) => [key.slice(2), value.bytes]));
+    return { revision, tasks, rows: new Map(tasks.map(task => [task.id, task])), indices: new Map(tasks.map((task, index) => [task.id, index])),
+      orders: new Map([...metadata].map(([key, value]) => [key, value.order])), sizes, bytes: [...sizes.values()].reduce((sum, size) => sum + size, 0) };
+  };
+  if (!held || held.revision > revision) held = fill();
+  if (held.revision !== revision) {
+    // Already returned array views keep their revision while this reader
+    // installs the journal's next immutable row references once.
+    held.tasks = held.tasks.slice();
+    let from = held.revision, cursor = "", reordered = false;
+    const findings = new Map<string, { project: string; key: string }>();
+    const rememberFinding = (task: BoardTask | undefined) => {
+      const raw = task && (persistedRows.get(task) as BoardTask | undefined) || task;
+      if (raw && raw.status !== "done" && raw.findingKey !== undefined) {
+        const project = canonical(raw.project), key = raw.findingKey;
+        findings.set(JSON.stringify([project, key]), { project, key });
+      }
+    };
+    for (;;) {
+      const page = collection.changesAfter(from, cursor, 512);
+      if (page.changeFloor > held.revision) { held = fill(); break; }
+      const metadata = collection.keyMetadata(page.entries.filter(entry => entry.key.startsWith("t:")).map(entry => entry.key));
+      for (const entry of page.entries) {
+        if (!entry.key.startsWith("t:")) continue;
+        const id = entry.key.slice(2), index = held.indices.get(id);
+        rememberFinding(held.rows.get(id));
+        const raw = entry.valueJson ? JSON.parse(entry.valueJson) as TaskStateRow : null;
+        const task = raw ? coerceTask(raw, canonical) : null;
+        if (raw && !task) throw new Error("invalid persisted task row");
+        if (task) {
+          persistedRows.set(task, raw); deepFreeze(task); held.rows.set(id, task);
+          rememberFinding(task);
+          if (index !== undefined) held.tasks[index] = task;
+        } else held.rows.delete(id);
+        held.bytes -= held.sizes.get(id) ?? 0;
+        const size = entry.valueJson?.length ? entry.valueJson.length * 2 : 0;
+        held.bytes += size;
+        if (task) held.sizes.set(id, size); else held.sizes.delete(id);
+        // Compare only changed ordering metadata. Ordinary patches retain
+        // both the shared array and its index without a collection-wide pass.
+        if (held.orders.get(entry.key) !== metadata.get(entry.key)?.order) reordered = true;
+        if (metadata.has(entry.key)) held.orders.set(entry.key, metadata.get(entry.key)!.order);
+        else held.orders.delete(entry.key);
+      }
+      if (page.entries.length < 512) { held.revision = page.revision; break; }
+      const last = page.entries.at(-1)!; from = last.revision; cursor = last.key;
+    }
+    // Only changed finding groups can change another row's reader projection.
+    // Reload their indexed raw candidates to avoid adding a combined count twice.
+    const aliasNames = Object.keys(projectAliasSnapshot().aliases);
+    for (const { project, key } of findings.values()) {
+      const projects = [project, ...aliasNames.filter(alias => alias !== project && canonical(alias) === project)];
+      const group = projects.flatMap(project => collection.findingTaskKeys(project, key)).map(key => {
+        const raw = collection.get(key)!;
+        const task = coerceTask(raw, canonical);
+        if (!task) throw new Error("invalid persisted task row");
+        persistedRows.set(task, raw); return task;
+      });
+      for (const task of reconcileOpenFindings(group)) {
+        if (!persistedRows.has(task)) {
+          persistedRows.set(task, persistedRows.get(group.find(row => row.id === task.id)!));
+          Object.assign(task, { revision: `task-legacy:${taskFingerprint(task)}` });
+        }
+        deepFreeze(task); held.rows.set(task.id, task);
+        const index = held.indices.get(task.id);
+        if (index !== undefined) held.tasks[index] = task;
+      }
+    }
+    if (reordered) {
+      held.tasks = [...held.rows.values()].sort((a, b) => held!.orders.get(`t:${a.id}`)! - held!.orders.get(`t:${b.id}`)! || a.id.localeCompare(b.id));
+      held.indices = new Map(held.tasks.map((task, index) => [task.id, index]));
+    }
+  }
+  mutationHistories.delete(key); mutationHistories.set(key, held);
+  let bytes = [...mutationHistories.values()].reduce((sum, history) => sum + history.bytes, 0);
+  while (mutationHistories.size > 2 || bytes > PROJECT_EVIDENCE_BYTES) {
+    const oldest = mutationHistories.keys().next().value!;
+    bytes -= mutationHistories.get(oldest)!.bytes; mutationHistories.delete(oldest);
+  }
+  return held;
+}
+
 /** Clone a task only when the callback reads it. Original drafts stay available
     after array replacement, sorting or deletion for revision comparison. */
-function taskDrafts(pristine: readonly BoardTask[]) {
+function taskDrafts(pristine: readonly BoardTask[], shared?: (task: BoardTask, index: number, peek: boolean) => BoardTask | undefined) {
   const copies = new Map<number, BoardTask>();
+  const proxies = new Map<number, BoardTask>();
   const nested = new Map<number, Map<string, unknown>>();
-  const original = (index: number): BoardTask => {
+  const materialize = (index: number): BoardTask => {
     let copy = copies.get(index);
     if (!copy) {
       const source = pristine[index]!;
@@ -898,14 +1035,68 @@ function taskDrafts(pristine: readonly BoardTask[]) {
     }
     return copy;
   };
-  const tasks: BoardTask[] = new Array(pristine.length);
-  pristine.forEach((_, index) => {
-    Object.defineProperty(tasks, index, { configurable: true, enumerable: true,
-      get: () => original(index),
-      set: (value: BoardTask) => { Object.defineProperty(tasks, index, { configurable: true, enumerable: true, writable: true, value }); },
-    });
+  const peek = (index: number): BoardTask => {
+    let proxy = proxies.get(index);
+    if (!proxy) {
+      proxy = shared?.(pristine[index]!, index, true);
+      if (!proxy) proxy = new Proxy({} as BoardTask, {
+        get: (_target, key) => {
+          const row = copies.get(index) ?? pristine[index]!;
+          const value = Reflect.get(row, key);
+          return value && typeof value === "object" ? Reflect.get(materialize(index), key) : value;
+        },
+        set: (_target, key, value) => Reflect.set(materialize(index), key, value),
+        has: (_target, key) => Reflect.has(copies.get(index) ?? pristine[index]!, key),
+        ownKeys: () => Reflect.ownKeys(materialize(index)),
+        getOwnPropertyDescriptor: (_target, key) => Reflect.getOwnPropertyDescriptor(materialize(index), key),
+        deleteProperty: (_target, key) => Reflect.deleteProperty(materialize(index), key),
+        defineProperty: (_target, key, descriptor) => Reflect.defineProperty(materialize(index), key, descriptor),
+      });
+      persistedRows.set(proxy, persistedRows.get(pristine[index]!));
+      proxies.set(index, proxy);
+    }
+    return proxy;
+  };
+  const original = (index: number): BoardTask => shared?.(pristine[index]!, index, false) ?? materialize(index);
+  // No per-row array slots or shallow task copies for a scalar lookup.
+  const target: BoardTask[] = new Array(pristine.length);
+  let inheritedLength = pristine.length;
+  const deleted = new Set<number>();
+  const slot = (key: PropertyKey) => typeof key === "string" && /^(0|[1-9][0-9]*)$/.test(key) ? Number(key) : -1;
+  const tasks = new Proxy(target, {
+    get: (array, key) => {
+      if (key === "find" || key === "findLast" || key === "findIndex" || key === "findLastIndex") return (predicate: (task: BoardTask, index: number, rows: BoardTask[]) => unknown, receiver?: unknown) => {
+        const reverse = key === "findLast" || key === "findLastIndex";
+        const length = array.length;
+        for (let index = reverse ? length - 1 : 0; reverse ? index >= 0 : index < length; index += reverse ? -1 : 1) {
+          const held = Object.hasOwn(array, index) ? array[index] : index < inheritedLength && !deleted.has(index) ? peek(index) : undefined;
+          if (predicate.call(receiver, held!, index, tasks)) return key === "findIndex" || key === "findLastIndex" ? index : Object.hasOwn(array, index) || index >= inheritedLength || deleted.has(index) ? held : original(index);
+        }
+        return key === "findIndex" || key === "findLastIndex" ? -1 : undefined;
+      };
+      const index = slot(key);
+      return index >= 0 && index < array.length && !Object.hasOwn(array, key) && index < inheritedLength && !deleted.has(index) ? original(index) : Reflect.get(array, key);
+    },
+    has: (array, key) => slot(key) >= 0 && slot(key) < Math.min(array.length, inheritedLength) && !deleted.has(slot(key)) || Reflect.has(array, key),
+    set: (array, key, value) => {
+      const result = Reflect.set(array, key, value);
+      if (result && key === "length") inheritedLength = Math.min(inheritedLength, array.length);
+      if (result) deleted.delete(slot(key));
+      return result;
+    },
+    defineProperty: (array, key, descriptor) => {
+      const result = Reflect.defineProperty(array, key, descriptor);
+      if (result && key === "length") inheritedLength = Math.min(inheritedLength, array.length);
+      if (result) deleted.delete(slot(key));
+      return result;
+    },
+    ownKeys: array => [...new Set([...Array.from({ length: Math.min(array.length, inheritedLength) }, (_, index) => index).filter(index => !deleted.has(index)).map(String), ...Reflect.ownKeys(array)])],
+    getOwnPropertyDescriptor: (array, key) => Reflect.getOwnPropertyDescriptor(array, key)
+      ?? (slot(key) >= 0 && slot(key) < Math.min(array.length, inheritedLength) && !deleted.has(slot(key))
+        ? { configurable: true, enumerable: true, writable: true, value: original(slot(key)) } : undefined),
+    deleteProperty: (array, key) => { deleted.add(slot(key)); return Reflect.deleteProperty(array, key); },
   });
-  unreadDrafts.set(tasks, index => !copies.has(index) && Object.getOwnPropertyDescriptor(tasks, index)?.get ? pristine[index] : undefined);
+  unreadDrafts.set(tasks, index => !copies.has(index) && !Object.hasOwn(target, index) ? pristine[index] : undefined);
   const changed = (index: number, task: BoardTask) => {
     const prior = pristine[index]! as unknown as Record<string, unknown>;
     const keys = Object.keys(task);
@@ -919,7 +1110,7 @@ function taskDrafts(pristine: readonly BoardTask[]) {
     }
     return false;
   };
-  return { tasks, original, copies, changed };
+  return { tasks, original, peek, copies, changed };
 }
 
 const syncStep = (current: readonly BoardTask[], sync: TaskSyncWrite | null) =>
@@ -931,8 +1122,8 @@ const projectEvidence = evidenceOwner.__delegatusTaskProjectEvidenceV2 ??= new M
 const PROJECT_EVIDENCE_BYTES = 64 * 1024 * 1024;
 
 /** Admission is a reader of project history. Reuse its immutable projection;
- * later revisions decode only journaled rows. This cache has one owner, eight
- * project slots and a total byte bound. */
+ * later revisions decode only journaled rows. The byte bound covers all
+ * projects together; a normal project rotation retains its summaries. */
 function taskProjectEvidence(collection: SqliteStateCollection<TaskStateRow>, projects: readonly string[], canonical: (project: string) => string, aliases: string): ProjectEvidence {
   const identity = databaseFileIdentity(collection.filename);
   const key = JSON.stringify([collection.filename, identity, projects, aliases]);
@@ -1000,7 +1191,7 @@ function taskProjectEvidence(collection: SqliteStateCollection<TaskStateRow>, pr
   projectEvidence.delete(key); projectEvidence.set(key, evidence);
   let bytes = 0;
   for (const held of projectEvidence.values()) bytes += held.bytes;
-  while (projectEvidence.size > 8 || bytes > PROJECT_EVIDENCE_BYTES) {
+  while (projectEvidence.size > 256 || bytes > PROJECT_EVIDENCE_BYTES) {
     const oldest = projectEvidence.keys().next().value!;
     bytes -= projectEvidence.get(oldest)!.bytes;
     projectEvidence.delete(oldest);
@@ -1116,6 +1307,8 @@ function prepareTaskRowsLeased(filePath: string, options: { afterPersist?: () =>
   }, options);
   if (preparationRevision(filePath) !== revision) throw new FileTransactionBusyError("task preparation dependencies changed; retry");
   writeJsonDurably(path.join(directory, "tasks-row-preparation.json"), { revision });
+  // Preparation has released the tasks transaction before warming readers.
+  loadTasksForList(filePath);
   console.warn(`[tasks preparation] ${JSON.stringify({ changedRows: changed, effects: counts })}`);
   return changed;
 }
@@ -1153,7 +1346,7 @@ function writeTaskCommands<R>(filePath: string,
         }
         return selected.get(id)!;
       };
-      const get = (id: string) => {
+      const pristineGet = (id: string) => {
         const task = read(id);
         if (task?.status !== "done" && task?.findingKey !== undefined) {
           const identity = JSON.stringify([task.project, task.findingKey]);
@@ -1173,46 +1366,47 @@ function writeTaskCommands<R>(filePath: string,
         }
         return selected.get(id)!;
       };
+      const mutable = new Map<string, ReturnType<typeof taskDrafts>>();
+      const get = (id: string) => {
+        let draft = mutable.get(id);
+        if (!draft) {
+          const index = full?.indices.get(id);
+          if (index !== undefined) return full!.draft.original(index);
+          const task = pristineGet(id);
+          if (!task) return null;
+          draft = taskDrafts([task]); mutable.set(id, draft);
+        }
+        return draft.original(0);
+      };
       let structural = false;
       let full: { current: TasksFileState; pristine: TasksFileState; draft: ReturnType<typeof taskDrafts>; indices: Map<string, number> } | undefined;
       const readFull = () => {
         if (!full) {
-          const committed = collection.loadReadonly();
-          const snapshots = tasksOnly ? taskOnlyWriteSnapshots : writeSnapshots;
-          let baseline = snapshots.get(committed);
-          if (baseline?.aliases !== aliasKey) {
-            const list = listSnapshots.get(committed);
-            const stateSnapshot = writeSnapshots.get(committed);
-            const state = tasksOnly && list?.aliases === aliasKey
-              ? { tasks: list.tasks as BoardTask[], recentCreates: [], migrations: {} }
-              : tasksOnly && stateSnapshot?.aliases === aliasKey
-              ? { tasks: stateSnapshot.state.tasks, recentCreates: [], migrations: {} }
-              : stateFromBody(bodyFromRows(committed));
-            baseline = { aliases: aliasKey, state: deepFreeze(state) };
-            snapshots.set(committed, baseline);
-          }
-          const pristine = baseline.state;
-          const draft = taskDrafts(pristine.tasks);
-          const current = { ...pristine, tasks: draft.tasks, recentCreates: structuredClone(pristine.recentCreates), migrations: { ...pristine.migrations } };
-          let indices = writeSnapshotIndices.get(pristine.tasks);
-          if (!indices) {
-            indices = new Map(pristine.tasks.map((task, index) => [task.id, index]));
-            writeSnapshotIndices.set(pristine.tasks, indices);
-          }
-          let normalized = writeSnapshotNormalizations.get(pristine.tasks);
-          if (!normalized) {
-            normalized = pristine.tasks.filter(task => {
-              const stored = persistedRows.get(task) as BoardTask | undefined;
-              return stored && !sameStoredCompletion(stored, task);
-            });
-            writeSnapshotNormalizations.set(pristine.tasks, normalized);
-          }
-          for (const task of normalized) normalizations.set(task.id, task);
+          const history = mutationHistory(collection, aliasKey, canonical);
+          const pristine: TasksFileState = { tasks: history.tasks, recentCreates: [], migrations: {} };
+          const draft = taskDrafts(pristine.tasks, (task, _index, peek) => {
+            const held = mutable.get(task.id);
+            return held ? peek ? held.peek(0) : held.original(0) : undefined;
+          });
+          const current = { ...pristine, tasks: draft.tasks };
+          const indices = history.indices;
           full = { current, pristine, draft, indices };
         }
         return full.current.tasks;
       };
       const plans = new WeakMap<BoardTask[], ReadonlyMap<string, BoardTask>>();
+      const draftChanges = (changes: ReadonlyMap<string, BoardTask>) => {
+        const rows = new Map<string, BoardTask>();
+        for (const [id, draft] of mutable) {
+          const copy = draft.copies.get(0);
+          if (copy && draft.changed(0, copy)) rows.set(id, copy);
+        }
+        if (full) for (const [index, copy] of full.draft.copies) {
+          if (full.draft.changed(index, copy)) rows.set(full.pristine.tasks[index]!.id, copy);
+        }
+        for (const [id, task] of changes) rows.set(id, task);
+        return rows;
+      };
       const makeView = (changes: ReadonlyMap<string, BoardTask>): BoardTask[] => {
         const view: TaskMutationView = {
           get: id => changes.get(id) ?? get(id),
@@ -1222,7 +1416,7 @@ function writeTaskCommands<R>(filePath: string,
             const evidence = taskProjectEvidence(collection, projects(project), canonical, aliasKey);
             if (!evidence.admission || now < evidence.admission.observedAt) evidence.admission = new TaskAdmissionEvidence(evidence.rows.values(), now);
             let count = evidence.admission.count(project, now, members, seat);
-            for (const [id, task] of changes) {
+            for (const [id, task] of draftChanges(changes)) {
               const prior = evidence.rows.get(id);
               const visible = (row: BoardTask) => row.project === project && taskShowsOnBoard(row, members?.(row) ?? false, { now, get holdsSeat() { return seat?.(row) === "holds"; } });
               if (prior && visible(prior)) count--;
@@ -1233,7 +1427,7 @@ function writeTaskCommands<R>(filePath: string,
           completedFinding: (project, key) => {
             const evidence = taskProjectEvidence(collection, projects(project), canonical, aliasKey);
             const rows = new Map(evidence.doneFindings.get(key));
-            for (const [id, task] of changes) {
+            for (const [id, task] of draftChanges(changes)) {
               rows.delete(id);
               if (task.project === canonical(project) && task.findingKey === key && task.status === "done") rows.set(id, task);
             }
@@ -1246,7 +1440,7 @@ function writeTaskCommands<R>(filePath: string,
               const task = get(key.slice(2));
               return task ? [[task.id, task] as const] : [];
             }));
-            for (const [id, task] of changes) {
+            for (const [id, task] of draftChanges(changes)) {
               rows.delete(id);
               if (canonical(task.project) === canonical(project) && task.findingKey === key && task.status !== "done") rows.set(id, task);
             }
@@ -1257,8 +1451,10 @@ function writeTaskCommands<R>(filePath: string,
         const tasks = lazyTaskMutationView(() => {
           const rows = readFull();
           if (!changes.size) return rows;
-          const present = new Set(rows.map(task => task.id));
-          return [...rows.map(task => changes.get(task.id) ?? task), ...[...changes.values()].filter(task => !present.has(task.id))];
+          const appended = [...changes.values()].filter(task => !full!.indices.has(task.id));
+          const source = appended.length ? [...full!.pristine.tasks, ...appended] : full!.pristine.tasks;
+          return taskDrafts(source, (task, index, peek) => changes.get(task.id)
+            ?? (peek ? full!.draft.peek(index) : full!.draft.original(index))).tasks;
         }, view, () => { structural = true; });
         plans.set(tasks, changes);
         return tasks;
@@ -1294,6 +1490,8 @@ function writeTaskCommands<R>(filePath: string,
       if (preparationRevision(filePath) !== prepared) throw new FileTransactionBusyError("task preparation dependencies changed; retry");
       if (!outcome.state) return { records: [], companion: sync?.pending() };
       const plan = plans.get(outcome.state.tasks);
+      if (full) for (const task of full.draft.copies.values()) pristineGet(task.id);
+      if ([...mutable].some(([id, draft]) => draft.copies.get(0)?.id !== undefined && draft.copies.get(0)!.id !== id)) structural = true;
       if (full && [...full.draft.copies].some(([index, task]) => task.id !== full!.pristine.tasks[index]!.id)) structural = true;
       const edits = new Map([...normalizations].map(([id, task]) => [id, structuredClone(task)]));
       let deleted: BoardTask[] = [];
@@ -1306,7 +1504,7 @@ function writeTaskCommands<R>(filePath: string,
           if (ids.has(task.id)) throw new Error("duplicate persisted task id");
           ids.set(task.id, ids.size);
           const index = full!.indices.get(task.id);
-          if (index === undefined || full!.draft.copies.get(index) !== task) {
+          if (index === undefined || (mutable.get(task.id)?.original(0) ?? full!.draft.copies.get(index)) !== task) {
             edits.set(task.id, task); replacements.add(task.id);
           }
         }
@@ -1316,6 +1514,10 @@ function writeTaskCommands<R>(filePath: string,
       for (const [id, task] of normalizations) if (!edits.has(id)) edits.set(id, structuredClone(task));
       const deletedIds = new Set(deleted.map(task => task.id));
       for (const id of deletedIds) edits.delete(id);
+      for (const [id, draft] of mutable) {
+        const task = draft.copies.get(0);
+        if (task && draft.changed(0, task) && !deletedIds.has(id) && !replacements.has(task.id)) edits.set(task.id, task);
+      }
       if (full) for (const [index, task] of full.draft.copies) {
         const prior = full.pristine.tasks[index]!;
         if (full.draft.changed(index, task) && !deletedIds.has(prior.id) && !replacements.has(task.id)) edits.set(task.id, task);
@@ -1330,13 +1532,13 @@ function writeTaskCommands<R>(filePath: string,
       }
       const baseline = [...tasks.flatMap(task => {
         const index = full?.indices.get(task.id);
-        const prior = index === undefined ? get(task.id) : full!.pristine.tasks[index];
+        const prior = index === undefined ? pristineGet(task.id) : full!.pristine.tasks[index];
         return prior ? [prior] : [];
       }), ...deleted];
       const before = snapshotTasks(baseline);
       if (full) for (const [id, prior] of before) {
         const index = full.indices.get(id);
-        if (index !== undefined) before.set(id, { ...prior, ref: full.draft.original(index), pristine: full.pristine.tasks[index] });
+        if (index !== undefined) before.set(id, { ...prior, ref: mutable.get(id)?.original(0) ?? full.draft.original(index), pristine: full.pristine.tasks[index] });
       }
       const rows = committedRows(tasks, before, true, syncStep(baseline, sync?.write ?? null));
       const committed = baseline.map(task => persistedRows.get(task) as TaskStateRow);
@@ -1354,10 +1556,6 @@ function writeTaskCommands<R>(filePath: string,
   }, sync ? { companion: sync.companion } : {});
   return result!;
 }
-
-const writeSnapshotIndices = new WeakMap<BoardTask[], Map<string, number>>();
-const writeSnapshotNormalizations = new WeakMap<BoardTask[], BoardTask[]>();
-const taskOnlyWriteSnapshots = new WeakMap<object, { aliases: string; state: TasksFileState }>();
 
 export function saveTasks(tasks: BoardTask[], filePath = TASKS_FILE): void {
   writeTaskState(filePath, ({ tasks: current, recentCreates, migrations }, sync) => {

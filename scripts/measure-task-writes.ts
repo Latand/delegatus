@@ -81,6 +81,7 @@ if (process.argv[2] === "--worker") {
         return { state: { tasks: result.tasks, recentCreates: result.recentCreates }, result: null };
       }, file);
       else store.mutateTasks(tasks => {
+        if (process.argv.includes("--lookup") && !tasks.find(task => task.id === "fixture-04598")) throw new Error("task missing");
         const result = commands.patchTask(tasks, "fixture-04598", kind === "patch" ? { text: `Changed fixture ${iteration}` } : { note: `Fixture note ${iteration}` }, at);
         if (!result.ok) throw new Error(result.error);
         return { tasks: result.tasks, result: null };
@@ -94,7 +95,7 @@ if (process.argv[2] === "--worker") {
     }
   } finally { db.close(); globalThis.structuredClone = clone; console.warn = warn; }
 } else {
-  const sources = process.argv.slice(2);
+  const sources = process.argv.slice(2).filter(value => value !== "--lookup");
   const sizesArgument = sources.indexOf("--sizes");
   const sizeFile = sizesArgument < 0 ? undefined : sources.splice(sizesArgument, 2)[1];
   const root = process.env.LLV_BENCH_DIR;
@@ -139,7 +140,7 @@ if (process.argv[2] === "--worker") {
     const directory = path.join(root, i === 0 ? "before" : "after");
     const temp = path.join(directory, "tmp"), state = path.join(temp, "state");
     for (const name of ["home", "config", "tmp/state"]) fs.mkdirSync(path.join(directory, name), { recursive: true, mode: 0o700 });
-    const child = Bun.spawn([process.execPath, import.meta.path, "--worker", path.resolve(source), fixture], { cwd: source, stdin: "pipe", stdout: "pipe", stderr: Bun.file(path.join(directory, "stderr.log")), env: { ...process.env, HOME: path.join(directory, "home"), XDG_CONFIG_HOME: path.join(directory, "config"), TMPDIR: temp, LLV_STATE_DIR: state, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" } });
+    const child = Bun.spawn([process.execPath, import.meta.path, "--worker", path.resolve(source), fixture, ...(process.argv.includes("--lookup") ? ["--lookup"] : [])], { cwd: source, stdin: "pipe", stdout: "pipe", stderr: Bun.file(path.join(directory, "stderr.log")), env: { ...process.env, HOME: path.join(directory, "home"), XDG_CONFIG_HOME: path.join(directory, "config"), TMPDIR: temp, LLV_STATE_DIR: state, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" } });
     return { child, replies: lines(child.stdout)[Symbol.asyncIterator](), version: i === 0 ? "before" : "after" };
   };
   const workers: ReturnType<typeof startWorker>[] = [];

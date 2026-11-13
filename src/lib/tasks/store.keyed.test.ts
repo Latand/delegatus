@@ -79,6 +79,153 @@ test("nested draft edits and a following command preserve both changes and roll 
   expect(raw(file).find(row => row.row_key === "t:other")).toEqual(before.find(row => row.row_key === "t:other"));
 });
 
+for (const access of ["input", "output"] as const) test(`command followed by nested ${access} edits shares assignments and rolls back`, () => {
+  const { file } = sandbox();
+  seed(file, [task("target"), task("other")]); prepareTaskRows(file);
+  const assignment = { path: "fixture/after.jsonl", panePid: null, state: "delivered" as const, error: null, at, conversationId: "after" };
+  const write = (refuse: boolean) => mutateTasks(tasks => {
+    const out = patchTask(tasks, "target", { text: "changed" }, at);
+    if (!out.ok) throw new Error(out.error);
+    (access === "input" ? tasks : out.tasks).find(row => row.id === "target")!.assignments.push(assignment);
+    const done = patchTask(out.tasks, "target", { status: "done" }, at);
+    if (!done.ok) throw new Error(done.error);
+    if (refuse) throw new Error("rollback after command");
+    return { tasks: done.tasks, result: null };
+  }, file);
+  const before = raw(file);
+  expect(() => write(true)).toThrow("rollback after command");
+  expect(raw(file)).toEqual(before);
+  write(false);
+  expect(loadTasks(file).find(row => row.id === "target")).toMatchObject({ text: "changed", assignments: [assignment], doneAdmissions: admissionSnapshot([assignment]) });
+  expect(raw(file).find(row => row.row_key === "t:other")).toEqual(before.find(row => row.row_key === "t:other"));
+});
+
+test("array lookup and command refresh only changed payloads over successive revisions", () => {
+  const { file } = sandbox();
+  seed(file, Array.from({ length: 4599 }, (_, i) => task(`lookup-${i}`, { details: "x".repeat(5000) })));
+  prepareTaskRows(file); loadTasksForList(file);
+  // Preparation/list readers own the full revision before the first lookup write.
+  const full = spyOn(SqliteStateCollection.prototype, "loadReadonly").mockImplementation(() => { throw new Error("repeated full payload read"); });
+  const clone = spyOn(globalThis, "structuredClone");
+  const entries = Object.entries;
+  let shallow = 0;
+  const copies = spyOn(Object, "entries").mockImplementation((value: object) => {
+    if (value && typeof value === "object" && "id" in value && "status" in value) shallow++;
+    return entries(value);
+  });
+  const orders = SqliteStateCollection.prototype.keyMetadata;
+  const metadata = orders && spyOn(SqliteStateCollection.prototype, "keyMetadata").mockImplementation(function(this: SqliteStateCollection<BoardTask>, keys) {
+    expect(keys.length).toBeLessThan(2);
+    return orders.call(this, keys);
+  });
+  const stringify = JSON.stringify;
+  let payloads = 0;
+  const json = spyOn(JSON, "stringify").mockImplementation((value, ...args) => {
+    if (value && typeof value === "object" && "id" in value && "status" in value) payloads++;
+    return Reflect.apply(stringify, JSON, [value, ...args]);
+  });
+  try {
+    for (let i = 0; i < 3; i++) mutateTasks(tasks => {
+      expect(tasks.findLast(row => row.id === "lookup-4598")?.id).toBe("lookup-4598");
+      expect(tasks.find(row => row.id === "lookup-4598")?.id).toBe("lookup-4598");
+      const result = patchTask(tasks, "lookup-4598", i % 2 ? { note: `note ${i}` } : { text: `text ${i}` }, at);
+      if (result.ok) expect(result.tasks.find(row => row.id === "lookup-4598")?.text).toBe(`text ${i === 1 ? 0 : i}`);
+      return { tasks: result.ok ? result.tasks : undefined, result };
+    }, file);
+    expect(payloads).toBeLessThan(30);
+    expect(clone.mock.calls.length).toBeLessThan(30);
+    expect(shallow).toBeLessThan(30);
+  } finally { full.mockRestore(); clone.mockRestore(); json.mockRestore(); copies.mockRestore(); metadata?.mockRestore(); }
+});
+
+test("seventeen project rotations retain admission facts and apply journaled edits", () => {
+  setSystemTime(new Date(at));
+  const { file } = sandbox();
+  seed(file, Array.from({ length: 4599 }, (_, i) => task(`rotation-${i}`, { project: `project-${i % 17}`, status: "done", board: "hidden", doneAt: at, doneAdmissions: [], details: "x".repeat(5000) })));
+  prepareTaskRows(file); loadTasksForList(file);
+  const create = (project: number, pass: number) => mutateTasksFile(state => {
+    const out = createTask(state.tasks, { project: `project-${project}`, text: "Rotation", placement: "unplaced" }, state.recentCreates, { now: () => at, id: () => `new-${pass}-${project}` });
+    return { state: out.ok ? { ...state, tasks: out.tasks } : undefined, result: out };
+  }, file);
+  const facts = spyOn(TaskAdmissionEvidence.prototype, "put");
+  const read = spyOn(SqliteStateCollection.prototype, "taskProjectKeys").mockImplementation(() => { throw new Error("project refill"); });
+  try {
+    for (let project = 0; project < 17; project++) expect(create(project, 0).ok).toBe(true);
+    for (let project = 0; project < 17; project++) expect(create(project, 1).ok).toBe(true);
+    expect(facts.mock.calls.length).toBeLessThan(40);
+  } finally { facts.mockRestore(); read.mockRestore(); }
+});
+
+test("array reader follows peer edits and deletion while an earlier view keeps its revision", () => {
+  const { file, root } = sandbox();
+  seed(file, [task("a"), task("b")]); prepareTaskRows(file); loadTasksForList(file);
+  const old = mutateTasks(tasks => {
+    expect(tasks.find(row => row.id === "b")?.text).toBe("Task b");
+    return { tasks: undefined, result: tasks };
+  }, file);
+  const peer = new SqliteStateCollection<BoardTask>(path.join(root, "state.sqlite"), { collection: "tasks", schemaVersion: 1,
+    key: row => `t:${row.id}`, decode: value => value as BoardTask, clone: structuredClone, busyMessage: "peer busy" });
+  try { peer.boundedPatch(3, tx => { tx.delete("t:a"); tx.put(task("b", { text: "Peer edit" })); tx.put(task("c")); }); }
+  finally { peer.close(); }
+  const before = raw(file);
+  mutateTasks(tasks => {
+    expect(tasks.find(row => row.id === "a")).toBeUndefined();
+    expect(tasks.findLast(row => row.id === "b")?.text).toBe("Peer edit");
+    expect(tasks.map(row => row.id)).toEqual(["b", "c"]);
+    tasks.find(row => row.id === "b")!.text = "Discarded";
+    return { tasks: undefined, result: null };
+  }, file);
+  expect(old.find(row => row.id === "b")?.text).toBe("Task b");
+  expect(raw(file)).toEqual(before);
+});
+
+test("a cached array lookup reconciles only a peer's changed finding group before revision guards", () => {
+  const { file, root } = sandbox();
+  seed(file, [task("keeper", { findingKey: "incident", finding: { count: 2, lastSeenAt: at } }), task("other")]);
+  prepareTaskRows(file); loadTasksForList(file);
+  mutateTasks(tasks => { expect(tasks.find(row => row.id === "keeper")?.finding?.count).toBe(2); return { tasks: undefined, result: null }; }, file);
+  const peer = new SqliteStateCollection<BoardTask>(path.join(root, "state.sqlite"), { collection: "tasks", schemaVersion: 1,
+    key: row => `t:${row.id}`, decode: value => value as BoardTask, clone: structuredClone, busyMessage: "peer busy" });
+  try { peer.boundedPatch(1, tx => tx.put(task("late", { findingKey: "incident", finding: { count: 3, lastSeenAt: at } }))); }
+  finally { peer.close(); }
+  const expected = loadTasksForList(file).find(row => row.id === "keeper")!;
+  const result = mutateTasks(tasks => {
+    const keeper = tasks.find(row => row.id === "keeper")!;
+    expect(keeper.finding?.count).toBe(5);
+    expect(taskRevision(keeper)).toBe(taskRevision(expected));
+    const out = patchTask(tasks, "keeper", { note: "Peer group", expectedProject: "fixture", expectedRevision: taskRevision(expected) }, at);
+    return { tasks: out.ok ? out.tasks : undefined, result: out };
+  }, file);
+  expect(result.ok).toBe(true);
+  expect(loadTasksForList(file).find(row => row.id === "keeper")?.finding?.count).toBe(5);
+  expect(loadTasksForList(file).find(row => row.id === "late")?.findingKey).toBeUndefined();
+});
+
+for (const boundary of ["snapshot", "metadata"] as const) test(`reader warming discards a revision changed after ${boundary}`, () => {
+  const { file, root } = sandbox();
+  seed(file, [task("a"), task("b")]); prepareTaskRows(file);
+  const peer = new SqliteStateCollection<BoardTask>(path.join(root, "state.sqlite"), { collection: "tasks", schemaVersion: 1,
+    key: row => `t:${row.id}`, decode: value => value as BoardTask, clone: structuredClone, busyMessage: "peer busy" });
+  peer.boundedPatch(1, tx => tx.put(task("b", { text: "Before reader" })));
+  const method = boundary === "snapshot" ? "loadReadonly" : "keyMetadata";
+  const original = SqliteStateCollection.prototype[method];
+  let raced = false;
+  const read = spyOn(SqliteStateCollection.prototype, method).mockImplementation(function(this: SqliteStateCollection<BoardTask>, ...args: unknown[]) {
+    const result = Reflect.apply(original, this, args);
+    if (!raced) { raced = true; peer.boundedPatch(1, tx => tx.put(task("b", { text: "Racing writer" }))); }
+    return result;
+  });
+  try { loadTasksForList(file); }
+  finally { read.mockRestore(); peer.close(); }
+  expect(raced).toBe(true);
+  const before = raw(file);
+  mutateTasks(tasks => {
+    expect(tasks.find(row => row.id === "b")?.text).toBe("Racing writer");
+    return { tasks: undefined, result: null };
+  }, file);
+  expect(raw(file)).toEqual(before);
+});
+
 test("4599 rows in one project: hidden creates skip history and visible creates refresh only changed admission facts", () => {
   const { file } = sandbox();
   seed(file, Array.from({ length: 4599 }, (_, i) => task(`history-${i}`, { status: "done", board: "hidden", doneAt: at, doneAdmissions: [], details: "x".repeat(5000) })));

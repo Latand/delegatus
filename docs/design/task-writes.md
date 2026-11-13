@@ -52,7 +52,7 @@ Commands identify their input rows before producing a write plan; persistence
 compares only those rows, receipts and migration markers. Finding guards seek
 the existing finding index. Board admission reads the relevant project's
 evidence through the existing project index. A single shared cache retains at
-most eight project summaries and 64 MiB of serialized UTF-16 content. It fills
+most 256 project summaries and 64 MiB of serialized UTF-16 content. It fills
 on a cold read, eviction or journal expiry; later revisions update only journaled
 rows. Admission keeps visibility counts, expiration deadlines and assignment
 references. Production seat snapshots supply their current conversation/path
@@ -63,12 +63,27 @@ completed findings select only their own group, preserving collection order
 for timestamp ties. A synchronous alias snapshot removes per-row metadata probes.
 
 Callers that explicitly enumerate history retain an array view and the old
-ordering, replacement, deletion and nested mutation behavior. Reading the array
-ends its keyed-command shortcut: a later command sees the actual mutable drafts.
-An explicit replacement returned by that command takes precedence over its
-earlier draft during persistence. The immutable
-reader projection is cached by collection revision and aliases. Only nested
-values that a callback reads get mutable copies. Explicit full-state saves
+ordering, replacement, deletion and nested mutation behavior. Scalar
+`find`/`findLast` predicates inspect lazy row views; a match, nested field
+read, enumeration or edit opens the row's mutable shallow copy. A command
+shares those drafts with its input and output arrays, including assignment
+arrays read before the command. Structural array edits end the command
+shortcut; subsequent commands consume the actual reordered array.
+
+The immutable array-reader projection is keyed by database identity and
+aliases, with at most two database views and a 64 MiB byte bound under one
+process-wide owner. It reuses an existing list or state snapshot on its first
+read. Preparation warms these projections after releasing the tasks
+transaction; list readers also warm each new snapshot, including admission
+facts, before the next command. Repeated reads of that snapshot skip this work.
+Warming verifies the database identity, revision and aliases before publishing
+its caches; a concurrent change discards the unverified projections.
+Later revisions decode only journaled rows, and seek their order and
+byte metadata by key. Ordinary patches keep the existing index; insertions,
+deletions and moved rows rebuild the ordered reference array once per changed
+reader revision. A previous array view retains its own revision. Journal
+expiry, alias changes, file replacement and eviction cause a fresh reader
+snapshot. Only nested values that a callback reads get mutable copies. Explicit full-state saves
 remain full-state operations. The alarm controller and tick scheduling remain
 outside this change.
 
@@ -378,3 +393,64 @@ The scripts and command receipts are retained with the stage evidence, outside
 the source tree. Every nested check proved reuse of its parent's admitted CPU
 lease, and test files ran serially with fresh HOME/config/temp/state roots.
 The final commit's unmodified pre-push exit is reported in the stage result.
+
+## Mutable lookup and project rotation controls
+
+The regression file now exercises nested assignments before and after a
+command through both its input and output arrays, rollback, subsequent done
+admissions, peer edits, finding ownership and cache invalidation during reader
+warming. The four handed reproduction cases fail on the reviewed revision
+`eb48635230a1` and pass on the fix. The maintained differential replay compares
+30 exact states against the original writer, including command-then-nested
+edits, reversal and project moves; the review's separate 30-state replay also
+matches. Five explicit test files pass: 135 tests and 1428 assertions.
+
+The final measurement window was 2026-11-13 21:14:20–21:14:45 UTC. Each fixture
+has 4599 rows and 25,165,834 bytes. The two hashes and size distributions above
+are unchanged: both fixtures are synthetic; the distribution fixture uses only
+4529 recorded row lengths. No board content was copied. Conditions: Bun 1.4.0,
+three admitted CPUs, nine alternating repetitions per operation, one active
+writer, prepared unlinked stores, and keyed cleanup outside timing. The
+reference writer is `d040eef4955f`; its task-store source matches `fbc7d2474b3c`.
+
+| Fixture / lookup | Operation | Before median / max, ms | After median / max, ms |
+| --- | --- | ---: | ---: |
+| Original / keyed | Patch | 133.789 / 335.257 | 2.427 / 20.834 |
+| Original / keyed | Note | 151.064 / 213.515 | 2.800 / 4.524 |
+| Original / keyed | Create | 155.456 / 212.959 | 3.093 / 21.242 |
+| Original / array find | Patch | 147.285 / 181.888 | 10.832 / 15.208 |
+| Original / array find | Note | 144.776 / 162.149 | 11.065 / 13.294 |
+| Original / array find | Create | 152.355 / 204.471 | 3.826 / 20.444 |
+| Recorded sizes / array find | Patch | 131.709 / 196.874 | 12.096 / 17.036 |
+| Recorded sizes / array find | Note | 127.706 / 161.643 | 12.679 / 14.350 |
+| Recorded sizes / array find | Create | 134.694 / 165.925 | 4.130 / 11.492 |
+
+All 81 candidate transactions above are below 50 ms. The lookup control counts
+one shallow task copy and one task-root deep clone per patch/note, two task
+fingerprints and five task-root serializations; create has zero task copies
+and two task-root serializations. The predicate scans cached references, and
+only the changed row's payload is refreshed.
+
+Two rotations through 17 projects compare the reviewed writer with the fix.
+Create median/max moves from 7.100/29.613 ms to 3.275/19.582 ms, with all
+34 candidate transactions below 50 ms. Every candidate create performs zero
+admission puts and two task-root serializations after preparation. The
+reviewed writer repeats 270–271 puts and 272–273 serializations per create,
+including its second rotation. This control removes its created card outside
+timing; the committed regression also keeps the new cards to verify journal
+updates.
+
+```sh
+bash "$GATE" bun scripts/compare-task-writes.ts "$REFERENCE" "$CANDIDATE"
+bash "$GATE" bun scripts/measure-task-writes.ts "$REFERENCE" "$CANDIDATE"
+bash "$GATE" bun scripts/measure-task-writes.ts "$REFERENCE" "$CANDIDATE" --lookup --sizes "$SIZES"
+bash "$GATE" bun scripts/reviewer-array-lookup.ts "$REFERENCE" "$CANDIDATE"
+bash "$GATE" bun scripts/reviewer-rotation.ts "$REVIEWED" "$CANDIDATE"
+```
+
+The reviewer drivers, raw measurements and identical counter/logger patches
+are retained outside the source tree. An intermediate implementation retained
+a 74.392 ms first lookup and a 50.092 ms cold rotation sample; those runs stay
+in evidence. The final run warms the reusable projections during preparation
+and genuine list reads, after the tasks transaction has ended. Its 115/115
+transactions meet the bound without dropping a repetition.

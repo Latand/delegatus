@@ -133,6 +133,30 @@ if (process.argv[2] === "--worker") {
     return { tasks: result.tasks, result: null };
   }, file);
   checkpoint({ composedNestedAndCommand: true });
+  for (const access of ["input", "output"] as const) {
+    instant += 1000; freeze();
+    store.mutateTasks(tasks => {
+      const command = commands.patchTask(tasks, "plain", { note: `command then nested ${access}` }, at());
+      if (!command.ok) throw new Error(command.error);
+      (access === "input" ? tasks : command.tasks).find(task => task.id === "plain")!.assignments.push({ path: `fixture/${access}.jsonl`, panePid: null, state: "delivered", error: null, at: at(), conversationId: access });
+      if (access === "output") command.tasks.reverse();
+      return { tasks: command.tasks, result: null };
+    }, file);
+    checkpoint({ commandThenNested: access });
+  }
+  instant += 1000; freeze();
+  store.mutateTasks(tasks => {
+    tasks.find(task => task.id === "plain")!.project = "dir-moved";
+    const command = commands.patchTask(tasks, "plain", { color: "lime" }, at());
+    if (!command.ok) throw new Error(command.error);
+    return { tasks: command.tasks, result: null };
+  }, file);
+  checkpoint({ projectMove: true, list: store.loadTasksForList(file).map(task => [task.id, task.project]), selected: store.loadTasksByIds(new Set(["plain", "done"]), file).map(task => [task.id, task.project]) });
+  patch("plain", { status: "done" });
+  patch("plain", { status: "inbox" });
+  create("mixed-finding", "mixed-new", { findingKey: "incident" });
+  patch("accounting", { findingKey: "incident" });
+  checkpoint({ finalMixed: true });
   db.close();
   console.log(JSON.stringify(snapshots));
 } else {

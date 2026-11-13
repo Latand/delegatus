@@ -35,19 +35,16 @@ export function readMutationTask(tasks: BoardTask[], id: string): BoardTask | un
 export function lazyTaskMutationView(read: () => BoardTask[], view: TaskMutationView, onArrayWrite: () => void): BoardTask[] {
   let rows: BoardTask[] | undefined;
   const resolve = () => {
-    // Once an application reads the array it owns mutable drafts. Subsequent
-    // commands must consume that array, including nested edits and reordering.
-    views.delete(tasks);
     return rows ??= read();
   };
   const tasks = new Proxy<BoardTask[]>([], {
     get: (_target, key) => Reflect.get(resolve(), key),
-    set: (_target, key, value) => { onArrayWrite(); return Reflect.set(resolve(), key, value); },
+    set: (_target, key, value) => { onArrayWrite(); views.delete(tasks); return Reflect.set(resolve(), key, value); },
     has: (_target, key) => Reflect.has(resolve(), key),
     ownKeys: () => Reflect.ownKeys(resolve()),
     getOwnPropertyDescriptor: (_target, key) => Reflect.getOwnPropertyDescriptor(resolve(), key),
-    deleteProperty: (_target, key) => { onArrayWrite(); return Reflect.deleteProperty(resolve(), key); },
-    defineProperty: (_target, key, descriptor) => { onArrayWrite(); return Reflect.defineProperty(resolve(), key, descriptor); },
+    deleteProperty: (_target, key) => { onArrayWrite(); views.delete(tasks); return Reflect.deleteProperty(resolve(), key); },
+    defineProperty: (_target, key, descriptor) => { onArrayWrite(); views.delete(tasks); return Reflect.defineProperty(resolve(), key, descriptor); },
   });
   views.set(tasks, view);
   return tasks;
