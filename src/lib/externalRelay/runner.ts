@@ -1,4 +1,5 @@
 import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
+import { actionOutcomeAnswer } from "./actionOutcome";
 import { CloudFailure, cloudEnvironment, cloudTransport, runCloudRelay, type CloudTransport } from "./cloud";
 import { scrubOwnerReply } from "./ownerOutput";
 import { cloudOwnerDirectory, CloudOwnerDirectoryError } from "./ownerRun";
@@ -73,6 +74,7 @@ import {
 import {
   changeRunAsync,
   claimRelayRequestAsync,
+  reserveRelayActionVerificationAsync,
   dropRunAsync,
   reserveRunAsync,
   RelayStoreBusy,
@@ -322,6 +324,11 @@ export async function runClaimedRequest(
     if (finishing) return finishing;
     finishing = (async () => {
     leaveRelayHold(requestId);
+    const actionAnswer = request && actionOutcomeAnswer(request, loop?.results ?? ownerTools?.loop.results ?? []);
+    if (actionAnswer) {
+      stagedAttachments = [];
+      body = { lease_id: leaseId, outcome: "answered", answer: actionAnswer, duration_ms: Date.now() - deadline.receivedAt };
+    }
     try {
       if (pendingBeat) {
         if (releaseRequested) void pendingBeat.catch(() => console.error("External relay heartbeat refresh failed during demotion"));
@@ -849,6 +856,8 @@ export async function runClaimedRequest(
     }
     const lose = () => { if (ownerPastWindow()) return; leaseUnavailable = true; if (!ownerExecution) { run?.cancel(); callAbort.abort(); } };
     const lease = {
+      deadlineAt: serviceDeadline.at,
+      verificationBudget: (callId: string, until: number, consume: boolean | "send") => reserveRelayActionVerificationAsync(requestId, leaseId, callId, until, consume),
       signal: callAbort.signal, lose,
       ack: async () => {
         while (!acked && !leaseUnavailable) {
@@ -1213,6 +1222,8 @@ export async function runClaimedRequest(
       if (executionExpired && await Promise.race([tools, executionExpired]) === "expired") return await finishOwnerTimeout(started);
       await tools;
       if (leaseUnavailable && !ownerExecution) return null;
+      const actionAnswer = actionOutcomeAnswer(request, loop!.results);
+      if (actionAnswer) { completion = actionAnswer; break; }
     }
     if (pendingBeat) await pendingBeat;
     cancelStalledRun();
