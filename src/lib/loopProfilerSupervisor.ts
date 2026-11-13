@@ -19,6 +19,7 @@ type Ports = {
   reserve(at: number): Promise<boolean>;
   beginCapture(at: number, admittedAt: number): Promise<boolean>;
   cancel(admittedAt: number): Promise<void>;
+  complete(startedAt: number, admittedAt: number): Promise<void>;
   capture(source: CaptureSource, beginCapture: (at: number) => Promise<boolean>, captureStarted: () => void, admittedAt: number): Promise<void | string>;
   decision(reason: string): void;
 };
@@ -26,6 +27,7 @@ type Ports = {
 export function createLoopProfilerSupervisor(ports: Ports) {
   let stopped = false, stalled = false, pending: Promise<void> | undefined;
   let previous = "", nextAttempt = 0;
+  let settlement: { admittedAt: number; startedAt?: number } | undefined;
   const decision = (reason: string) => {
     if (previous === reason) return;
     previous = reason; ports.decision(reason);
@@ -37,8 +39,23 @@ export function createLoopProfilerSupervisor(ports: Ports) {
     if (!settings.automatic) return "automatic-disabled";
     return automatic ? "armed-automatic" : "waiting-for-stall";
   };
+  const settle = async () => {
+    if (!settlement) return true;
+    try {
+      if (settlement.startedAt === undefined) await ports.cancel(settlement.admittedAt);
+      else await ports.complete(settlement.startedAt, settlement.admittedAt);
+      settlement = undefined;
+      return true;
+    } catch {
+      if (!stopped) decision("admission-unavailable");
+      return false;
+    }
+  };
   const refresh = async () => {
     try {
+      // Only the settled capture's owner retries its token. The single-flight
+      // refresh keeps this away from a collection that is still running.
+      if (!await settle()) return;
       let settings = await ports.settings();
       if (stopped) return;
       const automatic = stalled; stalled = false;
@@ -56,6 +73,8 @@ export function createLoopProfilerSupervisor(ports: Ports) {
         return;
       }
       let started = false;
+      const owned: { admittedAt: number; startedAt?: number } = { admittedAt };
+      settlement = owned;
       try {
         if (stopped) return;
         nextAttempt = admittedAt + LOOP_PROFILE_COOLDOWN_MS;
@@ -69,7 +88,9 @@ export function createLoopProfilerSupervisor(ports: Ports) {
           if (began) nextAttempt = at + LOOP_PROFILE_COOLDOWN_MS;
           return began;
         };
-        const markCaptureStarted = () => { started = true; nextAttempt = ports.now() + LOOP_PROFILE_COOLDOWN_MS; };
+        const markCaptureStarted = () => {
+          started = true; owned.startedAt = ports.now(); nextAttempt = owned.startedAt + LOOP_PROFILE_COOLDOWN_MS;
+        };
         const refusal = await ports.capture(reason === "armed-manual" ? "manual" : "automatic", beginCapture, markCaptureStarted, admittedAt);
         if (!stopped) decision(refusal ?? "cooldown");
       }
@@ -77,8 +98,8 @@ export function createLoopProfilerSupervisor(ports: Ports) {
       finally {
         if (!started) {
           nextAttempt = 0;
-          try { await ports.cancel(admittedAt); } catch { if (!stopped) decision("admission-unavailable"); }
         }
+        await settle();
       }
       // A stall observed inside a capture cannot queue a second capture.
       stalled = false;

@@ -271,9 +271,14 @@ export function createLoopProfiler(ports: LoopProfilerPorts, expires: number) {
   let window: { from: number; pending: { emit: Emit; frames: boolean }[] } | undefined;
   let inactive: LoopGapProfile = { status: "skipped", reason: "no-active-window" };
   const enabled = async () => {
-    if (stopped || ports.now() >= expires) return false;
+    const expired = () => {
+      if (stopped) return true;
+      if (ports.now() < expires) return false;
+      inactive = { status: "not-armed", reason: "arm-expired" }; return true;
+    };
+    if (expired()) return false;
     const on = await ports.phase("settings", ports.enabled);
-    if (stopped || ports.now() >= expires) return false;
+    if (expired()) return false;
     if (!on) inactive = { status: "not-armed", reason: "kill-switch" };
     return on;
   };
@@ -308,13 +313,17 @@ export function createLoopProfiler(ports: LoopProfilerPorts, expires: number) {
         // Frames were cut to the whole budget on their own: make room for the histogram beside them.
         while (frames?.rows.length && Buffer.byteLength(JSON.stringify(record(true))) > LOOP_PROFILE_BYTES) frames.rows.pop();
         ports.completed?.(record(true));
-        for (const gap of current.pending) gap.emit(record(gap.frames));
+        for (const gap of current.pending.splice(0)) gap.emit(record(gap.frames));
       }
     } catch {
       stopped = true;
       inactive = { status: "unavailable", reason: "capture-failed" };
-      for (const gap of current.pending) gap.emit(inactive);
-    } finally { window = undefined; }
+    } finally {
+      // Admission can refuse after correlate has accepted a deferred record.
+      // Every exit finishes those records with the fixed refusal or failure.
+      window = undefined;
+      for (const gap of current.pending.splice(0)) gap.emit(inactive);
+    }
     return true;
   };
   return {

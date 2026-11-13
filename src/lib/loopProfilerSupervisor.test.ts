@@ -23,6 +23,7 @@ function harness() {
       next = now + LOOP_PROFILE_COOLDOWN_MS; return true;
     },
     cancel: async () => {},
+    complete: async () => {},
     capture: async (_source, beginCapture, captureStarted) => { calls++;
       if (!await beginCapture(at)) return "cooldown"; captureStarted(); await capture?.(); return undefined; },
     decision: reason => decisions.push(reason) });
