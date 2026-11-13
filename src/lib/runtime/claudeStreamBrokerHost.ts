@@ -1047,16 +1047,24 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         this.terminationTimer = null;
       }
       this.resolveReaped();
-      if (this.releasing) this.finishRelease();
-      else if (this.dead) this.notifyStateListeners();
-      else if (!this.releasing && !this.released) {
-        // Pipes may deliver the diagnostic after exit, before close.
-        const launchFailure = this.terminalExit ?? this.memoryCell?.launchFailure() ?? null;
-        if (launchFailure && this.endCause?.kind === "child-exit" && this.endCause.reason === CLAUDE_CHILD_EXITED) {
-          this.endCause = { ...this.endCause, reason: boundedEndReason(launchFailure) };
+      const finish = () => {
+        if (this.releasing) this.finishRelease();
+        else if (this.dead) this.notifyStateListeners();
+        else if (!this.releasing && !this.released) {
+          // Pipes may deliver the diagnostic after exit, before close.
+          const launchFailure = this.terminalExit ?? this.memoryCell?.launchFailure() ?? null;
+          if (launchFailure && this.endCause?.kind === "child-exit" && this.endCause.reason === CLAUDE_CHILD_EXITED) {
+            this.endCause = { ...this.endCause, reason: boundedEndReason(launchFailure) };
+          }
+          this.fail(new Error(this.endCause ? claudeHostEndText(this.endCause) : CLAUDE_CHILD_EXITED));
         }
-        this.fail(new Error(this.endCause ? claudeHostEndText(this.endCause) : CLAUDE_CHILD_EXITED));
-      }
+      };
+      // The pipe is closed, while a captured result can still be waiting for
+      // its durable append. Retain its owner through that bounded drain.
+      if (this.nativeWriter && this.nativeWorkCount) {
+        void this.joinNativePersistence().catch(error => this.noteNativeFailure("reducer", error))
+          .then(finish).catch(error => this.noteNativeFailure("reducer", error));
+      } else finish();
     });
   }
 
@@ -1382,9 +1390,13 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     return blocks;
   }
 
-  private nativeCurrent(): boolean {
-    return !!this.nativeWriter && !this.unavailable()
-      && this.processIdentity(this.nativeWriter.process.pid) === this.nativeWriter.process.startIdentity;
+  private nativeCurrent(capturedStream = false): boolean {
+    const writer = this.nativeWriter;
+    if (!writer || this.dead || this.released || !capturedStream && (this.releasing || this.reaped || this.exitNoted)) return false;
+    try { if (this.writerFence?.() === false) return false; } catch { return false; }
+    // Captured frames retain the original pipe/process binding through exit.
+    // Dispatch requires a live kernel identity; both retain the writer claim.
+    return capturedStream || this.processIdentity(writer.process.pid) === writer.process.startIdentity;
   }
 
   private noteNativeFailure(phase: "intent" | "no-write" | "reducer", error: unknown): void {
@@ -1533,7 +1545,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     const content = messageContent(message);
     const state = this.deliveries.find(row => row.native?.inputUuid === message.uuid);
     let echo: string | null = null;
-    if (this.nativeCurrent() && state?.native && sameNativeWriter(state.native, this.nativeWriter!) && content && message.isReplay === true
+    if (this.nativeCurrent(true) && state?.native && sameNativeWriter(state.native, this.nativeWriter!) && content && message.isReplay === true
       && message.session_id === this.identity.sessionId && message.parent_tool_use_id == null && message.agent_id == null
       && stringField(message.message, "role") === "user" && (state.entry.contentDigest === content.contentDigest
         || state.nativeReplayShape && state.nativeReplayShape.imageCount === content.content.images.length
@@ -1543,7 +1555,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         turnId: state.disposition === "turn-started" ? state.entry.id : null };
       const result = await this.deliveryLedger.recordNativeConsumed!(this.identity.sessionId, evidence);
       if (result !== "refused") await this.noteNativeConsumed([state.entry.id]);
-      if (result !== "refused" && this.nativeCurrent()) {
+      if (result !== "refused" && this.nativeCurrent(true)) {
         state.nativeConsumed = evidence;
         state.engineMessageId = evidence.canonicalUuid;
         // For an idle-origin input its owner is already established. Queued
@@ -1569,7 +1581,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private async acceptNativeResult(message: JsonObject): Promise<void> {
-    if (!this.nativeCurrent() || !this.activeTurnId) return;
+    if (!this.nativeCurrent(true) || !this.activeTurnId) return;
     if (message.parent_tool_use_id != null || message.agent_id != null) return;
     const prior = this.deliveries.map(state => state.nativeResult ?? state.nativeTerminal).find(proof => proof?.resultUuid === message.uuid);
     if (prior) {
@@ -1585,7 +1597,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       if (!this.deliveryLedger.recordNativeTerminal || await this.deliveryLedger.recordNativeTerminal(this.identity.sessionId, evidence) === "refused") {
         this.nativeUncertain = this.nativeProtocolUncertain = true; return;
       }
-      if (!this.nativeCurrent()) return;
+      if (!this.nativeCurrent(true)) return;
       for (const state of members) {
         state.nativeTerminal = evidence;
         const index = this.turnQueue.indexOf(state.entry.id);
@@ -1615,7 +1627,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (accepted === "refused") { this.nativeUncertain = this.nativeProtocolUncertain = true; return; }
     await this.noteNativeConsumed(members.map(state => state.entry.id));
     // A lost writer cannot project a boundary or settle receipts for its successor.
-    if (!this.nativeCurrent()) return;
+    if (!this.nativeCurrent(true)) return;
     for (const state of members) {
       state.nativeResult = proof;
       state.delivered = true;
@@ -1878,8 +1890,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     }
   }
 
-  private unavailable(): boolean {
-    if (this.dead || this.releasing || this.released) return true;
+  private unavailable(capturedStream = false): boolean {
+    if (this.dead || this.releasing || this.released || !capturedStream && this.nativeWriter && (this.reaped || this.exitNoted)) return true;
     try { return this.writerFence?.() === false; } catch { return true; }
   }
 
@@ -2084,7 +2096,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private acceptStdout(chunk: string): void {
-    if (this.dead || this.released) return;
+    if (this.dead || this.released || this.nativeWriter && this.reaped) return;
     this.stdoutBuffer += chunk;
     let newline = this.stdoutBuffer.indexOf("\n");
     while (newline >= 0) {
@@ -2333,7 +2345,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private startBackgroundTurn(messageId: string | null, userUuid: string | null): void {
-    if (this.manualCompaction || this.unavailable()) return;
+    if (this.manualCompaction || this.unavailable(true)) return;
     if (this.activeTurnId) {
       this.activeUserUuid ??= userUuid;
       return;
@@ -2467,6 +2479,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         this.resolveReaped();
       }
     }
+    await this.joinNativePersistence();
     this.finishRelease();
   }
 

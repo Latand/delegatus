@@ -5158,6 +5158,83 @@ describe("native evidence with admission contained", () => {
     } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
   });
 
+  test.each(["natural", "released", "releasing", "exited"] as const)("native results received at process close survive pending persistence (%s)", async (mode) => {
+    const ownedRelease = mode === "released" || mode === "releasing";
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-close-proof-"));
+    let openProof!: () => void;
+    const proofGate = new Promise<void>(resolve => { openProof = resolve; });
+    let entered = false, alive = true;
+    const { host, child, ledger, store } = await openNative(directory, (options, file, process) => {
+      options.shutdownGraceMs = 5_000;
+      options.processIdentity = () => alive ? "5150:fixture" : null;
+      const confirm = file.confirmNativeResult.bind(file);
+      file.confirmNativeResult = async (...args) => { entered = true; await proofGate; return confirm(...args); };
+      options.signalProcess = () => { result(process, users(process).map(frame => frame.uuid), 1);
+        if (mode !== "releasing") { alive = false; process.emit("close", 0, "SIGTERM"); } };
+    });
+    let closing: Promise<void> | undefined;
+    try {
+      const deliveries = ["decision", "follow-up"].map(id => host.send({ id, text: `fixture ${id}` }));
+      for (const delivery of deliveries) void delivery.catch(() => {});
+      await until(() => users(child).length === 2);
+      if (ownedRelease) closing = host.release();
+      else { result(child, users(child).map(frame => frame.uuid), 1); alive = false; child.emit(mode === "exited" ? "exit" : "close", 0, null); }
+      await until(() => entered);
+      await expect(host.interrupt("decision")).rejects.toThrow("unavailable");
+      expect(child.inputs.filter(frame => frame.type === "control_request")).toEqual([]);
+      if (mode === "natural" || mode === "released") echo(child, users(child)[0]!); // Bytes after close have no stream custody.
+      expect(ledger.load(sessionId).some(row => row.nativeResult)).toBe(false);
+      expect(store.load(sessionId).filter(event => event.kind === "turn-ended")).toEqual([]);
+      openProof();
+      expect(await Promise.all(deliveries)).toEqual([
+        { outcome: "turn-started", turnId: "decision" }, { outcome: "steered", turnId: "decision" },
+      ]);
+      if (mode === "releasing" || mode === "exited") { alive = false; child.emit("close", 0, ownedRelease ? "SIGTERM" : null); }
+      if (closing) await closing;
+      else await until(() => store.load(sessionId).some(event => event.kind === "session-status" && event.status === "dead"));
+      const restored = new FileClaudeDeliveryLedger(path.join(directory, "ledger")).load(sessionId);
+      expect(restored.every(row => row.nativeResult)).toBe(true);
+      expect(restored.map(row => row.engineMessageId ?? null)).toEqual([null, null]);
+      expect(store.load(sessionId).filter(event => event.kind === "turn-ended")).toMatchObject([
+        { turnId: "decision", status: "completed", claudeResultUuid: resultUuid(1) },
+      ]);
+      await host.release();
+      const successor = await openNative(directory);
+      try {
+        for (const id of ["decision", "follow-up"]) await successor.host.send({ id, text: `fixture ${id}` });
+        expect(users(successor.child)).toEqual([]);
+        expect(successor.store.load(sessionId).filter(event => event.kind === "turn-ended")).toHaveLength(1);
+      } finally { await successor.host.release(); }
+    } finally { openProof(); alive = false; child.emit("close", 0, null); await closing?.catch(() => {});
+      await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("native results received at process close require the original writer claim", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-close-claim-"));
+    let current = true, alive = true;
+    const { host, child, ledger, store } = await openNative(directory, options => {
+      options.processIdentity = () => alive ? "5150:fixture" : null;
+    });
+    host.setWriterFence(() => current);
+    try {
+      const pending = host.send({ id: "original", text: "fixture original" }).catch(error => error);
+      await until(() => users(child).length === 1);
+      current = false;
+      result(child, [users(child)[0]!.uuid], 1);
+      alive = false; child.emit("close", 0, null);
+      expect(await pending).toBeInstanceOf(Error);
+      await until(() => store.load(sessionId).some(event => event.kind === "session-status" && event.status === "dead"));
+      expect(ledger.load(sessionId)[0]).toMatchObject({ delivered: false });
+      expect(ledger.load(sessionId)[0]?.nativeResult).toBeUndefined();
+      await host.release();
+      const successor = await openNative(directory);
+      try {
+        await expect(successor.host.send({ id: "original", text: "fixture original" })).rejects.toThrow("uncertain");
+        expect(users(successor.child)).toEqual([]);
+      } finally { await successor.host.release(); }
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
   test("one result consumes both written inputs without individual echoes", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-batch-"));
     const { host, child, ledger, store } = await openNative(directory);

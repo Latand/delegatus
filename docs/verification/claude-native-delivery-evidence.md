@@ -204,3 +204,19 @@ Its CLI integration helpers still see private empty credential directories,
 while the native queue fixture supplies its own loopback API and synthetic
 authentication. The final handover verifies that the native evidence files
 were actually produced, alongside the hook exit.
+
+## Close and pending proof
+
+Native stream closure retains the foreground owner while already captured
+frames drain through bounded persistence. Receipt proof keeps the original pipe
+and process binding after exit; new dispatch and controls require a live process.
+Writer-claim fencing applies to both. Bytes received after the pipe closes
+supply no evidence. Release joins this drain before final cleanup.
+
+Two initial close/persistence regressions exited 1: 0 pass, 2 fail, 4 assertions
+and 208 filtered tests. They failed before the proof writer was reached. The
+first repaired control run exited 0: 4 pass, 0 fail, 38 assertions and 208
+filtered tests. The full file also covers process exit while the pipe remains
+live, post-close replay rejection, lost writer ownership and successor replay
+with zero additional writes. The final source campaign and hook renew these
+checks after this lifecycle change.
