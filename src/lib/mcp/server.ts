@@ -3635,7 +3635,16 @@ export function createMcpToolService(
         const retryViewerClaim = VIEWER_CLAIMED_TOOLS.has(typedTool) && claim.kind === "replay" && !claim.result.ok
           && (claim.result.code === "outcome_unknown" && claim.result.details?.outcome === "unknown"
             || claim.result.code === "send_uncertain");
-        if (claim.kind === "replay" && !retryPrototypePublication && !retryDeployment && !retryViewerClaim) {
+        // A recorded bridge report owns its row deduplication and bot send key.
+        // Re-enter its binding to reconcile pending Telegram bookkeeping; a
+        // refusal before the row was stored keeps its existing receipt behaviour.
+        const bridgeTelegram = typedTool === "bridge_report" && claim.kind === "replay" && claim.result.ok
+          && isRecord(claim.result.destinations) && isRecord(claim.result.destinations.telegram)
+          ? claim.result.destinations.telegram : null;
+        const retryBridgeReport = bridgeTelegram && (bridgeTelegram.state === "pending"
+          || bridgeTelegram.state === "failed" && bridgeTelegram.retryable === true
+          || isRecord(bridgeTelegram.bookkeeping));
+        if (claim.kind === "replay" && !retryPrototypePublication && !retryDeployment && !retryViewerClaim && !retryBridgeReport) {
           const replayStartedAt = performance.now();
           const replayed = { ...claim.result, replayed: true };
           phaseDurations.replay = performance.now() - replayStartedAt;

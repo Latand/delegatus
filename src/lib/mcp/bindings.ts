@@ -142,6 +142,7 @@ import { bridgeDirectiveBody, bridgeDirectiveId, type BridgeTrailer } from "@/li
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { BRIDGE_REPORT_COMPLETE_MAX_BYTES, isBridgeReportClass, isBridgeReportOutcomeKind, type BridgeReportCompleteV1, type BridgeReportOutcome, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
 import { bridgeReportComplete, findBridgeReport, recordBridgeReportTelegram, scopedReportId } from "@/lib/bridge/store";
+import { scrubTelegramDiagnostic } from "@/lib/telegram/bot/diagnostics";
 import { EMPTY_DENY_LIST, type PublicDenyList } from "@/lib/bridge/publicSafe";
 import { ISSUE_REPORT_RESPONSE_RULE, issueReportApprovalForm, issueReportApprovalReplies, issueReportDecisionApproves, issueReportFormLanguage } from "@/lib/issueReports/approvalForm";
 import { delegatusIssueRepository, issueReportFinder, issueReportPublisher, type IssueReportFinder, type IssueReportPublisher } from "@/lib/issueReports/publish";
@@ -4121,8 +4122,8 @@ async function bridgeReport(
     ? seats.find((seat) => seat.project === project)
     : undefined;
 
-  /* A replay stores nothing. Its one job is a Telegram copy whose send failed
-     retryably: the row's stored HTML is re-sent byte for byte, and this call's
+  /* A replay stores nothing. Its one job is a pending or retryably failed
+     Telegram copy: the row's stored HTML is re-sent byte for byte, and this call's
      own arguments are ignored (§5.5). Only the manager's own replay re-sends:
      the post goes out under the caller's capability and attribution. A row
      filed under the caller's old project key before it was folded is still
@@ -4134,14 +4135,15 @@ async function bridgeReport(
   const reportId = scopedReportId(project, key);
   const existing = findBridgeReport(reportId)
     ?? (callerProject && callerProject !== project ? findBridgeReport(scopedReportId(callerProject, key)) : null);
-  if (existing) {
+  const recordedReport = async (existing: NonNullable<ReturnType<typeof findBridgeReport>>): Promise<McpToolPayload> => {
     if (outcomeKind === "autonomy" && existing.outcome?.kind !== "autonomy") throw new Error("autonomy report key is occupied by another report");
     if (autonomyEpisode && project) markAutonomyReported(project, autonomyEpisode.startedAt, existing.at);
-    const telegram = existing.telegram && existing.telegram.state === "failed" && existing.origin?.kind === "manager"
-      && origin.kind === "manager" && isRetryableReportSend(existing.telegram.code)
+    const telegram = existing.telegram && (existing.telegram.state === "pending"
+      || existing.telegram.state === "failed" && isRetryableReportSend(existing.telegram.code))
+      && existing.origin?.kind === "manager" && origin.kind === "manager"
       && project !== null && effectiveReportTelegram(project)?.chat === existing.telegram.chat
       && effectiveReportTelegram(project)?.topicId === existing.telegram.topicId
-      ? await postReportTelegram(existing.id, existing.telegram.chat, existing.telegram.html, existing.telegram.topicId, `bridge-report:${existing.id}:r${existing.telegram.attempts}`, dependencies, control)
+      ? await postReportTelegram(existing.id, existing.telegram, dependencies, control)
       : existing.telegram ?? null;
     /* `alreadyRecorded`, because the tool service's envelope owns `replayed`
        (a replay of the same clientRequestId). */
@@ -4153,7 +4155,8 @@ async function bridgeReport(
       reportId: existing.id,
       destinations: reportDestinations(existing.seq, telegram),
     };
-  }
+  };
+  if (existing) return recordedReport(existing);
 
   const locale = dependencies.operatorLocale ? dependencies.operatorLocale() : operatorLocale();
   const warnings: string[] = [];
@@ -4243,12 +4246,11 @@ async function bridgeReport(
      to have delivered a second report. */
   if (!appended) {
     const winner = findBridgeReport(reportId);
-    if (autonomyEpisode && project && winner) markAutonomyReported(project, autonomyEpisode.startedAt, winner.at);
-    return { recorded: false, alreadyRecorded: true, ...(outcomeKind === "autonomy" && winner ? { chatText: winner.body, nextAction: "Repeat chatText exactly in the seat conversation." } : {}) };
+    return winner ? recordedReport(winner) : { recorded: false, alreadyRecorded: true };
   }
   if (autonomyEpisode && project) markAutonomyReported(project, autonomyEpisode.startedAt, appended.at);
   const telegram = appended.telegram
-    ? await postReportTelegram(appended.id, appended.telegram.chat, appended.telegram.html, appended.telegram.topicId, `bridge-report:${appended.id}`, dependencies, control)
+    ? await postReportTelegram(appended.id, appended.telegram, dependencies, control)
     : null;
   return {
     recorded: true,
@@ -4275,7 +4277,9 @@ function reportSectionsArg(value: unknown): Record<SeatSectionId, string[]> {
   return sections;
 }
 
-function reportDestinations(seq: number, telegram: BridgeReportTelegram | null): Record<string, unknown> {
+type ReportTelegramDelivery = BridgeReportTelegram & { bookkeeping?: { state: "pending" } };
+
+function reportDestinations(seq: number, telegram: ReportTelegramDelivery | null): Record<string, unknown> {
   return {
     bridge: { seq },
     ...(telegram
@@ -4283,6 +4287,7 @@ function reportDestinations(seq: number, telegram: BridgeReportTelegram | null):
         telegram: {
           chat: telegram.chat,
           state: telegram.state,
+          ...(telegram.bookkeeping ? { bookkeeping: telegram.bookkeeping } : {}),
           ...(telegram.messageIds?.length ? { messageIds: telegram.messageIds } : {}),
           ...(telegram.code ? { code: telegram.code, retryable: isRetryableReportSend(telegram.code) } : {}),
           ...(telegram.message ? { message: telegram.message } : {}),
@@ -4309,13 +4314,14 @@ function isRetryableReportSend(code: string | null | undefined): boolean {
  */
 async function postReportTelegram(
   reportId: string,
-  chat: string,
-  html: string,
-  topicId: number | undefined,
-  clientRequestId: string,
+  copy: BridgeReportTelegram,
   dependencies: ViewerMcpDomainDependencies,
   control: ViewerControlDependencies | null,
-): Promise<BridgeReportTelegram | null> {
+): Promise<ReportTelegramDelivery> {
+  const { chat, html, topicId } = copy;
+  // Pending bookkeeping must recover the same bot receipt, including when
+  // the send succeeded. Only a durably recorded attempt advances the key.
+  const clientRequestId = `bridge-report:${reportId}${copy.attempts ? `:r${copy.attempts}` : ""}`;
   const send = dependencies.sendReportTelegram ?? ((input: ReportTelegramSend) => productionSendReportTelegram(input, control));
   let outcome: ReportTelegramSendOutcome;
   try {
@@ -4325,9 +4331,21 @@ async function postReportTelegram(
   }
   const at = new Date().toISOString();
   const evidence = { ...(outcome.bot ? { bot: outcome.bot } : {}), ...(outcome.refusals ? { refusals: outcome.refusals } : {}) };
-  return recordBridgeReportTelegram(reportId, outcome.ok
-    ? { state: "sent", messageIds: outcome.messageIds, at, ...evidence }
-    : { state: outcome.code === "send_uncertain" ? "uncertain" : "failed", code: outcome.code, message: outcome.message ?? `Telegram report send failed (${outcome.code})`, at, ...evidence })?.telegram ?? null;
+  const delivery: BridgeReportTelegram = {
+    chat, html, ...(topicId ? { topicId } : {}), attempts: copy.attempts + 1, at, ...evidence,
+    ...(copy.messageIds ? { messageIds: copy.messageIds } : {}),
+    ...(outcome.ok
+      ? { state: "sent", messageIds: outcome.messageIds }
+      : { state: outcome.code === "send_uncertain" ? "uncertain" : "failed", code: outcome.code,
+        message: scrubTelegramDiagnostic(outcome.message ?? `Telegram report send failed (${outcome.code})`) }),
+  };
+  try {
+    return recordBridgeReportTelegram(reportId, delivery)?.telegram ?? delivery;
+  } catch {
+    // The bridge row is already committed and the send has its own receipt.
+    // Report the observed delivery and let a report-key retry finish bookkeeping.
+    return { ...delivery, bookkeeping: { state: "pending" } };
+  }
 }
 
 export interface ReportTelegramSend {
