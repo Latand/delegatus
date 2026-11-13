@@ -37,6 +37,7 @@ function fixture(lanes = [lane()]) {
       const route = args[1]!;
       if (route === "graphql") return JSON.stringify({ data: { repository: { issue: { timelineItems: { nodes: [{ closer }] } } } } });
       if (route.includes("/compare/")) return JSON.stringify({ base_commit: { sha: primary.merge_commit_sha }, merge_base_commit: { sha: "d".repeat(40) } });
+      if (route.includes("/commits/") && route.endsWith("/pulls?per_page=100")) return JSON.stringify([]);
       if (route.includes("/pulls/")) return JSON.stringify(primary);
       if (route.includes("/comments?")) return JSON.stringify(comments);
       if (/\/issues\/\d+$/.test(route)) return JSON.stringify(issue);
@@ -160,11 +161,13 @@ test.each(["stale", "old", "other-base"])("primary landing check handles %s with
   await f.sweep(); expect(f.writes).toEqual([]);
   if (kind === "other-base") expect(f.lanes[0]!.issueDelivery?.[0]).toMatchObject({ state: "pending", failures: 0 });
 });
-test("old in-memory landings and Git-only lanes make no forge calls", async () => {
+test("old deliveries make no issue writes, and Git-only lanes make no forge calls", async () => {
   const f = fixture(); f.ports.since = () => "2026-11-02T00:00:00Z"; await f.sweep();
+  expect(f.writes).toEqual([]);
   delete f.lanes[0]!.delivery; f.ports.since = () => AT;
+  const reads = f.reads.length;
   expect(creationIssueLinks(f.lanes[0]!, { repository: null, cache: forgeViewOf(f.data), lanes: [], pullRequestOf: f.ports.pullRequestOf })).toEqual([]);
-  await f.sweep(); expect(f.reads).toEqual([]); expect(f.writes).toEqual([]);
+  await f.sweep(); expect(f.reads).toHaveLength(reads); expect(f.writes).toEqual([]);
 });
 test.each(["comment", "close", "reopen"])("a timed-out %s is reconciled before retry", async kind => {
   const f = fixture(); if (kind === "reopen") { f.lanes[0]!.workLinks = [link(3900, true)]; f.issue.state = "closed"; f.closer(3909); }
@@ -510,14 +513,15 @@ test("a merged integration PR uses its later main carrier time and retains carri
   f.primary.merged_at = "2026-10-31T13:00:00.000Z";
   f.primary.base.ref = "integration";
   f.lanes[0]!.workLinks = [link(3900, true)];
+  f.issue.state = "closed";
   const original = f.ports.run;
   f.ports.run = async args => {
     const route = args[1]!;
     if (route.endsWith("/pulls/4000")) return JSON.stringify({ ...f.primary, number: 4000, merged_at: AT,
-      base: { ref: "main", repo: { default_branch: "main" } }, head: { ref: "batch/widgets" }, title: "Batch #3909" });
+      base: { ref: "main", repo: { default_branch: "main" } }, head: { ref: "merge-batch/widgets" }, title: "Merge batch: #3909" });
     if (route.includes("/commits/") && route.endsWith("/pulls?per_page=100")) return JSON.stringify([
       { ...f.primary, number: 4000, merged_at: AT, base: { ref: "main", repo: { default_branch: "main" } },
-        head: { ref: "batch/widgets" }, title: "Batch #3909" },
+        head: { ref: "merge-batch/widgets" }, title: "Merge batch: #3909" },
     ]);
     return original(args);
   };

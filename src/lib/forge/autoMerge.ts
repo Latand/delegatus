@@ -1899,10 +1899,8 @@ export function scheduleAutoMerge(overrides: Partial<AutoMergePorts> & Pick<Auto
       tokens: new ForgeAppTokenSource(repository => mintForgeAppToken(repository, process.env, "issue-delivery")),
     });
     const issueRead = overrides.run ?? githubRunner(os.tmpdir(), GH_TIMEOUT_MS, { asApp: issueApp });
-    const landingApp = forgeAppWriter(os.tmpdir(), GH_TIMEOUT_MS, {
-      tokens: new ForgeAppTokenSource(repository => mintForgeAppToken(repository, process.env, "issue-landing")),
-    });
     const landingTokens = new ForgeAppTokenSource(repository => mintForgeAppToken(repository, process.env, "issue-landing"));
+    const landingApp = forgeAppWriter(os.tmpdir(), GH_TIMEOUT_MS, { tokens: landingTokens });
     const landingRead = overrides.run ?? githubRunner(os.tmpdir(), GH_TIMEOUT_MS, { asApp: landingApp });
     const issueRun = sweepIssueDelivery({
       now: ports.now, since: () => issueDeliverySince(ports.now()),

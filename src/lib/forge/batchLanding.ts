@@ -10,7 +10,7 @@ import { realExec } from "@/lib/workflows/provision";
  * Closed-PR hints may name a batch tip with companion changes; that mode
  * verifies the reviewed diff itself, leaving the native exact-patch rule intact.
  * Git writes only objects; the checkout, index and branch refs stay untouched. */
-async function patchPresent(repoDir: string, head: string, landing: string, base: string, allowCompanions = false, fetchEnv: NodeJS.ProcessEnv = {}): Promise<boolean> {
+async function patchPresent(repoDir: string, head: string, landing: string, base: string, allowCompanions = false, fetchEnv: Partial<NodeJS.ProcessEnv> = {}): Promise<boolean> {
   if (![head, landing, base].every((sha) => /^[0-9a-f]{40}$/i.test(sha))) return false;
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "llv-batch-patch-"));
   const env = { GIT_NO_REPLACE_OBJECTS: "1", ...fetchEnv };
@@ -99,7 +99,7 @@ export type CarriedBranchLanding = { state: "waiting"; batch?: number; commit?: 
  * The separate reader carries contents-read permission, never issue writes. */
 export async function readCarriedBranchLanding(repository: string, number: number, base: string,
   reviewed: { head: string; repoDir: string; commit?: string; after?: string }, issueRead: GithubRunner, contentsRead: GithubRunner,
-  fetchEnv: NodeJS.ProcessEnv = {}): Promise<CarriedBranchLanding> {
+  fetchEnv: Partial<NodeJS.ProcessEnv> = {}): Promise<CarriedBranchLanding> {
   if (!/^[0-9a-f]{40}$/i.test(reviewed.head)) throw new Error("Reviewed batch head is unavailable");
   if (typeof base !== "string" || !base) throw new Error("Batch default branch is unavailable");
   const raw = await issueRead(["api", `repos/${repository}/issues/${number}/comments?per_page=100`, "--paginate", "--jq", ".[] | {body} | @json"]);

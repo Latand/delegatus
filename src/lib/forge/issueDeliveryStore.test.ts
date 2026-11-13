@@ -50,6 +50,7 @@ await sweepIssueDelivery({
       title: "Widget batch", head: { ref: "batch/widgets" }, base: { ref: "main", repo: { default_branch: "main" } } });
     if (scenario === "closed-batch-wait" && args[1].endsWith("/pulls/9")) return JSON.stringify({ state: "closed", merged_at: null, head: { sha: "a".repeat(40) }, base: { ref: "batch/widgets", repo: { default_branch: "main" } } });
     if (args[1].includes("/compare/")) return JSON.stringify({ base_commit: { sha: "c".repeat(40) }, merge_base_commit: { sha: (process.env.DELIVERY_ARRIVED ? "c" : "d").repeat(40) } });
+    if (args[1].includes("/commits/") && args[1].endsWith("/pulls?per_page=100")) return "[]";
     if (args[1].includes("/pulls/")) return JSON.stringify({ merged_at: at, merge_commit_sha: "c".repeat(40), title: "Widget controls", base: { ref: scenario === "batch-wait" ? "batch/widgets" : scenario === "other-base" ? "release" : "main", repo: { default_branch: "main" } } });
     if (args[1] === "graphql") return JSON.stringify({ data: { repository: { issue: { timelineItems: { nodes: [{ closer: { number: 9, repository: { nameWithOwner: repo } } }] } } } } });
     if (args[1].includes("/comments?")) return "[]";
