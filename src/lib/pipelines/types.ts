@@ -880,6 +880,7 @@ export type PipelineUnresolvedTermination = {
   survivors: Array<{ pid: number; startIdentity: string | null; bootEpoch?: string | null }>;
   error: string;
   recordedAt: string;
+  sourceRevision?: string;
 };
 
 export type PipelineStageRun = {
@@ -1324,6 +1325,9 @@ export type Pipeline = {
   /** Hosts the last close could not confirm terminated. Present only while one
       is outstanding; a close that confirms every kill clears it. */
   unconfirmedHosts?: PipelineUnconfirmedHost[];
+  /** Bounded physical-process proofs for outstanding hosts. A changed source
+      identity invalidates its cursor; completed hosts retain no proof state. */
+  hostTerminationProofs?: Record<string, import("./hostTerminationProof").HostTerminationProgress>;
   /** Receipt of the finished-host sweep completion triggers (#574). Absent
       until the pipeline first settles terminally with launched hosts to check. */
   terminalReap?: PipelineTerminalReap;

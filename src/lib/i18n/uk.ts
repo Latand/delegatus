@@ -4,6 +4,9 @@ import type { en } from "./en";
 /* Ukrainian mirror of en.ts. The `Record<keyof typeof en, …>` annotation fails
    the build if a key is missing or extra, keeping both locales in lockstep. */
 export const uk: Record<keyof typeof en, Message> = {
+  "claudeCloud.connectGithub": "Підключіть GitHub до цього акаунта Claude на claude.ai.",
+  "claudeCloud.createEnvironment": "Створіть хмарне середовище для цього акаунта Claude на claude.ai.",
+
   "pipelineCreation.accepted": "Прийнято — очікує створення",
   "pipelineCreation.linkPending": "Створено — джерельне посилання очікує приєднання",
   "pipelineCreation.attach": "Приєднати збережене посилання",
