@@ -43,11 +43,23 @@ export function laneEvidenceAuthority(pipelineId: string, now: () => number): Te
 function retainedTarget(row: TemporaryDataCandidate) {
   const journal = attemptTempJournalPath(row.directory);
   if (!fs.existsSync(journal)) return row.directory;
-  const intent = readEnvelope(journal) as { directory?: unknown; identity?: unknown; trash?: unknown };
+  const intent = readEnvelope(journal) as { directory?: unknown; identity?: unknown; trash?: unknown; uid?: unknown };
   if (intent.directory !== row.directory || intent.identity !== row.identity || typeof intent.trash !== "string"
     || path.dirname(intent.trash) !== path.dirname(row.directory)
     || !path.basename(intent.trash).startsWith(`.delegatus-trash-${path.basename(row.directory)}-`)) throw new Error("journal-binding-changed");
-  return intent.trash as string;
+  const original = fs.lstatSync(row.directory, { throwIfNoEntry: false });
+  if (original) {
+    // Claim admission reads copy ownership before reconciliation can cancel a
+    // pre-rename or post-restore intent. Read only the proven original, never
+    // a replacement or an original competing with a surviving trash path.
+    if (fs.lstatSync(intent.trash, { throwIfNoEntry: false }) || original.isSymbolicLink()
+      || !original.isDirectory() && !original.isFile() || `${original.dev}:${original.ino}` !== row.identity
+      || original.uid !== intent.uid || process.getuid && original.uid !== process.getuid()
+      || fs.realpathSync(path.dirname(row.directory)) !== path.dirname(row.directory)
+      || original.dev !== fs.statSync(path.dirname(row.directory)).dev) throw new Error("quarantine-identity-changed");
+    return row.directory;
+  }
+  return intent.trash;
 }
 
 /** Entry status alone is insufficient: termination survivors, pending exits,

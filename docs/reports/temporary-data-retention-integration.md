@@ -11,8 +11,10 @@ This integration supersedes #3943 and #3894. Both reviewed heads are preserved
 through merge commits: `d1e6883313a5d52306e0b649f3b6b068c198348f` and
 `33d553413b6e3e2faf85a9cc53526c982e2cf380`. Base:
 `ce7806df4acef79bbf76221943227e86c59863a9`; combined merge:
-`ded2c9588177eb76be7fece6906974508504b609`. The refreshed main stayed at that base.
-Bun 1.4.0 executed the checks below.
+`ded2c9588177eb76be7fece6906974508504b609`. Main stayed at that base during the
+initial integration. The initial observations and command table below are
+historical; the crash-recovery follow-up records the later implementation.
+Bun 1.4.0 executed these checks.
 
 ## Integration and contracts
 
@@ -57,7 +59,7 @@ its hook. Restricting native Git to the isolated check environment gives 6/6 on
 both trees. This pair does not cause those failures. No admission, owned-runner,
 registry or host-termination repair was added beyond the reviewed inputs.
 
-## Final observations
+## Initial integration observations
 
 The two required retention files pass 72/72 and 135/135. Every W4 file passes.
 All 51 files selected by the repository's touched-file rule, plus copy discovery,
@@ -67,14 +69,14 @@ zero introduced failures and respectively one and two pre-existing assertions.
 They concern nesting-policy fixture cleanup and capability-handover HTTP 403.
 The namespace-dependent tests and opt-in benchmark account for the 25 skips.
 
-The production build passed before reproduction. Subsequent implementation edits
-changed tests and the reviewed test helper; production inputs still match the
-built combined merge. W4's permission-refusal cases verify restored root/modes,
+The production build passed on the combined merge before reproduction. Later
+crash-recovery repairs change production inputs, so that build supplies no verdict
+for the current recovery implementation. W4's permission-refusal cases verify restored root/modes,
 working consumer links, cleared intent and successful later retirement. The
 preservation matrix verifies late records, payload bytes, inode identity and
 replay; its unchanged controls still remove eligible trees.
 
-## Command results
+## Initial integration command results
 
 Each row uses `bash "$GATE" --record "$TMPDIR/<run>.log" <command>`, with
 `GATE` supplied by the launch and an isolated child environment. Counts are
@@ -173,3 +175,103 @@ exited 0; its plain `git commit` exited 0. The corresponding merge of the review
 `git fetch --no-tags origin main` and `git diff --check` exited 0.
 Read-only inspection outputs remain in the private stage transcript. The final plain commit runs the launch's repository hooks.
 No branch was pushed from this stage.
+
+
+## Crash-recovery repair
+
+The follow-up preserves both superseded changes, #3943 and #3894, and repairs two
+remaining replay paths beyond the merge. In `src/lib/tempSweep.ts`, replay forwards
+the real mutation-start callback. A removal refusal after reversible permission
+repair restores the same original inode and cancels the intent before propagating
+the reason. A failure after native removal starts retains its partial tree and
+journal. Replacement trash and an acquired original remain protected.
+
+In `src/lib/runtime/temporaryDataProduction.ts`, claim admission can read the
+verified original when a durable intent exists before rename or after restoration.
+The original must match the recorded identity and owner, have a physical parent
+on the same filesystem, and have no competing trash path. The existing reconciler
+then cancels the intent under the claim and refreshes authority and protection.
+Changed ownership, bindings, identities and preservation records still hold data.
+No journal format, retention lifetime or admission policy changed; no performance
+gain is claimed.
+
+Both review reproductions are committed as regressions. The permission case uses
+the real quarantine writer in a child process, checks inode, payload, mode, absent
+trash and cleared intent on each refused pass, then proves a later allowed removal.
+Production-copy cases use the real production entry point after crashes before
+rename and after restore, with an uninterrupted control and ten protection cases.
+Four additional replay controls cover pre-start refusal, actual partial deletion,
+replacement trash and an acquired original.
+
+Final successful file observations total **870 pass / 0 fail / 25 opt-in skips**
+across 23 files, each run separately in private state through the launch gate.
+Preservation is 72/72, self-update retention 135/135, permission retention 25 passes
+with five skips, production-copy recovery 13/13, and tempSweep 88/88. Types exit 0.
+ESLint covers 43 executable files: exit 0, zero errors and one existing unused
+variable warning in `src/lib/agent/registry.ts`. No current build result is claimed.
+
+The pre-fix production blobs are from `aaa920abe3`, with the same regression files
+and isolation. They reproduce one permission-replay failure (24/1/5) and both copy
+crash-window failures (11/2/0); their uninterrupted controls pass. An initial new
+permission assertion over-specified callback count; per-pass refusal assertions
+replace that count while all restoration assertions remain. The first types run
+found a missing required NODE_ENV in the new fixture's ProcessEnv; inheriting the
+fixture environment fixes it, and copy recovery and types were renewed.
+
+One production W4 run returned 64/1/1 because a mount-namespace fence deferred one
+root. Equivalent pre-fix and fresh repair confirmations both pass 65/0/1. The failed
+observation remains recorded; no test or fence was changed for it. The 25 skips
+are 24 namespace-dependent cases and one opt-in benchmark.
+
+The keep-marker and transport attribution above remains supported by the prior
+independent review: batch guard 12/12 after the pair's five writer migrations;
+transport 3/3 failures on both base and integration under the Git shim, 6/6 on each
+under native Git. This repair adds no keep-marker writer and changes none of the
+transport or gate sources. The earlier three registry baseline failures remain
+baseline notes. Current main has advanced; the observed overlap is SQLite-memory
+telemetry in `attemptTempRetention.ts`, which this repair leaves untouched.
+
+### Follow-up command results
+
+Every heavy command below uses the same recorded wrapper and isolation described
+above. `pre-fix production` replaces only the two repaired production blobs with
+those from the pre-fix commit. Counts include diagnostic and expected red runs;
+the final 870 count selects the last successful observation for each file.
+Native receipts and the complete command journal are retained in stage evidence
+under `replay-repair/`. Whitespace, source-manifest and closed-loopback checks exit
+0; no push, deployment or live temporary-root sweep was performed.
+
+| Run | Tree | Command | Exit | Pass/fail/skip |
+| --- | --- | --- | ---: | --- |
+| permission | repair | `bun run test ./src/lib/runtime/attemptTempRetention.permissions.test.ts` | 1 | 24/1/5 |
+| copy | repair | `bun run test ./src/lib/runtime/temporaryDataProduction.recovery.test.ts` | 0 | 13/0/0 |
+| temp-sweep | repair | `bun run test ./src/lib/tempSweep.test.ts` | 0 | 88/0/0 |
+| permission-final | repair | `bun run test ./src/lib/runtime/attemptTempRetention.permissions.test.ts` | 0 | 25/0/5 |
+| preservation | repair | `bun run test ./src/lib/runtime/temporaryDataRetention.preservation.test.ts` | 0 | 72/0/0 |
+| base-permission | pre-fix production | `bun run test ./src/lib/runtime/attemptTempRetention.permissions.test.ts` | 1 | 24/1/5 |
+| base-copy | pre-fix production | `bun run test ./src/lib/runtime/temporaryDataProduction.recovery.test.ts` | 1 | 11/2/0 |
+| self-retention | repair | `bun run test ./src/lib/selfUpdate/retention.test.ts` | 0 | 135/0/0 |
+| mutation | repair | `bun run test ./src/lib/runtime/attemptMutationFence.test.ts` | 0 | 17/0/0 |
+| removal | repair | `bun run test ./src/lib/runtime/attemptTempRetention.removalFences.test.ts` | 0 | 25/0/0 |
+| retention | repair | `bun run test ./src/lib/runtime/attemptTempRetention.test.ts` | 0 | 143/0/0 |
+| filesystem-permissions | repair | `bun run test ./src/lib/runtime/attemptTempFilesystem.permissions.test.ts` | 0 | 27/0/5 |
+| filesystem | repair | `bun run test ./src/lib/runtime/attemptTempFilesystem.test.ts` | 0 | 65/0/14 |
+| production | repair | `bun run test ./src/lib/runtime/attemptTempProduction.test.ts` | 1 | 64/1/1 |
+| copy-discovery | repair | `bun run test ./src/lib/runtime/attemptCopyDiscovery.test.ts` | 0 | 3/0/0 |
+| base-production | pre-fix production | `bun run test ./src/lib/runtime/attemptTempProduction.test.ts` | 0 | 65/0/1 |
+| production-confirm | repair | `bun run test ./src/lib/runtime/attemptTempProduction.test.ts` | 0 | 65/0/1 |
+| temporary-retention | repair | `bun run test ./src/lib/runtime/temporaryDataRetention.test.ts` | 0 | 69/0/0 |
+| temporary-production | repair | `bun run test ./src/lib/runtime/temporaryDataProduction.test.ts` | 0 | 29/0/0 |
+| liveness | repair | `bun run test ./src/lib/runtime/attemptTempRetention.liveness.test.ts` | 0 | 3/0/0 |
+| binding | repair | `bun run test ./src/lib/runtime/attemptEvidenceBinding.test.ts` | 0 | 8/0/0 |
+| gated-trash | repair | `bun run test ./src/lib/selfUpdate/gatedTrash.test.ts` | 0 | 17/0/0 |
+| release-observer | repair | `bun run test ./src/lib/selfUpdate/releaseObserver.test.ts` | 0 | 8/0/0 |
+| docker-cache | repair | `bun run test ./src/lib/dockerCacheRetention.test.ts` | 0 | 10/0/0 |
+| test-safety | repair | `bun run test ./src/lib/retentionTestSafety.test.ts` | 0 | 6/0/0 |
+| worktree-worker | repair | `bun run test ./src/lib/pipelines/worktreeSweepWorker.test.ts` | 0 | 38/0/0 |
+| registry-temporary | repair | `bun run test ./src/lib/agent/registry.temporaryData.test.ts` | 0 | 3/0/0 |
+| temp-cap | repair | `bun run test ./src/lib/tempSweep.cap.test.ts` | 0 | 1/0/0 |
+| types | repair | `bunx --no-install tsc --noEmit` | 2 | — |
+| copy-final | repair | `bun run test ./src/lib/runtime/temporaryDataProduction.recovery.test.ts` | 0 | 13/0/0 |
+| types-final | repair | `bunx --no-install tsc --noEmit` | 0 | — |
+| eslint | repair | `bun node_modules/eslint/bin/eslint.js scripts/temporary-data-dry-run.ts src/lib/agent/registry.temporaryData.test.ts src/lib/agent/registry.ts src/lib/agent/sqliteRegistryStore.ts src/lib/dockerCacheRetention.test.ts src/lib/dockerCacheRetention.ts src/lib/pipelines/worktreeSweep.fixture.ts src/lib/pipelines/worktreeSweepWorker.test.ts src/lib/pipelines/worktreeSweepWorker.ts src/lib/retention.worker.ts src/lib/retentionTestSafety.test.ts src/lib/retentionTestSafety.ts src/lib/runtime/attemptEvidenceBinding.test.ts src/lib/runtime/attemptEvidenceBinding.ts src/lib/runtime/attemptEvidenceCopies.ts src/lib/runtime/attemptMutationFence.test.ts src/lib/runtime/attemptMutationFence.ts src/lib/runtime/attemptTempDiagnostics.ts src/lib/runtime/attemptTempFilesystem.permissions.test.ts src/lib/runtime/attemptTempFilesystem.ts src/lib/runtime/attemptTempProduction.ts src/lib/runtime/attemptTempRetention.fixture.ts src/lib/runtime/attemptTempRetention.liveness.test.ts src/lib/runtime/attemptTempRetention.permissions.test.ts src/lib/runtime/attemptTempRetention.removalFences.test.ts src/lib/runtime/attemptTempRetention.test.ts src/lib/runtime/attemptTempRetention.ts src/lib/runtime/keepMarker.testSupport.ts src/lib/runtime/temporaryDataProduction.recovery.test.ts src/lib/runtime/temporaryDataProduction.test.ts src/lib/runtime/temporaryDataProduction.ts src/lib/runtime/temporaryDataRetention.fixture.ts src/lib/runtime/temporaryDataRetention.preservation.test.ts src/lib/runtime/temporaryDataRetention.test.ts src/lib/runtime/temporaryDataRetention.ts src/lib/runtime/temporaryDataStore.ts src/lib/selfUpdate/gatedTrash.test.ts src/lib/selfUpdate/releaseObserver.test.ts src/lib/selfUpdate/releaseObserver.worker.ts src/lib/selfUpdate/retention.test.ts src/lib/tempSweep.test.ts src/lib/tempSweep.ts src/lib/worktreeSweep.worker.ts` | 0 | — |

@@ -5,6 +5,16 @@ import { attemptTempJournalPath } from "@/lib/tempSweep";
 
 const [filename, mode, time] = process.argv.slice(2);
 const store = new TemporaryDataStore(filename!);
+if (mode === "production-recover") {
+  Date.now = () => Number(time);
+  const { runTemporaryDataSweep } = await import("./temporaryDataProduction");
+  try {
+    const report = await runTemporaryDataSweep({ scan: () => ({ ownNamespace: null, processes: [] }),
+      containerReferences: async () => true }, { ...process.env, LLV_TEMP_SWEEP: "on" });
+    process.stdout.write(JSON.stringify(report));
+  } finally { store.close(); }
+  process.exit(0);
+}
 if (mode === "crash-before-rename" || mode === "crash-after-restore") {
   const directory = store.due(Number(time))[0]!.directory, rename = fs.renameSync;
   fs.renameSync = (from, to) => {
