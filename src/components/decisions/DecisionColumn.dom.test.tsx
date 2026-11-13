@@ -29,6 +29,8 @@ Object.assign(globalThis, {
 });
 
 const DecisionColumn = await import("./DecisionColumn");
+const { setLocale } = await import("@/lib/i18n");
+const { DecisionRecord } = await import("./DecisionCard");
 const { DecisionList, DecisionStripLine } = DecisionColumn;
 const { DecisionPointer, decisionPointerOf, setDecisionRecordPollForTests } = await import("./DecisionPointer");
 const { openOperatorDecisions, resetDecisionSurfacesForTests, useDecisionSheet, useDecisionSurface } = await import("./decisionSurface");
@@ -57,6 +59,7 @@ const realFetch = globalThis.fetch;
 afterEach(async () => {
   if (root) await act(async () => root?.unmount());
   root = null;
+  setLocale("en");
   globalThis.fetch = realFetch;
   resetDecisionSurfacesForTests();
   resetDecisionDraftsForTests();
@@ -73,7 +76,7 @@ async function render(node: React.ReactNode) {
 }
 const click = async (element: Element | null) => { expect(element).not.toBeNull(); await act(async () => (element as HTMLElement).click()); };
 
-test("the decision count and badges exclude answered delivery notices, including a refreshed notice", async () => {
+test("the Decisions tab counts the same waiting forms and undelivered cards as the panel", async () => {
   const notice: PrototypeReviewNotice = { id: `prototype:${SEAT}`, project: "project-a", taskId: null, reviewId: SEAT,
     title: "Deploy tonight?", createdAt: "2026-10-11T14:42:00.000Z", target: { kind: "seat-decision", project: "project-a", reviewId: SEAT } };
   function Counts() {
@@ -85,9 +88,9 @@ test("the decision count and badges exclude answered delivery notices, including
   const host = await render(<Counts />);
   expect(host.querySelector("output")!.textContent).toBe("1");
   await act(async () => publishPrototypeNotices([{ ...notice, undelivered: true }]));
-  expect(host.querySelector("output")!.textContent).toBe("0");
-  expect(host.querySelector("[data-decision-strip]")).toBeNull();
-  expect(host.querySelector("[data-decision-tab-count]")).toBeNull();
+  expect(host.querySelector("output")!.textContent).toBe("1");
+  expect(host.querySelector("[data-decision-strip]")).not.toBeNull();
+  expect(host.querySelector("[data-decision-tab-count]")!.textContent).toBe("1");
   await act(async () => publishPrototypeNotices([notice]));
   expect(host.querySelector("output")!.textContent).toBe("1");
   expect(host.querySelector("[data-decision-tab-count]")!.textContent).toBe("1");
@@ -776,4 +779,43 @@ test("the pointer's Retry draws the message on its way at once, sends once, and 
   expect(server.posts).toHaveLength(1);
   expect(host.querySelector("[data-decision-delivery]")?.getAttribute("data-decision-delivery")).toBe("failed");
   expect(host.querySelector("[data-decision-retry-error]")?.textContent).toContain("prototype decision is busy");
+});
+
+
+for (const lang of ["en", "uk"] as const) for (const decided of [false, true]) {
+  test(`withdraws a ${decided ? "saved answer" : "taskless form"} with local errors and retry (${lang})`, async () => {
+    setLocale(lang);
+    const decision = decided ? failedRecord() : seatDecision();
+    let mode: "offline" | "server" | "conflict" | "forbidden" | "ok" = "offline";
+    const posts: unknown[] = [];
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      if (String(url) !== "/api/attention/dismissals") return new Response(JSON.stringify({ project: "project-a", decisions: [decision] }));
+      posts.push(JSON.parse(String(init?.body)));
+      if (mode === "offline") throw new Error("private server detail");
+      return new Response(JSON.stringify({ ok: mode === "ok", error: "private server detail" }), { status: mode === "server" ? 503 : mode === "conflict" ? 409 : mode === "forbidden" ? 403 : 200 });
+    }) as typeof fetch;
+    const host = await render(<DecisionList project="project-a" initial={[decision]} />);
+    for (const failure of ["offline", "server", "conflict", "forbidden"] as const) {
+      mode = failure;
+      await click(host.querySelector("[data-decision-withdraw]"));
+      expect(host.querySelector("[data-decision-withdraw-error]")?.textContent).toContain(lang === "uk" ? "Спробуйте ще раз" : "Try again");
+      expect(host.textContent).not.toContain("private server detail");
+      expect(host.querySelector("[data-decision-list]")!.getAttribute("data-decision-list")).toBe("1");
+    }
+    mode = "ok";
+    await click(host.querySelector("[data-decision-withdraw]"));
+    expect(posts).toHaveLength(5);
+    expect(posts[4]).toEqual({ project: "project-a", target: { kind: "prototype", taskId: null, reviewId: SEAT } });
+    expect(host.querySelector("[data-decision-list]")!.getAttribute("data-decision-list")).toBe("0");
+  });
+}
+
+for (const lang of ["en", "uk"] as const) for (const state of ["pending", "uncertain", "failed", "no-orchestrator"] as const) test(`retired ${state} delivery has a terminal badge and reason (${lang})`, async () => {
+  setLocale(lang);
+  const record = failedRecord();
+  record.decision!.delivery = { state, retryable: false, phase: "retired", settlement: { at: "2026-10-11T15:16:00.000Z", reason: "delivery-expired" } };
+  const host = await render(<DecisionRecord decision={record} onRetry={() => { throw new Error("retired delivery cannot retry"); }} />);
+  expect(host.querySelector("[data-decision-delivery]")?.textContent).toBe(lang === "uk" ? "припинено" : "retired");
+  expect(host.querySelector("[data-decision-retired]")?.textContent).toContain(lang === "uk" ? "30 хвилин" : "30 minutes");
+  expect(host.querySelector("[data-decision-retry]")).toBeNull();
 });

@@ -5,14 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fromJSONSchema, type ZodType } from "zod";
-import currentManifest from "./protocol/0.167.0/manifest.json";
-import latestPriorManifest from "./protocol/0.166.0/manifest.json";
-import newestPriorManifest from "./protocol/0.165.0/manifest.json";
-import lastManifest from "./protocol/0.164.0/manifest.json";
-import recentManifest from "./protocol/0.163.0/manifest.json";
-import priorManifest from "./protocol/0.162.1/manifest.json";
-import previousManifest from "./protocol/0.159.0/manifest.json";
-import oldestManifest from "./protocol/0.154.0/manifest.json";
+import { CODEX_PROTOCOL_MANIFESTS, SUPPORTED_CODEX_VERSIONS } from "./codexVersions";
 import { CodexAppServerProtocolError } from "./codexAppServerProtocol";
 import { codexSchemaBreaks } from "./codexSchemaCompatibility";
 import { signalDetachedProcessGroup } from "@/lib/processGroup";
@@ -20,10 +13,7 @@ import { hardenedRedact } from "@/lib/view/compactText";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 type Schema = { [key: string]: unknown; properties?: Record<string, Schema | boolean | undefined>; oneOf?: Schema[]; anyOf?: Schema[]; $ref?: string; type?: string | string[]; definitions?: Record<string, Schema> };
-const pins = [
-  currentManifest, latestPriorManifest, newestPriorManifest, lastManifest, recentManifest,
-  priorManifest, previousManifest, oldestManifest,
-].map(manifest => {
+const pins = CODEX_PROTOCOL_MANIFESTS.map(manifest => {
   // Keep the generated object graphs out of webpack's server modules. Each
   // immutable artifact is read once, when a check first needs that schema.
   const loaded: Partial<Record<"stable" | "experimental", Schema>> = {};
@@ -104,7 +94,7 @@ function strictObjects(value: unknown): unknown {
 }
 
 const REMEDY = "Pin the CLI to a supported version, or regenerate with scripts/generate-codex-protocol.ts and review compatibility";
-const supported = () => pins.map(row => row.manifest.version).join(", ");
+const supported = () => SUPPORTED_CODEX_VERSIONS.join(", ");
 
 function protocolAdmissionError(version: string, cause: string): CodexAppServerProtocolError {
   return new CodexAppServerProtocolError(`CLI ${version}; Supported: ${supported()}; cause: ${hardenedRedact(cause).replace(/\s+/g, " ").trim().slice(0, 180)}. ${REMEDY}`);
@@ -126,7 +116,7 @@ export class CodexPinnedProtocol {
   readonly unpinned: CodexUnpinnedCli | null;
   private readonly pin: typeof pins[number];
 
-  constructor(version = currentManifest.version, unpinned: CodexUnpinnedCli | null = null) {
+  constructor(version = SUPPORTED_CODEX_VERSIONS[0]!, unpinned: CodexUnpinnedCli | null = null) {
     const pin = pins.find(row => row.manifest.version === version);
     if (!pin) throw new CodexAppServerProtocolError(`CLI ${version} has no pinned schema. ${REMEDY}. Supported: ${supported()}`);
     this.pin = pin;

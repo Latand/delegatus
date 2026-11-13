@@ -42,7 +42,19 @@ export function SeatTickChip({ project, projectName, className = "" }: { project
   const [openFor, setOpenFor] = useState<string | null>(null);
   const open = openFor === project;
   const anchorRef = useRef<HTMLDivElement>(null);
-  const read = useSeatTickSettings(project, true);
+  const summary = useSeatTickSettings(project, true, "summary");
+  const panel = useSeatTickSettings(project, open);
+  // A refused move on the closed control opens this panel with its reason.
+  // The next panel edit owns its own receipt and clears that earlier refusal.
+  const panelRead: SeatTickSettingsRead = {
+    ...panel,
+    error: panel.error ?? summary.error,
+    errorScope: panel.error ? panel.errorScope : summary.errorScope,
+    clearError() { summary.clearError(); panel.clearError(); },
+    save(change) { summary.clearError(); return panel.save(change); },
+    saveAfter(build) { summary.clearError(); return panel.saveAfter(build); },
+  };
+  const read = open && panel.answer ? panelRead : summary;
   const now = Date.now();
   const reading = seatTickReading(read, now, t);
 
@@ -80,7 +92,7 @@ export function SeatTickChip({ project, projectName, className = "" }: { project
           anchorRef={anchorRef}
           project={project}
           projectName={projectName}
-          read={read}
+          read={panelRead}
           onClose={() => setOpenFor(null)}
         />
       ) : null}
@@ -123,14 +135,6 @@ function SeatTickPopover({ anchorRef, project, projectName, read, onClose }: {
     window.addEventListener("pointerdown", away);
     return () => window.removeEventListener("pointerdown", away);
   }, [anchorRef, onClose]);
-
-  /* A fresh read the moment it opens: the chip's 60 s cadence is for a face,
-     and the popover states ages to the minute. */
-  useEffect(() => {
-    void read.refresh();
-    // Once, on open: the poll inside the hook keeps it current after that.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   /* Gone with its chip. Closing rather than hiding, so the layer, the outside
      listener and the focus return all unwind the way Escape unwinds them. */
