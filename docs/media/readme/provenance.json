@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "f2a648f1432981695147581c59219a9903c84b2b09f8e4d7b4771091fc87303a",
+  "generatorSha256": "7ed35586329683065f2c9dc2382fdec58393ec7a9be3cf7d5e3e9c00d2761e27",
   "seed": "scripts/readme-demo-state.ts",
   "seedSha256": "a87949b4f1615a6a66fa13611b07548a7fd2fb33a331f422fc29538981151710",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
@@ -25,10 +25,10 @@
       "renderBack": {
         "worstTileMean": 4.296,
         "changedTileShare": 0,
-        "meanDifference": 0.199,
+        "meanDifference": 0.23,
         "ringsClipped": 0
       },
-      "sha256": "43593129573406daa6f629357cc24ae7fe58adb16a9f1873e60b2e59d473b017"
+      "sha256": "2ef77d304b68dbfcee4f910a57e5522d91d85c83321f45be8a3b8333d204ff70"
     },
     {
       "path": "orchestrator.svg",
@@ -47,11 +47,11 @@
       "rasterTiles": 14,
       "renderBack": {
         "worstTileMean": 13.513,
-        "changedTileShare": 0.033,
-        "meanDifference": 0.626,
+        "changedTileShare": 0.031,
+        "meanDifference": 0.613,
         "ringsClipped": 1
       },
-      "sha256": "bad8538a2be948c59d50abebddf4d06b31248b2d6dab69171357b1713b072e3f"
+      "sha256": "2477ca2c15665c3588a84e7f4ee68d7332645a71e3bd02b34bcdbaf7d8cdbc1e"
     },
     {
       "path": "conversation.svg",
@@ -74,7 +74,7 @@
         "meanDifference": 0.368,
         "ringsClipped": 2
       },
-      "sha256": "27a3bd3182c579cffc654243aaea974329f44d99d3fc4c2762c3d0aaa54a075f"
+      "sha256": "7b5c39dddef1f6df6165636da819257c8dad6cd658fd0328c0214912cb9bf4fb"
     },
     {
       "path": "pipeline.svg",
@@ -92,12 +92,12 @@
       "colorScheme": "dark",
       "rasterTiles": 31,
       "renderBack": {
-        "worstTileMean": 9.363,
+        "worstTileMean": 8.264,
         "changedTileShare": 0.001,
-        "meanDifference": 0.271,
+        "meanDifference": 0.204,
         "ringsClipped": 0
       },
-      "sha256": "f7872efe9820b9e4af6c4f0f95afea4cd7e491fd0a92cacafdca45f13c4cfb79"
+      "sha256": "a65141b032388405f7cb99202dbc82ecc5b29dc5f1034aa2a1f16e55fa89f138"
     },
     {
       "path": "card-menu.svg",
@@ -113,14 +113,14 @@
         "height": 418
       },
       "colorScheme": "dark",
-      "rasterTiles": 21,
+      "rasterTiles": 22,
       "renderBack": {
-        "worstTileMean": 4.934,
-        "changedTileShare": 0,
-        "meanDifference": 0.312,
+        "worstTileMean": 12.115,
+        "changedTileShare": 0.001,
+        "meanDifference": 0.387,
         "ringsClipped": 0
       },
-      "sha256": "8178bf023121d893e80dd8b712c469414b13106b05e2e31c1551d5e6d3e65a7f"
+      "sha256": "6e476e327a7a5277ae0df98cfb501c3dcdfdec2249a766edede21284e13cc1c2"
     },
     {
       "path": "accounts.svg",
@@ -131,19 +131,19 @@
       },
       "crop": {
         "x": 255,
-        "y": 313,
+        "y": 487,
         "width": 400,
-        "height": 495
+        "height": 321
       },
       "colorScheme": "dark",
-      "rasterTiles": 19,
+      "rasterTiles": 20,
       "renderBack": {
-        "worstTileMean": 4.862,
+        "worstTileMean": 2.765,
         "changedTileShare": 0,
-        "meanDifference": 0.293,
+        "meanDifference": 0.221,
         "ringsClipped": 0
       },
-      "sha256": "9a451bc7fec5f6edefa4cd3ce5ef57a3f9c86d8344d1730fc622e6e74ea1dfd3"
+      "sha256": "f2b5da586ab619f3c91a947dbfe0f17af48f0721c762f9369fb965f2d7fe54e8"
     },
     {
       "path": "phone-conversation.svg",
@@ -160,7 +160,7 @@
         "meanDifference": 0.745,
         "ringsClipped": 0
       },
-      "sha256": "aa2c5bd6504a490ee7dfe572fe339dd1fcf235ecb00d03ebf51fa958e99586ef"
+      "sha256": "725d162933383d8990db8da4f81015f233cffd538228ae4f6f28b6c29c0b6bdc"
     },
     {
       "path": "phone-board.svg",
@@ -173,11 +173,11 @@
       "rasterTiles": 10,
       "renderBack": {
         "worstTileMean": 12.37,
-        "changedTileShare": 0.02,
-        "meanDifference": 0.397,
+        "changedTileShare": 0.022,
+        "meanDifference": 0.421,
         "ringsClipped": 0
       },
-      "sha256": "277c9db117e52c20403635522556c8c4954ae239c3a34054130bef56e896170e"
+      "sha256": "61a5442708c6f65e26caaa33beb0806925fdc33465ca90fe32532a121bea498e"
     }
   ]
 }
