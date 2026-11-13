@@ -9,7 +9,7 @@ import type { AgentMemoryCell } from "./agentMemory";
 import { STDERR_READ_BYTES, startupStderrText, withoutUnterminatedSecret } from "./startupStderr";
 import { bindHostExitWriter } from "./hostExit";
 import { spawnNativeWaitOwner } from "./nativeWaitOwner";
-import { beforeStructuredSetupExec, retainStructuredSetupProcess } from "./structuredSetupCustody";
+import { beforeStructuredSetupExecOffLoop, retainStructuredSetupProcess } from "./structuredSetupCustody";
 
 export interface AgentSignalDomain {
   policyVersion: 1;
@@ -55,7 +55,8 @@ export async function spawnManagedEngine(command: string, args: string[], option
   memory: AgentMemoryCell | null | undefined, injected?: EngineSpawn, sourceEnv = options.env ?? process.env,
   transportSpawn?: EngineSpawn, assertCurrent?: () => void): Promise<ChildProcessWithoutNullStreams> {
   assertCurrent?.();
-  beforeStructuredSetupExec();
+  await beforeStructuredSetupExecOffLoop();
+  assertCurrent?.();
   if (injected) {
     const child = (memory?.wrapSpawn(injected) ?? injected)(command, args, options);
     retainStructuredSetupProcess(child.pid);
