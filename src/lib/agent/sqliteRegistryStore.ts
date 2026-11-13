@@ -220,17 +220,22 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
     const row = event === "DELETE" ? "OLD" : "NEW";
     const trigger = `${table}_termination_${event.toLowerCase()}`;
     db.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
+    // Separate collection admission keeps a conversation write from executing
+    // entry/capture maintenance with a null key, and vice versa.
     db.exec(`CREATE TRIGGER ${trigger} AFTER ${event} ON ${table}
-      WHEN ${row}.collection IN ('conversations','entries') BEGIN
-      ${refresh(`CASE WHEN ${row}.collection='conversations' THEN ${row}.row_key END`)}
-      UPDATE registry_termination_versions SET version=hex(randomblob(16)) WHERE ${row}.collection='entries' AND id IN (
+      WHEN ${row}.collection='conversations' BEGIN ${refresh(`${row}.row_key`)} END`);
+    const entryTrigger = `${trigger}_entry`;
+    db.exec(`DROP TRIGGER IF EXISTS ${entryTrigger}`);
+    db.exec(`CREATE TRIGGER ${entryTrigger} AFTER ${event} ON ${table}
+      WHEN ${row}.collection='entries' BEGIN
+      UPDATE registry_termination_versions SET version=hex(randomblob(16)) WHERE id IN (
         SELECT conversation_id FROM registry_termination_generations WHERE entry_key=${row}.row_key
         UNION SELECT p.conversation_id FROM registry_termination_paths p
           JOIN registry_termination_entries e ON e.entry_key=${row}.row_key WHERE p.path=e.path
         UNION SELECT p.conversation_id FROM registry_termination_paths p
           JOIN ${source} e ON e.collection='entries' AND e.row_key=${row}.row_key WHERE p.path=json_extract(e.value_json,'$.artifactPath')
       );
-      ${refreshEntry(`CASE WHEN ${row}.collection='entries' THEN ${row}.row_key END`)} END`);
+      ${refreshEntry(`${row}.row_key`)} END`);
   }
   // Installation is a one-time startup migration; ordinary reads only select
   // indexed metadata and generation ordinals.
@@ -241,7 +246,7 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
   for (const { row_key } of db.query<{ row_key: string }, []>(`SELECT row_key FROM ${source} WHERE collection='entries'`).all()) {
     db.exec(refreshEntry(`'${row_key.replaceAll("'", "''")}'`));
   }
-  db.exec("INSERT OR REPLACE INTO registry_meta(key,value) VALUES ('termination_projection_version','3')");
+  db.exec("INSERT OR REPLACE INTO registry_meta(key,value) VALUES ('termination_projection_version','4')");
 }
 
 const registryCallerIndexes = declaredIndexes([
@@ -1684,7 +1689,7 @@ export class SqliteAgentRegistryStore {
     if (this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_generation_identities'").get()) {
       registryGenerationIndexes.install(this.db, path.dirname(filename));
     }
-    if (options.allowArchiveMigration !== false && this.meta("termination_projection_version") !== "3") {
+    if (options.allowArchiveMigration !== false && this.meta("termination_projection_version") !== "4") {
       assertStateStartupMutation(path.dirname(filename), "agent registry termination projection");
       withStartupTransaction(this.db, () => installTerminationProjection(this.db, this.recordsSource));
     }
