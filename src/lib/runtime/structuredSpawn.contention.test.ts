@@ -1,5 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
+import { Database } from "bun:sqlite";
+import { createInterface } from "node:readline";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -35,7 +37,14 @@ const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
 const FAILURE = `${REGISTRY_WRITER_BUSY} (spawn.setup-custody)`;
 
-async function fixture(held: "released" | "expired" | "revoked" | "owner-released" | "pipeline" | "stalled" | "repeat" = "released", retryMs?: number, queuedDeadlineMs?: number) {
+interface CustodyControl {
+  queued: (filename: string) => Promise<void>;
+  hold: (filename: string) => Promise<void>;
+  release: () => Promise<void>;
+  sleep: (ms: number, now: number) => Promise<number>;
+}
+
+async function fixture(held: "released" | "expired" | "revoked" | "owner-released" | "pipeline" | "stalled" | "repeat" = "released", retryMs?: number, queuedDeadlineMs?: number, control?: CustodyControl) {
   let sequence = 0;
   const ids = spyOn(crypto, "randomUUID").mockImplementation(() =>
     `00008000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`);
@@ -53,8 +62,10 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
   Object.assign(process.env, { LLV_SPAWN_TRANSPORT: "structured", LLV_STRUCTURED_HOSTS: "1",
     LLV_RUNTIME_EVENTS: "1", NEXT_PUBLIC_RUNTIME_UI: "1", LLV_STATE_DIR: path.join(root, "state"),
     LLV_RUNTIME_HOST_SOCKET: path.join(root, "unused.sock") });
-  const holder = registryLockHolder(storage.sqliteFilename);
-  cleanups.push(() => holder.close());
+  const holder = control
+    ? { hold: () => control.hold(storage.sqliteFilename), release: control.release }
+    : registryLockHolder(storage.sqliteFilename);
+  if ("close" in holder) cleanups.push(() => holder.close());
   const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true });
   cleanups.push(() => journal.close());
   const runtime = {
@@ -66,7 +77,7 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
   const selected = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account });
   cleanups.push(() => selected.mockRestore());
   let attempts = 0, starts = 0, sends = 0, waits = 0,
-    clock = queuedDeadlineMs === undefined ? Date.parse("2026-11-13T12:00:00Z") : Date.now();
+    clock = control || queuedDeadlineMs === undefined ? Date.parse("2026-11-13T12:00:00Z") : Date.now();
   let authorized = true;
   const launchIds: string[] = [];
   const pending: Array<() => Promise<void>> = [];
@@ -97,8 +108,10 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
             imageRefs: input.imageRefs ?? [], parentArtifactPath: null, pipelineSourceConversationId: null,
           } },
         };
-        if (queuedDeadlineMs !== undefined) registry.queuePinnedSpawn(input.receipt.launchId,
-          queued.receipt.queuedPinnedSpawn!, "Queued fixture");
+        if (queuedDeadlineMs !== undefined) {
+          registry.queuePinnedSpawn(input.receipt.launchId, queued.receipt.queuedPinnedSpawn!, "Queued fixture");
+          await control?.queued(storage.sqliteFilename);
+        }
         return spawnStructuredConversation({ ...input,
           ...(queuedDeadlineMs === undefined && retryMs !== undefined ? { setupCustodyRetryMs: retryMs } : {}),
           ...(queuedDeadlineMs === undefined ? {} : { admissionRetryMs: 0 }),
@@ -109,7 +122,9 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
             expect(sends).toBe(0);
             expect(registry.spawnReceipt(input.receipt.launchId)).toMatchObject({ state: "starting",
               hostSetup: { phase: "preparing", processes: [] } });
-            delays.push(ms); waits++; clock += ms;
+            delays.push(ms); waits++;
+            if (control) { clock = await control.sleep(ms, clock); return; }
+            clock += ms;
             if (held === "stalled") clock += 5_000;
             if (held === "revoked") authorized = false;
             if (held !== "expired") await holder.release();
@@ -129,6 +144,7 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
               }
               await spawnManagedEngine("fixture-engine", [], { env: account.env }, null, () => {
                 starts++;
+                if (control) fs.appendFileSync(path.join(root, "native-starts"), `${current.receipt.launchId}\n`);
                 child = spawn(process.execPath, ["--no-env-file", "-e", "setInterval(() => {}, 1000)"], {
                   env: { NODE_ENV: "test", PATH: process.env.PATH }, stdio: ["pipe", "pipe", "pipe"],
                 });
@@ -140,7 +156,7 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
               });
             }
             catch (error) {
-              await holder.release();
+              if (!control) await holder.release();
               throw error;
             }
             await holder.release();
@@ -169,7 +185,6 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
     return { status: response.status, body: await response.json() as Record<string, unknown> };
   };
   return { root, registry, launch, spec, launchIds, journal, delays, submitted: () => submitted,
-    releaseHolder: () => holder.release(),
     drain: async () => { for (const work of pending.splice(0)) await work(); },
     counts: () => ({ attempts, starts, sends, waits }),
   };
@@ -306,43 +321,121 @@ test("queued recovery retries custody independently from its single runtime admi
   expect(Object.values(f.registry.readOnlySnapshot().receipts)).toMatchObject([{ state: "completed", hostSetup: { processes: [{}] } }]);
 });
 
-test("queued recovery custody retry expires at the absolute admission deadline", async () => {
-  const f = await fixture("stalled", undefined, 100);
-  const sdk = await connect(f);
-  await sdk.call();
-  await f.drain();
-  expect(f.delays).toEqual([25]);
-  expect(f.counts()).toEqual({ attempts: 1, starts: 0, sends: 0, waits: 1 });
-  expect(Object.values(f.registry.readOnlySnapshot().receipts)).toMatchObject([{ state: "failed", error: FAILURE }]);
-});
-
-test("child process observes a queued absolute deadline while an independent writer holds custody", async () => {
-  if (process.env.LLV_CUSTODY_DEADLINE_CHILD === "1") {
-    const f = await fixture("stalled", undefined, 100);
+for (const release of ["before", "after"] as const) test(`parent controls custody release ${release} the caller cutoff`, async () => {
+  const childMode = process.env.LLV_CUSTODY_DEADLINE_CHILD;
+  if (childMode && childMode !== release) return;
+  if (childMode) {
+    // Standard streams survive the repository preload's owned-runner re-entry.
+    const input = createInterface({ input: process.stdin });
+    cleanups.push(() => input.close());
+    const commands = input[Symbol.asyncIterator]();
+    const request = async (action: string, detail = {}) => {
+      process.stdout.write(`CUSTODY_CONTROL=${JSON.stringify({ action, ...detail })}\n`);
+      const command = await commands.next();
+      if (command.done) throw new Error("parent closed the custody control channel");
+      return Number(command.value);
+    };
+    const f = await fixture("released", undefined, 100, {
+      queued: async filename => { await request("queued", { filename }); },
+      hold: async filename => { await request("hold", { filename }); },
+      // The parent owns the writer and releases it before acknowledging sleep.
+      release: async () => {},
+      sleep: (ms, now) => request("wait", { ms, now }),
+    });
     const sdk = await connect(f);
     await sdk.call(); await f.drain();
-    await f.releaseHolder();
-    await sdk.call();
-    const result = { counts: f.counts(), delays: f.delays,
-      dispatches: sdk.dispatches(), entries: Object.keys(f.registry.readOnlySnapshot().entries).length,
-      receipts: Object.values(f.registry.readOnlySnapshot().receipts).map(({ state, error, hostSetup }) => ({ state, error, hostSetup })) };
-    process.stdout.write(`CUSTODY_DEADLINE_CHILD=${JSON.stringify(result)}\n`);
+    const replay = await replayInNewProcess(f.submitted());
+    await sdk.call(); await f.drain();
+    await request("done", { counts: f.counts(), delays: f.delays, dispatches: sdk.dispatches(), replay });
     return;
   }
+  type Message = { action: string; filename?: string; ms?: number; now?: number };
+  let received = Promise.withResolvers<Message>();
   const child = Bun.spawn([process.execPath, "test", import.meta.filename, "--test-name-pattern",
-    "child process observes a queued absolute deadline"], {
-    env: { ...process.env, LLV_CUSTODY_DEADLINE_CHILD: "1" }, stdout: "pipe", stderr: "pipe",
+    `parent controls custody release ${release} the caller cutoff`], {
+    env: { ...process.env, LLV_CUSTODY_DEADLINE_CHILD: release }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
-  const timer = setTimeout(() => { if (child.exitCode === null) child.kill(); }, 15_000);
+  const output = (async () => {
+    let text = "", pending = "";
+    const decoder = new TextDecoder(), reader = child.stdout.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const part = decoder.decode(value, { stream: true });
+      text += part; pending += part;
+      const lines = pending.split("\n"); pending = lines.pop()!;
+      for (const line of lines) if (line.startsWith("CUSTODY_CONTROL="))
+        received.resolve(JSON.parse(line.slice("CUSTODY_CONTROL=".length)) as Message);
+    }
+    return text;
+  })();
+  const errors = new Response(child.stderr).text();
+  const send = (clock: number) => { child.stdin.write(`${clock}\n`); child.stdin.flush(); };
+  const timer = setTimeout(() => { if (child.exitCode === null) child.kill(); }, 30_000);
   cleanups.push(async () => { clearTimeout(timer); if (child.exitCode === null) child.kill(); await child.exited; });
-  const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  expect(code, err).toBe(0);
-  const line = out.split("\n").find(value => value.startsWith("CUSTODY_DEADLINE_CHILD="));
-  expect(line).toBeDefined();
-  const result = JSON.parse(line!.slice("CUSTODY_DEADLINE_CHILD=".length));
-  expect(result).toMatchObject({ counts: { attempts: 1, starts: 0, sends: 0, waits: 1 }, delays: [25], dispatches: 1, entries: 0,
-    receipts: [{ state: "failed", error: FAILURE, hostSetup: { processes: [] } }] });
-});
+  const next = async () => {
+    const message = await Promise.race([received.promise,
+      child.exited.then(async code => { throw new Error(`launch child exited early (${code}): ${await errors}`); })]);
+    received = Promise.withResolvers<Message>();
+    return message;
+  };
+  const queued = await next();
+  expect(queued.action).toBe("queued");
+  const filename = queued.filename!;
+  const root = path.dirname(filename);
+  const observer = new Database(filename, { readonly: true });
+  cleanups.push(() => observer.close());
+  const receipts = () => observer.query<{ value_json: string }, []>(
+    "SELECT value_json FROM registry_rows WHERE collection='receipts' ORDER BY row_order",
+  ).all().map(row => JSON.parse(row.value_json));
+  const entries = () => observer.query<{ count: number }, []>(
+    "SELECT count(*) AS count FROM registry_rows WHERE collection='entries'",
+  ).get()!.count;
+  const pinned = receipts();
+  expect(pinned).toHaveLength(1);
+  const launchId = pinned[0].launchId;
+  const cutoff = Date.parse(pinned[0].queuedPinnedSpawn.admissionDeadlineAt);
+  expect(cutoff).toBe(Date.parse("2026-11-13T12:00:00.100Z"));
+  send(0);
+  expect(await next()).toEqual({ action: "hold", filename });
+  const holder = registryLockHolder(filename);
+  cleanups.push(() => holder.close());
+  await holder.hold();
+  const initial = receipts();
+  expect(initial).toHaveLength(1);
+  expect(initial[0]).toMatchObject({ state: "starting", hostSetup: { phase: "preparing", processes: [] } });
+  send(0);
+  const waiting = await next();
+  expect(waiting).toMatchObject({ action: "wait", ms: 25, now: cutoff - 100 });
+  // The parent chooses the wake independently of the requested delay. Both
+  // wakes leave the writer's 2000ms budget and durable setup bound unspent.
+  const wake = cutoff + (release === "after" ? 1 : -1);
+  expect(wake - waiting.now!).toBeLessThan(2_000);
+  expect(wake >= cutoff).toBe(release === "after");
+  expect(entries()).toBe(0);
+  expect(fs.existsSync(path.join(root, "native-starts"))).toBe(false);
+  expect(receipts()).toEqual(initial);
+  await holder.release();
+  send(wake);
+  const result = await next();
+  expect(result).toMatchObject({ action: "done", counts: { attempts: 1,
+    starts: release === "before" ? 1 : 0, sends: release === "before" ? 1 : 0, waits: 1 },
+    delays: [25], dispatches: 1, replay: { status: 200, starts: 0, deferred: 0 } });
+  const final = receipts();
+  expect(final).toHaveLength(1);
+  expect(final[0].launchId).toBe(launchId);
+  const expected = release === "after"
+    ? { state: "failed", error: FAILURE, hostSetup: { processes: [] } }
+    : { state: "completed", hostSetup: { processes: [{}] } };
+  expect(final[0]).toMatchObject(expected);
+  expect(result).toMatchObject({ replay: { receipts: [{ state: expected.state }] } });
+  expect(entries()).toBe(release === "before" ? 1 : 0);
+  expect(fs.existsSync(path.join(root, "native-starts"))).toBe(release === "before");
+  if (release === "after") expect(result).toMatchObject({ replay: { receipts: [{ error: FAILURE }] } });
+  else expect(fs.readFileSync(path.join(root, "native-starts"), "utf8")).toBe(`${launchId}\n`);
+  send(0);
+  expect(await child.exited, `${await output}\n${await errors}`).toBe(0);
+}, 35_000);
 
 test("a custody wait cannot dispatch after its admission lease was released", async () => {
   const f = await fixture("owner-released");
@@ -384,6 +477,13 @@ test("an expired launch keeps its terminal refusal when the same request returns
   const f = await fixture("expired");
   const sdk = await connect(f);
   await sdk.call(); await f.drain();
+  const replay = await replayInNewProcess(f.submitted());
+  expect(replay).toMatchObject({ status: 200, starts: 0, deferred: 0, receipts: [{ state: "failed", error: FAILURE }] });
+  expect(replay.receipts).toHaveLength(1);
+  expect(f.counts().starts).toBe(0);
+});
+
+async function replayInNewProcess(body: Record<string, unknown>) {
   const source = (name: string) => JSON.stringify(new URL(name, import.meta.url).href);
   const program = `
     const { AgentRegistry } = await import(${source("../agent/registry.ts")});
@@ -417,12 +517,9 @@ test("an expired launch keeps its terminal refusal when the same request returns
   });
   const timer = setTimeout(() => { if (child.exitCode === null) child.kill(); }, 15_000);
   cleanups.push(async () => { clearTimeout(timer); if (child.exitCode === null) child.kill(); await child.exited; });
-  child.stdin.write(JSON.stringify(f.submitted()));
+  child.stdin.write(JSON.stringify(body));
   child.stdin.end();
   const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect(code, err).toBe(0);
-  const replay = JSON.parse(out);
-  expect(replay).toMatchObject({ status: 200, starts: 0, deferred: 0, receipts: [{ state: "failed", error: FAILURE }] });
-  expect(replay.receipts).toHaveLength(1);
-  expect(f.counts().starts).toBe(0);
-});
+  return JSON.parse(out);
+}
