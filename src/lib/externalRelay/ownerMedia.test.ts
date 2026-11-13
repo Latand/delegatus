@@ -142,9 +142,11 @@ test("A3: a growing part stays unpublished, identical calls join, and switching 
     const handle = await open(...args);
     if (String(args[0]).endsWith(".part")) {
       const write = handle.write.bind(handle);
-      writes.push(spyOn(handle, "write").mockImplementation(async (...args: Parameters<typeof handle.write>) => {
-        const result = await write(...args); written.release(); return result;
-      }));
+      writes.push(spyOn(handle, "write").mockImplementation(new Proxy(write, {
+        async apply(target, receiver, args) {
+          const result = await Reflect.apply(target, receiver, args); written.release(); return result;
+        },
+      })));
     }
     return handle;
   });
@@ -379,12 +381,14 @@ test("an unfinished join survives completion during the joining caller's directo
   let directoryCheck: { mockRestore(): void } | undefined;
   try {
     const first = f.call(); await serving.promise;
-    directoryCheck = spyOn(fs, "realpath").mockImplementation(async file => {
-      if (!held && String(file) === evidence) {
-        held = true; checking.release(); await allowDirectory.promise;
-      }
-      return realpath(file);
-    });
+    directoryCheck = spyOn(fs, "realpath").mockImplementation(new Proxy(realpath, {
+      async apply(target, receiver, args) {
+        if (!held && String(args[0]) === evidence) {
+          held = true; checking.release(); await allowDirectory.promise;
+        }
+        return Reflect.apply(target, receiver, args);
+      },
+    }));
     const joining = f.call(); await checking.promise;
     allowBody.release();
     const finished = await first;
