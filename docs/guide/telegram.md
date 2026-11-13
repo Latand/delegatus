@@ -98,6 +98,12 @@ answers with.
   reply records the decision.
 - Reading the owner's group history through `relay_owner_history` stays behind
   the owner tools switch, off by default.
+  With `action: "media"`, `chat`, `messageId` and your evidence `directory`,
+  it also saves one message's media locally. This requires the paired service's
+  `relay_owner_media` feature; larger files may need repeated calls while
+  `in_progress`. The per-call limit is 2 GiB. History shows media metadata and
+  `editedAt` when the service reports them; `editsReported: false` means edits
+  could not be confirmed from that page.
 
 ### When the install is busy
 
