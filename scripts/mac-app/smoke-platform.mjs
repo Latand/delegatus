@@ -1,5 +1,34 @@
 import { execFile } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import assert from "node:assert/strict";
+
+export function appLogs(caseHome, pid) {
+  const directory = join(caseHome, "Library/Logs/Delegatus");
+  try {
+    return readdirSync(directory).filter(name => name.startsWith("app-") && name.endsWith(pid === undefined ? ".log" : `-${Number(pid)}.log`)).sort()
+      .map(name => readFileSync(join(directory, name), "utf8")).join("");
+  } catch { return ""; }
+}
+
+export function exited(child) { return child.exitCode !== null || child.signalCode !== null; }
+export function alive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
+
+export async function end(entry, { owned, until, run }) {
+  const child = owned.get(entry?.pid);
+  if (!child) return;
+  const filterPID = entry.process === child
+    ? Number(appLogs(entry.home, entry.pid).match(/EVIDENCE-FILTER pid (\d+)/)?.[1]) : NaN;
+  if (!exited(child)) child.kill("SIGTERM");
+  await until("owned process exit", () => exited(child));
+  owned.delete(entry.pid);
+  if (Number.isSafeInteger(filterPID) && filterPID > 1 && alive(filterPID)) {
+    const command = run("/bin/ps", ["-ww", "-p", String(filterPID), "-o", "command="]).trim();
+    assert(/(^|\/)sed(?:\s|$)/.test(command) && command.includes(" -l "), `recorded evidence filter PID ${filterPID} belongs to this app fixture`);
+    try { process.kill(filterPID, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+    await until("owned evidence filter exit", () => !alive(filterPID));
+  }
+}
 
 export function intelIsTranslated({ status, stdout = "", stderr = "" }) {
   if (status === 0) {

@@ -6,7 +6,7 @@ import { userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
-import { appSessionData, comparablePath, commandFailure, intelIsTranslated, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
+import { alive, appLogs, appSessionData, comparablePath, commandFailure, end as endOwnedProcess, exited, intelIsTranslated, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
 
 const [image, reportArg] = process.argv.slice(2);
 if (process.platform !== "darwin" || !image || !reportArg || process.env.CI !== "true") throw new Error("Usage on disposable macOS CI: node smoke.mjs DMG REPORT");
@@ -96,19 +96,10 @@ async function check(name, action) {
   try { await action(); checks.push({ name, exit: 0 }); }
   catch (error) { checks.push({ name, exit: 1, error: redact(error.message) }); throw error; }
 }
-function appLogs(caseHome, pid) {
-  const directory = join(caseHome, "Library/Logs/Delegatus");
-  try {
-    return readdirSync(directory).filter(name => name.startsWith("app-") && name.endsWith(pid === undefined ? ".log" : `-${Number(pid)}.log`)).sort()
-      .map(name => readFileSync(join(directory, name), "utf8")).join("");
-  } catch { return ""; }
-}
 const processLog = app => appLogs(app.home, app.pid);
 function capturedFrames(directory) {
   try { return readdirSync(directory).filter(name => name.endsWith(".png")).length; } catch { return 0; }
 }
-function exited(child) { return child.exitCode !== null || child.signalCode !== null; }
-function alive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
 let foreignListener = 0;
 function own(child, label) {
   assert(Number.isSafeInteger(child.pid) && child.pid > 1, `${label} started`);
@@ -130,18 +121,7 @@ function launch(caseHome, args, label) {
   return { process: child, pid, home: caseHome, frames, diagnostics };
 }
 async function end(entry) {
-  const child = owned.get(entry?.pid);
-  if (!child) return;
-  const filterPID = Number(processLog(entry).match(/EVIDENCE-FILTER pid (\d+)/)?.[1]);
-  if (!exited(child)) child.kill("SIGTERM");
-  await until("owned process exit", () => exited(child));
-  owned.delete(entry.pid);
-  if (Number.isSafeInteger(filterPID) && filterPID > 1 && alive(filterPID)) {
-    const command = run("/bin/ps", ["-ww", "-p", String(filterPID), "-o", "command="]).trim();
-    assert(/(^|\/)sed(?:\s|$)/.test(command) && command.includes(" -l "), `recorded evidence filter PID ${filterPID} belongs to this app fixture`);
-    try { process.kill(filterPID, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
-    await until("owned evidence filter exit", () => !alive(filterPID));
-  }
+  return endOwnedProcess(entry, { owned, until, run });
 }
 function startViewer(bun, cli, settings = {}) {
   const child = spawn(bun, [cli, "--no-open", "--port", String(port)], { env: caseEnvironment(home, settings), stdio: "ignore" });

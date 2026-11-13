@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { execFileSync, spawn } from "node:child_process";
+import assert from "node:assert/strict";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { digest, validatePackage, verifiedBun } from "./manifest";
-import { appSessionData, commandFailure, comparablePath, intelIsTranslated, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
+import { alive, appSessionData, commandFailure, comparablePath, end, exited, intelIsTranslated, runCommand, smokeEnvironment, smokeStdio, plainFailureMessage } from "./smoke-platform.mjs";
 
 describe("Mac runtime manifest", () => {
   const bytes = new TextEncoder().encode("archive fixture");
@@ -173,5 +178,143 @@ describe("Mac smoke plain failure verdict", () => {
     "STATE failed Open Logs\nLISTENER refused fixture", "STATE failed Open Logs\nSTART timed out",
   ])("rejects missing or technical window text %#", log => {
     expect(() => plainFailureMessage(log)).toThrow();
+  });
+});
+
+describe("Mac smoke process cleanup", () => {
+  async function fixture(action: (context: ReturnType<typeof contextFor>) => Promise<void>) {
+    const context = contextFor(mkdtempSync(join(tmpdir(), "mac-smoke-cleanup-")));
+    try { await action(context); }
+    finally {
+      // Also reap children when testing a broken end(), so a red run leaks none.
+      for (const { child } of context.children) if (!exited(child)) child.kill("SIGKILL");
+      await Promise.all(context.children.map(({ closed }) => closed));
+      for (const { child } of context.children) expect(alive(child.pid)).toBe(false);
+      rmSync(context.home, { recursive: true, force: true });
+    }
+  }
+
+  function contextFor(home: string) {
+    const owned = new Map<number, ChildProcess>();
+    const children: { child: ChildProcess; closed: Promise<unknown> }[] = [];
+    const options = {
+      owned,
+      until: async (label: string, check: () => boolean) => {
+        const deadline = Date.now() + 5_000;
+        while (!check()) {
+          assert(Date.now() < deadline, label);
+          await new Promise(resolve => setTimeout(resolve, 5));
+        }
+      },
+      run: (command: string, args: string[]) => execFileSync(command, args, { encoding: "utf8", timeout: 5_000 }),
+    };
+    return {
+      home, owned, children,
+      async start(command = "/bin/sleep", args = ["30"], register = true) {
+        const child = spawn(command, args, { stdio: ["pipe", "ignore", "ignore"] });
+        children.push({ child, closed: new Promise(resolve => child.once("close", resolve)) });
+        await once(child, "spawn");
+        assert(child.pid && child.pid > 1, "fixture child started");
+        if (register) owned.set(child.pid, child);
+        return child;
+      },
+      app(child: ChildProcess, log = "") {
+        const directory = join(home, "Library/Logs/Delegatus");
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(join(directory, `app-fixture-${child.pid}.log`), log);
+        return { process: child, pid: child.pid, home };
+      },
+      end: (entry: unknown) => end(entry, options),
+    };
+  }
+
+  for (const kind of ["raw child", "app record"]) {
+    test(`smoke cleanup terminates and forgets a recorded ${kind}`, async () => {
+      await fixture(async context => {
+        const child = await context.start();
+        const entry = kind === "raw child" ? child : context.app(child);
+        await context.end(entry);
+        expect(child.signalCode).toBe("SIGTERM");
+        expect(alive(child.pid)).toBe(false);
+        expect(context.owned.size).toBe(0);
+        await context.end(entry);
+      });
+    });
+
+    test(`smoke cleanup forgets an already exited ${kind}`, async () => {
+      await fixture(async context => {
+        const child = await context.start();
+        const entry = kind === "raw child" ? child : context.app(child);
+        const stopped = once(child, "exit");
+        child.kill("SIGTERM");
+        await stopped;
+        await context.end(entry);
+        expect(alive(child.pid)).toBe(false);
+        expect(context.owned.size).toBe(0);
+      });
+    });
+  }
+
+  test("smoke assertion failure still cleans the app, raw replacement, launcher and server", async () => {
+    await fixture(async context => {
+      const app = context.app(await context.start());
+      const replacement = await context.start();
+      const launcher = await context.start();
+      const server = await context.start();
+      const failure = new assert.AssertionError({ message: "fixture readiness assertion" });
+      let observed;
+      try {
+        try { throw failure; }
+        finally {
+          await context.end(app);
+          await context.end(replacement);
+          await context.end(launcher);
+          await context.end(server);
+        }
+      } catch (error) { observed = error; }
+      expect(observed).toBe(failure);
+      expect(context.owned.size).toBe(0);
+      for (const { child } of context.children) {
+        expect(child.signalCode).toBe("SIGTERM");
+        expect(alive(child.pid)).toBe(false);
+      }
+    });
+  });
+
+  test("smoke app cleanup reads its PID log and reaps its recorded evidence filter", async () => {
+    await fixture(async context => {
+      const child = await context.start();
+      const filter = await context.start("/usr/bin/sed", process.platform === "darwin" ? ["-l", "-e", ""] : ["-l", "0", "-e", ""], false);
+      const peer = await context.start(undefined, undefined, false);
+      const app = context.app(child, `EVIDENCE-FILTER pid ${filter.pid}\n`);
+      context.app(peer, `EVIDENCE-FILTER pid ${peer.pid}\n`);
+      await context.end(app);
+      expect(child.signalCode).toBe("SIGTERM");
+      expect(filter.signalCode).toBe("SIGTERM");
+      expect(alive(filter.pid)).toBe(false);
+      expect(alive(peer.pid)).toBe(true);
+      expect(context.owned.size).toBe(0);
+    });
+  });
+
+  test("smoke app cleanup refuses a recorded filter PID whose command is unrelated", async () => {
+    await fixture(async context => {
+      const child = await context.start();
+      const peer = await context.start(undefined, undefined, false);
+      await expect(context.end(context.app(child, `EVIDENCE-FILTER pid ${peer.pid}\n`))).rejects.toThrow("belongs to this app fixture");
+      expect(alive(child.pid)).toBe(false);
+      expect(alive(peer.pid)).toBe(true);
+      expect(context.owned.size).toBe(0);
+    });
+  });
+
+  test("smoke cleanup ignores an unowned raw child and absent entries", async () => {
+    await fixture(async context => {
+      const peer = await context.start(undefined, undefined, false);
+      await context.end(peer);
+      await context.end(undefined);
+      expect(alive(peer.pid)).toBe(true);
+      expect(context.owned.size).toBe(0);
+    });
   });
 });
