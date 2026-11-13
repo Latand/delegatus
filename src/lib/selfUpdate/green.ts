@@ -213,7 +213,8 @@ export class GreenReader {
       ];
       const requiredOnly = exactDeploy && required.length > 0;
       if (!checks.length) {
-        if (runtimeGateRed) return finish({ state: "red", detail: "runtime-gate", checks: ["runtime-gate"] });
+        if (runtimeGateRed) return finish({ state: "red", detail: "runtime-gate",
+          checks: [...new Set([...required.map(check => check.name), "runtime-gate"])].sort() });
         return requiredOnly ? { state: "pending", done: 0, total: required.length, checks: required.map(check => check.name).sort() }
           : finish({ state: "no-checks", checks: required.map(check => check.name).sort() });
       }

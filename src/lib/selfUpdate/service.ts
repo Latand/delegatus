@@ -177,6 +177,8 @@ type CheckoutBusyReceipt = { state: "busy"; deploymentId?: string; revision?: st
   outcome: "not-executed"; nextAction: "retry-same-key"; waitBudgetMs: number };
 type CheckoutGreenRefusal = { state: "refused"; revision: string; deploymentId?: never; code: "deploy_not_green";
   outcome: "not-executed"; evidence: "not-admitted"; nextAction: "retry-same-key"; retryable: true; green: GreenVerdict; error: string };
+type CheckoutActionRequired = { state: "action-required"; action: Snapshot["action"]; error: string; code: "self-update-action-required" };
+type CheckoutDeployResult = ViewerDeploymentReceipt | CheckoutBusyReceipt | CheckoutGreenRefusal | CheckoutActionRequired;
 
 interface PendingManualRestart { role: LauncherRole; requestId: string; at: number; from: string | null; target: string }
 interface Persisted { slice: CheckSlice; update: UpdateState | null; pendingRestart?: PendingManualRestart | null; autoPending?: AutoState["pending"]; autoRollbackPointer?: string | null; autoRollbackCaptured?: boolean }
@@ -1895,13 +1897,31 @@ export class SelfUpdateService {
     return holder;
   }
 
-  async deployRevision(request: ViewerDeploymentRequest, authorize?: () => void): Promise<ViewerDeploymentReceipt | CheckoutBusyReceipt | CheckoutGreenRefusal | { state: "action-required"; action: Snapshot["action"]; error: string; code: "self-update-action-required" }> {
+  async deployRevision(request: ViewerDeploymentRequest, authorize?: () => void): Promise<CheckoutDeployResult> {
+    const deadlineAt = Date.now() + DEPLOY_ADMISSION_WAIT_MS;
     let attempt = 0;
     const settled = await checkoutAdmission(this.deps.dir, request, authorize, generation => { attempt = generation; return null; });
     if (settled) return settled;
+    const busyHolderSettled = Symbol("busy-holder-settled");
+    const finishBusy = (record: LauncherRecord): Promise<CheckoutBusyReceipt | ViewerDeploymentReceipt | typeof busyHolderSettled> => checkoutAdmission(
+      this.deps.dir, request, authorize, () => {
+        const deployment = checkoutDeployments(this.deps.dir).find(row => !row.terminal);
+        if (deployment) return { state: "busy", deploymentId: deployment.deploymentId, revision: deployment.revision };
+        return this.checkoutHolder(record) ?? busyHolderSettled;
+      }, { attempt, retireOnBusy: true, deadlineAt },
+    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<ViewerDeploymentReceipt>((resolve, reject) => {
+      // Arm the absolute budget before invoking any admission callback: a
+      // synchronous green or health adapter can stall this event loop.
+      timer = setTimeout(() => {
+        void checkoutAdmission(this.deps.dir, { ...request, reconcileOnly: true }, authorize,
+          (): never => { throw new Error("Reconciliation cannot admit a deployment"); }, { attempt }).then(resolve, reject);
+      }, Math.max(0, deadlineAt - Date.now()));
+    });
     // Serialize target resolution with admission so two exact requests cannot build together.
     const preceding = this.deploying;
-    const run = (async () => {
+    const run: () => Promise<CheckoutDeployResult> = async () => {
       if (preceding) await preceding.catch(() => {});
       authorize?.();
       if (!/^[A-Za-z0-9_.:-]{1,200}$/.test(request.idempotencyKey)) throw new Error("Invalid deployment idempotency key");
@@ -1944,14 +1964,18 @@ export class SelfUpdateService {
               const current = checkoutDeployments(this.deps.dir).find(row => row.deploymentId === active.deploymentId);
               if (!current || !current.revision.toLowerCase().startsWith(requested)) throw new Error("The deployment changed during admission");
               return joinDeployment(current);
-            }, { attempt });
+            }, { attempt, deadlineAt });
           }
         }
-        return { state: "busy" as const, deploymentId: active.deploymentId, revision: active.revision };
+        const settledBusy = await finishBusy(record);
+        return settledBusy === busyHolderSettled ? run() : settledBusy;
       }
       const holder = await this.waitForCheckoutHolder(record);
       authorize?.();
-      if (holder) return holder;
+      if (holder) {
+        const settledBusy = await finishBusy(record);
+        return settledBusy === busyHolderSettled ? run() : settledBusy;
+      }
       let target = request.revision ?? "";
       if (/^[a-f0-9]{7,39}$/i.test(target)) {
         if (!record.checkout) throw new Error("pass the full SHA or a ref");
@@ -1975,7 +1999,7 @@ export class SelfUpdateService {
       const green: GreenVerdict = observedGreen.state === "checks-timeout" ? { ...observedGreen, state: "pending" } : observedGreen;
       if (green.state !== "green") return checkoutAdmission(this.deps.dir, request, authorize, () => ({ state: "refused" as const, revision: target, code: "deploy_not_green" as const,
         outcome: "not-executed" as const, evidence: "not-admitted" as const, nextAction: "retry-same-key" as const, retryable: true as const, green,
-        error: `The requested revision is not green (${green.state})${green.checks?.length ? `: ${green.checks.join(", ")}` : green.detail ? `: ${green.detail}` : ""}. Retry the same key once checks are green.` }), { attempt, refuse: true });
+        error: `The requested revision is not green (${green.state})${green.checks?.length ? `: ${green.checks.join(", ")}` : green.detail ? `: ${green.detail}` : ""}. Retry the same key once checks are green.` }), { attempt, refuse: true, deadlineAt });
       const health = await this.deps.hostHealth().catch(() => null);
       const current = await this.decide();
       if (current.record?.launcher.pid !== record.launcher.pid || current.record.launcher.startIdentity !== record.launcher.startIdentity) throw new Error("The launcher changed during deployment admission");
@@ -1983,7 +2007,10 @@ export class SelfUpdateService {
       // belongs to the attributable request at admission, after those waits.
       const lateHolder = await this.waitForCheckoutHolder(current.record!);
       authorize?.();
-      if (lateHolder) return lateHolder;
+      if (lateHolder) {
+        const settledBusy = await finishBusy(current.record!);
+        return settledBusy === busyHolderSettled ? run() : settledBusy;
+      }
       const admit = () => checkoutAdmission(this.deps.dir, request, authorize, () => {
         const admitted = checkoutDeployments(this.deps.dir).find(row => !row.terminal);
         if (admitted) return admitted.revision.toLowerCase() === target.toLowerCase() ? joinDeployment(admitted)
@@ -2018,7 +2045,7 @@ export class SelfUpdateService {
           throw error;
         }
         return { state: "accepted" as const, deploymentId, revision: target, replayed: false };
-      }, { attempt });
+      }, { attempt, deadlineAt });
       for (;;) {
         const receipt = await admit();
         if (receipt.state !== "busy" || !("holder" in receipt)) return receipt;
@@ -2026,19 +2053,14 @@ export class SelfUpdateService {
         // Release that lock before waiting, under this request's outer budget.
         const holder = await this.waitForCheckoutHolder(current.record!);
         authorize?.();
-        if (holder) return holder;
+        if (holder) {
+          const settledBusy = await finishBusy(current.record!);
+          if (settledBusy !== busyHolderSettled) return settledBusy;
+        }
       }
-    })();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<ViewerDeploymentReceipt>((resolve, reject) => {
-      timer = setTimeout(() => {
-        // Fence before answering. A target/health read may finish later, but
-        // its admission can only replay this acceptance or closed key.
-        void checkoutAdmission(this.deps.dir, { ...request, reconcileOnly: true }, authorize,
-          (): never => { throw new Error("Reconciliation cannot admit a deployment"); }, { attempt }).then(resolve, reject);
-      }, DEPLOY_ADMISSION_WAIT_MS);
-    });
-    const bounded = Promise.race([run, timeout]);
+    };
+    const running = run();
+    const bounded = Promise.race([running, timeout]);
     this.deploying = bounded;
     try { return await bounded; } finally {
       if (timer !== undefined) clearTimeout(timer);

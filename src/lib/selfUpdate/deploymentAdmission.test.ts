@@ -7,6 +7,19 @@ import { saveCheckoutDeployment } from "./deployments";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 
 const SHA = "a".repeat(40);
+test("a callback that reaches the admission fence after its deadline closes the key without admitting", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "checkout-admission-deadline-"));
+  const request = { revision: SHA, idempotencyKey: "expired-admission-deadline" };
+  let effects = 0;
+  try {
+    await expect(checkoutAdmission(directory, request, undefined, () => ++effects, { deadlineAt: Date.now() - 1 }))
+      .rejects.toMatchObject({ code: "deploy_not_admitted" });
+    await expect(checkoutAdmission(directory, request, undefined, () => ++effects))
+      .rejects.toMatchObject({ code: "deploy_not_admitted" });
+    expect(effects).toBe(0);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("a retryable refusal fences older reads and their timeout across processes, while the same key retries", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "checkout-admission-generation-"));
   const request = { revision: SHA, idempotencyKey: "retryable-refusal-generation" };

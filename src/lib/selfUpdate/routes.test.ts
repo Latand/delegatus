@@ -852,6 +852,49 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     }
   });
 
+  test("a busy receipt fences an older admission and the same key retries after its holder settles", async () => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<GreenVerdict>();
+    h.deps.green = { read: () => { entered.resolve(); return release.promise; } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const older = h.service.deployRevision({ revision: tipSha, idempotencyKey: "busy-fences-old-read" });
+    const observed = older.then(value => ({ value, error: null }), error => ({ value: null, error }));
+    const greenDeps = { ...h.deps, green: { read: async () => ({ state: "green" }) } as unknown as GreenReader };
+    const holderService = new SelfUpdateService(greenDeps);
+    const busyService = new SelfUpdateService(greenDeps);
+    try {
+      await entered.promise;
+      const holder = await holderService.deployRevision({ revision: firstSha, idempotencyKey: "different-live-holder" });
+      expect(holder).toMatchObject({ state: "accepted" });
+      const busy = await busyService.deployRevision({ revision: tipSha, idempotencyKey: "busy-fences-old-read" });
+      expect(busy).toMatchObject({ state: "busy", deploymentId: "deploymentId" in holder ? holder.deploymentId : undefined, revision: firstSha });
+
+      release.resolve({ state: "green" });
+      expect((await observed).error).toMatchObject({ code: "deploy_attempt_superseded" });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+
+      await finishHeldBuild(h);
+      const holderRow = checkoutDeployments(h.deps.dir).find(row => row.deploymentId === ("deploymentId" in holder ? holder.deploymentId : ""))!;
+      saveCheckoutDeployment(h.deps.dir, { ...holderRow, phase: "succeeded", terminal: true, updatedAt: new Date().toISOString(), revisionNumber: holderRow.revisionNumber + 1 });
+      const settledRecord = readLauncherRecord(h.recordFile)!;
+      rmSync(settledRecord.requestFile, { force: true });
+      writeFileSync(h.recordFile, JSON.stringify({ ...settledRecord,
+        launcher: { ...settledRecord.launcher, revision: tipSha },
+        web: { ...settledRecord.web, revision: tipSha.slice(0, 7) },
+        runtimeHost: { ...settledRecord.runtimeHost, revision: tipSha.slice(0, 7) },
+      }));
+      h.deps.hostHealth = async () => ({ pid: process.pid, startIdentity: readStartIdentity(process.pid)!, hostEpoch: 1, generation: { revision: tipSha } });
+      expect(await busyService.deployRevision({ revision: tipSha, idempotencyKey: "busy-fences-old-read" }))
+        .toMatchObject({ state: "accepted", revision: tipSha });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(2);
+    } finally {
+      release.resolve({ state: "green" }); await observed;
+      h.service.stop();
+      holderService.stop(); busyService.stop();
+      if (h.releaseBuild) { h.releaseBuild(); h.releaseBuild = null; }
+    }
+  });
+
   test("a retention pass that settles after the busy snapshot permits admission", async () => {
     const h = harness({ relaunch: true, holdBuild: true });
     const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
@@ -981,11 +1024,11 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     };
     h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
     const request = { revision: tipSha, idempotencyKey: `expired-${heldRead}` };
-    const attempt = deployPost(post("/runtime/deployments", request));
-    // A separate event loop keeps the deadline observable while this process
-    // is stalled inside an admission callback.
+    // Start the independent clock before the request so time spent before the
+    // callback resumes counts against the same admission budget.
     const watchdog = new Worker("setTimeout(() => postMessage('expired'), 11_000)", { eval: true });
     const deadline = new Promise<never>((_, reject) => watchdog.once("message", () => reject(new Error("independent admission deadline exceeded"))));
+    const attempt = deployPost(post("/runtime/deployments", request));
     try {
       await entered.promise;
       const response = await Promise.race([attempt, deadline]);
@@ -1003,6 +1046,41 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       if (checkoutDeployments(h.deps.dir).length) {
         await finishHeldBuild(h);
       }
+    }
+  });
+
+  test("admission deadline includes a blocked event loop and fences the late callback", async () => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const release = Promise.withResolvers<GreenVerdict>();
+    let blockOnce = true;
+    h.deps.green = { read: () => {
+      if (blockOnce) {
+        blockOnce = false;
+        const until = Date.now() + 4_000;
+        while (Date.now() < until) { /* model a synchronous callback stall */ }
+        return release.promise;
+      }
+      return Promise.resolve({ state: "green" });
+    } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const request = { revision: tipSha, idempotencyKey: "blocked-admission-budget" };
+    const startedAt = Date.now();
+    const watchdog = new Worker("setTimeout(() => postMessage('expired'), 11_000)", { eval: true });
+    const deadline = new Promise<never>((_, reject) => watchdog.once("message", () => reject(new Error("admission exceeded its absolute budget"))));
+    const attempt = deployPost(post("/runtime/deployments", request));
+    try {
+      const response = await Promise.race([attempt, deadline]);
+      expect(Date.now() - startedAt).toBeLessThan(11_000);
+      expect(await response.json()).toMatchObject({ code: "deploy_not_admitted", outcome: "not-executed", nextAction: "new-request-permitted" });
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+      release.resolve({ state: "green" });
+      expect(await (await deployPost(post("/runtime/deployments", request))).json()).toMatchObject({ code: "deploy_not_admitted" });
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+    } finally {
+      await watchdog.terminate();
+      release.resolve({ state: "green" });
+      await attempt;
+      if (checkoutDeployments(h.deps.dir).length) await finishHeldBuild(h);
     }
   });
 

@@ -108,6 +108,30 @@ test("a lost busy-join reply replays its durable admission before and after sett
   }
 }, 2 * REPLAY_CHILD_TIMEOUT_MS + 15_000);
 
+test("an accepted replay keeps its deployment receipt when wake attribution is unavailable", async () => {
+  let attributionReady = false;
+  let admissions = 0;
+  let wakeWrites = 0;
+  const deploymentId = "checkout-accepted-wake-replay";
+  const key = "accepted-wake-replay";
+  const bindings = viewerMcpBindings(undefined, { post: async () => {
+    admissions++;
+    throw new Error("accepted receipt replay must not send admission");
+  } }, {
+    ...domain,
+    beginSeatDeployment: async () => { if (!attributionReady) throw new Error("seat attribution store unavailable"); },
+    recordSeatDeployment: async () => { if (!attributionReady) throw new Error("seat wake store unavailable"); wakeWrites++; },
+  } as never);
+  const call = () => bindings.deploy_exact_sha({ revision: SHA, clientRequestId: key }, {
+    priorAttemptUncertain: true, priorAcceptedDeployment: { deploymentId, revision: SHA },
+  });
+
+  expect(await call()).toMatchObject({ state: "accepted", deploymentId, revision: SHA, wakeOnSettle: false });
+  attributionReady = true;
+  expect(await call()).toMatchObject({ state: "accepted", deploymentId, revision: SHA, wakeOnSettle: true });
+  expect({ admissions, wakeWrites }).toEqual({ admissions: 0, wakeWrites: 1 });
+});
+
 test("an attribution failure during uncertain replay stays pending until admission and wake reconcile", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "uncertain-attribution-replay-"));
   const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { now: () => 4_000 });

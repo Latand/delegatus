@@ -74,11 +74,11 @@ describe("green merge evidence", () => {
   });
 
   test("a failed runtime workflow stays red even when its check-run receipt is missing", async () => {
-    const h = reader({ tree: "different-tree", requiredChecks: [{ context: "runtime-gate", app_id: 15368 }],
+    const h = reader({ tree: "different-tree", requiredChecks: [{ context: "runtime-gate", app_id: 15368 }, { context: "typecheck", app_id: 15368 }],
       workflowRuns: [{ id: 77, path: ".github/workflows/bun-runtime.yml", head_sha: SHA, event: "push", status: "completed", conclusion: "failure", check_suite_id: 88 }],
       targetRuns: [] });
     expect(await h.subject.read("github.com/latand/delegatus", "main", SHA, "/checkout", undefined, true, "exact-deploy"))
-      .toMatchObject({ state: "red", detail: "runtime-gate", checks: ["runtime-gate"] });
+      .toMatchObject({ state: "red", detail: "runtime-gate", checks: ["runtime-gate", "typecheck"] });
   });
 
   test("a queued rerun supersedes an older failure before it has a start time", async () => {

@@ -3941,13 +3941,23 @@ async function deployExactSha(
   const idempotencyKey = requestId(args);
   const pending = { conversationId: seat.conversationId, project: seat.project,
     revision: revision.toLowerCase(), requestedAt: new Date().toISOString(), idempotencyKey };
+  const knownAccepted = callContext.priorAcceptedDeployment
+    && callContext.priorAcceptedDeployment.revision.toLowerCase().startsWith(revision.toLowerCase())
+    ? { state: "accepted", ...callContext.priorAcceptedDeployment, replayed: true } : null;
   try {
     await (dependencies.beginSeatDeployment ?? beginSeatDeployment)(pending, assertSeat);
   } catch (error) {
-    if (callContext.priorAttemptUncertain && !(error instanceof McpToolRefusal)) {
-      throw new McpDeploymentPendingError(`the prior deploy request is still being reconciled because seat attribution is unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    if (knownAccepted && !(error instanceof McpToolRefusal)) {
+      // The durable MCP receipt already proves this deployment was admitted.
+      // An unavailable wake reservation must not erase that outcome.
+      assertSeat();
+      console.error(`[deploy_exact_sha] could not begin wake recovery for deployment ${knownAccepted.deploymentId}: ${error instanceof Error ? error.message : String(error)}`);
+    } else {
+      if (callContext.priorAttemptUncertain && !(error instanceof McpToolRefusal)) {
+        throw new McpDeploymentPendingError(`the prior deploy request is still being reconciled because seat attribution is unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      throw error;
     }
-    throw error;
   }
   assertSeat();
   const reconcile = () => control.post("/api/runtime/deployments/reconcile", { revision, idempotencyKey, reconcileOnly: true }, {}, {
@@ -3955,9 +3965,7 @@ async function deployExactSha(
     // has its own five-second read/fence budget and never sends admission.
     ...callContext, signal: undefined, deadlineAt: Date.now() + 5000,
   });
-  let recoveredReceipt: Record<string, unknown> | null = callContext.priorAcceptedDeployment
-    && callContext.priorAcceptedDeployment.revision.toLowerCase().startsWith(revision.toLowerCase())
-    ? { state: "accepted", ...callContext.priorAcceptedDeployment, replayed: true } : null;
+  let recoveredReceipt: Record<string, unknown> | null = knownAccepted;
   if (callContext.priorAttemptUncertain && !seatDeploymentForRequestKey(idempotencyKey)
     && dependencies.findDeploymentByIdempotencyKey) {
     const remainingMs = callContext.deadlineAt === undefined
