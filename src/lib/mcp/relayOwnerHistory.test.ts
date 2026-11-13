@@ -16,6 +16,35 @@ test("history always observes fresh data, never reads or writes receipts even wi
   }
   expect(calls).toBe(3); expect(claim).not.toHaveBeenCalled(); expect(lookup).not.toHaveBeenCalled(); expect(complete).not.toHaveBeenCalled();
 });
+
+test("A1/A6: media arguments survive the real MCP schema and binding without receipts", async () => {
+  const seen: unknown[] = [];
+  const control = { post: async (_route: string, body: unknown) => { seen.push(body); return { available: true, status: "done", sha256: "a".repeat(64) }; } };
+  const store = new MemoryMcpReceiptStore();
+  const claim = spyOn(store, "claim"), complete = spyOn(store, "complete");
+  const service = createMcpToolService(viewerMcpBindings(undefined, control), store);
+  const directory = process.env.LLV_STATE_DIR + "/evidence";
+  const args = { action: "media", chat: "-101", messageId: 7, directory, clientRequestId: "media-read" };
+  expect(await service.callTool("relay_owner_history", args)).toMatchObject({ ok: true, status: "done", sha256: "a".repeat(64) });
+  expect(seen).toEqual([{ op: "media", chat: "-101", messageId: 7, directory }]);
+  expect(claim).not.toHaveBeenCalled(); expect(complete).not.toHaveBeenCalled();
+});
+
+test("media binding joins progress to completion within its caller deadline", async () => {
+  const seen: unknown[] = [];
+  const control = { post: async (_route: string, body: unknown) => {
+    seen.push(body);
+    return seen.length === 1 ? { available: true, status: "in_progress", retryAfterSeconds: 1 }
+      : { available: true, status: "done" };
+  } };
+  const bindings = viewerMcpBindings(undefined, control);
+  const args = { action: "media", chat: "-101", messageId: 1 };
+  expect(await bindings.relay_owner_history(args, { deadlineAt: Date.now() + 10_000 })).toMatchObject({ status: "done" });
+  expect(seen).toEqual([{ op: "media", chat: "-101", messageId: 1 }, { op: "media", chat: "-101", messageId: 1 }]);
+  seen.length = 0;
+  expect(await bindings.relay_owner_history(args, { deadlineAt: Date.now() + 500 })).toMatchObject({ status: "in_progress" });
+  expect(seen).toHaveLength(1);
+});
 test("binding posts only fixed arguments and caller capability; live Telegram reply is refused before control", async () => {
   const original = process.env[VIEWER_SPAWN_CAPABILITY_ENV];
   process.env[VIEWER_SPAWN_CAPABILITY_ENV] = "b".repeat(43);
