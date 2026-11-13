@@ -6,7 +6,7 @@ import { accountQuotaVerdict } from "@/lib/accounts/headlessSelection";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import { expect, test, tickPipelines, loadPipelines, savePipelines, LIMITED_ACCOUNT, SPARE_ACCOUNT,
   stageTranscript, readFixtures, providerRecoveryHarness, failedReceipt, AgentRegistry,
-  harness, create, ProjectAccountRefusedError, setAgentRegistryForTests, fs, path, os } from "./engine.fixture";
+  harness, create, frozenWallClock, ProjectAccountRefusedError, setAgentRegistryForTests, fs, path, os } from "./engine.fixture";
 
 const TIMEOUT = "delivery was started and the structured host did not answer; whether it reached the recipient is unverified: Claude delivery confirmation timed out; outcome is uncertain";
 
@@ -315,4 +315,68 @@ test.each(["quoted", "busy", "worked", "newer-prompt", "receipt-raced", "generat
   expect(after.runs[0]!.attempts[0]!.providerWait).toBeUndefined();
   expect(f.h.spawnInputs).toHaveLength(1);
   expect(quota.quotaObservations("claude")).toEqual([]);
+});
+
+test("two native limit-only refusals cannot start a third account after a transient artifact read failure", async () => {
+  const h = harness();
+  const advance = frozenWallClock(h);
+  const accounts = [LIMITED_ACCOUNT, SPARE_ACCOUNT].map(id => ({ id, authPresent: true }));
+  const fixtures: Record<string, string> = {};
+  readFixtures(h, fixtures);
+  const receipts = new Map<string, NonNullable<ReturnType<typeof h.ports.spawnReceipt>>>();
+  h.ports.spawnReceipt = id => receipts.get(id) ?? null;
+  h.ports.allowedAccountIds = () => accounts.map(a => a.id);
+  h.ports.resolveProjectSpawn = (_engine, request) => {
+    const selected = selectProjectAccount({ project: null, engine: "claude", accounts,
+      observations: quota.quotaObservations("claude"), bindings: [], preferredId: LIMITED_ACCOUNT,
+      requestedId: request.requestedId, unavailableIds: request.unavailableIds, model: request.model, now: Date.parse(h.ports.now()) });
+    return selected.kind === "available" ? { kind: "available", account: { engine: "claude", accountId: selected.accountId!, kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } } : selected;
+  };
+  const spawn = h.ports.spawnAgent;
+  h.ports.spawnAgent = async (input, reserved) => {
+    const result = await spawn(input, reserved);
+    if (result.accountId === "account-c") return { ...result, paneId: null };
+    advance(1000);
+    fixtures[result.transcript!] = stageTranscript("native-limit-" + result.launchId, [{ type: "assistant", timestamp: h.ports.now(),
+      isApiErrorMessage: true, error: "rate_limit", message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence",
+        content: [{ type: "text", text: "You've hit your weekly limit · resets 10pm (UTC)" }] } }]);
+    receipts.set(result.launchId, { ...failedReceipt(result.launchId, result.conversationId, TIMEOUT), transcript: result.transcript, accountId: result.accountId });
+    h.setConversationActive(false);
+    throw new Error(TIMEOUT);
+  };
+  await create(h.ports);
+  for (let tick = 0; tick < 8; tick++) {
+    await tickPipelines([], h.ports);
+    const a = loadPipelines()[0]!.runs[0]!.attempts;
+    if (a.length === 2 && a[1]!.providerWait?.limitOnly && a[1]!.providerWait!.turnTs > 0) break;
+  }
+  let attempts = loadPipelines()[0]!.runs[0]!.attempts;
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]!.providerWait?.condition.kind).toBe("usage_limit");
+  expect(attempts[1]!.providerWait?.limitOnly).toBe(true);
+  expect(attempts[1]!.usageLimitedAccounts?.map(a => a.accountId).sort()).toEqual([LIMITED_ACCOUNT, SPARE_ACCOUNT].sort());
+  expect(quota.quotaObservations("claude").some(item => item.accountId === SPARE_ACCOUNT)).toBe(false);
+  savePipelines(loadPipelines());
+  accounts.push({ id: "account-c", authPresent: true });
+  quota.recordQuotaObservation({ engine: "claude", accountId: "account-c", authenticated: true,
+    observedAt: h.ports.now(), authCheckedAt: h.ports.now(), bootId: "fixture", provenance: { source: "live", reason: null, staleSince: null },
+    limits: { session: null, weekly: { usedPercent: 31, resetsAt: Math.floor(Date.parse(h.ports.now()) / 1000) + 7200 }, plan: "pro", capturedAt: Math.floor(Date.parse(h.ports.now()) / 1000) } });
+  const read = h.ports.durableTurnEvidence;
+  let reads = 0;
+  h.ports.durableTurnEvidence = async (...args) => ++reads === 1 ? null : read(...args);
+  await tickPipelines([], { ...h.ports });
+  await tickPipelines([], { ...h.ports });
+  attempts = loadPipelines()[0]!.runs[0]!.attempts;
+  expect(attempts).toHaveLength(2);
+  expect(h.spawnInputs).toHaveLength(2);
+  expect(reads).toBeGreaterThan(1);
+  const reopened = new AgentRegistry(quota.filename);
+  try {
+    const observation = reopened.quotaObservations("claude").find(item => item.accountId === SPARE_ACCOUNT);
+    expect(observation?.limits?.weekly).toMatchObject({ usedPercent: 100,
+      resetsAt: attempts[1]!.providerWait!.resetsAt });
+    expect(observation?.provenance.source).toBe("transcript");
+  } finally {
+    reopened.close();
+  }
 });

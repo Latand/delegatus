@@ -3778,9 +3778,9 @@ async function recoverProviderCut(
     await persist();
   }
   if (!wait) return false;
-  if (notice?.onlyOutput && attempt.effectiveRole.engine === "claude" && notice.condition.kind === "usage_limit" && wait.accountId) {
+  if (wait.limitOnly && attempt.effectiveRole.engine === "claude" && wait.condition.kind === "usage_limit" && wait.accountId) {
     if (unixMs(attempt.controllerWait?.retryAfter ?? "") > time) return true;
-    try { await recordClaudeLimitObservation(wait.accountId, { ...notice, resetsAt: wait.resetsAt }); }
+    try { await recordClaudeLimitObservation(wait.accountId, { text: wait.text, ts: wait.turnTs, resetsAt: wait.resetsAt }); }
     catch (error) {
       await waitForProviderTransport(pipeline, attempt, wait.condition, `account limit observation unavailable: ${String(error)}`, ports, persist);
       return true;
@@ -3851,7 +3851,7 @@ async function recoverProviderCut(
   const bounded = !wait.actionAt && (condition.kind === "transient" || condition.kind === "auth_required" || condition.kind === "usage_limit") && wait.tries >= 3
     || condition.kind === "usage_limit" && !wait.resetsAt && time - unixMs(wait.startedAt) >= 6 * 60 * 60_000;
   const parkCut = (reason: string) => parkProviderCut(pipeline, attempt, reason, ports);
-  if (engine === "claude" && condition.kind === "usage_limit" && notice?.onlyOutput) {
+  if (engine === "claude" && condition.kind === "usage_limit" && wait.limitOnly) {
     const accountLimitRetrySpent = usageLimitsOn(attempt, engine).some(limited => limited.accountId !== wait.accountId
       && !providerAccountHasNewWindow(pipeline, attempt, engine, limited.accountId, ports));
     if (accountLimitRetrySpent) {
@@ -3915,7 +3915,7 @@ async function recoverProviderCut(
     return true;
   }
   pipeline.stateDetail = providerWaitDetail(attempt, ports);
-  if (notice?.onlyOutput && exhaustedReset !== null) {
+  if (wait.limitOnly && exhaustedReset !== null) {
     pipeline.stateDetail += `; earliest reset ${new Date(exhaustedReset * 1000).toISOString()}`;
   }
   const sourceRecovered = condition.kind === "usage_limit" && wait.accountId
