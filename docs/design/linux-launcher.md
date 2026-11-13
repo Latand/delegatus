@@ -5,7 +5,7 @@
 On 2026-11-13 the owner asked, through the project orchestrator, for a Debian
 package that gives Linux users what the Mac app gives Mac users. Linux has no
 package at all; the Mac app (`docs/design/mac-launcher.md`, pull request
-#3925) is the model. The deadline is "as soon as possible". Source: the pinned
+#3925) is the model. Delivery is urgent. Source: the pinned
 task specification "Delegatus launcher for Linux: a .deb that installs an
 app-menu entry and opens Delegatus in its own window".
 
@@ -230,7 +230,10 @@ started keeps running from the per-user runtime.
    first line is `# ` + `SERVICE_MARKER` (`bin/login-service.mjs:8`). Its
    `ExecStart=` arguments (quoted, with `\\`, `%%` and `$$` unescaped) give
    the Bun and the `cli.mjs`. Its `Environment=` lines are added to every
-   child, as the Mac app does with the plist's `EnvironmentVariables`. A
+   child, as the Mac app does with the plist's `EnvironmentVariables`.
+   `Environment=` unescapes backslash and percent while preserving dollar
+   signs, matching `renderLoginService`; systemd does no variable expansion
+   there. A
    `--port` other than 8898 shows the `service-port` message.
 2. **The private install**, when `runtime/bun/bin/bun` and
    `runtime/packages/node_modules/delegatus-cli/bin/cli.mjs` exist and the
@@ -526,6 +529,34 @@ Nothing runs on this machine's port 8898.
    publication gate on the branch.
 
 ## Acceptance checks
+
+Implementation corrections to the plan: `scripts/linux-app/build_package.py`
+assembles the payload and `package_checks.py` checks its full footprint;
+`build.sh` retains the specified interface and uses the shared manifest and
+icon scripts. The build-script test is `scripts/linux-app/build.test.ts`.
+The smoke uses an ephemeral loopback port passed with `--port` to avoid
+collisions, including inside its disposable container. The dependency
+negative control accepts a missing GTK or WebKit typelib: a fresh image with
+only `python3-gi` can lack both. The image negative control uses a generated
+blank image, since a bare Xvfb root can contain a pointer. CI's container is
+started by Docker on the runner so dependencies can be checked before apt
+installs the package. Screenshot and locale assertions remain in the real
+WebKit process. These changes follow the current writer and platform tools.
+
+Local evidence establishes unit behaviour, package metadata and contents,
+reproducibility and package validation. The hosted workflow remains the
+required proof of installation, launch, rendering and removal across the
+supported distribution and architecture matrix. A local container rehearsal
+does not replace that hosted evidence.
+
+The direct server start uses a detached Python log reader (`--pipe-log`) so
+closing the window leaves the CLI's output pipe open and redacts subsequent
+log lines. It ends at EOF from that server. Installer output is supervised by
+the window until the installer has exited and rolled back when cancelled.
+The removal smoke reinstalls the same package between `apt remove` and
+`apt purge`, checking retained data after each. With no conffiles, a remove
+can delete apt's package record, so purging that absent record is not a
+portable test of purge.
 
 1. `bun test scripts/mac-app/manifest.test.ts` passes, including the Linux
    archive names, and the Mac manifest for the same inputs differs only by

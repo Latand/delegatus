@@ -1,0 +1,200 @@
+name: Linux app
+
+on:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      mode:
+        type: string
+        default: pr
+      tag:
+        type: string
+        default: ''
+      integrity:
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-app-${{ inputs.tag || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+      revision: ${{ steps.revision.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+      - id: scope
+        run: bun scripts/ci-platform-scope.ts --workflow .github/workflows/linux-app.yml --prefix linux/ --prefix scripts/linux-app/ --prefix scripts/mac-app/manifest --prefix scripts/mac-app/icon.ts --prefix bin/ --prefix src/app/api/onboarding/ --prefix src/proxy.ts --prefix Dockerfile --prefix .github/workflows/publish.yml
+      - id: revision
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  pack:
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.scope.outputs.revision }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: bun install --frozen-lockfile
+      - name: Check manifest and Debian assembly
+        env:
+          HOME: ${{ runner.temp }}/linux-check/home
+          XDG_CONFIG_HOME: ${{ runner.temp }}/linux-check/config
+          LLV_STATE_DIR: ${{ runner.temp }}/linux-check/state
+          TMPDIR: ${{ runner.temp }}/linux-check/tmp
+          NODE_ENV: test
+        run: |
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$LLV_STATE_DIR" "$TMPDIR"
+          bash scripts/gate-slot.sh bun test scripts/mac-app/manifest.test.ts scripts/linux-app/build.test.ts
+          bash scripts/gate-slot.sh python3 -I -m unittest discover -s linux/tests
+      - name: Pack the checkout
+        if: inputs.mode != 'release'
+        env:
+          HOME: ${{ runner.temp }}/linux-pack/home
+          XDG_CONFIG_HOME: ${{ runner.temp }}/linux-pack/config
+          LLV_STATE_DIR: ${{ runner.temp }}/linux-pack/state
+          TMPDIR: ${{ runner.temp }}/linux-pack/tmp
+          NEXT_TELEMETRY_DISABLED: '1'
+          NODE_ENV: production
+        run: |
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$LLV_STATE_DIR" "$TMPDIR" "$RUNNER_TEMP/linux-package"
+          bash scripts/gate-slot.sh npm pack --pack-destination "$RUNNER_TEMP/linux-package"
+      - uses: actions/upload-artifact@v4
+        if: inputs.mode != 'release'
+        with:
+          name: linux-app-package
+          path: ${{ runner.temp }}/linux-package/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    name: Linux app build
+    needs: [scope, pack]
+    if: needs.scope.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.scope.outputs.revision }}
+          persist-credentials: false
+      - name: Isolate build state
+        run: |
+          mkdir -p "$RUNNER_TEMP/linux-build"/{home,config,state,tmp}
+          echo "HOME=$RUNNER_TEMP/linux-build/home" >> "$GITHUB_ENV"
+          echo "XDG_CONFIG_HOME=$RUNNER_TEMP/linux-build/config" >> "$GITHUB_ENV"
+          echo "LLV_STATE_DIR=$RUNNER_TEMP/linux-build/state" >> "$GITHUB_ENV"
+          echo "TMPDIR=$RUNNER_TEMP/linux-build/tmp" >> "$GITHUB_ENV"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        if: inputs.mode != 'release'
+        with:
+          name: linux-app-package
+          path: ${{ runner.temp }}/linux-package
+      - name: Build twice, then change the epoch
+        env:
+          MODE: ${{ inputs.mode || 'pr' }}
+          EXPECTED_INTEGRITY: ${{ inputs.integrity }}
+        run: |
+          tarball=("$RUNNER_TEMP"/linux-package/*.tgz)
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          bash scripts/gate-slot.sh bash scripts/linux-app/build.sh "$MODE" "$RUNNER_TEMP/linux-one" "${tarball[0]}"
+          bash scripts/gate-slot.sh bash scripts/linux-app/build.sh "$MODE" "$RUNNER_TEMP/linux-two" "${tarball[0]}"
+          export SOURCE_DATE_EPOCH=$((SOURCE_DATE_EPOCH + 1))
+          bash scripts/gate-slot.sh bash scripts/linux-app/build.sh "$MODE" "$RUNNER_TEMP/linux-changed" "${tarball[0]}"
+          dpkg-deb --info "$RUNNER_TEMP"/linux-one/*.deb
+          dpkg-deb --contents "$RUNNER_TEMP"/linux-one/*.deb
+      - name: Lintian, reproducibility and footprint with negative controls
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/src:ro" -v "$RUNNER_TEMP:/artifacts" -w /src debian:13 bash -ec '
+            apt-get update -qq
+            apt-get install -y lintian python3 >/dev/null
+            python3 -I scripts/linux-app/verify_package.py /artifacts/linux-one/*.deb /artifacts/linux-two/*.deb /artifacts/linux-changed/*.deb /artifacts/linux-one/report.json
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-app-deb
+          path: |
+            ${{ runner.temp }}/linux-one/*.deb
+            ${{ runner.temp }}/linux-one/*.sha256
+            ${{ runner.temp }}/linux-one/report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  smoke:
+    name: Linux app smoke (${{ matrix.image }}, ${{ matrix.arch }})
+    needs: [scope, build]
+    if: needs.scope.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu:24.04
+            arch: amd64
+            runner: ubuntu-24.04
+          - image: ubuntu:26.04
+            arch: amd64
+            runner: ubuntu-24.04
+          - image: debian:13
+            arch: amd64
+            runner: ubuntu-24.04
+          - image: ubuntu:26.04
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.scope.outputs.revision }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-app-deb
+          path: ${{ runner.temp }}/linux-app
+      - name: Verify checksum, install, render, reuse and remove
+        env:
+          IMAGE: ${{ matrix.image }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          cd "$RUNNER_TEMP/linux-app"
+          sha256sum -c ./*.sha256
+          mkdir -p "$RUNNER_TEMP/linux-smoke"
+          docker run --rm --platform "linux/$ARCH" -e CI=true -v "$GITHUB_WORKSPACE:/src:ro" -v "$RUNNER_TEMP/linux-app:/package:ro" -v "$RUNNER_TEMP/linux-smoke:/report" -w /src "$IMAGE" bash -ec '
+            apt-get update -qq
+            apt-get install -y python3 >/dev/null
+            python3 -I scripts/linux-app/smoke.py /package/*.deb /report
+          '
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-app-smoke-${{ strategy.job-index }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/linux-smoke
+          if-no-files-found: warn
+          retention-days: 14
