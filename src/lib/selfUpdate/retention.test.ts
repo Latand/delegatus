@@ -8,7 +8,8 @@ import { finishTreeTrash, removeTreeViaTrash, scanProcesses, type ProcessScan } 
 import type { LauncherRecord } from "./launcher";
 import { runGit } from "./git";
 import { RetentionWorker } from "./retentionWorker";
-import { retentionProcessScan, withSelfObservation } from "./retentionInspection";
+import { retentionProcessScan, retentionScanWithObserver, withSelfObservation } from "./retentionInspection";
+import { observePrivilegedReleases, RELEASE_OBSERVER } from "./releaseObserver.worker";
 import { quarantineTree, sealProcessLinks } from "./gatedTrash";
 import { installStateOwnershipGraph, MODULE_CONSUMER_SOURCE } from "./stateOwnershipGraph.fixture";
 
@@ -139,6 +140,26 @@ function fixture(count = 8) {
   return { root, dirs, shas, record, inputs, ports, commands, locked, now, run: () => retainReleases(record, inputs, ports) };
 }
 const exists = fs.existsSync;
+
+test.each([false, true])("fixed proc observer availability=%s preserves holds and permits only unused old releases", async available => {
+  const h = fixture(), proc = path.join(h.root, "observer-proc"), entry = path.join(proc, "100001");
+  fs.mkdirSync(path.join(proc, "self/ns"), { recursive: true }); fs.symlinkSync("mnt:[fixture]", path.join(proc, "self/ns/mnt"));
+  fs.mkdirSync(path.join(entry, "ns"), { recursive: true }); fs.mkdirSync(path.join(entry, "fd"));
+  fs.symlinkSync("mnt:[fixture]", path.join(entry, "ns/mnt"));
+  const fields = Array(52).fill("0"); fields[0] = "S"; fields[19] = "123";
+  fs.writeFileSync(path.join(entry, "stat"), `100001 (fixture) ${fields.join(" ")}`);
+  for (const name of ["cwd", "exe", "root"]) fs.symlinkSync("/elsewhere", path.join(entry, name));
+  fs.writeFileSync(path.join(entry, "cmdline"), ""); // maps is deliberately unavailable.
+  const invoke: typeof spawnSync = ((command: string, args: string[]) => {
+    expect(command).toBe("/usr/bin/sudo"); expect(args).toEqual(["-n", "--", RELEASE_OBSERVER]);
+    return { status: available ? 0 : 1, stdout: JSON.stringify({ ...EMPTY, complete: true, uncertain: [] }), stderr: "", pid: 0, output: [], signal: null };
+  }) as unknown as typeof spawnSync;
+  h.ports.scan = () => retentionScanWithObserver(h.record.releasesDir, () => observePrivilegedReleases(h.record.releasesDir, invoke), proc);
+  h.inputs.rollbackPointers = [JSON.stringify({ dir: h.dirs[1], sha: h.shas[1] })];
+  const report = await h.run(); expect(report.errors).toEqual([]);
+  expect(report.removed.map(row => row.dir)).toEqual(available ? h.dirs.slice(2, 5) : []);
+  for (const directory of [h.dirs[0]!, h.dirs[1]!, ...h.dirs.slice(-3)]) expect(exists(directory)).toBeTrue();
+});
 
 test.each([true, false])("a fresh install without a releases directory has nothing to retain (checkout=%s)", async checkout => {
   const h = fixture(0);
