@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { readCloudEnvironmentBindings, type CloudEnvironmentProjection } from "@/lib/projects/codexCloudEnvironments";
+import { readClaudeCloudReadiness } from "@/lib/projects/claudeCloudTasks";
 import { validAgentMemoryMax } from "@/lib/runtime/agentMemoryConfig";
 import { projectAgentMemoryMax, setProjectAgentMemoryMax } from "@/lib/projects/settings";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
@@ -73,6 +74,7 @@ export interface ProjectSettingsResponse {
   codexCloudEnvironmentId: string;
   claudeCloudTasks?: ClaudeCloudTask[];
   codexCloudEnvironments?: CloudEnvironmentProjection[];
+  claudeCloudReadiness?: ReturnType<typeof readClaudeCloudReadiness>;
   pipelineStageRuntime?: "local" | "codex-cloud";
   pipelineStageRuntimeSetting?: ReturnType<typeof pipelineStageRuntimeSetting>;
   mergeOnReview: MergeOnReviewSetting;
@@ -110,6 +112,7 @@ function answer(project: string): ProjectSettingsResponse {
     archived: presentation.archived?.value ?? false,
     codexCloudEnvironmentId: codexCloudEnvironmentId(key),
     claudeCloudTasks: claudeCloudTasks(key),
+    claudeCloudReadiness: readClaudeCloudReadiness(key),
     codexCloudEnvironments: readCloudEnvironmentBindings(key).bindings,
     pipelineStageRuntime: stageRuntime.runtime,
     pipelineStageRuntimeSetting: stageRuntime,
