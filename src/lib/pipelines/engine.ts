@@ -3426,6 +3426,19 @@ function providerRetryReset(pipeline: Pipeline, attempt: PipelineStageAttempt, p
       && !providerFailedAccountsOn(attempt, attempt.effectiveRole.engine).includes(item.accountId)
       && (quotaCut || item.accountId !== wait.accountId && !wait.failedAccounts?.includes(item.accountId)))
     .map(item => item.resetsAt)];
+  // The selector's exhausted result carries only one reset, and unavailable
+  // carries none. Include each permitted account's live quota verdict so an
+  // earlier observed reset survives either selector outcome and a restart.
+  if (allowed && ports.accountQuota) {
+    const failed = new Set(providerFailedAccountsOn(attempt, attempt.effectiveRole.engine));
+    for (const accountId of allowed) {
+      if ((pinned && accountId !== pinned) || failed.has(accountId)) continue;
+      try {
+        const quota = ports.accountQuota(attempt.effectiveRole.engine, accountId, attempt.effectiveRole.model);
+        if (quota.capacity === "exhausted") resetCandidates.push(quota.resetsAt);
+      } catch { /* A missing observation must not erase the reset evidence above. */ }
+    }
+  }
   return knownReset(...resetCandidates.filter(reset => reset !== null && reset * 1_000 + 60_000 > now));
 }
 

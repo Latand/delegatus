@@ -1,6 +1,9 @@
 import { beforeEach, afterEach } from "bun:test";
 import { pathToFileURL } from "node:url";
 import type { AgentRegistry as QuotaRegistry } from "@/lib/agent/registry";
+import { selectProjectAccount } from "@/lib/accounts/projectSelection";
+import { accountQuotaVerdict } from "@/lib/accounts/headlessSelection";
+import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import { expect, test, tickPipelines, loadPipelines, savePipelines, LIMITED_ACCOUNT, SPARE_ACCOUNT,
   stageTranscript, readFixtures, providerRecoveryHarness, failedReceipt, AgentRegistry,
   harness, create, ProjectAccountRefusedError, setAgentRegistryForTests, fs, path, os } from "./engine.fixture";
@@ -165,22 +168,44 @@ test.each([false, true])("a Claude limit-only first turn with no spare holds wit
   expect(f.sends).toHaveLength(0);
 });
 
-test.each([
-  [3600_000, 7200_000, "unavailable", null],
-  [7200_000, 3600_000, "exhausted", 1800_000],
-] as const)(
-  "an exhausted pool wakes at the earliest authorized reset after reload (source=%i ms, fallback=%i ms, selector=%s)", async (sourceDelay, fallbackDelay, selector, selectorDelay) => {
+function useRealClaudeSelection(f: Awaited<ReturnType<typeof providerRecoveryHarness>>, observations: DurableQuotaObservation[]) {
+  const allowed = [LIMITED_ACCOUNT, SPARE_ACCOUNT];
+  const accounts = allowed.map(id => ({ id, authPresent: true }));
+  const bindings = allowed.map(accountId => ({ project: loadPipelines()[0]!.project, engine: "claude" as const,
+    accountId, createdAt: f.h.ports.now() }));
+  f.h.ports.allowedAccountIds = () => allowed;
+  f.h.ports.accountQuota = (_engine, accountId, model) => accountQuotaVerdict(observations, accountId,
+    Date.parse(f.h.ports.now()), model);
+  f.h.ports.resolveProjectSpawn = (_engine, request) => {
+    const selection = selectProjectAccount({ project: loadPipelines()[0]!.project, engine: "claude", accounts,
+      observations, bindings, unavailableIds: request.unavailableIds, requestedId: request.requestedId,
+      model: request.model, now: Date.parse(f.h.ports.now()) });
+    return selection.kind === "available" ? { kind: "available", account: { engine: "claude",
+      accountId: selection.accountId!, kind: "managed" as const, home: "/account",
+      transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } } : selection;
+  };
+}
+
+test("an unavailable real selector keeps the source reset ahead of persisted retry history after reload", async () => {
+  const sourceDelay = 3600_000, fallbackDelay = 7200_000;
   const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your weekly limit", sourceDelay);
   f.h.durableTurns.get("/codex/stage-1.jsonl")!.lastAgentOutputAt = null;
-  const earliest = Math.floor((f.now() + Math.min(sourceDelay, fallbackDelay, selectorDelay ?? Number.MAX_SAFE_INTEGER)) / 1000);
+  const earliest = Math.floor((f.now() + sourceDelay) / 1000);
   const lane = loadPipelines()[0]!;
   const attempt = lane.runs[0]!.attempts[0]!;
-  attempt.usageLimitedAccounts = [{ accountId: SPARE_ACCOUNT, engine: "claude", limitedAt: f.now(), resetsAt: fallbackDelay ? Math.floor((f.now() + fallbackDelay) / 1000) : null }];
+  attempt.usageLimitedAccounts = [{ accountId: SPARE_ACCOUNT, engine: "claude", limitedAt: f.now(), resetsAt: Math.floor((f.now() + fallbackDelay) / 1000) }];
   savePipelines([lane]);
-  f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT];
-  f.h.ports.resolveProjectSpawn = () => selector === "unavailable"
-    ? ({ kind: "unavailable", allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] })
-    : ({ kind: "exhausted", resetsAt: Math.floor((f.now() + selectorDelay!) / 1000), allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] });
+  const observations: DurableQuotaObservation[] = [
+    { engine: "claude", accountId: LIMITED_ACCOUNT, authenticated: true, authCheckedAt: f.h.ports.now(),
+      observedAt: f.h.ports.now(), bootId: "fixture", limits: { weekly: { usedPercent: 100, resetsAt: f.resetsAt },
+        session: null, plan: "pro", capturedAt: Math.floor(f.now() / 1000) },
+      provenance: { source: "live", reason: null, staleSince: null } },
+    { engine: "claude", accountId: SPARE_ACCOUNT, authenticated: true, authCheckedAt: f.h.ports.now(),
+      observedAt: f.h.ports.now(), bootId: "fixture", limits: { weekly: { usedPercent: 100,
+        resetsAt: Math.floor((f.now() + fallbackDelay) / 1000) }, session: null, plan: "pro", capturedAt: Math.floor(f.now() / 1000) },
+      provenance: { source: "live", reason: null, staleSince: null } },
+  ];
+  useRealClaudeSelection(f, observations);
   await tickPipelines([], f.h.ports);
   savePipelines(loadPipelines());
   const after = loadPipelines()[0]!;
@@ -189,7 +214,40 @@ test.each([
   expect(wait.resetsAt).toBe(f.resetsAt);
   expect(wait.resumeAt).toBe(new Date(earliest * 1000 + 60_000).toISOString());
   expect(after.stateDetail).toContain(new Date(earliest * 1000).toISOString());
-  f.advance(Math.min(sourceDelay, fallbackDelay) - 1);
+  expect(selectProjectAccount({ project: after.project, engine: "claude", accounts: [
+    { id: LIMITED_ACCOUNT, authPresent: true }, { id: SPARE_ACCOUNT, authPresent: true }], observations,
+    bindings: [LIMITED_ACCOUNT, SPARE_ACCOUNT].map(accountId => ({ project: after.project, engine: "claude" as const,
+      accountId, createdAt: f.h.ports.now() })), unavailableIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT], now: f.now() }).kind).toBe("unavailable");
+  f.advance(sourceDelay - 1);
+  await tickPipelines([], { ...f.h.ports });
+  expect(f.h.spawnInputs).toHaveLength(1);
+});
+
+test("an earlier selector quota observation wins over later attempt history after reload", async () => {
+  const sourceDelay = 7200_000, observedDelay = 3600_000;
+  const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your weekly limit", sourceDelay);
+  f.h.durableTurns.get("/codex/stage-1.jsonl")!.lastAgentOutputAt = null;
+  const earliest = Math.floor((f.now() + observedDelay) / 1000);
+  const lane = loadPipelines()[0]!;
+  savePipelines([lane]);
+  const observations: DurableQuotaObservation[] = [{ engine: "claude", accountId: SPARE_ACCOUNT,
+    authenticated: true, authCheckedAt: f.h.ports.now(), observedAt: f.h.ports.now(), bootId: "fixture",
+    limits: { weekly: { usedPercent: 100, resetsAt: earliest }, session: null, plan: "pro", capturedAt: Math.floor(f.now() / 1000) },
+    provenance: { source: "live", reason: null, staleSince: null } }];
+  useRealClaudeSelection(f, observations);
+  await tickPipelines([], f.h.ports);
+  savePipelines(loadPipelines());
+  const after = loadPipelines()[0]!;
+  const wait = after.runs[0]!.attempts[0]!.providerWait!;
+  const selection = selectProjectAccount({ project: after.project, engine: "claude", accounts: [
+    { id: LIMITED_ACCOUNT, authPresent: true }, { id: SPARE_ACCOUNT, authPresent: true }], observations,
+    bindings: [LIMITED_ACCOUNT, SPARE_ACCOUNT].map(accountId => ({ project: after.project, engine: "claude" as const,
+      accountId, createdAt: f.h.ports.now() })), unavailableIds: [LIMITED_ACCOUNT], now: f.now() });
+  expect(selection).toEqual({ kind: "exhausted", resetsAt: earliest, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] });
+  expect(wait.resumeAt).toBe(new Date(earliest * 1000 + 60_000).toISOString());
+  expect(after.stateDetail).toContain(new Date(earliest * 1000).toISOString());
+  expect(f.h.spawnInputs).toHaveLength(1);
+  f.advance(observedDelay - 1);
   await tickPipelines([], { ...f.h.ports });
   expect(f.h.spawnInputs).toHaveLength(1);
 });
