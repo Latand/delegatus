@@ -4317,13 +4317,13 @@ test.each(["ok","lease_lost","refused","media_only_refused","outside","ignore"])
 });
 
 
-test.each([["claude",false],["codex",false],["codex",true]] as const)("owner %s returns rich text, buttons and a document through the real MCP binding (lease loss=%s)", async (engine, leaseLost)=>{
+test.each([["claude",false,false],["codex",false,false],["codex",true,false],["claude",false,true]] as const)("owner %s returns rich text, buttons and a document through the real MCP binding (lease loss=%s, relay_answer text=%s)", async (engine, leaseLost, composed)=>{
   const { richRequest }=await import("./rich.fixture");
   const { viewerMcpBindings, productionDomainDependencies }=await import("@/lib/mcp/bindings");
   const ownerHome=fs.mkdtempSync(path.join("/tmp","relay-rich-owner-"));
   fs.mkdirSync(path.join(ownerHome,"handoff")); const file=path.join(ownerHome,"handoff","report.md");fs.writeFileSync(file,"# Report");
   const oldHome=process.env.HOME, oldState=process.env.LLV_STATE_DIR; process.env.HOME=ownerHome; process.env.LLV_STATE_DIR=path.join(ownerHome,"state");
-  const request=richRequest(true);request.request_id=`rq_owner_rich_${engine}_${leaseLost}`;
+  const request=richRequest(true);request.request_id=`rq_owner_rich_${engine}_${leaseLost}_${composed}`;
   request.input.requester={key:"u1",is_owner:true,is_admin:true,is_anonymous_admin:false,can_delete_messages:true,can_restrict_members:true};
   if (leaseLost) request.owner_delivery={chat_id:-1000000000101,reply_to_message_id:51,message_thread_id:null};
   const events:string[]=[], lateSends:unknown[]=[];
@@ -4335,10 +4335,12 @@ test.each([["claude",false],["codex",false],["codex",true]] as const)("owner %s 
   });
   const paired=relay(`${server.origin}/v1`);paired.targets[0]={...paired.targets[0]!,ownerTier:true,engine};
   updateRelayStore(s=>({...s,relays:[paired]}));
-  const conversationId=`conversation_owner_rich_${engine}`;
+  const conversationId=`conversation_owner_rich_${engine}_${composed}`;
   const binding=(via?:{deputy:string},kind="agent")=>viewerMcpBindings(undefined,{get:async()=>({}),post:async()=>({})},{...productionDomainDependencies,callerAttribution:()=>({kind,conversationId,role:null,...(via?{via}:{})})} as never);
   const own=binding();let observedError:unknown;
-  const text=leaseLost ? "Owner reply" : ("# Report\n\n"+"Long report. ".repeat(500)).trimEnd();
+  const text=composed ? "# Report\n\nThe chat reply cites its [source](https://example.com/source) inline." : leaseLost ? "Owner reply" : ("# Report\n\n"+"Long report. ".repeat(500)).trimEnd();
+  // With relay_answer text, the last message stays in the session.
+  const lastMessage=composed ? "Answered in the chat.\n\nSources:\n- [Source](https://example.com/source)" : text;
   try {
     const result=await runClaimedRequest(paired,request,undefined,{timeoutMs:10000,ownerPorts:{
       launch:async body=>{expect(body.prompt).toContain("<format>");expect(body.prompt).toContain("relay_answer");return {status:202,body:{conversationId}};},
@@ -4346,9 +4348,9 @@ test.each([["claude",false],["codex",false],["codex",true]] as const)("owner %s 
         try{
           await expect(binding({deputy:"seat"}).relay_answer({format:"rich_markdown"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
           await expect(binding(undefined,"voice-gateway").relay_answer({format:"rich_markdown"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
-          await own.relay_answer({format:"rich_markdown",mentions:[{author_key:"u1",offset:2,length:6}],buttons:[[{text:"Open",url:"https://example.com/report"}]],attachments:[{path:file,kind:"document",caption:"Report"}]});
+          await own.relay_answer({...(composed?{text}:{}),format:"rich_markdown",mentions:[{author_key:"u1",offset:2,length:6}],buttons:[[{text:"Open",url:"https://example.com/report"}]],attachments:[{path:file,kind:"document",caption:"Report"}]});
         }catch(error){observedError=error;}
-        return {state:"ended",finalText:text};
+        return {state:"ended",finalText:lastMessage};
       },stop:async()=>{},pollMs:1}});
     if(observedError)throw observedError;
     expect(result).toMatchObject({outcome:"answered",answer:{text}});

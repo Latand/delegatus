@@ -3300,6 +3300,94 @@ describe("self-update reload notice", () => {
    The last state arrives while a "Check now" is held: its late answer, and
    then a late refusal of a second check, both carry the old installation and
    neither brings back the old revision, its badge or the Update button. */
+describe("administrator self-update policy", () => {
+  browserTest("administrator notice and hidden controls at 390px and desktop", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const { idleCheck, idleUpdate, stoppedProcess } = await import("@/lib/selfUpdate/types");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "administrator-self-update");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "server"));
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const at = "2030-01-01T00:00:00.000Z";
+    const revision = { version: "2.0.0", sha: "a".repeat(40), short: "aaaaaaa", date: at };
+    const snapshot = { selfUpdateDisabled: true, mode: "checkout", unsupportedReason: null, installed: revision,
+      serving: { web: revision, runtimeHost: revision }, available: revision, check: idleCheck(), update: idleUpdate(), busy: null,
+      processes: { web: stoppedProcess(), runtimeHost: stoppedProcess() },
+      meta: { branch: "main", remote: "https://github.com/example/fixture.git", checkout: null, pollMinutes: 60, serverTime: at } };
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 1440]) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 700 }, colorScheme: theme, reducedMotion: "reduce",
+          ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        try {
+          await context.addInitScript(({ lang, snapshot }) => {
+            localStorage.setItem("llv_lang", lang);
+            let installed = window.EventSource;
+            Object.defineProperty(window, "EventSource", { configurable: true, get: () => installed, set: (Source: typeof EventSource) => {
+              installed = class extends Source {
+                constructor(url: string | URL) {
+                  super(url);
+                  if (String(url).startsWith("/api/self-update/events")) Object.assign(this, {
+                    addEventListener: (type: string, listener: (event: { data: string }) => void) => {
+                      if (type === "state") queueMicrotask(() => listener({ data: JSON.stringify(snapshot) }));
+                    },
+                  });
+                }
+              } as typeof EventSource;
+            } });
+          }, { lang, snapshot });
+          const page = await context.newPage();
+          await page.clock.setFixedTime(new Date(at));
+          const pageErrors: string[] = [];
+          page.on("pageerror", error => pageErrors.push(error.message));
+          await page.goto(server.base);
+          await page.evaluate(() => window.dispatchEvent(new Event("llv:open-self-update")));
+          const dialog = page.locator("[data-self-update-dialog]");
+          const notice = dialog.locator("[data-section='updates-disabled']");
+          await notice.waitFor();
+          expect(await notice.innerText()).toContain(translate(lang, "selfUpdate.refusal.updates-disabled"));
+          expect(await dialog.locator("[data-action]").count()).toBe(0);
+          const measure = () => notice.evaluate(element => {
+            const texts: { text: string; whole: boolean }[] = [];
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              if (!node.textContent?.trim()) continue;
+              let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+              for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left + parent.clientLeft); right = Math.min(right, box.left + parent.clientLeft + parent.clientWidth); }
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top + parent.clientTop); bottom = Math.min(bottom, box.top + parent.clientTop + parent.clientHeight); }
+              }
+              const range = document.createRange(); range.selectNodeContents(node);
+              texts.push({ text: node.textContent, whole: [...range.getClientRects()].every(r => r.left >= left - 1 && r.right <= right + 1 && r.top >= top - 1 && r.bottom <= bottom + 1) });
+            }
+            const heading = element.querySelector("h2")!.getBoundingClientRect(), body = element.querySelector("p")!.getBoundingClientRect();
+            return { texts, overlap: heading.bottom > body.top, horizontalOverflow: document.documentElement.scrollWidth > innerWidth };
+          });
+          const opening = await measure();
+          expect(opening.texts.every(t => t.whole)).toBe(true); expect(opening.overlap).toBe(false); expect(opening.horizontalOverflow).toBe(false);
+          await dialog.press("PageDown");
+          const paged = await measure();
+          expect(paged.texts.every(t => t.whole)).toBe(true);
+          const frame = `${width}-${lang}-${theme}.png`;
+          await dialog.screenshot({ path: path.join(out, frame) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, width, height: phone ? 844 : 700, opening, paged, final: await measure(), frame, pageErrors });
+        } finally { await context.close(); }
+      }
+      const sourceDigests = Object.fromEntries(["src/components/selfUpdate/SelfUpdateView.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"]
+        .map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]));
+      const record = { capturedAt: new Date().toISOString(), command: "LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx --test-name-pattern 'administrator self-update policy' (isolated roots, gate-slot.sh)", sourceDigests, readings };
+      fs.mkdirSync("evidence/administrator-self-update", { recursive: true });
+      fs.writeFileSync("evidence/administrator-self-update/rendered.json", JSON.stringify(record, null, 2) + "\n");
+      fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify(record, null, 2) + "\n");
+    } finally { await browser.close(); sockets.close(); server.stop(); }
+  }, 180_000);
+});
+
 describe("Updates dialog first state", () => {
   browserTest("pending, error and loaded states and their controls on desktop and phone in en and uk", async () => {
     const out = path.resolve(".artifacts/updates-dialog-first-state");
@@ -44771,4 +44859,193 @@ describe("cold conversation link", () => {
     fs.writeFileSync(path.join(EVIDENCE, "rendered.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "issue1695Evidence.fixture.tsx?scenario=cold-link", readings, failures }, null, 2)}\n`);
     expect(failures).toEqual([]);
   }, 1_500_000);
+});
+
+
+describe("seat tick summary arrives before panel details", () => {
+  browserTest("closed state and held, loaded and failed panels at phone and desktop sizes", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const { seatTickSettingsAnswer } = await import("@/lib/monitor/seatTickSettingsAnswer");
+    const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const baseline = process.env.LLV_TICK_BASELINE === "1";
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", baseline ? "tick-before-frames" : "tick-after-frames");
+    fs.mkdirSync(out, { recursive: true });
+    const now = new Date("2026-11-12T10:00:00Z");
+    const actor = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+    writeSeatTickSettings("atlas", { ...defaultSeatTickSettings("atlas"), enabled: true, wakeIntervalMinutes: 10,
+      reason: "Review queued work", updatedAt: now.toISOString(), monitorPrompt: "Review the next queued task. ".repeat(500) });
+    const full = seatTickSettingsAnswer("atlas", false, actor, { now: () => now.getTime() });
+    const summary = seatTickSettingsAnswer("atlas", false, actor, { now: () => now.getTime(), summary: true });
+    let release: (() => void) | undefined;
+    let held = Promise.resolve();
+    let calls: string[] = [];
+    let notifyPanel!: () => void;
+    let enteredPanel = Promise.resolve();
+    let fail = false;
+    let refuseWrite = false;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        if (request.method === "PUT" && refuseWrite) return Response.json({ error: "Cadence held for review" }, { status: 400 });
+        const small = new URL(request.url).searchParams.get("view") === "summary";
+        calls.push(small ? "summary" : "panel");
+        if (small) return Response.json(summary);
+        notifyPanel();
+        await held;
+        return Response.json(fail ? { error: "fixture panel unavailable" } : full, { status: fail ? 500 : 200 });
+      },
+      "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
+    });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const width of [320, 390, 1000, 1440]) for (const outcome of baseline ? ["baseline"] : ["loaded", "failed", "refused"]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        if (outcome === "refused" && width <= 390) continue;
+        calls = []; fail = outcome === "failed"; refuseWrite = outcome === "refused";
+        held = new Promise<void>(resolve => { release = resolve; });
+        enteredPanel = new Promise<void>(resolve => { notifyPanel = resolve; });
+        const phone = width <= 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`,
+          { width, height: phone ? 844 : 700 }, theme, lang, "reduce", phone, 1, now);
+        const tag = `${width}-${lang}-${theme}-${outcome}`;
+        const frame = async (state: string) => {
+          await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 1000; } });
+          // Long panels scroll. Frame complete lines at both ends instead of
+          // treating a native scroll crop as a truncated label.
+          const scroll = state === "panel-ready" || state === "panel-end" || state === "panel-write-refused" ? await page.evaluate((end) => {
+            const scroller = document.querySelector<HTMLElement>('[data-mobile2-sheet="tick"] [data-mobile2-sheet-body], [data-seat-tick-popover]');
+            if (!scroller) return null;
+            const box = scroller.getBoundingClientRect();
+            const top = box.top + scroller.clientTop, bottom = top + scroller.clientHeight;
+            const lines: Array<{ top: number; bottom: number }> = [];
+            const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+            let node: Node | null;
+            while ((node = walker.nextNode())) {
+              if (!node.textContent?.trim() || !node.parentElement?.checkVisibility()) continue;
+              const range = document.createRange(); range.selectNodeContents(node);
+              for (const r of range.getClientRects()) if (r.width && r.height) lines.push({ top: r.top + scroller.scrollTop, bottom: r.bottom + scroller.scrollTop });
+            }
+            const maximum = scroller.scrollHeight - scroller.clientHeight;
+            const desired = end ? maximum : 0;
+            let chosen = desired;
+            for (let distance = 0; distance <= maximum; distance++) {
+              const offset = end ? maximum - distance : distance;
+              const cuts = lines.some(line => (line.top < top + offset - 0.5 && line.bottom > top + offset + 0.5)
+                || (line.top < bottom + offset - 0.5 && line.bottom > bottom + offset + 0.5));
+              if (!cuts) { chosen = offset; break; }
+            }
+            scroller.scrollTop = chosen;
+            return { desired, actual: scroller.scrollTop, maximum };
+          }, state === "panel-end" || state === "panel-write-refused") : null;
+          const geometry = await page.evaluate(() => {
+            const control = document.querySelector<HTMLElement>('[role="slider"][data-seat-tick-switch]');
+            const row = control?.closest<HTMLElement>("[data-seat-tick-row]");
+            const panel = document.querySelector<HTMLElement>("[data-seat-tick-popover], [data-testid=mobile-seat-tick-sheet]");
+            const roots = panel ? [panel] : [row ?? control].filter(Boolean) as HTMLElement[];
+            const cuts: string[] = [];
+            const clipDetails: unknown[] = [];
+            const ranges: Array<{ text: string; left: number; top: number; right: number; bottom: number }> = [];
+            for (const root of roots) {
+              const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+              let node: Node | null;
+              while ((node = walker.nextNode())) {
+                if (!node.textContent?.trim() || !node.parentElement?.checkVisibility()) continue;
+                const range = document.createRange(); range.selectNodeContents(node);
+                for (const r of range.getClientRects()) {
+                  if (r.bottom <= 0 || r.top >= innerHeight || r.width === 0 || r.height === 0) continue;
+                  let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+                  for (let ancestor: HTMLElement | null = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                    const style = getComputedStyle(ancestor), box = ancestor.getBoundingClientRect();
+                    if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left); right = Math.min(right, box.right); }
+                    if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom); }
+                  }
+                  // Wholly scrolled-away rows are outside the visible surface.
+                  if (r.bottom <= top || r.top >= bottom) continue;
+                  const text = node.textContent!.trim().slice(0, 80);
+                  if (r.left < left - 0.5 || r.right > right + 0.5 || r.top < top - 0.5 || r.bottom > bottom + 0.5) { cuts.push(text); clipDetails.push({ text, glyph: { left: r.left, top: r.top, right: r.right, bottom: r.bottom }, clip: { left, top, right, bottom } }); }
+                  ranges.push({ text, left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+                }
+              }
+            }
+            const overlaps: string[] = [];
+            for (let a = 0; a < ranges.length; a++) for (let b = a + 1; b < ranges.length; b++) {
+              const x = ranges[a]!, y = ranges[b]!;
+              if (Math.min(x.right, y.right) - Math.max(x.left, y.left) > 0.5 && Math.min(x.bottom, y.bottom) - Math.max(x.top, y.top) > 0.5) overlaps.push(`${x.text} / ${y.text}`);
+            }
+            const rect = control?.getBoundingClientRect();
+            return { cuts, clipDetails, overlaps, word: control?.querySelector("[data-seat-tick-face]")?.textContent, visibleText: ranges.map(r => r.text),
+              controlOnFirstScreen: !!rect && rect.top >= 0 && rect.bottom <= innerHeight,
+              pageOverflow: document.documentElement.scrollWidth > innerWidth, scrollbarGutter: innerWidth - document.documentElement.clientWidth,
+              panelScrollbarGutter: panel ? panel.offsetWidth - panel.clientWidth - parseFloat(getComputedStyle(panel).borderLeftWidth) - parseFloat(getComputedStyle(panel).borderRightWidth) : null,
+              fields: panel ? [...panel.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea")].filter(input => input.checkVisibility()).map(input => ({ value: input.value, placeholder: input.placeholder, width: input.clientWidth, height: input.clientHeight })) : [] };
+          });
+          await page.screenshot({ path: path.join(out, `${tag}-${state}.png`) });
+          readings.push({ width, height: phone ? 844 : 700, lang, theme, state, outcome, calls: [...calls], scroll, ...geometry, pageErrors });
+          fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+          const target = page.locator("[data-seat-tick-popover]:visible, [data-testid=mobile-seat-tick-sheet]:visible, [data-seat-tick-row]:visible").first();
+          if (await target.count()) await target.screenshot({ path: path.join(out, `${tag}-${state}-detail.png`) });
+          if (!baseline) {
+            expect(geometry.cuts, `${tag} ${state} clipped text`).toEqual([]);
+            expect(geometry.overlaps, `${tag} ${state} overlapping text`).toEqual([]);
+          }
+          expect(geometry.pageOverflow).toBe(false);
+          expect(pageErrors).toEqual([]);
+          return geometry;
+        };
+        try {
+          await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+          await page.evaluate(() => document.fonts.ready);
+          if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+          else {
+            await page.locator("[data-kanban-seat]").waitFor();
+            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+          }
+          const control = page.locator('[role="slider"][data-seat-tick-switch]:visible').first();
+          if (baseline) {
+            await enteredPanel;
+            await frame("waiting-for-panel");
+            continue;
+          }
+          await control.waitFor();
+          await page.waitForFunction(() => document.querySelector('[role="slider"][data-seat-tick-switch]')?.getAttribute("aria-valuenow") === "3");
+          expect(calls.every(call => call === "summary")).toBe(true);
+          expect((await frame("closed-ready")).controlOnFirstScreen).toBe(true);
+          if (refuseWrite) {
+            await control.focus();
+            await page.keyboard.press("ArrowLeft");
+            await page.keyboard.press("Enter");
+          } else await control.click();
+          await page.locator(phone ? "[data-testid=mobile-seat-tick-sheet]" : "[data-seat-tick-popover]").waitFor();
+          await enteredPanel;
+          expect(calls.filter(call => call === "panel").length).toBe(1);
+          await frame("panel-pending");
+          if (phone) {
+            for (const key of ["Tab", "Tab", "Shift+Tab"]) {
+              await page.keyboard.press(key);
+              expect(await page.evaluate(() => !!document.activeElement?.closest('[data-mobile2-sheet="tick"]'))).toBe(true);
+            }
+            expect(await page.evaluate(() => !!document.elementFromPoint(8, 8)?.closest("[data-mobile2-scrim]"))).toBe(true);
+          }
+          const answered = page.waitForResponse(response => response.url().includes("/api/monitor/seat-tick/settings") && !response.url().includes("view=summary"));
+          release!();
+          await answered;
+          if (fail) {
+            await page.locator("[data-seat-tick-summary]:visible").filter({ hasText: translate(lang, "seatTick.summary.unreadable") }).waitFor();
+            expect(await page.locator("[data-seat-tick-interval]:visible").count()).toBe(0);
+            await frame("panel-failed");
+          } else {
+            await page.locator("[data-seat-tick-interval]:visible").waitFor();
+            if (refuseWrite) {
+              await frame("panel-write-refused");
+              expect(await page.locator("[data-seat-tick-error]:visible").innerText()).toBe("Cadence held for review");
+            } else {
+              await frame("panel-ready");
+              await frame("panel-end");
+            }
+          }
+        } finally { release?.(); await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { release?.(); await browser.close(); sockets.close(); server.stop(); }
+  }, 600_000);
 });

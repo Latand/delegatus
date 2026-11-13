@@ -138,6 +138,12 @@ interrupted by a signal or a stopped Viewer before it reached the remote is
 counted the same way, whatever the stage changed. A refusal of a
 head that changes files, or of commits privacy refused, gets one repair turn
 from the producer that wrote them; its park keeps the cause on the first line.
+After a type, lint or test refusal, a settled producer repair can return to a
+fresh producer attempt automatically. The lane permits two fresh repair
+attempts across controller restarts. `retry-stage` uses the same repair path
+once the earlier turn has settled; the original pass and accepted commits stay
+recorded. Active turns, queued deliveries and live background work fence the
+replacement. See `docs/design/publication-producer-repair.md`.
 `LLV_SKIP_HOOKS=1` is the escape hatch for a false positive. Pre-push warns if
 the branch is behind `origin/main`. Missing local media tools defer named media
 files to the required CI OCR gate. See CONTRIBUTING.md for slot settings.
