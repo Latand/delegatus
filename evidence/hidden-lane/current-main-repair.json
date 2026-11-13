@@ -1,0 +1,800 @@
+{
+  "checkedAt": "2026-11-13T08:16:14.681699+00:00",
+  "testedRevision": "c2d094d1dbce4c12fe47cba3c077fd006571bae2",
+  "comparisonBase": "ce7806df4acef79bbf76221943227e86c59863a9",
+  "requirement": "A hidden lane has the same effective visibility in UI and MCP. A new roundless provisioning decision resurfaces.",
+  "changes": "Merge current main without rebasing. Preserve the existing product fix and the test partitions.",
+  "conditions": {
+    "runner": "Controller-supplied gate-slot.sh, recorded completion awaited through wait_for_check.",
+    "isolation": "Scratch exports at exact Git revisions; separate HOME, XDG_CONFIG_HOME, XDG_CACHE_HOME, XDG_DATA_HOME, LLV_STATE_DIR and TMPDIR for every command.",
+    "execution": "Focused campaign: sequential heavy commands, one explicit test file per process. Native pre-push: the project controls lane and file concurrency.",
+    "controlUrl": "http://127.0.0.1:1",
+    "testFileLimitMs": 300000,
+    "typecheckLimitMs": 1200000
+  },
+  "inventory": {
+    "registrationBodiesBefore": 37,
+    "registrationBodiesAfter": 37,
+    "identical": true,
+    "removed": 0,
+    "added": 0,
+    "command": [
+      "node",
+      "$TMPDIR/repair3/inventory.cjs"
+    ],
+    "exitStatus": 0
+  },
+  "headTotals": {
+    "pass": 190,
+    "fail": 2,
+    "skip": 306,
+    "expect() calls": 2492
+  },
+  "preexistingFailures": [
+    {
+      "tree": "head",
+      "file": "src/lib/pipelines/engine.proactive.part2.test.ts",
+      "assertions": [
+        "unadopted merge custody survives restart: head-changed",
+        "unadopted merge custody survives restart: review-changed"
+      ]
+    },
+    {
+      "tree": "main",
+      "file": "src/lib/pipelines/engine.proactive.part2.test.ts",
+      "assertions": [
+        "unadopted merge custody survives restart: head-changed",
+        "unadopted merge custody survives restart: review-changed"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "label": "typecheck",
+      "tree": "head",
+      "command": [
+        "bunx",
+        "tsc",
+        "--noEmit"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "diagnostics": 0
+      },
+      "durationSeconds": 409.48,
+      "log": "001-head.log"
+    },
+    {
+      "label": "src/lib/mcp/pipelineVisibility.integration.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/mcp/pipelineVisibility.integration.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 5,
+        "fail": 0,
+        "expect() calls": 227
+      },
+      "durationSeconds": 10.79,
+      "log": "002-head.log"
+    },
+    {
+      "label": "src/lib/pipelines/engine.attemptGitCustody.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.attemptGitCustody.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 14,
+        "fail": 0,
+        "expect() calls": 123
+      },
+      "durationSeconds": 67.402,
+      "log": "003-head.log"
+    },
+    {
+      "label": "src/lib/pipelines/engine.mechanicalRecovery.authority.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.mechanicalRecovery.authority.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 9,
+        "fail": 0,
+        "expect() calls": 323
+      },
+      "durationSeconds": 114.972,
+      "log": "004-head.log"
+    },
+    {
+      "label": "src/lib/pipelines/engine.mechanicalRecovery.launch.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.mechanicalRecovery.launch.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 25,
+        "fail": 0,
+        "expect() calls": 217
+      },
+      "durationSeconds": 34.411,
+      "log": "005-head.log"
+    },
+    {
+      "label": "src/lib/pipelines/engine.mechanicalRecovery.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.mechanicalRecovery.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 8,
+        "fail": 0,
+        "expect() calls": 282
+      },
+      "durationSeconds": 91.1,
+      "log": "006-head.log"
+    },
+    {
+      "label": "src/lib/pipelines/engine.ports.part3.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.ports.part3.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 2,
+        "fail": 0,
+        "expect() calls": 521
+      },
+      "durationSeconds": 134.668,
+      "log": "007-head.log"
+    },
+    {
+      "label": "src/lib/pipelines/engine.proactive.part2.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.proactive.part2.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 21,
+        "fail": 2,
+        "expect() calls": 182
+      },
+      "durationSeconds": 94.87,
+      "log": "008-head.log"
+    },
+    {
+      "label": "src/lib/pipelines/engine.proactive.part2.test.ts",
+      "tree": "main",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.proactive.part2.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 50,
+        "fail": 2,
+        "expect() calls": 445
+      },
+      "durationSeconds": 171.722,
+      "log": "009-main.log"
+    },
+    {
+      "label": "src/lib/pipelines/engine.proactive.pending.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.proactive.pending.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 6,
+        "fail": 0,
+        "expect() calls": 48
+      },
+      "durationSeconds": 18.657,
+      "log": "010-head.log"
+    },
+    {
+      "label": "src/lib/pipelines/engine.proactive.workerCapacity.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.proactive.workerCapacity.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 23,
+        "fail": 0,
+        "expect() calls": 215
+      },
+      "durationSeconds": 43.374,
+      "log": "011-head.log"
+    },
+    {
+      "label": "src/lib/pipelines/engine.refreshCompletion.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.refreshCompletion.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 2,
+        "fail": 0,
+        "expect() calls": 14
+      },
+      "durationSeconds": 6.472,
+      "log": "012-head.log"
+    },
+    {
+      "label": "src/lib/pipelines/listProjection.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/listProjection.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 28,
+        "fail": 0,
+        "expect() calls": 90
+      },
+      "durationSeconds": 1.119,
+      "log": "013-head.log"
+    },
+    {
+      "label": "src/components/mobile/mobileBoardModel.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/components/mobile/mobileBoardModel.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 18,
+        "fail": 0,
+        "expect() calls": 114
+      },
+      "durationSeconds": 1.067,
+      "log": "014-head.log"
+    },
+    {
+      "label": "src/components/kanban/stagesModel.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/components/kanban/stagesModel.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 22,
+        "fail": 0,
+        "expect() calls": 106
+      },
+      "durationSeconds": 0.978,
+      "log": "015-head.log"
+    },
+    {
+      "label": "src/lib/pipelines/engine.watchdogRegression.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.watchdogRegression.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 5,
+        "fail": 0,
+        "expect() calls": 17
+      },
+      "durationSeconds": 5.113,
+      "log": "016-head.log"
+    },
+    {
+      "label": "browser collection",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/components/kanban/kanbanBoard.browser.test.tsx"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "skip": 306,
+        "fail": 0,
+        "expect() calls": 1
+      },
+      "durationSeconds": 2.153,
+      "log": "017-head.log"
+    },
+    {
+      "label": "hidden lane browser",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/components/kanban/kanbanBoard.browser.test.tsx",
+        "--test-name-pattern",
+        "hidden lane visibility"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "fail": 0,
+        "expect() calls": 12
+      },
+      "durationSeconds": 9.352,
+      "log": "018-head.log"
+    }
+  ],
+  "privacy": {
+    "command": [
+      "bun",
+      "scripts/privacy-publication-gate.ts",
+      "--base",
+      "origin/main",
+      "--require-known-values",
+      "--check-commits"
+    ],
+    "exitStatus": 0,
+    "scope": "Whole changed files and commit messages",
+    "counts": {
+      "findings": 0
+    }
+  },
+  "publication": {
+    "command": [
+      "bash",
+      ".githooks/pre-push"
+    ],
+    "exitStatus": 1,
+    "durationSeconds": 982.436,
+    "log": "publication-direct.log",
+    "counts": {
+      "completedHeadFiles": 67,
+      "selectedHeadFiles": 80,
+      "unfinishedHeadFiles": 13
+    },
+    "verdict": "Blocked: incomplete test campaign and runner cleanup refusals",
+    "summaryLines": [
+      "pre-push: privacy",
+      "pre-push: CPU admission for publication checks",
+      "pre-push: push checks",
+      "pre-push: types: passed in 74 s; gate service: pids.peak=20 pids.max=768 pids.events:max=0",
+      "pre-push: eslint: passed in 44 s",
+      "pre-push: touched tests: failed (1)",
+      "touched-tests: base commit ce7806df4acef79bbf76221943227e86c59863a9",
+      "touched-tests: reviewed head commit c2d094d1dbce4c12fe47cba3c077fd006571bae2 (head sample runs the working tree)",
+      "touched-tests: head file src/components/mobile/mobileBoardModel.test.ts: 1781ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/mcp/pipelineVisibility.integration.test.ts: 8434ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.closeAttempts.test.ts: 15103ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.claudeCloud.test.ts: 22570ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.accounting.test.ts: 25435ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.controllerSnapshot.test.ts: 22077ms wall; 0 failures; complete; gate service: pids.peak=32 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.capacity.test.ts: 58307ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.cpuQueue.test.ts: 7335ms wall; 0 failures; complete; gate service: pids.peak=32 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.activation.test.ts: 76526ms wall; 1 failures; complete; gate service: pids.peak=32 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.attemptGitCustody.test.ts: 79834ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.dependencies.test.ts: 9206ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.historyWrites.test.ts: 16718ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.accountGuard.test.ts: 117643ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.containment.test.ts: 121589ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.cpuAdmissionPolling.test.ts: 93342ms wall; 2 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.fencedMessage.test.ts: 64326ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.creation.test.ts: 82645ms wall; 0 failures; complete; gate service: pids.peak=32 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.pauseMetadata.test.ts: 13580ms wall; 0 failures; complete; gate service: pids.peak=32 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.controllerPass.test.ts: 139938ms wall; 1 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.launchLease.test.ts: 73722ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.mechanicalRecovery.launch.test.ts: 58997ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.privacyCorrelation.test.ts: 5650ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.missingWorktree.test.ts: 81152ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.mechanicalRecovery.authority.test.ts: 135280ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.proactive.pending.test.ts: 32101ms wall; 0 failures; complete; gate service: pids.peak=32 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.mechanicalRecovery.test.ts: 135314ms wall; 0 failures; complete; gate service: pids.peak=32 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.ports.part2.test.ts: 131169ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.cloud.test.ts: 301392ms wall; 1 failures; incomplete; over half the 300 s file budget; split it; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.proactive.part2.test.ts: 140476ms wall; 2 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.proactive.workerCapacity.test.ts: 86673ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.providerBudget.test.ts: 73382ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.ports.test.ts: 190353ms wall; 0 failures; complete; over half the 300 s file budget; split it; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.ports.part3.test.ts: 243225ms wall; 4 failures; complete; over half the 300 s file budget; split it; gate service: pids.peak=32 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.proactive.test.ts: 159652ms wall; 0 failures; complete; over half the 300 s file budget; split it; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.providerBudgetKinds.test.ts: 76172ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.providerBudgetChains.part3.test.ts: 145831ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.providerBudgetChains.part2.test.ts: 169128ms wall; 0 failures; complete; over half the 300 s file budget; split it; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.providerBudgetChains.test.ts: 168646ms wall; 0 failures; complete; over half the 300 s file budget; split it; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts: 199239ms wall; 0 failures; complete; over half the 300 s file budget; split it; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts: 193012ms wall; 0 failures; complete; over half the 300 s file budget; split it; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.providerChains.part2.test.ts: 97862ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.providerReset.part3.test.ts: 18968ms wall; 27 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.providerBudgetOutput.test.ts: 190076ms wall; 0 failures; complete; over half the 300 s file budget; split it; gate service: pids.peak=32 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts: 182412ms wall; 0 failures; complete; over half the 300 s file budget; split it; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts: 191945ms wall; 0 failures; complete; over half the 300 s file budget; split it; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.providerChains.test.ts: 134647ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts: 197408ms wall; 0 failures; complete; over half the 300 s file budget; split it; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.recoveredPending.test.ts: 60669ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.provisioning.test.ts: 80184ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.providerSignals.test.ts: 116821ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.publication.test.ts: 122527ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.providerReset.part2.test.ts: 188870ms wall; 0 failures; complete; over half the 300 s file budget; split it; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.recovery.test.ts: 87838ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.recovery.part2.test.ts: 100433ms wall; 8 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.refreshCompletion.test.ts: 12119ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.recoveryAdmission.test.ts: 76103ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.recoveryAdmission.part2.test.ts: 92929ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.providerReset.test.ts: 211696ms wall; 16 failures; complete; over half the 300 s file budget; split it; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.rolePrivacy.test.ts: 55344ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.recoveryAuthority.part2.test.ts: 111706ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.restoreContinuation.test.ts: 95580ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.settlementAuthority.test.ts: 6994ms wall; 0 failures; complete; gate service: pids.peak=30 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.recoveryAuthority.test.ts: 131076ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.setupRecipe.test.ts: 8571ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.settlementPreparation.test.ts: 73548ms wall; 0 failures; complete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.rolePrivacyEffects.part2.test.ts: 175174ms wall; 0 failures; complete; over half the 300 s file budget; split it; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.rolePrivacyEffects.part3.test.ts: 179000ms wall; 0 failures; complete; over half the 300 s file budget; split it; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.routing.test.ts: 133727ms wall; 8 failures; complete; gate service: pids.peak=32 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.succession.part2.test.ts: 11587ms wall; 1 failures; incomplete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.spawnRetry.test.ts: 74051ms wall; 1 failures; incomplete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.succession.part3.test.ts: 1786ms wall; 1 failures; incomplete; gate service: pids.peak=30 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.spawnSilence.test.ts: 21904ms wall; 1 failures; incomplete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.roleMemoryDispatch.test.ts: 191653ms wall; 1 failures; incomplete; over half the 300 s file budget; split it; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.rolePrivacyEffects.test.ts: 167280ms wall; 1 failures; incomplete; over half the 300 s file budget; split it; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head file src/lib/pipelines/engine.settlement.test.ts: 132315ms wall; 1 failures; incomplete; gate service: pids.peak=31 pids.max=768 pids.events:max=0",
+      "touched-tests: head: test run exceeded its 15 minute budget; 67 of 80 files completed",
+      "pre-push: Linux backend: stopped when \"touched tests\" failed; nothing was judged",
+      "pre-push: Linux tests: stopped when \"touched tests\" failed; nothing was judged",
+      "pre-push: \"touched tests\" failed: 1; gate failed",
+      "pre-push: publication checks CPU wait: 67045 ms (excluded from execution budget)"
+    ],
+    "steps": [
+      {
+        "name": "privacy",
+        "command": [
+          "bun",
+          "scripts/privacy-publication-gate.ts",
+          "--base",
+          "ce7806df4acef79bbf76221943227e86c59863a9",
+          "--require-known-values",
+          "--check-commits",
+          "--added-lines",
+          "--defer-unavailable-media"
+        ],
+        "exitStatus": 0,
+        "counts": {
+          "findings": 0
+        },
+        "verdict": "passed"
+      },
+      {
+        "name": "types",
+        "command": [
+          "bunx",
+          "tsc",
+          "--noEmit"
+        ],
+        "exitStatus": 0,
+        "counts": {
+          "diagnostics": 0
+        },
+        "verdict": "passed"
+      },
+      {
+        "name": "eslint",
+        "command": [
+          "bun",
+          "scripts/eslint-changes.ts",
+          "--base",
+          "ce7806df4acef79bbf76221943227e86c59863a9",
+          "./src/components/attention/needsYouPanel.fixture.tsx",
+          "./src/components/kanban/kanbanBoard.browser.test.tsx",
+          "./src/components/mobile/mobileBoardModel.ts",
+          "./src/lib/mcp/pipelineVisibility.integration.test.ts",
+          "./src/lib/pipelines/engine.attemptGit.fixture.ts",
+          "./src/lib/pipelines/engine.attemptGitCustody.test.ts",
+          "./src/lib/pipelines/engine.mechanicalRecovery.authority.test.ts",
+          "./src/lib/pipelines/engine.mechanicalRecovery.fixture.ts",
+          "./src/lib/pipelines/engine.mechanicalRecovery.launch.test.ts",
+          "./src/lib/pipelines/engine.mechanicalRecovery.test.ts",
+          "./src/lib/pipelines/engine.ports.part3.test.ts",
+          "./src/lib/pipelines/engine.proactive.part2.test.ts",
+          "./src/lib/pipelines/engine.proactive.pending.test.ts",
+          "./src/lib/pipelines/engine.proactive.workerCapacity.test.ts",
+          "./src/lib/pipelines/engine.refreshCompletion.test.ts",
+          "./src/lib/pipelines/engine.ts",
+          "./src/lib/pipelines/laneMovement.ts",
+          "./src/lib/pipelines/listProjection.test.ts",
+          "./src/lib/pipelines/listProjection.ts"
+        ],
+        "exitStatus": 0,
+        "counts": {
+          "introducedErrors": 0
+        },
+        "verdict": "passed"
+      },
+      {
+        "name": "touched tests",
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "ce7806df4acef79bbf76221943227e86c59863a9",
+          "./src/lib/mcp/pipelineVisibility.integration.test.ts",
+          "./src/lib/pipelines/engine.attemptGitCustody.test.ts",
+          "./src/lib/pipelines/engine.mechanicalRecovery.authority.test.ts",
+          "./src/lib/pipelines/engine.mechanicalRecovery.launch.test.ts",
+          "./src/lib/pipelines/engine.mechanicalRecovery.test.ts",
+          "./src/lib/pipelines/engine.ports.part3.test.ts",
+          "./src/lib/pipelines/engine.proactive.part2.test.ts",
+          "./src/lib/pipelines/engine.proactive.pending.test.ts",
+          "./src/lib/pipelines/engine.proactive.workerCapacity.test.ts",
+          "./src/lib/pipelines/engine.refreshCompletion.test.ts",
+          "./src/lib/pipelines/listProjection.test.ts",
+          "./src/components/mobile/mobileBoardModel.test.ts",
+          "./src/lib/pipelines/engine.rolePrivacyEffects.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts",
+          "./src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
+          "./src/lib/pipelines/engine.providerBudget.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetOutput.test.ts",
+          "./src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
+          "./src/lib/pipelines/engine.providerReset.part3.test.ts",
+          "./src/lib/pipelines/engine.provisioning.test.ts",
+          "./src/lib/pipelines/engine.historyWrites.test.ts",
+          "./src/lib/pipelines/engine.succession.test.ts",
+          "./src/lib/pipelines/engine.creation.test.ts",
+          "./src/lib/pipelines/engine.missingWorktree.test.ts",
+          "./src/lib/pipelines/engine.roleMemoryDispatch.test.ts",
+          "./src/lib/pipelines/engine.recoveredPending.test.ts",
+          "./src/lib/pipelines/engine.containment.test.ts",
+          "./src/lib/pipelines/engine.closeAttempts.test.ts",
+          "./src/lib/pipelines/engine.controllerPass.test.ts",
+          "./src/lib/pipelines/engine.pauseMetadata.test.ts",
+          "./src/lib/pipelines/engine.settlementPreparation.test.ts",
+          "./src/lib/pipelines/engine.providerChains.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetChains.part2.test.ts",
+          "./src/lib/pipelines/engine.recoveryAuthority.test.ts",
+          "./src/lib/pipelines/engine.controllerSnapshot.test.ts",
+          "./src/lib/pipelines/engine.succession.part3.test.ts",
+          "./src/lib/pipelines/engine.settlement.test.ts",
+          "./src/lib/pipelines/engine.accountGuard.test.ts",
+          "./src/lib/pipelines/engine.launchLease.test.ts",
+          "./src/lib/pipelines/engine.succession.part2.test.ts",
+          "./src/lib/pipelines/engine.cloud.test.ts",
+          "./src/lib/pipelines/engine.claudeCloud.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetChains.test.ts",
+          "./src/lib/pipelines/engine.accounting.test.ts",
+          "./src/lib/pipelines/engine.rolePrivacy.test.ts",
+          "./src/lib/pipelines/engine.suspendedRetry.test.ts",
+          "./src/lib/pipelines/engine.recoveryAdmission.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts",
+          "./src/lib/pipelines/engine.spawnSilence.test.ts",
+          "./src/lib/pipelines/engine.recovery.part2.test.ts",
+          "./src/lib/pipelines/engine.terminalBudget.test.ts",
+          "./src/lib/pipelines/engine.spawnRetry.test.ts",
+          "./src/lib/pipelines/engine.routing.test.ts",
+          "./src/lib/pipelines/engine.fencedMessage.test.ts",
+          "./src/lib/pipelines/engine.activation.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
+          "./src/lib/pipelines/engine.cpuQueue.test.ts",
+          "./src/lib/pipelines/engine.dependencies.test.ts",
+          "./src/lib/pipelines/engine.rolePrivacyEffects.part2.test.ts",
+          "./src/lib/pipelines/engine.restoreContinuation.test.ts",
+          "./src/lib/pipelines/engine.providerReset.test.ts",
+          "./src/lib/pipelines/engine.providerSignals.test.ts",
+          "./src/lib/pipelines/engine.ports.part2.test.ts",
+          "./src/lib/pipelines/engine.proactive.test.ts",
+          "./src/lib/pipelines/engine.settlementAuthority.test.ts",
+          "./src/lib/pipelines/engine.recovery.test.ts",
+          "./src/lib/pipelines/engine.providerReset.part2.test.ts",
+          "./src/lib/pipelines/engine.capacity.test.ts",
+          "./src/lib/pipelines/engine.watchdogRegression.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts",
+          "./src/lib/pipelines/engine.providerChains.part2.test.ts",
+          "./src/lib/pipelines/engine.publication.test.ts",
+          "./src/lib/pipelines/engine.setupRecipe.test.ts",
+          "./src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+          "./src/lib/pipelines/engine.rolePrivacyEffects.part3.test.ts",
+          "./src/lib/pipelines/engine.privacyCorrelation.test.ts",
+          "./src/lib/pipelines/engine.ports.test.ts"
+        ],
+        "exitStatus": 1,
+        "counts": {
+          "selectedHeadFiles": 80,
+          "completedHeadFiles": 67,
+          "unfinishedHeadFiles": 13
+        },
+        "verdict": "failed"
+      },
+      {
+        "name": "Linux backend",
+        "command": [
+          "bun",
+          "scripts/verify-platform-backend.ts",
+          "--expect",
+          "linux"
+        ],
+        "exitStatus": null,
+        "counts": {},
+        "verdict": "not judged"
+      },
+      {
+        "name": "Linux tests",
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "ce7806df4acef79bbf76221943227e86c59863a9",
+          "./scripts/owned-runner.portable.test.ts",
+          "./src/lib/proc/memory.test.ts",
+          "./src/lib/proc/portable.test.ts",
+          "./src/lib/proc/darwinIdentity.test.ts",
+          "./src/lib/proc/index.test.ts",
+          "./src/lib/proc/windowsSnapshot.test.ts",
+          "./src/lib/proc/windowsIdentity.test.ts",
+          "./src/lib/proc/windowsCwd.test.ts",
+          "./src/lib/proc/windows.test.ts",
+          "./src/lib/processGroup.test.ts",
+          "./src/lib/platformHome.test.ts",
+          "./src/lib/runtime/localEndpoint.test.ts",
+          "./src/lib/scanner/describe.test.ts",
+          "./src/lib/state/durableJson.test.ts",
+          "./src/runtime-host/socket.test.ts",
+          "./src/runtime-host/runtimeHostFence.test.ts",
+          "./bin/server-runtime.test.ts",
+          "./bin/bind-guard.test.ts"
+        ],
+        "exitStatus": null,
+        "counts": {},
+        "verdict": "not judged"
+      }
+    ],
+    "reportedSurvivorIdentitiesAbsentOnReconciliation": true,
+    "cleanupVerdictAdopted": false
+  },
+  "rendered": {
+    "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+    "case": "hidden lane visibility",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "languages": [
+      "en",
+      "uk"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "frames": 8,
+    "visuallyInspectedAtNativeSize": true,
+    "hiddenHeaderCounts": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "restoredPanelCounts": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "visibleIdentities": "No people, account handles, logins, hosts or emails. The screens contain generic fixture project and role labels.",
+    "readings": [
+      {
+        "lang": "en",
+        "scheme": "light",
+        "hiddenRows": 0,
+        "restoredRows": 1,
+        "action": "undoFlag"
+      },
+      {
+        "lang": "en",
+        "scheme": "dark",
+        "hiddenRows": 0,
+        "restoredRows": 1,
+        "action": "undoFlag"
+      },
+      {
+        "lang": "uk",
+        "scheme": "light",
+        "hiddenRows": 0,
+        "restoredRows": 1,
+        "action": "undoFlag"
+      },
+      {
+        "lang": "uk",
+        "scheme": "dark",
+        "hiddenRows": 0,
+        "restoredRows": 1,
+        "action": "undoFlag"
+      }
+    ]
+  },
+  "notes": [
+    "Publication is blocked: 67 of 80 selected head files completed before the 15 minute comparator limit; no baseline comparison was completed for that campaign. Runner cleanup refusals remain unresolved.",
+    "The previous interrupted publication rehearsal has no adopted verdict.",
+    "The earlier ledgers remain historical observations at the revisions they name.",
+    "The browser collection has 306 gated skips; the enabled hidden-lane case ran separately.",
+    "No performance improvement is claimed."
+  ],
+  "interruptedPublicationRehearsal": {
+    "command": [
+      "bash",
+      ".githooks/pre-push"
+    ],
+    "outerExitStatus": 143,
+    "hookExitStatus": null,
+    "verdict": "No check verdict; interrupted",
+    "privacyExitStatus": 0,
+    "cleanup": "Owned processes were reported at shutdown; their reported identities were absent on reconciliation.",
+    "cause": "The systemd journal records simultaneous service stops; no execution deadline verdict or failing assertion was reported.",
+    "adopted": false
+  },
+  "reportPrivacy": {
+    "command": [
+      "bun",
+      "scripts/privacy-publication-gate.ts",
+      "--base",
+      "origin/main",
+      "--require-known-values",
+      "--paths",
+      "evidence/hidden-lane/current-main-repair.json",
+      "evidence/hidden-lane/current-main-repair.md"
+    ],
+    "exitStatus": 0,
+    "counts": {
+      "findings": 0
+    }
+  }
+}
