@@ -1075,22 +1075,15 @@ function taskDrafts(pristine: readonly BoardTask[], shared?: (task: BoardTask, i
   };
   const peek = (index: number): BoardTask => shared?.(pristine[index]!, index, true) ?? copies.get(index) ?? pristine[index]!;
   const original = (index: number): BoardTask => shared?.(pristine[index]!, index, false) ?? materialize(index);
-  // No per-row array slots or shallow task copies for a scalar lookup.
+  // Allocate array slots and mutable rows only as callers access them.
   const target: BoardTask[] = new Array(pristine.length);
   let inheritedLength = pristine.length;
   const deleted = new Set<number>();
   const slot = (key: PropertyKey) => typeof key === "string" && /^(0|[1-9][0-9]*)$/.test(key) ? Number(key) : -1;
   const tasks = new Proxy(target, {
     get: (array, key) => {
-      if (key === "find" || key === "findLast" || key === "findIndex" || key === "findLastIndex") return (predicate: (task: BoardTask, index: number, rows: BoardTask[]) => unknown, receiver?: unknown) => {
-        const reverse = key === "findLast" || key === "findLastIndex";
-        const length = array.length;
-        for (let index = reverse ? length - 1 : 0; reverse ? index >= 0 : index < length; index += reverse ? -1 : 1) {
-          const held = Object.hasOwn(array, index) ? array[index] : index < inheritedLength && !deleted.has(index) ? peek(index) : undefined;
-          if (predicate.call(receiver, held!, index, tasks)) return key === "findIndex" || key === "findLastIndex" ? index : Object.hasOwn(array, index) || index >= inheritedLength || deleted.has(index) ? held : original(index);
-        }
-        return key === "findIndex" || key === "findLastIndex" ? -1 : undefined;
-      };
+      // Native array methods retain their call receiver and read the same
+      // mutable draft as indexed access, including through an outer view.
       const index = slot(key);
       return index >= 0 && index < array.length && !Object.hasOwn(array, key) && index < inheritedLength && !deleted.has(index) ? original(index) : Reflect.get(array, key);
     },
@@ -1507,7 +1500,11 @@ function writeTaskCommands<R>(filePath: string,
       if (preparationRevision(filePath) !== prepared) throw new FileTransactionBusyError("task preparation dependencies changed; retry");
       if (!outcome.state) return { records: [], companion: sync?.pending() };
       const plan = plans.get(outcome.state.tasks);
-      if (full) for (const task of full.draft.copies.values()) pristineGet(task.id);
+      if (full) for (const [index, task] of full.draft.copies) {
+        // Visiting a mutable draft does not make its payload a write input.
+        // Command replacements still reconcile their selected finding group.
+        if (plan?.has(task.id) || full.draft.changed(index, task)) pristineGet(task.id);
+      }
       if ([...mutable].some(([id, draft]) => draft.copies.get(0)?.id !== undefined && draft.copies.get(0)!.id !== id)) structural = true;
       if (full && [...full.draft.copies].some(([index, task]) => task.id !== full!.pristine.tasks[index]!.id)) structural = true;
       const edits = new Map([...normalizations].map(([id, task]) => [id, structuredClone(task)]));

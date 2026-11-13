@@ -63,9 +63,13 @@ completed findings select only their own group, preserving collection order
 for timestamp ties. A synchronous alias snapshot removes per-row metadata probes.
 
 Callers that explicitly enumerate history retain an array view and the old
-ordering, replacement, deletion and nested mutation behavior. Scalar
-`find`/`findLast` predicates inspect the cached row projection; a match
-opens the row's mutable shallow copy. A command
+ordering, replacement, deletion and nested mutation behavior. Native
+`find`, `findLast`, `findIndex` and `findLastIndex` predicates receive the same
+mutable row as indexed access and the array on which the method was called.
+Each visited row opens its mutable shallow copy; keyed lookups use
+`readMutationTask` to avoid enumerating history. Commit preparation reloads
+only changed drafts and command replacements; visiting an unchanged draft
+does not reload or normalize its stored payload. A command
 shares those drafts with its input and output arrays, including assignment
 arrays read before the command. Structural array edits end the command
 shortcut; subsequent commands consume the actual reordered array.
@@ -80,8 +84,8 @@ Warming verifies the database identity, revision and aliases before publishing
 its caches; a concurrent change discards the unverified projections.
 Later revisions decode only journaled rows, and seek their order and
 byte metadata by key. A persistent binary index copies the path to a changed
-row and shares its other branches with earlier views. Scalar lookup allocates
-no wrapper for each inspected row and copies no full task reference vector.
+row and shares its other branches with earlier views. Keyed lookup allocates
+only its selected draft and copies no full task reference vector.
 Ordinary patches keep the existing index; insertions,
 deletions and moved rows rebuild the ordered reference array once per changed
 reader revision. A previous array view retains its own revision. Journal
@@ -399,6 +403,10 @@ The final commit's unmodified pre-push exit is reported in the stage result.
 
 ## Mutable lookup and project rotation controls
 
+This section records the earlier implementation. Its array-find timings and
+single-copy allocation counts predate the mutable predicate correction below;
+they do not describe the current native array scan.
+
 The regression file now exercises nested assignments before and after a
 command through both its input and output arrays, rollback, subsequent done
 admissions, peer edits, finding ownership and cache invalidation during reader
@@ -470,11 +478,15 @@ reader projections and receipt retry. The maintained differential now compares
 writer. Task revisions, SQLite row revisions and order, receipts and rollback
 all match.
 
-The lookup regression refuses a full reference-vector slice and counts every
+The keyed and array lookup regressions refuse a full reference-vector slice and count every
 new Proxy constructor call while repeatedly patching and updating a note on
 4599 rows without intervening list reads. It also retains earlier mutation
 views and verifies their original values after later commits. Both bounds
-include command output lookups.
+include command output lookups through the corresponding reader. A separate replay
+compares all 45 captured whole-state checkpoints, including mutable scalar
+predicates and row/array identity. Explicit array scans materialize visited
+drafts; the earlier scalar projection measurements below describe the prior
+implementation and are superseded for array scans by this correction.
 
 The repeated before/after lookup measurement uses the unchanged synthetic
 fixture above (4599 rows, 25,165,834 bytes), Bun 1.4.0, three admitted CPUs,
@@ -490,8 +502,9 @@ no repetition was discarded.
 | Note after find | 100.417 / 131.120 | 5.530 / 8.842 |
 | Create | 106.143 / 138.764 | 2.112 / 9.815 |
 
-Reproduce with `scripts/measure-task-writes.ts "$REFERENCE" "$CANDIDATE"
---lookup` through the gate, using the preparation, isolation and measurement
-procedure above. Patch and note each clone one task root; create clones none.
+Reproduce this historical scalar control with the revisions recorded in its
+evidence and `scripts/measure-task-writes.ts "$REFERENCE" "$CANDIDATE"
+--lookup` through the gate, using the isolation procedure above. In that
+implementation patch and note each clone one task root; create clones none.
 Raw observations, the red regressions and the final hook verdict are retained
 with the stage evidence outside the source tree.

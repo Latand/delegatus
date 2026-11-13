@@ -1,3 +1,8 @@
+import { strict as assert } from "node:assert";
+import * as store from "./store";
+import * as commands from "./commands";
+import { proactiveScopeHash } from "./proactiveScope";
+import { readMutationTask } from "./mutationView";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -100,7 +105,7 @@ for (const access of ["input", "output"] as const) test(`command followed by nes
   expect(raw(file).find(row => row.row_key === "t:other")).toEqual(before.find(row => row.row_key === "t:other"));
 });
 
-test("array lookup and command refresh only changed payloads over successive revisions", () => {
+for (const lookup of ["keyed", "array"] as const) test(`${lookup} lookup and command refresh only changed payloads over successive revisions`, () => {
   const { file } = sandbox();
   seed(file, Array.from({ length: 4599 }, (_, i) => task(`lookup-${i}`, { details: "x".repeat(5000) })));
   prepareTaskRows(file); loadTasksForList(file);
@@ -136,17 +141,19 @@ test("array lookup and command refresh only changed payloads over successive rev
     return Reflect.apply(stringify, JSON, [value, ...args]);
   });
   try {
+    const read = (rows: BoardTask[]) => lookup === "keyed" ? readMutationTask(rows, "lookup-4598") : rows.find(row => row.id === "lookup-4598");
     for (let i = 0; i < 3; i++) mutateTasks(tasks => {
       retained.push(tasks);
-      expect(tasks.findLast(row => row.id === "lookup-4598")?.id).toBe("lookup-4598");
-      expect(tasks.find(row => row.id === "lookup-4598")?.id).toBe("lookup-4598");
+      expect(read(tasks)?.id).toBe("lookup-4598");
       const result = patchTask(tasks, "lookup-4598", i % 2 ? { note: `note ${i}` } : { text: `text ${i}` }, at);
-      if (result.ok) expect(result.tasks.find(row => row.id === "lookup-4598")?.text).toBe(`text ${i === 1 ? 0 : i}`);
+      if (result.ok) expect(read(result.tasks)?.text).toBe(`text ${i === 1 ? 0 : i}`);
       return { tasks: result.ok ? result.tasks : undefined, result };
     }, file);
     expect(payloads).toBeLessThan(30);
     expect(clone.mock.calls.length).toBeLessThan(30);
-    expect(shallow).toBeLessThan(30);
+    // Mutable array predicates open a shallow draft for every visited row.
+    // Keyed readers open only their selected draft. Neither copies payloads.
+    expect(shallow).toBeLessThan(lookup === "keyed" ? 30 : 4599 * 3 + 30);
     expect(wrappers).toBeLessThan(60);
   } finally { globalThis.Proxy = NativeProxy; slices.mockRestore(); full.mockRestore(); clone.mockRestore(); json.mockRestore(); copies.mockRestore(); metadata?.mockRestore(); }
   expect(retained.map(rows => rows.find(row => row.id === "lookup-4598")?.text)).toEqual(["Task lookup-4598", "text 0", "text 0"]);
@@ -665,3 +672,334 @@ for (const mode of ["owner", "refused"]) test.skipIf(process.platform !== "linux
     expect(result).toMatchObject({ mode, privateChannel: true, workerStartupAuthority: false, preparations: mode === "owner" ? 3 : 0 });
   } finally { if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; } }
 }, 60_000);
+
+for (const method of ["find", "findLast", "findIndex", "findLastIndex"] as const) {
+  for (const output of [false, true]) test(`${method} predicates retain mutable row and array identity on ${output ? "command output" : "input"}`, () => {
+    const { file } = sandbox();
+    seed(file, [task("extra-a", { assignments: [{ path: "fixture/predicate.jsonl", panePid: null, state: "delivered", error: null, at }] }), task("extra-b")]);
+    prepareTaskRows(file);
+    const retained = loadTasksForList(file);
+    const before = raw(file);
+    const write = (rollback: boolean) => mutateTasks(tasks => {
+      const command = output ? patchTask(tasks, "extra-b", { text: "Command edit" }, at) : undefined;
+      if (command && !command.ok) throw new Error(command.error);
+      const rows = command?.ok ? command.tasks : tasks;
+      const receiver = { visited: [] as number[] };
+      const found = rows[method](function(this: typeof receiver, row, index, array) {
+        expect(this).toBe(receiver);
+        expect(array).toBe(rows);
+        expect(row).toBe(array[index]!);
+        this.visited.push(index);
+        if (row.id !== "extra-a") return false;
+        row.text = "Edited inside predicate";
+        row.assignments[0]!.state = "failed";
+        return true;
+      }, receiver);
+      expect(found).toBe(method === "findIndex" || method === "findLastIndex" ? 0 : rows[0]!);
+      expect(receiver.visited).toEqual(method === "findLast" || method === "findLastIndex" ? [1, 0] : [0]);
+      expect(rows[method](() => false)).toBe(method === "findIndex" || method === "findLastIndex" ? -1 : undefined);
+      const other = [task("borrowed")];
+      const borrowed = Reflect.apply(rows[method], other, [(row: BoardTask) => row.id === "borrowed"]);
+      expect(borrowed).toBe(method === "findIndex" || method === "findLastIndex" ? 0 : other[0]!);
+      if (rollback) throw new Error("predicate rollback");
+      return { tasks: rows, result: null };
+    }, file);
+    expect(() => write(true)).toThrow("predicate rollback");
+    expect(raw(file)).toEqual(before);
+    write(false);
+    expect(loadTasks(file).find(row => row.id === "extra-a")).toMatchObject({ text: "Edited inside predicate", assignments: [{ state: "failed" }] });
+    expect(retained[0]).toMatchObject({ text: "Task extra-a", assignments: [{ state: "delivered" }] });
+  });
+}
+
+test("mixed identity replay matches all 45 whole-state writer checkpoints", () => {
+  const { root, file } = sandbox();
+  let serial = 100_000;
+  const nativeUuid = crypto.randomUUID;
+  const uuid = spyOn(crypto, "randomUUID").mockImplementation(() => new Error().stack?.includes("stampTaskRevisions")
+    ? `00000000-0000-4000-8000-${String(++serial).padStart(12, "0")}` : nativeUuid());
+  try {
+    let instant = Date.parse("2026-11-05T00:00:00.000Z");
+    const at = () => new Date(instant).toISOString();
+    const freeze = () => setSystemTime(new Date(instant));
+    freeze();
+    const make = (id: string, project: string): BoardTask => {
+      const result = commands.createTask([], { project, text: `Task ${id}`, placement: "unplaced" }, [], { now: at, id: () => id });
+      if (!result.ok) throw new Error(result.error);
+      return result.task;
+    };
+    const a = make("finding-a", "dir-before"), b = make("finding-b", "dir-after");
+    for (const task of [a, b]) { task.findingKey = "incident"; task.finding = { count: 2, lastSeenAt: at() }; }
+    const done = make("done", "dir-after"); done.status = "done";
+    const accounting = make("accounting", "dir-after"); accounting.accounting!.readyAt = null;
+    const proactive = make("proactive", "dir-before");
+    proactive.proactive = { episode: at(), candidateKey: "candidate", sources: ["fixture"], score: [1, 1, 1, 1], scopeHash: proactiveScopeHash(proactive), scopeRevision: 0 };
+    const tasks = [a, b, done, accounting, proactive, make("plain", "dir-after")];
+    fs.writeFileSync(file, JSON.stringify({ tasks }));
+    store.importLegacyTasks(file);
+    // This is the unchanged whole-state writer, shared with the reference.
+    store.saveTasks(store.loadTasks(file), file);
+    if (store.prepareTaskRows) store.prepareTaskRows(file);
+    serial = 0;
+    const db = new Database(path.join(root, "state.sqlite"), { readonly: true });
+    try {
+      const snapshots: unknown[] = [];
+      const checkpoint = (result: unknown) => snapshots.push({ result, state: store.loadTasksFile(file), rows: db.query("SELECT row_key,value_json,row_order,row_revision FROM state_rows WHERE collection='tasks' ORDER BY row_order,row_key").all() });
+      const patch = (id: string, input: Parameters<typeof commands.patchTask>[2]) => {
+        instant += 1000; freeze();
+        const result = store.mutateTasks(tasks => {
+          const outcome = commands.patchTask(tasks, id, input, at());
+          return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
+        }, file);
+        checkpoint(result.ok ? { ok: true, id: result.task.id, revision: taskRevision(result.task), notes: result.notes } : result);
+      };
+      const create = (id: string, request: string, extra: Parameters<typeof commands.createTask>[1] = {}) => {
+        instant += 1000; freeze();
+        const result = store.mutateTasksFile(state => {
+          const outcome = commands.createTask(state.tasks, { project: "dir-after", text: `Created ${id}`, placement: "unplaced", clientRequestId: request, ...extra }, state.recentCreates, { now: at, id: () => id });
+          return { state: outcome.ok && !outcome.replay ? { tasks: outcome.tasks, recentCreates: outcome.recentCreates } : undefined, result: outcome };
+        }, file);
+        checkpoint(result.ok ? { ok: true, id: result.task.id, revision: taskRevision(result.task), replay: result.replay, matched: result.matched } : result);
+      };
+      checkpoint({ prepared: true });
+      const initial = taskRevision(store.loadTasks(file).find(task => task.id === "plain")!);
+      patch("plain", { text: "Edited", expectedProject: "dir-after", expectedRevision: initial });
+      patch("plain", { note: "A note" });
+      patch("plain", { text: "Stale", expectedProject: "dir-after", expectedRevision: initial });
+      create("created", "first", { findingKey: "new-occurrence" });
+      create("unused", "first", { findingKey: "new-occurrence" });
+      create("unused", "second", { findingKey: "new-occurrence" });
+      const legacyWriter = new SqliteStateCollection<BoardTask>(path.join(root, "state.sqlite"), {
+        collection: "tasks", schemaVersion: 1, key: row => `t:${row.id}`,
+        busyMessage: "fixture state busy", decode: value => value as BoardTask, clone: row => structuredClone(row),
+      });
+      const late = make("late-finding", "dir-after");
+      late.findingKey = "incident"; late.finding = { count: 3, lastSeenAt: at() };
+      legacyWriter.boundedPatch(1, tx => tx.put(late));
+      checkpoint({ lateFinding: true });
+      const keeper = store.loadTasksFile(file).tasks.find(task => task.id === "finding-b")!;
+      patch("finding-b", { note: "Late finding guard", expectedProject: "dir-after", expectedRevision: taskRevision(keeper) });
+      instant += 1000; freeze();
+      assert(persistProjectAliases([{ source: "dir-before", target: "dir-after", displayName: "Fixture" }]));
+      if (store.prepareTaskRows) store.prepareTaskRows(file);
+      else store.mutateTasks(tasks => ({ tasks: tasks.slice(), result: null }), file);
+      checkpoint({ aliased: true });
+      patch("plain", { findingKey: "incident" });
+      patch("done", { status: "inbox" });
+      patch("done", { status: "done" });
+      instant += 1000; freeze();
+      store.mutateTasks(tasks => {
+        const task = tasks.find(task => task.id === "done")!;
+        task.assignments.push({ path: "fixture/new.jsonl", panePid: null, state: "delivered", error: null, at: at(), conversationId: "fixture-new" });
+        task.updatedAt = at();
+        return { tasks, result: null };
+      }, file);
+      checkpoint({ admitted: true });
+      patch("plain", { color: "amber" });
+      patch("plain", { color: "amber" });
+      instant += 1000; freeze();
+      store.mutateTasks(tasks => {
+        const result = commands.deleteTask(tasks, "created");
+        if (!result.ok) throw new Error(result.error);
+        return { tasks: result.tasks, result: null };
+      }, file);
+      checkpoint({ deleted: true });
+      create("recreated", "first", { findingKey: "new-occurrence" });
+      instant += 1000; freeze();
+      store.mutateTasks(tasks => { tasks.reverse(); return { tasks, result: null }; }, file);
+      checkpoint({ reverse: true, list: store.loadTasksForList(file).map(task => task.id), selected: store.loadTasksByIds(new Set(["plain", "done"]), file).map(task => task.id) });
+      instant += 1000; freeze();
+      const saved = JSON.stringify(store.loadTasksFile(file));
+      assert.throws(() => store.mutateTasks(tasks => { tasks[0]!.text = "rollback edit"; throw new Error("intentional refusal"); }, file), /intentional refusal/);
+      assert.equal(JSON.stringify(store.loadTasksFile(file)), saved);
+      checkpoint({ rollback: true });
+      store.mutateTasks(tasks => {
+        const first = commands.patchTask(tasks, "plain", { note: "first composed command" }, at());
+        if (!first.ok) throw new Error(first.error);
+        const second = commands.patchTask(first.tasks, "done", { color: "lime" }, at());
+        if (!second.ok) throw new Error(second.error);
+        return { tasks: second.tasks, result: null };
+      }, file);
+      checkpoint({ twoCommands: true });
+      instant += 1000; freeze();
+      store.mutateTasks(tasks => {
+        tasks.find(task => task.id === "plain")!.assignments.push({ path: "fixture/composed.jsonl", panePid: null, state: "delivered", error: null, at: at(), conversationId: "composed" });
+        const result = commands.patchTask(tasks, "plain", { text: "composed edit" }, at());
+        if (!result.ok) throw new Error(result.error);
+        return { tasks: result.tasks, result: null };
+      }, file);
+      checkpoint({ composedNestedAndCommand: true });
+      for (const access of ["input", "output"] as const) {
+        instant += 1000; freeze();
+        store.mutateTasks(tasks => {
+          const command = commands.patchTask(tasks, "plain", { note: `command then nested ${access}` }, at());
+          if (!command.ok) throw new Error(command.error);
+          (access === "input" ? tasks : command.tasks).find(task => task.id === "plain")!.assignments.push({ path: `fixture/${access}.jsonl`, panePid: null, state: "delivered", error: null, at: at(), conversationId: access });
+          if (access === "output") command.tasks.reverse();
+          return { tasks: command.tasks, result: null };
+        }, file);
+        checkpoint({ commandThenNested: access });
+      }
+      instant += 1000; freeze();
+      store.mutateTasks(tasks => {
+        tasks.find(task => task.id === "plain")!.project = "dir-moved";
+        const command = commands.patchTask(tasks, "plain", { color: "lime" }, at());
+        if (!command.ok) throw new Error(command.error);
+        return { tasks: command.tasks, result: null };
+      }, file);
+      checkpoint({ projectMove: true, list: store.loadTasksForList(file).map(task => [task.id, task.project]), selected: store.loadTasksByIds(new Set(["plain", "done"]), file).map(task => [task.id, task.project]) });
+      patch("plain", { status: "done" });
+      patch("plain", { status: "inbox" });
+      create("mixed-finding", "mixed-new", { findingKey: "incident" });
+      patch("accounting", { findingKey: "incident" });
+      checkpoint({ finalMixed: true });
+      for (const mode of ["replace-patched", "splice-created", "splice-patched", "truncate-patched"]) {
+        instant += 1000; freeze();
+        const before = store.loadTasksFile(file);
+        const structural = (rollback: boolean) => store.mutateTasksFile(state => {
+          let recentCreates = state.recentCreates;
+          const command = mode === "splice-created"
+            ? (() => {
+              const created = commands.createTask(state.tasks, { project: "dir-after", text: "Structural", placement: "unplaced", clientRequestId: "structural-request" }, recentCreates, { now: at, id: () => "structural-new" });
+              if (created.ok) recentCreates = created.recentCreates;
+              return created;
+            })()
+            : commands.patchTask(state.tasks, "plain", { note: `Structural ${mode}` }, at());
+          if (!command.ok) throw new Error(command.error);
+          const index = command.tasks.findIndex(task => task.id === command.task.id);
+          if (mode === "replace-patched") command.tasks[index] = { ...command.task, text: "Final replacement" };
+          else if (mode === "truncate-patched") command.tasks.length = 0;
+          else command.tasks.splice(index, 1);
+          if (rollback) throw new Error("structural rollback");
+          return { state: { ...state, tasks: command.tasks, recentCreates }, result: null };
+        }, file);
+        assert.throws(() => structural(true), /structural rollback/);
+        assert.deepEqual(store.loadTasksFile(file), before);
+        structural(false);
+        checkpoint({ structural: mode, list: store.loadTasksForList(file) });
+        if (mode === "splice-created") create("structural-retry", "structural-request", { text: "Structural" });
+        if (mode === "splice-patched") create("plain", "restore-plain", { project: "dir-moved" });
+      }
+
+      create("extra-a", "extra-a", { project: "dir-extra" });
+      create("extra-b", "extra-b", { project: "dir-extra" });
+      const mixed = (label: string, mutate: (tasks: BoardTask[]) => BoardTask[] | undefined) => {
+        instant += 1000; freeze();
+        let error: string | null = null;
+        try { store.mutateTasks(tasks => ({ tasks: mutate(tasks), result: null }), file); }
+        catch (e) { error = e instanceof Error ? e.name : String(e); }
+        checkpoint({ reviewerMixed: label, error, list: store.loadTasksForList(file), selected: store.loadTasksByIds(new Set(["extra-a", "extra-b"]), file) });
+      };
+      mixed("two commands and done admission", tasks => {
+        const a = commands.patchTask(tasks, "extra-a", { status: "done", note: "a note" }, at());
+        if (!a.ok) throw new Error(a.error);
+        a.task.assignments.push({ path: "fixture/reviewer.jsonl", panePid: null, state: "delivered", error: null, at: at(), conversationId: "fixture-reviewer" });
+        const b = commands.patchTask(a.tasks, "extra-b", { text: "Second changed" }, at());
+        if (!b.ok) throw new Error(b.error);
+        return b.tasks;
+      });
+      mixed("rollback after replacement", tasks => {
+        const a = commands.patchTask(tasks, "extra-a", { text: "Rolled back" }, at());
+        if (!a.ok) throw new Error(a.error);
+        a.tasks.splice(0, 1);
+        throw new Error("rollback");
+      });
+      mixed("reverse then guarded command", tasks => {
+        tasks.reverse();
+        const before = tasks.find(t => t.id === "extra-a")!;
+        const a = commands.patchTask(tasks, "extra-a", { color: "amber", expectedProject: before.project, expectedRevision: taskRevision(before) }, at());
+        if (!a.ok) throw new Error(a.error);
+        return a.tasks;
+      });
+      mixed("nested edit and refused command", tasks => {
+        tasks.find(t => t.id === "extra-a")!.assignments[0]!.error = "changed nested";
+        const staleRevision = `task-v1:00000000-0000-4000-8000-${String(999_999_999_999)}`;
+        const a = commands.patchTask(tasks, "extra-a", { text: "Should refuse", expectedProject: "dir-extra", expectedRevision: staleRevision }, at());
+        assert.equal(a.ok, false);
+        return tasks;
+      });
+      mixed("command output structural change then next command", tasks => {
+        const a = commands.patchTask(tasks, "extra-b", { note: "before deletion" }, at());
+        if (!a.ok) throw new Error(a.error);
+        a.tasks.splice(a.tasks.findIndex(t => t.id === "extra-b"), 1);
+        const b = commands.patchTask(a.tasks, "extra-a", { status: "inbox" }, at());
+        if (!b.ok) throw new Error(b.error);
+        return b.tasks;
+      });
+      store.mutateTasks(tasks => {
+        const byIdentity = tasks.find((row, i, rows) => row.id === "extra-a" && rows[i] === row);
+        const byArray = tasks.find((row, _i, rows) => row.id === "extra-a" && rows === tasks);
+        checkpoint({ reviewerMixed: "pure predicate identity", byIdentity: byIdentity?.id ?? null, byArray: byArray?.id ?? null });
+        return { tasks: undefined, result: null };
+      }, file);
+      mixed("predicate mutates visited row", tasks => {
+        const index = tasks.findIndex(task => {
+          if (task.id !== "extra-a") return false;
+          task.text = "Edited inside predicate";
+          task.assignments[0]!.state = "failed";
+          return true;
+        });
+        assert(index >= 0);
+        return tasks;
+      });
+
+      // Captured from the unmodified whole-state writer at d040eef4955f.
+      // Hash canonical keys only; values include exact JSON, row order/revisions,
+      // task revisions, receipts, refusals and predicate results.
+      const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical)
+        : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)])) : value;
+      const expected = [
+        "8a5430af329e374354a4e37d1ed45850c7d756248bb0e650d1a5b182493253e0",
+        "93984561fe5ce288c6b7710487bfa4b6fb220d96ddc2fa4596c4a9b1af01fbce",
+        "ecbc7df095dd11385d2edbba0e264251ec3dc690e7690f91c943846ffab1610c",
+        "25e728a2ad1c8fcf42d511be4a67078fcd594026039b40c4f4d0988cf690831c",
+        "289ee8f38202bebe59e51c94ead34795d15f7116b03615a9fbcf3b376c3524e1",
+        "081062443ae0cebc69ff90a4230a54b2d8c23f2bfdc9aa42dcd5afb23c2be3d2",
+        "3c7d7fc3be2355a050d6ec7595d4c53ff0c118c299e34eaee80b1813603c4eb7",
+        "f08f66a1a3f9a088e26d21df371b0043f0ab34557b694b1dcef5e1ab54fc0ead",
+        "a44b2b322431b8a5747f5ad654799442d29733926a2c69443b2365e33a839ea2",
+        "a3075a91188bd3b1951f1e632a0f47092bd7c72066c2eee04c612b69536c1c67",
+        "ccee6b278129f7503c75345c6924c828fe3519fbdb75bf5ee1aa64d131df8931",
+        "90a5a8751393be37321ed93c301f0ae565e8fa02c944e418f3624bb472626315",
+        "a3934b880c248b388f3e81eb3e7d214b931b8f1e68d97ec9c3d34dbbd3f2c88d",
+        "810ceca38fe036ed35df913ca4867101645eac2f65e2a898d3d66416933aa524",
+        "037a92cc339a7dd6447f9ae658538db205ea347eeb48494a40394faa9ce3d28a",
+        "fc618536e05b5a475ab70a63b5b8993e4cee0ed22d59e8031fd57d57ae4827eb",
+        "0c4c338ae717635eb9897f7df49c7450df71e3a19b1f27d9e46b788c91637788",
+        "f55921d8f2f45a039afd490e77bc520f28955e80c2a130f63212499cf64d562a",
+        "d0eb1c9c4c22dede49350245c2a185c904739b8beecd7dfb04facf84ac6cab69",
+        "57ef8b6b28acc21771d512746d9226845d87af67a6dce3835072bda5c11b8042",
+        "f77a907f1193baeb548ba79b3ed388d90dcd64d1bfc8a86e79d01a7acd99ff33",
+        "f3658307bb555e9d381bd49d305a1431ba85ba708e1af7df4e62e44ba30bd9ee",
+        "97d8b5643763dd1172cd6a9b450f98bd46b807efadc4f658f5a8ebcb45fb48c7",
+        "85242c3b9c54c5c73c223472843c7d6f8b7b5540d02c21a69110beecc31bd5ca",
+        "d79dc186a89c9cdf02779bd18447c8d26f7a2576922079b480ae4b04d21f10b4",
+        "726eecadea274a0adc90da41168c1c73d0820ec59121f2b351651be50ee4f86d",
+        "b687bbb7cd12032df7018032e5584d44e89ce94470fe069437636bb6aae1369c",
+        "3726dda2ab155113c87fc39a4f9bf2acbc9844ab67a52adf6420b13f710fe2f3",
+        "405d5968b77fd88f77521f73278fe4ef25b7f516d28795a58c1d9133823642e3",
+        "1ce985a6d280e80ec6eab6ef10a8d7ca34e2555b635986141c3c738c8dee8412",
+        "b1b83f9fd5eb9279813473034cad5de9d5977ef8824278c84457f16c7ea19b22",
+        "6fe6ced313a887b555d3bb971cb6e368d658393e020fe9bc804b20e394ca52f2",
+        "56425d5a4f3e174b1c18caf1ccb5ccba01d725881d4074994745d8f75f8b5ed0",
+        "4ae8a7b1510b69f5b8eba9ec162e2699169ab8c62237e7d5580f4c7670fd5cda",
+        "422c9d7337bb26e1c44125c971dc975ff857ff88d403de30bf2e0f0a44bf9854",
+        "3ce829137e51b8c390bcbdd2df4d86fab2c2a085768379030a35d622a6a4c6b8",
+        "43a3709299c71ef8edc9b5a27e59282cfe63bcd06b4ec59c0df2f61d647d7628",
+        "ac2b2f1fb9853f537c3b37cd3f06a1b9ba5c141e8888b0aa733c2f79cf86134f",
+        "a84c80da50d709e7e21a7657d1dd78000ce22bbdbac57c2bfdecd2d3af07d73a",
+        "b1edd6130bb7457c97f9d15141dc131403537ce6b95b5849881ed39be60dfaa5",
+        "6e663d370d1dc26ba5e2f5045d38c56832abbe71951716b0c7f72a167d68a601",
+        "fbb8c2d06117abf236dfc5c47f730e8e680efcc81d6591daa41becf6237c7a6c",
+        "a0caffbb1339a5d1bd470df6552c86a161ba32d2b5e94815895649c346ef5729",
+        "92e18a3f6f9b4e004f926ce6868e6d24d7792d056545e87ccfd5101623b25994",
+        "a695b3e8a74066054b4d6333fd7a4f6daa360debb85f46ead786eec8bffca965"
+    ];
+      const actual = snapshots.map(snapshot => crypto.createHash("sha256").update(JSON.stringify(canonical(snapshot))).digest("hex"));
+      const mismatches = actual.flatMap((hash, index) => hash === expected[index] ? [] : [index]);
+      console.log(JSON.stringify({ mixedIdentityCheckpoints: actual.length, mismatches }));
+      expect(actual).toHaveLength(45);
+      expect(mismatches).toEqual([]);
+    } finally { db.close(); }
+  } finally { uuid.mockRestore(); }
+});
