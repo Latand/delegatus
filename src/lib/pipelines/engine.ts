@@ -9444,6 +9444,12 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         account = resolution.account;
         cloud.accountId = account.accountId;
       } else {
+        if (client.demandPreparation) {
+          const repository = githubRepositoryOfRemote(pipeline.delivery?.target.remote);
+          if (!repository) throw new HostedCloudError(`${label} requires a GitHub repository`, "cloud-limit");
+          await boundedCloudCall(() => { assertLane(); return client.demandPreparation!({ project: pipeline.project, repository, assertCurrent: assertLane }); }, abort.signal);
+          assertLane();
+        }
         // Enumerate the allowed/capacity pool and verify each catalog before
         // reserving the next eligible account under the project settings lock.
         const candidates: AccountContext[] = [], seen: string[] = [];

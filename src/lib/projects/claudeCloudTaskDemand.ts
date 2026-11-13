@@ -19,7 +19,7 @@ type Job = { promise: Promise<void>; abort: AbortController };
 const globalStore = globalThis as typeof globalThis & { __llvClaudeTaskDemands?: Map<string, Job>; __llvClaudeTaskTail?: Promise<void> };
 const jobs = () => globalStore.__llvClaudeTaskDemands ??= new Map();
 /** The Viewer owns a bounded demand queue. No discovery walk creates unused routines. */
-export function queueClaudeCloudTasks(project: string, accountId: string | undefined, assertCurrent: () => void, ports: Ports = claudeCloudTaskDemandPorts(), repositoryHint?: string) {
+export function queueClaudeCloudTasks(project: string, accountId: string | undefined, assertCurrent: () => void, ports: Ports = claudeCloudTaskDemandPorts(), repositoryHint?: string, options: { force?: boolean } = {}) {
   project = canonicalProject(project);
   const selectedRemote = ports.remote(project);
   const recordedRepository = selectedRemote === null ? null : githubRepositoryOfRemote(selectedRemote);
@@ -42,6 +42,8 @@ export function queueClaudeCloudTasks(project: string, accountId: string | undef
       try {
         const guard = () => {
           abort.signal.throwIfAborted(); assertStateMutationAllowed(stateDir());
+          // Explicit preparation retains its caller’s authority throughout the job.
+          if (options.force) assertCurrent();
           const currentRemote = ports.remote(project);
           const currentRepository = currentRemote === null ? null : githubRepositoryOfRemote(currentRemote);
           const remoteMatches = selectedRemote === null
@@ -51,7 +53,7 @@ export function queueClaudeCloudTasks(project: string, accountId: string | undef
           const current = ports.resolve(project, account.id);
           if (current.kind !== "available" || current.account.home !== account.home) throw new Error("Claude preparation account changed");
         };
-        let force = true;
+        let force = options.force === true;
         while (!abort.signal.aborted) {
           guard(); const resolved = ports.resolve(project, account.id);
           if (resolved.kind !== "available") return;

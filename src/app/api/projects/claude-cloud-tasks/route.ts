@@ -29,7 +29,7 @@ async function workspacePOST(request: NextRequest) {
   try {
     const result = queueClaudeCloudTasks(project, accountId, () => {
       if (cloudEnvironmentActor(request, project) !== actor) throw new Error("Claude task preparation authority changed");
-    });
+    }, undefined, undefined, { force: true });
     return NextResponse.json({ ok: true, ...result }, { status: 202, headers });
   } catch { return NextResponse.json({ error: "Claude task preparation could not be queued" }, { status: 503, headers }); }
 }

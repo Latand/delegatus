@@ -22,7 +22,8 @@ step is part of the workflow.
 ## Implementation
 
 The preparation slice and revision claims live in
-`src/lib/projects/claudeCloudTasks.ts`. Admission calls that slice through
+`src/lib/projects/claudeCloudTasks.ts`. Admission first queues the allowed pool
+before execution-capacity selection, then calls that slice through
 `cloudClaudeClient.ts`; `setClaudeCloudTaskFor` preserves sibling and predecessor
 bindings. A known creation or discovery id is persisted before repair and read
 again after restart, even if the list has not caught up. The per-account task fingerprint remains the execution guard, while
@@ -204,9 +205,9 @@ writer.
 
 Preparation runs in two places:
 
-- at the admission of a `claude-cloud` stage, for each candidate account the
-  engine already considers there: every allowed account with capacity, or the
-  stage's pinned account (`engine.ts:9332-9366`);
+- at the admission of a `claude-cloud` stage, before selecting execution candidates
+  by quota: every allowed account, resolved with `requireCapacity: false`, including
+  accounts without execution capacity and siblings of a pinned execution account;
 - when the operator or the project's designated seat calls the `prepare` action
   (§6): every allowed account with a claude.ai login, or the one named.
 
@@ -241,8 +242,10 @@ account home and organization digest):
    receipt, since tasks belong to an organization. At admission, an
    `unavailable` row inside its cooldown answers its stored reason at once, so a
    stuck account costs no request per stage. The seat's `prepare` (§6) is an
-   explicit request and starts a new window, the way a demand does for Codex;
-   that is how a human step that was just done gets noticed.
+   explicit request and starts a new window; that is how a human step that was
+   just done gets noticed. Ordinary admission demands preserve the stored cooldown.
+   Explicit background preparation rechecks its caller’s authority before each
+   provider operation, including after an asynchronous wait.
 3. **Bound task.** When `claudeCloudTasks` names a task for the account, read it
    (`GET /v1/code/triggers/{id}`, envelope `{trigger}`, §1.14 O27).
    - 404, or one source that is a different repository: continue at step 4, and

@@ -6,6 +6,7 @@ import { fakeClaudeCloud } from "@/lib/pipelines/claudeCloud.fixture";
 import { createClaudeCloudTaskProvider } from "@/lib/pipelines/cloudClaudeClient";
 import { CLAUDE_CLOUD_TASK_PROMPT } from "@/lib/pipelines/claudeCloudTaskPrompt";
 import { prepareClaudeCloudTask, readClaudeCloudReadiness } from "./claudeCloudTasks";
+import { queueClaudeCloudTasks, settleClaudeCloudTaskDemands } from "./claudeCloudTaskDemand";
 import { updateOperatorSettings } from "@/lib/operator/settings";
 import { claudeCloudTasks, setClaudeCloudTasks, setClaudeCloudTaskFor } from "./settings";
 import { persistProjectAliases, recordProjectRemote } from "./aliases";
@@ -377,5 +378,61 @@ test("a renamed routine with the previously shipped prompt is adopted without a 
   const f = fixture({ tasks: [previous] });
   expect(await f.prepare()).toMatchObject({ state: "ready", environmentId: "previous-routine" });
   expect(f.posts()).toHaveLength(0);
+  expect(f.fake.runCalls()).toBe(0);
+});
+
+
+test.each([true, false])("stored readiness survives an empty remote catalog (connected: %s)", async connected => {
+  const f = fixture({ githubConnected: connected });
+  f.input.project = "repo-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const state = connected ? "ready" : "unavailable";
+  expect(await f.prepare()).toMatchObject({ state });
+  const count = f.fake.calls.length;
+  expect(readClaudeCloudReadiness(f.input.project)[0]).toMatchObject({ state,
+    ...(connected ? { taskId: "task-created-1" } : { code: "github_not_connected", step: { code: "connect_github" } }) });
+  if (!connected) {
+    updateOperatorSettings({ locale: "uk" }, "2026-11-01T00:00:00Z");
+    expect(readClaudeCloudReadiness(f.input.project)[0]?.step).toMatchObject({ text: expect.stringContaining("Підключіть GitHub"), url: "https://claude.ai/connect-github" });
+    updateOperatorSettings({ locale: "en" }, "2026-11-01T00:00:01Z");
+    expect(readClaudeCloudReadiness(f.input.project)[0]?.step?.text).toContain("Connect GitHub");
+  }
+  recordProjectRemote({ project: f.input.project, canonicalRemote: "https://github.com/sample/project" });
+  expect(readClaudeCloudReadiness(f.input.project)[0]?.state).toBe(state);
+  recordProjectRemote({ project: f.input.project, canonicalRemote: "https://github.com/sample/changed" });
+  expect(readClaudeCloudReadiness(f.input.project)[0]).toMatchObject({ state: "not_prepared", code: null, step: null });
+  expect(f.fake.calls).toHaveLength(count);
+});
+
+test("automatic demands preserve the persisted cooldown and explicit preparation renews it", async () => {
+  const f = fixture({ preparationAnswer: () => new Response("", { status: 503 }) });
+  expect(await f.prepare()).toMatchObject({ state: "pending" });
+  f.advance(2001); expect(await f.restart()).toMatchObject({ state: "pending" });
+  f.advance(4001); expect(await f.restart()).toMatchObject({ state: "unavailable" });
+  expect(f.fake.calls).toHaveLength(3);
+  const retryAt = readClaudeCloudReadiness(f.input.project)[0]!.retryAt;
+  const account = { id: "default", label: "Fixture", home: f.input.account.home, projectsDir: f.input.account.home, kind: "managed" as const, authPresent: true, createdAt: 0 };
+  const ports = {
+    accounts: () => [account], allowed: () => true, remote: () => "https://github.com/sample/project",
+    resolve: () => ({ kind: "available" as const, account: f.input.account }),
+    prepare: async (input: Parameters<typeof prepareClaudeCloudTask>[0]) => {
+      const result = await prepareClaudeCloudTask({ ...input, now: f.input.now }, f.provider);
+      if (result.state === "pending") f.advance(result.retryAt - f.input.now());
+      return result;
+    },
+  };
+  for (let admission = 0; admission < 2; admission++) {
+    queueClaudeCloudTasks(f.input.project, undefined, () => {}, ports);
+    await settleClaudeCloudTaskDemands();
+    expect(f.fake.calls).toHaveLength(3);
+    expect(readClaudeCloudReadiness(f.input.project)[0]?.retryAt).toBe(retryAt);
+  }
+  // A new process also obeys the saved cooldown, even after the ten-minute window.
+  f.advance(600_001);
+  expect(await f.restart()).toMatchObject({ state: "unavailable" });
+  expect(f.fake.calls).toHaveLength(3);
+  queueClaudeCloudTasks(f.input.project, "default", () => {}, ports, undefined, { force: true });
+  await settleClaudeCloudTaskDemands();
+  expect(f.fake.calls).toHaveLength(6);
+  expect(readClaudeCloudReadiness(f.input.project)[0]?.retryAt).toBeGreaterThan(retryAt);
   expect(f.fake.runCalls()).toBe(0);
 });

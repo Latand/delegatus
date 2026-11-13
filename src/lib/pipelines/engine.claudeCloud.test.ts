@@ -1,9 +1,13 @@
+import { spyOn } from "bun:test";
+import { accountManager } from "@/lib/accounts/manager";
+import { claudeCloudTaskDemandPorts, queueClaudeCloudTasks, settleClaudeCloudTaskDemands } from "@/lib/projects/claudeCloudTaskDemand";
+import { prepareClaudeCloudTask } from "@/lib/projects/claudeCloudTasks";
 import { expect, test, harness, create, loadPipelines, savePipelines, tickPipelines, patchPipeline, path, realProvisioningRepo, fs } from "./engine.fixture";
 import { normalizeStages } from "./engine";
 import { pipelineRoleLookup } from "./roles";
 import { spawnSync } from "node:child_process";
 import { settlePipelineControllerJobs } from "./controllerJobs";
-import { createClaudeCloudStageClient } from "./cloudClaudeClient";
+import { createClaudeCloudTaskProvider, createClaudeCloudStageClient } from "./cloudClaudeClient";
 import { fakeClaudeCloud } from "./claudeCloud.fixture";
 import { resetProjectSettingsForTests, setClaudeCloudTaskFor, setClaudeCloudTasks } from "@/lib/projects/settings";
 import type { PipelineStageInput } from "./types";
@@ -25,7 +29,7 @@ async function fixture(options: Parameters<typeof fakeClaudeCloud>[0] & { stages
   h.ports.resolveProjectSpawn = (engine, request) => ({ kind: "available", account: { engine, accountId: request.requestedId ?? "account-a", kind: "managed",
     home: path.resolve("fixture-account"), transcriptRoot: path.resolve("fixture-account"), env: { NODE_ENV: "test" } } });
   const fake = fakeClaudeCloud(options);
-  h.ports.claudeCloudClient = createClaudeCloudStageClient(fake.dependencies);
+  h.ports.claudeCloudClient = createClaudeCloudStageClient({ ...fake.dependencies, queueTaskPreparation: () => {} });
   await create(h.ports, (options.stages ?? [reviewer]) as never, { publication: "remote-branch", ...(options.repoDir ? { repoDir: options.repoDir } : {}) });
   const record = lane();
   record.project = `claude-cloud-fixture-${++fixtureSequence}`;
@@ -250,3 +254,37 @@ test("a Claude cloud builder's diff lands on the lane branch through hooks and p
     } finally { fake.stop(); }
   } finally { await settlePipelineControllerJobs(); fs.rmSync(native.root, { recursive: true, force: true }); }
 }, 30_000);
+
+
+test("an exhausted Claude pool still prepares every allowed account before quota selection", async () => {
+  const { h, fake } = await fixture({ taskBinding: false });
+  const resolve = h.ports.resolveProjectSpawn!;
+  h.ports.resolveProjectSpawn = (engine, request) => request.requestedId
+    ? resolve(engine, request) : { kind: "exhausted", resetsAt: null, allowedAccountIds: ["account-a", "account-b"] };
+  const accounts = ["account-a", "account-b", "account-denied"].map(id => ({ id, label: id, home: path.resolve("fixture-account"), projectsDir: path.resolve("fixture-account"), kind: "managed" as const, authPresent: true, createdAt: 0 }));
+  const requests: boolean[] = [], prepared: string[] = [];
+  const manager = spyOn(accountManager, "resolveProjectSpawn").mockImplementation((engine, request) => {
+    expect(engine).toBe("claude");
+    requests.push(request.requireCapacity!);
+    return resolve("claude", request);
+  });
+  let demands = 0;
+  h.ports.claudeCloudClient = createClaudeCloudStageClient({ ...fake.dependencies, queueTaskPreparation: (project, current) => {
+    demands++;
+    queueClaudeCloudTasks(project, undefined, current, {
+      ...claudeCloudTaskDemandPorts(), accounts: () => accounts, allowed: (_project, _engine, id) => id !== "account-denied", remote: () => null,
+      prepare: async input => { prepared.push(input.account.accountId); return prepareClaudeCloudTask(input, createClaudeCloudTaskProvider(fake.dependencies)); },
+    }, "sample/project");
+  } });
+  try {
+    for (let i = 0; i < 6; i++) await step(h);
+    await settleClaudeCloudTaskDemands();
+    expect(demands).toBe(1);
+    expect(prepared).toEqual(["account-a", "account-b"]);
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests.every(capacity => capacity === false)).toBe(true);
+    const { claudeCloudTasks } = await import("@/lib/projects/settings");
+    expect(claudeCloudTasks(lane().project).map(row => row.accountId)).toEqual(["account-a", "account-b"]);
+    expect(fake.runCalls()).toBe(0);
+  } finally { await settleClaudeCloudTaskDemands(); manager.mockRestore(); fake.stop(); }
+});

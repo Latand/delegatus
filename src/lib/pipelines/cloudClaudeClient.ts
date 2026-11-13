@@ -344,14 +344,15 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
     supportsModel: (model, effort) => /^[A-Za-z0-9._-]{1,128}$/.test(model) && (effort === null || /^[a-z]{1,32}$/.test(effort)),
     sameModel: sameClaudeModel,
     hasEnvironment: async input => !!input.environmentId,
-    prepareEnvironment: async (input: PrepareCloudEnvironmentInput): Promise<CloudEnvironmentPreparation> => {
-      // A Claude Cloud admission is the demand signal for every allowed account
-      // in this project, including accounts without execution capacity.
+    demandPreparation: async input => {
+      // Admission prepares every allowed account independently of execution quota.
       if (dependencies.queueTaskPreparation) dependencies.queueTaskPreparation(input.project, input.assertCurrent);
       else {
         const { queueClaudeCloudTasks } = await import("@/lib/projects/claudeCloudTaskDemand");
         queueClaudeCloudTasks(input.project, undefined, input.assertCurrent, undefined, input.repository);
       }
+    },
+    prepareEnvironment: async (input: PrepareCloudEnvironmentInput): Promise<CloudEnvironmentPreparation> => {
       return prepareClaudeCloudTask({ ...input, now: input.now ?? dependencies.now }, provider);
     },
     submit: async input => {

@@ -547,7 +547,9 @@ test("admission prepares a missing binding and repairs paused tasks and connecto
   for (const options of [{}, { task: { enabled: false, mcp_connections: [{ name: "connector" }], job_config: { ccr: { session_context: { sources: [{ git_repository: { url: "https://github.com/sample/project" } }] } } } } }]) {
     const project = `prepare-${++n}`, fake = provider(options);
     if (options.task) setClaudeCloudTasks(project, [{ accountId: account.accountId, taskId: "task-1" }]);
-    expect(await createClaudeCloudStageClient({ ...fake.dependencies, queueTaskPreparation: queuedProject => demanded.push(queuedProject) }).prepareEnvironment!({ project, account, repository: "sample/project", ref: "main", signal: controller.signal, assertCurrent: () => {} })).toMatchObject({ state: "ready" });
+    const client = createClaudeCloudStageClient({ ...fake.dependencies, queueTaskPreparation: queuedProject => demanded.push(queuedProject) });
+    await client.demandPreparation!({ project, repository: "sample/project", assertCurrent: () => {} });
+    expect(await client.prepareEnvironment!({ project, account, repository: "sample/project", ref: "main", signal: controller.signal, assertCurrent: () => {} })).toMatchObject({ state: "ready" });
     expect(fake.calls.filter(c => c.method === "POST").length).toBeGreaterThan(0);
     expect(fake.runCalls()).toBe(0);
   }

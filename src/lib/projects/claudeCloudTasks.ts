@@ -83,7 +83,7 @@ export function readClaudeCloudReadiness(project: string, options: { accountId?:
   return listClaudeAccounts().filter(a => (!options.accountId || a.id === options.accountId) && projectAllowsAccount(project, "claude", a.id)).map(account => {
     const row = read(project, account.id), repository = recordedProjectRemote(project);
     const selected = claudeCloudTasks(project).find(task => task.accountId === account.id)?.taskId;
-    const current = row && githubRepositoryOfRemote(repository) === row.repository && (row.state !== "ready" || selected === row.taskId) ? row : null;
+    const current = row && (repository === null || githubRepositoryOfRemote(repository) === row.repository) && (row.state !== "ready" || selected === row.taskId) ? row : null;
     const expired = current?.state === "preparing" && current.deadlineAt <= (options.now ?? Date.now());
     const code = expired ? "provider_unavailable" : current?.code ?? null;
     return { project: canonicalProject(project), accountId: account.id, label: account.label,
