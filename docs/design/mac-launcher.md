@@ -431,14 +431,17 @@ for this surface; later cases are added to it):
   graphical session, the runner user's. An app started from a second operating
   system account has no connection to that session's window server, so it
   cannot create a window. The smoke therefore runs every GUI step as the runner
-  user and gets its isolation from fresh data. The first check requires an
+  user and gets its isolation from fresh data. An early check requires an
   unprivileged runner user and records the launchd manager of the session. A
   run creates one data root under the temporary directory, and each case that
   needs a clean start gets its own empty home folder there and the app's `HOME`
   points at it. The `.dmg` is attached read-only, and `ditto` copies the app into
-  `Applications` under that root. Every child gets
+  `Applications` under that root. The app, the replacement Delegatus
+  servers, `stop --all` and the test listener get
   `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, no Bun and `DELEGATUS_TELEMETRY=0`,
-  and inherits nothing else from the runner's environment. AppKit and WebKit keep
+  and inherit nothing else from the runner's environment. The helper
+  commands (`hdiutil`, `ditto`, `defaults`, `ps`, `lsof`, `launchctl`, `log`)
+  keep the runner's environment. AppKit and WebKit keep
   preferences, restored window state, web data and caches under the session
   user's own `Library`, whatever `HOME` says, so before each launch the smoke
   deletes the app's preference domain and those folders for its bundle
@@ -489,8 +492,8 @@ are included. The frames cover each confirmation layout, recovery and busy
 screens, plus loaded pages in en and uk, light and dark. Dark comes
 from the launch argument `-AppleInterfaceStyle Dark`, and a launch with
 `--evidence-dir` also sets `NSApp.appearance` to dark or light from that
-argument. The report, frames and logs (with the home path
-replaced by `$HOME`) upload as an artifact for the visual critic.
+argument. The report, frames and logs (with the run's data root
+replaced by `$SMOKE_ROOT` and the runner's home by `$RUNNER_HOME`) upload as an artifact for the visual critic.
 
 **Known limitation.** Frames labelled "dark" for the system menu keep the
 light system-menu look on the hosted runners. The dialogs do show both themes.
