@@ -39,25 +39,37 @@ export function withCompilerEntry(command: string[], cwd = process.cwd()) {
   let root: string | undefined;
   const mounts: [string, string][] = [];
   try {
-    // Bun evaluates bunfig test preloads before BUN_OPTIONS preloads. Enter
-    // admission ahead of an older preload's ownership/reentry checks as well,
-    // including tests forked by a package script. The original preload still
-    // runs with all of its settings and isolation intact.
+    // Bun evaluates bunfig test preloads before BUN_OPTIONS preloads. Supply
+    // their order through a private config, keeping tracked preload bytes
+    // unchanged for publication's Git and input certification.
+    const configOption = /(?:^|\s)--config=(\S*\/delegatus-test-config-\d+\.toml)(?=\s|$)/g;
+    let previousConfig: string | undefined;
+    process.env.BUN_OPTIONS = (process.env.BUN_OPTIONS ?? "").replace(configOption, (_match, file: string) => { previousConfig = file; return ""; }).trim();
     const config = path.join(cwd, "bunfig.toml");
     if (fs.existsSync(config)) {
-      const settings = Bun.TOML.parse(fs.readFileSync(config, "utf8")) as { test?: { preload?: string | string[] } };
+      const settings = Bun.TOML.parse(fs.readFileSync(config, "utf8")) as { preload?: string[]; test?: { preload?: string | string[] } };
       const preloads = settings.test?.preload;
-      for (const entry of typeof preloads === "string" ? [preloads] : preloads ?? []) {
-        const file = fs.realpathSync(path.resolve(cwd, entry));
-        const source = fs.readFileSync(file, "utf8");
-        root ??= fs.mkdtempSync(path.join(os.tmpdir(), "compiler-entry-"));
-        const copy = path.join(root, `${mounts.length}${path.extname(file)}`);
-        const preload = pathToFileURL(path.join(import.meta.dir, "check-runtime-preload.mjs")).href;
-        // The mounted file is also a typecheck input. Resolve this runtime
-        // URL dynamically so TypeScript does not treat it as a module name.
-        fs.writeFileSync(copy, `await import(String(${JSON.stringify(preload)}));\n${source}`, { mode: 0o600 });
-        mounts.push([copy, file]);
-      }
+      const absolute = (entry: string) => fs.existsSync(path.resolve(cwd, entry)) ? path.resolve(cwd, entry) : entry;
+      if (settings.preload) settings.preload = settings.preload.map(absolute);
+      settings.test = { ...settings.test, preload: [path.join(import.meta.dir, "check-runtime-preload.mjs"),
+        ...(typeof preloads === "string" ? [preloads] : preloads ?? []).map(absolute)] };
+      // One empty mount target per temp root; config contents exist only
+      // in this command's namespace. Its stable path binds prepare/transport
+      // to identical BUN_OPTIONS without retaining per-run config files.
+      const temp = os.tmpdir();
+      const target = previousConfig && (path.dirname(previousConfig) === temp || /\s/.test(temp))
+        ? previousConfig : path.join(temp, `delegatus-test-config-${process.getuid!()}.toml`);
+      if (/\s/.test(target)) throw new Error("Bun admission config requires a whitespace-free temp path");
+      fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+      try { fs.writeFileSync(target, "", { flag: "wx", mode: 0o600 }); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+      if (!fs.lstatSync(target).isFile()) throw new Error("test admission config target must be a regular file");
+      root ??= fs.mkdtempSync(path.join(os.tmpdir(), "compiler-entry-"));
+      const copy = path.join(root, "test-config.toml");
+      const toml = Bun.TOML as typeof Bun.TOML & { stringify(value: unknown): string };
+      fs.writeFileSync(copy, toml.stringify(settings), { mode: 0o600 });
+      mounts.push([copy, target]);
+      process.env.BUN_OPTIONS = `--config=${target} ${process.env.BUN_OPTIONS ?? ""}`.trim();
     }
     for (const installation of installations) {
       const lib = path.join(installation, "lib");
