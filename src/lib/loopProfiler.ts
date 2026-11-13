@@ -260,6 +260,7 @@ export interface LoopProfilerPorts {
   phase<T>(phase: "collect" | "trim" | "settings", work: () => T): T;
   root: string;
   completed?(profile: LoopGapProfile): void;
+  beforeCollect?(): Promise<boolean>;
 }
 
 /** One owner per Viewer monitor; no runtime-host start path calls this. */
@@ -278,6 +279,10 @@ export function createLoopProfiler(ports: LoopProfilerPorts, expires: number) {
     if (!await enabled()) return false;
     const current = window = { from: ports.now(), pending: [] as { emit: Emit; frames: boolean }[] };
     try {
+      if (ports.beforeCollect && !await ports.beforeCollect()) {
+        inactive = { status: "not-armed", reason: "waiting-for-capture" };
+        return false;
+      }
       const raw = await ports.phase("collect", () => ports.collect(() => ports.sleep(Math.min(LOOP_PROFILE_WINDOW_MS, expires - ports.now())), intervalUs));
       // A profile timer can recover before the monitor's timer. Observe that
       // recovery while this window still owns its pending gap records.

@@ -94,8 +94,9 @@ export async function startServingLoopProfiler(monitor: ReturnType<typeof create
     const supervisor = createLoopProfilerSupervisor({ now: injected.wallNow ?? Date.now,
       settings: () => monitor.run("loop-profiler.settings", () => loopProfilerControl(directory)),
       reserve: at => monitor.run("loop-profiler.settings", () => store.reserve(at)),
+      beginCapture: (at, admittedAt) => monitor.run("loop-profiler.settings", () => store.beginCapture(at, admittedAt)),
       decision: injected.decision ?? (reason => decisions.enqueue(`[loop-profiler] ${reason}`)),
-      capture: async source => {
+      capture: async (source, beginCapture) => {
         // Only an admitted capture loads the Bun builtin. Idle polling does
         // not sample stacks or read source files.
         const collect = injected.collect ?? (await monitor.run("loop-profiler.settings", () => import(/* webpackIgnore: true */ "bun:jsc"))).profile;
@@ -109,6 +110,11 @@ export async function startServingLoopProfiler(monitor: ReturnType<typeof create
         let captured: LoopGapProfile | undefined;
         const recorder = active = createLoopProfiler({ now,
           enabled, collect,
+          beforeCollect: async () => {
+            const began = await beginCapture((injected.wallNow ?? Date.now)());
+            if (!began) refusal = "cooldown";
+            return began;
+          },
           sleep: injected.sleep ?? (ms => new Promise(resolve => { const timeout = setTimeout(resolve, ms); timeout.unref(); })),
           flushTick: () => monitor.tick(), root: process.cwd(),
           phase: (phase, work) => monitor.run(`loop-profiler.${phase}`, work),

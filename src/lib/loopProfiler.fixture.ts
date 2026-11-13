@@ -156,6 +156,7 @@ if (process.argv[2] === "native" || process.argv[2] === "native-computed" || pro
       now: () => at, wallNow: () => at, decision: reason => reasons.push(reason),
       sleep: async ms => { at += ms; },
       get collect() {
+        if (process.argv[5] === "late-load") at += 600_000;
         if (process.argv[5] === "late-kill") fs.writeFileSync(path.join(directory, "loop-profiler.json"), JSON.stringify({ enabled: false }));
         if (process.argv[5] === "late-automatic-off") fs.writeFileSync(path.join(directory, "loop-profiler.json"), JSON.stringify({ automatic: false }));
         if (process.argv[5] === "late-manual-expiry") at += 60_000;

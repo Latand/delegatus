@@ -16,7 +16,12 @@ function harness() {
   const supervisor = createLoopProfilerSupervisor({ now: () => at,
     settings: () => settingsRead ? settingsRead() : Promise.resolve(settings),
     reserve: async now => { if (now < next) return false; next = now + LOOP_PROFILE_COOLDOWN_MS; afterReserve?.(); return true; },
-    capture: async () => { calls++; await capture?.(); }, decision: reason => decisions.push(reason) });
+    beginCapture: async (now, admittedAt) => {
+      if (next !== admittedAt + LOOP_PROFILE_COOLDOWN_MS || now < admittedAt) return false;
+      next = now + LOOP_PROFILE_COOLDOWN_MS; return true;
+    },
+    capture: async (_source, beginCapture) => { calls++; await capture?.(); return await beginCapture(at) ? undefined : "cooldown"; },
+    decision: reason => decisions.push(reason) });
   return { supervisor, decisions, get calls() { return calls; }, get at() { return at; },
     time: (time: number) => { at = time; }, settings: (value: Partial<ProfilerControl>) => { settings = { ...settings, ...value }; },
     read: (value: () => Promise<ProfilerControl>) => { settingsRead = value; },

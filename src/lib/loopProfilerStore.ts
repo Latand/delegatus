@@ -51,6 +51,17 @@ export function createLoopProfileStore(directory: string) {
       ledger.nextCaptureAt = at + LOOP_PROFILE_COOLDOWN_MS;
       await write(ledger); return true;
     }),
+    beginCapture: (at: number, admittedAt: number) => transaction(async () => {
+      if (!Number.isSafeInteger(at) || at < 0 || !Number.isSafeInteger(admittedAt) || admittedAt < 0
+        || admittedAt > Number.MAX_SAFE_INTEGER - LOOP_PROFILE_COOLDOWN_MS) throw new Error("profile-store-invalid");
+      const ledger = await read();
+      // The admission timestamp is a durable one-shot token. Only its owner
+      // can move the cooldown to the actual beginning of native sampling.
+      if (ledger.nextCaptureAt !== admittedAt + LOOP_PROFILE_COOLDOWN_MS || at < admittedAt) return false;
+      if (at > Number.MAX_SAFE_INTEGER - LOOP_PROFILE_COOLDOWN_MS) throw new Error("profile-store-invalid");
+      ledger.nextCaptureAt = at + LOOP_PROFILE_COOLDOWN_MS;
+      await write(ledger); return true;
+    }),
     save: (profile: LoopGapProfile, revision: string, capturedAt: number) => transaction(async () => {
       if (profile.status !== "captured" || Buffer.byteLength(JSON.stringify(profile)) > LOOP_PROFILE_BYTES
         || typeof revision !== "string" || !/^[a-f0-9]{7,40}$/.test(revision) || !Number.isSafeInteger(capturedAt) || capturedAt < 0) throw new Error("profile-store-invalid");

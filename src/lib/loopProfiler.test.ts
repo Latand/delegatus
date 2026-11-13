@@ -371,6 +371,19 @@ test("same-revision restarts arm after a stall and preserve cooldown and storage
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test("cooldown begins at native sampling after delayed admission and survives a process restart", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-delayed-cooldown-"));
+  try {
+    const firstStart = 1_000_000 + 6_010 + 600_000;
+    expect(await child(["lifetime", "1000000", "6000", "late-load"], dir))
+      .toMatchObject({ calls: 1, profiles: 1 });
+    const restartDuringCooldown = await child(["lifetime", String(firstStart + 6_010), "6000"], dir);
+    expect(restartDuringCooldown).toMatchObject({ calls: 0, profiles: 1 });
+    const restartAfterCooldown = await child(["lifetime", String(firstStart + 600_000), "6000"], dir);
+    expect(restartAfterCooldown).toMatchObject({ calls: 1, profiles: 2 });
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test("a ninety-minute window still rechecks the kill switch and cannot extend its deadline", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-kill-switch-"));
   try {
