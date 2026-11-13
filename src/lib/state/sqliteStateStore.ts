@@ -2478,6 +2478,17 @@ export class SqliteStateCollection<T> {
     `).all(project, findingKey).map(row => row.row_key);
   }
 
+  /** Task command evidence for one project. The project index bounds the
+   * reader independently of retained history in other projects. */
+  taskProjectKeys(projects: readonly string[]): string[] {
+    if (this.options.collection !== "tasks") throw new Error("task selection requires tasks");
+    return projects.flatMap(project => this.readDb.query<{ row_key: string }, [string]>(`
+      SELECT row_key FROM state_rows INDEXED BY state_rows_task_project
+      WHERE collection='tasks' AND json_valid(value_json) AND json_extract(value_json,'$.project')=?
+      ORDER BY row_order,row_key
+    `).all(project).map(row => row.row_key));
+  }
+
   /** One indexed read; rejected holds and remote rows never reach the decoder. */
   overdueTaskKeys(projects: readonly string[], nowMs: number, limit = 51, machine: string | null = null, shown: readonly string[] = [], cursor: OverdueTaskCursor | null = null, known: readonly string[] = shown): string[] {
     return this.overdueTaskRows(projects, nowMs, limit, machine, shown, cursor, known).map(row => row.row_key);

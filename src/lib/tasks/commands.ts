@@ -8,6 +8,7 @@ import { canonicalProject } from "@/lib/projects/aliases";
 import { validateTaskHoldInput, readTaskHold, storedTaskHold } from "./hold";
 import { isTaskAttachment } from "./attachments";
 import { taskRevision } from "./revision";
+import { taskMutationView } from "./mutationView";
 import { defaultTaskDue, isoNow, storedDueHistory } from "./helpers";
 import { hasUndeliveredDecision, TaskDecisionUndeliveredError } from "./decisionCompletion";
 import { withTaskCompletion } from "./completion";
@@ -413,6 +414,22 @@ export function createTask(
   recentCreates: RecentCreate[] = [],
   deps: TaskCommandDeps = {},
 ): CreateTaskResult {
+  const view = taskMutationView(existing);
+  if (view) {
+    const rows = new Map<string, BoardTask>();
+    const request = typeof input.clientRequestId === "string" ? input.clientRequestId.trim() : null;
+    const receipt = request ? recentCreates.find(row => row.clientRequestId === request) : undefined;
+    const replay = receipt ? view.get(receipt.taskId) : null;
+    if (replay) rows.set(replay.id, replay);
+    if (!replay && typeof input.project === "string") {
+      const key = readFindingKey(input.findingKey);
+      const matched = key.ok && key.key !== undefined ? view.finding(input.project.trim(), key.key) : [];
+      for (const row of matched.length ? matched : view.project(input.project.trim())) rows.set(row.id, row);
+    }
+    const result = createTask([...rows.values()], input, recentCreates, deps);
+    if (result.ok && !result.replay && !result.matched && view.get(result.task.id)) throw new Error("duplicate persisted task id");
+    return result.ok ? { ...result, tasks: result.replay ? existing : view.replace(result.task) } : result;
+  }
   let project = normalizeProject(input.project);
   if (!project) return { ok: false, error: "project is required", status: 400 };
   const text = normalizeText(input.text);
@@ -597,6 +614,19 @@ function taskProgressActor(options: Pick<PatchTaskOptions, "actor" | "conversati
 }
 
 export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInput, now = isoNow(), options: PatchTaskOptions = {}): TaskCommandResult {
+  const view = taskMutationView(existing);
+  if (view) {
+    const task = view.get(id);
+    const rows = new Map<string, BoardTask>();
+    if (task) {
+      rows.set(id, task);
+      if (input.board === "shown") for (const row of view.project(task.project)) rows.set(row.id, row);
+      const key = Object.hasOwn(input, "findingKey") ? input.findingKey : task.findingKey;
+      if (typeof key === "string") for (const row of view.finding(task.project, key)) rows.set(row.id, row);
+    }
+    const result = patchTask([...rows.values()], id, input, now, options);
+    return result.ok ? { ...result, tasks: view.replace(result.task) } : result;
+  }
   const index = existing.findIndex((task) => task.id === id);
   if (index < 0) return { ok: false, error: "task not found", status: 404 };
   const task = existing[index]!;

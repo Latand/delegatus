@@ -5,18 +5,24 @@ import { waitForStateLock } from "@/lib/state/lockWait";
 import fs from "node:fs";
 import { readFindingKey, reconcileOpenFindings, validStoredFinding } from "./finding";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 import { isTaskNote } from "./note";
+import { lazyTaskMutationView, type TaskMutationView } from "./mutationView";
 import { isTaskSummary } from "./summary";
 import { isTaskProgress } from "./progress";
 import { storedDueHistory } from "./helpers";
 
 import { statePath } from "@/lib/configDir";
 import { deepFreeze } from "@/lib/deepFreeze";
-import { canonicalProject, projectAliasResolver, projectAliasSnapshot } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasResolver, projectAliasSnapshot, withProjectAliasSnapshot } from "@/lib/projects/aliases";
 import { canonicalProjectKeys, replaceProjectKeySource } from "@/lib/projects/projectKeyIndex";
-import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
-import { assertNotOperatorStateUnderTest } from "@/lib/stateOwnership";
+import { FileTransactionBusyError, withFileTransactionAttempt } from "@/lib/state/fileTransaction";
+import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
+import { assertOperationLease, awaitLeasedOperation } from "@/lib/operationLease";
+import { backupDatabase, BACKUP_DIRECTORY, stateDatabases } from "@/lib/state/durability";
+import { databaseFileIdentity } from "@/lib/state/currentDatabase";
+import { writeJsonDurably } from "@/lib/state/durableJson";
 import {
   importLegacyCollection,
   lazyReconcileAllowed,
@@ -50,7 +56,8 @@ export const TASKS_FILE = statePath("tasks.json");
 
 // Keep untouched legacy rows exactly as stored, including extension fields and
 // omitted placement/revision. Response coercion must not migrate other rows.
-const persistedRows = new WeakMap<BoardTask, unknown>();
+const taskRowOwner = globalThis as typeof globalThis & { __delegatusTaskPersistedRowsV1?: WeakMap<BoardTask, unknown> };
+const persistedRows = taskRowOwner.__delegatusTaskPersistedRowsV1 ??= new WeakMap<BoardTask, unknown>();
 /** For a draft array, the baseline task of a slot its callback never read. */
 const unreadDrafts = new WeakMap<BoardTask[], (index: number) => BoardTask | undefined>();
 
@@ -608,7 +615,14 @@ function readLegacyTasksFile(filePath: string): TasksFileState {
 export function loadTasksFile(filePath = TASKS_FILE): TasksFileState {
   const collection = taskCollection(filePath, "read");
   if (!collection) return readLegacyTasksFile(filePath);
-  return stateFromBody(bodyFromRows(collection.snapshot()));
+  const committed = collection.loadReadonly();
+  const aliases = JSON.stringify(projectAliasSnapshot().aliases);
+  let baseline = writeSnapshots.get(committed);
+  if (baseline?.aliases !== aliases) {
+    baseline = { aliases, state: deepFreeze(stateFromBody(bodyFromRows(committed))) };
+    writeSnapshots.set(committed, baseline);
+  }
+  return structuredClone(baseline.state);
 }
 
 /** The tick reads only overdue payloads, independently of the board snapshot. */
@@ -688,15 +702,24 @@ export function loadTasksByIds(ids: ReadonlySet<string>, filePath = TASKS_FILE, 
   return source.select(ids, limit);
 }
 
+type TaskListSnapshot = { aliases: string; tasks: readonly BoardTask[]; projects: ReadonlySet<string>;
+  byProject?: ReadonlyMap<string, readonly BoardTask[]> };
 const taskListOwner = globalThis as typeof globalThis & { __delegatusTaskListReaders?: {
   rows: WeakMap<object, { aliases: string; task: BoardTask }>;
-  snapshots: WeakMap<object, { aliases: string; tasks: readonly BoardTask[]; projects: ReadonlySet<string> }>;
-} };
+  snapshots: WeakMap<object, TaskListSnapshot>;
+}; __delegatusTaskListLatestV1?: Map<string, { identity: string | null; revision: number; snapshot: WeakRef<TaskListSnapshot> }> };
 // Raw collections have one bounded shared owner; weak keys give the derived
 // task views the same lifetime across separately compiled route bundles.
 const taskListReaders = taskListOwner.__delegatusTaskListReaders ??= { rows: new WeakMap(), snapshots: new WeakMap() };
 const listRows = taskListReaders.rows;
 const listSnapshots = taskListReaders.snapshots;
+// Weak references add no retained payload beyond the existing read cache.
+const latestListSnapshots = taskListOwner.__delegatusTaskListLatestV1 ??= new Map();
+function rememberTaskList(collection: SqliteStateCollection<TaskStateRow>, snapshot: TaskListSnapshot): void {
+  latestListSnapshots.delete(collection.filename);
+  latestListSnapshots.set(collection.filename, { identity: databaseFileIdentity(collection.filename), revision: collection.revision(), snapshot: new WeakRef(snapshot) });
+  while (latestListSnapshots.size > 8) latestListSnapshots.delete(latestListSnapshots.keys().next().value!);
+}
 /** Immutable list source. SQLite refreshes changed rows by revision; a repeated
  * list does not clone and validate every task and assignment again.
  *
@@ -723,6 +746,7 @@ export function loadTasksForList(filePath = TASKS_FILE): readonly BoardTask[] {
   const aliases = JSON.stringify(projectAliasSnapshot().aliases);
   const cached = listSnapshots.get(rows);
   if (cached?.aliases === aliases) {
+    rememberTaskList(collection, cached);
     replaceProjectKeySource(`tasks:${filePath}`, cached.projects);
     return cached.tasks;
   }
@@ -735,18 +759,25 @@ export function loadTasksForList(filePath = TASKS_FILE): readonly BoardTask[] {
     if (!task) {
       task = coerceTask(row, canonical) ?? undefined;
       if (!task) throw new Error("invalid persisted task row");
+      persistedRows.set(task, row);
       deepFreeze(task);
       listRows.set(row, { aliases, task });
     }
     tasks.push(task);
   }
-  const resolved = reconcileOpenFindings(tasks).map(task => {
+  const byProject = new Map<string, BoardTask[]>();
+  const resolved = reconcileOpenFindings(tasks).map((task, index) => {
+    if (task !== tasks[index]) persistedRows.set(task, persistedRows.get(tasks[index]!));
     if (!Object.isFrozen(task)) Object.assign(task, { revision: `task-legacy:${taskFingerprint(task)}` });
+    const project = byProject.get(task.project);
+    if (project) project.push(task); else byProject.set(task.project, [task]);
     return deepFreeze(task);
   });
   Object.freeze(resolved);
   const projects = canonicalProjectKeys(resolved.map(task => task.project));
-  listSnapshots.set(rows, { aliases, tasks: resolved, projects });
+  const snapshot = { aliases, tasks: resolved, projects, byProject };
+  listSnapshots.set(rows, snapshot);
+  rememberTaskList(collection, snapshot);
   replaceProjectKeySource(`tasks:${filePath}`, projects);
   return resolved;
 }
@@ -794,6 +825,7 @@ function taskSyncWrite(filePath: string): { write: TaskSyncWrite; companion: Non
 function writeTaskState<R>(
   filePath: string,
   prepare: (current: TasksFileState, sync: TaskSyncWrite | null, pristine: readonly BoardTask[], originalDraft: (index: number) => BoardTask) => { next: { rows: unknown[]; recentCreates: RecentCreate[]; migrations: TaskMigrations } | undefined; result: R },
+  options: { afterPersist?: () => void } = {},
 ): R {
   const collection = taskCollection(filePath, "write")!;
   const sync = taskSyncWrite(filePath);
@@ -830,7 +862,7 @@ function writeTaskState<R>(
        moves to the end too, so the receipt cap evicts it last after a reload. */
     const appendKeys = changed.map(taskRowKey).filter((key) => key.startsWith("r:") && byKey.has(key));
     return { records: changed, deleteKeys, appendKeys, ...(companion ? { companion } : {}) };
-  }, sync ? { companion: sync.companion } : {});
+  }, { ...(sync ? { companion: sync.companion } : {}), afterPersist: options.afterPersist });
   return result!;
 }
 
@@ -840,10 +872,25 @@ const writeSnapshots = new WeakMap<object, { aliases: string; state: TasksFileSt
     after array replacement, sorting or deletion for revision comparison. */
 function taskDrafts(pristine: readonly BoardTask[]) {
   const copies = new Map<number, BoardTask>();
+  const nested = new Map<number, Map<string, unknown>>();
   const original = (index: number): BoardTask => {
     let copy = copies.get(index);
     if (!copy) {
-      copy = structuredClone(pristine[index]!);
+      const source = pristine[index]!;
+      copy = { ...source };
+      const materialized = new Map<string, unknown>();
+      nested.set(index, materialized);
+      for (const [key, value] of Object.entries(source)) {
+        if (!value || typeof value !== "object") continue;
+        const target = copy;
+        Object.defineProperty(target, key, { configurable: true, enumerable: true,
+          get: () => {
+            if (!materialized.has(key)) materialized.set(key, structuredClone(value));
+            return materialized.get(key);
+          },
+          set: next => Object.defineProperty(target, key, { configurable: true, enumerable: true, writable: true, value: next }),
+        });
+      }
       persistedRows.set(copy, persistedRows.get(pristine[index]!));
       copies.set(index, copy);
     }
@@ -857,11 +904,417 @@ function taskDrafts(pristine: readonly BoardTask[]) {
     });
   });
   unreadDrafts.set(tasks, index => !copies.has(index) && Object.getOwnPropertyDescriptor(tasks, index)?.get ? pristine[index] : undefined);
-  return { tasks, original };
+  const changed = (index: number, task: BoardTask) => {
+    const prior = pristine[index]! as unknown as Record<string, unknown>;
+    const keys = Object.keys(task);
+    if (keys.length !== Object.keys(prior).length) return true;
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(task, key)!;
+      if (!Object.hasOwn(prior, key)) return true;
+      if (descriptor.get) {
+        if (nested.get(index)?.has(key) && JSON.stringify(nested.get(index)!.get(key)) !== JSON.stringify(prior[key])) return true;
+      } else if (!Object.is(descriptor.value, prior[key]) && JSON.stringify(descriptor.value) !== JSON.stringify(prior[key])) return true;
+    }
+    return false;
+  };
+  return { tasks, original, copies, changed };
 }
 
 const syncStep = (current: readonly BoardTask[], sync: TaskSyncWrite | null) =>
   sync ? { write: sync, groups: snapshotGroups(current, sync.linked, taskFingerprint) } : undefined;
+
+type ProjectEvidence = { revision: number; rows: Map<string, BoardTask>; ordered: BoardTask[]; bytes: number };
+const evidenceOwner = globalThis as typeof globalThis & { __delegatusTaskProjectEvidenceV1?: Map<string, ProjectEvidence> };
+const projectEvidence = evidenceOwner.__delegatusTaskProjectEvidenceV1 ??= new Map<string, ProjectEvidence>();
+const PROJECT_EVIDENCE_BYTES = 64 * 1024 * 1024;
+
+/** Admission is a reader of project history. Reuse its immutable projection;
+ * later revisions decode only journaled rows. This cache has one owner, eight
+ * project slots and a total byte bound. */
+function taskProjectEvidence(collection: SqliteStateCollection<TaskStateRow>, projects: readonly string[], canonical: (project: string) => string, aliases: string): BoardTask[] {
+  const identity = databaseFileIdentity(collection.filename);
+  const key = JSON.stringify([collection.filename, identity, projects]);
+  const revision = collection.revision();
+  let evidence = projectEvidence.get(key);
+  const decode = (raw: TaskStateRow) => {
+    const task = coerceTask(raw, canonical);
+    if (!task) throw new Error("invalid persisted task row");
+    return deepFreeze(task);
+  };
+  const fill = (reuseList = true): ProjectEvidence => {
+    const latest = latestListSnapshots.get(collection.filename);
+    const snapshot = reuseList && latest?.identity === identity && latest.revision <= revision ? latest.snapshot.deref() : undefined;
+    const reuse = snapshot?.aliases === aliases && snapshot.byProject;
+    const keys = reuse ? [] : collection.taskProjectKeys(projects);
+    const tasks = reuse
+      ? [...new Set(projects.map(canonical))].flatMap(project => snapshot!.byProject!.get(project) ?? [])
+      : collection.keysInOrder(keys, keys.length).map(key => decode(collection.get(key)!));
+    return { revision: reuse ? latest!.revision : revision, rows: new Map(tasks.map(task => [task.id, task])), ordered: tasks, bytes: tasks.reduce((sum, task) => sum + JSON.stringify(task).length * 2, 0) };
+  };
+  if (!evidence || evidence.revision > revision) evidence = fill();
+  if (evidence.revision !== revision) {
+    let cursor = "";
+    let from = evidence.revision;
+    for (;;) {
+      const page = collection.changesAfter(from, cursor, 512);
+      if (page.changeFloor > evidence.revision) { evidence = fill(false); break; }
+      for (const entry of page.entries) {
+        if (!entry.key.startsWith("t:")) continue;
+        const id = entry.key.slice(2);
+        const previous = evidence.rows.get(id);
+        if (previous) { evidence.bytes -= JSON.stringify(previous).length * 2; evidence.rows.delete(id); }
+        const raw = entry.valueJson ? JSON.parse(entry.valueJson) as TaskStateRow : null;
+        if (raw && projects.includes(raw.project as string)) {
+          const task = decode(raw);
+          evidence.bytes += JSON.stringify(task).length * 2;
+          evidence.rows.set(id, task);
+        }
+      }
+      if (page.entries.length < 512) { evidence.revision = page.revision; break; }
+      const last = page.entries.at(-1)!;
+      from = last.revision; cursor = last.key;
+    }
+    const byKey = new Map([...evidence.rows.values()].map(task => [`t:${task.id}`, task]));
+    evidence.ordered = collection.keysInOrder([...byKey.keys()], byKey.size).map(key => byKey.get(key)!);
+  }
+  projectEvidence.delete(key); projectEvidence.set(key, evidence);
+  let bytes = 0;
+  for (const held of projectEvidence.values()) bytes += held.bytes;
+  while (projectEvidence.size > 8 || bytes > PROJECT_EVIDENCE_BYTES) {
+    const oldest = projectEvidence.keys().next().value!;
+    bytes -= projectEvidence.get(oldest)!.bytes;
+    projectEvidence.delete(oldest);
+  }
+  return evidence.ordered;
+}
+
+function preparationRevision(filePath: string): string {
+  const context = linkedContext();
+  return createHash("sha256").update(JSON.stringify([
+    "task-row-preparation-v1", databaseFileIdentity(legacyDatabasePath(filePath)), projectAliasSnapshot().aliases, context.self, [...context.all].sort(),
+  ])).digest("hex");
+}
+
+function preparedRevision(filePath: string): string | null {
+  try {
+    const value = JSON.parse(fs.readFileSync(path.join(path.dirname(filePath), "tasks-row-preparation.json"), "utf8"));
+    return typeof value.revision === "string" ? value.revision : null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+class TaskPreparationRequiredBase extends FileTransactionBusyError {}
+const preparationOwner = globalThis as typeof globalThis & {
+  __delegatusTaskPreparationRequesterV1?: () => Promise<void>;
+  __delegatusTaskPreparationErrorV1?: typeof TaskPreparationRequiredBase;
+};
+const TaskPreparationRequired = preparationOwner.__delegatusTaskPreparationErrorV1 ??= TaskPreparationRequiredBase;
+
+/** A task worker requests preparation from its serving Viewer over its owned
+ * pipe. It receives no startup authority and chooses no destination path. */
+export function setTaskPreparationRequester(request: () => Promise<void>): () => void {
+  const previous = preparationOwner.__delegatusTaskPreparationRequesterV1;
+  preparationOwner.__delegatusTaskPreparationRequesterV1 = request;
+  return () => {
+    if (preparationOwner.__delegatusTaskPreparationRequesterV1 === request) preparationOwner.__delegatusTaskPreparationRequesterV1 = previous;
+  };
+}
+
+export async function withTaskPreparation<R>(operation: () => R | Promise<R>): Promise<R> {
+  const deadline = performance.now() + 30_000;
+  for (;;) {
+    assertOperationLease();
+    try { return await operation(); }
+    catch (error) {
+      if (!(error instanceof TaskPreparationRequired) || !preparationOwner.__delegatusTaskPreparationRequesterV1 || performance.now() >= deadline) throw error;
+      await awaitLeasedOperation("tasks.preparation", preparationOwner.__delegatusTaskPreparationRequesterV1);
+      assertOperationLease();
+      // A changed dependency after the reply takes a new attempt and yields.
+      await new Promise<void>(resolve => setTimeout(resolve, 25));
+    }
+  }
+}
+
+function prepareTaskWrite(filePath: string): void {
+  if (mayRunStateStartupMutation(path.dirname(path.resolve(filePath)))) prepareTaskRows(filePath);
+  else if (preparedRevision(filePath) !== preparationRevision(filePath)) throw new TaskPreparationRequired("task rows require serving Viewer preparation");
+}
+
+/** The old writer's first logical write, before keyed commands are admitted.
+ * Task fields and revisions are produced by the existing pass. The marker
+ * follows their commit: losing the marker repeats an idempotent pass.
+ * Alias/link dependency changes use the same startup and release fences. */
+export function prepareTaskRows(filePath = TASKS_FILE, options: { afterPersist?: () => void } = {}): number {
+  assertOperationLease();
+  if (preparedRevision(filePath) === preparationRevision(filePath)) return 0;
+  assertStateStartupMutation(path.dirname(path.resolve(filePath)), "task row preparation");
+  // Backup and marker publication share one nonblocking admission across
+  // processes. Contention leaves every application callback unentered.
+  return withFileTransactionAttempt(path.join(path.dirname(filePath), "tasks-row-preparation.json"),
+    "task row preparation is busy", () => prepareTaskRowsLeased(filePath, options));
+}
+
+function prepareTaskRowsLeased(filePath: string, options: { afterPersist?: () => void }): number {
+  const directory = path.dirname(path.resolve(filePath));
+  if (preparedRevision(filePath) === null) assertStateStartupMutation(directory, "task row preparation");
+  taskCollection(filePath, "write");
+  const revision = preparationRevision(filePath);
+  if (preparedRevision(filePath) === revision) return 0;
+  assertStateStartupMutation(directory, "task row preparation");
+  const database = stateDatabases(directory).find(db => db.name === "state.sqlite");
+  if (!database?.backup) throw new Error("task row preparation requires a backed-up state database");
+  const backup = backupDatabase({ ...database, backup: { ...database.backup, intervalMs: 0 } }, {
+    backupDirectory: path.join(directory, BACKUP_DIRECTORY),
+  });
+  if (backup.state !== "taken" && backup.state !== "not-due" && backup.state !== "unchanged") {
+    throw new Error(`task row preparation backup refused: ${backup.state}`);
+  }
+  const effects = ["doneAt", "doneAdmissions", "findingKey", "finding", "accounting", "proactive", "project", "machine", "sync"];
+  const counts = Object.fromEntries([...effects, "projection"].map(field => [field, 0]));
+  const at = Date.now();
+  const changed = writeTaskState(filePath, (current, sync, pristine, originalDraft) => {
+    // Recheck under the collection lease: another process may have prepared it.
+    if (preparedRevision(filePath) === revision) return { next: undefined, result: 0 };
+    const before = snapshotTasks(current.tasks, pristine, originalDraft);
+    const step = syncStep(current.tasks, sync ? { ...sync, now: () => at } : null);
+    const rows = committedRows(current.tasks.slice(), before, true, step);
+    let changed = 0;
+    for (let index = 0; index < rows.length; index++) {
+      const prior = persistedRows.get(pristine[index]!) as Record<string, unknown>;
+      const next = rows[index] as Record<string, unknown>;
+      if (JSON.stringify(prior) === JSON.stringify(next)) continue;
+      changed++;
+      for (const field of effects) {
+        if (JSON.stringify(prior[field]) !== JSON.stringify(next[field])) counts[field] = (counts[field] ?? 0) + 1;
+      }
+      if (["placement", "pos", "hold", "steps", "dueHistory", "note", "summary", "progress", "statusBy", "icon", "priority"]
+        .some(field => JSON.stringify(prior[field]) !== JSON.stringify(next[field]))) counts.projection++;
+    }
+    return { next: { rows, recentCreates: current.recentCreates, migrations: current.migrations ?? {} }, result: changed };
+  }, options);
+  if (preparationRevision(filePath) !== revision) throw new FileTransactionBusyError("task preparation dependencies changed; retry");
+  writeJsonDurably(path.join(directory, "tasks-row-preparation.json"), { revision });
+  console.warn(`[tasks preparation] ${JSON.stringify({ changedRows: changed, effects: counts })}`);
+  return changed;
+}
+
+/** Command writes have a keyed input/output plan. A callback that explicitly
+ * traverses history still gets the existing array contract, resolved lazily. */
+function writeTaskCommands<R>(filePath: string,
+  mutate: (state: TasksFileState, sync: TaskSyncWrite | null) => { state: TasksFileState | undefined; result: R }, tasksOnly = false): R {
+  assertOperationLease();
+  prepareTaskWrite(filePath);
+  const collection = taskCollection(filePath, "write")!;
+  const sync = taskSyncWrite(filePath);
+  const prepared = preparationRevision(filePath);
+  let result: R;
+  collection.patchSync(() => {
+    if (preparedRevision(filePath) !== prepared || preparationRevision(filePath) !== prepared) throw new TaskPreparationRequired("task preparation dependencies changed; retry");
+    const aliases = projectAliasSnapshot();
+    const aliasKey = JSON.stringify(aliases.aliases);
+    return withProjectAliasSnapshot(aliases, () => {
+      const canonical = projectAliasResolver(aliases);
+      const projects = (project: string) => {
+        const key = canonical(project);
+        return [key, ...Object.keys(aliases.aliases).filter(alias => alias !== key && canonical(alias) === key)];
+      };
+      const selected = new Map<string, BoardTask | null>();
+      const normalizations = new Map<string, BoardTask>();
+      const findingGroups = new Set<string>();
+      const read = (id: string) => {
+        if (!selected.has(id)) {
+          const raw = collection.get(`t:${id}`);
+          const task = raw ? coerceTask(raw, canonical) : null;
+          if (raw && !task) throw new Error("invalid persisted task row");
+          if (task) { persistedRows.set(task, raw); deepFreeze(task); }
+          selected.set(id, task);
+        }
+        return selected.get(id)!;
+      };
+      const get = (id: string) => {
+        const task = read(id);
+        if (task?.status !== "done" && task?.findingKey !== undefined) {
+          const identity = JSON.stringify([task.project, task.findingKey]);
+          if (!findingGroups.has(identity)) {
+            findingGroups.add(identity);
+            const group = projects(task.project).flatMap(project => collection.findingTaskKeys(project, task.findingKey!))
+              .flatMap(key => { const row = read(key.slice(2)); return row ? [row] : []; });
+            const projected = reconcileOpenFindings(group);
+            for (let index = 0; index < projected.length; index++) {
+              const row = projected[index]!;
+              if (row === group[index]) continue;
+              persistedRows.set(row, persistedRows.get(group[index]!));
+              Object.assign(row, { revision: `task-legacy:${taskFingerprint(row)}` });
+              deepFreeze(row); selected.set(row.id, row); normalizations.set(row.id, row);
+            }
+          }
+        }
+        return selected.get(id)!;
+      };
+      let structural = false;
+      let full: { current: TasksFileState; pristine: TasksFileState; draft: ReturnType<typeof taskDrafts>; indices: Map<string, number> } | undefined;
+      const readFull = () => {
+        if (!full) {
+          const committed = collection.loadReadonly();
+          const snapshots = tasksOnly ? taskOnlyWriteSnapshots : writeSnapshots;
+          let baseline = snapshots.get(committed);
+          if (baseline?.aliases !== aliasKey) {
+            const list = listSnapshots.get(committed);
+            const stateSnapshot = writeSnapshots.get(committed);
+            const state = tasksOnly && list?.aliases === aliasKey
+              ? { tasks: list.tasks as BoardTask[], recentCreates: [], migrations: {} }
+              : tasksOnly && stateSnapshot?.aliases === aliasKey
+              ? { tasks: stateSnapshot.state.tasks, recentCreates: [], migrations: {} }
+              : stateFromBody(bodyFromRows(committed));
+            baseline = { aliases: aliasKey, state: deepFreeze(state) };
+            snapshots.set(committed, baseline);
+          }
+          const pristine = baseline.state;
+          const draft = taskDrafts(pristine.tasks);
+          const current = { ...pristine, tasks: draft.tasks, recentCreates: structuredClone(pristine.recentCreates), migrations: { ...pristine.migrations } };
+          let indices = writeSnapshotIndices.get(pristine.tasks);
+          if (!indices) {
+            indices = new Map(pristine.tasks.map((task, index) => [task.id, index]));
+            writeSnapshotIndices.set(pristine.tasks, indices);
+          }
+          let normalized = writeSnapshotNormalizations.get(pristine.tasks);
+          if (!normalized) {
+            normalized = pristine.tasks.filter(task => {
+              const stored = persistedRows.get(task) as BoardTask | undefined;
+              return stored && !sameStoredCompletion(stored, task);
+            });
+            writeSnapshotNormalizations.set(pristine.tasks, normalized);
+          }
+          for (const task of normalized) normalizations.set(task.id, task);
+          full = { current, pristine, draft, indices };
+        }
+        return full.current.tasks;
+      };
+      const plans = new WeakMap<BoardTask[], ReadonlyMap<string, BoardTask>>();
+      const makeView = (changes: ReadonlyMap<string, BoardTask>): BoardTask[] => {
+        const view: TaskMutationView = {
+          get: id => changes.get(id) ?? get(id),
+          project: project => {
+            const rows = new Map(taskProjectEvidence(collection, projects(project), canonical, aliasKey).map(task => [task.id, task]));
+            for (const [id, task] of changes) { rows.delete(id); if (canonical(task.project) === canonical(project)) rows.set(id, task); }
+            return [...rows.values()];
+          },
+          finding: (project, key) => {
+            const rows = new Map(projects(project).flatMap(project => collection.findingTaskKeys(project, key)).flatMap(key => {
+              const task = get(key.slice(2));
+              return task ? [[task.id, task] as const] : [];
+            }));
+            for (const [id, task] of changes) {
+              rows.delete(id);
+              if (canonical(task.project) === canonical(project) && task.findingKey === key && task.status !== "done") rows.set(id, task);
+            }
+            return [...rows.values()];
+          },
+          replace: task => makeView(new Map([...changes, [task.id, task]])),
+        };
+        const tasks = lazyTaskMutationView(() => {
+          const rows = readFull();
+          if (!changes.size) return rows;
+          const present = new Set(rows.map(task => task.id));
+          return [...rows.map(task => changes.get(task.id) ?? task), ...[...changes.values()].filter(task => !present.has(task.id))];
+        }, view, () => { structural = true; });
+        plans.set(tasks, changes);
+        return tasks;
+      };
+      // Receipts and migration markers have their own keyed ranges. Task
+      // commands never decode the retained task history to read these sections.
+      const section = (prefix: string) => {
+        const rows: TaskStateRow[] = [];
+        let after = prefix;
+        for (;;) {
+          const page = collection.keyRange(after, `${prefix}\uffff`, 512);
+          rows.push(...page);
+          if (page.length < 512) return rows;
+          after = taskRowKey(page.at(-1)!);
+        }
+      };
+      const receipts = (tasksOnly ? [] : section("r:")) as unknown as RecentCreate[];
+      // Receipt order is insertion order, not request-key order.
+      const orderedReceipts = new Map(receipts.map(receipt => [`r:${receipt.clientRequestId}`, receipt]));
+      const recentCreates = collection.keysInOrder([...orderedReceipts.keys()], receipts.length).map(key => orderedReceipts.get(key)!);
+      const migrations = Object.fromEntries((tasksOnly ? [] : section("m:")).map(row => [row.name, row.appliedAt])) as TaskMigrations;
+      const current: TasksFileState = { tasks: makeView(new Map()), recentCreates, migrations };
+      assertOperationLease();
+      let outcome: ReturnType<typeof mutate>;
+      try { outcome = mutate(current, sync?.write ?? null); }
+      catch (error) {
+        // A nested admission cannot replay an application callback's effects.
+        if (error instanceof TaskPreparationRequired) throw new FileTransactionBusyError(error.message);
+        throw error;
+      }
+      result = outcome.result;
+      assertOperationLease();
+      if (preparationRevision(filePath) !== prepared) throw new FileTransactionBusyError("task preparation dependencies changed; retry");
+      if (!outcome.state) return { records: [], companion: sync?.pending() };
+      const plan = plans.get(outcome.state.tasks);
+      if (full && [...full.draft.copies].some(([index, task]) => task.id !== full!.pristine.tasks[index]!.id)) structural = true;
+      const edits = new Map([...normalizations].map(([id, task]) => [id, structuredClone(task)]));
+      let deleted: BoardTask[] = [];
+      let outputPositions: Map<string, number> | undefined;
+      if (!plan || structural) {
+        readFull();
+        const ids = new Map<string, number>();
+        for (const task of outcome.state.tasks) {
+          if (ids.has(task.id)) throw new Error("duplicate persisted task id");
+          ids.set(task.id, ids.size);
+          const index = full!.indices.get(task.id);
+          if (index === undefined || full!.draft.copies.get(index) !== task) edits.set(task.id, task);
+        }
+        deleted = full!.pristine.tasks.filter(task => !ids.has(task.id));
+        outputPositions = ids;
+      }
+      for (const [id, task] of normalizations) if (!edits.has(id)) edits.set(id, structuredClone(task));
+      const deletedIds = new Set(deleted.map(task => task.id));
+      for (const id of deletedIds) edits.delete(id);
+      if (full) for (const [index, task] of full.draft.copies) {
+        const prior = full.pristine.tasks[index]!;
+        if (full.draft.changed(index, task) && !deletedIds.has(prior.id)) edits.set(task.id, task);
+      }
+      if (plan) for (const [id, task] of plan) edits.set(id, task);
+      let tasks = [...edits.values()];
+      if (outputPositions) tasks.sort((left, right) => outputPositions!.get(left.id)! - outputPositions!.get(right.id)!);
+      else if (plan && tasks.length > 1) {
+        const ordered = collection.keysInOrder(tasks.map(task => `t:${task.id}`), tasks.length);
+        const existing = new Set(ordered);
+        tasks = [...ordered.map(key => edits.get(key.slice(2))!), ...tasks.filter(task => !existing.has(`t:${task.id}`))];
+      }
+      const baseline = [...tasks.flatMap(task => {
+        const index = full?.indices.get(task.id);
+        const prior = index === undefined ? get(task.id) : full!.pristine.tasks[index];
+        return prior ? [prior] : [];
+      }), ...deleted];
+      const before = snapshotTasks(baseline);
+      if (full) for (const [id, prior] of before) {
+        const index = full.indices.get(id);
+        if (index !== undefined) before.set(id, { ...prior, ref: full.draft.original(index), pristine: full.pristine.tasks[index] });
+      }
+      const rows = committedRows(tasks, before, true, syncStep(baseline, sync?.write ?? null));
+      const committed = baseline.map(task => persistedRows.get(task) as TaskStateRow);
+      const deleteKeys = deleted.map(task => `t:${task.id}`);
+      const nextMigrations = outcome.state.migrations ?? migrations;
+      const records = stateRows(rows, outcome.state.recentCreates, nextMigrations);
+      const previous = new Map([...committed, ...receipts as unknown as TaskStateRow[], ...Object.entries(migrations).map(([name, appliedAt]) => ({ name, appliedAt }))].map(row => [taskRowKey(row), row]));
+      const changed = records.filter(row => { const prior = previous.get(taskRowKey(row)); return prior !== row && JSON.stringify(prior) !== JSON.stringify(row); });
+      const receiptKeys = new Set(outcome.state.recentCreates.map(receipt => `r:${receipt.clientRequestId}`));
+      for (const receipt of receipts) if (!receiptKeys.has(`r:${receipt.clientRequestId}`)) deleteKeys.push(`r:${receipt.clientRequestId}`);
+      for (const name of Object.keys(migrations)) if (!Object.hasOwn(nextMigrations, name)) deleteKeys.push(`m:${name}`);
+      if (preparationRevision(filePath) !== prepared) throw new FileTransactionBusyError("task preparation dependencies changed; retry");
+      return { records: changed, deleteKeys, appendKeys: changed.map(taskRowKey).filter(key => key.startsWith("r:") && previous.has(key)), companion: sync?.pending() };
+    });
+  }, sync ? { companion: sync.companion } : {});
+  return result!;
+}
+
+const writeSnapshotIndices = new WeakMap<BoardTask[], Map<string, number>>();
+const writeSnapshotNormalizations = new WeakMap<BoardTask[], BoardTask[]>();
+const taskOnlyWriteSnapshots = new WeakMap<object, { aliases: string; state: TasksFileState }>();
 
 export function saveTasks(tasks: BoardTask[], filePath = TASKS_FILE): void {
   writeTaskState(filePath, ({ tasks: current, recentCreates, migrations }, sync) => {
@@ -902,14 +1355,10 @@ export function mutateLinkedTasks<R>(
   mutate: (tasks: BoardTask[], sync: TaskSyncWrite | null) => { tasks: BoardTask[] | undefined; result: R },
   filePath = TASKS_FILE,
 ): R {
-  return writeTaskState(filePath, (current, sync, pristine, originalDraft) => {
-    const before = snapshotTasks(current.tasks, pristine, originalDraft);
-    const step = syncStep(current.tasks, sync);
+  return writeTaskCommands(filePath, (current, sync) => {
     const outcome = mutate(current.tasks, sync);
-    if (!outcome.tasks) return { next: undefined, result: outcome.result };
-    const rows = committedRows(outcome.tasks, before, true, step);
-    return { next: { rows, recentCreates: current.recentCreates, migrations: current.migrations ?? {} }, result: outcome.result };
-  });
+    return { state: outcome.tasks ? { ...current, tasks: outcome.tasks } : undefined, result: outcome.result };
+  }, true);
 }
 
 /**
@@ -922,17 +1371,7 @@ export function mutateTasksFile<R>(
   mutate: (state: TasksFileState) => { state: TasksFileState | undefined; result: R },
   filePath = TASKS_FILE,
 ): R {
-  return writeTaskState(filePath, (current, sync, pristine, originalDraft) => {
-    const before = snapshotTasks(current.tasks, pristine, originalDraft);
-    const step = syncStep(current.tasks, sync);
-    const outcome = mutate(current);
-    if (!outcome.state) return { next: undefined, result: outcome.result };
-    const rows = committedRows(outcome.state.tasks, before, true, step);
-    return {
-      next: { rows, recentCreates: outcome.state.recentCreates, migrations: outcome.state.migrations ?? current.migrations ?? {} },
-      result: outcome.result,
-    };
-  });
+  return writeTaskCommands(filePath, current => mutate(current));
 }
 
 /** The change log and key order of the task collection, for the linked-boards
@@ -1076,7 +1515,7 @@ export function mutateTaskTelegramPolls(taskId: string, reviewId: string,
 }
 
 export function mutateTasksAsync<R>(mutate: (tasks: BoardTask[]) => { tasks: BoardTask[] | undefined; result: R }, filePath = TASKS_FILE): Promise<R> {
-  return waitForStateLock("tasks.mutation", () => mutateTasks(mutate, filePath), { subject: "tasks" });
+  return withTaskPreparation(() => waitForStateLock("tasks.mutation", () => mutateTasks(mutate, filePath), { subject: "tasks" }));
 }
 
 /** Targeted task + companion transaction. Both leases are acquired in canonical
