@@ -4,6 +4,7 @@ import base64
 import fcntl
 import hashlib
 import http.client
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -175,12 +176,35 @@ class Listener:
     version: str = ''
 
 
-def listening_sockets(text, port):
+def _ipv4_socket_address(encoded, family):
+    try:
+        raw = bytes.fromhex(encoded)
+        if family == 'tcp':
+            if len(raw) != 4:
+                return None
+            return ipaddress.IPv4Address(raw[::-1])
+        if family == 'tcp6':
+            if len(raw) != 16:
+                return None
+            address = ipaddress.IPv6Address(b''.join(raw[index:index + 4][::-1] for index in range(0, 16, 4)))
+            if address.ipv4_mapped:
+                return address.ipv4_mapped
+            # /proc does not expose IPV6_V6ONLY. Treat a wildcard as a
+            # possible dual-stack listener, while excluding IPv6 loopback.
+            return ipaddress.IPv4Address('0.0.0.0') if address.is_unspecified else None
+    except (ValueError, ipaddress.AddressValueError):
+        return None
+    return None
+
+
+def listening_sockets(text, port, family='tcp'):
     rows = []
     for line in text.splitlines()[1:]:
         parts = line.split()
         try:
-            if parts[3] == '0A' and int(parts[1].split(':')[1], 16) == port:
+            address, encoded_port = parts[1].split(':')
+            endpoint = _ipv4_socket_address(address, family)
+            if parts[3] == '0A' and int(encoded_port, 16) == port and endpoint in (ipaddress.IPv4Address('127.0.0.1'), ipaddress.IPv4Address('0.0.0.0')):
                 rows.append((int(parts[7]), parts[9]))
         except (IndexError, ValueError):
             continue
@@ -207,11 +231,33 @@ def script_argument(args):
     return Path(args[index]) if len(args) > index and Path(args[index]).is_absolute() else None
 
 
+def trusted_process_script(args, install):
+    """Return a verified Delegatus script only when its interpreter is this Bun."""
+    script = script_argument(args)
+    if not script or not args:
+        return None
+    try:
+        if Path(args[0]).resolve() != install.bun.resolve():
+            return None
+        script = script.resolve()
+        root = script.parent.parent.parent.resolve() if script.name == 'server.js' else script.parent.parent.resolve()
+        expected = {
+            root / 'bin/cli.mjs',
+            root / 'dist/runtime-host.mjs',
+            root / 'dist/standalone/server.js',
+        }
+        if script not in expected or package_info(root) is None or not all((root / name).is_file() for name in REQUIRED):
+            return None
+        return script
+    except OSError:
+        return None
+
+
 def listener(port, install=None, proc=Path('/proc')):
     rows = []
     for table in ('tcp', 'tcp6'):
         try:
-            rows.extend(listening_sockets((proc / 'net' / table).read_text(), port))
+            rows.extend(listening_sockets((proc / 'net' / table).read_text(), port, table))
         except OSError:
             pass
     if not rows or any(uid != os.getuid() for uid, _ in rows):
@@ -250,10 +296,10 @@ def listener(port, install=None, proc=Path('/proc')):
             if not row:
                 break
             args, cursor = row
-            script = script_argument(args)
-            if script and (str(script).endswith('/dist/runtime-host.mjs') or str(script).endswith('/dist/standalone/server.js')):
+            script = trusted_process_script(args, install)
+            if script and script.name in ('runtime-host.mjs', 'server.js'):
                 server = True
-            if server and script and str(script).endswith('/bin/cli.mjs'):
+            if server and script and script.name == 'cli.mjs' and script.parent.name == 'bin':
                 root = script.parent.parent.resolve()
                 info = package_info(root)
                 if info:

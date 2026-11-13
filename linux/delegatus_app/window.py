@@ -91,6 +91,7 @@ class Application(Gtk.Application):
                 if code not in self.copy:
                     detail += '\n\n' + tail
                 self.later(self.show_state, 'failed', detail)
+                self.later(self.sync_login_item)
             finally:
                 self.later(self.finished)
         threading.Thread(target=run, daemon=True).start()
@@ -104,6 +105,9 @@ class Application(Gtk.Application):
     def update_menu(self):
         for key in ('start', 'stop', 'login', 'updates'):
             self.menu_items[key].set_sensitive(not self.busy and (self.installation is not None or key in ('start', 'updates')))
+
+    def sync_login_item(self):
+        self.login_item.set_active(bool(self.installation and self.installation.service))
 
     def do_activate(self):
         if self.window:
@@ -418,9 +422,16 @@ class Application(Gtk.Application):
             return
         remove = self.installation.service is not None
         if remove and not self.ask(self.copy['remove-question'], self.copy['login']):
+            self.login_item.set_active(True)
             return
         def work():
-            self.cli(['service', 'remove'] if remove else ['service', 'install', '--port', str(self.port)])
+            try:
+                self.cli(['service', 'remove'] if remove else ['service', 'install', '--port', str(self.port)])
+            except Exception:
+                # The command may have changed the unit before it reported an
+                # error. Refresh discovery so the checkbox reflects disk state.
+                self.installation = core.discover(self.home, os.environ, self.port)
+                raise
             self.start_work()
         self.worker(work)
 

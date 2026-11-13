@@ -38,7 +38,7 @@ jobs:
         with:
           bun-version: '1.4.0'
       - id: scope
-        run: bun scripts/ci-platform-scope.ts --workflow .github/workflows/linux-app.yml --prefix linux/ --prefix scripts/linux-app/ --prefix scripts/mac-app/manifest --prefix scripts/mac-app/icon.ts --prefix bin/ --prefix src/app/api/onboarding/ --prefix src/proxy.ts --prefix Dockerfile --prefix .github/workflows/publish.yml
+        run: bun scripts/ci-platform-scope.ts --workflow .github/workflows/linux-app.yml --always "${{ inputs.mode == 'release' }}" --prefix linux/ --prefix scripts/linux-app/ --prefix scripts/mac-app/manifest --prefix scripts/mac-app/icon.ts --prefix bin/ --prefix src/app/api/onboarding/ --prefix src/proxy.ts --prefix Dockerfile --prefix .github/workflows/publish.yml
       - id: revision
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 

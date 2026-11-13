@@ -2,10 +2,13 @@ import http.server
 import json
 import os
 from pathlib import Path
+import shutil
+import signal
 import socket
 import subprocess
 import sys
 import tempfile
+import time
 import threading
 import unittest
 
@@ -112,6 +115,69 @@ console.log(renderLoginService(JSON.parse(process.argv[1])));'''
         self.assertEqual(core.listener(43210, install, proc).kind, 'program')
         table.write_text('header\n' + row.replace(f' {os.getuid()} 0 123', f' {os.getuid()+1} 0 123'))
         self.assertEqual(core.listener(43210, install, proc).kind, 'other-user')
+
+    def test_ipv6_loopback_listener_does_not_own_ipv4_endpoint(self):
+        proc = self.home / 'proc'
+        (proc / 'net').mkdir(parents=True)
+        ipv4 = f' 0: 0100007F:A8CA 00000000:0000 0A 0:0 00:0 0 {os.getuid()} 0 123 1\n'
+        ipv6_loopback = f' 1: 00000000000000000000000001000000:A8CA 00000000000000000000000000000000:0000 0A 0:0 00:0 0 {os.getuid()+1} 0 456 1\n'
+        (proc / 'net/tcp').write_text('header\n' + ipv4)
+        (proc / 'net/tcp6').write_text('header\n' + ipv6_loopback)
+        root = self.package(self.home / 'root')
+        install = core.Installation(Path('/fixture/bun'), root / 'bin/cli.mjs')
+        self.process(proc, 40, 1, ['/fixture/bun', str(install.cli)])
+        self.process(proc, 41, 40, ['/fixture/bun', str(root / 'dist/runtime-host.mjs')], '123')
+        self.assertEqual(core.listener(43210, install, proc).kind, 'own-install')
+
+        dual_stack = ipv6_loopback.replace('00000000000000000000000001000000', '00000000000000000000000000000000').replace(' 456 1', ' 789 1')
+        (proc / 'net/tcp6').write_text('header\n' + dual_stack)
+        self.assertEqual(core.listener(43210, install, proc).kind, 'other-user')
+
+    def test_real_python_listener_with_package_shaped_ancestry_is_busy_and_gets_no_key(self):
+        bun = shutil.which('bun')
+        self.assertIsNotNone(bun, 'the pinned Bun executable is needed to verify interpreter identity')
+        root = self.package(self.home / 'packages/node_modules/delegatus-cli')
+        seen = self.home / 'received-credentials'
+        host = root / 'dist/runtime-host.mjs'
+        host.write_text('''import http.server, os
+class Handler(http.server.BaseHTTPRequestHandler):
+ def do_HEAD(self):
+  value = self.headers.get('Authorization')
+  if value:
+   with open(os.environ['CREDENTIALS'], 'a') as stream: stream.write(value + "\\n")
+  self.send_response(204 if value else 401)
+  if value: self.send_header('x-delegatus-diagnostics', '1')
+  self.end_headers()
+ def log_message(self, *_args): pass
+http.server.HTTPServer(('127.0.0.1', int(os.environ['PORT'])), Handler).serve_forever()
+''')
+        cli = root / 'bin/cli.mjs'
+        cli.write_text('''import subprocess, sys
+subprocess.run([sys.executable, sys.argv[1]], check=False)
+''')
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+        child = subprocess.Popen([sys.executable, '-I', str(cli), str(host)], env={**os.environ, 'PORT': str(port), 'CREDENTIALS': str(seen)},
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        def stop():
+            if child.poll() is None:
+                os.killpg(child.pid, signal.SIGTERM)
+                child.wait(timeout=5)
+        self.addCleanup(stop)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if child.poll() is not None:
+                self.fail('the package-shaped Python listener exited before the probe')
+            try:
+                with socket.create_connection(('127.0.0.1', port), timeout=.05):
+                    break
+            except OSError:
+                time.sleep(.02)
+        install = core.Installation(Path(bun), cli)
+        result = core.observe(port, install, 'fixture-secret')
+        self.assertEqual(result.state, 'port-busy')
+        self.assertFalse(seen.exists(), 'the unverified Python listener must not receive the access key')
 
     def test_probe_never_sends_key_to_unverified_listener_or_redirect(self):
         requests = []
