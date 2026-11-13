@@ -194,12 +194,15 @@ test("OpenAI live: a refused offer records the clip and transcribes it instead",
 test("OpenAI audio captured during a successful offer remains on batch", () => withPeer(async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   let resolve!: (response: Response) => void;
+  let offered!: () => void;
+  const atOffer = new Promise<void>(r => { offered = r; });
   globalThis.fetch = openAiFetch(calls, () => {
     feedAudio();
+    offered();
     return new Promise<Response>(r => { resolve = r; });
   });
   mount("en"); const started = dictation().start();
-  for (let i = 0; i < 40; i++) await Promise.resolve();
+  await atOffer;
   expect(PeerFixture.latest).toBeDefined();
   resolve(new Response("v=0 answer-fixture")); await started;
   expect(PeerFixture.latest!.remote).toEqual({ type: "answer", sdp: "v=0 answer-fixture" });
