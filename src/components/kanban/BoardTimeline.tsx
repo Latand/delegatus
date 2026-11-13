@@ -1,7 +1,7 @@
 "use client";
 
 import { ChartGantt, ChevronRight, Minus, Plus } from "lucide-react";
-import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { BAR_CONTROL, BAR_OUTLINED, BAR_PRESSED } from "@/components/ProjectBar";
 import { humanizeDuration } from "@/components/turnDuration";
 import { useLocale } from "@/lib/i18n";
@@ -53,16 +53,20 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
   const scroll = useRef<HTMLDivElement>(null);
   const positioned = useRef("");
   const previousTop = useRef(0);
+  // A finger, wheel, key or scrollbar drag is moving the chart. While it is, the
+  // component writes neither the viewport height nor scrollTop; what a layout
+  // change asked for meanwhile waits in `pending` until the movement is over.
+  const gesture = useRef({ active: false, held: false, moved: false, placed: false, pending: "" as "" | "soft" | "force", timer: 0 as ReturnType<typeof setTimeout> | 0 });
   const [width, setWidth] = useState(0);
   const [viewLeft, setViewLeft] = useState(0);
   const labelWidth = phone ? 0 : Math.min(380, Math.max(120, Math.round(width * 0.45)));
-  // Size the scrolling viewport to complete rows, without changing a row's
-  // text or height. Wheel, keyboard and scrollbar movement land on row edges.
-  const fitRows = useCallback(() => {
+  // Whole-row stops of the chart: where a row (or, for a row taller than the
+  // viewport, a text line) starts, measured from the bottom of the pinned axis.
+  const measureRows = useCallback(() => {
     const element = scroll.current, container = root.current;
-    if (!element || !container) return;
+    if (!element || !container) return null;
     const rows = [...element.querySelectorAll<HTMLElement>(".bt-row")];
-    if (!rows.length) return;
+    if (!rows.length) return null;
     const axis = element.querySelector<HTMLElement>(".bt-axis")!.offsetHeight;
     const scrollbar = element.offsetHeight - element.clientHeight;
     const available = container.clientHeight - container.querySelector<HTMLElement>(".bt-head")!.offsetHeight - axis - scrollbar;
@@ -79,6 +83,17 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
     const offsets: number[] = [];
     let total = 0;
     for (const height of heights) { offsets.push(total); total += height; }
+    return { element, axis, scrollbar, available, heights, offsets };
+  }, []);
+  // Size the scrolling viewport to complete rows, without changing a row's
+  // text or height, and put the chart on a row edge. It runs when the layout
+  // changes (open, resize, expand, scale) and when the chart is moved from
+  // script; never while a person is scrolling (see `fit`).
+  const fitRows = useCallback(() => {
+    const measured = measureRows();
+    if (!measured) return;
+    const { element, axis, scrollbar, available, heights, offsets } = measured;
+    gesture.current.placed = false;
     const atEnd = element.scrollTop > 0 && element.scrollTop + element.clientHeight >= element.scrollHeight - 1;
     let first = offsets.findIndex(offset => offset >= element.scrollTop - 1);
     if (first < 0) first = heights.length - 1;
@@ -100,17 +115,73 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
     element.style.height = `${axis + used + scrollbar}px`;
     element.scrollTop = offsets[first]!;
     previousTop.current = element.scrollTop;
-  }, []);
+  }, [measureRows]);
+  // `force` is a layout change that owes whole rows even over a scrolled
+  // position; without it a data refresh or a horizontal pan leaves a position
+  // the person chose alone. During a gesture either one waits.
+  const fit = useCallback((force: boolean) => {
+    const state = gesture.current;
+    if (state.active) { if (force || !state.pending) state.pending = force ? "force" : "soft"; return; }
+    if (!force && state.placed) return;
+    fitRows();
+  }, [fitRows]);
+  const endGesture = useCallback(() => {
+    const state = gesture.current;
+    if (state.timer) clearTimeout(state.timer);
+    state.active = false; state.held = false; state.timer = 0;
+    const pending = state.pending; state.pending = "";
+    if (pending === "force" || pending === "soft" && !state.placed) fitRows();
+  }, [fitRows]);
+  // The movement is over 200 ms after the last scroll or input event with
+  // nothing held down; a held finger or button keeps it going, up to 8 s of silence.
+  const keepGesture = useCallback(() => {
+    const state = gesture.current;
+    state.active = true;
+    if (state.timer) clearTimeout(state.timer);
+    state.timer = setTimeout(endGesture, state.held ? 8000 : 200);
+  }, [endGesture]);
+  const press = useCallback(() => { gesture.current.held = true; gesture.current.moved = false; keepGesture(); }, [keepGesture]);
+  const keyStep = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    const down = event.key === "ArrowDown";
+    if (!down && event.key !== "ArrowUp" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.defaultPrevented) { if (event.key.startsWith("Arrow") || event.key.startsWith("Page") || event.key === "Home" || event.key === "End" || event.key === " ") keepGesture(); return; }
+    // Arrow keys move one row (or one text line of a very tall row) at a time.
+    const measured = measureRows();
+    if (!measured) return;
+    event.preventDefault();
+    const { element, offsets } = measured;
+    const target = down ? offsets.find(offset => offset > element.scrollTop + 1) : offsets.findLast(offset => offset < element.scrollTop - 1);
+    keepGesture();
+    element.scrollTop = Math.max(0, Math.min(target ?? (down ? element.scrollHeight : 0), element.scrollHeight - element.clientHeight));
+  }, [keepGesture, measureRows]);
+  useEffect(() => {
+    const state = gesture.current;
+    const release = (event: Event) => {
+      if (!state.active) return;
+      // The browser cancels a touch pointer once it takes over the scrolling; the finger is still down until `touchend`.
+      if (event.type === "pointercancel") { state.moved = true; return; }
+      if (event.type === "touchend" && (event as TouchEvent).touches.length) return;
+      state.held = false;
+      if (state.moved) keepGesture(); else endGesture();
+    };
+    const events = ["pointerup", "pointercancel", "touchend", "touchcancel", "mouseup", "blur"] as const;
+    for (const type of events) window.addEventListener(type, release, { passive: true });
+    return () => {
+      for (const type of events) window.removeEventListener(type, release);
+      if (state.timer) clearTimeout(state.timer);
+    };
+  }, [keepGesture, endGesture]);
   useLayoutEffect(() => {
     const element = root.current;
     if (!element) return;
-    const measure = () => { setWidth(element.clientWidth); fitRows(); };
+    const measure = () => { setWidth(element.clientWidth); fit(true); };
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure); observer.observe(element);
     return () => observer.disconnect();
-  }, [fitRows]);
-  useLayoutEffect(fitRows, [fitRows, preference.expanded, tasks, pipelines, width, locale]);
+  }, [fit]);
+  useLayoutEffect(() => fit(true), [fit, preference.expanded, preference.hours, width, locale]);
+  // A data refresh re-fits a chart nobody has scrolled, and leaves a scrolled one where it is.
+  useLayoutEffect(() => fit(false), [fit, tasks, pipelines]);
   const laneWidth = Math.max(120, width - labelWidth - (phone ? 0 : 17));
   const pxPerMs = laneWidth / (preference.hours * HOUR);
   const earliest = projection.tasks.reduce((start, task) => Math.min(start, task.startedAtMs ?? start), nowMs - preference.hours * HOUR);
@@ -159,7 +230,7 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
   const hiddenBefore = (attempt: TimelineAttempt) => attempt.startedAtMs !== null && attempt.endAtMs !== null && bar(attempt.startedAtMs, attempt.endAtMs) !== null && x(attempt.endAtMs) < viewLeft;
   const earlierCount = projection.tasks.reduce((count, task) => timelineExpanded(preference, task.taskId, task.live)
     ? count + [...task.pipelines.flatMap(pipeline => pipeline.attempts), ...task.agents].filter(hiddenBefore).length : count, 0);
-  useLayoutEffect(fitRows, [fitRows, earlierCount]);
+  useLayoutEffect(() => fit(false), [fit, earlierCount]);
   const nowLine = <i className="bt-now" style={{ left: nowX }} aria-hidden />;
   const stepHours = [1, 3, 6, 12, 24, 48, 72, 168].find(hours => hours * HOUR * pxPerMs >= 44) ?? 168;
   const visibleFrom = from + viewLeft / pxPerMs;
@@ -189,7 +260,16 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
       </div>
     </header>
     {!projection.tasks.length ? <div className="bt-empty"><strong>{t("timeline.empty")}</strong><p>{t("timeline.emptyHint")}</p></div> : <div ref={scroll} className="bt-scroll" data-timeline-scroll="" tabIndex={0} aria-label={t("timeline.chart")}
-      onScroll={event => { setViewLeft(event.currentTarget.scrollLeft); if (event.currentTarget.scrollTop !== previousTop.current) fitRows(); }}>
+      onPointerDown={press} onTouchStart={press} onWheel={keepGesture} onKeyDown={keyStep}
+      onScroll={event => {
+        const element = event.currentTarget, state = gesture.current;
+        setViewLeft(element.scrollLeft);
+        if (state.active) { state.moved = true; keepGesture(); }
+        if (element.scrollTop === previousTop.current) return;
+        // A person's scrolling is never corrected; only a script-driven move is fitted to a row edge.
+        if (state.active) { previousTop.current = element.scrollTop; state.placed = true; return; }
+        fitRows();
+      }}>
       <div style={{ width: canvas + labelWidth, "--bt-label": `${labelWidth}px`, "--bt-phone-width": `${width - (phone ? 0 : 17)}px` } as CSSProperties}>
         <div className="bt-axis">
           {phone ? null : <div className="bt-axis-label text-label text-secondary">{t("timeline.task")}</div>}
