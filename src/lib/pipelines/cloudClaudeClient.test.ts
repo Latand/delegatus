@@ -22,15 +22,15 @@ const controller = new AbortController();
 const owned: ReturnType<typeof fakeClaudeCloud>[] = [];
 afterEach(() => {
   for (const fake of owned.splice(0)) fake.stop();
-  fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "cloud", "claude-write-access.json"), { force: true });
 });
 const provider = (options: Parameters<typeof fakeClaudeCloud>[0] = {}) => { const fake = fakeClaudeCloud(options); owned.push(fake); return fake; };
 const submitInput = (overrides: Record<string, unknown> = {}) => ({ environmentId: "task-1", environmentScope: { repository: "sample/project", ref: "main" }, branch: "pipeline/x", headSha: head,
   model: "opus", prompt: "Review the change.", reasoningEffort: "high", allowProviderModelFallback: false as const, account, signal: controller.signal, assertCurrent: () => undefined, ...overrides });
 const access = (submitted: { taskId: string; thread?: { threadId: string; turnId: string } }) => ({ taskId: submitted.taskId, thread: submitted.thread, account, environmentId: "task-1", branch: "pipeline/x", headSha: head, signal: controller.signal, assertCurrent: () => undefined });
-const prepare = (client: ReturnType<typeof createClaudeCloudStageClient>, project = "fixture-project") => client.prepareEnvironment!({ project, account, repository: "sample/project", ref: "main", signal: controller.signal, assertCurrent: () => undefined, model: "opus" });
+let prepareSequence = 0;
+const prepare = (client: ReturnType<typeof createClaudeCloudStageClient>, project = `fixture-project-${++prepareSequence}`) => { setClaudeCloudTasks(project, [{ accountId: account.accountId, taskId: "task-1" }]); return client.prepareEnvironment!({ project, account, repository: "sample/project", ref: "main", signal: controller.signal, assertCurrent: () => undefined, model: "opus" }); };
 
-test("a stage's input reaches the session after the write probe, on the login, in order, and its verdict is read back", async () => {
+test("a stage's input reaches the session directly, on the login, in order, and its verdict is read back", async () => {
   const fake = provider();
   const client = createClaudeCloudStageClient(fake.dependencies);
   const parts = "x".repeat(70_000);
@@ -42,9 +42,8 @@ test("a stage's input reaches the session after the write probe, on the login, i
   expect(run.path).toBe("/v1/code/triggers/task-1/run");
   expect(run.login).toBe("Bearer subscription-login-account-a");
   expect(run.organization).toBe("org-fixture");
-  expect(fake.sent[0]).toStartWith("GitHub write probe");
-  expect(fake.sent.slice(1, 3)).toEqual(["/model opus", "/effort high"]);
-  const assignment = fake.sent.slice(3);
+  expect(fake.sent.slice(0, 2)).toEqual(["/model opus", "/effort high"]);
+  const assignment = fake.sent.slice(2);
   expect(assignment).toHaveLength(1);
   expect(assignment.map(text => /^Input part (\d+)\/(\d+),/.exec(text)!.slice(1, 3).join("/"))).toEqual(assignment.map((_, index) => `${index + 1}/${assignment.length}`));
   expect(assignment.join("")).toContain("x".repeat(70_000));
@@ -58,6 +57,30 @@ test("a stage's input reaches the session after the write probe, on the login, i
   expect(sameClaudeModel(final.model, "opus")).toBe(true);
   expect(sameClaudeModel(final.model, "sonnet")).toBe(false);
   expect(sameClaudeModel("claude-opus-5-5", "claude-opus-5")).toBe(false);
+});
+
+test("an existing task with a legacy saved prompt receives work despite a leftover write-access record", async () => {
+  const legacy = "The owner of this repository requires a GitHub write probe before any work, to prove a session cannot write. Never push, open or comment on GitHub.";
+  const fake = provider({ task: { enabled: true, job_config: { ccr: { session_context: {
+    sources: [{ git_repository: { url: "https://github.com/sample/project" } }], prompt: legacy,
+  } } } } });
+  const file = path.join(process.env.LLV_STATE_DIR!, "cloud", "claude-write-access.json");
+  const stored = JSON.stringify({ [`${account.accountId}/task-1`]: fake.dependencies.now!() });
+  const project = "legacy-task-project";
+  expect(setClaudeCloudTasks(project, [{ accountId: account.accountId, taskId: "task-1" }])).toBe(true);
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, stored);
+    const client = createClaudeCloudStageClient(fake.dependencies);
+    expect(await prepare(client, project)).toMatchObject({ state: "ready", environmentId: "task-1" });
+    const submitted = await client.submit(submitInput());
+    expect(await client.poll(access(submitted))).toMatchObject({ state: "completed" });
+    expect(fake.sessions.get(fake.sessionId)!.status).toBe("active");
+    expect(fake.runCalls()).toBe(1);
+    expect(fake.calls.filter(call => call.method !== "GET").map(call => call.path)).toEqual(["/v1/code/triggers/task-1/run"]);
+    expect(fake.sent).toHaveLength(3);
+    expect(fs.readFileSync(file, "utf8")).toBe(stored);
+  } finally { fs.rmSync(file, { force: true }); }
 });
 
 test.each([
@@ -74,6 +97,16 @@ test.each([
   expect(error.message).toContain(cause);
   expect(fake.runCalls()).toBe(1);
   expect(fake.sent).toEqual([]);
+});
+
+test("a missing GitHub token on a run is a linked setup step and leaves the login usable", async () => {
+  const fake = provider({ runAnswer: () => Response.json({ error: { reason: "github_token_missing" } }, { status: 401 }) });
+  const error = await createClaudeCloudStageClient(fake.dependencies).submit(submitInput()).catch(failure => failure);
+  expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(error.category).toBe("cloud-limit");
+  expect(error.message).toContain("https://claude.ai/connect-github");
+  expect(error.message).not.toContain("login was refused");
+  expect(fake.runCalls()).toBe(1);
 });
 
 test("a run that never connected proves nothing started, and a retry may make a new call", async () => {
@@ -97,7 +130,7 @@ test.each(["5xx", "2xx without a session id"])("%s: its own run is adopted only 
   const submitted = await client.submit(submitInput());
   expect(submitted.taskId).toBe("session_own");
   expect(fake.runCalls()).toBe(1);
-  expect(fake.sessions.get("session_foreign")!.events.every(event => !JSON.stringify(event).includes("write probe"))).toBe(true);
+  expect(fake.sessions.get("session_foreign")!.events.every(event => !JSON.stringify(event).includes("Input part"))).toBe(true);
 });
 
 test("a foreign run alone is never adopted: the outcome stays unknown and nothing is sent", async () => {
@@ -150,7 +183,7 @@ test("runs still provisioning cannot hide the later run carrying the nonce: it i
   const submitted = await createClaudeCloudStageClient(fake.dependencies).submit(submitInput());
   expect(submitted.taskId).toBe("session_own");
   expect(fake.runCalls()).toBe(1);
-  for (let n = 1; n <= 5; n++) expect(fake.sessions.get(`session_pending_${n}`)!.events.some(event => JSON.stringify(event).includes("write probe"))).toBe(false);
+  for (let n = 1; n <= 5; n++) expect(fake.sessions.get(`session_pending_${n}`)!.events.some(event => JSON.stringify(event).includes("Input part"))).toBe(false);
 });
 
 test("a pending run stays a candidate after the window moves on, and is adopted once its prompt appears", async () => {
@@ -262,7 +295,7 @@ test("a failed read that later answers lets the own run be adopted, and the othe
   expect((await client.submit(submitInput())).taskId).toBe("session_own");
   expect(failed.size).toBe(5);
   expect(fake.runCalls()).toBe(1);
-  for (let n = 1; n <= 5; n++) expect(fake.sessions.get(`session_foreign_${n}`)!.events.some(event => JSON.stringify(event).includes("write probe"))).toBe(false);
+  for (let n = 1; n <= 5; n++) expect(fake.sessions.get(`session_foreign_${n}`)!.events.some(event => JSON.stringify(event).includes("Input part"))).toBe(false);
 });
 
 test("reads that keep failing cannot hide later runs: the runs behind them are still read", async () => {
@@ -337,7 +370,7 @@ test("an assignment too big for one observed message is cut into ordered parts, 
   const fake = provider();
   const client = createClaudeCloudStageClient(fake.dependencies);
   await client.submit(submitInput({ prompt: "x".repeat(300_000) }));
-  const assignment = fake.sent.slice(3);
+  const assignment = fake.sent.slice(2);
   expect(assignment.length).toBeGreaterThan(2);
   expect(assignment.map(text => /^Input part (\d+)\/(\d+),/.exec(text)!.slice(1, 3).join("/"))).toEqual(assignment.map((_, index) => `${index + 1}/${assignment.length}`));
   expect(assignment.every(text => Buffer.byteLength(text) <= 129_939)).toBe(true);
@@ -346,89 +379,8 @@ test("an assignment too big for one observed message is cut into ordered parts, 
 test("a stage with no explicit effort sends only its model", async () => {
   const fake = provider();
   await createClaudeCloudStageClient(fake.dependencies).submit(submitInput({ reasoningEffort: null }));
-  expect(fake.sent[1]).toBe("/model opus");
-  expect(fake.sent[2]).toStartWith("Input part");
-});
-
-test.each([
-  ["the empty comment reaches GitHub", { comment: "write" }],
-  ["the push is allowed", { push: "write" }],
-  ["both can write", { comment: "write", push: "write" }],
-])("%s: no assignment is sent, the session is archived and the cause is kept", async (_name, probe) => {
-  const fake = provider({ probe: probe as never });
-  const error = await createClaudeCloudStageClient(fake.dependencies).submit(submitInput()).catch(failure => failure);
-  expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
-  expect(error.message).toContain("can write to GitHub");
-  expect(error.message).toContain("setup step 2");
-  expect(error.category).toBe("cloud-limit");
-  expect(fake.sent).toHaveLength(1);
-  expect(fake.sessions.get(fake.sessionId)!.status).toBe("archived");
-});
-
-test("proven write access holds later stages off a run across a restart, until the hold ends and a refusal clears it", async () => {
-  const project = "write-hold-project";
-  setClaudeCloudTasks(project, [{ accountId: account.accountId, taskId: "task-1" }]);
-  const writer = provider({ probe: { comment: "write" } });
-  await createClaudeCloudStageClient(writer.dependencies).submit(submitInput()).catch(failure => failure);
-
-  /* A new client reads only what was written: nothing here lives in the first one. */
-  const held = provider();
-  const restarted = createClaudeCloudStageClient({ ...held.dependencies, now: writer.dependencies.now });
-  expect(await prepare(restarted, project)).toMatchObject({ state: "unavailable", reason: expect.stringContaining("can write to GitHub") });
-  expect(held.calls).toEqual([]);
-
-  const later = provider();
-  const afterHold = createClaudeCloudStageClient({ ...later.dependencies, now: () => writer.dependencies.now!() + 6 * 3_600_000 });
-  expect(await prepare(afterHold, project)).toMatchObject({ state: "ready" });
-  await afterHold.submit(submitInput());
-  expect(await prepare(createClaudeCloudStageClient({ ...provider().dependencies, now: writer.dependencies.now }), project)).toMatchObject({ state: "ready" });
-});
-
-test.each([
-  ["the session's permission check stops the comment", { comment: "blocked" }, "permission check"],
-  ["the session's permission check stops the push", { push: "blocked" }, "permission check"],
-  ["the session declines the comment and ends its turn", { comment: "silent" }, "without a usable result"],
-  ["the session declines the push and ends its turn", { push: "silent" }, "without a usable result"],
-])("%s: read-only access stays unproven, without a ten-minute wait", async (_name, probe, cause) => {
-  const fake = provider({ probe: probe as never });
-  const started = fake.dependencies.now!();
-  const error = await createClaudeCloudStageClient(fake.dependencies).submit(submitInput()).catch(failure => failure);
-  expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
-  expect(error.message).toContain(cause);
-  expect(error.message).not.toContain("can write");
-  expect(fake.sent).toHaveLength(1);
-  expect(fake.dependencies.now!() - started).toBeLessThan(60_000);
-  expect(fake.sessions.get(fake.sessionId)!.status).toBe("archived");
-});
-
-test("a 5xx from the comment request proves neither answer", async () => {
-  const fake = provider({ onSend: (text, id) => {
-    if (!text.startsWith("GitHub write probe")) return null;
-    const uuid = "probe-part", comment = text.split("\n").find(line => line.startsWith("gh api "))!;
-    fake.push(id, { type: "user", uuid, message: { role: "user", content: text } });
-    fake.assistant(id, [{ type: "tool_use", id: "c", name: "Bash", input: { command: comment } }]);
-    fake.push(id, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "c", content: "Exit code 1\nHTTP/1.1 502 Bad Gateway", is_error: true }] }, tool_use_result: "Error: Exit code 1\nHTTP/1.1 502 Bad Gateway" });
-    fake.endTurn(id, uuid);
-    return { state: "queued" };
-  } });
-  const error = await createClaudeCloudStageClient(fake.dependencies).submit(submitInput()).catch(failure => failure);
-  expect(error.message).toContain("without a usable result");
-});
-
-test("no probe result within ten minutes is a cloud limit and sends no assignment", async () => {
-  const fake = provider({ onSend: () => ({ state: "queued" }) });
-  const error = await createClaudeCloudStageClient(fake.dependencies).submit(submitInput()).catch(failure => failure);
-  expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
-  expect(error.category).toBe("cloud-limit");
-  expect(error.message).toContain("no GitHub write probe result");
-  expect(fake.sent).toHaveLength(1);
-});
-
-test("a repository with no readable closed issue starts no run", async () => {
-  const fake = provider({ closedIssue: null });
-  const error = await createClaudeCloudStageClient(fake.dependencies).submit(submitInput()).catch(failure => failure);
-  expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
-  expect(fake.runCalls()).toBe(0);
+  expect(fake.sent[0]).toBe("/model opus");
+  expect(fake.sent[1]).toStartWith("Input part");
 });
 
 test("a send whose answer was lost is settled by the part's own event, never sent twice", async () => {
@@ -464,7 +416,9 @@ test("an idle session holding an older verdict settles nothing until the last pa
   const client = createClaudeCloudStageClient(fake.dependencies);
   const submitted = await client.submit(submitInput());
   const bound = access(submitted), token = submitted.thread!.turnId;
-  /* The probe turn ended with a valid-looking pass, and the last part is queued with its turn not started. */
+  /* An earlier turn holds a valid-looking pass while the last part's turn has not started. */
+  fake.assistant(fake.sessionId, [{ type: "text", text: '```json\n{"status":"pass","findings":[]}\n```' }]);
+  fake.endTurn(fake.sessionId, "earlier");
   expect(await client.poll(bound)).toEqual({ state: "pending", model: null });
   /* An earlier turn ends after the part was queued: its result does not list the part. */
   fake.assistant(fake.sessionId, [{ type: "text", text: '```json\n{"status":"pass","findings":[]}\n```' }]); fake.endTurn(fake.sessionId, "earlier");
@@ -587,44 +541,28 @@ test("a read-only stage is told nothing about exporting a diff", async () => {
   expect(fake.sent.at(-1)).not.toContain("git diff --cached");
 });
 
-test("admission reads only, and refuses each unmet condition with its reason", async () => {
-  const project = "fixture-project";
-  const none = provider();
-  setClaudeCloudTasks(project, []);
-  expect(await prepare(createClaudeCloudStageClient(none.dependencies))).toEqual({ state: "unavailable", reason: "no Claude cloud scheduled task is set for this account" });
-  expect(none.calls).toEqual([]);
-  expect(setClaudeCloudTasks(project, [{ accountId: account.accountId, taskId: "task-1" }])).toBe(true);
-  const session = (extra: Record<string, unknown> = {}) => ({ id: "task-1", enabled: true, job_config: { ccr: { session_context: { model: "claude-opus-5-5", sources: [{ git_repository: { url: "https://github.com/sample/project" } }], ...extra } } } });
-  for (const [options, reason] of [
-    [{ task: { ...session(), enabled: false } }, "paused or turned off"],
-    [{ task: { ...session(), mcp_connections: [{ name: "slack" }] } }, "connectors attached"],
-    [{ task: session({ mcp_connector_ids: ["connector"] }) }, "connectors attached"],
-    [{ task: session({ sources: [{ git_repository: { url: "https://github.com/other/project" } }] }) }, "different repository"],
-    [{ task: { id: "task-1" } }, "unrecognised shape"],
-    [{ task: null }, "task read answered 400"],
-  ] as const) {
-    const fake = provider(options as never);
-    const answer = await prepare(createClaudeCloudStageClient(fake.dependencies));
-    expect(answer).toMatchObject({ state: "unavailable", reason: expect.stringContaining(reason) });
-    expect(fake.calls.every(call => call.method === "GET")).toBe(true);
+test("admission prepares a missing binding and repairs paused tasks and connectors", async () => {
+  let n = 0;
+  const demanded: string[] = [];
+  for (const options of [{}, { task: { enabled: false, mcp_connections: [{ name: "connector" }], job_config: { ccr: { session_context: { sources: [{ git_repository: { url: "https://github.com/sample/project" } }] } } } } }]) {
+    const project = `prepare-${++n}`, fake = provider(options);
+    if (options.task) setClaudeCloudTasks(project, [{ accountId: account.accountId, taskId: "task-1" }]);
+    const client = createClaudeCloudStageClient({ ...fake.dependencies, queueTaskPreparation: queuedProject => demanded.push(queuedProject) });
+    await client.demandPreparation!({ project, repository: "sample/project", assertCurrent: () => {} });
+    expect(await client.prepareEnvironment!({ project, account, repository: "sample/project", ref: "main", signal: controller.signal, assertCurrent: () => {} })).toMatchObject({ state: "ready" });
+    expect(fake.calls.filter(c => c.method === "POST").length).toBeGreaterThan(0);
+    expect(fake.runCalls()).toBe(0);
   }
-  const ready = provider();
-  const prepared = await prepare(createClaudeCloudStageClient(ready.dependencies));
-  expect(prepared).toMatchObject({ state: "ready", environmentId: "task-1" });
-  expect(ready.calls.every(call => call.method === "GET")).toBe(true);
-  /* The account's training choice is its own: nothing reads it, and a task on another model is switched per stage. */
-  expect(ready.calls.map(call => call.path)).toEqual(["/v1/code/triggers/task-1"]);
-  const otherModel = provider({ task: session({ model: "claude-sonnet-5-5" }) });
-  expect(await prepare(createClaudeCloudStageClient(otherModel.dependencies))).toMatchObject({ state: "ready" });
+  expect(demanded).toEqual(["prepare-1", "prepare-2"]);
 });
 
 test("admission reads the observed answer: the task sits inside `trigger`, in either of its forms", async () => {
-  const project = "fixture-project";
+  const project = "observed-task-shape";
   setClaudeCloudTasks(project, [{ accountId: account.accountId, taskId: "task-1" }]);
   const sources = [{ git_repository: { url: "https://github.com/sample/project" } }];
   const answering = (answer: unknown) => {
     const fake = provider();
-    return createClaudeCloudStageClient({ ...fake.dependencies, fetch: (async () => Response.json(answer)) as unknown as typeof fetch });
+    return createClaudeCloudStageClient({ ...fake.dependencies, queueTaskPreparation: () => {}, fetch: (async () => Response.json(answer)) as unknown as typeof fetch });
   };
   expect(await prepare(answering({ trigger: { enabled: true, mcp_connections: [], job_config: { ccr: { session_context: { sources } } } } }))).toMatchObject({ state: "ready", environmentId: "task-1" });
   expect(await prepare(answering({ trigger: { enabled: true, session_request: { session_context: { sources } } } }))).toMatchObject({ state: "ready" });
@@ -636,16 +574,16 @@ test("an account with no subscription login, an expired one or a third-party pro
   const project = "fixture-project";
   setClaudeCloudTasks(project, [{ accountId: account.accountId, taskId: "task-1" }]);
   for (const [overrides, reason] of [
-    [{ readLogin: async () => null }, "login, which is missing"],
-    [{ readLogin: async () => ({ accessToken: "t", organization: "o", expiresAt: 1 }) }, "login has expired"],
+    [{ readLogin: async () => null }, "sign-in is missing"],
+    [{ readLogin: async () => ({ accessToken: "t", organization: "o", expiresAt: 1 }) }, "sign-in expired"],
   ] as const) {
     const fake = provider();
-    const answer = await prepare(createClaudeCloudStageClient({ ...fake.dependencies, ...overrides }));
+    const answer = await prepare(createClaudeCloudStageClient({ ...fake.dependencies, ...overrides, queueTaskPreparation: () => {} }));
     expect(answer).toMatchObject({ state: "unavailable", reason: expect.stringContaining(reason) });
     expect(fake.calls).toEqual([]);
   }
   const fake = provider();
-  const answer = await createClaudeCloudStageClient(fake.dependencies).prepareEnvironment!({ project, account: { ...account, claudeProvider: { baseUrl: "https://gateway.example", model: "m", smallFastModel: null } },
+  const answer = await createClaudeCloudStageClient({ ...fake.dependencies, queueTaskPreparation: () => {} }).prepareEnvironment!({ project, account: { ...account, claudeProvider: { baseUrl: "https://gateway.example", model: "m", smallFastModel: null } },
     repository: "sample/project", ref: "main", signal: controller.signal, assertCurrent: () => undefined, model: "opus" });
   expect(answer).toMatchObject({ state: "unavailable", reason: expect.stringContaining("third-party provider") });
   expect(fake.calls).toEqual([]);

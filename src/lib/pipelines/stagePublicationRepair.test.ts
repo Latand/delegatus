@@ -225,7 +225,8 @@ test("a repair commit refusal remains consumed if final park settlement is lost"
     const commitHook = path.join(h.root, "repo/.git/hooks/pre-commit");
     const marker = path.join(h.root, "commit-calls");
     fs.writeFileSync(commitHook, `#!/bin/sh\necho called >> '${marker}'\necho 'pre-commit: repair still invalid' >&2\nexit 1\n`, { mode: 0o700 });
-    h.endTurn(); await h.tick();
+    // Replay this settlement before a controller tick can start a new producer.
+    h.endTurn(); await settlePendingStageGit(h.ports);
     expect(h.current().state).toBe("needs_decision");
     expect(h.current().runs[0]!.attempts[0]!.publicationRepair?.outcome).toMatchObject({ status: "rejected", reason: expect.stringContaining("repair still invalid") });
     // Bun's toMatchObject writes its matchers into the received object, so clear the park on a fresh read.
@@ -233,7 +234,7 @@ test("a repair commit refusal remains consumed if final park settlement is lost"
     rejected.state = "running"; rejected.stateDetail = null;
     rejected.runs[0]!.attempts[0]!.state = "passed";
     savePipelines([rejected]);
-    await h.tick();
+    await settlePendingStageGit(h.ports);
     expect(h.current().state).toBe("needs_decision");
     expect(h.current().stateDetail!.split("\n")[0]).toStartWith('publishing the passed stage: the repository\'s pre-push hook failed in its "eslint" phase');
     expect(h.current().stateDetail).toContain("repair still invalid");
@@ -248,6 +249,8 @@ test("publication repair refuses a foreign checkout before committing any of its
     await h.tick();
     h.git("checkout", "-q", "-b", "foreign");
     fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 2;\n");
+    Object.assign(h.ports, { engineReadiness: undefined, resolveProjectSpawn: undefined,
+      structuredDeliveryPublication: () => "ready", cpuPressureHold: () => null });
     h.endTurn(); await h.tick();
     expect(h.current().state).toBe("needs_decision");
     expect(h.git("rev-parse", "HEAD")).toBe(h.accepted);
@@ -304,7 +307,8 @@ test.each(["unreserved", "failed", "gone", "unavailable", "completed-gone", "run
     h.ports.resumeSeveredTurn = async () => false;
     await h.tick();
     h.advance(21 * 60_000);
-    await h.tick();
+    // Stop at the publication park; the next full tick now auto-repairs it.
+    await settlePendingStageGit(h.ports);
     expect(h.current().state).toBe("needs_decision");
     const original = structuredClone(h.current().runs[0]!.attempts[0]!);
     if (shape === "gone") h.git("commit", "-q", "--allow-empty", "-m", "producer repair before host loss");

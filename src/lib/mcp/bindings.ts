@@ -1,3 +1,4 @@
+import { setTimeout as ownerMediaPause } from "node:timers/promises";
 import { textLengthError } from "@/lib/textLimits";
 import { keepReportPicturesSoon } from "@/lib/reportMedia/paths";
 import { AsyncResource } from "node:async_hooks";
@@ -2596,6 +2597,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
       queuedBecause: result.queued.reason,
       note: PIPELINE_CREATION_QUEUED_NOTE,
       ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+      ...(result.briefWarnings?.length ? { briefWarnings: result.briefWarnings } : {}),
       ...newLegacyReviewFields(result),
     });
   }
@@ -2608,6 +2610,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
     ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
     ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+    ...(result.briefWarnings?.length ? { briefWarnings: result.briefWarnings } : {}),
     ...newLegacyReviewFields(result),
   });
 }
@@ -2758,6 +2761,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   /* The pipeline itself is acknowledged, not echoed (#1845): get_pipeline reads it. */
   return redactPayload({
     ...pipelineActionAcknowledgement(result.pipeline, fullAnswer(args) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)),
+    ...(result.briefWarnings?.length ? { briefWarnings: result.briefWarnings } : {}),
     revision: recordRevision(result.pipeline),
     changedFields: changedFieldNames(beforeFields, result.pipeline),
     taskIds: result.pipeline.taskIds,
@@ -4837,6 +4841,16 @@ function cloudEnvironmentWriteAuthority(args: McpToolArgs, dependencies: ViewerM
   throw new McpToolRefusal("Cloud environment overrides require the operator or this project's designated seat", { code: "cloud_environment_write_refused", status: 403 });
 }
 
+function claudeCloudTaskWriteAuthority(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): void {
+  if (args.action !== "prepare") return;
+  const caller = authorityOf(dependencies);
+  if (caller.kind === "root") return;
+  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+  if (caller.kind === "worker" && seats.some(seat => seat.conversationId === caller.conversationId && seat.project
+    && canonicalProject(seat.project) === canonicalProject(required(args, "project")))) return;
+  throw new McpToolRefusal("Claude task preparation requires the operator or this project’s designated seat", { code: "claude_cloud_task_write_refused", status: 403 });
+}
+
 /**
  * get_orchestrator (two-axis contract): the designation, its health, and a
  * BOUNDED rotation recommendation. Read-only; every inferred number is
@@ -5798,11 +5812,18 @@ function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
   return redactPayload({ count: accounts.length, accounts });
 }
 
-async function relayOwnerHistory(args: McpToolArgs, control: ViewerControlDependencies, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+async function relayOwnerHistory(args: McpToolArgs, control: ViewerControlDependencies, dependencies: ViewerMcpDomainDependencies, context?: McpToolCallContext): Promise<McpToolPayload> {
   if (ownerRelayCaller(dependencies)) throw new McpToolRefusal("Group history cannot be read while answering in Telegram.", { code: "owner_history_refused" });
-  return redactPayload(await control.post("/api/external-relay/owner-history", {
-    op: args.action, ...Object.fromEntries(["chat", "from", "to", "limit", "cursor"].filter(key => args[key] !== undefined).map(key => [key, args[key]])),
-  }, callerCapabilityHeaders()));
+  const body = { op: args.action, ...Object.fromEntries(["chat", "from", "to", "limit", "cursor", "messageId", "directory"]
+    .filter(key => args[key] !== undefined).map(key => [key, args[key]])) };
+  const deadline = Math.min(Date.now() + 30_000, context?.deadlineAt ?? Infinity);
+  for (;;) {
+    context?.signal?.throwIfAborted(); context?.assertCaller?.();
+    if (ownerRelayCaller(dependencies)) throw new McpToolRefusal("Group history cannot be read while answering in Telegram.", { code: "owner_history_refused" });
+    const answer = await control.post("/api/external-relay/owner-history", body, callerCapabilityHeaders());
+    if (args.action !== "media" || answer.status !== "in_progress" || Date.now() + 3500 >= deadline) return redactPayload(answer);
+    await ownerMediaPause(Math.min(1000, Math.max(1, Number(answer.retryAfterSeconds) || 1) * 1000), undefined, { signal: context?.signal });
+  }
 }
 
 /*
@@ -7768,6 +7789,26 @@ async function requestAttention(
   });
 }
 
+/** Round reads and receipt replays retain the same current project/seat fence. */
+function prototypeDismissalAuthority(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): (() => void) | void {
+  if (!args.target || (args.target as { kind?: unknown }).kind !== "prototype") return;
+  const target = parseDismissalTarget(args.target, { allowSubjects: false });
+  if (target.kind !== "prototype") return;
+  const assert = () => {
+    const authority = authorityOf(dependencies);
+    const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+    const admission = permitAttentionDismissal(authority, seats, null);
+    if (!admission.allowed) throw new McpToolRefusal(admission.error, { code: "DISMISS_NOT_PERMITTED" });
+    const owner = target.taskId === null ? mcpPrototypeRound(null, target.reviewId)
+      : dependencies.loadTasks().find(task => task.id === target.taskId);
+    if (!owner) throw new McpToolRefusal("prototype review not found", { code: "REVIEW_NOT_FOUND" });
+    const verdict = permitAttentionDismissal(authority, seats, canonicalOrchestratorProject(owner.project));
+    if (!verdict.allowed) throw new McpToolRefusal(verdict.error, { code: "DISMISS_NOT_PERMITTED" });
+  };
+  assert();
+  return assert;
+}
+
 /**
  * Clear a needs-you flag through the one dismissal service
  * (docs/design/needs-attention.md §5), for `dismiss_attention` and for
@@ -7785,6 +7826,7 @@ async function dismissThroughService(
   operationKey: string,
   dependencies: ViewerMcpDomainDependencies,
   reason?: string,
+  assertCurrent?: () => void,
 ) {
   const authority = authorityOf(dependencies);
   const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
@@ -7817,9 +7859,10 @@ async function dismissThroughService(
     if (!project) throw new McpToolRefusal("report not found", { code: "REPORT_NOT_FOUND" });
     rawProject = project;
   } else if (target.kind === "prototype") {
-    const task = dependencies.loadTasks().find(t => t.id === target.taskId);
-    if (!task) throw new McpToolRefusal("prototype task not found", { code: "TASK_NOT_FOUND" });
-    rawProject = task.project;
+    const round = target.taskId === null ? mcpPrototypeRound(null, target.reviewId) : null;
+    const task = target.taskId === null ? null : dependencies.loadTasks().find(t => t.id === target.taskId);
+    if (!round && !task) throw new McpToolRefusal("prototype review not found", { code: "REVIEW_NOT_FOUND" });
+    rawProject = (round ?? task)!.project;
   } else if (target.kind === "conversation" && target.path?.startsWith("spawn:")) {
     const snapshot = dependencies.registrySnapshot();
     const receipt = snapshot.receipts?.[target.path.slice(6)];
@@ -7852,7 +7895,7 @@ async function dismissThroughService(
          is how the service keys it when the registry does not. */
       target.kind === "conversation" && focus?.kind === "conversation" ? { ...target, path: target.path ?? focus.path } : target,
       by,
-      { undo, operationKey, project, reason, ...(dependencies.dismissalPorts ? { ports: dependencies.dismissalPorts } : {}) },
+      { undo, operationKey, project, reason, assertCurrent, ...(dependencies.dismissalPorts ? { ports: dependencies.dismissalPorts } : {}) },
     );
   } catch (error) {
     if (error instanceof DismissalError) throw new McpToolRefusal(error.message, { code: error.code, status: error.status });
@@ -7970,7 +8013,7 @@ async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDo
     throw error;
   }
   if (args.escalate !== undefined) return escalateThroughService(target, args.escalate, args.undo === true, mcpOperationId("dismiss_attention", requestId(args)), dependencies);
-  const outcome = await dismissThroughService(target, args.undo === true, mcpOperationId("dismiss_attention", requestId(args)), dependencies, args.reason as string | undefined);
+  const outcome = await dismissThroughService(target, args.undo === true, mcpOperationId("dismiss_attention", requestId(args)), dependencies, args.reason as string | undefined, context?.assertCaller);
   return {
     dismissed: outcome.dismissed,
     alreadyClear: outcome.alreadyClear,
@@ -8855,7 +8898,9 @@ export function viewerMcpBindings(
       if (!capability) throw new Error("prototype reads require an identified caller");
       return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews/read",withoutKeys(args,["clientRequestId"]),{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
     },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("read",args,controlDependencies,context) }),
-    dismiss_attention: (args, context) => dismissAttentionTool(args, domainDependencies, controlDependencies, context),
+    dismiss_attention: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => dismissAttentionTool(args, domainDependencies, controlDependencies, context), {
+      authorizeReceipt: (args: McpToolArgs) => prototypeDismissalAuthority(args, domainDependencies),
+    }),
     bridge_report: (args, context) => bridgeReport(args, domainDependencies, viewerControlForCall(controlDependencies, context)),
     bridge_directive: orchestratorProjectBinding(domainDependencies, (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies), true),
     get_orchestrator: orchestratorProjectBinding(domainDependencies, (args) => getOrchestrator(args, domainDependencies)),
@@ -8872,6 +8917,16 @@ export function viewerMcpBindings(
       cloudEnvironmentWriteAuthority(args, domainDependencies);
       return control.post("/api/projects/cloud-environments", args, callerCapabilityHeaders());
     }, false, false), { authorizeReceipt: (args: McpToolArgs) => cloudEnvironmentWriteAuthority(args, domainDependencies) }),
+    claude_cloud_task: Object.assign(orchestratorProjectBinding(domainDependencies, async (args, context) => {
+      const control = viewerControlForCall(controlDependencies, context);
+      if (args.action === "read") {
+        const query = new URLSearchParams({ project: required(args, "project") });
+        if (args.accountId !== undefined) query.set("accountId", String(args.accountId));
+        return readViewerControl(control, `/api/projects/claude-cloud-tasks?${query}`);
+      }
+      claudeCloudTaskWriteAuthority(args, domainDependencies);
+      return control.post("/api/projects/claude-cloud-tasks", args, callerCapabilityHeaders());
+    }, false, false), { authorizeReceipt: (args: McpToolArgs) => claudeCloudTaskWriteAuthority(args, domainDependencies) }),
     role_presets: async (args) => waitForStateLock("mcp.role-presets", () => rolePresetsTool(args, domainDependencies)),
     auto_updates: (args, context) => autoUpdatesTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     voice_tools: (args, context) => voiceTools(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
@@ -8904,7 +8959,7 @@ export function viewerMcpBindings(
       if (result === null) throw new McpToolRefusal("Service tools exist only while you answer a relay message as its owner.", { code: "relay_tools_unavailable", retryable: false });
       return result;
     },
-    relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies),
+    relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
     github_app_connect: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => {
       const capability = callerCapability();
