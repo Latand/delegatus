@@ -149,6 +149,8 @@ export class GreenReader {
         this.list(`${api}/commits/${evidence}/statuses?per_page=100`),
         this.requiredChecks(repository, branch, fresh),
       ]);
+      let runtimeGatePending = false;
+      let runtimeGateRed = false;
       if (exactTarget) {
         const gate = required.find(check => check.name === "runtime-gate" && check.appId === 15368);
         if (!gate) return { state: "untested-tree" };
@@ -160,14 +162,16 @@ export class GreenReader {
         matching.sort((a, b) => (Date.parse(b.created_at ?? "") || 0) - (Date.parse(a.created_at ?? "") || 0) || (b.id ?? 0) - (a.id ?? 0));
         const workflow = matching[0];
         if (!workflow || workflow.status !== "completed" || workflow.conclusion !== "success" || !Number.isSafeInteger(workflow.check_suite_id)) {
-          return { state: workflow?.status === "completed" && workflow.conclusion === "failure" ? "red" : "pending", detail: "runtime-gate", checks: ["runtime-gate"] };
+          if (workflow?.status === "completed" && workflow.conclusion === "failure") runtimeGateRed = true;
+          else runtimeGatePending = true;
+        } else {
+          const gates = runs.filter(run => {
+            const item = run as { name?: unknown; app?: { id?: unknown }; check_suite?: { id?: number }; status?: string; conclusion?: string };
+            return item.name === gate.name && item.app?.id === gate.appId && item.check_suite?.id === workflow.check_suite_id
+              && item.status === "completed" && item.conclusion === "success";
+          });
+          runtimeGatePending = !gates.length;
         }
-        const gates = runs.filter(run => {
-          const item = run as { name?: unknown; app?: { id?: unknown }; check_suite?: { id?: number }; status?: string; conclusion?: string };
-          return item.name === gate.name && item.app?.id === gate.appId && item.check_suite?.id === workflow.check_suite_id
-            && item.status === "completed" && item.conclusion === "success";
-        });
-        if (!gates.length) return { state: "pending", detail: "runtime-gate", checks: ["runtime-gate"] };
       }
       const runGroups = new Map<number | null, Record<string, unknown>[]>();
       for (const run of runs) {
@@ -208,8 +212,11 @@ export class GreenReader {
         ...rollupLatestChecksByName(latestStatuses).map((check) => ({ ...check, kind: "status" as const, appId: null })),
       ];
       const requiredOnly = exactDeploy && required.length > 0;
-      if (!checks.length) return requiredOnly ? { state: "pending", done: 0, total: required.length, checks: required.map(check => check.name).sort() }
-        : finish({ state: "no-checks", checks: required.map(check => check.name).sort() });
+      if (!checks.length) {
+        if (runtimeGateRed) return finish({ state: "red", detail: "runtime-gate", checks: ["runtime-gate"] });
+        return requiredOnly ? { state: "pending", done: 0, total: required.length, checks: required.map(check => check.name).sort() }
+          : finish({ state: "no-checks", checks: required.map(check => check.name).sort() });
+      }
       // Exact deployment follows the tracked branch's required checks on the
       // requested commit. Automatic updates retain their merged-PR policy.
       const relevant = requiredOnly ? checks.filter(check => required.some(({ name, appId }) => check.name === name
@@ -218,13 +225,15 @@ export class GreenReader {
       const notGreen = [...new Set([...relevant.filter(check => check.verdict !== "green").map(check => check.name),
         ...required.filter(({ name, appId }) => !checks.some(check => check.name === name && check.verdict === "green"
           && (appId === null || (check.kind === "run" && check.appId === appId)))).map(check => check.name)])].sort();
-      if (red) return finish({ state: "red", detail: red.name, checks: notGreen });
+      if (red || runtimeGateRed) return finish({ state: "red", detail: red?.name ?? "runtime-gate",
+        checks: [...new Set([...notGreen, ...(runtimeGateRed ? ["runtime-gate"] : []), ...(runtimeGatePending ? ["runtime-gate"] : [])])].sort() });
       const done = requiredOnly ? required.filter(({ name, appId }) => checks.some(check => check.name === name && check.verdict === "green"
         && (appId === null || (check.kind === "run" && check.appId === appId)))).length : relevant.filter(check => check.verdict === "green").length;
       const total = requiredOnly ? required.length : relevant.length;
       const missing = required.find(({ name, appId }) => !checks.some((check) => check.name === name && check.verdict === "green"
         && (appId === null || (check.kind === "run" && check.appId === appId))));
-      if (done === total && !missing) return finish({ state: "green", done, total });
+      if (done === total && !missing && !runtimeGatePending) return finish({ state: "green", done, total });
+      if (runtimeGatePending) return { state: "pending", done, total, detail: "runtime-gate", checks: [...new Set([...notGreen, "runtime-gate"])].sort() };
       if (exactDeploy) return { state: "pending", done, total, detail: missing?.name, checks: notGreen };
       const persistedFirst = firstReadAt ? Date.parse(firstReadAt) : NaN;
       const first = this.firstPending.get(target) ?? (Number.isFinite(persistedFirst) ? persistedFirst : this.ports.now());

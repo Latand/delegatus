@@ -5,7 +5,7 @@ const SHA = "a".repeat(40);
 const HEAD = "b".repeat(40);
 const TREE = "c".repeat(40);
 
-function reader(options: { runs?: Record<string, unknown>[]; targetRuns?: Record<string, unknown>[]; statuses?: Record<string, unknown>[]; required?: string[]; requiredChecks?: { context: string; app_id: number }[]; pull?: boolean; mergeSha?: string; tree?: string; response?: number; invalidBranch?: boolean } = {}) {
+function reader(options: { runs?: Record<string, unknown>[]; targetRuns?: Record<string, unknown>[]; statuses?: Record<string, unknown>[]; required?: string[]; requiredChecks?: { context: string; app_id: number }[]; workflowRuns?: Record<string, unknown>[]; pull?: boolean; mergeSha?: string; tree?: string; response?: number; invalidBranch?: boolean } = {}) {
   let reads = 0;
   let now = 1_000;
   const calls: string[] = [];
@@ -17,6 +17,7 @@ function reader(options: { runs?: Record<string, unknown>[]; targetRuns?: Record
     const body = url.includes("/pulls") ? (options.pull === false ? [] : [{ merged_at: "2026-01-01", merge_commit_sha: options.mergeSha ?? SHA, base: { ref: "main" }, head: { sha: HEAD } }])
       : url.includes("/check-runs") ? { check_runs: (url.includes(`/commits/${SHA}/`) ? options.targetRuns : undefined) ?? options.runs ?? [{ name: "test", status: "completed", conclusion: "success", started_at: "2026-01-01" }] }
       : url.includes("/statuses") ? options.statuses ?? []
+      : url.includes("/actions/runs?") ? { workflow_runs: options.workflowRuns ?? [] }
       : url.includes("/branches/") ? (options.invalidBranch ? {} : { protected: true, protection: { required_status_checks: { contexts: options.required ?? [], checks: options.requiredChecks ?? [] } } })
       : { commit: { tree: { sha: options.tree ?? TREE } } };
     return Response.json(body);
@@ -34,14 +35,14 @@ describe("green merge evidence", () => {
     ];
     const h = reader({ runs: [{ name: "Minimum macOS SQLite", status: "completed", conclusion: "failure", app: { id: 15368 } }],
       targetRuns, requiredChecks: [{ context: "runtime-gate", app_id: 15368 }, { context: "typecheck", app_id: 15368 }] });
-    expect(await h.subject.read("github.com/example/project", "main", SHA, "/checkout", undefined, true, "exact-deploy"))
+    expect(await h.subject.read("github.com/latand/delegatus", "main", SHA, "/checkout", undefined, true, "exact-deploy"))
       .toMatchObject({ state: "pending", checks: ["runtime-gate", "typecheck"], total: 2 });
-    expect(h.calls).toContain(`https://api.github.com/repos/example/project/commits/${SHA}/check-runs?per_page=100`);
+    expect(h.calls).toContain(`https://api.github.com/repos/latand/delegatus/commits/${SHA}/check-runs?per_page=100`);
     h.advance(91 * 60_000);
-    expect(await h.subject.read("github.com/example/project", "main", SHA, "/checkout", undefined, true, "exact-deploy"))
+    expect(await h.subject.read("github.com/latand/delegatus", "main", SHA, "/checkout", undefined, true, "exact-deploy"))
       .toMatchObject({ state: "pending", checks: ["runtime-gate", "typecheck"] });
     for (const check of targetRuns.slice(0, 2)) { check.status = "completed"; check.conclusion = "success"; }
-    expect(await h.subject.read("github.com/example/project", "main", SHA, "/checkout", undefined, true, "exact-deploy"))
+    expect(await h.subject.read("github.com/latand/delegatus", "main", SHA, "/checkout", undefined, true, "exact-deploy"))
       .toMatchObject({ state: "green", done: 2, total: 2 });
     // The exact-deploy verdict must never authorize the automatic policy.
     expect(await h.subject.read("github.com/example/project", "main", SHA, "/checkout"))
@@ -62,6 +63,22 @@ describe("green merge evidence", () => {
     const h = reader({ targetRuns: [], required: ["runtime-gate", "typecheck"] });
     expect(await h.subject.read("github.com/example/project", "main", SHA, "/checkout", undefined, true, "exact-deploy"))
       .toMatchObject({ state: "pending", checks: ["runtime-gate", "typecheck"], total: 2 });
+  });
+
+  test("exact deploy reports another required failure while runtime-gate is still running", async () => {
+    const h = reader({ tree: "different-tree", requiredChecks: [{ context: "runtime-gate", app_id: 15368 }, { context: "typecheck", app_id: 15368 }],
+      workflowRuns: [{ id: 77, path: ".github/workflows/bun-runtime.yml", head_sha: SHA, event: "push", status: "in_progress", check_suite_id: 88 }],
+      targetRuns: [{ id: 90, name: "typecheck", status: "completed", conclusion: "failure", app: { id: 15368 } }] });
+    expect(await h.subject.read("github.com/latand/delegatus", "main", SHA, "/checkout", undefined, true, "exact-deploy"))
+      .toMatchObject({ state: "red", checks: ["runtime-gate", "typecheck"] });
+  });
+
+  test("a failed runtime workflow stays red even when its check-run receipt is missing", async () => {
+    const h = reader({ tree: "different-tree", requiredChecks: [{ context: "runtime-gate", app_id: 15368 }],
+      workflowRuns: [{ id: 77, path: ".github/workflows/bun-runtime.yml", head_sha: SHA, event: "push", status: "completed", conclusion: "failure", check_suite_id: 88 }],
+      targetRuns: [] });
+    expect(await h.subject.read("github.com/latand/delegatus", "main", SHA, "/checkout", undefined, true, "exact-deploy"))
+      .toMatchObject({ state: "red", detail: "runtime-gate", checks: ["runtime-gate"] });
   });
 
   test("a queued rerun supersedes an older failure before it has a start time", async () => {

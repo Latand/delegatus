@@ -370,6 +370,8 @@ export interface McpToolCallContext {
   deadlineAt?: number;
   /** An earlier attempt of this logical deploy may have reached admission. */
   priorAttemptUncertain?: boolean;
+  /** Durable MCP receipt proving a prior attempt was accepted. */
+  priorAcceptedDeployment?: { deploymentId: string; revision: string };
   /** Numeric transport subphases, supplied by the service, never tool arguments. */
   recordTiming?: (phase: "http", milliseconds: number) => void;
   /** #1490: the durable binding this call's dispatch must use. Present only on
@@ -3721,7 +3723,10 @@ export function createMcpToolService(
         const bindingStartedAt = performance.now();
         try {
           const payload = await bindings[typedTool](effectiveArgs, typedTool === "deploy_exact_sha" && (retryDeployment || claim.kind === "pending")
-            ? { ...context, priorAttemptUncertain: true }
+            ? { ...context, priorAttemptUncertain: true,
+              ...(retryDeployment && claim.result.ok && claim.result.state === "accepted"
+                && typeof claim.result.deploymentId === "string" && typeof claim.result.revision === "string"
+                ? { priorAcceptedDeployment: { deploymentId: claim.result.deploymentId, revision: claim.result.revision } } : {}) }
             : context);
           unadmitted = typedTool === "deploy_exact_sha" && payload.state === "busy" && payload.outcome === "not-executed";
           settled = {

@@ -3955,7 +3955,9 @@ async function deployExactSha(
     // has its own five-second read/fence budget and never sends admission.
     ...callContext, signal: undefined, deadlineAt: Date.now() + 5000,
   });
-  let recoveredReceipt: Record<string, unknown> | null = null;
+  let recoveredReceipt: Record<string, unknown> | null = callContext.priorAcceptedDeployment
+    && callContext.priorAcceptedDeployment.revision.toLowerCase().startsWith(revision.toLowerCase())
+    ? { state: "accepted", ...callContext.priorAcceptedDeployment, replayed: true } : null;
   if (callContext.priorAttemptUncertain && !seatDeploymentForRequestKey(idempotencyKey)
     && dependencies.findDeploymentByIdempotencyKey) {
     const remainingMs = callContext.deadlineAt === undefined
@@ -3992,7 +3994,10 @@ async function deployExactSha(
       reconciledReceipt = await reconcile();
       assertSeat();
     } catch (error) {
-      if (error instanceof McpToolRefusal) throw error;
+      if (error instanceof McpToolRefusal) {
+        await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
+        throw error;
+      }
       throw new McpDeploymentPendingError(`deployment reconciliation is unavailable: ${error instanceof Error ? error.message : String(error)}`);
     }
   }

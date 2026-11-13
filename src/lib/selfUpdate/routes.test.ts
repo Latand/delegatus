@@ -8,6 +8,7 @@ import { viewerDeploymentPage, viewerDeploymentSummary } from "@/lib/runtime/con
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 
 import { NextRequest } from "next/server";
 
@@ -981,12 +982,13 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
     const request = { revision: tipSha, idempotencyKey: `expired-${heldRead}` };
     const attempt = deployPost(post("/runtime/deployments", request));
-    let guard: ReturnType<typeof setTimeout> | undefined;
+    // A separate event loop keeps the deadline observable while this process
+    // is stalled inside an admission callback.
+    const watchdog = new Worker("setTimeout(() => postMessage('expired'), 11_000)", { eval: true });
+    const deadline = new Promise<never>((_, reject) => watchdog.once("message", () => reject(new Error("independent admission deadline exceeded"))));
     try {
       await entered.promise;
-      const response = await Promise.race([attempt, new Promise<never>((_, reject) => {
-        guard = setTimeout(() => reject(new Error("admission did not settle within its bound")), 15_000);
-      })]);
+      const response = await Promise.race([attempt, deadline]);
       expect(await response.json()).toMatchObject({ code: "deploy_not_admitted", outcome: "not-executed", nextAction: "new-request-permitted" });
       expect(checkoutDeployments(h.deps.dir)).toEqual([]);
       hold = false;
@@ -996,7 +998,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       expect(await (await deployPost(post("/runtime/deployments", request))).json()).toMatchObject({ code: "deploy_not_admitted" });
       expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
     } finally {
-      if (guard !== undefined) clearTimeout(guard);
+      await watchdog.terminate();
       hold = false; release.resolve(); await attempt;
       if (checkoutDeployments(h.deps.dir).length) {
         await finishHeldBuild(h);
