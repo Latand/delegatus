@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { createPublicationFixtures } from "./publicationHook.fixture";
+import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 import { publicationCheckBinding, readPublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 
 const root = path.resolve(import.meta.dir, "..");
@@ -19,14 +20,15 @@ nativeTest.each(["Codex", "Bun and Codex"])("cold %s cache produces evidence onc
   expect(cold.status, cold.stderr).toBe(0);
   expect(readPublicationCheckReceipt(f.receipt, publicationCheckBinding(f.env)).inputs).toMatch(/^[a-f0-9]{64}$/);
   expect(touchedChecks(f)).toHaveLength(1);
-  const installations = () => f.calls().filter(call => call.args[0] === "native-install").map(call => call.args[1]);
-  expect(installations()).toEqual(coldBun ? ["bun", "codex"] : ["codex"]);
+  const installations = () => f.calls().filter(call => call.args[0] === "native-install").map(call => call.args[2]);
+  const expected = [...(coldBun ? ["bun@0.0.2"] : []), ...SUPPORTED_CODEX_VERSIONS.map(version => `@openai/codex@${version}`)];
+  expect(installations()).toEqual(expected);
   expect(f.run(false).status).toBe(0);
   f.env.LLV_GATE_PUBLICATION_ID = "warm-native-cache";
   const warm = f.run(true);
   expect(warm.status, warm.stderr).toBe(0);
   expect(touchedChecks(f)).toHaveLength(1);
-  expect(installations()).toEqual(coldBun ? ["bun", "codex"] : ["codex"]);
+  expect(installations()).toEqual(expected);
   const before = f.calls().length;
   expect(f.run(false).status).toBe(0);
   expect(f.calls().slice(before).map(call => call.args[0])).toEqual(["scripts/privacy-publication-gate.ts"]);

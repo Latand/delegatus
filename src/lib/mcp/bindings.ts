@@ -2596,6 +2596,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
       queuedBecause: result.queued.reason,
       note: PIPELINE_CREATION_QUEUED_NOTE,
       ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+      ...(result.briefWarnings?.length ? { briefWarnings: result.briefWarnings } : {}),
       ...newLegacyReviewFields(result),
     });
   }
@@ -2608,6 +2609,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
     ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
     ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+    ...(result.briefWarnings?.length ? { briefWarnings: result.briefWarnings } : {}),
     ...newLegacyReviewFields(result),
   });
 }
@@ -2758,6 +2760,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   /* The pipeline itself is acknowledged, not echoed (#1845): get_pipeline reads it. */
   return redactPayload({
     ...pipelineActionAcknowledgement(result.pipeline, fullAnswer(args) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)),
+    ...(result.briefWarnings?.length ? { briefWarnings: result.briefWarnings } : {}),
     revision: recordRevision(result.pipeline),
     changedFields: changedFieldNames(beforeFields, result.pipeline),
     taskIds: result.pipeline.taskIds,
@@ -7768,6 +7771,26 @@ async function requestAttention(
   });
 }
 
+/** Round reads and receipt replays retain the same current project/seat fence. */
+function prototypeDismissalAuthority(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): (() => void) | void {
+  if (!args.target || (args.target as { kind?: unknown }).kind !== "prototype") return;
+  const target = parseDismissalTarget(args.target, { allowSubjects: false });
+  if (target.kind !== "prototype") return;
+  const assert = () => {
+    const authority = authorityOf(dependencies);
+    const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+    const admission = permitAttentionDismissal(authority, seats, null);
+    if (!admission.allowed) throw new McpToolRefusal(admission.error, { code: "DISMISS_NOT_PERMITTED" });
+    const owner = target.taskId === null ? mcpPrototypeRound(null, target.reviewId)
+      : dependencies.loadTasks().find(task => task.id === target.taskId);
+    if (!owner) throw new McpToolRefusal("prototype review not found", { code: "REVIEW_NOT_FOUND" });
+    const verdict = permitAttentionDismissal(authority, seats, canonicalOrchestratorProject(owner.project));
+    if (!verdict.allowed) throw new McpToolRefusal(verdict.error, { code: "DISMISS_NOT_PERMITTED" });
+  };
+  assert();
+  return assert;
+}
+
 /**
  * Clear a needs-you flag through the one dismissal service
  * (docs/design/needs-attention.md §5), for `dismiss_attention` and for
@@ -7785,6 +7808,7 @@ async function dismissThroughService(
   operationKey: string,
   dependencies: ViewerMcpDomainDependencies,
   reason?: string,
+  assertCurrent?: () => void,
 ) {
   const authority = authorityOf(dependencies);
   const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
@@ -7817,9 +7841,10 @@ async function dismissThroughService(
     if (!project) throw new McpToolRefusal("report not found", { code: "REPORT_NOT_FOUND" });
     rawProject = project;
   } else if (target.kind === "prototype") {
-    const task = dependencies.loadTasks().find(t => t.id === target.taskId);
-    if (!task) throw new McpToolRefusal("prototype task not found", { code: "TASK_NOT_FOUND" });
-    rawProject = task.project;
+    const round = target.taskId === null ? mcpPrototypeRound(null, target.reviewId) : null;
+    const task = target.taskId === null ? null : dependencies.loadTasks().find(t => t.id === target.taskId);
+    if (!round && !task) throw new McpToolRefusal("prototype review not found", { code: "REVIEW_NOT_FOUND" });
+    rawProject = (round ?? task)!.project;
   } else if (target.kind === "conversation" && target.path?.startsWith("spawn:")) {
     const snapshot = dependencies.registrySnapshot();
     const receipt = snapshot.receipts?.[target.path.slice(6)];
@@ -7852,7 +7877,7 @@ async function dismissThroughService(
          is how the service keys it when the registry does not. */
       target.kind === "conversation" && focus?.kind === "conversation" ? { ...target, path: target.path ?? focus.path } : target,
       by,
-      { undo, operationKey, project, reason, ...(dependencies.dismissalPorts ? { ports: dependencies.dismissalPorts } : {}) },
+      { undo, operationKey, project, reason, assertCurrent, ...(dependencies.dismissalPorts ? { ports: dependencies.dismissalPorts } : {}) },
     );
   } catch (error) {
     if (error instanceof DismissalError) throw new McpToolRefusal(error.message, { code: error.code, status: error.status });
@@ -7970,7 +7995,7 @@ async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDo
     throw error;
   }
   if (args.escalate !== undefined) return escalateThroughService(target, args.escalate, args.undo === true, mcpOperationId("dismiss_attention", requestId(args)), dependencies);
-  const outcome = await dismissThroughService(target, args.undo === true, mcpOperationId("dismiss_attention", requestId(args)), dependencies, args.reason as string | undefined);
+  const outcome = await dismissThroughService(target, args.undo === true, mcpOperationId("dismiss_attention", requestId(args)), dependencies, args.reason as string | undefined, context?.assertCaller);
   return {
     dismissed: outcome.dismissed,
     alreadyClear: outcome.alreadyClear,
@@ -8855,7 +8880,9 @@ export function viewerMcpBindings(
       if (!capability) throw new Error("prototype reads require an identified caller");
       return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews/read",withoutKeys(args,["clientRequestId"]),{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
     },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("read",args,controlDependencies,context) }),
-    dismiss_attention: (args, context) => dismissAttentionTool(args, domainDependencies, controlDependencies, context),
+    dismiss_attention: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => dismissAttentionTool(args, domainDependencies, controlDependencies, context), {
+      authorizeReceipt: (args: McpToolArgs) => prototypeDismissalAuthority(args, domainDependencies),
+    }),
     bridge_report: (args, context) => bridgeReport(args, domainDependencies, viewerControlForCall(controlDependencies, context)),
     bridge_directive: orchestratorProjectBinding(domainDependencies, (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies), true),
     get_orchestrator: orchestratorProjectBinding(domainDependencies, (args) => getOrchestrator(args, domainDependencies)),

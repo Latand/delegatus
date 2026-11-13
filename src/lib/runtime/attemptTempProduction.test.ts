@@ -8,10 +8,11 @@ import { materializeStructuredHostAccess } from "./structuredSpawn";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
 import { runTempSweep, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
 import { statePath } from "@/lib/configDir";
-import { attemptReferencesClear } from "./attemptTempFilesystem";
+import { attemptReferencesClear, RepositoryLinkInventory } from "./attemptTempFilesystem";
 import { holdFinishedRoot, finishedLane } from "./attemptTempRetention.testSupport";
 import { RecordedCheckStore, recordedRootHeld } from "@/lib/recordedChecks/store";
 import { attemptTempJournalPath } from "@/lib/tempSweep";
+import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 
 test.each([false, true])("all roots of an acknowledged check await expiry after clock rollback (restart=%s)", async restart => {
   const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
@@ -127,6 +128,7 @@ test.each([["root", false], ["copy", false], ["root", true], ["copy", true]] as 
   const { sweepEvidenceCopies } = await import("./attemptEvidenceCopies");
   const { digest } = await import("@/lib/recordedChecks/wire");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-protected-replay-")); roots.push(root);
+  isolateState(root); // The copy case writes its marker through statePath().
   const now = Date.parse("2026-11-01T00:00:01Z"), p = finishedLane(root, "2026-10-01T00:00:00Z");
   p.merge = { state: "blocked", by: null, repository: "fixture/repository", prNumber: 1,
     policyChangedAt: p.closedAt!, reviewedHead: "a".repeat(40), chain: [], updates: [], seenChecks: [], head: null, headSeenAt: null,
@@ -135,7 +137,7 @@ test.each([["root", false], ["copy", false], ["root", true], ["copy", true]] as 
   savePipelines([p]);
   const directory = kind === "root" ? path.join(root, "llv-stage-protected-replay") : statePath("evidence", "attempt-temp", digest(root));
   fs.mkdirSync(path.join(directory, "nested"), { recursive: true });
-  fs.writeFileSync(path.join(directory, "nested", ".delegatus-keep"), "operator pin");
+  plantKeepMarker(path.join(directory, "nested", ".delegatus-keep"));
   fs.writeFileSync(path.join(directory, "payload"), "keep data");
   const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
   if (kind === "root") store.register({ directory, pipelineId: p.id, launchId: "retention-launch", retainUntilClose: true, createdAt: 1 });
@@ -333,7 +335,7 @@ test.each([false, true])("six-day retention keeps the check and excludes human p
   const now = Date.parse("2026-11-01T00:00:00Z"), expiresAt = now + 86400000;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-six-days-")); roots.push(root);
   const directory = path.join(root, "llv-stage-held"); fs.mkdirSync(directory);
-  if (keep) fs.writeFileSync(path.join(directory, ".delegatus-keep"), "operator pin");
+  if (keep) plantKeepMarker(path.join(directory, ".delegatus-keep"));
   const p = finishedLane(root, "2026-10-26T00:00:00Z"); savePipelines([p]);
   const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
   try {
@@ -446,6 +448,65 @@ test("retrying preservation recreates a missing copy before expiry and stops doi
   } finally { store.close(); }
 });
 
+test.each(["needs_decision", "pending"] as const)("a lane completed while an attempt was %s expires its scratch seven days after the close", async state => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempAuthority, recordingAttemptTempState } = await import("./attemptTempProduction");
+  const now = Date.parse("2026-11-01T00:00:01Z");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-parked-")); roots.push(root);
+  const directory = path.join(root, "llv-stage-parked"); fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "payload"), "scratch of a parked attempt");
+  const p = finishedLane(root, "2026-10-20T00:00:00Z");
+  // Parking leaves completedAt unset, and the later close does not stamp it.
+  p.runs = [{ stageId: "build", attempts: [{ n: 1, state, effectiveRole: p.stages[0]!.effectiveRole,
+    launchId: "parked-launch", conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2026-10-19T00:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: "waiting for the operator" }] }];
+  savePipelines([p]);
+  const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
+  const authority: NonNullable<Parameters<typeof sweepAttemptTemps>[1]["authority"]> = (owner, inventory) => attemptTempAuthority(owner, inventory, () => now);
+  try {
+    store.register({ directory, pipelineId: p.id, launchId: "parked-launch", retainUntilClose: false, createdAt: now - 14 * 86400000 });
+    expect(await authority(store.owner(directory)!, new RepositoryLinkInventory())).toMatchObject({ state: "expired", expiresAt: Date.parse("2026-10-27T00:00:00Z") });
+    const report = await sweepAttemptTemps(store, { now: () => now, state: recordingAttemptTempState(store, authority), authority,
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
+    expect(report).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(directory)).toBeFalse(); expect(store.has(directory)).toBeFalse();
+  } finally { store.close(); }
+});
+
+test("a finished-lane root held by linked evidence records its retention end and leads the first page after it", async () => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempAuthority, recordingAttemptTempState } = await import("./attemptTempProduction");
+  const closed = Date.parse("2026-10-30T00:00:00Z"), expiresAt = closed + 7 * 86400000;
+  let now = closed + 86400000;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-linked-")); roots.push(root);
+  const p = finishedLane(root, new Date(closed).toISOString());
+  const open = buildPipeline({ id: "open-lane", task: "Open", project: "fixture", repoDir: root, stages: p.stages,
+    srcPath: null, srcConversationId: null, now: "2026-10-01T00:00:00Z" });
+  open.state = "running"; savePipelines([p, open]);
+  const target = path.join(root, "outside.png"); fs.writeFileSync(target, "kept outside the root");
+  const linked = path.join(root, "llv-stage-linked"); fs.mkdirSync(linked);
+  fs.symlinkSync(target, path.join(linked, "frame.png"));
+  const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
+  const authority: NonNullable<Parameters<typeof sweepAttemptTemps>[1]["authority"]> = (owner, inventory) => attemptTempAuthority(owner, inventory, () => now);
+  const sweep = (maxRoots: number) => sweepAttemptTemps(store, { now: () => now, maxRoots, state: recordingAttemptTempState(store, authority), authority,
+    scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
+  try {
+    store.register({ directory: linked, pipelineId: p.id, launchId: "retention-launch", retainUntilClose: false, createdAt: closed - 86400000 });
+    const held = await sweep(1);
+    expect(held.outcomes).toEqual([expect.objectContaining({ directory: linked, disposition: "failed", reason: "linked attempt evidence" })]);
+    expect(store.retentionExpiry(linked)).toBe(expiresAt);
+    // Open-lane roots the round robin would visit before it.
+    for (let n = 0; n < 6; n++) {
+      const directory = path.join(root, `llv-stage-open-${n}`); fs.mkdirSync(directory);
+      store.register({ directory, pipelineId: open.id, launchId: `open-${n}`, retainUntilClose: false, createdAt: closed - 10 * 86400000 });
+    }
+    now = expiresAt + 1;
+    const report = await sweep(2);
+    expect(report.outcomes[0]).toMatchObject({ directory: linked, disposition: "removed" });
+    expect(fs.existsSync(linked)).toBeFalse(); expect(fs.readFileSync(target, "utf8")).toBe("kept outside the root");
+  } finally { store.close(); }
+});
+
 test.each(["running", "paused", "needs_decision", "teardown", "merge", "attempt", "unconfirmed"])("unfinished lane %s never expires an old check hold", async kind => {
   const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
   const { attemptTempAuthority } = await import("./attemptTempProduction");
@@ -481,7 +542,14 @@ test.each(["running", "paused", "needs_decision", "teardown", "merge", "attempt"
 });
 
 const roots: string[] = [];
-afterEach(() => { savePipelines([]); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+const stateRestores: Array<() => void> = [];
+/** Points LLV_STATE_DIR inside a test's own root until the test ends, passed or failed. */
+function isolateState(root: string): void {
+  const prior = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  stateRestores.push(() => { if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior; });
+}
+afterEach(() => { removeKeepMarkers(); for (const restore of stateRestores.splice(0).reverse()) restore(); savePipelines([]); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 const modeledBytesPerHour = (removedBytes: number, elapsedMs: number) => removedBytes * 3600000 / (60000 + elapsedMs);
 
 test("hourly reclaim model includes sweep duration before the scheduler's minute wait", () => {
@@ -776,7 +844,7 @@ test.each(["due", "upcoming"] as const)("the persisted %s forecast clears after 
   savePipelines([pipeline]);
   const destination = statePath("evidence", "attempt-temp", digest("report-pin"));
   fs.mkdirSync(destination, { recursive: true });
-  fs.writeFileSync(path.join(destination, ".delegatus-keep"), "operator pin");
+  plantKeepMarker(path.join(destination, ".delegatus-keep"));
   const store = new AttemptTempStore();
   store.registerCopy({ destination, pipelineId: pipeline.id, launchId: "copy", kind: "lane",
     createdAt: 1, expiresAt, checkedAt: 0, bytes: 4096 });
