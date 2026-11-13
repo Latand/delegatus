@@ -3315,6 +3315,21 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   const current = sources.seatFor(project).active;
   if (current?.conversationId !== seat.conversationId || current?.seatEpoch !== seat.seatEpoch) return null;
   const settings = effectiveSeatTickSettings(sources.settings(project), sources.now(), SEAT_TICK_WAKE_INTERVAL_MS);
+  let workerAsksObserved = true;
+  let decisionForms: SeatTickCheckInput["decisionForms"];
+  if (settings.enabled && sources.workerAsks) {
+    try {
+      const read = await sources.workerAsks(project, seat.conversationId ?? undefined);
+      workerAsksObserved = read !== null;
+      if (read && "asks" in read) decisionForms = read.forms;
+    } catch (error) {
+      workerAsksObserved = false;
+      console.error("[seat tick] routed asks unavailable", error instanceof Error ? error.name : "unknown");
+    }
+    assertSeatTickWork();
+    const currentSeat = sources.seatFor(project).active;
+    if (currentSeat?.conversationId !== seat.conversationId || currentSeat?.seatEpoch !== seat.seatEpoch) return null;
+  }
   const paused = projectRows(sources.pipelines(), project).filter(lane => isOpen(lane) && lane.state === "paused");
   const pauses = pauseInputs(paused, seat, sources, sources.now());
   const pipelines: SeatTickPipelineInput[] = [];
@@ -3326,6 +3341,7 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   }, { batchSize: 4, timeBudgetMs: 8 });
   return { project, now: sources.now(), seat, state, policy, settings,
     pipelines, tasks: [], events: [], children: [], childrenUnavailable: null,
+    workerAsksObserved, ...(decisionForms ? { decisionForms } : {}),
     ownLanes: [], pullRequests: [], pullRequestsUnavailable: null, pullRequestsObserved: false,
     signals: [], settledDeploys, deploySettlementWakeDue: true, ...(observedReports ? { reports: observedReports } : {}),
     changeFingerprint: seatTickFingerprint(pipelines, [], [], [], null, [], settledDeploys, []),
@@ -3548,7 +3564,9 @@ function instructionReviewFor(project: string, now: number, settings: ReturnType
   const finished = new Map<string, string>();
   for (const lane of projectRows(lanes, project)) {
     if (lane.state === "completed" || lane.state === "closed") {
-      const at = laneMovedAt(lane);
+      // closedAt is the durable terminal event. Movement timestamps can point
+      // at an earlier attempt or pause and hide work closed after review.
+      const at = lane.closedAt ?? stageAttempt(lane)?.completedAt ?? laneMovedAt(lane);
       if (at) finished.set(lane.id, at);
     }
     if (lane.merge?.state === "merged") {

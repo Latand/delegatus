@@ -738,6 +738,29 @@ test("a deploy the seat started wakes it once when it settles, with the lanes it
   expect(hourly.sent.every(message => !message.text.includes("[deploy] deploy-own"))).toBe(true);
 });
 
+for (const delivered of [false, true]) test(`deploy-settled controller wakes read decision forms and credit only delivered rows: ${delivered}`, async () => {
+  const reviewId = "deploy-form-round";
+  const rig = harness({ state: OVERDUE,
+    seatDeployments: [{ deploymentId: "deploy-own", conversationId: CONVERSATION }],
+    deployments: { "deploy-own": { phase: "succeeded", terminal: true, revision: "a".repeat(40) } },
+    delivery: delivered ? { ok: true, target: "structured", outcome: "delivered", spawned: true, structured: true }
+      : { ok: false, outcome: "failed", error: "fixture refusal", status: 503 },
+  });
+  let reads = 0;
+  rig.deps.sources!.workerAsks = async () => {
+    reads++;
+    return { asks: [], forms: { count: 1, rows: [{ id: `prototype:${reviewId}`, kind: "prototype", title: "Choose a direction",
+      line: "Choose", since: new Date(NOW - 86_400_000).toISOString(), taskId: null,
+      subject: { reviewId }, target: null, stale: false, evidence: [] }] } };
+  };
+  const result = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(result?.reasons).toContain("deploy-settled");
+  expect(reads).toBeGreaterThan(0);
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.sent[0]!.text).toContain(`- prototype ${reviewId} |`);
+  expect(rig.deps.readState!(PROJECT).formPageAfter).toBe(delivered ? `prototype:${reviewId}` : undefined);
+});
+
 test("a lane the operator paused is not the seat's work: no stall, no interval wake (#2063)", async () => {
   const pipelines = [{
     id: "pipeline_op", state: "paused", createdAt: new Date(NOW - 300 * MINUTE).toISOString(),

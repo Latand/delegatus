@@ -2734,6 +2734,25 @@ describe("reserved task pages", () => {
     expect(new Set(ids).size).toBe(25);
     expect(seatTickDecision(check).verdict.kind).toBe("quiet");
   });
+  test("a recurring unstarted backlog cannot starve a waiting task across daily pages or restart", () => {
+    const unstarted = Array.from({ length: 300 }, (_, n): SeatTickTaskInput => ({
+      id: `accepted-${String(n).padStart(3, "0")}`, title: `Accepted ${n}`, status: "inbox", owned: false,
+      accepted: true, updatedAt: new Date(NOW - 3 * 86_400_000).toISOString(),
+    }));
+    const held = { ...waiting(0), id: "blocked-waiting", title: "Waiting for release" };
+    let check = input({ tasks: [...unstarted, held] });
+    let waitingAppearances = 0;
+    for (let tick = 0; tick < 72; tick++) {
+      const page = landed(check);
+      if (page.decision.verdict.kind !== "wake") throw new Error("wake expected");
+      waitingAppearances += page.decision.verdict.taskPage!.rows.filter(row => row.item.id === held.id).length;
+      expect(page.decision.verdict.taskPage!.lines.join("\n").length).toBeLessThanOrEqual(1800);
+      // Durable state loaded by a fresh process; no in-memory sweep budget survives.
+      const state = JSON.parse(JSON.stringify(page.state)) as SeatTickProjectState;
+      check = { ...check, state, now: check.now + 60 * MINUTE };
+    }
+    expect(waitingAppearances).toBeGreaterThanOrEqual(2);
+  });
   test("unlanded and partially visible pages retain uncredited rows", () => {
     const check = input({ tasks: Array.from({ length: 25 }, (_, i) => waiting(i)) });
     const page = landed(check);

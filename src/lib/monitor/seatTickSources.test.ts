@@ -3570,3 +3570,20 @@ test("task page facts and finished-reference review survive gathering and both r
   ports.tasks = () => [{ ...task, status: "done", doneAt: new Date(NOW - 1000).toISOString() }] as never;
   expect(refreshSeatTickInput(gathered, ports).instructionReview).toContain("names task-review-facts");
 });
+
+test("closing a lane after instruction review flags it on gather and refresh, then a new review clears it", async () => {
+  const reviewedAt = "2026-08-28T11:30:00.000Z";
+  const closedAt = "2026-08-28T11:50:00.000Z";
+  const finished = lane({ id: "deadbeef", state: "closed", closedAt,
+    runs: [{ stageId: "build", attempts: [{ n: 1, state: "failed", startedAt: "2026-08-28T11:15:00.000Z", completedAt: "2026-08-28T11:16:00.000Z" }] }] });
+  const ports = sources({ pipelines: [finished], tasks: [] });
+  const settings = { ...defaultSeatTickSettings(PROJECT), reason: "Wait for deadbeef",
+    instructionLines: [{ text: "Wait for deadbeef", author: null, at: null }], instructionsReviewedAt: reviewedAt };
+  ports.settings = () => settings;
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(gathered.instructionReview).toContain("names deadbeef");
+  expect(refreshSeatTickInput(gathered, ports).instructionReview).toContain("names deadbeef");
+  expect(refreshSeatTickInput(refreshSeatTickInput(gathered, ports), ports).instructionReview).toContain("names deadbeef");
+  settings.instructionsReviewedAt = "2026-08-28T12:00:00.000Z";
+  expect(refreshSeatTickInput(gathered, ports).instructionReview).toBeUndefined();
+});

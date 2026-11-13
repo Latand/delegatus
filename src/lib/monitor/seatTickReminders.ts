@@ -194,6 +194,11 @@ export function seatTickTaskPage(input: SeatTickCheckInput, legacy: readonly Sea
   const rowClass = (item: SeatTickItem) => item.reminderKind === "overdue" ? 0 : item.reminderKind === "task" ? 1 : 2;
   const due = all.filter(item => !shown.has(item.itemVersion!.split("@")[0])).sort((a, b) =>
     rowClass(a) - rowClass(b) || (a.reminderKind === "task" ? owedAt(a) - owedAt(b) || a.id.localeCompare(b.id) : 0));
+  // A recurring overdue/unstarted backlog must not occupy every page forever.
+  // Reserve one waiting slot per delivered page; its sweep cursor is still
+  // credited only when that row survives rendering and delivery.
+  const waitingIndex = due.findIndex(item => item.reminderKind === "waiting");
+  if (waitingIndex > 0) due.unshift(...due.splice(waitingIndex, 1));
   const counts = (kind: SeatTickItem["reminderKind"]) => all.filter(item => item.reminderKind === kind).length;
   const rows: SeatTickTaskPage["rows"] = [];
   let length = 0;
