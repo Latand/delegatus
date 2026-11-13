@@ -7,6 +7,9 @@ import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdent
 interface SetupCustody {
   enabled?(): boolean;
   beforeExec(): void;
+  /** Only the outer asynchronous launch boundary may wait for a writer.
+   * Native PID retention and the final exec fences remain synchronous. */
+  beforeExecOffLoop?(): Promise<void>;
   record(process: ProcessIdentity): void;
 }
 const custody = new AsyncLocalStorage<SetupCustody>();
@@ -20,6 +23,12 @@ export function withStructuredSetupCustody<T>(ports: SetupCustody | null, work: 
 }
 
 export function beforeStructuredSetupExec(): void { activeCustody()?.beforeExec(); }
+
+export async function beforeStructuredSetupExecOffLoop(): Promise<void> {
+  const current = activeCustody();
+  if (current?.beforeExecOffLoop) await current.beforeExecOffLoop();
+  else current?.beforeExec();
+}
 
 export function structuredSetupCustodyActive(): boolean { return activeCustody() !== undefined; }
 
