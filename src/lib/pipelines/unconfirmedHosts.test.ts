@@ -276,8 +276,10 @@ test.skipIf(measurementWorker || worker)("generation materialization has a fixed
   const outcomes = [];
   for (const backend of ["off", "sqlite"]) for (const count of [64, 4096]) for (const limit of [0, 16]) {
     const privateRoot = fs.mkdtempSync(path.join(root, "read-worker-"));
-    const child = Bun.spawn(["bash", process.env.LLV_TEST_GATE_WRAPPER ?? path.resolve("scripts/gate-slot.sh"),
-      process.execPath, "test", "src/lib/pipelines/unconfirmedHosts.test.ts", "--test-name-pattern", "^termination read worker$"], {
+    // The file's owned gate contains these measurement children. A second
+    // CPU admission inside Bun's per-test timeout can expire while queued.
+    const child = Bun.spawn([process.execPath, "test", "src/lib/pipelines/unconfirmedHosts.test.ts",
+      "--test-name-pattern", "^termination read worker$"], {
       env: { ...process.env, LLV_STATE_DIR: privateRoot, LLV_TERMINATION_READ_WORKER: "1",
         LLV_TERMINATION_BACKEND: backend, LLV_TERMINATION_HISTORY: String(count), LLV_TERMINATION_LIMIT: String(limit) },
       stdout: "pipe", stderr: "pipe" });

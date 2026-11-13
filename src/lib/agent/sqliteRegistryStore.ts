@@ -164,11 +164,12 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
       SELECT r.row_key,CAST(g.key AS INTEGER),json_extract(g.value,'$.id'),json_extract(g.value,'$.path'),
         json_extract(r.value_json,'$.engine')||':'||json_extract(g.value,'$.id')
       FROM ${source} r,json_each(r.value_json,'$.generations') g WHERE r.collection='conversations' AND r.row_key=${key};
-    INSERT OR IGNORE INTO registry_termination_paths
+    INSERT INTO registry_termination_paths
       SELECT r.row_key,p.value FROM ${source} r,json_each(r.value_json,'$.continuityPaths') p
-      WHERE r.collection='conversations' AND r.row_key=${key};
-    INSERT OR IGNORE INTO registry_termination_paths
-      SELECT conversation_id,path FROM registry_termination_generations WHERE conversation_id=${key};
+      WHERE r.collection='conversations' AND r.row_key=${key} ON CONFLICT(path,conversation_id) DO NOTHING;
+    INSERT INTO registry_termination_paths
+      SELECT conversation_id,path FROM registry_termination_generations WHERE conversation_id=${key}
+      ON CONFLICT(path,conversation_id) DO NOTHING;
   `;
   const refreshEntry = (key: string) => `
     DELETE FROM registry_termination_entries WHERE entry_key=${key};
@@ -198,7 +199,9 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
   `;
   for (const table of ["registry_rows", "registry_cold"]) for (const event of ["INSERT", "UPDATE", "DELETE"]) {
     const row = event === "DELETE" ? "OLD" : "NEW";
-    db.exec(`CREATE TRIGGER IF NOT EXISTS ${table}_termination_${event.toLowerCase()} AFTER ${event} ON ${table}
+    const trigger = `${table}_termination_${event.toLowerCase()}`;
+    db.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
+    db.exec(`CREATE TRIGGER ${trigger} AFTER ${event} ON ${table}
       WHEN ${row}.collection IN ('conversations','entries') BEGIN
       ${refresh(`CASE WHEN ${row}.collection='conversations' THEN ${row}.row_key END`)}
       UPDATE registry_termination_versions SET version=hex(randomblob(16)) WHERE ${row}.collection='entries' AND id IN (
@@ -219,7 +222,7 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
   for (const { row_key } of db.query<{ row_key: string }, []>(`SELECT row_key FROM ${source} WHERE collection='entries'`).all()) {
     db.exec(refreshEntry(`'${row_key.replaceAll("'", "''")}'`));
   }
-  db.exec("INSERT OR REPLACE INTO registry_meta(key,value) VALUES ('termination_projection_version','1')");
+  db.exec("INSERT OR REPLACE INTO registry_meta(key,value) VALUES ('termination_projection_version','2')");
 }
 
 const registryCallerIndexes = declaredIndexes([
@@ -1662,7 +1665,7 @@ export class SqliteAgentRegistryStore {
     if (this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_generation_identities'").get()) {
       registryGenerationIndexes.install(this.db, path.dirname(filename));
     }
-    if (options.allowArchiveMigration !== false && this.meta("termination_projection_version") !== "1") {
+    if (options.allowArchiveMigration !== false && this.meta("termination_projection_version") !== "2") {
       assertStateStartupMutation(path.dirname(filename), "agent registry termination projection");
       withStartupTransaction(this.db, () => installTerminationProjection(this.db, this.recordsSource));
     }

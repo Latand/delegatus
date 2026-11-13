@@ -6269,7 +6269,9 @@ export class AgentRegistry {
         }
         this.assertSqliteParity();
       }
-      if (changed) this.readOnlySnapshot();
+      // Keep an observed owner's proof view warm without forcing a first
+      // read of a JSON registry that no reader has requested yet.
+      if (changed && this.readOnlyCache) this.readOnlySnapshot();
       return result;
     } finally {
       if (!admitted) this.releaseLock(claim);
