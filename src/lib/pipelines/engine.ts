@@ -3332,6 +3332,14 @@ function parkPipelineState(pipeline: Pipeline, detail: string, attempt?: Pipelin
     attempt.providerWait.retryCancelled = true;
   }
   if (attempt) attempt.error = detail;
+  // A new park can precede every round (base/worktree provisioning). Its
+  // decision must resurface even when no attempt timestamp changed. Repeated
+  // ticks of the same parked decision retain the operator's Hide.
+  if (pipeline.state !== "needs_decision") {
+    pipeline.dismissedAt = null;
+    delete pipeline.dismissedBy;
+    delete pipeline.dismissedNote;
+  }
   pipeline.state = "needs_decision";
   pipeline.pausedState = null;
   pipeline.stateDetail = detail;

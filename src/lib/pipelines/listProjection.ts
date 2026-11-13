@@ -21,6 +21,7 @@
  */
 import type { RuntimeEngine as FlowEngine } from "@/lib/agent/runtimeConfig";
 
+import { pipelineHiddenFromBoard } from "./laneMovement";
 import { latestOperationalStageAttempt } from "./attemptSelection";
 import { failEdgeExhaustion, failEdgeMaxRounds, pipelineReviewSummary, type PipelineReviewSummary } from "./failEdgeBudget";
 import { selectArchivedPipelines, loadPipelinesForList, withDeliveryPublicationDetail } from "./store";
@@ -106,6 +107,9 @@ export type PipelineListRow = {
   branch: string;
   baseBranch: string;
   state: PipelineState;
+  dismissedAt: string | null;
+  /** Effective visibility of the current decision, as on the board. */
+  hiddenFromBoard: boolean;
   pausedState: Pipeline["pausedState"];
   /** Clamped. */
   stateDetail: string | null;
@@ -264,6 +268,8 @@ export function pipelineListRow(record: Pipeline): PipelineListRow {
     branch: pipeline.branch,
     baseBranch: pipeline.baseBranch,
     state: pipeline.state,
+    dismissedAt: pipeline.dismissedAt ?? null,
+    hiddenFromBoard: pipelineHiddenFromBoard(pipeline),
     pausedState: pipeline.pausedState ?? null,
     stateDetail: clampText(withDeliveryPublicationDetail(pipeline).stateDetail),
     hasSpec: typeof pipeline.spec === "string" && pipeline.spec.length > 0,
@@ -289,6 +295,9 @@ export type PipelineCompactRow = {
   /** First line of the title, clamped. */
   task: string;
   state: PipelineState;
+  dismissedAt: string | null;
+  /** Effective visibility of the current decision, as on the board. */
+  hiddenFromBoard: boolean;
   cursor: { stageId: string; state: PipelineCursorState } | null;
   /** Clamped. */
   stateDetail: string | null;
@@ -322,6 +331,8 @@ export function pipelineCompactRow(record: Pipeline): PipelineCompactRow {
     id: pipeline.id,
     task: clampLine(pipeline.task, COMPACT_TASK_CHARS) ?? "",
     state: pipeline.state,
+    dismissedAt: pipeline.dismissedAt ?? null,
+    hiddenFromBoard: pipelineHiddenFromBoard(pipeline),
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     stateDetail: clampChars(withDeliveryPublicationDetail(pipeline).stateDetail, COMPACT_DETAIL_CHARS),
     ...reviewField(pipeline),

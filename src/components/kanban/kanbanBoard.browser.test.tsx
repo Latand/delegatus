@@ -44772,3 +44772,41 @@ describe("cold conversation link", () => {
     expect(failures).toEqual([]);
   }, 1_500_000);
 });
+
+
+describe("hidden lane visibility", () => {
+  browserTest("the desktop keeps a roundless hidden decision cleared and restores it with Undo", async () => {
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "hidden-lane");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    let browser: Browser | undefined;
+    const readings: unknown[] = [];
+    try {
+      browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { page, context } = await openFixture(browser, `${server.base}?scenario=hidden-lane&lang=${lang}`, { width: 1440, height: 900 }, scheme, lang, "reduce");
+        try {
+          await page.clock.setFixedTime(new Date("2026-09-24T10:00:00.000Z"));
+          await page.reload();
+          const card = page.locator('[data-kanban-board] .card[data-id="task:t-visibility"]');
+          await card.waitFor();
+          await card.scrollIntoViewIfNeeded();
+          expect(await card.locator('[data-chronology-kind="lane-cleared"]').count()).toBe(1);
+          expect(await page.locator('[data-needs-you-row="lane-visibility"]').count()).toBe(0);
+          await page.screenshot({ path: path.join(out, `${lang}-${scheme}-hidden.png`) });
+          await card.locator("[data-menu]").click();
+          await page.locator('.menu [data-cm-item="undoFlag"]').click();
+          await page.waitForFunction(() => !document.querySelector('[data-id="task:t-visibility"] [data-chronology-kind="lane-cleared"]'));
+          await page.locator("[data-attention-count]").click();
+          await page.locator('[data-needs-you-row="lane-visibility"]').waitFor();
+          expect(await page.locator('[data-needs-you-row="lane-visibility"]').count()).toBe(1);
+          await page.screenshot({ path: path.join(out, `${lang}-${scheme}-restored.png`) });
+          readings.push({ lang, scheme, hiddenRows: 0, restoredRows: 1, action: "undoFlag" });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+    } finally { await browser?.close(); sockets.close(); server.stop(); }
+  }, 180_000);
+});

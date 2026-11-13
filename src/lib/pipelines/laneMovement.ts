@@ -42,3 +42,15 @@ export function drawnLaneMovement(pipeline: Pipeline): number | null {
 export function laneMovedSince(pipeline: Pipeline, drawn: number | null | undefined): boolean {
   return drawn !== undefined && laneMovedAt(pipeline) > (drawn ?? Number.NEGATIVE_INFINITY);
 }
+
+/** Whether Hide still covers the decision the lane currently waits on.
+ * A later round makes the old dismissal historical. Shared by UI and MCP. */
+export function pipelineHiddenFromBoard(pipeline: Pipeline): boolean {
+  if (!pipeline.dismissedAt) return false;
+  const dismissed = Date.parse(pipeline.dismissedAt);
+  if (pipeline.state === "completed" && pipeline.merge?.state === "blocked") {
+    return dismissed >= Date.parse(pipeline.merge.blockedAt ?? pipeline.merge.updatedAt);
+  }
+  if (pipeline.state !== "needs_decision" && pipeline.state !== "needs_review") return false;
+  return laneMovedAt(pipeline) <= dismissed;
+}
