@@ -1,3 +1,4 @@
+import { bindVoiceSession, releaseVoiceSession } from "./voiceViewBinding";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import type { ViewerMcpObservation, QueueEntry, DeliveryReceipt } from "./engineHost";
 import crypto from "node:crypto";
@@ -18,6 +19,8 @@ import type { RuntimeHostClient } from "./client";
 import {
   structuredDeliveryMcpObservation,
   bindStructuredDeliveryQueue,
+  structuredDeliveryHeapCounts,
+  releaseIdleStructuredHostEventWindows,
   publishStructuredHostProjection,
   publishStructuredDeliveryHost,
   terminateStructuredDeliveryHost,
@@ -89,6 +92,7 @@ for (const qualified of [false, true]) test(`${qualified ? "qualified" : "unqual
   try {
     await bindStructuredDeliveryQueue([{ key: f.key, host: registeredHost }], { registry: f.registry, client: f.client,
       watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    expect(structuredDeliveryHeapCounts()).toMatchObject({ hosts: 1, registrations: 1 });
     await holder.hold();
     const termination = terminateStructuredDeliveryHost(f.key, qualified ? { pid: process.pid + 100_000, startIdentity: "expected-old-host" } : undefined);
     await waiting;
@@ -432,3 +436,37 @@ test("engine denial leaves an ordinary operator control eligible", async () => {
     expect(f.journal.operationResult("mcp-operator")?.receipt.status).toBe("delivered");
   } finally { await f.cleanup(); }
 });
+
+for (const change of ["none", "voice-before", "voice-after", "owner-after", "epoch-after", "process-after", "writer-after"] as const) {
+  test(`idle window sweep rechecks published ownership and voice binding: ${change}`, async () => {
+    const f = migrationDeliveryFixture();
+    let cleared = false;
+    Object.assign(f.host, { releaseIdleEventWindow: async (canRelease: () => boolean) => {
+      if (!canRelease()) return false;
+      await Promise.resolve();
+      if (change === "voice-after") bindVoiceSession(f.conversation.id, "fixture-call", null);
+      if (change === "owner-after") await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
+      if (change === "epoch-after") {
+        const row = f.registry.hostEntry(f.key)!;
+        f.registry.upsert({ ...row, claimEpoch: row.claimEpoch + 1 });
+      }
+      if (change === "process-after" || change === "writer-after") {
+        const row = f.registry.hostEntry(f.key)!;
+        f.registry.upsert({ ...row, structuredHost: { ...row.structuredHost!,
+          ...(change === "process-after" ? { process: { pid: 1234567, startIdentity: "replacement", bootEpoch: "fixture" } }
+            : { writerClaimEpoch: row.structuredHost!.writerClaimEpoch + 1 }),
+        } });
+      }
+      if (!canRelease()) return false;
+      cleared = true;
+      return true;
+    } });
+    try {
+      await bindStructuredDeliveryQueue([{ key: f.key, host: f.host }], { registry: f.registry, client: f.client,
+        watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+      if (change === "voice-before") bindVoiceSession(f.conversation.id, "fixture-call", null);
+      expect(await releaseIdleStructuredHostEventWindows()).toBe(change === "none" ? 1 : 0);
+      expect(cleared).toBe(change === "none");
+    } finally { releaseVoiceSession(f.conversation.id); await f.cleanup(); }
+  });
+}

@@ -1,3 +1,6 @@
+import { assertReleasedHostEventLedger } from "./hostEventWindow";
+import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
+import { heapAttribution } from "@/lib/heapAttribution";
 import { hostExitProcess, observeHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
 import { memoryField, memoryKillText } from "./agentMemoryState";
@@ -34,7 +37,7 @@ import type {
   SessionMaterializationEvidence,
 } from "./engineHost";
 import { normalizeQueueEntry, StructuredHostAdoptionCleanupError } from "./engineHost";
-import { attachRuntimeEvents, boundMap, hostEventWindowOf, trimHostEventWindow, type RuntimeEventSubscriber } from "./hostEventWindow";
+import { attachRuntimeEvents, boundMap, HostEventWindow, type RuntimeEventSubscriber } from "./hostEventWindow";
 import {
   FileRuntimeEventStore,
   nextRuntimeEventSequence,
@@ -313,8 +316,41 @@ export class CopilotAcpHost implements EngineHost {
   private readonly processIdentity: (pid: number) => string | null;
   private readonly childStartIdentity: string | null;
   private readonly exitProcess: import("@/lib/processIdentity").ProcessIdentity | null;
+
+  /** Scalar reads only; independent of event-window retention policy. */
+  heapAttribution() {
+    let queuedEvents = 0;
+    for (const subscriber of this.subscribers) queuedEvents += subscriber.queue.length;
+    return { engine: "copilot", events: this.events.length, ...this.eventWindow.heapAttribution(), eventSubscribers: this.subscribers.size,
+      stateSubscribers: this.stateListeners.size, queuedEvents };
+  }
+
   private readonly subscribers = new Set<Subscriber>();
-  private readonly events: RuntimeEvent[] = [];
+  private readonly eventWindow = new HostEventWindow();
+  private readonly events = this.eventWindow.events;
+  private eventWindowReleased = false;
+  private eventWindowRevision = 0;
+
+  releaseIdleEventWindow(canRelease: () => boolean): Promise<boolean> {
+    const transcriptPath = this.identity.path;
+    return releaseIdleHostEventWindow({
+      events: this.events,
+      revision: () => this.eventWindowRevision,
+      transcriptPath,
+      eligible: () => this.identity.path === transcriptPath && !this.dead && !this.releasing && !this.released
+        && !(this.running !== null) && canRelease(),
+      onRelease: () => { this.eventWindow.release(); this.eventWindowReleased = true; },
+    });
+  }
+
+  private refillEventWindow(): void {
+    if (!this.eventWindowReleased) return;
+    const stored = this.eventStore.load(this.identity.sessionId);
+    assertReleasedHostEventLedger(this.events, stored);
+    this.eventWindow.restore(stored);
+    this.eventWindowReleased = false;
+  }
+
   private readonly pending = new Map<number, PendingRequest>();
   /** Open `session/request_permission` requests by attention id, with the
       JSON-RPC id the answer has to carry. */
@@ -352,6 +388,7 @@ export class CopilotAcpHost implements EngineHost {
   private resolveReaped!: () => void;
 
   private constructor(child: ChildProcessWithoutNullStreams, options: CopilotAcpHostOptions) {
+    heapAttribution.hosts.add(this, null);
     this.child = child;
     this.memoryCell = options.memoryCell ?? null;
     this.memoryCell?.onChange(() => this.notifyStateListeners());
@@ -512,6 +549,8 @@ export class CopilotAcpHost implements EngineHost {
   }
 
   attach(afterSeq: number): AsyncIterable<RuntimeEvent> {
+    this.eventWindowRevision += 1;
+    this.refillEventWindow();
     return attachRuntimeEvents(afterSeq, {
       window: () => this.events,
       ledger: () => this.eventStore.load(this.identity.sessionId),
@@ -750,7 +789,7 @@ export class CopilotAcpHost implements EngineHost {
   private restore(): void {
     const stored = this.eventStore.load(this.identity.sessionId);
     /* The restore below reads the whole ledger once; only the window stays. */
-    for (const event of hostEventWindowOf(stored)) this.events.push(event);
+    this.eventWindow.restore(stored);
     this.cursor = reconcileRuntimeEventCursor(
       this.identity.sessionId,
       stored.at(-1)?.seq ?? 0,
@@ -788,15 +827,15 @@ export class CopilotAcpHost implements EngineHost {
     }
     this.cursor = nextCursor;
     const sequenced = { ...event, seq: nextCursor } as RuntimeEvent;
-    try { this.eventStore.append(this.identity.sessionId, sequenced); }
+    try { this.refillEventWindow(); this.eventStore.append(this.identity.sessionId, sequenced); }
     catch (error) {
       this.cursor = this.events.at(-1)?.seq ?? Math.max(0, this.cursor - 1);
       this.ledgerFailed = true;
       this.fail(new Error(`runtime event ledger failed: ${safeError(error)}`));
       return;
     }
-    this.events.push(sequenced);
-    trimHostEventWindow(this.events);
+    this.eventWindowRevision += 1;
+    this.eventWindow.append(sequenced);
     for (const subscriber of this.subscribers) {
       subscriber.queue.push(sequenced);
       subscriber.wake?.();

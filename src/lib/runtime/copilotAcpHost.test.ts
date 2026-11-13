@@ -1,3 +1,4 @@
+import { idleWindowFixture } from "./fixtures/idleEventWindow";
 import { readHostExit, withHostStopOrigin } from "./hostExit";
 import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import crypto from "node:crypto";
@@ -779,4 +780,62 @@ test("Copilot child environments keep the production scratch and evidence alloca
     expect(env.LLV_EVIDENCE_DIR).toBe(access.env.LLV_EVIDENCE_DIR);
     expect(fs.statSync(env.LLV_EVIDENCE_DIR!).isDirectory()).toBeTrue();
   } finally { access.cleanup(); }
+});
+
+
+test("heap counters observe events and subscriber queues without consuming them", async () => {
+  const host = await CopilotAcpHost.start(options(new FakeCopilot()));
+  const before = host.heapAttribution();
+  const stop = host.onStateChange(() => {});
+  const stream = host.attach(0)[Symbol.asyncIterator]();
+  try {
+    expect(before.engine).toBe("copilot");
+    expect(before.events).toBeGreaterThan(0);
+    expect(host.heapAttribution()).toMatchObject({ events: before.events,
+      eventSubscribers: before.eventSubscribers + 1, stateSubscribers: before.stateSubscribers + 1,
+      queuedEvents: before.queuedEvents + before.events });
+    await stream.next();
+    expect(host.heapAttribution().queuedEvents).toBe(before.queuedEvents + before.events - 1);
+    await stream.return?.();
+    stop();
+    expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
+  } finally { stop(); await stream.return?.(); await host.release(); }
+});
+
+test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
+  const host = await CopilotAcpHost.start(options(new FakeCopilot()));
+  const idle = idleWindowFixture(host);
+  try {
+    const count = host.heapAttribution().events;
+    expect(count).toBeGreaterThan(0);
+    expect(await host.releaseIdleEventWindow(() => false)).toBeFalse();
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    expect(host.heapAttribution().events).toBe(0);
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    try {
+      expect(host.heapAttribution().events).toBeGreaterThan(0);
+      for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
+    } finally { await stream.return?.(); }
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    await host.send({ id: "next-idle-turn", text: "continue" });
+    expect(host.heapAttribution().events).toBeGreaterThan(0);
+  } finally { idle.cleanup(); await host.release(); }
+});
+
+test("ACP output is previewed only in the retained window and replay keeps its terminal outcome", async () => {
+  const child = new FakeCopilot();
+  const eventStore = new MemoryEventStore();
+  const host = await CopilotAcpHost.start(options(child, { eventStore }));
+  try {
+    child.update({ sessionUpdate: "tool_call_update", toolCallId: "large-output", status: "failed", rawOutput: "output".repeat(10_000) });
+    const stored = eventStore.load(child.sessionId);
+    expect(JSON.stringify(stored)).toContain("output".repeat(10_000));
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    try {
+      const replay: RuntimeEvent[] = [];
+      for (let index = 0; index < stored.length; index++) replay.push((await stream.next()).value as RuntimeEvent);
+      expect(replay.at(-1)).toMatchObject({ phase: "completed", item: { status: "failed", toolCallId: "large-output", rawOutput: expect.stringContaining("[truncated; original UTF-8 bytes: 60000;") } });
+      expect(host.heapAttribution()).toMatchObject({ trimmedEvents: 1 });
+    } finally { await stream.return?.(); }
+  } finally { await host.release(); }
 });

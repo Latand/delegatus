@@ -187,6 +187,12 @@ Of the variables ending in `_API_KEY`, only `ANTHROPIC_API_KEY`,
 - `DELEGATUS_WHISPER_MODEL`, `DELEGATUS_WHISPER_DEVICE` — faster-whisper model size (default `small`) and device (`cpu`, the default, or `cuda`).
 - `DELEGATUS_TTS_BACKEND` — `openai`, `elevenlabs` or `soniox`: fixes the read-aloud provider.
 
+**Built-in updates**
+
+- `DELEGATUS_DISABLE_SELF_UPDATE` — `1` disables the built-in update controls and automatic self-updates for this installation. Set it in the environment that starts Delegatus, then restart Delegatus. The Updates dialog explains the administrator policy; manual update, retry, install-action and automatic-update setting/decision requests are refused by the server with HTTP `403` and code `updates-disabled`. A previously saved automatic-update preference cannot override this policy. Unset or any value other than `1` keeps today’s behavior. `LLV_DISABLE_SELF_UPDATE` is the legacy alias; `DELEGATUS_DISABLE_SELF_UPDATE` wins when both are set.
+
+Command-line updates still work: update a packaged installation with `bun add -g delegatus-cli@latest`, or pull and build your checkout using its usual procedure. The deployment control API remains available to installation automation. Restart after updating. Removing the setting and restarting restores the saved automatic-update preference. An update already handed to the launcher or deployment host can finish; the setting prevents new built-in update work after restart.
+
 **Cleanup and lifecycle**
 
 - `DELEGATUS_HOST_RETIREMENT_IDLE_HOURS` — how many hours a hosted agent's transcript must stay quiet before Delegatus may stop its host (default `6`; `0` turns this off). Delegatus never stops a host that is mid-turn, has a pending question or holds an orchestrator seat.

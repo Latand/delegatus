@@ -6,6 +6,7 @@ import { CUSTODY_CLEANUP_MS, identitySchema, custodyClock } from "../recordedChe
 // Leave one minute of the engines' ten-minute foreground window for startup
 // and printing the final state and tail. Custom waits share this ceiling.
 const MAX_WAIT_MS = 9 * 60_000;
+const COMPLETION_RECHECK_MS = 1000;
 const TAIL_BYTES = 16_384;
 const directory = (log: string) => `${log}.gate`;
 
@@ -71,7 +72,8 @@ export function gateSnapshot(log: string, directoryFd?: number): { state: string
 }
 
 /** Subscribe before checking so a completion racing the first read wakes us.
- * Only the final snapshot reads the tail; log activity does not extend the bound. */
+ * Recheck the exit path if filesystem notifications are lost. Only the final
+ * snapshot reads the tail; log activity does not extend the bound. */
 export async function waitForGate(log: string, timeoutMs = MAX_WAIT_MS): Promise<ReturnType<typeof gateSnapshot>> {
   if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_WAIT_MS) throw new Error("invalid wait deadline");
   return observeGate(log, timeoutMs);
@@ -84,45 +86,55 @@ async function observeGate(log: string, timeoutMs: number, signal?: AbortSignal)
     let timer: ReturnType<typeof setTimeout> | undefined;
     let watcher: fs.FSWatcher | undefined;
     let settled = false;
-    const closeDirectory = () => { if (!settled) { settled = true; fs.closeSync(dirFd); } };
+    const cleanup = () => {
+      settled = true;
+      clearTimeout(timer); watcher?.close(); signal?.removeEventListener("abort", abort);
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      cleanup(); fs.closeSync(dirFd); reject(error);
+    };
     const finish = () => {
       if (settled) return;
-      clearTimeout(timer); watcher?.close(); signal?.removeEventListener("abort", abort);
+      cleanup();
       try { resolve(gateSnapshot(log, dirFd)); } catch (error) { reject(error); }
-      finally { closeDirectory(); }
+      finally { fs.closeSync(dirFd); }
     };
-    const abort = () => {
-      if (settled) return;
-      clearTimeout(timer); watcher?.close(); signal?.removeEventListener("abort", abort);
-      closeDirectory(); reject(new Error("gate completion wait cancelled; command result unknown"));
+    const assertDirectory = () => {
+      const current = fs.lstatSync(directory(log)), opened = fs.fstatSync(dirFd);
+      if (!current.isDirectory() || current.dev !== opened.dev || current.ino !== opened.ino) {
+        throw new Error("gate completion ticket identity changed");
+      }
     };
+    const abort = () => fail(new Error("gate completion wait cancelled; command result unknown"));
     try {
       if (signal?.aborted) { abort(); return; }
       signal?.addEventListener("abort", abort, { once: true });
-      watcher = fs.watch(dir, (_event, name) => { if ((!name || name.toString() === "exit") && readDirectFile(dirFd, "exit") !== null) finish(); });
-      watcher.on("error", error => {
-        if (settled) return;
-        clearTimeout(timer); watcher?.close(); signal?.removeEventListener("abort", abort);
-        closeDirectory(); reject(error);
+      watcher = fs.watch(dir, (_event, name) => {
+        if (settled || name && name.toString() !== "exit") return;
+        try {
+          assertDirectory();
+          if (readDirectFile(dirFd, "exit") !== null) finish();
+        } catch (error) { fail(error); }
       });
+      watcher.on("error", fail);
       const deadline = performance.now() + timeoutMs;
       const arm = () => {
-        const remaining = Math.max(0, deadline - performance.now());
-        timer = setTimeout(remaining > 2_147_483_647 ? arm : finish, Math.min(remaining, 2_147_483_647));
+        if (settled) return;
+        try {
+          assertDirectory();
+          const remaining = Math.max(0, deadline - performance.now());
+          if (remaining === 0 || readDirectFile(dirFd, "exit") !== null) { finish(); return; }
+          timer = setTimeout(arm, Math.min(remaining, COMPLETION_RECHECK_MS));
+        } catch (error) { fail(error); }
       };
       arm();
-      // An already finished run returns immediately, including after restart.
-      if (readDirectFile(dirFd, "exit") !== null) finish();
-      else {
-        const owner = readDirectFile(dirFd, "owner.json");
-        if (owner === null) throw new Error("unknown gate log (no recording ticket)");
-        if (cpuOwnerStatus(JSON.parse(owner)) !== "alive") finish();
-      }
-    } catch (error) {
+      // arm may settle an already completed run and close its descriptor.
       if (settled) return;
-      clearTimeout(timer); watcher?.close(); signal?.removeEventListener("abort", abort);
-      closeDirectory(); reject(error);
-    }
+      const owner = readDirectFile(dirFd, "owner.json");
+      if (owner === null) throw new Error("unknown gate log (no recording ticket)");
+      if (cpuOwnerStatus(JSON.parse(owner)) !== "alive") finish();
+    } catch (error) { fail(error); }
   });
 }
 

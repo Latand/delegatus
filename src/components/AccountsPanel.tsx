@@ -250,9 +250,26 @@ function ResetLine({ account, state, facts, now, receipts }: { account: AccountO
   const { t } = useLocale();
   const s = useSizes();
   const resets = facts.resets;
+  const spend = useArmed(() => void state.useResetCredit(account.id).then((ok) => { if (ok) receipts?.show(t("mobile2.accounts.resetUsed", { label: account.label })); }));
   if (!resets || resets.availableCount === 0) return null;
   const busy = state.limitsBusy?.accountId === account.id;
   const redeeming = busy && state.limitsBusy?.operation === "resetCredit";
+  const blocked = state.mutation !== null || busy || !account.authPresent;
+  // The first press arms a confirmation in this row: a reset is scarce and cannot be taken back.
+  if (spend.armed && !blocked) {
+    return (
+      <ArmedConfirm
+        text={t("accounts.useResetConfirm")}
+        armedProps={{ "data-account-reset-armed": account.id }}
+        confirmProps={{ "data-account-reset-confirm": account.id, "aria-label": t("accounts.useResetAria", { label: account.label }) }}
+        confirmLabel={t("accounts.useReset")}
+        cancelLabel={t("accounts.useResetCancel")}
+        confirmInk="text-accent hover:bg-canvas"
+        armed={spend}
+        disabled={false}
+      />
+    );
+  }
   return (
     <div data-account-reset-credits={account.id} data-account-line className={`flex flex-wrap items-center gap-x-2 ${s.line} ${s.endLine}`}>
       <span className="flex min-w-0 flex-1 flex-wrap gap-x-1.5 font-semibold text-primary">
@@ -264,8 +281,8 @@ function ResetLine({ account, state, facts, now, receipts }: { account: AccountO
         data-account-use-reset={account.id}
         aria-label={t("accounts.useResetAria", { label: account.label })}
         aria-busy={redeeming || undefined}
-        disabled={state.mutation !== null || busy || !account.authPresent}
-        onClick={() => void state.useResetCredit(account.id).then((ok) => { if (ok) receipts?.show(t("mobile2.accounts.resetUsed", { label: account.label })); })}
+        disabled={blocked}
+        onClick={spend.arm}
         className={`${accentAction(s)} ${s.edge}`}
       >
         {redeeming ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden /> : <Zap className="h-3 w-3" aria-hidden />}
@@ -341,40 +358,43 @@ function SignInButton({ account, onStart, disabled }: { account: AccountOption; 
   );
 }
 
-/** How long an armed removal waits for its confirm before it disarms. */
-const REMOVE_ARM_MS = 10_000;
+/** How long an armed action waits for its confirm before it disarms. */
+const ARM_MS = 10_000;
 
 /** Removal moves the home into the shared archive (Main is only hidden, its
-    folder untouched), so the first press arms it and only a second, explicit
-    confirm runs it. Escape or ten quiet seconds disarm it. */
-function useRemoval(onRemove: () => void) {
+    folder untouched), and a limit reset is spent for good, so the first press
+    arms the action and only a second, explicit confirm runs it. Escape or ten
+    quiet seconds disarm it. */
+function useArmed(onRun: () => void) {
   const [armed, setArmed] = useState(false);
   useEffect(() => {
     if (!armed) return undefined;
-    const timer = setTimeout(() => setArmed(false), REMOVE_ARM_MS);
+    const timer = setTimeout(() => setArmed(false), ARM_MS);
     return () => clearTimeout(timer);
   }, [armed]);
-  return { armed, arm: () => setArmed(true), disarm: () => setArmed(false), run: () => { setArmed(false); onRemove(); } };
+  return { armed, arm: () => setArmed(true), disarm: () => setArmed(false), run: () => { setArmed(false); onRun(); } };
 }
 
-function RemoveConfirm({ account, removal, disabled }: { account: AccountOption; removal: ReturnType<typeof useRemoval>; disabled: boolean }) {
-  const { t } = useLocale();
+/** The armed line both confirmations share: the question in strong text, the rest plain, Cancel and the explicit confirm.
+    Escape disarms it without reaching the panel; the confirm takes focus when it appears. */
+function ArmedConfirm({ text, armedProps, confirmProps, confirmLabel, cancelLabel, confirmInk, armed, disabled }: {
+  text: string; armedProps: Record<string, string>; confirmProps: Record<string, string>; confirmLabel: string; cancelLabel: string; confirmInk: string; armed: ReturnType<typeof useArmed>; disabled: boolean;
+}) {
   const s = useSizes();
   const confirm = useRef<HTMLButtonElement>(null);
   useEffect(() => { confirm.current?.focus(); }, []);
-  const text = t(account.kind === "legacy" ? "accounts.removeConfirmLegacy" : "accounts.removeConfirm", { label: account.label });
   // Only the question is strong; what follows it is plain text.
   const end = text.indexOf("? ");
   return (
     <div
-      data-account-remove-armed={account.id}
+      {...armedProps}
       data-account-line
       className={`flex flex-col ${s.gap}`}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
         event.stopPropagation();
         event.preventDefault();
-        removal.disarm();
+        armed.disarm();
       }}
     >
       <p className={`break-words ${s.line} text-muted`}>
@@ -382,10 +402,26 @@ function RemoveConfirm({ account, removal, disabled }: { account: AccountOption;
         {end < 0 ? null : ` ${text.slice(end + 2)}`}
       </p>
       <div className={`flex justify-end gap-x-1 ${s.endLine}`}>
-        <button type="button" disabled={disabled} onClick={removal.disarm} className={quietAction(s)}>{t("accounts.removeConfirmCancel")}</button>
-        <button ref={confirm} type="button" data-account-remove-confirm={account.id} disabled={disabled} onClick={removal.run} className={`${ACTION_BASE} ${s.action} ${s.edge} text-danger hover:bg-danger-soft`}>{t("accounts.removeConfirmCta")}</button>
+        <button type="button" disabled={disabled} onClick={armed.disarm} className={quietAction(s)}>{cancelLabel}</button>
+        <button ref={confirm} type="button" {...confirmProps} disabled={disabled} onClick={armed.run} className={`${ACTION_BASE} ${s.action} ${s.edge} ${confirmInk}`}>{confirmLabel}</button>
       </div>
     </div>
+  );
+}
+
+function RemoveConfirm({ account, removal, disabled }: { account: AccountOption; removal: ReturnType<typeof useArmed>; disabled: boolean }) {
+  const { t } = useLocale();
+  return (
+    <ArmedConfirm
+      text={t(account.kind === "legacy" ? "accounts.removeConfirmLegacy" : "accounts.removeConfirm", { label: account.label })}
+      armedProps={{ "data-account-remove-armed": account.id }}
+      confirmProps={{ "data-account-remove-confirm": account.id }}
+      confirmLabel={t("accounts.removeConfirmCta")}
+      cancelLabel={t("accounts.removeConfirmCancel")}
+      confirmInk="text-danger hover:bg-danger-soft"
+      armed={removal}
+      disabled={disabled}
+    />
   );
 }
 
@@ -443,7 +479,7 @@ function RowRefusal({ account, state, engine, phone }: { account: AccountOption;
 }
 
 /** The row's own actions as one quiet line, each an icon and its word. The provider's editor keeps Remove's line. */
-function ToolActions({ account, state, facts, removal, onProvider }: { account: AccountOption; state: EngineAccountsState; facts: RowFacts; removal: ReturnType<typeof useRemoval>; onProvider: () => void }) {
+function ToolActions({ account, state, facts, removal, onProvider }: { account: AccountOption; state: EngineAccountsState; facts: RowFacts; removal: ReturnType<typeof useArmed>; onProvider: () => void }) {
   const { t } = useLocale();
   const s = useSizes();
   return (
@@ -606,7 +642,7 @@ function AccountRow({ account, engine, quota, surface }: {
   const tint = engineTintOf(engine).color;
   const open = openId === account.id;
   const toggle = () => setOpenId(open ? null : account.id);
-  const removal = useRemoval(() => void state.remove(account.id));
+  const removal = useArmed(() => void state.remove(account.id));
   // An armed removal belongs to the open row: closing the row disarms it.
   if (!open && removal.armed) removal.disarm();
   const [providerOpen, setProviderOpen] = useState(false);
