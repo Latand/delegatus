@@ -947,11 +947,20 @@ export function appendBridgeReports(
  */
 export function recordBridgeReportTelegram(
   id: string,
-  outcome: { state: BridgeReportTelegramState; messageIds?: readonly number[]; code?: string | null; message?: string; bot?: string; refusals?: { bot: string; code: string }[]; at: string; attempted?: boolean },
+  outcome: { state: BridgeReportTelegramState; messageIds?: readonly number[]; code?: string | null; message?: string; bot?: string; refusals?: { bot: string; code: string }[]; at: string; attempted?: boolean; expectedAttempts?: number },
 ): BridgeReportV1 | null {
   return mutateLog((file) => {
     const report = file.reports.find((candidate) => candidate.id === id);
     if (!report?.telegram) return { result: null, changed: false };
+    // A delivery confirmation is terminal. Concurrent recoveries can finish
+    // out of order; only the same attempt may upgrade a recorded failure.
+    const heldAttempts = report.telegram.attempts;
+    const sameAttemptSuccess = outcome.expectedAttempts !== undefined && outcome.state === "sent"
+      && heldAttempts === outcome.expectedAttempts + 1;
+    if (outcome.expectedAttempts !== undefined && (report.telegram.state === "sent"
+      || heldAttempts !== outcome.expectedAttempts && !sameAttemptSuccess)) {
+      return { result: structuredClone(report), changed: false };
+    }
     const { code: _previous, message: _previousMessage, ...held } = report.telegram;
     delete held.bot;
     delete held.refusals;
@@ -963,7 +972,7 @@ export function recordBridgeReportTelegram(
       ...(outcome.messageIds?.length ? { messageIds: [...outcome.messageIds] } : held.messageIds ? { messageIds: held.messageIds } : {}),
       ...(outcome.code ? { code: outcome.code } : {}),
       ...(outcome.message ? { message: scrubTelegramDiagnostic(outcome.message) } : {}),
-      attempts: held.attempts + (outcome.attempted === false ? 0 : 1),
+      attempts: held.attempts + (outcome.attempted === false || sameAttemptSuccess ? 0 : 1),
       at: outcome.at,
     };
     return { result: structuredClone(report), changed: true };
