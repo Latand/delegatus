@@ -88,7 +88,7 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (mode === "pre-commit") return steps;
   const touched = new Set<string>();
   if (changedFiles.some(file => ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts", "scripts/gateTest.fixture.ts", "scripts/publicationHook.fixture.ts"].includes(file))) {
-    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.(?:config|receipts|checkpoints|hooks|publication|transport)(?:\.[^.]+)?|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
+    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.(?:receipts|checkpoints|hooks|publication|transport)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
   }
   if (changedFiles.includes("scripts/local-gate-tests.fixture.ts")) {
     for (const test of env.tests) if (test.startsWith("scripts/local-gate-tests.") && isTest(test)) touched.add(test);
@@ -608,26 +608,6 @@ async function prepared(prepare: RunOptions["prepare"], step: Step, until: numbe
 const isOutcome = (value: Prepared | Outcome): value is Outcome => "stopped" in value;
 interface PassRecord { at: string }
 export interface StepPasses { reused(step: Step, until?: number): boolean; passed(step: Step): void }
-/** Linked worktrees share branch bookkeeping. Only this checkout's branch
- * section can affect its checks; retain every other kind of configuration. */
-function checkGitConfig(root: string): [string, string][] {
-  const ref = spawnSync("git", ["symbolic-ref", "-q", "HEAD"], { cwd: root, encoding: "utf8" });
-  if (ref.status !== 0 && ref.status !== 1) throw new Error("git symbolic-ref failed");
-  const branch = ref.status === 0 ? ref.stdout.replace(/\r?\n$/, "").replace(/^refs\/heads\//, "") : undefined;
-  // NUL separates origin and entry; only the first newline separates key and
-  // value. Values may contain newlines, tabs or text resembling another key.
-  const fields = git(root, ["config", "--null", "--list", "--show-origin"]).split("\0");
-  fields.pop();
-  if (fields.length % 2) throw new Error("git config records incomplete");
-  const entries: [string, string][] = [];
-  for (let index = 0; index < fields.length; index += 2) {
-    const origin = fields[index]!, entry = fields[index + 1]!;
-    const key = entry.split("\n", 1)[0]!;
-    const section = /^branch\.(.+)\.[^.]+$/.exec(key);
-    if (!section || section[1] === branch) entries.push([origin, entry]);
-  }
-  return entries;
-}
 /** The bytes and configuration every local check actually consumes. */
 export function gateInputSnapshot(root: string, base: string, steps: readonly Step[], env: NodeJS.ProcessEnv = process.env) {
   const checkEnv = checkEnvironment(env);
@@ -661,9 +641,9 @@ export function gateInputSnapshot(root: string, base: string, steps: readonly St
         runtime: fingerprint([Bun.version, process.platform, process.arch]),
         toolchain: fingerprint(toolchain), dependencies: installedFingerprint(root),
         "working inputs": workingInputsFingerprint(root), environment,
-        "git config": fingerprint(checkGitConfig(root)),
+        "git config": fingerprint(git(root, ["config", "--list", "--show-origin"])),
       };
-      return { head, tree, components, key: fingerprint([6, components]) };
+      return { head, tree, components, key: fingerprint([5, components]) };
     } catch (error) { unavailableReason = error instanceof Error ? error.name : "input fingerprint unavailable"; return; }
   };
   const changed = (initial: NonNullable<ReturnType<typeof snapshot>>): string[] => {
