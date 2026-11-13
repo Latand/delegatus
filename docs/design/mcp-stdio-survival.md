@@ -31,6 +31,23 @@ malformed and rotated capabilities produce protocol errors. Legacy clients
 without a launch capability keep native attribution, and the admitted runtime
 health probe keeps its existing probe contract.
 
+After successful admission, discovery retries connection failures and HTTP
+502/503/504 through a Viewer or runtime-host relaunch for up to 55 seconds.
+Attempts retain their ten-second bound; spacing starts at 200 milliseconds and
+caps at one second under that single recovery deadline. Closing stdio cancels
+the recovery. Authorization refusals and malformed successful responses still
+fail immediately. Each retry asks the Viewer again, including after capability
+rotation; discovery stores no authority. Initial admission keeps its original
+ten-second check and refusal diagnostics. Calls in flight report retryable read
+failure or unknown mutation outcome through the existing forwarding service.
+
+`src/lib/mcp/relaunch.integration.test.ts` restarts a real process serving the
+exported HTTP route with policy and durable receipts while the SDK client stays
+alive. It covers Claude and Codex HTTP definitions, the stable stdio launcher
+and direct entry, including discovery during an outage, an interrupted call,
+subsequent tool use and capability revocation. The Claude launcher case holds
+the outage for 44 seconds, matching the observed update readiness gap.
+
 Managed Claude hosts initialize the CLI control channel and wait for its
 `mcp_status` Viewer entry to leave `pending`, under one request deadline. Codex
 hosts inspect the opened thread's `mcpServerStatus/list`, selecting Viewer

@@ -23,6 +23,7 @@ import { nativeAssociation } from "./nativeAssociation";
 import { nativeAssociationDecisionApproves } from "./nativeAssociationForm";
 import { nativeAssociationCurrent, readNativeSessionRecord } from "./nativeCallerSources";
 import { nativeSessionRecord, type NativeAdmissionEvidence } from "./nativeCaller";
+import { dismissAttention } from "./dismissals";
 
 const nativeTest = test.skipIf(process.platform !== "linux");
 
@@ -80,6 +81,10 @@ nativeTest("approval waits on the existing attention surface and is durable and 
   const approved = nativeAssociation(evidence); expect(approved.status).toBe("approved");
   expect(nativeAssociation({ ...evidence })).toEqual(approved); expect(seatDecisionNotices()).toHaveLength(0);
   expect(operatorDecisions(shown.project).decisions).toMatchObject([{ nativeAssociationState: "approved", decision: { answers: expect.any(Array) } }]);
+  await expect(dismissAttention({ kind: "prototype", taskId: null, reviewId: shown.id }, { kind: "operator", surface: "desktop" }))
+    .rejects.toMatchObject({ code: "ACTIVE_NATIVE_APPROVAL", status: 409 });
+  expect(nativeAssociation(evidence).status).toBe("approved");
+  expect(operatorDecisions(shown.project).decisions).toMatchObject([{ id: shown.id, nativeAssociationState: "approved" }]);
   expect((await decideAsOwner([0], {}, signedIn.cookie)).status).toBe(200); expect(nativeAssociation(evidence).status).toBe("refused");
   expect(operatorDecisions(shown.project).decisions).toHaveLength(0);
 });
