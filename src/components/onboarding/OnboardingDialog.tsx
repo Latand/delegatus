@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertTriangle, Bot, Check, ChevronLeft, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { DelegatusMark } from "@/components/brand/BrandMark";
 import { Z } from "@/components/layers";
@@ -136,7 +136,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
       this a first run that is offered the newcomer help. */
   markerStatus?: OnboardingMarkerStatus;
   /** `steps` rides on the same write as the outcome. */
-  onClose: (outcome: "dismissed" | "completed", steps?: Partial<Record<OnboardingStepId, OnboardingStepState>>) => void;
+  onClose: (outcome: "dismissed" | "completed", steps?: Partial<Record<OnboardingStepId, OnboardingStepState>>, noticeShown?: boolean) => void;
   /** The projects the rail lists, most recent first, with their folders. */
   projects?: readonly GuideProject[];
   currentProject?: string | null;
@@ -192,7 +192,12 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   const [projectDraft, setProjectDraft] = useState<CreateDraft>("none");
   /* The notice rides on the first guide step and on the step the guide opened
      on, so a later step opens on its own heading. */
-  const stateNotice = view === "guide" && legacyState && (current === GUIDE[0] || current === noticeStep) ? (
+  const noticeVisible = view === "guide" && legacyState && (current === GUIDE[0] || current === noticeStep);
+  /* Whether the notice was on screen at any point of this opening; closing
+     reports it, so only a notice the person was shown is acknowledged. */
+  const noticeSeen = useRef(false);
+  useLayoutEffect(() => { if (noticeVisible) noticeSeen.current = true; }, [noticeVisible]);
+  const stateNotice = noticeVisible ? (
     <div role="status" data-onboarding-legacy-state="" className="mb-4 rounded-[10px] border border-border bg-sunken p-3 text-ui text-secondary">
       <p>{t("onboarding.legacy.notice")}</p>
       <button type="button" aria-expanded={cleanStart} onClick={() => setCleanStart((value) => !value)} className="mt-2 min-h-8 font-semibold text-accent hover:underline max-sm:min-h-11">{t(cleanStart ? "onboarding.legacy.hideSteps" : "onboarding.legacy.cleanStart")}</button>
@@ -352,7 +357,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
     if (outcome === "completed") for (const id of visited.current) if (isGuideStep(id) && id !== "orchestrator" && !steps[id]) written[id] = "done";
     if (orchestrator) written.orchestrator = orchestrator;
     setSteps((value) => ({ ...value, ...written }));
-    onClose(outcome, Object.keys(written).length ? written : undefined);
+    onClose(outcome, Object.keys(written).length ? written : undefined, noticeSeen.current);
   };
   const create = (launch: OrchestratorDraftLaunch) => {
     if (!chosen) return;
@@ -378,7 +383,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
     setView("guide");
     goTo("engines");
   };
-  const dismiss = () => onClose("dismissed");
+  const dismiss = () => onClose("dismissed", undefined, noticeSeen.current);
   useEffect(() => { dismissRef.current = dismiss; });
 
   const title = view === "mapping" ? t("onboarding.mappingTitle") : view === "voice" ? t("onboarding.voiceTitle") : t("onboarding.title");

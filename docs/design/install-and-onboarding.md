@@ -197,12 +197,12 @@ gate (`src/lib/team/gate.ts:40`) but no route serves it.
 
 | Fact | Source |
 |---|---|
-| The guide opens by itself when the per-install marker `onboarding.json` was never decided, or when a guide was left in the middle; an install that already holds seats, pipelines, tasks or role overrides is marked `existing-install` and never opens it | `src/app/api/onboarding/route.ts:16-34`, `src/lib/onboarding/marker.ts:41`, `src/components/onboarding/useOnboarding.ts:32-34,147-154` |
+| The guide opens by itself when the per-install marker `onboarding.json` was never decided, or when a guide was left in the middle; an install that already holds seats, pipelines, tasks or role overrides is marked `existing-install` and never opens it, apart from the one-time inherited-state notice below | `src/app/api/onboarding/route.ts:16-34`, `src/lib/onboarding/marker.ts:41`, `src/components/onboarding/useOnboarding.ts:32-34,147-154` |
 | Numbered steps: Engines, Project, Telegram (optional), Orchestrator; "Later, any time": Agents, Phone, Voice, Check, Relay | `src/lib/onboarding/steps.ts:15-17` |
 | The Telegram step sits before Orchestrator so the new seat's first report knows its destination; it was added at the operator's request of 2026-09-25. With no bot connected it shows the bot panel's token form | `steps.ts:1-14`, `docs/design/orchestrator-reports.md:28-40,1076-1095` |
 | Nothing is gated: every step closes with Escape, ✕ or "Close, finish later"; reopened from the menu row "Setup guide" | `src/components/onboarding/OnboardingDialog.tsx:29-38`, `en.ts:6443` |
 | The footer holds one filled button. While a step's own action is the next thing to press (Create the orchestrator, Run the check, Turn on phone access), Continue steps back to a border. The Engines step never claims this today | `OnboardingDialog.tsx:438-446` |
-| Old `agent-log-viewer` state in use shows a notice with clean-start steps | `OnboardingDialog.tsx:168-174`, `src/lib/onboarding/legacyState.ts:10-23` |
+| Old `agent-log-viewer` state in use shows a notice with clean-start steps, by itself once on the first open (whatever the guide's marker says), then only from the Setup guide menu; its acknowledgement is the marker's own `legacyNoticeAckedAt` | `useOnboarding.ts` (`noticeOwed`), `OnboardingDialog.tsx` (`stateNotice`), `src/lib/onboarding/legacyState.ts` |
 | Phone: the same guide as a full-screen sheet with a step list in the header and footer buttons | `OnboardingDialog.tsx:476` onward |
 | After the seat goes live, a three-stop interface walk: the seat composer, the board, "Needs you"; the last button is "Give it the first task" | `src/components/onboarding/OnboardingWalk.tsx:14-29,162-165,360`, `en.ts:6513-6525` |
 
