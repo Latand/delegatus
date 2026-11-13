@@ -75,8 +75,6 @@ for (const [caller, recordedCaller] of [["adoption", "claude-adoption"], ["demot
     const error = collect(successor.stderr!);
     expect(await settled(successor), await error).toBe(0);
     await output;
-    expect(processIdentityStatus(s.native)).toBe("dead");
-    expect(processIdentityStatus(s.child)).toBe("dead");
     const records = fs.readFileSync(path.join(s.directory, "host-termination-journal.ndjson"), "utf8").trim().split("\n").map(line => JSON.parse(line));
     expect(records.find(record => record.event === "captured").decision).toEqual({
       caller: recordedCaller, claimRefusal: "live-native", ownerPid: s.owner.pid,
@@ -85,6 +83,49 @@ for (const [caller, recordedCaller] of [["adoption", "claude-adoption"], ["demot
     expect(records.at(-1).event).toBe("settled");
   }), 20_000);
 }
+
+test("planned succession records the live-host adoption refusal and stop decision", async () => scenario(async s => {
+  fs.writeFileSync(path.join(s.directory, "exit-owner"), "exit");
+  expect(await settled(s.owner)).toBe(0);
+  expect(processIdentityStatus(s.native)).toBe("alive");
+  expect(processIdentityStatus(s.child)).toBe("alive");
+  const before = s.registry.readOnlySnapshot().entries["claude:planned-succession"]!;
+  expect(before.status).toBe("live");
+  expect(before.structuredHost?.activeTurnRef).toBe("original-turn");
+  const successor = s.launch("adoption");
+  const output = collect(successor.stdout!);
+  const error = collect(successor.stderr!);
+  expect(await settled(successor), await error).toBe(0);
+  const observed = JSON.parse(await output);
+  const records = fs.readFileSync(path.join(s.directory, "host-termination-journal.ndjson"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+  expect(records.find(record => record.event === "captured").decision).toEqual({
+    caller: "claude-adoption", claimRefusal: "live-native", ownerPid: s.owner.pid,
+    claimEpoch: 1, writerClaimEpoch: 1, status: "live",
+  });
+  // The retry reaches replacement setup only after the refused first claim.
+  // This records the defect; continuity is the pending expectation below.
+  expect(observed.optionsCalls).toBe(1);
+  expect(records.at(-1).event).toBe("settled");
+}), 20_000);
+
+// The agent-state follow-up after #3975 owns the continuity repair. This
+// process fixture exercises custody; real broker restoration is also owed there.
+test.todo("agent-state follow-up after #3975: planned succession preserves the job and delivers its result once", async () => scenario(async s => {
+  fs.writeFileSync(path.join(s.directory, "exit-owner"), "exit");
+  expect(await settled(s.owner)).toBe(0);
+  const successor = s.launch("adoption");
+  const output = collect(successor.stdout!);
+  const error = collect(successor.stderr!);
+  expect(await settled(successor), await error).toBe(0);
+  await output;
+  expect(processIdentityStatus(s.native)).toBe("alive");
+  expect(processIdentityStatus(s.child)).toBe("alive");
+  fs.writeFileSync(path.join(s.directory, "finish-job"), "finish");
+  await until(() => fs.existsSync(path.join(s.directory, "agent-results")));
+  expect(fs.readFileSync(path.join(s.directory, "starts"), "utf8")).toBe("started\n");
+  expect(fs.readFileSync(path.join(s.directory, "completions"), "utf8")).toBe("completed\n");
+  expect(fs.readFileSync(path.join(s.directory, "agent-results"), "utf8")).toBe("background-result\n");
+}), 20_000);
 
 test("a descendant of a proven-dead Claude host is still stopped with its refusal recorded", async () => scenario(async s => {
   fs.writeFileSync(path.join(s.directory, "exit-owner"), "exit");
