@@ -105,7 +105,20 @@ fs.renameSync(`${readyPath}.partial`, readyPath);
 
 const isCurrent = () => {
   if (!fs.existsSync(demotionGate)) return true;
-  try { return fs.readFileSync(targetPath, "utf8").trim() === "incumbent"; }
+  try {
+    const current = fs.readFileSync(targetPath, "utf8").trim() === "incumbent";
+    if (!current && engine === "claude" && !skipHostRelease && liveState.activeTurnRef) {
+      // This fixture tests the release handshake after work settles. The real
+      // broker's unfinished foreground/background custody is exercised by the
+      // shared succession fixture.
+      fs.appendFileSync(claimed.artifactPath, JSON.stringify({ type: "assistant", message: {
+        role: "assistant", model: "fixture", stop_reason: "end_turn", content: [],
+      } }) + "\n");
+      liveState.status = "idle";
+      liveState.activeTurnRef = null;
+    }
+    return current;
+  }
   catch { return true; }
 };
 await activateViewerRuntimeWhenCurrent(async () => {}, isCurrent, {

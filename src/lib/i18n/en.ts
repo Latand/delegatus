@@ -4,6 +4,9 @@ import type { Dictionary } from "./core";
    Plural entries use Intl.LDMLPluralRule forms; {name} placeholders are
    filled from t()'s params. uk.ts must mirror this key set. */
 export const en = {
+  "claudeCloud.connectGithub": "Connect GitHub to this Claude account on claude.ai.",
+  "claudeCloud.createEnvironment": "Create a cloud environment for this Claude account on claude.ai.",
+
   "pipelineCreation.accepted": "Accepted — waiting to create",
   "pipelineCreation.linkPending": "Created — source link awaits attachment",
   "pipelineCreation.attach": "Attach saved link",
@@ -1159,6 +1162,8 @@ export const en = {
   "accounts.resetsExpire": "expires {at}",
   "accounts.useReset": "Use one reset",
   "accounts.useResetAria": "Use one usage-limit reset on {label}",
+  "accounts.useResetConfirm": "One reset is spent for this account and cannot be taken back.",
+  "accounts.useResetCancel": "Cancel",
   "accounts.resetUsed": "Reset used on {label} — the new window is shown",
   "accounts.resetNone": "{label} has no resets available",
   "accounts.resetNothing": "Nothing to reset on {label} — no window is exhausted",
@@ -3925,6 +3930,8 @@ export const en = {
   "dictation.silence": "silence — nothing recognized",
   "dictation.unsupported": "recording is not supported in this browser",
   "dictation.liveError": "live transcription error",
+  "dictation.tailMissing": "Final words were not received. Confirmed text remains in the draft. Review it before sending.",
+  "dictation.bufferLimit": "Dictation stopped: the audio buffer filled. Recovered text is in the draft. Review it before continuing.",
   "dictation.connectionLost": "transcription connection dropped",
   "dictation.noMic": "no microphone access",
 
@@ -6967,6 +6974,9 @@ export const en = {
   "selfUpdate.refusal.no-update": "No update is available: run a check first.",
   "selfUpdate.refusal.not-failed": "Only a failed update can be retried.",
   "selfUpdate.refusal.cannot-check": "This install cannot check for updates.",
+  "selfUpdate.disabled.title": "Updates managed by your administrator",
+  "selfUpdate.refusal.updates-disabled": "Built-in updates are disabled by the administrator. Use your installation’s command-line update procedure.",
+  "selfUpdate.auto.unavailable.disabled-by-admin": "Updates managed by your administrator",
   "selfUpdate.refusal.cannot-update": "This install cannot update itself.",
   "selfUpdate.refusal.cannot-restart": "This install cannot restart its processes.",
   "selfUpdate.refusal.managed-restart": "A managed install restarts its processes through a deployment.",

@@ -800,6 +800,316 @@ describe("board timeline hybrid", () => {
       await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
     }
   }, 600_000);
+
+  /*
+   * #scroll: the chart follows the gesture. A chart of 30 tasks (collapsed and
+   * with every task expanded) is driven by real touch input through CDP and by
+   * real wheel, key and scrollbar input, next to a plain scroller given the same
+   * gesture. Numbers land in $LLV_EVIDENCE_DIR/timeline-scroll-<label>.json
+   * (label: LLV_TIMELINE_SCROLL_LABEL) before any assertion runs.
+   */
+  browserTest("chart follows touch, trackpad, wheel and key scrolling without jumps", async () => {
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const { pipelineRoleLookup, resolvePipelineRole } = await import("@/lib/pipelines/roles");
+    const { filesReadSummary } = await import("@/lib/filesReadSummary");
+    const label = process.env.LLV_TIMELINE_SCROLL_LABEL ?? "run";
+    const evidence = process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts/board-timeline-scroll");
+    const out = path.resolve(".artifacts/board-timeline-scroll"); fs.mkdirSync(out, { recursive: true }); fs.mkdirSync(evidence, { recursive: true });
+    const now = Date.parse("2026-10-26T13:20:00Z");
+    const iso = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+    const titles = ["Експорт CSV на великих проєктах з вибором колонок і кодування", "Зберегти фільтри пошуку", "Відновити оплату карткою після відмови банку та повторної спроби", "Перевірити контраст підказок",
+      "Доставка сповіщень", "Пошук у логах агентів за часом і за роллю виконавця у вибраному проєкті"];
+    const records = (count: number) => {
+      const tasks: BoardTask[] = Array.from({ length: count }, (_, index) => ({ id: `scroll-task-${index}`, project: "atlas", text: `${titles[index % titles.length]} ${index + 1}`,
+        status: "assigned" as const, placement: "unplaced" as const, assignments: [], createdAt: iso(1600), updatedAt: iso(1) }));
+      const pipelines: Pipeline[] = tasks.map((task, index) => {
+        const stageIds = ["builder", "reviewer", "fix"];
+        const stages = stageIds.map((id, stageIndex) => {
+          const role = { roleId: stageIndex === 1 ? "reviewer" as const : "builder" as const };
+          const resolved = resolvePipelineRole({ role, engine: stageIndex === 1 ? "codex" : "claude", model: stageIndex === 1 ? "gpt-6-astra" : "fable", effort: "high", access: stageIndex === 1 ? "read-only" : "read-write" }, "run", pipelineRoleLookup);
+          if (!resolved.role) throw new Error(resolved.error);
+          return { id, kind: "run" as const, role, effectiveRole: resolved.role, next: stageIds[stageIndex + 1] ?? null, "prompt": "{{task}}" };
+        });
+        const lane = buildPipeline({ id: `scroll-lane-${index}`, task: task.text, taskIds: [task.id], project: task.project, repoDir: "/fixture/atlas", srcPath: null, srcConversationId: null, now: iso(1500 - index * 40), stages });
+        const running = index % 3 === 0;
+        lane.state = running ? "running" : "needs_decision";
+        lane.cursor = { stageId: "fix", state: running ? "running" : "pending", input: null, activatedBy: null };
+        lane.runs.forEach((run, stageIndex) => {
+          const start = 1490 - index * 40 - stageIndex * 100 + (index === count - 1 ? -1480 + 6 + stageIndex * 100 : 0);
+          const live = stageIndex === 2 && running;
+          run.attempts.push({ n: 1, state: stageIndex < 2 ? "passed" : running ? "running" : "needs_decision", effectiveRole: structuredClone(stages[stageIndex]!.effectiveRole), launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+            startedAt: iso(Math.max(start, 6)), completedAt: live ? null : iso(Math.max(start - 80, 1)), input: null, output: null, activatedBy: null, verdict: null, error: null });
+        });
+        return lane;
+      });
+      return { ...filesReadSummary([], pipelines), files: [] as FileEntry[], tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }], projectCwds: { atlas: "/fixture/atlas" } };
+    };
+    let payload = records(30);
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(payload), "/api/tasks": () => Response.json({ tasks: payload.tasks }) });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const report: Record<string, unknown> = { label, now, rows: {} as Record<string, number>, touch: [] as unknown[], control: [] as unknown[], desktop: [] as unknown[], refresh: [] as unknown[], rest: [] as unknown[] };
+    const failures: string[] = [];
+    const check = (ok: boolean, detail: string) => { if (!ok) failures.push(detail); };
+    const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+    /* Records, per animation frame, where the chart is, and every script write to its position or height. */
+    const install = (page: Page) => page.evaluate(() => {
+      const scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!;
+      const rec = { on: false, frames: [] as { top: number; left: number; h: number }[], writes: [] as string[] };
+      (window as unknown as { __rec: typeof rec }).__rec = rec;
+      const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+      Object.defineProperty(scroller, "scrollTop", { configurable: true, get() { return descriptor.get!.call(this); },
+        set(value) { if (rec.on) rec.writes.push(`scrollTop=${value}`); descriptor.set!.call(this, value); } });
+      new MutationObserver(() => { if (rec.on) rec.writes.push(`style=${scroller.getAttribute("style")}`); }).observe(scroller, { attributes: true, attributeFilter: ["style"] });
+      const loop = () => { if (rec.on) rec.frames.push({ top: scroller.scrollTop, left: scroller.scrollLeft, h: scroller.clientHeight }); requestAnimationFrame(loop); };
+      requestAnimationFrame(loop);
+    });
+    const startRec = (page: Page) => page.evaluate(() => { const rec = (window as unknown as { __rec: { on: boolean; frames: unknown[]; writes: string[] } }).__rec; rec.frames = []; rec.writes = []; rec.on = true; });
+    const stopRec = (page: Page) => page.evaluate(() => { const rec = (window as unknown as { __rec: { on: boolean; frames: { top: number; left: number; h: number }[]; writes: string[] } }).__rec; rec.on = false; return rec; });
+    const series = (frames: { top: number }[]) => {
+      let maxJump = 0, backRun = 0, maxBack = 0, last = 0;
+      for (let index = 1; index < frames.length; index++) {
+        const delta = frames[index]!.top - frames[index - 1]!.top;
+        maxJump = Math.max(maxJump, Math.abs(delta));
+        if (!delta) continue;
+        if (last && Math.sign(delta) !== last) backRun = 0;
+        // A reversal is the length of a run against the direction of the finger's first leg (positive = chart moving down the list).
+        last = Math.sign(delta); if (delta < 0) { backRun += -delta; maxBack = Math.max(maxBack, backRun); } else backRun = 0;
+      }
+      return { maxJump: Math.round(maxJump * 10) / 10, maxBackwardRun: Math.round(maxBack * 10) / 10 };
+    };
+    const position = (page: Page) => page.evaluate(() => { const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!; return { top: s.scrollTop, left: s.scrollLeft, h: s.clientHeight, sh: s.scrollHeight }; });
+    const cuts = (page: Page) => page.evaluate(() => {
+      const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = s.getBoundingClientRect(), axis = s.querySelector<HTMLElement>(".bt-axis")!.offsetHeight;
+      const top = box.top + axis, bottom = box.top + s.clientHeight, cut: string[] = [];
+      for (const row of s.querySelectorAll<HTMLElement>(".bt-row")) {
+        const rect = row.getBoundingClientRect();
+        if (rect.bottom <= top + 0.5 || rect.top >= bottom - 0.5) continue;
+        if (rect.top < top - 0.5 || rect.bottom > bottom + 0.5) cut.push(`${row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")}:${Math.round(rect.top - top)}..${Math.round(rect.bottom - bottom)}`);
+      }
+      return cut;
+    });
+    const settle = async (page: Page) => { await sleep(700); await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))); };
+    const open = async (phone: boolean, expandedAll: boolean, hold = 0) => {
+      payload = records(30);
+      const opened = await openFixture(browser, "about:blank", { width: phone ? 390 : 1440, height: phone ? 844 : 900 }, "light", "uk", "reduce", phone);
+      const { page, context, pageErrors } = opened;
+      await context.addInitScript(({ stored }) => {
+        localStorage.setItem("llv:board-timeline:v1:atlas", JSON.stringify(stored));
+        localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: true }, placement: "top", height: null, width: null }));
+      }, { stored: { view: "timeline", hours: 24, expanded: Object.fromEntries(payload.tasks.map(task => [task.id, expandedAll])) } });
+      await page.clock.setFixedTime(new Date(now));
+      await page.goto(`${served.base}?scenario=board-timeline#p=atlas`);
+      if (phone) { const tab = page.locator('[data-phone-kanban-tab="timeline"]'); await tab.waitFor(); if (await tab.getAttribute("aria-selected") !== "true") await tab.click(); }
+      else { const toggle = page.locator("[data-board-timeline-toggle]"); await toggle.waitFor(); if (await toggle.getAttribute("aria-pressed") !== "true") await toggle.click(); }
+      await page.locator("[data-timeline-scroll]").waitFor();
+      await page.waitForFunction(() => (document.querySelector("[data-timeline-scroll]") as HTMLElement | null)?.style.height !== undefined);
+      await settle(page); void hold;
+      return { page, context, pageErrors };
+    };
+    const geometry = (page: Page) => page.evaluate(() => {
+      const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = s.getBoundingClientRect(), axis = s.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect().bottom;
+      const rows = [...s.querySelectorAll<HTMLElement>(".bt-row")].filter(row => { const rect = row.getBoundingClientRect(); return rect.top >= axis - 1 && rect.bottom <= box.top + s.clientHeight + 1; });
+      if (!rows.length) throw new Error(`no whole row in view: scroller ${box.top}+${s.clientHeight}, axis ${axis}, scrollTop ${s.scrollTop}`);
+      const row = rows[Math.floor(rows.length / 2)]!;
+      const title = row.querySelector<HTMLElement>(".bt-title, .bt-stage-name")!.getBoundingClientRect(), lane = row.querySelector<HTMLElement>(".bt-lane")!.getBoundingClientRect(), bar = row.querySelector<HTMLElement>(".bt-summary-bar, .bt-stage-bar")?.getBoundingClientRect();
+      const laneY = lane.top + lane.height / 2;
+      const barX = bar && bar.right > 12 && bar.left < 378 ? Math.min(378, Math.max(12, (Math.max(bar.left, 0) + Math.min(bar.right, 390)) / 2)) : null;
+      const emptyX = [8, 380, 200, 100].find(x => !bar || x < bar.left - 6 || x > bar.right + 6) ?? 8;
+      return { label: { x: title.left + 24, y: title.top + 8 }, bar: barX === null ? { x: emptyX, y: laneY } : { x: barX, y: laneY }, empty: { x: emptyX, y: laneY }, visibleRows: rows.length, rowHeights: rows.map(r => Math.round(r.getBoundingClientRect().height)) };
+    });
+    try {
+      for (const mode of ["collapsed", "expanded"] as const) {
+        const { page, context, pageErrors } = await open(true, mode === "expanded");
+        try {
+          const cdp = await context.newCDPSession(page);
+          const touch = (type: "touchStart" | "touchMove" | "touchEnd", x: number, y: number) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }] });
+          await install(page);
+          const rowCount = await page.locator("[data-board-timeline] .bt-row").count();
+          (report.rows as Record<string, number>)[mode] = rowCount;
+          check(rowCount >= 28, `${mode}: chart has ${rowCount} rows, at least 28 needed`);
+          const rest: { mode: string; atOpen: string[]; zoomOut?: string[]; toggled?: string[] } = { mode, atOpen: await cuts(page) };
+          // A plain scroller beside the chart gets each gesture too, as the reference for what a finger moves.
+          await page.evaluate(() => {
+            const box = document.createElement("div"); box.id = "scroll-control"; box.style.cssText = "position:fixed;left:0;top:420px;width:390px;height:300px;overflow:auto;background:#fff;z-index:99999;border:2px solid #06c;visibility:hidden";
+            const inner = document.createElement("div"); inner.style.cssText = "width:3000px;height:4000px;background:repeating-linear-gradient(#eee 0 40px,#ccc 40px 80px)"; box.append(inner); document.body.append(box);
+          });
+          const shapes: { name: string; legs: [number, number][]; step: number; starts: ("bar" | "label" | "empty")[]; holds: number[] }[] = [
+            { name: "drag200", legs: [[0, -200]], step: 4, starts: ["bar", "label", "empty"], holds: [0, 700] },
+            { name: "drag30", legs: [[0, -30]], step: 3, starts: ["bar", "label", "empty"], holds: [0] },
+            { name: "slow60", legs: [[0, -60]], step: 1, starts: ["bar", "label", "empty"], holds: [0] },
+            { name: "wobble", legs: [[0, -40], [0, 12], [0, -40], [0, 12], [0, -40]], step: 3, starts: ["bar", "label", "empty"], holds: [0, 700] },
+            { name: "drag200down", legs: [[0, 200]], step: 4, starts: ["bar", "label", "empty"], holds: [0] },
+          ];
+          const reference: Record<string, number> = {};
+          for (const shape of shapes) {
+            await page.evaluate(() => { const b = document.getElementById("scroll-control")!; b.style.visibility = "visible"; b.scrollTop = 1000; });
+            await touch("touchStart", 200, 600); await sleep(100);
+            let y = 600; for (const [, dy] of shape.legs) { const n = Math.ceil(Math.abs(dy) / shape.step); for (let i = 0; i < n; i++) { y += dy / n; await touch("touchMove", 200, y); await sleep(16); } await sleep(60); }
+            await sleep(350); await touch("touchEnd", 0, 0); await sleep(900);
+            reference[shape.name] = await page.evaluate(() => document.getElementById("scroll-control")!.scrollTop - 1000);
+            await page.evaluate(() => { document.getElementById("scroll-control")!.style.visibility = "hidden"; });
+            (report.control as unknown[]).push({ mode, shape: shape.name, moved: reference[shape.name] });
+          }
+          for (const shape of shapes) for (const start of shape.starts) for (const hold of shape.holds) {
+            await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 400; });
+            await settle(page);
+            const g = await geometry(page), at = g[start], before = await position(page);
+            await startRec(page);
+            await touch("touchStart", at.x, at.y); await sleep(hold);
+            let x = at.x, y = at.y; const marks: number[] = [];
+            for (const [dx, dy] of shape.legs) {
+              const n = Math.ceil(Math.hypot(dx, dy) / shape.step);
+              for (let i = 0; i < n; i++) { x += dx / n; y += dy / n; await touch("touchMove", x, y); await sleep(16); }
+              await sleep(60); marks.push((await position(page)).top - before.top);
+            }
+            await sleep(350); await touch("touchEnd", 0, 0); await sleep(900);
+            const recorded = await stopRec(page); const after = await position(page); const stats = series(recorded.frames);
+            const moved = after.top - before.top, heights = [...new Set(recorded.frames.map(frame => frame.h))];
+            const entry = { mode, shape: shape.name, start, hold, before: before.top, moved, expected: -shape.legs.reduce((sum, [, dy]) => sum + dy, 0), control: reference[shape.name], afterEachLeg: marks, movedX: after.left - before.left,
+              heights, scriptWrites: recorded.writes.length, writes: recorded.writes.slice(0, 3), ...stats };
+            (report.touch as unknown[]).push(entry);
+            const tag = `${mode}/${shape.name}/${start}/hold${hold}`;
+            check(recorded.writes.length === 0, `${tag}: ${recorded.writes.length} script writes to scrollTop or height during the gesture`);
+            check(heights.length === 1, `${tag}: viewport height took ${heights.length} values`);
+            if (shape.name === "drag200") check(Math.abs(moved - 185) <= 10, `${tag}: moved ${moved}, expected 185±10`);
+            if (shape.name === "drag200down") check(Math.abs(moved + 185) <= 10, `${tag}: moved ${moved}, expected -185±10`);
+            if (shape.name === "drag30") check(moved >= 0 && moved <= 30, `${tag}: moved ${moved}, expected at most 30`);
+            if (shape.name === "slow60") check(moved > 0 && moved <= 62 && Math.abs(moved - reference.slow60!) <= 10, `${tag}: moved ${moved}, a plain scroller moved ${reference.slow60}`);
+            if (shape.name === "wobble") check(stats.maxBackwardRun <= 14 && Math.abs(moved - reference.wobble!) <= 10, `${tag}: moved ${moved} (plain ${reference.wobble}), largest reversal ${stats.maxBackwardRun}, finger's own 12`);
+            check(stats.maxJump <= 40, `${tag}: largest one-frame jump ${stats.maxJump}`);
+            if (shape.name === "drag200" && hold === 0 && start === "label") await page.screenshot({ path: path.join(evidence, `timeline-scroll-${label}-phone-${mode}-after-drag200.png`) });
+          }
+          // A data refresh while the user has scrolled leaves the position where the user put it.
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          const before = await position(page), g = await geometry(page);
+          await touch("touchStart", g.label.x, g.label.y);
+          for (let i = 0; i < 40; i++) { await touch("touchMove", g.label.x, g.label.y - i * 3); await sleep(16); }
+          await touch("touchEnd", 0, 0); await sleep(900);
+          const placed = await position(page); const cutsBefore = await cuts(page);
+          await startRec(page);
+          payload = records(31); payload.tasks[3]!.updatedAt = iso(0);
+          await page.evaluate(() => { for (const name of ["llv:tasks-changed", "llv:files-changed", "llv:pipelines-changed"]) window.dispatchEvent(new Event(name)); });
+          await page.waitForFunction(() => document.querySelectorAll("[data-timeline-task]").length >= 31, undefined, { timeout: 15_000 }).catch(() => undefined);
+          await sleep(1200);
+          const recorded = await stopRec(page); const refreshed = await position(page);
+          const rows31 = await page.locator("[data-timeline-task]").count();
+          (report.refresh as unknown[]).push({ mode, phone: true, scrolledFrom: before.top, placedAt: placed.top, afterRefreshTop: refreshed.top, heightBefore: placed.h, heightAfter: refreshed.h, taskRows: rows31, writes: recorded.writes.length, cutsAtPlacement: cutsBefore });
+          check(rows31 >= 31, `${mode}: the refresh did not reach the chart (${rows31} task rows)`);
+          check(refreshed.top === placed.top && refreshed.h === placed.h && recorded.writes.length === 0, `${mode}: refresh moved the position ${placed.top}→${refreshed.top} or height ${placed.h}→${refreshed.h} (${recorded.writes.length} writes)`);
+          // Layout changes still fit whole rows: zoom, and expand/collapse of a task.
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          await page.getByRole("button", { name: translate("uk", "timeline.zoomOut"), exact: true }).click(); await settle(page);
+          rest.zoomOut = await cuts(page);
+          await page.locator("[data-timeline-expand]").nth(2).click(); await settle(page);
+          rest.toggled = await cuts(page);
+          (report.rest as unknown[]).push(rest);
+          check(rest.atOpen.length === 0 && rest.zoomOut!.length === 0 && rest.toggled!.length === 0, `${mode}: rows cut at rest after open/zoom/toggle: ${JSON.stringify(rest)}`);
+          await page.screenshot({ path: path.join(evidence, `timeline-scroll-${label}-phone-${mode}-rest.png`) });
+          check(pageErrors.length === 0, `${mode}: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+      for (const mode of ["collapsed", "expanded"] as const) {
+        const { page, context, pageErrors } = await open(false, mode === "expanded");
+        try {
+          await install(page);
+          const scroller = page.locator("[data-timeline-scroll]");
+          const box = (await scroller.boundingBox())!;
+          const wheelPoint = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+          await page.evaluate(() => {
+            const control = document.createElement("div"); control.id = "scroll-control"; const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!;
+            control.style.cssText = `position:fixed;left:0;top:0;width:${s.clientWidth}px;height:${s.clientHeight}px;overflow:auto;visibility:hidden;z-index:99999`;
+            const inner = document.createElement("div"); inner.style.cssText = "height:6000px"; control.append(inner); document.body.append(control);
+          });
+          const rest: { mode: string; atOpen: string[]; zoomOut?: string[]; toggled?: string[] } = { mode, atOpen: await cuts(page) };
+          const wheelOnce = async (delta: number, target: "chart" | "control") => {
+            await page.evaluate(target => { const c = document.getElementById("scroll-control")!; c.style.visibility = target === "control" ? "visible" : "hidden"; c.scrollTop = 0; if (target === "chart") document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; }, target);
+            await settle(page);
+            await page.mouse.move(wheelPoint.x, wheelPoint.y);
+            const before = target === "chart" ? (await position(page)).top : 0;
+            if (target === "chart") await startRec(page);
+            await page.mouse.wheel(0, delta); await sleep(900);
+            const writes = target === "chart" ? (await stopRec(page)).writes : [];
+            const top = target === "chart" ? (await position(page)).top : await page.evaluate(() => document.getElementById("scroll-control")!.scrollTop);
+            return { moved: top - before, writes: writes.length };
+          };
+          for (const delta of [40, 100]) {
+            const chart = await wheelOnce(delta, "chart"), control = await wheelOnce(delta, "control");
+            (report.desktop as unknown[]).push({ mode, input: `wheel ${delta}`, moved: chart.moved, control: control.moved, scriptWrites: chart.writes });
+            check(chart.writes === 0, `${mode}: wheel ${delta} wrote scrollTop or height ${chart.writes} times`);
+            check(Math.abs(chart.moved - control.moved) <= 4 && (delta !== 40 || Math.abs(chart.moved - 40) <= 6), `${mode}: wheel ${delta} moved ${chart.moved}, a plain scroller moved ${control.moved}`);
+          }
+          await page.evaluate(() => { document.getElementById("scroll-control")!.style.visibility = "hidden"; });
+          // Arrow keys: one row at a time, each landing on a row's top edge below the pinned axis.
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          await scroller.focus();
+          const edges = await page.evaluate(() => {
+            const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, top = s.getBoundingClientRect().top + s.querySelector<HTMLElement>(".bt-axis")!.offsetHeight;
+            return [...s.querySelectorAll<HTMLElement>(".bt-row")].map(row => Math.round(row.getBoundingClientRect().top - top + s.scrollTop));
+          });
+          let previous = 0; const stepped: number[] = [];
+          for (let press = 0; press < 3; press++) {
+            await startRec(page); await page.keyboard.press("ArrowDown"); await sleep(500);
+            const recorded = await stopRec(page); const top = (await position(page)).top; stepped.push(top - previous);
+            check(edges.some(edge => Math.abs(edge - top) <= 1), `${mode}: arrow down ${press + 1} landed at ${top}, not on a row edge`);
+            check(top > previous && edges.filter(edge => edge > previous + 1 && edge < top - 1).length === 0, `${mode}: arrow down ${press + 1} moved ${previous}→${top}, more than one row`);
+            previous = top; void recorded;
+          }
+          const upTop = (await (async () => { await page.keyboard.press("ArrowUp"); await sleep(500); return (await position(page)).top; })());
+          check(edges.some(edge => Math.abs(edge - upTop) <= 1) && upTop < previous, `${mode}: arrow up landed at ${upTop} from ${previous}`);
+          (report.desktop as unknown[]).push({ mode, input: "arrow down x3 then up", steps: stepped, upTop, firstRowEdges: edges.slice(0, 6) });
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page); await scroller.focus();
+          const pageHeight = (await position(page)).h;
+          await page.keyboard.press("PageDown"); await sleep(600);
+          const paged = (await position(page)).top;
+          (report.desktop as unknown[]).push({ mode, input: "PageDown", moved: paged, clientHeight: pageHeight });
+          check(paged > pageHeight * 0.5 && paged <= pageHeight, `${mode}: PageDown moved ${paged} of a ${pageHeight}px viewport`);
+          await page.keyboard.press("PageUp"); await sleep(600);
+          check((await position(page)).top < paged, `${mode}: PageUp did not scroll back`);
+          // The scrollbar: a click on its track below the thumb pages the chart. (A synthesized press on the
+          // thumb itself starts no drag in headless Chromium, with or without this change, so the track is the input.)
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          const gutter = await scroller.evaluate(element => (element as HTMLElement).offsetWidth - element.clientWidth);
+          check(gutter >= 12, `${mode}: scrollbar gutter is ${gutter}px, so the scrollbar is not exercised`);
+          const barX = box.x + box.width - gutter / 2;
+          await startRec(page);
+          await page.mouse.move(barX, box.y + box.height - 60); await sleep(150);
+          await page.mouse.down(); await sleep(60); await page.mouse.up(); await sleep(700);
+          const dragged = await stopRec(page); const thumbTop = (await position(page)).top;
+          (report.desktop as unknown[]).push({ mode, input: "scrollbar track click", moved: thumbTop, scriptWrites: dragged.writes.length, writes: dragged.writes.slice(0, 3) });
+          check(thumbTop > 0 && dragged.writes.length === 0, `${mode}: scrollbar track click moved ${thumbTop} with ${dragged.writes.length} script writes`);
+          // A refresh while scrolled leaves the position.
+          const placed = await position(page);
+          await startRec(page);
+          payload = records(31); payload.tasks[3]!.updatedAt = iso(0);
+          await page.evaluate(() => { for (const name of ["llv:tasks-changed", "llv:files-changed", "llv:pipelines-changed"]) window.dispatchEvent(new Event(name)); });
+          await page.waitForFunction(() => document.querySelectorAll("[data-timeline-task]").length >= 31, undefined, { timeout: 15_000 }).catch(() => undefined);
+          await sleep(1200);
+          const recorded = await stopRec(page); const refreshed = await position(page);
+          (report.refresh as unknown[]).push({ mode, phone: false, placedAt: placed.top, afterRefreshTop: refreshed.top, heightBefore: placed.h, heightAfter: refreshed.h, writes: recorded.writes.length });
+          check(refreshed.top === placed.top && refreshed.h === placed.h && recorded.writes.length === 0, `${mode} desktop: refresh moved ${placed.top}→${refreshed.top}, height ${placed.h}→${refreshed.h}, ${recorded.writes.length} writes`);
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          await page.getByRole("button", { name: translate("uk", "timeline.zoomOut"), exact: true }).click(); await settle(page);
+          rest.zoomOut = await cuts(page);
+          (report.rest as unknown[]).push({ phone: false, ...rest });
+          check(rest.atOpen.length === 0 && rest.zoomOut!.length === 0, `${mode} desktop: rows cut at rest ${JSON.stringify(rest)}`);
+          await page.screenshot({ path: path.join(evidence, `timeline-scroll-${label}-desktop-${mode}.png`) });
+          check(pageErrors.length === 0, `${mode} desktop: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+    } finally {
+      report.failures = failures;
+      fs.writeFileSync(path.join(evidence, `timeline-scroll-${label}.json`), JSON.stringify(report, null, 2) + "\n");
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 900_000);
 });
 
 describe("project default stage runtime", () => {
@@ -3300,6 +3610,94 @@ describe("self-update reload notice", () => {
    The last state arrives while a "Check now" is held: its late answer, and
    then a late refusal of a second check, both carry the old installation and
    neither brings back the old revision, its badge or the Update button. */
+describe("administrator self-update policy", () => {
+  browserTest("administrator notice and hidden controls at 390px and desktop", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const { idleCheck, idleUpdate, stoppedProcess } = await import("@/lib/selfUpdate/types");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "administrator-self-update");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "server"));
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const at = "2030-01-01T00:00:00.000Z";
+    const revision = { version: "2.0.0", sha: "a".repeat(40), short: "aaaaaaa", date: at };
+    const snapshot = { selfUpdateDisabled: true, mode: "checkout", unsupportedReason: null, installed: revision,
+      serving: { web: revision, runtimeHost: revision }, available: revision, check: idleCheck(), update: idleUpdate(), busy: null,
+      processes: { web: stoppedProcess(), runtimeHost: stoppedProcess() },
+      meta: { branch: "main", remote: "https://github.com/example/fixture.git", checkout: null, pollMinutes: 60, serverTime: at } };
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 1440]) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 700 }, colorScheme: theme, reducedMotion: "reduce",
+          ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        try {
+          await context.addInitScript(({ lang, snapshot }) => {
+            localStorage.setItem("llv_lang", lang);
+            let installed = window.EventSource;
+            Object.defineProperty(window, "EventSource", { configurable: true, get: () => installed, set: (Source: typeof EventSource) => {
+              installed = class extends Source {
+                constructor(url: string | URL) {
+                  super(url);
+                  if (String(url).startsWith("/api/self-update/events")) Object.assign(this, {
+                    addEventListener: (type: string, listener: (event: { data: string }) => void) => {
+                      if (type === "state") queueMicrotask(() => listener({ data: JSON.stringify(snapshot) }));
+                    },
+                  });
+                }
+              } as typeof EventSource;
+            } });
+          }, { lang, snapshot });
+          const page = await context.newPage();
+          await page.clock.setFixedTime(new Date(at));
+          const pageErrors: string[] = [];
+          page.on("pageerror", error => pageErrors.push(error.message));
+          await page.goto(server.base);
+          await page.evaluate(() => window.dispatchEvent(new Event("llv:open-self-update")));
+          const dialog = page.locator("[data-self-update-dialog]");
+          const notice = dialog.locator("[data-section='updates-disabled']");
+          await notice.waitFor();
+          expect(await notice.innerText()).toContain(translate(lang, "selfUpdate.refusal.updates-disabled"));
+          expect(await dialog.locator("[data-action]").count()).toBe(0);
+          const measure = () => notice.evaluate(element => {
+            const texts: { text: string; whole: boolean }[] = [];
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              if (!node.textContent?.trim()) continue;
+              let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+              for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left + parent.clientLeft); right = Math.min(right, box.left + parent.clientLeft + parent.clientWidth); }
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top + parent.clientTop); bottom = Math.min(bottom, box.top + parent.clientTop + parent.clientHeight); }
+              }
+              const range = document.createRange(); range.selectNodeContents(node);
+              texts.push({ text: node.textContent, whole: [...range.getClientRects()].every(r => r.left >= left - 1 && r.right <= right + 1 && r.top >= top - 1 && r.bottom <= bottom + 1) });
+            }
+            const heading = element.querySelector("h2")!.getBoundingClientRect(), body = element.querySelector("p")!.getBoundingClientRect();
+            return { texts, overlap: heading.bottom > body.top, horizontalOverflow: document.documentElement.scrollWidth > innerWidth };
+          });
+          const opening = await measure();
+          expect(opening.texts.every(t => t.whole)).toBe(true); expect(opening.overlap).toBe(false); expect(opening.horizontalOverflow).toBe(false);
+          await dialog.press("PageDown");
+          const paged = await measure();
+          expect(paged.texts.every(t => t.whole)).toBe(true);
+          const frame = `${width}-${lang}-${theme}.png`;
+          await dialog.screenshot({ path: path.join(out, frame) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, width, height: phone ? 844 : 700, opening, paged, final: await measure(), frame, pageErrors });
+        } finally { await context.close(); }
+      }
+      const sourceDigests = Object.fromEntries(["src/components/selfUpdate/SelfUpdateView.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"]
+        .map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]));
+      const record = { capturedAt: new Date().toISOString(), command: "LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx --test-name-pattern 'administrator self-update policy' (isolated roots, gate-slot.sh)", sourceDigests, readings };
+      fs.mkdirSync("evidence/administrator-self-update", { recursive: true });
+      fs.writeFileSync("evidence/administrator-self-update/rendered.json", JSON.stringify(record, null, 2) + "\n");
+      fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify(record, null, 2) + "\n");
+    } finally { await browser.close(); sockets.close(); server.stop(); }
+  }, 180_000);
+});
+
 describe("Updates dialog first state", () => {
   browserTest("pending, error and loaded states and their controls on desktop and phone in en and uk", async () => {
     const out = path.resolve(".artifacts/updates-dialog-first-state");
@@ -44771,4 +45169,193 @@ describe("cold conversation link", () => {
     fs.writeFileSync(path.join(EVIDENCE, "rendered.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "issue1695Evidence.fixture.tsx?scenario=cold-link", readings, failures }, null, 2)}\n`);
     expect(failures).toEqual([]);
   }, 1_500_000);
+});
+
+
+describe("seat tick summary arrives before panel details", () => {
+  browserTest("closed state and held, loaded and failed panels at phone and desktop sizes", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const { seatTickSettingsAnswer } = await import("@/lib/monitor/seatTickSettingsAnswer");
+    const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const baseline = process.env.LLV_TICK_BASELINE === "1";
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", baseline ? "tick-before-frames" : "tick-after-frames");
+    fs.mkdirSync(out, { recursive: true });
+    const now = new Date("2026-11-12T10:00:00Z");
+    const actor = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+    writeSeatTickSettings("atlas", { ...defaultSeatTickSettings("atlas"), enabled: true, wakeIntervalMinutes: 10,
+      reason: "Review queued work", updatedAt: now.toISOString(), monitorPrompt: "Review the next queued task. ".repeat(500) });
+    const full = seatTickSettingsAnswer("atlas", false, actor, { now: () => now.getTime() });
+    const summary = seatTickSettingsAnswer("atlas", false, actor, { now: () => now.getTime(), summary: true });
+    let release: (() => void) | undefined;
+    let held = Promise.resolve();
+    let calls: string[] = [];
+    let notifyPanel!: () => void;
+    let enteredPanel = Promise.resolve();
+    let fail = false;
+    let refuseWrite = false;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        if (request.method === "PUT" && refuseWrite) return Response.json({ error: "Cadence held for review" }, { status: 400 });
+        const small = new URL(request.url).searchParams.get("view") === "summary";
+        calls.push(small ? "summary" : "panel");
+        if (small) return Response.json(summary);
+        notifyPanel();
+        await held;
+        return Response.json(fail ? { error: "fixture panel unavailable" } : full, { status: fail ? 500 : 200 });
+      },
+      "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
+    });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const width of [320, 390, 1000, 1440]) for (const outcome of baseline ? ["baseline"] : ["loaded", "failed", "refused"]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        if (outcome === "refused" && width <= 390) continue;
+        calls = []; fail = outcome === "failed"; refuseWrite = outcome === "refused";
+        held = new Promise<void>(resolve => { release = resolve; });
+        enteredPanel = new Promise<void>(resolve => { notifyPanel = resolve; });
+        const phone = width <= 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`,
+          { width, height: phone ? 844 : 700 }, theme, lang, "reduce", phone, 1, now);
+        const tag = `${width}-${lang}-${theme}-${outcome}`;
+        const frame = async (state: string) => {
+          await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 1000; } });
+          // Long panels scroll. Frame complete lines at both ends instead of
+          // treating a native scroll crop as a truncated label.
+          const scroll = state === "panel-ready" || state === "panel-end" || state === "panel-write-refused" ? await page.evaluate((end) => {
+            const scroller = document.querySelector<HTMLElement>('[data-mobile2-sheet="tick"] [data-mobile2-sheet-body], [data-seat-tick-popover]');
+            if (!scroller) return null;
+            const box = scroller.getBoundingClientRect();
+            const top = box.top + scroller.clientTop, bottom = top + scroller.clientHeight;
+            const lines: Array<{ top: number; bottom: number }> = [];
+            const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+            let node: Node | null;
+            while ((node = walker.nextNode())) {
+              if (!node.textContent?.trim() || !node.parentElement?.checkVisibility()) continue;
+              const range = document.createRange(); range.selectNodeContents(node);
+              for (const r of range.getClientRects()) if (r.width && r.height) lines.push({ top: r.top + scroller.scrollTop, bottom: r.bottom + scroller.scrollTop });
+            }
+            const maximum = scroller.scrollHeight - scroller.clientHeight;
+            const desired = end ? maximum : 0;
+            let chosen = desired;
+            for (let distance = 0; distance <= maximum; distance++) {
+              const offset = end ? maximum - distance : distance;
+              const cuts = lines.some(line => (line.top < top + offset - 0.5 && line.bottom > top + offset + 0.5)
+                || (line.top < bottom + offset - 0.5 && line.bottom > bottom + offset + 0.5));
+              if (!cuts) { chosen = offset; break; }
+            }
+            scroller.scrollTop = chosen;
+            return { desired, actual: scroller.scrollTop, maximum };
+          }, state === "panel-end" || state === "panel-write-refused") : null;
+          const geometry = await page.evaluate(() => {
+            const control = document.querySelector<HTMLElement>('[role="slider"][data-seat-tick-switch]');
+            const row = control?.closest<HTMLElement>("[data-seat-tick-row]");
+            const panel = document.querySelector<HTMLElement>("[data-seat-tick-popover], [data-testid=mobile-seat-tick-sheet]");
+            const roots = panel ? [panel] : [row ?? control].filter(Boolean) as HTMLElement[];
+            const cuts: string[] = [];
+            const clipDetails: unknown[] = [];
+            const ranges: Array<{ text: string; left: number; top: number; right: number; bottom: number }> = [];
+            for (const root of roots) {
+              const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+              let node: Node | null;
+              while ((node = walker.nextNode())) {
+                if (!node.textContent?.trim() || !node.parentElement?.checkVisibility()) continue;
+                const range = document.createRange(); range.selectNodeContents(node);
+                for (const r of range.getClientRects()) {
+                  if (r.bottom <= 0 || r.top >= innerHeight || r.width === 0 || r.height === 0) continue;
+                  let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+                  for (let ancestor: HTMLElement | null = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                    const style = getComputedStyle(ancestor), box = ancestor.getBoundingClientRect();
+                    if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left); right = Math.min(right, box.right); }
+                    if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom); }
+                  }
+                  // Wholly scrolled-away rows are outside the visible surface.
+                  if (r.bottom <= top || r.top >= bottom) continue;
+                  const text = node.textContent!.trim().slice(0, 80);
+                  if (r.left < left - 0.5 || r.right > right + 0.5 || r.top < top - 0.5 || r.bottom > bottom + 0.5) { cuts.push(text); clipDetails.push({ text, glyph: { left: r.left, top: r.top, right: r.right, bottom: r.bottom }, clip: { left, top, right, bottom } }); }
+                  ranges.push({ text, left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+                }
+              }
+            }
+            const overlaps: string[] = [];
+            for (let a = 0; a < ranges.length; a++) for (let b = a + 1; b < ranges.length; b++) {
+              const x = ranges[a]!, y = ranges[b]!;
+              if (Math.min(x.right, y.right) - Math.max(x.left, y.left) > 0.5 && Math.min(x.bottom, y.bottom) - Math.max(x.top, y.top) > 0.5) overlaps.push(`${x.text} / ${y.text}`);
+            }
+            const rect = control?.getBoundingClientRect();
+            return { cuts, clipDetails, overlaps, word: control?.querySelector("[data-seat-tick-face]")?.textContent, visibleText: ranges.map(r => r.text),
+              controlOnFirstScreen: !!rect && rect.top >= 0 && rect.bottom <= innerHeight,
+              pageOverflow: document.documentElement.scrollWidth > innerWidth, scrollbarGutter: innerWidth - document.documentElement.clientWidth,
+              panelScrollbarGutter: panel ? panel.offsetWidth - panel.clientWidth - parseFloat(getComputedStyle(panel).borderLeftWidth) - parseFloat(getComputedStyle(panel).borderRightWidth) : null,
+              fields: panel ? [...panel.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea")].filter(input => input.checkVisibility()).map(input => ({ value: input.value, placeholder: input.placeholder, width: input.clientWidth, height: input.clientHeight })) : [] };
+          });
+          await page.screenshot({ path: path.join(out, `${tag}-${state}.png`) });
+          readings.push({ width, height: phone ? 844 : 700, lang, theme, state, outcome, calls: [...calls], scroll, ...geometry, pageErrors });
+          fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+          const target = page.locator("[data-seat-tick-popover]:visible, [data-testid=mobile-seat-tick-sheet]:visible, [data-seat-tick-row]:visible").first();
+          if (await target.count()) await target.screenshot({ path: path.join(out, `${tag}-${state}-detail.png`) });
+          if (!baseline) {
+            expect(geometry.cuts, `${tag} ${state} clipped text`).toEqual([]);
+            expect(geometry.overlaps, `${tag} ${state} overlapping text`).toEqual([]);
+          }
+          expect(geometry.pageOverflow).toBe(false);
+          expect(pageErrors).toEqual([]);
+          return geometry;
+        };
+        try {
+          await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+          await page.evaluate(() => document.fonts.ready);
+          if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+          else {
+            await page.locator("[data-kanban-seat]").waitFor();
+            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+          }
+          const control = page.locator('[role="slider"][data-seat-tick-switch]:visible').first();
+          if (baseline) {
+            await enteredPanel;
+            await frame("waiting-for-panel");
+            continue;
+          }
+          await control.waitFor();
+          await page.waitForFunction(() => document.querySelector('[role="slider"][data-seat-tick-switch]')?.getAttribute("aria-valuenow") === "3");
+          expect(calls.every(call => call === "summary")).toBe(true);
+          expect((await frame("closed-ready")).controlOnFirstScreen).toBe(true);
+          if (refuseWrite) {
+            await control.focus();
+            await page.keyboard.press("ArrowLeft");
+            await page.keyboard.press("Enter");
+          } else await control.click();
+          await page.locator(phone ? "[data-testid=mobile-seat-tick-sheet]" : "[data-seat-tick-popover]").waitFor();
+          await enteredPanel;
+          expect(calls.filter(call => call === "panel").length).toBe(1);
+          await frame("panel-pending");
+          if (phone) {
+            for (const key of ["Tab", "Tab", "Shift+Tab"]) {
+              await page.keyboard.press(key);
+              expect(await page.evaluate(() => !!document.activeElement?.closest('[data-mobile2-sheet="tick"]'))).toBe(true);
+            }
+            expect(await page.evaluate(() => !!document.elementFromPoint(8, 8)?.closest("[data-mobile2-scrim]"))).toBe(true);
+          }
+          const answered = page.waitForResponse(response => response.url().includes("/api/monitor/seat-tick/settings") && !response.url().includes("view=summary"));
+          release!();
+          await answered;
+          if (fail) {
+            await page.locator("[data-seat-tick-summary]:visible").filter({ hasText: translate(lang, "seatTick.summary.unreadable") }).waitFor();
+            expect(await page.locator("[data-seat-tick-interval]:visible").count()).toBe(0);
+            await frame("panel-failed");
+          } else {
+            await page.locator("[data-seat-tick-interval]:visible").waitFor();
+            if (refuseWrite) {
+              await frame("panel-write-refused");
+              expect(await page.locator("[data-seat-tick-error]:visible").innerText()).toBe("Cadence held for review");
+            } else {
+              await frame("panel-ready");
+              await frame("panel-end");
+            }
+          }
+        } finally { release?.(); await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { release?.(); await browser.close(); sockets.close(); server.stop(); }
+  }, 600_000);
 });

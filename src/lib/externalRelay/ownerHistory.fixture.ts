@@ -29,10 +29,11 @@ function midnight(date: string, tz: string) {
 export type HistoryExchange = { request: { method: string; path: string; query: string[][] }; response: { status: number; headers: Record<string,string>; body: unknown } };
 export async function historyDouble() {
   const credential = "h".repeat(43);
-  const state = { now: Date.parse("2026-10-12T09:00:00Z"), enabled: true, requests: 0, admissions: 0, minute: 0,
+  const state = { now: Date.parse("2026-10-12T09:00:00Z"), enabled: true, requests: 0, admissions: 0, minute: 0, historyVersion: "",
     forced: null as null | { status?: number; body?: unknown; headers?: Record<string,string>; drop?: boolean },
     afterHistoryResponse: null as (() => void) | null, exchanges: [] as HistoryExchange[] };
   function handle(req: http.IncomingMessage) {
+    state.historyVersion = String(req.headers["delegatus-relay-owner-history"] ?? "");
     state.requests++;
     const url = new URL(req.url!, "http://double.example");
     const error = (status: number, code: string, retry?: number): { status: number; headers: Record<string, string>; body: unknown } => ({ status, headers: retry ? { "Retry-After": String(retry) } : {}, body: { error: { code, message: code.replaceAll("_", " "), ...(retry ? { retry_after_s: retry } : {}) } } });

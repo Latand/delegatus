@@ -126,6 +126,129 @@ const registryGenerationIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_generation_identities_owner ON registry_generation_identities(conversation_id)",
 ]);
 
+/** Write-maintained host evidence. Readers never expand a conversation's JSON
+ * generations to discover either its version or its next bounded window.
+ * Triggers also cover predecessor writers and hot/archive moves. */
+function installTerminationProjection(db: BunDatabase, source: string): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS registry_termination_versions (
+      id TEXT PRIMARY KEY, engine TEXT NOT NULL, total INTEGER NOT NULL, version TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS registry_termination_generations (
+      conversation_id TEXT NOT NULL, ordinal INTEGER NOT NULL, id TEXT NOT NULL, path TEXT NOT NULL,
+      entry_key TEXT NOT NULL, PRIMARY KEY(conversation_id, ordinal)
+    );
+    CREATE INDEX IF NOT EXISTS registry_termination_entry ON registry_termination_generations(entry_key);
+    CREATE INDEX IF NOT EXISTS registry_termination_conversation_entry ON registry_termination_generations(conversation_id,entry_key);
+    CREATE INDEX IF NOT EXISTS registry_termination_path ON registry_termination_generations(path);
+    CREATE TABLE IF NOT EXISTS registry_termination_paths (
+      conversation_id TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY(path, conversation_id)
+    );
+    CREATE INDEX IF NOT EXISTS registry_termination_paths_owner ON registry_termination_paths(conversation_id);
+    CREATE TABLE IF NOT EXISTS registry_termination_entries (
+      entry_key TEXT PRIMARY KEY, path TEXT, metadata TEXT NOT NULL, survivors INTEGER NOT NULL, exits INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS registry_termination_entries_path ON registry_termination_entries(path);
+    CREATE TABLE IF NOT EXISTS registry_termination_owners (
+      ordinal INTEGER PRIMARY KEY, conversation_id TEXT NOT NULL, entry_key TEXT NOT NULL,
+      UNIQUE(conversation_id,entry_key)
+    );
+    CREATE INDEX IF NOT EXISTS registry_termination_owners_page ON registry_termination_owners(conversation_id,ordinal);
+    CREATE INDEX IF NOT EXISTS registry_termination_owners_entry ON registry_termination_owners(entry_key);
+    CREATE TABLE IF NOT EXISTS registry_termination_identities (
+      entry_key TEXT NOT NULL, source TEXT NOT NULL, ordinal INTEGER NOT NULL, identity_json TEXT,
+      PRIMARY KEY(entry_key,source,ordinal)
+    );
+  `);
+  const refresh = (key: string) => `
+    DELETE FROM registry_termination_owners WHERE conversation_id=${key};
+    DELETE FROM registry_termination_generations WHERE conversation_id=${key};
+    DELETE FROM registry_termination_paths WHERE conversation_id=${key};
+    DELETE FROM registry_termination_versions WHERE id=${key};
+    INSERT INTO registry_termination_versions
+      SELECT row_key,json_extract(value_json,'$.engine'),json_array_length(value_json,'$.generations'),hex(randomblob(16))
+      FROM ${source} WHERE collection='conversations' AND row_key=${key};
+    INSERT INTO registry_termination_generations
+      SELECT r.row_key,CAST(g.key AS INTEGER),json_extract(g.value,'$.id'),json_extract(g.value,'$.path'),
+        json_extract(r.value_json,'$.engine')||':'||json_extract(g.value,'$.id')
+      FROM ${source} r,json_each(r.value_json,'$.generations') g WHERE r.collection='conversations' AND r.row_key=${key};
+    INSERT INTO registry_termination_paths
+      SELECT r.row_key,p.value FROM ${source} r,json_each(r.value_json,'$.continuityPaths') p
+      WHERE r.collection='conversations' AND r.row_key=${key} ON CONFLICT(path,conversation_id) DO NOTHING;
+    INSERT INTO registry_termination_paths
+      SELECT conversation_id,path FROM registry_termination_generations WHERE conversation_id=${key}
+      ON CONFLICT(path,conversation_id) DO NOTHING;
+    INSERT INTO registry_termination_owners(conversation_id,entry_key)
+      SELECT p.conversation_id,e.entry_key FROM registry_termination_paths p
+      JOIN registry_termination_entries e ON e.path=p.path
+      WHERE p.conversation_id=${key} AND NOT EXISTS (
+        SELECT 1 FROM registry_termination_generations g WHERE g.conversation_id=p.conversation_id AND g.entry_key=e.entry_key);
+  `;
+  const refreshEntry = (key: string) => `
+    DELETE FROM registry_termination_owners WHERE entry_key=${key};
+    DELETE FROM registry_termination_entries WHERE entry_key=${key};
+    DELETE FROM registry_termination_identities WHERE entry_key=${key};
+    INSERT INTO registry_termination_entries
+      SELECT row_key,json_extract(value_json,'$.artifactPath'),json_object(
+        'key',json_extract(value_json,'$.key'),'artifactPath',json_extract(value_json,'$.artifactPath'),
+        'status',json_extract(value_json,'$.status'),'updatedAt',json_extract(value_json,'$.updatedAt'),
+        'pendingAction',json_extract(value_json,'$.pendingAction'),
+        'paneAgent',json_extract(value_json,'$.paneAgent'),'hostExitProcess',json_extract(value_json,'$.hostExitProcess'),
+        'structuredTerminationCaptureId',json_extract(value_json,'$.structuredTerminationCaptureId'),
+        'structuredHost',json_object('process',json_extract(value_json,'$.structuredHost.process'),
+          'exitProcess',json_extract(value_json,'$.structuredHost.exitProcess'),
+          'scope',json_extract(value_json,'$.structuredHost.scope'),'memory',json_extract(value_json,'$.structuredHost.memory'),
+          'signalDomain',json_extract(value_json,'$.structuredHost.signalDomain'))),
+        COALESCE(json_array_length(value_json,'$.structuredTerminationSurvivors'),0),
+        COALESCE(json_array_length(value_json,'$.pendingHostExits'),0)
+      FROM ${source} WHERE collection='entries' AND row_key=${key};
+    INSERT INTO registry_termination_identities
+      SELECT r.row_key,'survivors',CAST(p.key AS INTEGER),p.value
+      FROM ${source} r,json_each(r.value_json,'$.structuredTerminationSurvivors') p
+      WHERE r.collection='entries' AND r.row_key=${key};
+    INSERT INTO registry_termination_identities
+      SELECT r.row_key,'exits',CAST(p.key AS INTEGER),json_extract(p.value,'$.process')
+      FROM ${source} r,json_each(r.value_json,'$.pendingHostExits') p
+      WHERE r.collection='entries' AND r.row_key=${key};
+    INSERT INTO registry_termination_owners(conversation_id,entry_key)
+      SELECT p.conversation_id,e.entry_key FROM registry_termination_paths p
+      JOIN registry_termination_entries e ON e.path=p.path
+      WHERE e.entry_key=${key} AND NOT EXISTS (
+        SELECT 1 FROM registry_termination_generations g WHERE g.conversation_id=p.conversation_id AND g.entry_key=e.entry_key);
+  `;
+  for (const table of ["registry_rows", "registry_cold"]) for (const event of ["INSERT", "UPDATE", "DELETE"]) {
+    const row = event === "DELETE" ? "OLD" : "NEW";
+    const trigger = `${table}_termination_${event.toLowerCase()}`;
+    db.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
+    // Separate collection admission keeps a conversation write from executing
+    // entry/capture maintenance with a null key, and vice versa.
+    db.exec(`CREATE TRIGGER ${trigger} AFTER ${event} ON ${table}
+      WHEN ${row}.collection='conversations' BEGIN ${refresh(`${row}.row_key`)} END`);
+    const entryTrigger = `${trigger}_entry`;
+    db.exec(`DROP TRIGGER IF EXISTS ${entryTrigger}`);
+    db.exec(`CREATE TRIGGER ${entryTrigger} AFTER ${event} ON ${table}
+      WHEN ${row}.collection='entries' BEGIN
+      UPDATE registry_termination_versions SET version=hex(randomblob(16)) WHERE id IN (
+        SELECT conversation_id FROM registry_termination_generations WHERE entry_key=${row}.row_key
+        UNION SELECT p.conversation_id FROM registry_termination_paths p
+          JOIN registry_termination_entries e ON e.entry_key=${row}.row_key WHERE p.path=e.path
+        UNION SELECT p.conversation_id FROM registry_termination_paths p
+          JOIN ${source} e ON e.collection='entries' AND e.row_key=${row}.row_key WHERE p.path=json_extract(e.value_json,'$.artifactPath')
+      );
+      ${refreshEntry(`${row}.row_key`)} END`);
+  }
+  // Installation is a one-time startup migration; ordinary reads only select
+  // indexed metadata and generation ordinals.
+  for (const { row_key } of db.query<{ row_key: string }, []>(`SELECT row_key FROM ${source} WHERE collection='conversations'`).all()) {
+    const quoted = `'${row_key.replaceAll("'", "''")}'`;
+    db.exec(refresh(quoted));
+  }
+  for (const { row_key } of db.query<{ row_key: string }, []>(`SELECT row_key FROM ${source} WHERE collection='entries'`).all()) {
+    db.exec(refreshEntry(`'${row_key.replaceAll("'", "''")}'`));
+  }
+  db.exec("INSERT OR REPLACE INTO registry_meta(key,value) VALUES ('termination_projection_version','4')");
+}
+
 const registryCallerIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_caller_roots_latest ON registry_caller_roots(updated_at DESC,row_order DESC)",
   "CREATE INDEX IF NOT EXISTS registry_caller_structured_pid ON registry_rows(collection,json_extract(value_json,'$.structuredHost.process.pid'),row_order)",
@@ -156,7 +279,7 @@ const DEFERRED_LOOKUP_INDEXES = new Set([
 ]);
 function registryLookupIndexes(): ReturnType<typeof declaredIndexes> {
   return declaredIndexes(Object.entries(LOOKUP_PATHS)
-    .filter(([field]) => !DEFERRED_LOOKUP_INDEXES.has(field))
+    .filter(([field]) => field !== "custodyState" && !DEFERRED_LOOKUP_INDEXES.has(field))
     .map(([field, jsonPath]) => `CREATE INDEX IF NOT EXISTS registry_lookup_${field.replaceAll(".", "_")} ON registry_rows(collection, json_extract(value_json, '${jsonPath}'), row_order)${field === "alias" ? " WHERE collection = 'conversationAliases'" : ""}`));
 }
 
@@ -191,6 +314,7 @@ export function pipelineSpawnHistorySelection(base: string): { sql: string; valu
 }
 
 const ROW_COLLECTIONS = [
+  "agentStates", "agentStateJournal", "agentStateMetrics",
   "entries",
   "receipts",
   "lineageEdges",
@@ -220,15 +344,16 @@ const ROW_COLLECTION_KEYS: ReadonlySet<string> = new Set(ROW_COLLECTIONS);
 /** The rows whose MCP grant lists a complete load decides from other rows. */
 const READER_GRANT_COLLECTIONS: ReadonlySet<RowCollection> = new Set(["entries", "receipts", "conversations"]);
 type LookupValue = string | readonly string[];
-export type RegistryKeyFilter = { field: "clientMessageId" | "launchId" | "parentConversationId" | "launchProfile.parentConversationId" | "pendingSpawnCapability.operationId" | "conversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "pendingSpawnCapability.digest" | "state" | "status" | "key.sessionId" | "requestDigest" | "supersedes.conversationId" | "structuredHost.kind"; value: LookupValue };
+export type RegistryKeyFilter = { field: "clientMessageId" | "launchId" | "parentConversationId" | "launchProfile.parentConversationId" | "pendingSpawnCapability.operationId" | "conversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "pendingSpawnCapability.digest" | "state" | "status" | "key.sessionId" | "requestDigest" | "supersedes.conversationId" | "structuredHost.kind" | "custodyState"; value: LookupValue };
 type LookupField = RegistryKeyFilter["field"];
-const LOOKUP_PATHS: Record<LookupField, string> = { clientMessageId: "$.clientMessageId", launchId: "$.launchId", parentConversationId: "$.parentConversationId", "launchProfile.parentConversationId": "$.launchProfile.parentConversationId", "pendingSpawnCapability.operationId": "$.pendingSpawnCapability.operationId", conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId", requestDigest: "$.requestDigest", "supersedes.conversationId": "$.supersedes.conversationId", "structuredHost.kind": "$.structuredHost.kind" };
+const LOOKUP_PATHS: Record<LookupField, string> = { custodyState: "$.terminalState", clientMessageId: "$.clientMessageId", launchId: "$.launchId", parentConversationId: "$.parentConversationId", "launchProfile.parentConversationId": "$.launchProfile.parentConversationId", "pendingSpawnCapability.operationId": "$.pendingSpawnCapability.operationId", conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId", requestDigest: "$.requestDigest", "supersedes.conversationId": "$.supersedes.conversationId", "structuredHost.kind": "$.structuredHost.kind" };
 type KeyedReader = (collection: RowCollection, field: LookupField, value: LookupValue) => string[];
 type BoundedKeyReader = (collection: RowCollection, filters: readonly { field: LookupField; value: LookupValue }[], limit: number) => string[];
 type ProjectionReader = (collection: RowCollection, projector: RegistryRowProjector<RowCollection, unknown>) => Array<[string, unknown]>;
 interface RegistryFileReaders {
   keyed: WeakMap<object, KeyedReader>;
   bounded: WeakMap<object, BoundedKeyReader>;
+  page?: WeakMap<object, (collection: RowCollection, after: string, limit: number) => string[]>;
   path: WeakMap<object, (path: string) => string[]>;
   entryKey: WeakMap<RegistryFile, (entryKey: string) => string[]>;
   coldKey: WeakMap<RegistryFile, (collection: RowCollection) => ReadonlySet<string> | undefined>;
@@ -252,6 +377,7 @@ const fileReaders = readerState.__llvRegistryFileReaders ??= {
 };
 const keyedReaders = fileReaders.keyed;
 const boundedReaders = fileReaders.bounded;
+const pageReaders = fileReaders.page ??= new WeakMap();
 const pathReaders = fileReaders.path;
 const entryKeyReaders = fileReaders.entryKey;
 const coldKeyReaders = fileReaders.coldKey;
@@ -275,6 +401,14 @@ export interface RegistryRowProjector<C extends RowCollection, T> {
   readonly id: string;
   readonly collection: C;
   project(row: RegistryFile[C][string]): T;
+}
+
+/** Bounded ordered keys. The SQLite path reads only primary-key cells. */
+export function registryCollectionPage(file: RegistryFile, collection: RowCollection, after = "", limit = 32): string[] {
+  const bounded = Math.max(1, Math.min(256, limit));
+  const reader = pageReaders.get(file);
+  if (reader) return reader(collection, after, bounded);
+  return Object.keys(file[collection]).filter(key => key > after).sort().slice(0, bounded);
 }
 
 /** Every row of the projector's collection, in collection order, projected. */
@@ -395,6 +529,8 @@ class RegistryReaderViews {
     const frozen = this.own(Object.freeze(view)) as unknown as RegistryFile;
     const keyed = keyedReaders.get(file);
     if (keyed) keyedReaders.set(frozen, keyed);
+    const page = pageReaders.get(file);
+    if (page) pageReaders.set(frozen, page);
     const bounded = boundedReaders.get(file);
     if (bounded) boundedReaders.set(frozen, bounded);
     const paths = pathReaders.get(file);
@@ -506,6 +642,7 @@ export function registryKeysMatchingBounded<C extends RowCollection>(
 
 function lookupValue(row: unknown, field: LookupField): unknown {
   if (field === "alias") return row;
+  if (field === "custodyState") return (row as { terminalState?: unknown } | null)?.terminalState == null ? "pending" : "terminal";
   return field.split(".").reduce<unknown>((value, part) => value && typeof value === "object" ? (value as Record<string, unknown>)[part] : undefined, row);
 }
 
@@ -1565,6 +1702,10 @@ export class SqliteAgentRegistryStore {
     }
     if (this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_generation_identities'").get()) {
       registryGenerationIndexes.install(this.db, path.dirname(filename));
+    }
+    if (options.allowArchiveMigration !== false && this.meta("termination_projection_version") !== "4") {
+      assertStateStartupMutation(path.dirname(filename), "agent registry termination projection");
+      withStartupTransaction(this.db, () => installTerminationProjection(this.db, this.recordsSource));
     }
     this.generationIdentitiesReady = this.generationIdentitiesInstalled(this.db);
     this.secureFiles();
@@ -3806,6 +3947,12 @@ export class SqliteAgentRegistryStore {
     const pinnedDeliveries = this.changesReady ? this.pinnedRowKeys(file, "heldDeliveries", coldGrantChangeId, identity) : null;
     const pinnedOwners = this.changesReady ? this.pinnedRowKeys(file, "deliveryOperationOwners", coldGrantChangeId, identity) : null;
     const pinnedEntries = this.changesReady ? this.pinnedRowKeys(file, "entries", coldGrantChangeId, identity) : null;
+    pageReaders.set(file, (collection, after, limit) => {
+      if (this.changeId() !== coldGrantChangeId || databaseFileIdentity(this.filename) !== identity)
+        throw new DatabaseReplacedError("registry page needs a fresh snapshot");
+      return this.db.query<{ row_key: string }, [string, string, number]>(
+        "SELECT row_key FROM registry_rows WHERE collection=? AND row_key>? ORDER BY row_key LIMIT ?").all(collection, after, limit).map(row => row.row_key);
+    });
     boundedReaders.set(file, (collection, filters, limit) => {
       const holds = (row: unknown) => filters.every(filter => {
         const values = typeof filter.value === "string" ? [filter.value] : filter.value;
@@ -4068,6 +4215,7 @@ export class SqliteAgentRegistryStore {
 
   /** The callback must finish inside the transaction; no lazy object escapes. */
   private matchingRowKeys(collection: RowCollection, field: LookupField, values: readonly string[]): string[] {
+    if (field === "custodyState") return this.matchingRowKeysBounded(collection, [{ field, value: values }], Number.MAX_SAFE_INTEGER);
     const distinct = [...new Set(values)];
     if (!distinct.length) return [];
     const jsonPath = LOOKUP_PATHS[field];
@@ -4103,11 +4251,11 @@ export class SqliteAgentRegistryStore {
       && clauses.some(filter => filter.field === "conversationId");
     const indexedBy = messageAndRecipient
       ? `registry_lookup_clientMessageId_conversationId_${collection}`
-      : clauses.length
+      : clauses.length && clauses[0]!.field !== "custodyState"
       ? `registry_lookup_${clauses[0]!.field.replaceAll(".", "_")}` + (clauses[0]!.field === "clientMessageId" ? `_${collection}` : "")
       : "registry_rows_collection_order";
     const where = [messageAndRecipient ? `collection='${collection}'` : "collection=?", ...clauses.map(filter =>
-      `json_extract(value_json,'${LOOKUP_PATHS[filter.field]}') IN (${filter.values.map(() => "?").join(",")})`)].join(" AND ");
+      `${filter.field === "custodyState" ? "CASE WHEN json_extract(value_json,'$.terminalState') IS NULL THEN 'pending' ELSE 'terminal' END" : `json_extract(value_json,'${LOOKUP_PATHS[filter.field]}')`} IN (${filter.values.map(() => "?").join(",")})`)].join(" AND ");
     const args: (string | number)[] = [...(messageAndRecipient ? [] : [collection]), ...clauses.flatMap(filter => filter.values)];
     const tableHint = clauses.length ? (messageAndRecipient ? ` INDEXED BY ${indexedBy}` : "") : ` INDEXED BY ${indexedBy}`;
     return this.db.query<{ row_key: string }, (string | number)[]>(`SELECT row_key FROM registry_rows${tableHint}
@@ -4204,6 +4352,110 @@ export class SqliteAgentRegistryStore {
       FROM (SELECT conversation_id FROM registry_generation_identities WHERE entry_key=?
         UNION SELECT conversation_id FROM registry_conversation_paths WHERE path=?) i)
       WHERE row_order IS NOT NULL ORDER BY row_order`).all(entryKey, artifactPath).map(row => row.conversation_id);
+  }
+
+  terminationRevision(): string {
+    return `sqlite:${databaseFileIdentity(this.filename)}:${this.revision()}:${this.changeId()}`;
+  }
+
+  terminationIdentity(target: { conversationId?: string | null; path?: string | null }): {
+    id: string; version: string; aliases: [string, string][];
+  } | null {
+    const aliases: [string, string][] = [];
+    let id = target.conversationId;
+    if (!id && target.path) {
+      const matches = this.db.query<{ id: string }, [string]>(`SELECT conversation_id AS id
+        FROM registry_termination_paths WHERE path=? LIMIT 2`).all(target.path);
+      if (matches.length !== 1) return null;
+      id = matches[0]!.id;
+    }
+    if (!id) return null;
+    const seen = new Set<string>();
+    for (let depth = 0; depth < SNAPSHOT_SPAWN_ALIAS_LIMIT; depth++) {
+      if (seen.has(id)) return null;
+      seen.add(id);
+      const alias = this.db.query<{ value_json: string }, [string]>(`SELECT value_json FROM ${this.recordsSource}
+        WHERE collection='conversationAliases' AND row_key=?`).get(id);
+      if (!alias) {
+        const row = this.db.query<{ version: string }, [string]>("SELECT version FROM registry_termination_versions WHERE id=?").get(id);
+        return row ? { id, version: `sqlite:${databaseFileIdentity(this.filename)}:${row.version}`, aliases } : null;
+      }
+      const next: unknown = parseSqliteJson(alias.value_json, this.db);
+      if (typeof next !== "string") return null;
+      aliases.push([id, next]);
+      id = next;
+    }
+    return null;
+  }
+
+  terminationPage(id: string, offset: number, limit: number): {
+    snapshot: { entries: Record<string, AgentRegistryEntry>; conversations: Record<string, {
+      id: string; engine: RegistryFile["conversations"][string]["engine"]; generations: { id: string; path: string }[];
+    }> }; offset: number; totalGenerations: number; currentEvidence: unknown; nextOffset: number; complete: boolean;
+  } {
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) this.db.exec("BEGIN");
+    try {
+      const result: ReturnType<SqliteAgentRegistryStore["terminationPage"]>["snapshot"] = { entries: {}, conversations: {} };
+      const metadata = this.db.query<{ engine: "codex" | "claude" | "copilot"; total: number; version: string }, [string]>(
+        "SELECT engine,total,version FROM registry_termination_versions WHERE id=?").get(id);
+      if (!metadata) throw new Error("termination conversation unavailable");
+      const generations = this.db.query<{ id: string; path: string }, [string, number, number]>(
+        `SELECT id,path FROM registry_termination_generations WHERE conversation_id=? AND ordinal>=? ORDER BY ordinal LIMIT ?`).all(id, offset, limit);
+      result.conversations[id] = { id, engine: metadata.engine, generations };
+      const readEntry = (row: { entry_key: string; metadata: string; survivors: number; exits: number }) => {
+        const entry = parseSqliteJson(row.metadata, this.db) as AgentRegistryEntry;
+        const identities = (source: string, length: number, wrap: boolean) => new Proxy([], {
+          get: (_target, key) => {
+            if (key === "length") return length;
+            if (typeof key !== "string" || !/^(0|[1-9]\d*)$/.test(key)) return undefined;
+            const identity = this.db.query<{ identity_json: string | null }, [string, string, number]>(
+              "SELECT identity_json FROM registry_termination_identities WHERE entry_key=? AND source=? AND ordinal=?").get(row.entry_key, source, Number(key));
+            const process = identity?.identity_json ? parseSqliteJson(identity.identity_json, this.db) : undefined;
+            return wrap ? { process } : process;
+          },
+        });
+        entry.structuredTerminationSurvivors = identities("survivors", row.survivors, false);
+        entry.pendingHostExits = identities("exits", row.exits, true);
+        result.entries[row.entry_key] = entry;
+      };
+      for (const generation of generations) {
+        const row = this.db.query<{ entry_key: string; metadata: string; survivors: number; exits: number }, [string]>(
+          "SELECT entry_key,metadata,survivors,exits FROM registry_termination_entries WHERE entry_key=?")
+          .get(`${metadata.engine}:${generation.id}`);
+        if (row) readEntry(row);
+      }
+      const generationEnd = Math.min(metadata.total, offset + generations.length);
+      let nextOffset = generationEnd, complete = false;
+      if (generationEnd === metadata.total) {
+        // Extra path owners have their own indexed ordinal. The same cursor
+        // traverses generations first, then these owners without OFFSET scans.
+        const capacity = limit - generations.length;
+        const owners = this.db.query<{ ordinal: number; entry_key: string }, [string, number, number]>(
+          `SELECT ordinal,entry_key FROM registry_termination_owners
+            WHERE conversation_id=? AND ordinal>? ORDER BY ordinal LIMIT ?`)
+          .all(id, Math.max(0, offset - metadata.total), capacity + 1);
+        for (const owner of owners.slice(0, capacity)) {
+          const row = this.db.query<{ entry_key: string; metadata: string; survivors: number; exits: number }, [string]>(
+            "SELECT entry_key,metadata,survivors,exits FROM registry_termination_entries WHERE entry_key=?").get(owner.entry_key);
+          if (!row) throw new Error("termination owner unavailable");
+          readEntry(row);
+          nextOffset = metadata.total + owner.ordinal;
+        }
+        complete = owners.length <= capacity;
+      }
+      if (ownsTransaction) this.db.exec("COMMIT");
+      return { snapshot: result, offset, totalGenerations: metadata.total,
+        currentEvidence: `sqlite:${databaseFileIdentity(this.filename)}:${metadata.version}`, nextOffset, complete };
+    } catch (error) {
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* preserve the read failure */ }
+      throw error;
+    }
+  }
+
+  terminationPathMatches(id: string, pathname: string): boolean {
+    return Boolean(this.db.query<{ present: number }, [string, string]>(
+      "SELECT 1 AS present FROM registry_termination_paths WHERE conversation_id=? AND path=?").get(id, pathname));
   }
 
   read<T>(reader: (file: RegistryFile) => T, options: { skipColdKeyInitialization?: boolean } = {}): T {
@@ -4383,6 +4635,17 @@ export class SqliteAgentRegistryStore {
    * and one that is gone restarts the sweep, which is idempotent for the
    * caller. `keys` reads the named edges instead, for a re-projection.
    */
+  temporaryDataReceiptKeys(after: string, limit: number): string[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 32) throw new RangeError("invalid retention receipt page");
+    // The records view includes current archived values. Seek each indexed
+    // key source separately so ORDER BY never expands retained payloads.
+    const hot = this.db.query<{ row_key: string }, [string, number]>(
+      "SELECT row_key FROM registry_rows WHERE collection='receipts' AND row_key>? ORDER BY row_key LIMIT ?").all(after, limit);
+    const cold = this.changesReady ? this.db.query<{ row_key: string }, [string, number]>(
+      "SELECT row_key FROM registry_cold WHERE collection='receipts' AND row_key>? ORDER BY row_key LIMIT ?").all(after, limit) : [];
+    return [...new Set([...hot, ...cold].map(row => row.row_key))].sort().slice(0, limit);
+  }
+
   pageSeatChildren(parentId: string, after: SeatChildrenAnchor | null, limit: number, keys?: readonly string[]): SeatChildrenPage {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 60) throw new Error("invalid child page limit");
     if (keys && keys.length > limit) throw new Error("child key budget exceeded");
@@ -5225,6 +5488,14 @@ export class SqliteAgentRegistryStore {
       decideGrants();
       return row;
     };
+    pageReaders.set(file, (collection, after, limit) => {
+      const keys = new Set(this.db.query<{ row_key: string }, [string, string, number]>(
+        "SELECT row_key FROM registry_rows WHERE collection=? AND row_key>? ORDER BY row_key LIMIT ?").all(collection, after, limit).map(row => row.row_key));
+      for (const key of dirtyRows.get(collection) ?? []) {
+        if (key > after && (file[collection] as Record<string, unknown>)[key]) keys.add(key); else keys.delete(key);
+      }
+      return [...keys].sort().slice(0, limit);
+    });
     boundedReaders.set(file, (collection, filters, limit) => this.matchingRowKeysBounded(collection, filters, limit));
     keyedReaders.set(file, (collection, field, value) => {
       const values = typeof value === "string" ? [value] : value;

@@ -12,7 +12,9 @@ import { spawnSync, type ChildProcess } from "node:child_process";
 import {
   buildFilesResponseInWorker,
   drainFilesResponseWorker,
+  FILES_PROJECTION_BUILD_TIMEOUT_MS,
   filesResponseWorkerPoolDiagnostics,
+  filesResponseWorkerTimeoutMs,
   shutdownFilesResponseWorker,
   type FilesResponseWorkerRuntime,
 } from "./filesResponseWorker";
@@ -894,4 +896,13 @@ test("task form currency survives the real board summary and notice builders", a
       expect(next.forms.rows).toEqual([]);
     } finally { await dismissAttention(target, { kind: "operator", surface: "desktop" }, { undo: true }); saveTasks(previous); }
   } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
+});
+
+test("a cold project build gets a longer cap than a seat source read, and a runtime's own cap governs both", () => {
+  const seat = { type: "seat-reports" as const, project: "fixture" };
+  expect(filesResponseWorkerTimeoutMs(request, {})).toBe(FILES_PROJECTION_BUILD_TIMEOUT_MS);
+  expect(filesResponseWorkerTimeoutMs(seat, {})).toBe(60_000);
+  expect(FILES_PROJECTION_BUILD_TIMEOUT_MS).toBeGreaterThan(60_000);
+  expect(filesResponseWorkerTimeoutMs(request, { timeoutMs: 50 })).toBe(50);
+  expect(filesResponseWorkerTimeoutMs(seat, { timeoutMs: 50 })).toBe(50);
 });

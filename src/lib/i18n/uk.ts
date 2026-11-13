@@ -4,6 +4,9 @@ import type { en } from "./en";
 /* Ukrainian mirror of en.ts. The `Record<keyof typeof en, …>` annotation fails
    the build if a key is missing or extra, keeping both locales in lockstep. */
 export const uk: Record<keyof typeof en, Message> = {
+  "claudeCloud.connectGithub": "Підключіть GitHub до цього акаунта Claude на claude.ai.",
+  "claudeCloud.createEnvironment": "Створіть хмарне середовище для цього акаунта Claude на claude.ai.",
+
   "pipelineCreation.accepted": "Прийнято — очікує створення",
   "pipelineCreation.linkPending": "Створено — джерельне посилання очікує приєднання",
   "pipelineCreation.attach": "Приєднати збережене посилання",
@@ -1158,6 +1161,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "accounts.resetsExpire": "діє до {at}",
   "accounts.useReset": "Використати скид",
   "accounts.useResetAria": "Використати один скид ліміту для {label}",
+  "accounts.useResetConfirm": "Для цього акаунта буде витрачено один скид, його не можна повернути.",
+  "accounts.useResetCancel": "Скасувати",
   "accounts.resetUsed": "Скид використано для {label} — показано нове вікно",
   "accounts.resetNone": "У {label} немає доступних скидів",
   "accounts.resetNothing": "Нічого скидати для {label} — жодне вікно не вичерпане",
@@ -3882,6 +3887,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "dictation.silence": "тиша — нічого не розпізналось",
   "dictation.unsupported": "запис не підтримується в цьому браузері",
   "dictation.liveError": "помилка live-транскрипції",
+  "dictation.tailMissing": "Останні слова не отримано. Підтверджений текст залишився в чернетці. Перевірте його перед надсиланням.",
+  "dictation.bufferLimit": "Диктовку зупинено: буфер аудіо заповнено. Відновлений текст у чернетці. Перевірте його перед продовженням.",
   "dictation.connectionLost": "зʼєднання з транскрипцією обірвалось",
   "dictation.noMic": "немає доступу до мікрофона",
 
@@ -6876,6 +6883,9 @@ export const uk: Record<keyof typeof en, Message> = {
   "selfUpdate.refusal.no-update": "Оновлення немає: спершу запустіть перевірку.",
   "selfUpdate.refusal.not-failed": "Повторити можна лише оновлення, що не вдалося.",
   "selfUpdate.refusal.cannot-check": "Ця установка не може перевіряти оновлення.",
+  "selfUpdate.disabled.title": "Оновленнями керує адміністратор",
+  "selfUpdate.refusal.updates-disabled": "Адміністратор вимкнув вбудовані оновлення. Скористайтеся процедурою оновлення вашої інсталяції через командний рядок.",
+  "selfUpdate.auto.unavailable.disabled-by-admin": "Оновленнями керує адміністратор",
   "selfUpdate.refusal.cannot-update": "Ця установка не може оновити себе.",
   "selfUpdate.refusal.cannot-restart": "Ця установка не може перезапускати свої процеси.",
   "selfUpdate.refusal.managed-restart": "Керована установка перезапускає процеси через розгортання.",
