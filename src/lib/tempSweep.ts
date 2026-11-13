@@ -460,7 +460,7 @@ export async function removeTreeViaTrash(directory: string, options: {
   } catch (error) {
     // A final removal fence can refuse before touching the quarantined tree.
     // Return its original inode to its owner and discard the now-completed
-    // intent; once any permission write/removal began, keep recovery custody.
+    // intent; once native removal began, keep recovery custody.
     if (!mutationStarted) {
       const current = fs.lstatSync(trash);
       if (current.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === identity && current.uid === uid) {
@@ -496,7 +496,24 @@ export async function finishTreeTrash(journal: string, held: (trash: string) => 
     || `${final.dev}:${final.ino}` !== row.identity || final.uid !== row.uid
     || (process.getuid && final.uid !== process.getuid()) || !matches()
     || mountPointsUnder(row.trash).length || dispatch && !dispatch(row.trash)) return false;
-  await (remove ?? ((target, started) => { started(); return fs.promises.rm(target, { recursive: true, force: true }); }))(row.trash, () => {});
+  let mutationStarted = false;
+  try {
+    await (remove ?? ((target, started) => { started(); return fs.promises.rm(target, { recursive: true, force: true }); }))(
+      row.trash, () => { mutationStarted = true; });
+  } catch (error) {
+    // Permission repair is reversible. Its final fence may refuse after the
+    // modes have rolled back but before native removal acquires custody.
+    if (!mutationStarted) {
+      const current = fs.lstatSync(row.trash);
+      if (current.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === row.identity && current.uid === row.uid) {
+        try { fs.lstatSync(row.directory); throw new Error(`original path was acquired while removal was refused (${attemptTempFailureDetail(error)}); preserved both paths`, { cause: error }); }
+        catch (restoreError) { if ((restoreError as NodeJS.ErrnoException).code !== "ENOENT") throw restoreError; }
+        fs.renameSync(row.trash, row.directory);
+        fs.unlinkSync(journal);
+      }
+    }
+    throw error;
+  }
   fs.unlinkSync(journal);
   return true;
 }

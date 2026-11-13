@@ -330,3 +330,40 @@ test.skipIf(process.platform !== "linux")("permission repair observes a late bin
     expect(fs.readFileSync(path.join(retained, "payload"), "utf8")).toBe("cache");
   } finally { read.mockRestore(); open.mockRestore(); f.store.close(); }
 });
+
+for (const replay of [false, true]) {
+  test(`permission-repair refusal restores the owner in the same pass (replay=${replay})`, async () => {
+    const f = fixture(), inode = fs.statSync(f.directory).ino, journal = attemptTempJournalPath(f.directory);
+    try {
+      if (replay) {
+        const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"),
+          "--crash-quarantined", f.directory], { stdout: "pipe", stderr: "pipe" });
+        const [output, error] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+        expect(await child.exited, error).toBe(0); expect(output).toBe("quarantined\n");
+      }
+      let refusals = 0;
+      for (const now of [NOW, NOW + 60001]) {
+        const previousRefusals = refusals;
+        const report = await sweepAttemptTemps(f.store, { now: () => now, maxRoots: 1,
+          state: async () => "expired", scan: emptyScan, references: async (_original, current) => {
+            if ((fs.statSync(path.join(current, "module-cache")).mode & 0o777) !== 0o555) {
+              refusals++; return false;
+            }
+            return true;
+          } });
+        expect(report).toMatchObject({ removed: 0, deferred: 1, errors: 0 });
+        expect(refusals).toBeGreaterThan(previousRefusals);
+        expect(fs.existsSync(f.directory)).toBeTrue();
+        expect(fs.statSync(f.directory).ino).toBe(inode);
+        expect(fs.statSync(f.cache).mode & 0o777).toBe(0o555);
+        expect(fs.readFileSync(path.join(f.cache, "payload"), "utf8")).toBe("cache");
+        expect(fs.existsSync(journal)).toBeFalse();
+        expect(fs.readdirSync(f.parent).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+      }
+      const report = await sweepAttemptTemps(f.store, { now: () => NOW + 120002, maxRoots: 1,
+        state: async () => "expired", scan: emptyScan, references: async () => true });
+      expect(report).toMatchObject({ removed: 1, errors: 0 });
+      expect(fs.existsSync(f.directory)).toBeFalse(); expect(fs.existsSync(journal)).toBeFalse();
+    } finally { f.store.close(); }
+  });
+}

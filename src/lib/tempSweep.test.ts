@@ -1083,3 +1083,49 @@ test.each([false, true])("trash custody follows the removal boundary (started=%s
   }
   expect(fs.readdirSync(root)).toEqual([]);
 });
+
+test.each(["before-start", "partial-removal", "replacement", "acquired-original"] as const)(
+  "replay refusal retains the correct removal custody (%s)", async kind => {
+    const { removeTreeViaTrash, finishTreeTrash } = await import("./tempSweep");
+    const root = tempRoot(), directory = path.join(root, "root"), journal = path.join(root, "intent.json");
+    fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "preserved bytes");
+    fs.writeFileSync(path.join(directory, "disposable"), "remove first");
+    const inode = fs.statSync(directory).ino;
+    await expect(removeTreeViaTrash(directory, { journal, disposable: true, held: () => false, remove: async (_trash, started) => {
+      started(); throw new Error("interrupted writer");
+    } })).rejects.toThrow("interrupted writer");
+    const { trash } = JSON.parse(fs.readFileSync(journal, "utf8")) as { trash: string };
+    let preserved = trash;
+    const refusal = new Error("replay removal refused");
+    const result = finishTreeTrash(journal, () => false, async (target, started) => {
+      if (kind === "partial-removal") { started(); fs.unlinkSync(path.join(target, "disposable")); }
+      if (kind === "replacement") {
+        preserved = path.join(root, "retained"); fs.renameSync(target, preserved);
+        fs.mkdirSync(target); fs.writeFileSync(path.join(target, "replacement"), "keep replacement");
+      }
+      if (kind === "acquired-original") {
+        fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "replacement"), "keep acquired original");
+      }
+      throw refusal;
+    }, undefined, true);
+    if (kind === "acquired-original") {
+      try { await result; throw new Error("expected refusal"); }
+      catch (error) { expect((error as Error).cause).toBe(refusal); }
+    } else await expect(result).rejects.toBe(refusal);
+    if (kind === "before-start") preserved = directory;
+    expect(fs.statSync(preserved).ino).toBe(inode);
+    expect(fs.readFileSync(path.join(preserved, "payload"), "utf8")).toBe("preserved bytes");
+    expect(fs.existsSync(journal)).toBe(kind !== "before-start");
+    if (kind === "before-start") {
+      expect(fs.existsSync(trash)).toBeFalse();
+      expect(await removeTreeViaTrash(directory, { journal, held: () => false })).toBeTrue();
+    } else if (kind === "partial-removal") {
+      expect(fs.existsSync(directory)).toBeFalse();
+      expect(fs.existsSync(path.join(trash, "disposable"))).toBeFalse();
+      expect(await finishTreeTrash(journal, () => false, undefined, undefined, true)).toBeTrue();
+    } else {
+      const replacement = kind === "replacement" ? trash : directory;
+      expect(fs.readFileSync(path.join(replacement, "replacement"), "utf8"))
+        .toBe(kind === "replacement" ? "keep replacement" : "keep acquired original");
+    }
+  });
