@@ -60,7 +60,9 @@ authorization revocation, lease loss and cleanup. Runner regressions drive
 avatar and frame fixtures through actual child input for both engines, plus
 unsupported-type fallback. No performance improvement is claimed.
 
-Checked on 2026-11-13 against main `6b78dc64d2`, using fresh scratch exports.
+Checked on 2026-11-13 against main `fbc7d2474b`, using fresh scratch exports
+after merging the launch-path successor. This repeated the initial checks
+against `6b78dc64d2` with the same results.
 Heavy checks ran sequentially through the gate wrapper; each test invocation
 had its own HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR.
 
