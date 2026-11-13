@@ -72,7 +72,7 @@ for (const stepName of ["Platform tests", "Terminal bootstrap custody with nativ
       }
       writeFileSync(path.join(dir, "scripts/gate-slot.sh"), `#!/bin/bash
 set -eu
-[[ $# == 3 && $1 == bun && $2 == test && -f $3 ]] || exit 91
+[[ $# == 3 && $1 == bun && $2 == scripts/ci-test.ts && -f $3 ]] || exit 91
 printf '%s\\n' "$3" >> "$CALLS"
 [[ $3 != "$FAIL_FILE" ]] || exit 17
 `);
