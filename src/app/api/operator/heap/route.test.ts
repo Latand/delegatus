@@ -104,3 +104,32 @@ test("with the header the operator's snapshot reaches the guards, and a written 
   if (response.status === 200) expect(String(body.path).startsWith(path.join(root, "cache") + path.sep)).toBe(true);
   else expect(body).toMatchObject({ written: false, refusal: "insufficient_disk" });
 });
+
+
+test("stats and persisted series expose total window bytes, largest host and preview counts", async () => {
+  const { heapAttribution } = await import("@/lib/heapAttribution");
+  const { HostEventWindow } = await import("@/lib/runtime/hostEventWindow");
+  const { createHeapSeriesStore } = await import("@/lib/heapSeries");
+  const window = new HostEventWindow();
+  window.append({ kind: "item", turnId: "turn", seq: 1, phase: "completed",
+    item: { type: "commandExecution", id: "heap-tool", aggregatedOutput: "x".repeat(20_000) } });
+  const host = { heapAttribution: () => ({ engine: "codex", events: window.events.length, eventSubscribers: 0, stateSubscribers: 0, queuedEvents: 0, ...window.heapAttribution() }) };
+  heapAttribution.hosts.add(host, null);
+  const response = await read("?gc=full", operator);
+  expect(response.status).toBe(200);
+  const stats = await response.json();
+  const { windowBytes } = window.heapAttribution();
+  expect(stats.attribution.hosts).toMatchObject({ windowBytes, largestWindowBytes: windowBytes, trimmedEvents: 1 });
+  expect(stats.attribution.hosts.largest[0]).toMatchObject({ windowBytes, windowByteLimit: window.byteLimit, trimmedEvents: 1 });
+  const at = Date.now();
+  const store = createHeapSeriesStore(path.join(root, "state", "state.sqlite"));
+  try {
+    // The autonomous sampler uses the same compact snapshot as this sample.
+    store.append({ id: "preview-sample", at, pid: 123, uptimeSeconds: 60, censusAt: new Date(at).toISOString(),
+      heapSize: 100, extraMemorySize: 0, rss: 200, censusMs: 1, gc: { mode: "none" }, types: {}, attribution: heapAttribution.snapshot(at, false) });
+  } finally { store.close(); }
+  const series = await read("?mode=series", operator);
+  expect(series.status).toBe(200);
+  expect((await series.json()).samples.at(-1).attribution.hosts).toMatchObject({ windowBytes, largestWindowBytes: windowBytes, trimmedEvents: 1, largest: [] });
+  expect(host.heapAttribution().windowBytes).toBe(windowBytes);
+});
