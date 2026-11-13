@@ -50,11 +50,12 @@ Three local defects are repaired: possible emission is durable before the initia
 | `git fetch origin main` followed by `git merge --no-edit origin/main` | 0 | one unrelated monitor update merged |
 | Before fixes: `gate-slot.sh bun test --timeout=60000 src/lib/externalRelay/actionOutcome.test.ts --test-name-pattern 'restart and authorization\|real client restarts\|pending action status'` | 1 | 0 pass, 4 fail, 15 assertions |
 | After fixes: explicit `actionOutcome.test.ts` | 0 | 30 pass, 0 fail, 175 assertions |
-| Final action file, including emission-boundary and old-record compatibility cases | 0 | 34 pass, 0 fail, 189 assertions |
+| Expanded action file, including emission-boundary and old-record compatibility cases | 0 | 34 pass, 0 fail, 189 assertions |
 | `gate-slot.sh bun test --timeout=60000 src/lib/externalRelay/runner.test.ts` | 1 | 334 pass (including one expected failure), 4 skip, 7 fail, 3290 assertions |
 | Current main, same file selecting all seven failures | 1 | 0 pass, 7 fail, 82 assertions; all match |
 | Whole-file privacy gate, all 14 lane files | 0 | PASS |
-| Full runner member-retry reproduction, with `test.failing` removed in the scratch copy | 1 | 0 pass, 1 fail, 8 assertions; both request route and call identity differ |
+| Full runner member-retry reproduction, with `test.failing` removed in the scratch copy; renewed with the final two-message input | 1 | 0 pass, 1 fail, 8 assertions; both request route and call identity differ |
+| `gate-slot.sh bunx tsc --noEmit --incremental false` | 2 | One new test assertion overload error; fixed with explicit `toBeUndefined` and string branches. The final hook renews types and tests after that correction |
 
 The committed member-retry reproduction is marked `test.failing` to preserve the known contract defect. Its two normal runner entries exercise request claims, leases, recorded tool outcomes, terminal claims and exactly one fake effect. This expected failure does not satisfy acceptance 3: a fresh member request supplies no link to the earlier action. A contract that safely reauthorizes redelivery of the original identity is still required, and the agreed lane constraint excludes inventing a new cross-turn identity. No fuzzy matching by arguments or message text is added.
 

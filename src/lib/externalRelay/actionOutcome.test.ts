@@ -74,8 +74,9 @@ for (const phase of ["next", "expired"]) test(`real client restarts cannot reple
   });
   try {
     const id = `restart_bound_${phase}`;
-    expect((await client(peer.origin, id, phase === "expired" ? "crash" : "next"))[0]?.outcome)
-      .toBe(phase === "expired" ? undefined : "verification_failed");
+    const outcome = (await client(peer.origin, id, phase === "expired" ? "crash" : "next"))[0]?.outcome;
+    if (phase === "expired") expect(outcome).toBeUndefined();
+    else expect(outcome).toBe("verification_failed");
     const initialPosts = posts;
     for (let generation = 0; generation < 3; generation++) {
       expect((await client(peer.origin, id, phase))[0]?.outcome).toBe("verification_failed");
