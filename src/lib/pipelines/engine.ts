@@ -15,7 +15,7 @@ import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./work
 import { prepareLockedDependencies } from "./lockedDependencies";
 import { settledPublicationForHead } from "./publicationEvidence";
 import { claudeCloudTaskFingerprint, codexCloudEnvironmentId, pipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
-import { cloudEnvironmentChoiceFingerprint } from "@/lib/projects/codexCloudEnvironments";
+import { cloudAccountVersion, recordCloudEnvironmentConnectFailure, cloudEnvironmentChoiceFingerprint } from "@/lib/projects/codexCloudEnvironments";
 import { cloudEngine, cloudLabel, cloudPollDelay, cloudStageDeadlineMs, isCloudRuntime, type CloudRuntime, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt } from "./cloudStage";
 import { hostedCloudStageClient, CloudSubmissionNotStartedError } from "./cloudHostedClient";
 import { claudeCloudStageClient } from "./cloudClaudeClient";
@@ -9409,6 +9409,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
     };
     const cloud = structuredClone(original);
     let submissionDispatched = false;
+    let recordConnectFailure: ((code: NonNullable<CloudSubmissionNotStartedError["environmentFailure"]>) => Promise<void>) | undefined;
     try {
       if (remaining <= 0) throw new Error(`${label} stage timed out`);
       const bound = attemptStage(stage, attempt);
@@ -9430,18 +9431,22 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
           if (setupError) throw new Error(setupError);
         }
       };
-      const guardAccount = (account: AccountContext) => () => {
-        assertLane();
-        if (!cloud.taskId) assertProactivePipelineExecution(reader.read() ?? pipeline, "dispatch", { id: account.accountId, engine, model: attempt.effectiveRole.model });
-        const current = resolve(account.accountId);
-        if (current.kind !== "available") throw new Error(`${label} account ${current.kind}`);
-        if (current.account.accountId !== account.accountId || current.account.home !== account.home) throw new Error(`${label} account changed`);
-        if (!bound.account && !cloud.taskId) {
-          const allowed = allowedAccountIdsForProject(pipeline.project, engine);
-          if (allowed && !allowed.includes(account.accountId)) throw new Error(`${label} automatic account no longer allowed`);
-        }
-        if (!cloud.taskId && cloud.environmentSelection
-          && cloud.environmentSelection !== cloudTargetFingerprint(runtime, pipeline.project, account.accountId)) throw new Error(`${label} environment selection changed`);
+      const guardAccount = (account: AccountContext) => {
+        const credentialVersion = runtime === "codex-cloud" ? cloudAccountVersion(account) : undefined;
+        return () => {
+          assertLane();
+          if (credentialVersion !== undefined && cloudAccountVersion(account) !== credentialVersion) throw new Error(`${label} account credentials changed`);
+          if (!cloud.taskId) assertProactivePipelineExecution(reader.read() ?? pipeline, "dispatch", { id: account.accountId, engine, model: attempt.effectiveRole.model });
+          const current = resolve(account.accountId);
+          if (current.kind !== "available") throw new Error(`${label} account ${current.kind}`);
+          if (current.account.accountId !== account.accountId || current.account.home !== account.home) throw new Error(`${label} account changed`);
+          if (!bound.account && !cloud.taskId) {
+            const allowed = allowedAccountIdsForProject(pipeline.project, engine);
+            if (allowed && !allowed.includes(account.accountId)) throw new Error(`${label} automatic account no longer allowed`);
+          }
+          if (!cloud.taskId && cloud.environmentSelection
+            && cloud.environmentSelection !== cloudTargetFingerprint(runtime, pipeline.project, account.accountId)) throw new Error(`${label} environment selection changed`);
+        };
       };
       let account: AccountContext;
       if (cloud.taskId && (cloud.accountId || attempt.accountId)) {
@@ -9528,6 +9533,15 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
       const assertCurrent = () => {
         accountGuard();
         if (privacyRevision !== undefined && storedLessonRevision() !== privacyRevision) throw new Error(`${label} input privacy changed`);
+      };
+      recordConnectFailure = async code => {
+        assertCurrent();
+        if (!cloud.environmentBindingRevision || !cloud.environmentSelection || !cloud.environmentPrincipal) return;
+        await recordCloudEnvironmentConnectFailure({ project: pipeline.project, account, code,
+          repository: githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? "", ref: pipeline.baseBranch,
+          environmentId: cloud.environmentId, revision: cloud.environmentBindingRevision, selection: cloud.environmentSelection,
+          principal: cloud.environmentPrincipal, now: () => unixMs(ports.now()), signal: abort.signal, assertCurrent });
+        assertCurrent();
       };
       if (cloud.phase === "reserved") {
         // Persist before submission. A crash after this point is ambiguous and
@@ -9632,6 +9646,9 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
       if (!sameCloudIntent(reader.read(), stageId, n, expected, authority)) {
         if (cloud.taskId && cloud.taskId !== original.taskId) await checkpoint({ ...cloud, phase: "polling" }, undefined, true);
         return;
+      }
+      if (runtime === "codex-cloud" && error instanceof CloudSubmissionNotStartedError && error.environmentFailure) {
+        await recordConnectFailure?.(error.environmentFailure);
       }
       const detail = error instanceof Error ? error.message : `${label} operation failed`;
       const unavailable = error instanceof HostedCloudError && error.category !== "invalid";
@@ -9739,19 +9756,21 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
   ports: PipelinePorts, persist: () => void | Promise<void>): Promise<void> {
   const bound = attemptStage(stage, attempt);
   const runtime = attemptCloudRuntime(stage, attempt), label = cloudLabel(runtime), engine = cloudEngine(runtime);
-  const reject = async (error: string) => {
+  const reject = async (error: string, cloudReason = error) => {
+    bindAttemptDefinition(stage, attempt, ports);
     attempt.state = "failed"; attempt.completedAt = ports.now(); attempt.error = error;
     if (attempt.cloud) {
       if (attempt.cloud.phase === "reserved") attempt.cloud.submissionUnresolved = false;
       if (attempt.cloud.phase === "submitting" && !attempt.cloud.taskId) attempt.cloud.submissionUnresolved = true;
-      attempt.cloud.phase = "failed"; attempt.cloud.error = error;
+      attempt.cloud.phase = "failed"; attempt.cloud.error = cloudReason;
     }
     setCursorState(pipeline, stage.id, "pending");
     await park(pipeline, error, attempt); await persist();
   };
   const fallback = async (reason: string) => {
+    if (runtime === "codex-cloud") return reject(`${label} required; Cloud execution failed: ${reason}. Select runtime local explicitly to run on this machine.`, reason);
     bindAttemptDefinition(stage, attempt, ports);
-    attempt.cloud ??= { phase: "failed", environmentId: runtime === "codex-cloud" ? codexCloudEnvironmentId(pipeline.project) : "", branch: pipeline.branch,
+    attempt.cloud ??= { phase: "failed", environmentId: "", branch: pipeline.branch,
       headSha: pipeline.lastPassedCommit, deadlineAt: ports.now(), nextPollAt: ports.now(), polls: 0, taskId: null, taskUrl: null, model: null, error: reason };
     attempt.cloud.phase = "failed"; attempt.cloud.error = reason;
     attempt.cloud.fallback = { at: ports.now(), reason };
@@ -14410,7 +14429,7 @@ export function normalizeStages(
       && !cloudStageConfigurationError({ ...input, runtime: "codex-cloud", model: resolved.role.model, effectiveRole: resolved.role });
     const runtime = input.runtime ?? (preservedStage ? preservedStage.runtime : inheritsCloud ? "codex-cloud" : undefined);
     const normalizedStage: PipelineStage = { ...input, ...(runtime ? { runtime } : {}),
-      ...(input.runtime === undefined && runtime === "codex-cloud" || runtime === "claude-cloud" && input.model === undefined ? { model: resolved.role.model } : {}),
+      ...(isCloudRuntime(runtime) && input.model === undefined ? { model: resolved.role.model } : {}),
       effectiveRole: structuredClone(resolved.role) };
     // Structural edits keep saved edge semantics, including legacy advance.
     // New definitions and explicit set-edge writes freeze today's default.
@@ -15030,6 +15049,20 @@ async function admitPipelineFromRequest(
   const normalized = normalizeStages(req.stages, ports.roleLookup, undefined, req.autoStart === false ? 0 : MIN_STARTED_PIPELINE_STAGES, roleProject);
   if (!normalized.stages) {
     violations.push(...(normalized.violations ?? [{ field: "stages", message: normalized.error ?? "invalid stages", expected: STAGE_OBJECT_SHAPE }]));
+  }
+  // Check the frozen role model and effort, including project runtime defaults,
+  // before repository admission, provisioning or a durable lane is created.
+  for (const [index, stage] of (normalized.stages ?? []).entries()) {
+    if (!isCloudRuntime(stage.runtime)) continue;
+    const provider = stage.runtime === "claude-cloud" ? ports.claudeCloudClient : ports.cloudClient;
+    const error = cloudTransportError(provider, stage.model!, stage.effectiveRole.effort, cloudLabel(stage.runtime));
+    if (error) violations.push({ field: `stages[${index}].model`, message: error,
+      expected: "effective model and reasoning effort supported by the selected Cloud transport" });
+  }
+  if (normalized.stages?.some(stage => isCloudRuntime(stage.runtime))
+    && (creator.lineage?.srcConversationId || creator.lineage?.srcPath)
+    && !(typeof req.inputContext?.handoffDigest === "string" && req.inputContext.handoffDigest.trim())) {
+    violations.push({ field: "inputContext.handoffDigest", message: "A source conversation requires a handoff digest; raw transcripts are not accepted.", expected: "non-empty handoffDigest for Cloud stages" });
   }
   /* Read after the type checks above recorded their verdicts: with batching a
      non-string baseRef reaches here, so the trims must not assume a string. */
@@ -17816,7 +17849,7 @@ async function applyPipelinePatch(
         );
         if (!resolved.role) return { error: resolved.error ?? "invalid stage role", status: 400 };
         const cloudError = cloudStageConfigurationError({ ...target, runtime: req.runtime ?? target.runtime,
-          model: req.model !== undefined ? req.model : resetRuntime ? undefined : isCloudRuntime(req.runtime) ? resolved.role.model : target.model, effectiveRole: resolved.role });
+          model: req.model !== undefined ? req.model : isCloudRuntime(req.runtime ?? target.runtime) ? resolved.role.model : resetRuntime ? undefined : target.model, effectiveRole: resolved.role });
         if (cloudError) return { error: cloudError, status: 400 };
         /* The store keeps a stage's input-level role/engine/model/effort
            consistent with its effectiveRole (isStage), so mirror the resolution
