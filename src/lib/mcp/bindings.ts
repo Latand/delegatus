@@ -1,3 +1,4 @@
+import { setTimeout as ownerMediaPause } from "node:timers/promises";
 import { textLengthError } from "@/lib/textLimits";
 import { keepReportPicturesSoon } from "@/lib/reportMedia/paths";
 import { AsyncResource } from "node:async_hooks";
@@ -4840,6 +4841,16 @@ function cloudEnvironmentWriteAuthority(args: McpToolArgs, dependencies: ViewerM
   throw new McpToolRefusal("Cloud environment overrides require the operator or this project's designated seat", { code: "cloud_environment_write_refused", status: 403 });
 }
 
+function claudeCloudTaskWriteAuthority(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): void {
+  if (args.action !== "prepare") return;
+  const caller = authorityOf(dependencies);
+  if (caller.kind === "root") return;
+  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+  if (caller.kind === "worker" && seats.some(seat => seat.conversationId === caller.conversationId && seat.project
+    && canonicalProject(seat.project) === canonicalProject(required(args, "project")))) return;
+  throw new McpToolRefusal("Claude task preparation requires the operator or this project’s designated seat", { code: "claude_cloud_task_write_refused", status: 403 });
+}
+
 /**
  * get_orchestrator (two-axis contract): the designation, its health, and a
  * BOUNDED rotation recommendation. Read-only; every inferred number is
@@ -5801,11 +5812,18 @@ function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
   return redactPayload({ count: accounts.length, accounts });
 }
 
-async function relayOwnerHistory(args: McpToolArgs, control: ViewerControlDependencies, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+async function relayOwnerHistory(args: McpToolArgs, control: ViewerControlDependencies, dependencies: ViewerMcpDomainDependencies, context?: McpToolCallContext): Promise<McpToolPayload> {
   if (ownerRelayCaller(dependencies)) throw new McpToolRefusal("Group history cannot be read while answering in Telegram.", { code: "owner_history_refused" });
-  return redactPayload(await control.post("/api/external-relay/owner-history", {
-    op: args.action, ...Object.fromEntries(["chat", "from", "to", "limit", "cursor"].filter(key => args[key] !== undefined).map(key => [key, args[key]])),
-  }, callerCapabilityHeaders()));
+  const body = { op: args.action, ...Object.fromEntries(["chat", "from", "to", "limit", "cursor", "messageId", "directory"]
+    .filter(key => args[key] !== undefined).map(key => [key, args[key]])) };
+  const deadline = Math.min(Date.now() + 30_000, context?.deadlineAt ?? Infinity);
+  for (;;) {
+    context?.signal?.throwIfAborted(); context?.assertCaller?.();
+    if (ownerRelayCaller(dependencies)) throw new McpToolRefusal("Group history cannot be read while answering in Telegram.", { code: "owner_history_refused" });
+    const answer = await control.post("/api/external-relay/owner-history", body, callerCapabilityHeaders());
+    if (args.action !== "media" || answer.status !== "in_progress" || Date.now() + 3500 >= deadline) return redactPayload(answer);
+    await ownerMediaPause(Math.min(1000, Math.max(1, Number(answer.retryAfterSeconds) || 1) * 1000), undefined, { signal: context?.signal });
+  }
 }
 
 /*
@@ -8899,6 +8917,16 @@ export function viewerMcpBindings(
       cloudEnvironmentWriteAuthority(args, domainDependencies);
       return control.post("/api/projects/cloud-environments", args, callerCapabilityHeaders());
     }, false, false), { authorizeReceipt: (args: McpToolArgs) => cloudEnvironmentWriteAuthority(args, domainDependencies) }),
+    claude_cloud_task: Object.assign(orchestratorProjectBinding(domainDependencies, async (args, context) => {
+      const control = viewerControlForCall(controlDependencies, context);
+      if (args.action === "read") {
+        const query = new URLSearchParams({ project: required(args, "project") });
+        if (args.accountId !== undefined) query.set("accountId", String(args.accountId));
+        return readViewerControl(control, `/api/projects/claude-cloud-tasks?${query}`);
+      }
+      claudeCloudTaskWriteAuthority(args, domainDependencies);
+      return control.post("/api/projects/claude-cloud-tasks", args, callerCapabilityHeaders());
+    }, false, false), { authorizeReceipt: (args: McpToolArgs) => claudeCloudTaskWriteAuthority(args, domainDependencies) }),
     role_presets: async (args) => waitForStateLock("mcp.role-presets", () => rolePresetsTool(args, domainDependencies)),
     auto_updates: (args, context) => autoUpdatesTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     voice_tools: (args, context) => voiceTools(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
@@ -8931,7 +8959,7 @@ export function viewerMcpBindings(
       if (result === null) throw new McpToolRefusal("Service tools exist only while you answer a relay message as its owner.", { code: "relay_tools_unavailable", retryable: false });
       return result;
     },
-    relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies),
+    relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
     github_app_connect: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => {
       const capability = callerCapability();

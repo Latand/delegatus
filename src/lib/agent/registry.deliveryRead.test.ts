@@ -175,3 +175,66 @@ test("opening an existing path index upgrades triggers for already connected ups
     expect(store.read(file => registryConversationsForPath(file, "/sessions/target.jsonl").map(row => row.id))).toEqual([conversation.id]);
   } finally { writer.close(); store.close(); registry.close(); }
 });
+
+test("opening an existing termination projection upgrades connected conversation and entry writers", () => {
+  const { registry, conversation } = seed("termination-upgrade");
+  const state = registry.snapshot();
+  state.conversations[conversation.id]!.continuityPaths.push("/sessions/target.jsonl");
+  const filename = path.join(root, "termination-upgrade.sqlite");
+  let store = new SqliteAgentRegistryStore(filename, { initialSnapshot: state, normalize: normalizeRegistry });
+  store.close();
+  const writer = new Database(filename);
+  writer.exec(`DROP TRIGGER registry_rows_termination_update;
+    CREATE TRIGGER registry_rows_termination_update AFTER UPDATE ON registry_rows WHEN NEW.collection='conversations' BEGIN
+      DELETE FROM registry_termination_paths WHERE conversation_id=OLD.row_key;
+      INSERT OR IGNORE INTO registry_termination_paths SELECT NEW.row_key,json_extract(value,'$.path')
+        FROM json_each(NEW.value_json,'$.generations');
+      INSERT OR IGNORE INTO registry_termination_paths SELECT NEW.row_key,value FROM json_each(NEW.value_json,'$.continuityPaths');
+    END;
+    UPDATE registry_meta SET value='1' WHERE key='termination_projection_version';`);
+  const before = writer.query("SELECT * FROM registry_rows ORDER BY collection,row_key").all();
+  store = new SqliteAgentRegistryStore(filename, { initialSnapshot: state, normalize: normalizeRegistry });
+  try {
+    expect(writer.query("SELECT * FROM registry_rows ORDER BY collection,row_key").all()).toEqual(before);
+    const row = structuredClone(state.conversations[conversation.id]!);
+    row.generations.push({ ...row.generations[0]!, id: "upgraded-generation" });
+    row.continuityPaths.push("/sessions/upgraded-termination.jsonl");
+    writer.query(`INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('conversations',?,?,0)
+      ON CONFLICT(collection,row_key) DO UPDATE SET value_json=excluded.value_json`).run(conversation.id, JSON.stringify(row));
+    expect(store.terminationPage(conversation.id, 0, 8).totalGenerations).toBe(2);
+    expect(store.terminationIdentity({ path: "/sessions/upgraded-termination.jsonl" })?.id).toBe(conversation.id);
+    expect(store.terminationIdentity({ path: "/sessions/target.jsonl" })?.id).toBe(conversation.id);
+    const key = { engine: "codex" as const, sessionId: "termination-upgrade-owner" };
+    const entryKey = `${key.engine}:${key.sessionId}`;
+    const child = { pid: 2147483647, startIdentity: "retained-child" };
+    const entry = { key, artifactPath: "/sessions/target.jsonl", cwd: "/repo", accountId: null,
+      status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+      updatedAt: "2026-11-12T12:00:00.000Z", structuredTerminationSurvivors: [child] };
+    const version = () => store.terminationIdentity({ conversationId: conversation.id })!.version;
+    const owner = () => store.terminationPage(conversation.id, 0, 8).snapshot.entries[entryKey];
+    let beforeVersion = version();
+    writer.query("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('entries',?,?,0)")
+      .run(entryKey, JSON.stringify(entry));
+    expect(version()).not.toBe(beforeVersion);
+    expect(owner()?.structuredTerminationSurvivors?.[0]).toEqual(child);
+    beforeVersion = version();
+    writer.query("UPDATE registry_rows SET value_json=? WHERE collection='conversations' AND row_key=?")
+      .run(JSON.stringify({ ...row, title: "Updated conversation" }), conversation.id);
+    expect(version()).not.toBe(beforeVersion);
+    expect(owner()?.structuredTerminationSurvivors?.[0]).toEqual(child);
+    beforeVersion = version();
+    writer.query("UPDATE registry_rows SET value_json=? WHERE collection='entries' AND row_key=?")
+      .run(JSON.stringify({ ...entry, artifactPath: "/sessions/detached-owner.jsonl" }), entryKey);
+    expect(version()).not.toBe(beforeVersion);
+    expect(owner()).toBeUndefined();
+    beforeVersion = version();
+    writer.query("UPDATE registry_rows SET value_json=? WHERE collection='entries' AND row_key=?")
+      .run(JSON.stringify(entry), entryKey);
+    expect(version()).not.toBe(beforeVersion);
+    expect(owner()?.structuredTerminationSurvivors?.[0]).toEqual(child);
+    beforeVersion = version();
+    writer.query("DELETE FROM registry_rows WHERE collection='entries' AND row_key=?").run(entryKey);
+    expect(version()).not.toBe(beforeVersion);
+    expect(owner()).toBeUndefined();
+  } finally { writer.close(); store.close(); registry.close(); }
+});

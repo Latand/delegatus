@@ -786,7 +786,13 @@ refusing resubmission.
 
 New file `src/lib/pipelines/cloudClaudeClient.ts`, with fake-transport tests.
 
-**Setup, once per account, by the operator on claude.ai**
+Automatic task preparation is specified in
+`docs/design/claude-cloud-auto-prepare.md`: Delegatus discovers or creates the
+scheduled task, repairs it and records the binding on each allowed account.
+The operator only completes linked GitHub and environment prerequisites. The
+numbered steps below retain the original setup plan; task step 4 is now automatic.
+
+**Original setup plan, once per account on claude.ai**
 
 All of it runs on the subscription; Delegatus stores no credential of its own.
 
@@ -802,7 +808,7 @@ All of it runs on the subscription; Delegatus stores no credential of its own.
    secrets.
 4. One scheduled task: this repository, that environment, the model the
    account's cloud stages use, **every connector removed** (the API adds two by
-   default, O12), the saved prompt from `docs/cloud/claude-task-prompt.md`, and no
+   default, O12), the saved prompt from `src/lib/pipelines/claudeCloudTaskPrompt.ts`, and no
    API trigger. A one-off run a year ahead satisfies the schedule; the saved prompt makes
    a run without a Delegatus assignment end at once. The saved prompt says the
    assignment comes in the follow-up messages that carry the run's nonce: run
@@ -811,19 +817,20 @@ All of it runs on the subscription; Delegatus stores no credential of its own.
    explicitly supersedes the obsolete probe requirement in older saved prompts;
    existing tasks need no prompt update.
 
-Project setting `claudeCloudTasks: Array<{ accountId: string; taskId: string;
-model: string }>` in `src/lib/projects/settings.ts`, written through `PUT
-/api/projects/settings` under the same operator authority as
-`codexCloudEnvironmentId`. Empty disables the provider.
+Project setting `claudeCloudTasks: Array<{ accountId: string; taskId: string }>`
+in `src/lib/projects/settings.ts` keeps per-account bindings. The operator may
+replace the list through `PUT /api/projects/settings`; automatic preparation
+upserts one account while preserving the others. Removing an account from the
+project’s Claude pool stops its automatic preparation.
 
 **Admission**
 
-`prepareEnvironment` reads the configured task afresh per attempt and checks its
-enabled state, absence of connectors and repository. It starts no probe session.
+`prepareEnvironment` prepares or repairs the account’s scheduled task and checks
+its GitHub connection, enabled state, absence of connectors and repository. It starts no probe session.
 GitHub write capability is allowed, is never tested as an admission condition,
 and creates no hold or local fallback. The removed hold file is ignored, including
-records left by an older installation. There is no readiness record or «Check»
-job in this runtime (see §1.13).
+records left by an older installation. Automatic task readiness and human-only
+setup actions are described in `docs/design/claude-cloud-auto-prepare.md`.
 
 **Submit**
 
