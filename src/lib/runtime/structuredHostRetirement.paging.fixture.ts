@@ -1,3 +1,4 @@
+import { spyOn } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { AgentRegistry, normalizeRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
@@ -15,6 +16,7 @@ import { defaultSeatTickSources, gatherSeatTickInput } from "@/lib/monitor/seatT
 import { DEFAULT_SEAT_TICK_POLICY } from "@/lib/monitor/seatTick";
 import { emptySeatTickState } from "@/lib/monitor/types";
 import { terminateStructuredHostTree } from "./structuredHostControl";
+import * as hostControl from "./structuredHostControl";
 import { projectRetirementStatus } from "./structuredHostRetirementStatus";
 
 const NOW = Date.parse("2026-10-28T09:00:00Z");
@@ -22,11 +24,14 @@ const session = (index: number) => ["00000000", "0000", "0000", "0000", String(i
 const filename = statePath("fixture-registry.json");
 const requested = process.argv[2]!;
 const curator = requested.includes("curator");
-const scenario = requested.replace("gone-curator", "gone").replace("late-curator", "late");
+const scenario = requested.replace("gone-curator", "gone").replace("late-curator", "late").replace("scope-curator", "scope");
+const scopeRelease = scenario.startsWith("scope-release");
+let scopeRootExited = false;
+const terminationErrors: string[] = [];
 const gone = scenario.startsWith("gone");
 const lateGone = scenario === "gone-after-measurement";
 const disappeared = new Set<number>();
-const scoped = scenario.startsWith("gone-scope") || scenario === "gone-exit" || lateGone;
+const scoped = scopeRelease || scenario.startsWith("gone-scope") || scenario === "gone-exit" || lateGone;
 const currentBoot = systemBootEpoch()!;
 const oldBoot = `linux:${["00000000", "0000", "0000", "0000", "000000000000"].join("-")}:pidns:pid:[1]`;
 const reused = scenario === "gone-reused";
@@ -38,7 +43,7 @@ const refuses = (index: number) => scenario === "batch-wrap" || index <= 8 || in
 if (!fs.existsSync(filename)) {
   const entries: Record<string, unknown> = {};
   const conversations: Record<string, unknown> = {};
-  const count = scenario === "batch-progress" ? 1024 : scenario === "batch-wrap" ? 32 : scenario === "paging" ? 524 : 6;
+  const count = scopeRelease ? 1 : scenario === "batch-progress" ? 1024 : scenario === "batch-wrap" ? 32 : scenario === "paging" ? 524 : 6;
   const indices = Array.from({ length: count }, (_, index) => index + 1);
   // Registration order must not hide a sorted-page starvation regression.
   if (batchScenario) indices.sort((a, b) => Number(refuses(a)) - Number(refuses(b)) || a - b);
@@ -199,11 +204,23 @@ const dependencies: StructuredHostRetirementDependencies = {
     return { ok: true, via: "runtime", pids: [ref.pid] };
   },
   // Bun runs this fixture against the base too; unknown dependency fields are inert there.
-  ...{ pidAlive: scenario === "gone" ? undefined : (pid: number) => determined((lateGone && !disappeared.has(pid)) || reused || !gone && !disappeared.has(pid) || revived && pid === 2_000_000_001),
+  ...{ pidAlive: scenario === "gone" ? undefined : (pid: number) => determined(!scopeRootExited && ((lateGone && !disappeared.has(pid)) || reused || !gone && !disappeared.has(pid) || revived && pid === 2_000_000_001)),
     scopeLoadState: async (scope: { unit: string }) => {
       scopeReads.push(scope.unit);
+      if (scopeRelease) {
+        await Promise.resolve();
+        const key = { engine: "codex" as const, sessionId: session(1) };
+        const entry = registry.hostEntry(key)!;
+        if (scenario === "scope-release-read-claim") registry.upsert({ ...entry, claimEpoch: entry.claimEpoch + 1 });
+        if (scenario === "scope-release-read-owner") registry.upsert({ ...entry, claimOwner: "replacement-owner" });
+        if (scenario === "scope-release-read-writer") registry.upsert({ ...entry,
+          structuredHost: { ...entry.structuredHost!, writerClaimEpoch: entry.structuredHost!.writerClaimEpoch + 1 } });
+        if (scenario === "scope-release-read-boot") bootChanged = true;
+        if (scenario === "scope-release-read-publication") publication = "unbound";
+      }
       if (scenario === "gone-scope-unknown") throw new Error("scope read unavailable");
-      return scenario === "gone-scope-live" ? "loaded" : "not-found";
+      if (scenario === "scope-release-unreadable") throw new Error("fixture scope read failed");
+      return scenario === "gone-scope-live" || scenario === "scope-release-loaded" ? "loaded" : "not-found";
     },
     treePss: async (pids: readonly number[]) => {
       await Promise.resolve();
@@ -211,6 +228,44 @@ const dependencies: StructuredHostRetirementDependencies = {
       return { bytes: 60, measuredProcesses: 1 };
     } },
 };
+// Exercise the sweep's default authorizer and the real termination ladder.
+// Only native effects and kernel observations belong to this fixture.
+if (scopeRelease) {
+  delete dependencies.terminate;
+  const terminate = hostControl.terminateStructuredHostTree;
+  spyOn(hostControl, "terminateStructuredHostTree").mockImplementation(async (ref, options) => {
+    const outcome = await terminate(ref, {
+      ...options,
+      pidAlive: pid => pid === ref.pid + 1 && scenario === "scope-release-descendant" || !scopeRootExited,
+      processIdentity: pid => pid === ref.pid + 1 ? "fixture:2" : scopeRootExited ? null : "fixture:1",
+      bootEpoch: () => currentBoot,
+      ppidMap: () => new Map(scenario === "scope-release-descendant" ? [[ref.pid, 1], [ref.pid + 1, ref.pid]] : [[ref.pid, 1]]),
+      processGroupId: () => null,
+      protectedPids: () => new Set(),
+      signal: () => { throw new Error("fixture must never signal a process"); },
+      stopScope: async () => { throw new Error("fixture must never stop a scope"); },
+      terminateOwnedHost: async () => {
+        attempted.push(ref.sessionId!);
+        await Promise.resolve();
+        const entry = registry.hostEntry({ engine: ref.engine, sessionId: ref.sessionId! })!;
+        scopeRootExited = scenario !== "scope-release-live";
+        registry.setStructuredHost(entry.key, entry.structuredHost!, "unhosted");
+        if (scenario === "scope-release-replaced") {
+          const expected = entry.structuredHost!.process!;
+          if (!registry.terminateStructuredHost(entry.key, expected, [expected], undefined, entry.structuredHost!.scope!)) {
+            throw new Error("fixture could not retire original custody");
+          }
+          registry.upsert({ ...entry, claimEpoch: entry.claimEpoch + 1,
+            structuredHost: { ...entry.structuredHost!, process: { ...expected, pid: 2_000_001_000 },
+              scope: { unit: "delegatus-agent-replacement.scope", bootEpoch: currentBoot } } });
+        }
+        return true;
+      },
+    });
+    if (!outcome.ok) terminationErrors.push(outcome.error);
+    return outcome;
+  });
+}
 const curatorIdFile = statePath("fixture-curation-pass.json");
 if (curator && !fs.existsSync(curatorIdFile)) {
   const scope = roleScope("fixture-project", "builder");
@@ -258,7 +313,7 @@ if (curator) {
   });
   signals = input.signals.filter(signal => signal.id === "host-retirement");
 }
-console.log(JSON.stringify({ report, terminated, attempted, scopeReads, historyIntact, curation, signals,
+console.log(JSON.stringify({ report, terminated, attempted, scopeReads, historyIntact, curation, signals, terminationErrors,
   status: status.status,
   remaining: Object.values(registry.readOnlySnapshot().entries).filter(entry => entry.structuredHost?.process).map(entry => sessionKeyId(entry.key)),
   remainingRows: Object.values(registry.readOnlySnapshot().entries).filter(entry => entry.structuredHost?.process)

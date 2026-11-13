@@ -1616,7 +1616,12 @@ export async function runStructuredHostRetirementSweep(
       const staleIdentityRefusal = outcome.status === 409 && outcome.stale === true;
       const registryCasRefusal = outcome.status === 409
         && outcome.error === "structured host changed before registry retirement";
-      if ((staleIdentityRefusal || registryCasRefusal)
+      // Runtime release can leave the same scoped custody marked unhosted,
+      // which no longer passes the live retirement predicate. Prove collection
+      // and custody again without stopping anything before calling it failed.
+      const scopeTargetRefusal = outcome.status === 409
+        && outcome.error === "scope retirement target changed";
+      if ((staleIdentityRefusal || registryCasRefusal || scopeTargetRefusal)
         && outcome.remaining.length === 0 && outcome.survivors.length === 0 && exited) {
         await reconcileGoneAndReport(fresh, subject.conversationId);
         continue;
