@@ -165,18 +165,22 @@ test.each([false, true])("a Claude limit-only first turn with no spare holds wit
   expect(f.sends).toHaveLength(0);
 });
 
-test.each([[3600_000, 7200_000], [7200_000, 3600_000]] as const)(
-  "an exhausted pool wakes at the earliest authorized reset after reload (source=%i ms, fallback=%i ms)", async (sourceDelay, fallbackDelay) => {
+test.each([
+  [3600_000, 7200_000, "unavailable", null],
+  [7200_000, 3600_000, "exhausted", 1800_000],
+] as const)(
+  "an exhausted pool wakes at the earliest authorized reset after reload (source=%i ms, fallback=%i ms, selector=%s)", async (sourceDelay, fallbackDelay, selector, selectorDelay) => {
   const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your weekly limit", sourceDelay);
   f.h.durableTurns.get("/codex/stage-1.jsonl")!.lastAgentOutputAt = null;
-  const earliest = Math.floor((f.now() + Math.min(sourceDelay, fallbackDelay)) / 1000);
-  const later = Math.floor((f.now() + Math.max(sourceDelay, fallbackDelay)) / 1000);
+  const earliest = Math.floor((f.now() + Math.min(sourceDelay, fallbackDelay, selectorDelay ?? Number.MAX_SAFE_INTEGER)) / 1000);
   const lane = loadPipelines()[0]!;
   const attempt = lane.runs[0]!.attempts[0]!;
   attempt.usageLimitedAccounts = [{ accountId: SPARE_ACCOUNT, engine: "claude", limitedAt: f.now(), resetsAt: fallbackDelay ? Math.floor((f.now() + fallbackDelay) / 1000) : null }];
   savePipelines([lane]);
   f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT];
-  f.h.ports.resolveProjectSpawn = () => ({ kind: "exhausted", resetsAt: later, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] });
+  f.h.ports.resolveProjectSpawn = () => selector === "unavailable"
+    ? ({ kind: "unavailable", allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] })
+    : ({ kind: "exhausted", resetsAt: Math.floor((f.now() + selectorDelay!) / 1000), allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] });
   await tickPipelines([], f.h.ports);
   savePipelines(loadPipelines());
   const after = loadPipelines()[0]!;

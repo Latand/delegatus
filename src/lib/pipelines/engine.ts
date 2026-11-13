@@ -3815,6 +3815,9 @@ async function recoverProviderCut(
     }
   }
   if (!wait.actionAt && !target && !pinned && (condition.kind === "usage_limit" || condition.kind === "auth_required")) {
+    // Resolve history before selection: the selector may report `unavailable`
+    // after every authorized account was excluded, without returning a reset.
+    if (condition.kind === "usage_limit") exhaustedReset = providerRetryReset(pipeline, attempt, ports);
     try {
       const resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(engine, {
         project: pipeline.project, model: attempt.effectiveRole.model,
@@ -3823,7 +3826,7 @@ async function recoverProviderCut(
           .map((item) => item.accountId).concat(wait.failedAccounts ?? [], triedAccounts),
       });
       if (condition.kind === "usage_limit" && resolution.kind === "exhausted") {
-        exhaustedReset = providerRetryReset(pipeline, attempt, ports) ?? resolution.resetsAt;
+        exhaustedReset = knownReset(exhaustedReset, resolution.resetsAt);
         await refreshReset(resolution.resetsAt);
       }
       const pool = ports.allowedAccountIds?.(pipeline.project, engine);
