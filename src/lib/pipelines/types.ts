@@ -1320,6 +1320,8 @@ export type Pipeline = {
       pipeline's own branches, `delivery.pr` and stage provenance say is joined
       at read time and never stored here. */
   workLinks?: import("@/lib/forge/workLinks").StoredWorkLink[];
+  /** Durable settlement of issues delivered by this lane. */
+  issueDelivery?: import("@/lib/forge/issueDelivery").IssueDelivery[];
   /** Hosts the last close could not confirm terminated. Present only while one
       is outstanding; a close that confirms every kill clears it. */
   unconfirmedHosts?: PipelineUnconfirmedHost[];
@@ -1573,6 +1575,8 @@ export type PatchPipelineRequest = {
   link?: string | number | Array<string | number>;
   /** for attach-link: overrides whether the number is a PR or an issue. */
   kind?: import("@/lib/forge/workLinks").WorkLinkKind;
+  /** attach-link only: true marks partial delivery, false clears it. */
+  part?: boolean;
   /** Creator transcript used by set-src. */
   srcPath?: string;
   /** Explicit authorization to replace existing creator lineage. */

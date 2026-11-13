@@ -22,6 +22,8 @@ export type StoredWorkLink = {
   kind: WorkLinkKind | null;
   addedAt: string;
   addedBy: "operator" | "agent";
+  /** Lane-only: this PR delivers a part of the issue. */
+  part?: true;
 };
 
 /** Manual links a single record can carry. */
@@ -390,7 +392,7 @@ export type WorkLinkEdit =
  */
 export function editStoredWorkLinks(
   current: readonly StoredWorkLink[] | undefined,
-  attach: readonly NormalizedWorkLink[],
+  attach: readonly (NormalizedWorkLink & { part?: boolean })[],
   detach: readonly NormalizedWorkLink[],
   meta: { now: string; addedBy: StoredWorkLink["addedBy"]; canonical?: (repository: string) => string },
   autoVia?: (link: NormalizedWorkLink) => WorkLinkVia[] | null,
@@ -421,8 +423,11 @@ export function editStoredWorkLinks(
     const existing = links.findIndex((link) => same(link, target));
     if (existing >= 0) {
       const prior = links[existing]!;
-      if (target.kind && prior.kind !== target.kind) {
-        links[existing] = { ...prior, kind: target.kind };
+      if ((target.kind && prior.kind !== target.kind) || (target.part !== undefined && !!prior.part !== target.part)) {
+        const updated = { ...prior, kind: target.kind ?? prior.kind };
+        if (target.part === true) updated.part = true;
+        if (target.part === false) delete updated.part;
+        links[existing] = updated;
         changed = true;
       }
       continue;
@@ -435,7 +440,7 @@ export function editStoredWorkLinks(
         error: `a record carries at most ${MAX_WORK_LINKS} attached links; detach one first. Attached: ${links.map((link) => `${link.repository}#${link.number}`).join(", ")}`,
       };
     }
-    links.push({ repository: target.repository, number: target.number, kind: target.kind, addedAt: meta.now, addedBy: meta.addedBy });
+    links.push({ repository: target.repository, number: target.number, kind: target.kind, addedAt: meta.now, addedBy: meta.addedBy, ...(target.part ? { part: true as const } : {}) });
     changed = true;
   }
   return { ok: true, links, changed };
