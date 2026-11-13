@@ -2199,8 +2199,9 @@ export interface StructuredStartupDependencies {
       or unresolved survivors. Defaults to reading active and archived records. */
   pipelineEvidence?: (registry: AgentRegistry, host?: AgentRegistryEntry) => PipelineStartupEvidence;
   /** Timer behind the deferred-evidence re-probe. Defaults to an unref'd
-      setTimeout, so the re-probe never holds a Viewer that is shutting down. */
-  schedule?: (callback: () => void, delayMs: number) => { unref?(): void };
+      setTimeout, so the re-probe never holds a Viewer that is shutting down.
+      Injected schedulers can await the callback's work before teardown. */
+  schedule?: (callback: () => void | Promise<void>, delayMs: number) => { unref?(): void };
   orchestratorSeats?: typeof activeOrchestratorSeats;
   /** Durable interruption obligations (#1835). Defaults to the directory
       beside the registry file. */
@@ -3618,7 +3619,7 @@ function scheduleDeferredStartupReprobe(
     if (deferredStartup !== state) return;
     state.probeScheduled = false;
     try { dependencies.assertActive?.(); } catch { return; }
-    void reprobeDeferredStructuredStartup(dependencies, registry, state);
+    return reprobeDeferredStructuredStartup(dependencies, registry, state);
   }, state.delayMs).unref?.();
 }
 

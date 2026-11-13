@@ -215,6 +215,21 @@ Every test command below is `bun test --timeout=60000 <path> [selection]`, throu
 
 The final focused positive commands contain 378 passes, zero failures and 15 platform skips; the expected metadata control is counted separately. That batch spends about 15 minutes in CPU admission before execution. The seven interruption baseline failures match both names and assertions: each expects two continuations and receives one. The first unmodified hook on the merged repair exits 1: ten new startup failures, 30 pre-existing, one fixed and two flaky; its types, lint and Linux peers are cancelled and judge nothing. The final hook receipt belongs to the post-commit delivery report and runs on the eventual committed tree.
 
+The separately named interruption suite exposed a fixture lifetime race under load: its probe helper returns after a short observation window while the scheduled startup callback is still running. The next probe can be absent and the unfinished callback can carry its obligation lock into the next case. Before the completion-contract repair, the producers/readers are the deferred startup callback and async row-retry job, `scheduleOutsidePass` (which preserves callback return values), the default timer (which ignores them), injected schedulers, and the two probe-driving helpers in `releaseInterruption.test.ts`. Expose the deferred callback's existing promise and let those helpers await the callback's completion. The real timer keeps its asynchronous behavior; a gated ordering regression must fail with the earlier fixture helper.
+
+| Additional command / source | Exit | Counts / observation |
+| --- | ---: | --- |
+| `bash .githooks/pre-push`, completed prompt/recovery repair | 0 | Types, lint, privacy, touched tests and scoped Linux gates pass; 0 new failures, 33 pre-existing, 1 fixed, 2 flaky. |
+| `bun test --timeout=60000 src/lib/runtime/releaseInterruption.test.ts`, separately renewed | 1 | 144 pass, 9 fail, 1 skip, 820 assertions; seven baseline failures plus missing-probe and busy-lock timing failures. |
+| Same path, `-t "a scheduled startup probe owns"`, missing scratch-copy control | 1 | Runner error: selection matches zero tests, 154 filtered; proves no behavior. |
+| Same selection, verified new regression with the earlier helper | 1 | 0 pass, 1 fail, 154 filtered, 1 assertion; helper returns before the callback's completion gate opens. |
+| `bun test --timeout=60000 src/lib/runtime/releaseInterruption.test.ts`, joined callbacks | 1 | 147 pass, 7 known baseline failures, 1 skip, 827 assertions; all seven names and expected/received values match the baseline exactly. |
+| `bun test --timeout=60000 src/lib/runtime/claudeSuccession.test.ts`, completion-contract confirmation | 0 | 21 pass, 0 fail, 155 assertions. |
+
+The ordering control uses an explicit promise gate and joins its own callback even when its assertion fails. The corrected helper awaits the callback's completion. The two-file campaign exits 0 after accepting only the seven equal baseline failures; the extra probe and lock failures are absent. Source-copy checks, `git diff --check` and routine read-only inspection commands exit 0 (test counts do not apply). The post-commit hook receipt follows in the retained delivery report.
+
+The final `git fetch origin main` exits 0; its 118 newer paths overlap none of the 20 repair paths. A hook-path assertion exits 1 because the launch supplies its stage guard as the effective hook directory. Inspection confirms that guard forwards to the checked-in hooks; the corrected ownership/base inspection exits 0. The commit preserves that launch configuration.
+
 Touched runtime ESLint invocation:
 
 ```sh
