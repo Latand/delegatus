@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 
 import * as realEngine from "@/lib/pipelines/engine";
+import { closeAgentRegistryForTests } from "@/lib/agent/registry";
+import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
 
 /*
  * #2518: an issue reporter writes one thing, a report's preview. It starts no
@@ -13,12 +15,15 @@ import * as realEngine from "@/lib/pipelines/engine";
  */
 
 const created: unknown[] = [];
+let advisory = false;
+let queued = false;
+const briefWarning = { stageId: "build", source: "prompt", reason: "acceptance-conflict", restriction: "fixture restriction", criterion: "fixture acceptance", message: "Resolve the excluded test dependency." };
 const patched: unknown[] = [];
 mock.module("@/lib/pipelines/engine", () => ({
   ...realEngine,
   createPipelineFromRequest: async (request: unknown) => {
     created.push(request);
-    return { pipeline: { id: "0a1b2c3d", stages: [], state: "draft" } };
+    return { pipeline: { id: "0a1b2c3d", stages: [], state: "draft" }, ...(advisory ? { briefWarnings: [briefWarning] } : {}), ...(queued ? { queued: { reason: "busy", queuedAt: "2026-11-12T10:00:00.000Z" } } : {}) };
   },
 }));
 
@@ -35,8 +40,11 @@ beforeEach(() => {
   process.env.LLV_STATE_DIR = path.join(sandbox, "state");
   created.length = 0;
   patched.length = 0;
+  advisory = false;
+  queued = false;
 });
 afterEach(() => {
+  closeAgentRegistryForTests();
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
   fs.rmSync(sandbox, { recursive: true, force: true });
@@ -58,7 +66,7 @@ function call(caller: CallerAttribution, tool: "create_pipeline" | "pipeline_act
     registrySnapshot: () => registry,
     patchPipeline: async (id: string, body: unknown) => {
       patched.push({ id, body });
-      return { pipeline: { id, stages: [], state: "running" } };
+      return { pipeline: { id, stages: [], state: "running" }, ...(advisory ? { briefWarnings: [briefWarning] } : {}) };
     },
     getPipelines: () => ({ pipelines: [] }),
   };
@@ -147,4 +155,32 @@ test("an orchestrator and a builder still reach the engine", async () => {
   }
   await call(SEAT, "pipeline_action", { pipelineId: "0a1b2c3d", action: "start" });
   expect(patched).toHaveLength(1);
+});
+
+
+test("MCP acknowledges brief warnings on ordinary and queued creates and stage actions", async () => {
+  const capability = process.env.LLV_SPAWN_CAPABILITY;
+  delete process.env.LLV_SPAWN_CAPABILITY;
+  const restoreTick = registerPipelineTick(async () => {});
+  try {
+    advisory = true;
+    for (const busy of [false, true]) {
+      queued = busy;
+      const input = PIPELINE();
+      const registry = { ...EMPTY_REGISTRY, conversations: {
+        [SEAT.conversationId!]: { id: SEAT.conversationId, engine: "codex", generations: [{ path: input.src }], continuityPaths: [] },
+      } };
+      const answer = await call(SEAT, "create_pipeline", input, registry);
+      expect(answer).toMatchObject({ ok: true });
+      expect(answer.briefWarnings).toEqual([briefWarning]);
+      if (busy) expect(answer.queued).toBe(true);
+    }
+    const answer = await call(SEAT, "pipeline_action", { pipelineId: "0a1b2c3d", action: "start" });
+    expect(answer.ok).toBe(true);
+    expect(answer.briefWarnings).toEqual([briefWarning]);
+  } finally {
+    restoreTick();
+    if (capability === undefined) delete process.env.LLV_SPAWN_CAPABILITY;
+    else process.env.LLV_SPAWN_CAPABILITY = capability;
+  }
 });
