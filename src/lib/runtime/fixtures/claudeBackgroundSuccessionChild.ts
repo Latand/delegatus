@@ -17,7 +17,7 @@ for await (const line of input) {
   process.stdout.write(`${JSON.stringify({ type: "user", session_id: sessionId, uuid, message })}\n`);
   process.stdout.write(`${JSON.stringify({ type: "system", subtype: "task_started", task_id: "succession-background" })}\n`);
   fs.appendFileSync(path.join(root, "tool-starts"), "start\n");
-  const tool = spawn(process.execPath, ["-e", 'setTimeout(() => { require("node:fs").writeFileSync(process.argv[1], "done"); }, 5000)', path.join(root, "tool-done")], {
+  const tool = spawn(process.execPath, ["-e", 'const fs = require("node:fs"); const gate = process.argv[1]; const done = process.argv[2]; const poll = setInterval(() => { if (!fs.existsSync(gate)) return; clearInterval(poll); fs.writeFileSync(done, "done"); }, 5)', path.join(root, "allow-tool-completion"), path.join(root, "tool-done")], {
     stdio: "ignore",
   });
   fs.writeFileSync(path.join(root, "tool.pid"), String(tool.pid));

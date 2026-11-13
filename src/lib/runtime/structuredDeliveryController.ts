@@ -3007,8 +3007,7 @@ async function settleActiveClaudeTurnBeforeDemotion(
     const recorded = current?.structuredHost?.process;
     if (!current || current.claimOwner !== ownerRow.claimOwner || current.claimEpoch !== ownerRow.claimEpoch
       || current.structuredHost?.writerClaimEpoch !== ownerRow.structuredHost?.writerClaimEpoch
-      || recorded?.pid !== process.pid || recorded.startIdentity !== process.startIdentity
-      || processIdentityStatus(process) !== "alive") {
+      || recorded?.pid !== process.pid || recorded.startIdentity !== process.startIdentity) {
       throw new Error(`Claude host ${sessionKeyId(key)} owner changed while its turn settled for Viewer demotion`);
     }
   };
@@ -3021,7 +3020,12 @@ async function settleActiveClaudeTurnBeforeDemotion(
       while (!settled) {
         const next = await events.next();
         assertOwner();
-        if (next.done) throw new Error(`Claude host ${sessionKeyId(key)} event stream ended before turn ${turnRef} settled`);
+        if (next.done) {
+          /* An ended stream cannot prove turn completion. Return the still
+             claimed host so the caller records the interruption before its
+             normal handoff/release path. */
+          return current;
+        }
         if (next.value.kind === "session-status" && (next.value.status === "dead" || next.value.status === "unhosted")) {
           throw new Error(`Claude host ${sessionKeyId(key)} ended before turn ${turnRef} settled`);
         }
@@ -3038,6 +3042,36 @@ async function settleActiveClaudeTurnBeforeDemotion(
     }
   }
   return current;
+}
+
+/** Keep the predecessor broker alive until a background task the settled
+    foreground turn was waiting on has produced its terminal transcript event.
+    The broker owns the native stdio reader that delivers that result. */
+async function settleClaudeBackgroundWorkBeforeDemotion(
+  registry: AgentRegistry,
+  key: SessionKey,
+  host: EngineHost,
+  ownerRow: AgentRegistryEntry,
+): Promise<void> {
+  const process = ownerRow.structuredHost?.process;
+  if (!process || processIdentityStatus(process) !== "alive") return;
+  const assertClaim = () => {
+    const row = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
+    if (!row || row.claimOwner !== ownerRow.claimOwner || row.claimEpoch !== ownerRow.claimEpoch
+      || row.structuredHost?.writerClaimEpoch !== ownerRow.structuredHost?.writerClaimEpoch
+      || row.structuredHost?.process?.pid !== process.pid
+      || row.structuredHost.process.startIdentity !== process.startIdentity) {
+      throw new Error(`Claude host ${sessionKeyId(key)} owner changed while background work settled for Viewer demotion`);
+    }
+  };
+  for (;;) {
+    assertClaim();
+    if (processIdentityStatus(process) !== "alive") return;
+    const cut = await idleHostCut(registry, key);
+    assertClaim();
+    if (cut.backgroundTasks.length === 0) return;
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
 }
 
 /** Releases every engine host owned by this Viewer before release demotion.
@@ -3086,7 +3120,12 @@ export async function releaseStructuredDeliveryHostsForDemotion(
             // The predecessor Viewer must keep the stdio reader alive until
             // Claude delivers the active turn's terminal event. Only then may
             // release close the broker and let the successor claim this row.
-            await settleActiveClaudeTurnBeforeDemotion(registry, key, host, rowBefore!, after);
+            if (processIdentityStatus(rowBefore.structuredHost!.process!) === "alive") {
+              const settled = await settleActiveClaudeTurnBeforeDemotion(registry, key, host, rowBefore!, after);
+              if (settled.status !== "active") {
+                await settleClaudeBackgroundWorkBeforeDemotion(registry, key, host, rowBefore!);
+              }
+            }
           }
         }
       }

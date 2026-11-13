@@ -5130,10 +5130,13 @@ test("planned succession preserves an active Claude broker until its background 
     let demotionSettled = false;
     const demotion = releaseStructuredDeliveryHostsForDemotion({ boundary: "fixture-planned-succession" })
       .then(() => { demotionSettled = true; });
-    await new Promise(resolve => setTimeout(resolve, 100));
+    /* The native job cannot finish until the test opens this gate. Starting
+       demotion first proves custody is retained independently of setup speed. */
+    expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: "succession-prompt" });
     expect(demotionSettled).toBeFalse();
     expect(processIdentityStatus(engineIdentity)).toBe("alive");
     expect(processIdentityStatus(toolIdentity)).toBe("alive");
+    fs.writeFileSync(path.join(root, "allow-tool-completion"), "go");
     await demotion;
     expect(demotionSettled).toBeTrue();
 
