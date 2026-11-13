@@ -1,15 +1,17 @@
 import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import * as workerThreads from "node:worker_threads";
 import sharp from "sharp";
 import { Database } from "bun:sqlite";
 import { stageGeneratedAttachments, stageOwnerAttachments, uploadAnswerAttachments, contentDisposition, validateAttachmentContent } from "./attachments";
 import { answerCapabilities, type AnswerDrop } from "./answerV2";
 import { richRequest } from "./rich.fixture";
 import { startTestRelay } from "./testRelay";
-import { readSqliteMemory } from "@/lib/sqliteMemoryDiagnostics";
-const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-attachments-"));
+import { readSqliteMemory, SQLITE_MEMORY_MESSAGE_PREFIX } from "@/lib/sqliteMemoryDiagnostics";
+// Owner documents reject hidden ancestors, including a stage's TMPDIR.
+// Keep the fixture's dedicated root independent of that runner environment.
+const root = fs.mkdtempSync(path.join("/tmp", "relay-attachments-"));
 const MiB=1024*1024;
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 const caps = answerCapabilities(richRequest(true), "codex");
@@ -118,11 +120,58 @@ test("generated media staging survives attribution messages and cancellation cle
   expect(new Set(fs.readdirSync(root).filter(name=>name.startsWith("relay-job-")))).toEqual(before);
 });
 test("parallel SQLite memory requests do not become attachment job results", async () => {
-  const { dir, refs } = await generated();
-  const sampling = (async () => { for (let i = 0; i < 8; i++) await readSqliteMemory(); })();
-  const staged = await stageGeneratedAttachments(refs, dir, new Set(["exec-1.png"]), root, caps, []);
-  await sampling;
-  expect(staged).toHaveLength(1);
+  const { dir, bytes, refs } = await generated();
+  const { port1, port2 } = new workerThreads.MessageChannel();
+  const ready = new Promise<void>(resolve => port1.once("message", () => resolve()));
+  const NativeWorker = workerThreads.Worker;
+  // Bun's spy types describe callable functions, so give this constructor seam
+  // the same arguments and result as the native constructor.
+  const constructors = workerThreads as unknown as {
+    Worker: (...args: ConstructorParameters<typeof NativeWorker>) => workerThreads.Worker;
+  };
+  let replies = 0;
+  const constructor = spyOn(constructors, "Worker").mockImplementation(function (filename, options) {
+    if (filename !== path.join(process.cwd(), "src/lib/externalRelay/attachmentStage.worker.ts")) {
+      return new NativeWorker(filename, options);
+    }
+    const worker = new NativeWorker(path.join(import.meta.dir, "attachmentSampling.fixture.ts"), {
+      ...options, workerData: { ...options?.workerData, control: port2, entry: filename }, transferList: [port2],
+    });
+    worker.on("message", message => {
+      if (message?.type === `${SQLITE_MEMORY_MESSAGE_PREFIX}answer`) replies++;
+    });
+    return worker;
+  });
+  const controller = new AbortController();
+  const watchdog = setTimeout(() => controller.abort(new Error("attachment sampling watchdog expired")), 10_000);
+  const drops: AnswerDrop[] = [];
+  let settled = false;
+  const pending = stageGeneratedAttachments(refs, dir, new Set(["exec-1.png"]), root, caps, drops, undefined, controller.signal);
+  // Observe both outcomes immediately, including the protocol-confusion failure.
+  void pending.then(() => { settled = true; }, () => { settled = true; });
+  try {
+    await Promise.race([ready, pending.then(() => { throw new Error("attachment finished before sampling"); })]);
+    // The production job is registered and its worker is held at startup.
+    // Every sample must receive a real reply while that job stays pending.
+    for (let i = 0; i < 8; i++) {
+      expect(settled).toBe(false);
+      expect((await readSqliteMemory()).unavailableWorkers).toBe(0);
+      expect(replies).toBe(i + 1);
+      expect(settled).toBe(false);
+    }
+    port1.postMessage("release");
+    const staged = await pending;
+    expect(staged).toHaveLength(1);
+    expect(staged[0]).toMatchObject({ kind: "photo", mime: "image/png", size: bytes.length });
+    expect(fs.readFileSync(staged[0]!.file)).toEqual(bytes);
+    expect(drops).toEqual([]);
+  } finally {
+    clearTimeout(watchdog);
+    constructor.mockRestore();
+    controller.abort();
+    await pending.catch(() => undefined);
+    port1.close(); port2.close();
+  }
 });
 test("generated staging refuses outside files, symlinks, hardlinks and old files", async () => {
   const { dir, refs } = await generated();
