@@ -505,6 +505,8 @@ export type PipelineStageAttempt = {
     startedAt: string;
     resumeAt: string;
     resetsAt: number | null;
+    /** The native provider refusal was the turn's only output. */
+    limitOnly?: boolean;
     actionAt?: string;
     /** Persisted before sending; a lost acknowledgment still owes cancellation on control. */
     continuationRequestedAt?: string;

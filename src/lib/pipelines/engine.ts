@@ -1,4 +1,5 @@
 import { withBriefWarnings, type BriefWarning } from "./briefWarnings";
+import { DELIVERY_UNVERIFIED_AFTER_ACTUATION } from "@/lib/runtime/unverifiedDeliveryReasons";
 import { declaredClassSchema, repeatReasonSchema, type RepeatReason } from "./accounting";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
@@ -3426,6 +3427,19 @@ function providerRetryReset(pipeline: Pipeline, attempt: PipelineStageAttempt, p
       && !providerFailedAccountsOn(attempt, attempt.effectiveRole.engine).includes(item.accountId)
       && (quotaCut || item.accountId !== wait.accountId && !wait.failedAccounts?.includes(item.accountId)))
     .map(item => item.resetsAt)];
+  // The selector's exhausted result carries only one reset, and unavailable
+  // carries none. Include each permitted account's live quota verdict so an
+  // earlier observed reset survives either selector outcome and a restart.
+  if (allowed && ports.accountQuota) {
+    const failed = new Set(providerFailedAccountsOn(attempt, attempt.effectiveRole.engine));
+    for (const accountId of allowed) {
+      if ((pinned && accountId !== pinned) || failed.has(accountId)) continue;
+      try {
+        const quota = ports.accountQuota(attempt.effectiveRole.engine, accountId, attempt.effectiveRole.model);
+        if (quota.capacity === "exhausted") resetCandidates.push(quota.resetsAt);
+      } catch { /* A missing observation must not erase the reset evidence above. */ }
+    }
+  }
   return knownReset(...resetCandidates.filter(reset => reset !== null && reset * 1_000 + 60_000 > now));
 }
 
@@ -3608,10 +3622,72 @@ function providerContinuationKey(pipeline: Pipeline, stage: PipelineStage, attem
   return `stage-provider-${pipeline.id}-${stage.id}-${attempt.n}-${wait.turnTs}`;
 }
 
-function providerCutNotice(engine: FlowEngine, message: NonNullable<StageTurnEvidence["terminalProviderMessage"]>) {
+function providerCutNotice(engine: FlowEngine, message: NonNullable<StageTurnEvidence["terminalProviderMessage"]>, onlyOutput = false) {
   return { condition: classifyProviderCondition(engine, message.errorClass
       ?? (message.usageLimit ? (engine === "claude" ? "rate_limit" : "usage_limit") : null), message.text),
-    text: message.text, ts: message.ts, resetsAt: message.usageLimit?.resetsAt ?? null };
+    text: message.text, ts: message.ts, resetsAt: message.usageLimit?.resetsAt ?? null, onlyOutput };
+}
+
+/** A missing input echo retains its uncertain receipt. A verified terminal
+ * provider refusal can still establish why this stage did no work. */
+async function adoptClaudeLimitTurn(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  ports: PipelinePorts, persist: () => void | Promise<void>, deferRecovery = false): Promise<boolean> {
+  if (attempt.effectiveRole.engine !== "claude" || !attempt.launchId || attempt.report || attempt.verdict) return false;
+  const receipt = ports.spawnReceipt(attempt.launchId);
+  const transcript = receipt?.transcript ?? attempt.agentPath;
+  if (receipt?.state !== "failed" || receipt.currentGeneration === false || receipt.launchId !== attempt.launchId
+    || receipt.conversationId !== attempt.conversationId || !transcript
+    || !isUnverifiedDeliverySpawnFailure(receipt.error ?? "")) return false;
+  if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
+  const evidence = await ports.durableTurnEvidence("claude", transcript, undefined, attemptEvidenceFloor(attempt));
+  if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
+  const notice = evidence?.terminalProviderMessage;
+  if (evidence?.turn !== "terminal" || !notice?.usageLimit || evidence.lastAgentOutputAt !== null
+    || notice.ts <= unixMs(attemptEvidenceFloor(attempt)) || evidence.promptHistoryComplete === false
+    || evidence.backgroundTasks?.length || newerExternalProviderPrompt(attempt, evidence)
+    || stageTurnEvidenceCurrent(evidence) !== true) return false;
+  // Recheck the receipt after the artifact read; a late settlement owns its identity.
+  const current = ports.spawnReceipt(attempt.launchId);
+  if (current?.state !== "failed" || current.currentGeneration === false
+    || current.launchId !== receipt.launchId || current.accountId !== receipt.accountId
+    || current.conversationId !== receipt.conversationId
+    || current.transcript !== receipt.transcript || current.error !== receipt.error) return false;
+  attempt.agentPath = transcript;
+  attempt.accountId = receipt.accountId ?? attempt.accountId;
+  attempt.sessionId = receipt.sessionId ?? attempt.sessionId;
+  attempt.paneId = receipt.paneId;
+  attempt.state = "running";
+  delete attempt.controllerWait;
+  if (attempt.activation) attempt.activation.phase = "settled";
+  setCursorState(pipeline, stage.id, "running");
+  const cut = providerCutNotice("claude", notice, true);
+  if (deferRecovery) {
+    // Activation checkpoints persist only this attempt. The controller's next
+    // tick owns creating and persisting a successor in the complete lane.
+    openProviderWait(stage, attempt, cut, ports);
+    await persist();
+    return true;
+  }
+  await persist();
+  await recoverProviderCut(pipeline, stage, attempt, cut, ports, persist);
+  return true;
+}
+
+async function recordClaudeLimitObservation(accountId: string, notice: { text: string; ts: number; resetsAt: number | null }): Promise<void> {
+  const registry = agentRegistry();
+  await registry.deliveryWriteOrBusy({ label: "quota.provider-limit" }, () => {
+    const previous = registry.quotaObservations("claude").find(item => item.accountId === accountId);
+    if (previous && unixMs(previous.observedAt) >= notice.ts) return;
+    const observedAt = new Date(notice.ts).toISOString();
+    const limits = structuredClone(previous?.limits ?? { session: null, weekly: null, plan: null, capturedAt: Math.floor(notice.ts / 1000) });
+    const window = /\bweek(?:ly)?\b/i.test(notice.text) ? "weekly" : "session";
+    limits[window] = { ...limits[window], usedPercent: 100, resetsAt: notice.resetsAt };
+    limits.capturedAt = Math.floor(notice.ts / 1000);
+    registry.recordQuotaObservation({ engine: "claude", accountId, authenticated: true,
+      authCheckedAt: previous?.authCheckedAt ?? observedAt, observedAt, limits,
+      provenance: { source: "transcript", reason: "terminal provider limit", staleSince: null },
+      bootId: previous?.bootId ?? "provider-limit" });
+  });
 }
 
 function modelCapacity(condition: ProviderCondition): boolean {
@@ -3628,7 +3704,7 @@ function providerBackoffMs(tries: number, condition: ProviderCondition, ports: P
 /** The wait a new provider cut opens: its condition, reset and account, in
     the chain budget the attempt holds (a fresh one when it holds none). */
 function openProviderWait(stage: PipelineStage, attempt: PipelineStageAttempt,
-  notice: { condition: ProviderCondition; text: string; ts: number; resetsAt: number | null }, ports: PipelinePorts,
+  notice: { condition: ProviderCondition; text: string; ts: number; resetsAt: number | null; onlyOutput?: boolean }, ports: PipelinePorts,
 ): NonNullable<PipelineStageAttempt["providerWait"]> {
   const now = ports.now();
   const time = unixMs(now);
@@ -3654,6 +3730,7 @@ function openProviderWait(stage: PipelineStage, attempt: PipelineStageAttempt,
   const opened = attempt.providerWait = { condition: notice.condition, text: redactBounded(notice.text, 300), accountId,
     turnTs: notice.ts, tries, startedAt: budget.startedAt,
     resumeAt: new Date(time + delay).toISOString(), resetsAt,
+    ...(notice.onlyOutput ? { limitOnly: true } : {}),
     ...(same && wait?.failedAccounts ? { failedAccounts: [...wait.failedAccounts] } : {}),
     ...(notice.condition.kind === "auth_required" ? { failedAccounts: [...new Set([...(same ? wait?.failedAccounts ?? [] : []), ...(accountId ? [accountId] : [])])] } : {}) };
   if (accountId && notice.condition.kind === "usage_limit") {
@@ -3671,21 +3748,21 @@ function providerWaitDetail(attempt: PipelineStageAttempt, ports: PipelinePorts)
   return `waiting for ${condition.label}${wait.accountId ? ` on account ${ports.accountLabel?.(attempt.effectiveRole.engine, wait.accountId) ?? wait.accountId}` : ""}${wait.resetsAt ? ` to reset at ${new Date(wait.resetsAt * 1_000).toISOString()}` : condition.resetLabel ? ` (${condition.resetLabel})` : ""}; next try at ${wait.resumeAt}; keeping the current worktree`;
 }
 
-async function parkProviderCut(pipeline: Pipeline, attempt: PipelineStageAttempt, reason: string, ports: PipelinePorts): Promise<void> {
+async function parkProviderCut(pipeline: Pipeline, attempt: PipelineStageAttempt, reason: string, ports: PipelinePorts, retryAt?: string): Promise<void> {
   const wait = attempt.providerWait!, condition = wait.condition;
   recordProviderRecovery(attempt, "park", condition, reason, ports.now());
   attempt.completedAt = ports.now();
   const sourceReset = (condition.kind === "auth_required" || condition.kind === "transient" && !modelCapacity(condition))
     && providerRetryReset(pipeline, attempt, ports) !== null;
   if (sourceReset && wait.accountId) wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.accountId])];
-  if (condition.kind === "usage_limit" || sourceReset) await parkProviderUsageLimit(pipeline, attempt, reason, ports);
+  if (condition.kind === "usage_limit" || sourceReset) await parkProviderUsageLimit(pipeline, attempt, reason, ports, retryAt);
   else await park(pipeline, reason, attempt);
 }
 
 /** Persist before transport. Delivery retries retain a key for this exact cut. */
 async function recoverProviderCut(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
-  notice: { condition: ProviderCondition; text: string; ts: number; resetsAt: number | null } | null,
+  notice: { condition: ProviderCondition; text: string; ts: number; resetsAt: number | null; onlyOutput?: boolean } | null,
   ports: PipelinePorts, persist: () => void | Promise<void>,
 ): Promise<boolean> {
   if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
@@ -3702,6 +3779,15 @@ async function recoverProviderCut(
     await persist();
   }
   if (!wait) return false;
+  if (wait.limitOnly && attempt.effectiveRole.engine === "claude" && wait.condition.kind === "usage_limit" && wait.accountId) {
+    if (unixMs(attempt.controllerWait?.retryAfter ?? "") > time) return true;
+    try { await recordClaudeLimitObservation(wait.accountId, { text: wait.text, ts: wait.turnTs, resetsAt: wait.resetsAt }); }
+    catch (error) {
+      await waitForProviderTransport(pipeline, attempt, wait.condition, `account limit observation unavailable: ${String(error)}`, ports, persist);
+      return true;
+    }
+    if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
+  }
   const condition = wait.condition;
   if (stage.effectiveRole.engine !== attempt.effectiveRole.engine) {
     return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, null);
@@ -3726,6 +3812,7 @@ async function recoverProviderCut(
   // A failed migration is evidence against this target for the current cut chain.
   const migration = attempt.conversationId ? ports.conversationMigration?.(attempt.conversationId) : null;
   let target: string | null = null;
+  let exhaustedReset: number | null = null;
   if (!modelCapacity(condition) && migration?.retry && !wait.actionAt) {
     wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), migration.targetId])];
     // Retry by launching a fresh stage there once, without copying conflicting history.
@@ -3742,6 +3829,9 @@ async function recoverProviderCut(
     }
   }
   if (!wait.actionAt && !target && !pinned && (condition.kind === "usage_limit" || condition.kind === "auth_required")) {
+    // Resolve history before selection: the selector may report `unavailable`
+    // after every authorized account was excluded, without returning a reset.
+    if (condition.kind === "usage_limit") exhaustedReset = providerRetryReset(pipeline, attempt, ports);
     try {
       const resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(engine, {
         project: pipeline.project, model: attempt.effectiveRole.model,
@@ -3749,7 +3839,10 @@ async function recoverProviderCut(
           .filter((item) => !providerAccountRecovered(pipeline, attempt, item.accountId, item.limitedAt ?? null, item.resetsAt, ports))
           .map((item) => item.accountId).concat(wait.failedAccounts ?? [], triedAccounts),
       });
-      if (condition.kind === "usage_limit" && resolution.kind === "exhausted") await refreshReset(resolution.resetsAt);
+      if (condition.kind === "usage_limit" && resolution.kind === "exhausted") {
+        exhaustedReset = knownReset(exhaustedReset, resolution.resetsAt);
+        await refreshReset(resolution.resetsAt);
+      }
       const pool = ports.allowedAccountIds?.(pipeline.project, engine);
       if (resolution.kind === "available" && resolution.account.accountId !== wait.accountId
         && (!pool || pool.includes(resolution.account.accountId)) && !wait.failedAccounts?.includes(resolution.account.accountId)
@@ -3759,6 +3852,22 @@ async function recoverProviderCut(
   const bounded = !wait.actionAt && (condition.kind === "transient" || condition.kind === "auth_required" || condition.kind === "usage_limit") && wait.tries >= 3
     || condition.kind === "usage_limit" && !wait.resetsAt && time - unixMs(wait.startedAt) >= 6 * 60 * 60_000;
   const parkCut = (reason: string) => parkProviderCut(pipeline, attempt, reason, ports);
+  if (engine === "claude" && condition.kind === "usage_limit" && wait.limitOnly) {
+    const accountLimitRetrySpent = usageLimitsOn(attempt, engine).some(limited => limited.accountId !== wait.accountId
+      && !providerAccountHasNewWindow(pipeline, attempt, engine, limited.accountId, ports));
+    if (accountLimitRetrySpent) {
+      const reset = knownReset(wait.resetsAt, exhaustedReset);
+      const retryAt = reset !== null && reset * 1000 > time ? new Date(reset * 1000 + 60_000).toISOString() : undefined;
+      await parkProviderCut(pipeline, attempt,
+        `stage cut by ${condition.label}; one account-limit retry was spent${reset !== null ? `; earliest reset ${new Date(reset * 1000).toISOString()}` : ""}; last: ${wait.text}`,
+        ports, retryAt);
+      return true;
+    }
+    if (!target && exhaustedReset !== null) {
+      wait.resumeAt = new Date(exhaustedReset * 1000 + 60_000).toISOString();
+      await persist();
+    }
+  }
   const waitForAccountPolicy = async (accountId: string, operation: string): Promise<boolean> => {
     let allowed: string[] | null | undefined;
     try { allowed = ports.allowedAccountIds?.(pipeline.project, engine); }
@@ -3807,6 +3916,9 @@ async function recoverProviderCut(
     return true;
   }
   pipeline.stateDetail = providerWaitDetail(attempt, ports);
+  if (wait.limitOnly && exhaustedReset !== null) {
+    pipeline.stateDetail += `; earliest reset ${new Date(exhaustedReset * 1000).toISOString()}`;
+  }
   const sourceRecovered = condition.kind === "usage_limit" && wait.accountId
     && providerAccountRecovered(pipeline, attempt, wait.accountId, wait.turnTs, wait.resetsAt, ports);
   if (!target && !sourceRecovered && time < unixMs(wait.resumeAt)) {
@@ -8379,6 +8491,7 @@ async function spawnCorrelatedRunStage(
       // charged between calls. CPU and update holds suspend that clock.
       const failedAt = ports.now();
       if (failedReceipt) {
+        if (await adoptClaudeLimitTurn(pipeline, stage, attempt, ports, persist, true)) return;
         /* Claimed under the identity retry-stage uses, so a later manual
            retry of the same launch is idempotent; a claim that finds the
            receipt settled after all parks, and the completed-receipt
@@ -8516,6 +8629,7 @@ async function spawnCorrelatedRunStage(
       return;
     }
     const detail = error instanceof Error ? error.message : String(error);
+    if (await adoptClaudeLimitTurn(pipeline, stage, attempt, ports, persist, true)) return;
     if (isLaunchAdmissionContention(error)) recordSpawnFailure(attempt, ports.now(), "writer", detail);
     if (error instanceof SpawnAdmissionBudgetExhausted) {
       const previous = spawnAdmissionFailure(attempt);
@@ -10260,6 +10374,7 @@ async function tickRunStage(
       attempt.agentPath = receipt.transcript;
       attempt.paneId = receipt.paneId;
       attempt.accountId = receipt.accountId ?? attempt.accountId ?? null;
+      if (await adoptClaudeLimitTurn(pipeline, stage, attempt, ports, persist)) return;
       /* A launch the spawn layer ended `failed` for a transient reason gets
          the same bounded wait the live activation gets (#1678). The budget
          starts at this process's first sighting: the interrupted activation's
@@ -10281,6 +10396,7 @@ async function tickRunStage(
         }
       }
       if (receipt.state === "failed" || receipt.state === "conflicted" || (receipt.state === "starting" && !receipt.paneId && !receipt.transcript)) {
+        if (await adoptClaudeLimitTurn(pipeline, stage, attempt, ports, persist)) return;
         await park(pipeline, receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`, attempt);
         return;
       }
@@ -10321,6 +10437,7 @@ async function tickRunStage(
      lag behind receipt settlement or fail to answer, so it has no authority to
      hide the recorded drain cause behind a later transcript park (#1326). */
   if (terminalSpawnFailure && !roleMemoryDelivered && !(isUnverifiedDeliverySpawnFailure(terminalSpawnFailure) && attempt.agentPath)) {
+    if (await adoptClaudeLimitTurn(pipeline, stage, attempt, ports, persist)) return;
     if (terminalSpawnFailure === SEND_LOST_REASON && spawnReceipt?.state === "failed") {
       const now = ports.now();
       const retry = await deferRetiredLaunchRetry(pipeline, stage, attempt, spawnReceipt, now, now, ports);
@@ -10433,7 +10550,7 @@ async function tickRunStage(
   // OOM recovery owns the slot immediately after recorded reports.
   const terminalProviderMessage = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
   const notice = terminalProviderMessage && terminalProviderMessage.ts > unixMs(attemptEvidenceFloor(attempt))
-    ? providerCutNotice(attempt.effectiveRole.engine, terminalProviderMessage) : null;
+    ? providerCutNotice(attempt.effectiveRole.engine, terminalProviderMessage, durable?.lastAgentOutputAt === null) : null;
   // An incomplete first read can start confirmation before providerWait exists.
   // Retire that clock only when the reader proves its cut's chain closed,
   // including output observed without a subsequent provider notice.
@@ -11610,7 +11727,7 @@ async function moveParkedProviderRetry(pipeline: Pipeline, stage: PipelineStage,
   const message = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
   if (!attempt.providerWait?.stageRetry || durable?.requestedCutOpen !== false || !durable.firstProviderCutAt
     || !message || message.ts <= attempt.providerWait.turnTs) return false;
-  const notice = providerCutNotice(attempt.effectiveRole.engine, message);
+  const notice = providerCutNotice(attempt.effectiveRole.engine, message, durable?.lastAgentOutputAt === null);
   // Authentication and unknown failures have no timed retry on a running lane either.
   if (notice.condition.kind !== "usage_limit" && notice.condition.kind !== "transient") return false;
   delete attempt.providerWait;
@@ -11785,6 +11902,8 @@ function availableProviderRetryAccount(pipeline: Pipeline, stage: PipelineStage,
   const condition = wait?.condition.kind;
   if (!wait || condition !== "usage_limit" && condition !== "auth_required") return null;
   const engine = attempt.effectiveRole.engine;
+  if (engine === "claude" && condition === "usage_limit" && wait.limitOnly === true && usageLimitsOn(attempt, engine).some(limited =>
+    limited.accountId !== wait.accountId && !providerAccountHasNewWindow(pipeline, attempt, engine, limited.accountId, ports))) return null;
   try {
     const recovered = (id: string) => {
       const limit = usageLimitsOn(attempt, engine).find(item => item.accountId === id);
@@ -12423,14 +12542,12 @@ function syncControllerWaitStateDetail(
   }
 }
 
-/** The delivery queue's own wording for a send an earlier executor started and
-    could not account for (#1750). A release succession leaves two executors
-    over one journal, which is what mints it, so a stage that meets it met a
-    deploy. Replacement requires authoritative non-execution evidence;
-    the classifier stays a pure test and the retirement path holds
-    the evidence gate. */
+/** The delivery queue's wording for a send whose executor or structured host
+    could not confirm its outcome. Replacement requires authoritative
+    non-execution evidence; the retirement path holds that evidence gate. */
 function isUnverifiedDeliverySpawnFailure(failure: string): boolean {
-  return failure.includes(DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR);
+  return failure.includes(DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR)
+    || failure.includes(DELIVERY_UNVERIFIED_AFTER_ACTUATION);
 }
 
 function isPrepublicationSpawnFailure(failure: string): boolean {
@@ -13645,7 +13762,7 @@ export async function recoverPipelineProviderTurn(id: string, ports?: PipelinePo
       // reconciles stops, newer input, succession and transport before sending.
       const message = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
       const notice = message && message.ts > unixMs(attemptEvidenceFloor(attempt))
-        ? providerCutNotice(attempt.effectiveRole.engine, message) : null;
+        ? providerCutNotice(attempt.effectiveRole.engine, message, durable?.lastAgentOutputAt === null) : null;
       if (notice?.condition.kind === "transient" && attempt.providerWait && durable?.requestedCutOpen === false) {
         delete attempt.providerRecoveryBudget;
         delete attempt.controllerWait;
