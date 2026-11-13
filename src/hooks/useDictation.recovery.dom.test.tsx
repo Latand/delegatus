@@ -286,3 +286,68 @@ test("distinct subwords sharing a timestamp range are recovered without dropping
   ] });
   expect(commits).toEqual([]); expect(await current.stop()).toBe("Hello"); expect(uploads[0].size).toBe(44 + 3200);
 });
+
+test.each([false, true])("a replayed standalone endpoint recovers the whole next word (close=%s)", async close => {
+  mount(); batchAnswer = () => Response.json({ text: "Hello" });
+  await current.start(); const ws = Socket.latest!; ws.open(); audio(6400);
+  const endpoint = { tokens: [{ text: "<end>", is_final: true }] };
+  ws.emit({ tokens: [{ text: "first", start_ms: 0, end_ms: 100, is_final: true }] }); ws.emit(endpoint);
+  ws.emit({ tokens: [{ text: "Hel", start_ms: 100, end_ms: 200, is_final: true }] }); ws.emit(endpoint);
+  expect(commits).toEqual(["first"]);
+  if (close) ws.drop();
+  ws.emit({ tokens: [{ text: "lo", start_ms: 200, end_ms: 300, is_final: true }, { text: "<end>", is_final: true }] });
+  const stopped = current.stop(); ws.emit({ finished: true });
+  expect([...commits, await stopped].join(" ")).toBe("first Hello");
+  expect(uploads).toHaveLength(1); expect(uploads[0].size).toBe(44 + 4800 * 2);
+  expect(traces.at(-1)).toMatchObject({ capturedSamples: 6400, bufferedSamples: 4800, commits: 2, batchOutcome: "ok" });
+});
+
+test.each(["elevenlabs", "openai"])("early PCM stays owned through a delayed %s token", async provider => {
+  mount(); let resolve!: (r: Response) => void; tokenAnswer = () => new Promise(r => { resolve = r; });
+  const started = current.start(); await tick(); audio(1600); await advance(5000);
+  resolve(Response.json({ provider, token: "fixture" })); await started;
+  Socket.latest?.open(); audio(1600, 0.5);
+  expect(await current.stop()).toBe("recovered tail"); expect(uploads).toHaveLength(1);
+  const pcm = new Int16Array(await uploads[0].arrayBuffer(), 44);
+  expect(pcm.length).toBe(3200); expect(pcm[0]).toBe(8191); expect(pcm.at(-1)).toBe(16383);
+  expect(commits).toEqual([]); expect(Socket.latest).toBeUndefined();
+  expect(traces.at(-1)).toMatchObject({ path: "batch", capturedSamples: 3200, commits: 1, outcome: "complete" });
+});
+
+test("an abort-aware token fetch records its native timeout as a deadline", async () => {
+  mount(); const oldTimeout = AbortSignal.timeout; const oldFetch = globalThis.fetch;
+  AbortSignal.timeout = ((ms: number) => {
+    const controller = new AbortController();
+    dom.setTimeout(() => controller.abort(new DOMException("deadline", "TimeoutError")), ms);
+    return controller.signal;
+  }) as typeof AbortSignal.timeout;
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (String(url).endsWith("/token")) return new Promise<Response>((_resolve, reject) => init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason)));
+    return oldFetch(url as string, init);
+  }) as typeof fetch;
+  try {
+    const started = current.start(); await tick(); audio(); await advance(10000); await started;
+    expect(await current.stop()).toBe("recovered tail");
+    expect(traces.at(-1)).toMatchObject({ tokenMs: 10000, tokenOutcome: "deadline", batchOutcome: "ok" });
+  } finally { AbortSignal.timeout = oldTimeout; globalThis.fetch = oldFetch; }
+});
+
+test.each(["http", "network"])("a token %s refusal remains unavailable and preserves capture", async kind => {
+  mount(); tokenAnswer = async () => {
+    if (kind === "network") throw new TypeError("fixture network failure");
+    return new Response(null, { status: 503 });
+  };
+  await current.start(); audio();
+  expect(await current.stop()).toBe("recovered tail");
+  expect(traces.at(-1)).toMatchObject({ tokenOutcome: "unavailable", batchOutcome: "ok" });
+});
+
+test("untimed final overflow recovers PCM while retaining the committed draft", async () => {
+  mount(); await current.start(); const ws = Socket.latest!; ws.open(); audio(3200);
+  ws.emit(segment("kept", 0, 100));
+  ws.emit({ tokens: Array.from({ length: 100000 }, () => ({ text: "x", is_final: true })) });
+  audio(1600, 0.5);
+  const stopped = current.stop(); ws.emit({ finished: true });
+  expect(await stopped).toBe("recovered tail"); expect(commits).toEqual(["kept"]);
+  expect(uploads).toHaveLength(1); expect(uploads[0].size).toBe(44 + 6400);
+});

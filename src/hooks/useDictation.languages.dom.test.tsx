@@ -18,7 +18,8 @@ for (const [key, value] of Object.entries(globals)) {
   saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
   Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
 }
-const stream = { getTracks: () => [{ stop() {} }] };
+let trackStops = 0;
+const stream = { getTracks: () => [{ stop() { trackStops++; } }] };
 Object.defineProperty(dom.navigator, "mediaDevices", { value: { getUserMedia: async () => stream } });
 class AudioFixture {
   sampleRate = 16000;
@@ -59,7 +60,7 @@ const errors: string[] = [];
 const commits: Array<{ text: string; language?: string }> = [];
 function Harness() { const result = useDictation({ onError: error => errors.push(error), onUnclaimedText() {}, onLiveCommit(text, language) { commits.push({ text, language }); } }); useLayoutEffect(() => { observed.current = result; }); return null; }
 function mount(locale: "uk" | "en") {
-  setLocale(locale); errors.length = 0; commits.length = 0;
+  setLocale(locale); errors.length = 0; commits.length = 0; trackStops = 0;
   const host = dom.document.createElement("div"); dom.document.body.append(host);
   root = createRoot(host as unknown as HTMLElement); flushSync(() => root!.render(<Harness />));
 }
@@ -129,7 +130,7 @@ Object.assign(stream, { getAudioTracks: () => [audioTrack] });
 
 /* Built at run time: a bearer line with a literal value reads as a credential to the publication gate. */
 const CLIENT_SECRET = ["client", "secret", "fixture"].join("-");
-function openAiFetch(calls: Array<{ url: string; init?: RequestInit }>, answer: () => Response = () => new Response("v=0 answer-fixture")) {
+function openAiFetch(calls: Array<{ url: string; init?: RequestInit }>, answer: () => Response | Promise<Response> = () => new Response("v=0 answer-fixture")) {
   return (async (url: unknown, init?: RequestInit) => {
     if (String(url).endsWith("/diagnostics")) return new Response(null, { status: 204 });
     calls.push({ url: String(url), init });
@@ -188,6 +189,27 @@ test("OpenAI live: a refused offer records the clip and transcribes it instead",
   expect(await dictation().stop()).toBe("recorded speech");
   expect(calls.map((call) => call.url).filter((url) => url.startsWith("/api/transcribe"))).toEqual(["/api/transcribe/token", "/api/transcribe"]);
   expect(errors).toEqual([]);
+}));
+
+test("OpenAI audio captured during a successful offer remains on batch", () => withPeer(async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  let resolve!: (response: Response) => void;
+  globalThis.fetch = openAiFetch(calls, () => {
+    feedAudio();
+    return new Promise<Response>(r => { resolve = r; });
+  });
+  mount("en"); const started = dictation().start();
+  for (let i = 0; i < 40; i++) await Promise.resolve();
+  expect(PeerFixture.latest).toBeDefined();
+  resolve(new Response("v=0 answer-fixture")); await started;
+  expect(PeerFixture.latest!.remote).toEqual({ type: "answer", sdp: "v=0 answer-fixture" });
+  expect(PeerFixture.latest!.closed).toBe(true);
+  expect(trackStops).toBe(0);
+  feedAudio();
+  expect(await dictation().stop()).toBe("recorded speech");
+  const upload = calls.find(call => call.url === "/api/transcribe")!;
+  const file = (upload.init!.body as FormData).get("file") as File;
+  expect(file.size).toBe(44 + 3200 * 2); expect(errors).toEqual([]);
 }));
 
 test("OpenAI live: a drop mid-recording says the connection was lost", () => withPeer(async () => {

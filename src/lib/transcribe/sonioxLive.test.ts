@@ -235,3 +235,34 @@ test("a timestamp collision requests audio recovery instead of removing a distin
   ] }))!;
   expect(update.error).toBe("Soniox token identity is ambiguous"); expect(update.commit).toBe("");
 });
+
+test("untimed finals cannot bypass the retained token limit, across frames or in one frame", () => {
+  const huge = applySonioxFrame(sonioxLiveInitialState(), JSON.stringify({ tokens: Array.from({ length: 100000 }, () => ({ text: "x", is_final: true })) }))!;
+  expect(huge.error).not.toBeNull(); expect(huge.state.finalText).toBe("");
+  let state = sonioxLiveInitialState();
+  for (let i = 0; i < 8192; i++) state = applySonioxFrame(state, frame([{ text: "x", is_final: true }]))!.state;
+  const overflow = applySonioxFrame(state, frame([{ text: "x", is_final: true }]))!;
+  expect(overflow.error).toBe("Soniox token limit"); expect(overflow.state.finalText.length).toBe(8192); expect(overflow.commit).toBe("");
+});
+
+test.each([true, false])("retained text is bounded independently of token count (final=%s)", is_final => {
+  const update = applySonioxFrame(sonioxLiveInitialState(), frame([{ text: "x".repeat(65537), is_final }]))!;
+  expect(update.error).not.toBeNull(); expect(update.state.finalText).toBe(""); expect(update.liveText).toBe("");
+});
+
+test("the wire frame has a bound before parsing", () => {
+  const update = applySonioxFrame(sonioxLiveInitialState(), " ".repeat(1048577))!;
+  expect(update.error).not.toBeNull(); expect(update.commit).toBe("");
+});
+
+test("positioned finals also reach the token bound", () => {
+  const update = applySonioxFrame(sonioxLiveInitialState(), JSON.stringify({ tokens: Array.from({ length: 10000 }, (_, i) => ({ text: "x", is_final: true, start_ms: i, end_ms: i + 1 })) }))!;
+  expect(update.error).toBe("Soniox token limit"); expect(update.commit).toBe("");
+});
+
+test("text at the bound is accepted, and a later frame cannot grow it", () => {
+  const first = applySonioxFrame(sonioxLiveInitialState(), frame([{ text: "x".repeat(65536), is_final: true }]))!;
+  expect(first.error).toBeNull(); expect(first.state.finalText.length).toBe(65536);
+  const overflow = applySonioxFrame(first.state, frame([{ text: "x", is_final: true }]))!;
+  expect(overflow.error).toBe("Soniox text limit"); expect(overflow.state.finalText.length).toBe(65536);
+});
