@@ -74,7 +74,7 @@ function mount() {
 }
 function audio(samples = 1600, value = 0.25) {
   const p = AudioFixture.processors.at(-1); expect(p).toBeDefined();
-  p.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array(samples).fill(value) } });
+  p!.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array(samples).fill(value) } });
 }
 function segment(text: string, start: number, end: number) { return { tokens: [{ text, start_ms: start, end_ms: end, is_final: true }, { text: "<end>", is_final: true }] }; }
 afterEach(() => { flushSync(() => root?.unmount()); root = undefined; timers.clear(); dom.document.body.replaceChildren(); });
@@ -194,13 +194,12 @@ test("finished flushes final tokens even without an endpoint", async () => {
 });
 
 
-test("partial final tokens replayed before their endpoint are appended only once", async () => {
-  mount(); await current.start(); const ws = Socket.latest!; ws.open(); audio(3200);
+test("ambiguous pending finals recover from audio without comparing words", async () => {
+  mount(); batchAnswer = () => Response.json({ text: "first" }); await current.start(); const ws = Socket.latest!; ws.open(); audio(3200);
   const tokens = { tokens: [{ text: "first", start_ms: 0, end_ms: 100, is_final: true }] };
   ws.emit(tokens); ws.emit(tokens); ws.emit({ tokens: [{ text: "<end>", is_final: true }] });
-  expect(commits).toEqual(["first"]); const stopped = current.stop(); ws.emit({ finished: true }); await stopped;
+  expect(commits).toEqual([]); expect(await current.stop()).toBe("first"); expect(uploads).toHaveLength(1);
 });
-
 
 test("the batch deadline ends Stop explicitly and ignores a later response", async () => {
   mount(); let resolve!: (r: Response) => void; const oldFetch = globalThis.fetch;
@@ -276,4 +275,14 @@ test("a final without timestamps falls back before inserting or acknowledging th
   expect(commits).toEqual(["kept"]); audio(1600, 0.5);
   expect(await current.stop()).toBe("recovered tail"); expect(uploads[0].size).toBe(44 + 6400 * 2);
   expect(commits).toEqual(["kept"]);
+});
+
+
+test("distinct subwords sharing a timestamp range are recovered without dropping letters", async () => {
+  mount(); batchAnswer = () => Response.json({ text: "Hello" }); await current.start(); const ws = Socket.latest!; ws.open(); audio();
+  ws.emit({ tokens: [
+    { text: "Hel", start_ms: 0, end_ms: 100, is_final: true },
+    { text: "lo", start_ms: 0, end_ms: 100, is_final: true }, { text: "<end>", is_final: true },
+  ] });
+  expect(commits).toEqual([]); expect(await current.stop()).toBe("Hello"); expect(uploads[0].size).toBe(44 + 3200);
 });

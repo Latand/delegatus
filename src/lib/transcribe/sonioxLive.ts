@@ -180,10 +180,14 @@ export function applySonioxFrame(state: SonioxLiveState, data: unknown): SonioxL
       && typeof end === "number" && Number.isFinite(end) && end >= start) {
       frameFinalEndMs = Math.max(frameFinalEndMs ?? 0, end);
       const id = `${start}:${end}`;
-      if ((committedThroughMs !== undefined && end <= committedThroughMs) || tokenIds.has(id)) {
+      if (committedThroughMs !== undefined && end <= committedThroughMs) {
         replayedFinals++;
         continue;
       }
+      // A shared timestamp range leaves token identity ambiguous. Recover the
+      // uncommitted segment from PCM so distinct subwords retain all letters.
+      if (tokenIds.has(id)) return { state, commit: "", liveText: state.finalText, finished: false,
+        error: "Soniox token identity is ambiguous", segments: 0, replayedFinals, finalSegments, stableCommit: false };
       // A corrupt unbounded utterance is recovered from the retained PCM.
       if (tokenIds.size >= 8192) return { state, commit: "", liveText: state.finalText, finished: false, error: "Soniox token limit", segments: 0, replayedFinals, finalSegments, stableCommit: false };
       tokenIds.add(id);

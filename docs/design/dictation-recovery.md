@@ -49,8 +49,9 @@ Final token identities use provider audio timestamp ranges; the last committed
 segment boundary is a monotone watermark. Replaying those finals does not
 insert another segment. Identical words at later timestamps remain intact.
 Recovery uploads PCM strictly after the last committed token end, so previously
-committed speech is excluded. Missing or impossible timestamps trigger batch
-recovery before that segment is committed. The active token identity set is
+committed speech is excluded. Missing, impossible or ambiguous timestamps trigger batch recovery before that
+segment is committed. Distinct subwords sharing a range are recovered from
+retained audio; their recognized words are never compared to decide uniqueness. The active token identity set is
 bounded to 8,192 entries. The protocol contracts are the Soniox
 [WebSocket API](https://docs.soniox.com/api-reference/stt/websocket-api),
 [timestamps](https://docs.soniox.com/stt/concepts/timestamps) and

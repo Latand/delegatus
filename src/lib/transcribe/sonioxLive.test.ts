@@ -226,3 +226,12 @@ test("missing timestamps after a timed commit cannot reuse the earlier segment i
   ] }))!;
   expect(next.stableCommit).toBe(false);
 });
+
+
+test("a timestamp collision requests audio recovery instead of removing a distinct subword", () => {
+  const update = applySonioxFrame(sonioxLiveInitialState(), JSON.stringify({ tokens: [
+    { text: "Hel", start_ms: 0, end_ms: 100, is_final: true },
+    { text: "lo", start_ms: 0, end_ms: 100, is_final: true }, { text: "<end>", is_final: true },
+  ] }))!;
+  expect(update.error).toBe("Soniox token identity is ambiguous"); expect(update.commit).toBe("");
+});
