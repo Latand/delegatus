@@ -1,0 +1,412 @@
+{
+  "capturedAt": "2026-11-12T07:05:28.835Z",
+  "command": "LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx --test-name-pattern 'administrator self-update policy' (isolated roots, gate-slot.sh)",
+  "sourceDigests": {
+    "src/components/selfUpdate/SelfUpdateView.tsx": "342e1a817ecbd9fc357e5ee184873e340b6153250b252ff68058525fa57c9b79",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "8b786540baeed5bca4c5186f27af7167aac65cc90edb722cb062897335cba7bb",
+    "src/lib/i18n/en.ts": "7197aad4c9b77716b44337b9e32624b480e9c9c3dbdd79fee4d16a6fcfd686d5",
+    "src/lib/i18n/uk.ts": "db711d12d5e058a724767223cfc7fab66c96495bdad8bcfef16a615ff42aa1e0"
+  },
+  "readings": [
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 390,
+      "height": 844,
+      "opening": {
+        "texts": [
+          {
+            "text": "Updates managed by your administrator",
+            "whole": true
+          },
+          {
+            "text": "Built-in updates are disabled by the administrator. Use your installation’s command-line update procedure.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "paged": {
+        "texts": [
+          {
+            "text": "Updates managed by your administrator",
+            "whole": true
+          },
+          {
+            "text": "Built-in updates are disabled by the administrator. Use your installation’s command-line update procedure.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "final": {
+        "texts": [
+          {
+            "text": "Updates managed by your administrator",
+            "whole": true
+          },
+          {
+            "text": "Built-in updates are disabled by the administrator. Use your installation’s command-line update procedure.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "frame": "390-en-light.png",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 1440,
+      "height": 700,
+      "opening": {
+        "texts": [
+          {
+            "text": "Updates managed by your administrator",
+            "whole": true
+          },
+          {
+            "text": "Built-in updates are disabled by the administrator. Use your installation’s command-line update procedure.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "paged": {
+        "texts": [
+          {
+            "text": "Updates managed by your administrator",
+            "whole": true
+          },
+          {
+            "text": "Built-in updates are disabled by the administrator. Use your installation’s command-line update procedure.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "final": {
+        "texts": [
+          {
+            "text": "Updates managed by your administrator",
+            "whole": true
+          },
+          {
+            "text": "Built-in updates are disabled by the administrator. Use your installation’s command-line update procedure.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "frame": "1440-en-light.png",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 390,
+      "height": 844,
+      "opening": {
+        "texts": [
+          {
+            "text": "Updates managed by your administrator",
+            "whole": true
+          },
+          {
+            "text": "Built-in updates are disabled by the administrator. Use your installation’s command-line update procedure.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "paged": {
+        "texts": [
+          {
+            "text": "Updates managed by your administrator",
+            "whole": true
+          },
+          {
+            "text": "Built-in updates are disabled by the administrator. Use your installation’s command-line update procedure.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "final": {
+        "texts": [
+          {
+            "text": "Updates managed by your administrator",
+            "whole": true
+          },
+          {
+            "text": "Built-in updates are disabled by the administrator. Use your installation’s command-line update procedure.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "frame": "390-en-dark.png",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "height": 700,
+      "opening": {
+        "texts": [
+          {
+            "text": "Updates managed by your administrator",
+            "whole": true
+          },
+          {
+            "text": "Built-in updates are disabled by the administrator. Use your installation’s command-line update procedure.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "paged": {
+        "texts": [
+          {
+            "text": "Updates managed by your administrator",
+            "whole": true
+          },
+          {
+            "text": "Built-in updates are disabled by the administrator. Use your installation’s command-line update procedure.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "final": {
+        "texts": [
+          {
+            "text": "Updates managed by your administrator",
+            "whole": true
+          },
+          {
+            "text": "Built-in updates are disabled by the administrator. Use your installation’s command-line update procedure.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "frame": "1440-en-dark.png",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 390,
+      "height": 844,
+      "opening": {
+        "texts": [
+          {
+            "text": "Оновленнями керує адміністратор",
+            "whole": true
+          },
+          {
+            "text": "Адміністратор вимкнув вбудовані оновлення. Скористайтеся процедурою оновлення вашої інсталяції через командний рядок.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "paged": {
+        "texts": [
+          {
+            "text": "Оновленнями керує адміністратор",
+            "whole": true
+          },
+          {
+            "text": "Адміністратор вимкнув вбудовані оновлення. Скористайтеся процедурою оновлення вашої інсталяції через командний рядок.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "final": {
+        "texts": [
+          {
+            "text": "Оновленнями керує адміністратор",
+            "whole": true
+          },
+          {
+            "text": "Адміністратор вимкнув вбудовані оновлення. Скористайтеся процедурою оновлення вашої інсталяції через командний рядок.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "frame": "390-uk-light.png",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 1440,
+      "height": 700,
+      "opening": {
+        "texts": [
+          {
+            "text": "Оновленнями керує адміністратор",
+            "whole": true
+          },
+          {
+            "text": "Адміністратор вимкнув вбудовані оновлення. Скористайтеся процедурою оновлення вашої інсталяції через командний рядок.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "paged": {
+        "texts": [
+          {
+            "text": "Оновленнями керує адміністратор",
+            "whole": true
+          },
+          {
+            "text": "Адміністратор вимкнув вбудовані оновлення. Скористайтеся процедурою оновлення вашої інсталяції через командний рядок.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "final": {
+        "texts": [
+          {
+            "text": "Оновленнями керує адміністратор",
+            "whole": true
+          },
+          {
+            "text": "Адміністратор вимкнув вбудовані оновлення. Скористайтеся процедурою оновлення вашої інсталяції через командний рядок.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "frame": "1440-uk-light.png",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 390,
+      "height": 844,
+      "opening": {
+        "texts": [
+          {
+            "text": "Оновленнями керує адміністратор",
+            "whole": true
+          },
+          {
+            "text": "Адміністратор вимкнув вбудовані оновлення. Скористайтеся процедурою оновлення вашої інсталяції через командний рядок.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "paged": {
+        "texts": [
+          {
+            "text": "Оновленнями керує адміністратор",
+            "whole": true
+          },
+          {
+            "text": "Адміністратор вимкнув вбудовані оновлення. Скористайтеся процедурою оновлення вашої інсталяції через командний рядок.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "final": {
+        "texts": [
+          {
+            "text": "Оновленнями керує адміністратор",
+            "whole": true
+          },
+          {
+            "text": "Адміністратор вимкнув вбудовані оновлення. Скористайтеся процедурою оновлення вашої інсталяції через командний рядок.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "frame": "390-uk-dark.png",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1440,
+      "height": 700,
+      "opening": {
+        "texts": [
+          {
+            "text": "Оновленнями керує адміністратор",
+            "whole": true
+          },
+          {
+            "text": "Адміністратор вимкнув вбудовані оновлення. Скористайтеся процедурою оновлення вашої інсталяції через командний рядок.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "paged": {
+        "texts": [
+          {
+            "text": "Оновленнями керує адміністратор",
+            "whole": true
+          },
+          {
+            "text": "Адміністратор вимкнув вбудовані оновлення. Скористайтеся процедурою оновлення вашої інсталяції через командний рядок.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "final": {
+        "texts": [
+          {
+            "text": "Оновленнями керує адміністратор",
+            "whole": true
+          },
+          {
+            "text": "Адміністратор вимкнув вбудовані оновлення. Скористайтеся процедурою оновлення вашої інсталяції через командний рядок.",
+            "whole": true
+          }
+        ],
+        "overlap": false,
+        "horizontalOverflow": false
+      },
+      "frame": "1440-uk-dark.png",
+      "pageErrors": []
+    }
+  ]
+}
