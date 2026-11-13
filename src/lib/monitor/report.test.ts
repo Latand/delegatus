@@ -404,6 +404,11 @@ test("reserved task and form rows add exactly their rendered budget and survive 
   const added = ["", ...taskPage.lines, "", ...formPage.lines].join("\n").length + 1;
   const text = seatTickWakeMessage({ ...base, taskPage, formPage });
   expect(text.length).toBe(ordinary.length + added);
+  const instructionReview = "Inherited instructions require review.";
+  expect(seatTickWakeMessage({ ...base, instructionReview }).length)
+    .toBe(ordinary.length + instructionReview.length + 2);
+  expect(seatTickWakeMessage({ ...base, taskPage, formPage, instructionReview }).length)
+    .toBe(ordinary.length + added + instructionReview.length + 2);
   for (const row of [...taskPage.lines, ...formPage.lines]) expect(text.split("\n")).toContain(row);
   const roster = seatTickWakeMessage({ ...base, taskPage, formPage, seatOwnedLanes: Array.from({ length: 20 }, (_, n) => ({ id: `row-${n}`, title: "Review", reason: "decision", sinceMs: 0 })) });
   expect(roster.length).toBeLessThanOrEqual(4000 + added);

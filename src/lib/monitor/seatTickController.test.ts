@@ -4,6 +4,18 @@ import { describe, expect, spyOn, test, fs, path, SANDBOX, runSeatTickCheck, SEA
 import type { SeatTickControllerDependencies, SeatTickProjectState, AgentLivenessRecord, ConversationMessage, DeliveryOutcome } from "./seatTickController.fixture";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { spawn, RuntimeJournal, journalClient } from "./seatTickController.fixture";
+import { seatTickInstructionLines, seatTickInstructionReview } from "./seatTickInstructions";
+
+function instructionReviewAllowance(settings: Parameters<typeof seatTickInstructionLines>[0]): number {
+  const review = seatTickInstructionReview(seatTickInstructionLines(settings), {
+    project: PROJECT, now: NOW, seat: { conversationId: CONVERSATION, seatEpoch: 7 }, finished: new Map(),
+  });
+  // These fixtures retain undated instructions. Their bounded review section
+  // adds its own space to the original 4,000-character message budget.
+  expect(review).toBeDefined();
+  expect(review!.length).toBeLessThanOrEqual(400);
+  return review!.length + 2;
+}
 
 
 test("one child with a failed and a finished turn is one line carrying its latest state (#1783)", async () => {
@@ -746,13 +758,15 @@ test.each([false, true])("five production-size settlements credit only complete 
     task: "Settlement title ".padEnd(119, "s"),
     taskFinishWaits: [{ taskId: "waiting-task", open: ["other-lane-a", "other-lane-b"] }],
   }));
-  const rig = harness({ ...(held ? { delivery: HELD } : {}), settings: { ...defaultSeatTickSettings(PROJECT),
+  const settings = { ...defaultSeatTickSettings(PROJECT),
     monitorPrompt: "Standing monitor note ".padEnd(7_622, "n"), reason: "Operator instructions ".padEnd(500, "i"),
-  } });
+  };
+  const wakeLimit = 4_000 + instructionReviewAllowance(settings);
+  const rig = harness({ ...(held ? { delivery: HELD } : {}), settings });
   rig.deps.sources!.pipelines = () => lanes as never;
   await runSeatTickCheck(PROJECT, rig.deps);
   const text = rig.sent[0]!.text;
-  expect(text.length).toBeLessThanOrEqual(4_000);
+  expect(text.length).toBeLessThanOrEqual(wakeLimit);
   const complete = ids.filter(id => agendaOf(text).some(line => line.includes(id) && line.endsWith("task waits for 2 open pipelines")));
   expect(complete).toHaveLength(4);
   if (held) {
@@ -892,8 +906,10 @@ test.each([30, 200])("full report ledgers deliver a complete maintenance settlem
     launchId: null, conversationId: null, transcriptPath: null, failure: null,
     log: { ...emptyMaintenanceLog(), attention }, counts: emptyMaintenanceCounts(), changedTaskIds: [], supersededTaskIds: [],
   };
+  const settings = { ...defaultSeatTickSettings(PROJECT), monitorPrompt: "Standing note ".padEnd(7_622, "n"), reason: "Instructions ".padEnd(500, "i") };
+  const wakeLimit = 4_000 + instructionReviewAllowance(settings);
   const rig = harness({ seat: { conversationId: CONVERSATION, seatEpoch: 7, path: null, mandate: "Custom older mandate", promptVersion: 20 },
-    settings: { ...defaultSeatTickSettings(PROJECT), monitorPrompt: "Standing note ".padEnd(7_622, "n"), reason: "Instructions ".padEnd(500, "i") },
+    settings,
     state: { reportsOwed },
   });
   rig.deps.sources!.maintenanceRuns = () => [run];
@@ -901,7 +917,7 @@ test.each([30, 200])("full report ledgers deliver a complete maintenance settlem
   for (let round = 0; round < 2; round++) {
     rig.deps.sources!.now = () => NOW + round * 70 * MINUTE;
     await runSeatTickCheck(PROJECT, rig.deps);
-    expect(rig.sent.at(-1)!.text.length).toBeLessThanOrEqual(4_000);
+    expect(rig.sent.at(-1)!.text.length).toBeLessThanOrEqual(wakeLimit);
     expect(rig.written.at(-1)!.reportsOwed).toEqual(reportsOwed);
     expect(rig.sent.at(-1)!.text).toContain(`key ${reportsOwed[0]!.key} and coversOwed: true`);
   }
