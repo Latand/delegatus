@@ -5,6 +5,7 @@ import { isOwnerTool, ownerRateLimitSchema, RELAY_OWNER_TOOLS, toolCallResultSch
 import { readRelaySwitches } from "./switches";
 import type { PairedRelay } from "./store";
 import type { RelayToolCallRecord } from "./answers";
+import { ACTION_VERIFICATION_MS, ACTION_VERIFICATION_READS, actionOutcomeReads, definiteActionOutcome, establishActionOutcome, verificationFailed, type ActionOutcome, type ActionResolution } from "./actionOutcome";
 
 export const RELAY_TOOL_ROUNDS = 8;
 
@@ -38,9 +39,10 @@ export function callBody(request: ExternalRelayRequest, logical: { tool: string;
 export type ToolProjection = {
   round: number; tool: string; arguments?: Record<string, unknown>; page_of?: string;
   effect?: "action"; delivered?: true; execution_unknown?: true; summary?: string; expires_in_s?: number;
+  outcome?: ActionOutcome;
   status: string; output: string; truncated: boolean; next_cursor?: string; audience?: string; code?: string;
 };
-export type ToolLoopRuntime = { sleep?: (ms: number, signal: AbortSignal) => Promise<void>; now?: () => number; onUnknownFeature?: () => Promise<unknown> };
+export type ToolLoopRuntime = { sleep?: (ms: number, signal: AbortSignal) => Promise<void>; now?: () => number; monotonicNow?: () => number; onUnknownFeature?: () => Promise<unknown> };
 export async function toolSleep(ms: number, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
@@ -51,14 +53,15 @@ export async function toolSleep(ms: number, signal: AbortSignal): Promise<void> 
 }
 /** Request-scoped memory only. The service owns the durable C6 ledger. */
 export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest, lease: {
-  signal: AbortSignal; lose: () => void; ack: () => Promise<boolean>; beforeSend?: () => void | Promise<void>;
+  signal: AbortSignal; lose: () => void; ack: () => Promise<boolean>; beforeSend?: () => void | Promise<void>; deadlineAt?: number;
+  verificationBudget?: (callId: string, deadlineAt: number, consume: boolean) => Promise<{ deadlineAt: number; reads: number; allowed: boolean }>;
 }, runtime: ToolLoopRuntime = {}, onProgress?: (tool: string, done: boolean, failed: boolean) => void, onToolState?: (pending: boolean) => void) {
   // I8/C8 admission and the authoritative index belong to the service. The
   // feature gates only the amended owner semantics; legacy 2a owner reads stay.
   const tools = callableTools(request);
   const ownerToolsEnabled = readRelaySwitches().owner_tools && relay.features?.includes(RELAY_OWNER_TOOLS);
   const effectOf = (name: string) => request.input.tools?.find((tool) => tool.name === name)?.effect;
-  const cache = new Map<string, Promise<{ result: ToolCallResult | null; code?: string; output?: string; unknown?: boolean }>>();
+  const cache = new Map<string, Promise<ActionResolution>>();
   const cursors = new Map<string, string>();
   const accounted = new Set<string>();
   const projected = new Set<string>();
@@ -82,14 +85,52 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
     catch (error) { if (lease.signal.aborted || !rejectionCode) throw error; }
   };
   const callsLeft = () => terminal ? 0 : Math.max(0, Math.min(remaining, 16 - sent));
-  async function send(body: ReturnType<typeof callBody>, tool: string) {
+  async function send(body: ReturnType<typeof callBody>, tool: string): Promise<ActionResolution> {
     if (!await lease.ack()) { lease.lose(); lease.signal.throwIfAborted(); }
     lease.signal.throwIfAborted();
     const action = effectOf(tool) === "action";
+    const verifyingRead = action && Object.hasOwn(actionOutcomeReads, tool) ? actionOutcomeReads[tool] : undefined;
     const owner = ownerToolsEnabled && isOwnerTool(tools.find((item) => item.name === tool)!);
-    const unknown = () => {
-      terminal = true; sawUnknown = true;
-      return { result: null, unknown: true, output: "The service did not confirm whether this action happened." };
+    const unknown = async (initial?: ToolCallResult): Promise<ActionResolution> => {
+      terminal = true;
+      let deadlineAt = Math.min(now() + ACTION_VERIFICATION_MS, (lease.deadlineAt ?? Infinity) - 1000);
+      if (verifyingRead && lease.verificationBudget) {
+        try {
+          const state = await lease.verificationBudget(body.call_id, deadlineAt, false);
+          deadlineAt = state.deadlineAt;
+          if (!state.allowed || state.reads >= ACTION_VERIFICATION_READS) {
+            sawUnknown = true; return verificationFailed(tool, "saved verification bound exhausted");
+          }
+        } catch (error) {
+          lease.signal.throwIfAborted();
+          const reason = error instanceof ExternalRelayError ? error.code : "saved verification bound unavailable";
+          console.error("External relay verification budget unavailable", reason);
+          sawUnknown = true; return verificationFailed(tool, reason);
+        }
+      }
+      const resolution: ActionResolution = verifyingRead
+        ? await establishActionOutcome(tool, async (signal, check) => {
+          if (!await lease.ack()) { lease.lose(); lease.signal.throwIfAborted(); }
+          check();
+          if (lease.verificationBudget && !(await lease.verificationBudget(body.call_id, deadlineAt, true)).allowed)
+            throw new ExternalRelayError("verification_limit", 409);
+          check();
+          try {
+            const response = await relayCall(relay.api_base, `/requests/${encodeURIComponent(request.request_id)}/tool-calls`, "POST", body,
+              relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal, beforeSend: async () => { await lease.beforeSend?.(); check(); } });
+            const parsed = toolCallResultSchema.safeParse(response.body);
+            if (!parsed.success || parsed.data.call_id !== body.call_id || parsed.data.tool !== tool || parsed.data.effect !== "action")
+              throw new ExternalRelayError("malformed");
+            return parsed.data;
+          } catch (error) {
+            if (isUnknownFeatureRefusal(error)) await runtime.onUnknownFeature?.();
+            if (error instanceof ExternalRelayError && (error.status === 404 || error.status === 409 && error.code === "lease_lost")) lease.lose();
+            throw error;
+          }
+        }, callSignal, { now: runtime.monotonicNow ?? (() => performance.now()), sleep, budgetMs: Math.max(0, deadlineAt - now()) })
+        : { result: initial ?? null, unknown: true, output: verificationFailed(tool, "no verifying read declared").output };
+      if (!verifyingRead || resolution.outcome === "verification_failed") sawUnknown = true;
+      return resolution;
     };
     let ambiguous = false;
     const refused = (code?: string) => {
@@ -97,7 +138,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       // A wire refusal proves this owner call was not admitted. Other calls'
       // markers and any earlier uncertainty in this call still block handoff.
       if (owner) possibleOwnerActions.delete(body.call_id);
-      return { result: null, code, output: "The call could not be completed." };
+      return { result: null, code, output: "The call could not be completed.", ...(verifyingRead ? { outcome: "not_done" as const } : {}) };
     };
     const unfinished = () => action ? unknown() : { result: null, output: "The read did not finish." };
     const started = now();
@@ -117,7 +158,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
           relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal: callSignal, beforeSend: lease.beforeSend });
         if (rejectionCode) return refused(rejectionCode);
         const parsed = toolCallResultSchema.safeParse(response.body);
-        if (!parsed.success || parsed.data.call_id !== body.call_id || parsed.data.tool !== tool) throw new ExternalRelayError("malformed");
+        if (!parsed.success || parsed.data.call_id !== body.call_id || parsed.data.tool !== tool || verifyingRead && parsed.data.effect !== "action") throw new ExternalRelayError("malformed");
         const result = parsed.data;
         onlyRateLimited = false;
         // Concurrent responses and historical replays must never replenish the budget.
@@ -127,7 +168,8 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         // Reauthorization can deny a saved success after execution. Keep the
         // denial; unavailable permits only retries of this same wire identity.
         if (action && result.status === "denied" && result.code !== "unavailable") terminal = true;
-        if (action && result.status === "outcome_unknown") sawUnknown = true;
+        if (verifyingRead && result.status === "denied" && result.code !== "unavailable") return unknown(result);
+        if (action && result.status === "outcome_unknown") return unknown(result);
         if (!action && !mayQuote(result.audience, request.input.requester)) return { result };
         if (result.status === "pending") {
           pending = true;
@@ -138,16 +180,16 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         }
         if (result.status === "denied" && result.code === "unavailable") {
           if (action) ambiguous = true;
+          if (verifyingRead) return unknown(result);
           if (unavailable++ < 2) {
             await wait((result.retry_after_s ?? 1) * 1000);
             continue;
           }
           if (action) {
-            unknown();
-            return { result, unknown: true };
+            return unknown(result);
           }
         }
-        return { result };
+        return { result, ...(verifyingRead ? { outcome: definiteActionOutcome(result) } : {}) };
       } catch (error) {
         if (lease.signal.aborted) throw error;
         if (isUnknownFeatureRefusal(error)) await runtime.onUnknownFeature?.();
@@ -181,6 +223,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         // response (including a redirect or HTTP timeout) leaves fate unresolved.
         ambiguous = true;
         onlyRateLimited = false;
+        if (verifyingRead) return unknown();
         if (++failures > 3) return action ? unknown() : refused();
         await wait(1000 * 2 ** (failures - 1));
       }
@@ -195,7 +238,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
     const readsSettled = new Promise<void>((resolve) => { releaseReads = resolve; });
     // Reserve the action identity immediately, but release its send only after reads settle.
     const scheduled = calls.map((call, index) => {
-      const local = (code: string, output = "") => ({ call, local: true, body: null, task: Promise.resolve({ result: null, code, output }) });
+      const local = (code: string, output = "") => ({ call, local: true, body: null, task: Promise.resolve<ActionResolution>({ result: null, code, output }) });
       if (index >= allowance) return local("too_many_calls");
       if (!tools.some((tool) => tool.name === call.tool)) return local("not_permitted");
       let logical: Parameters<typeof callBody>[1];
@@ -245,7 +288,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       const action = effectOf(call.tool) === "action";
       const raw = value.result;
       const withheld = !!raw && !mayQuote(raw.audience, request.input.requester);
-      let output = withheld ? "" : raw?.output ?? value.output ?? "";
+      let output = withheld ? "" : value.outcome === "verification_failed" ? value.output ?? "" : raw?.output ?? value.output ?? "";
       let code = withheld && !action ? "not_permitted" : raw?.code ?? value.code;
       let status = withheld && !action ? "denied" : raw?.status ?? ("unknown" in value && value.unknown ? "outcome_unknown" : local ? "denied" : "error");
       if (withheld && action) terminal = true;
@@ -266,6 +309,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         ...(body && "arguments" in body ? { arguments: body.arguments } : call.cursor ? { page_of: call.cursor } : {}),
         status, output, truncated,
         ...(action ? { effect: "action" as const } : {}),
+        ...(value.outcome ? { outcome: value.outcome } : {}),
         ...(action && raw && "unknown" in value && value.unknown ? { execution_unknown: true as const } : {}),
         ...(action && raw?.delivered ? { delivered: true as const } : {}),
         ...(action && !withheld && raw?.status === "confirmation_pending" ? {
@@ -283,6 +327,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       rows.set(index, { round, tool: call.tool, page: call.cursor !== null, status: raw?.status ?? status,
         code: raw?.code ?? code ?? null, audience: raw?.audience ?? null,
         truncated: raw?.truncated ?? false, replayed: raw?.replayed ?? false, withheld, local: local || !raw,
+        ...(value.outcome ? { outcome: value.outcome } : {}),
         ...(action ? { effect: "action" as const } : {}) });
     }
     const readIndexes = scheduled.flatMap((item, index) => effectOf(item.call.tool) !== "action" ? [index] : []);

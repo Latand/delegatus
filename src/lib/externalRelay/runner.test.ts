@@ -2461,6 +2461,29 @@ const actionResponse = (sample: string, body: WireCall) => ({ body: {
   ...x1Results[sample]!, call_id: body.call_id, tool: "tool" in body ? body.tool : x1Results[sample]!.tool,
 } });
 
+for (const initial of ["lost", "outcome_unknown"])
+for (const settled of ["ok", "error", "denied"] as const)
+  test(`trigger ${initial} then ${settled} delivers its established outcome without another agent round`, async () => {
+    const request = x1Request("actions_admin");
+    request.request_id = `trigger_${initial}_${settled}`;
+    request.input.request_text = "Create the requested sample rule";
+    const run = await runLoopCase({ request,
+      plan: actionPlan("request_trigger_rule_update", `{...reply,text:'The action may have happened.'}`),
+      response: (body, attempt) => attempt === 1 ? initial === "lost" ? { drop: true }
+        : { body: { ...actionResponse("action_ok", body).body, status: "outcome_unknown", calls_remaining: 0 } }
+        : { body: { ...actionResponse("action_ok", body).body, status: settled, replayed: true, calls_remaining: 0,
+          ...(settled === "denied" ? { code: "too_many_calls" } : {}) } } });
+    const outcome = settled === "ok" ? "done" : settled === "error" ? "not_done" : "verification_failed";
+    expect(run.completion).toMatchObject({ outcome: "answered", answer: { action: "reply",
+      text: settled === "ok" ? "Done: trigger rule update." : settled === "error" ? "Not done: trigger rule update."
+        : "Verification failed for trigger rule update: the saved action outcome could not be read." } });
+    expect(run.rounds).toHaveLength(1);
+    expect(run.calls).toHaveLength(2);
+    expect(run.calls[1]).toEqual(run.calls[0]);
+    expect(run.record?.toolCalls?.[0]).toMatchObject({ outcome });
+    expect(run.completions).toHaveLength(1);
+  });
+
 test("a post-execution switch-off denial prevents a changed-reason ban after switch-on", async () => {
   let actionsEnabled = true;
   const executed = new Set<string>();
