@@ -303,11 +303,11 @@ controls to stop it or configure login startup.
 
 **Start at login** (Delegatus menu, a checkmark). The checkmark means an owned
 plist exists. Turning it on runs `service install --port 8898` and shows the
-command's own localized output when it exits non-zero. Turning it off runs
-`service remove`. That stops a Delegatus the service was running, so the app
-asks first and then starts Delegatus itself with the direct spawn. The server
-starts at login and the app window does not; the window reattaches whenever
-the app opens.
+localized service-failed message if it exits non-zero; command details are in
+Logs. Turning it off runs `service remove`. That stops a Delegatus the service
+was running, so the app asks first and then starts Delegatus itself with the
+direct spawn. The server starts at login and the app window does not; the
+window reattaches whenever the app opens.
 
 **Quit.** While Delegatus runs, ⌘Q asks: "Delegatus keeps running so your
 agents can work." The buttons are Quit and Keep Running (the default), Stop
@@ -316,9 +316,11 @@ Closing the window keeps the app and the server running. Reopening the app
 from the Dock shows the window again.
 
 **Liveness while the window is open.** Two failed probes in a row switch to
-the stopped view, and probing continues. When Delegatus answers again, after
-an Update relaunch or a Stop from the web UI's own menu, the web view
-returns.
+the stopped view, and probing continues. If listener ownership is verified but
+the saved key no longer works, the app instead shows the localized
+access-unavailable guidance with Try Again and Open Logs. When Delegatus
+answers again, after an Update relaunch or a Stop from the web UI's own menu,
+the web view returns.
 
 ## 4. The health rule, under every gate
 
@@ -356,8 +358,10 @@ key, and checks ownership and the selected package again before accepting
 readiness. Redirects remain disabled for the root request too. A modern
 package whose diagnostics stays at 404 keeps waiting even if its root returns
 200. The same rule governs initial discovery, an app-started CLI, and every
-15-second monitor probe; two failures still show the stopped view and a
-verified recovery restores the web view.
+15-second monitor probe. Two failed probes show the stopped view. If listener
+ownership remains verified and the saved key is refused, the app shows
+localized access-unavailable guidance. A verified recovery restores the web
+view.
 
 ## 5. Window, language and web behaviour
 

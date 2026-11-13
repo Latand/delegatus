@@ -49,6 +49,7 @@ import WebKit
         filter.standardInput = pipe; filter.standardOutput = handle; filter.standardError = FileHandle.nullDevice
         child.standardOutput = pipe; child.standardError = pipe
         try filter.run(); filters.append(filter)
+        if directory != nil { log("EVIDENCE-FILTER pid \(filter.processIdentifier)") }
     }
     func capture(_ window: NSWindow, name: String, completion: (() -> Void)? = nil) {
         guard let directory else { return }

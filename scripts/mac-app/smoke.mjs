@@ -132,9 +132,16 @@ function launch(caseHome, args, label) {
 async function end(entry) {
   const child = owned.get(entry?.pid);
   if (!child) return;
+  const filterPID = Number(processLog(entry).match(/EVIDENCE-FILTER pid (\d+)/)?.[1]);
   if (!exited(child)) child.kill("SIGTERM");
   await until("owned process exit", () => exited(child));
   owned.delete(entry.pid);
+  if (Number.isSafeInteger(filterPID) && filterPID > 1 && alive(filterPID)) {
+    const command = run("/bin/ps", ["-ww", "-p", String(filterPID), "-o", "command="]).trim();
+    assert(/(^|\/)sed(?:\s|$)/.test(command) && command.includes(" -l "), `recorded evidence filter PID ${filterPID} belongs to this app fixture`);
+    try { process.kill(filterPID, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+    await until("owned evidence filter exit", () => !alive(filterPID));
+  }
 }
 function startViewer(bun, cli, settings = {}) {
   const child = spawn(bun, [cli, "--no-open", "--port", String(port)], { env: caseEnvironment(home, settings), stdio: "ignore" });
@@ -243,12 +250,34 @@ function seedInstallation(fixture, caseHome, community = false) {
   }
   return { bun, cli: join(packageRoot, "bin/cli.mjs") };
 }
-async function stopLegacy(caseHome, installation, child) {
+function fixtureListenerPID(installation) {
+  const listing = run("/usr/sbin/lsof", ["-nP", "-a", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"]).trim();
+  const pids = listing.split(/\s+/).filter(Boolean).map(Number);
+  assert.equal(pids.length, 1, `expected one listener for the isolated fixture, found ${listing || "none"}`);
+  const pid = pids[0];
+  const command = comparablePath(run("/bin/ps", ["-ww", "-p", String(pid), "-o", "command="]).trim());
+  const fixtureRoot = comparablePath(installation.cli.replace("/bin/cli.mjs", ""));
+  assert(command.includes(comparablePath(installation.bun)) && command.includes(fixtureRoot), `listener PID ${pid} belongs to this released fixture`);
+  return pid;
+}
+async function stopLegacy(caseHome, installation, child, listenerPID, launcherPIDs = []) {
   // The 1.11.0 CLI has no stop command. Reap only this fixture's recorded PID.
   try {
     if (child) {
       try { process.kill(-child.pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
       await end(child);
+    }
+    const fixtureRoot = comparablePath(installation.cli.replace("/bin/cli.mjs", ""));
+    for (const pid of launcherPIDs) if (alive(pid)) {
+      const command = comparablePath(run("/bin/ps", ["-ww", "-p", String(pid), "-o", "command="]).trim());
+      assert(command.includes(comparablePath(installation.bun)) && command.includes(comparablePath(installation.cli)), `recorded launcher PID ${pid} belongs to this released fixture`);
+      try { process.kill(pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+      await until(`released fixture launcher ${pid} exits`, () => !alive(pid));
+    }
+    if (listenerPID && alive(listenerPID)) {
+      const command = comparablePath(run("/bin/ps", ["-ww", "-p", String(listenerPID), "-o", "command="]).trim());
+      assert(command.includes(comparablePath(installation.bun)) && command.includes(fixtureRoot), `recorded listener PID ${listenerPID} still belongs to this released fixture`);
+      try { process.kill(listenerPID, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
     }
   }
   finally { await until("legacy port released", async () => !(await http())); }
@@ -298,6 +327,8 @@ async function notFoundCases() {
       }
       let child;
       let instance;
+      let listenerPID;
+      const appLauncherPIDs = new Set();
       let primaryError;
       try {
         if (!["app-started", "community-stopped"].includes(mode)) {
@@ -328,13 +359,16 @@ async function notFoundCases() {
             assert(message.includes("1.11.0") && (language === "en" ? /access key/i : /ключ/i).test(message), "localized access guidance names the old Delegatus");
           } else {
             if (mode === "already-running" || mode === "community-running") {
-              await until("legacy menu capabilities are disabled", () => processLog(instance).includes("LEGACY-MENU stop=disabled login=disabled"), 60_000, diagnostics);
+              await until("AppKit disables legacy menu actions after validation", () => processLog(instance).includes("MENU-VALIDATED stop=disabled login=disabled"), 60_000, diagnostics);
             }
             await until("legacy opens in app", () => {
               if (/STATE (port-busy|failed)/.test(processLog(instance))) throw new Error(diagnostics());
               return /STATE (ready|reused)/.test(processLog(instance)) && /WEB language=/.test(processLog(instance));
             },
               APP_START_BOUND_MS + 30_000, diagnostics);
+            if (mode === "app-started") listenerPID = fixtureListenerPID(installation);
+            const spawnedPID = Number(processLog(instance).match(/APP-LAUNCHER pid (\d+)/)?.[1]);
+            if (Number.isSafeInteger(spawnedPID) && spawnedPID > 1) appLauncherPIDs.add(spawnedPID);
             await sleep(32_000);
             assert(!processLog(instance).includes("STATE stopped"), "monitor retains the verified legacy page");
             assert.equal((await http("GET", protectedServer))?.status, 200);
@@ -347,8 +381,15 @@ async function notFoundCases() {
         throw error;
       } finally {
         const cleanupErrors = [];
+        if (!listenerPID && mode === "app-started") {
+          try { listenerPID = fixtureListenerPID(installation); } catch { /* The app never created a verified fixture listener. */ }
+        }
+        if (mode === "app-started" && instance) {
+          const spawnedPID = Number(processLog(instance).match(/APP-LAUNCHER pid (\d+)/)?.[1]);
+          if (Number.isSafeInteger(spawnedPID) && spawnedPID > 1) appLauncherPIDs.add(spawnedPID);
+        }
         try { if (instance) await end(instance); } catch (error) { cleanupErrors.push(error); }
-        try { if (mode !== "community-stopped") await stopLegacy(caseHome, installation, child); } catch (error) { cleanupErrors.push(error); }
+        try { if (mode !== "community-stopped") await stopLegacy(caseHome, installation, child, listenerPID, [...appLauncherPIDs]); } catch (error) { cleanupErrors.push(error); }
         if (cleanupErrors.length) {
           const errors = primaryError ? [primaryError, ...cleanupErrors] : cleanupErrors;
           throw new AggregateError(errors, errors.map(error => error.message).join("; "));
@@ -544,6 +585,7 @@ try {
       return output.includes("STATE ready");
     }, APP_START_BOUND_MS + 30_000, firstRun);
     await until("web language", () => /WEB language=en/.test(processLog(instance)), 60_000, firstRun);
+    await until("supported menu actions remain enabled after AppKit validation", () => processLog(instance).includes("MENU-VALIDATED stop=enabled login=enabled"), 60_000, firstRun);
     original = launcherPID();
     for (const entry of readdirSync(home).filter(entry => !before.includes(entry))) assert(["Library", ".config", ".cache"].includes(entry), `unexpected home entry ${entry}`);
     await sleep(4000); await end(instance);

@@ -3,7 +3,7 @@ import WebKit
 
 func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
 
-@main @MainActor final class App: NSObject, NSApplicationDelegate, NSToolbarDelegate {
+@main @MainActor final class App: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSMenuItemValidation {
     static func main() {
         let application = NSApplication.shared
         let delegate = App()
@@ -29,6 +29,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
     var address = Server.address
     var serviceMenu: NSMenuItem!
     var stopMenu: NSMenuItem!
+    var legacyInstallation = false
     var generation = 0
     var busy = false
     var quittingAfterSetup = false
@@ -128,6 +129,12 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
     func item(_ menu: NSMenu, _ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
         let item = NSMenuItem(title: text(title), action: action, keyEquivalent: key); item.target = self; menu.addItem(item); return item
     }
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(stop) || menuItem.action == #selector(toggleLogin) {
+            return !legacyInstallation
+        }
+        return true
+    }
     func buildMenus() {
         let main = NSMenu(); NSApp.mainMenu = main
         let application = NSMenu(); let root = NSMenuItem(); root.title = "Delegatus"; root.submenu = application; main.addItem(root)
@@ -188,11 +195,15 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
                 }
                 serviceMenu.state = install?.service == nil ? .off : .on
                 let legacy = install.flatMap { Installations.legacyVersion(home: home, environment: environment, install: $0) } != nil
+                legacyInstallation = legacy
                 // The released legacy CLI has no stop or service subcommands.
                 // Keep these controls unavailable while that installation is reused.
                 serviceMenu.isEnabled = !legacy
                 stopMenu.isEnabled = !legacy
-                if legacy { evidence.log("LEGACY-MENU stop=disabled login=disabled") }
+                if evidence.directory != nil {
+                    NSApp.mainMenu?.item(at: 0)?.submenu?.update()
+                    evidence.log("MENU-VALIDATED stop=\(stopMenu.isEnabled ? "enabled" : "disabled") login=\(serviceMenu.isEnabled ? "enabled" : "disabled")")
+                }
                 let (probe, observed) = await Server.inspect(home: home, environment: environment, install: install, address: address)
                 guard !Task.isCancelled, generation == token else { return }
                 if probe != .free { evidence.log("PROBE \(probe.label) \(observed)") }
@@ -241,6 +252,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
             child.environment = environment
             try evidence.redirect(child)
             try child.run(); launcher = child
+            if evidence.directory != nil { evidence.log("APP-LAUNCHER pid \(child.processIdentifier)") }
         }
         let deadline = Date().addingTimeInterval(180)
         var exitDeadline: Date? = nil
@@ -374,7 +386,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
     }
     @objc func retry() { begin() }
     @objc func stop() {
-        guard !busy, let install else { return }
+        guard !legacyInstallation, !busy, let install else { return }
         guard confirm("stop") else { return }
         busy = true; generation += 1; operation?.cancel(); monitor?.cancel()
         Task { defer { busy = false }
@@ -395,7 +407,7 @@ func text(_ key: String) -> String { NSLocalizedString(key, comment: "") }
         }
     }
     @objc func toggleLogin() {
-        guard !busy, let install else { return }
+        guard !legacyInstallation, !busy, let install else { return }
         if install.service != nil {
             guard confirm("login") else { return }
         }

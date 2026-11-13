@@ -62,7 +62,7 @@ import Foundation
         }
         let foreignViewer = [42: "42 43 /foreign/bun /fixture/server.js", 43: "43 1 /fixture/bun /fixture/cli.mjs"]
         let ownForeign = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs", launcherPID: 43) { foreignViewer[$0] }
-        expect(!ownForeign.verified && ownForeign.reason.contains("no Viewer"), "the app's own launcher does not vouch for a foreign Viewer (\(ownForeign.reason))")
+        expect(!ownForeign.verified && ownForeign.reason.contains("listener PID does not run"), "the app's own launcher does not vouch for a foreign Viewer (\(ownForeign.reason))")
         let unreadable = await Server.explainAncestry(listenerPID: 42, bun: "/fixture/bun", server: "/fixture/server.js", cli: "/fixture/cli.mjs") { _ in nil }
         expect(!unreadable.verified && unreadable.reason.contains("process 42 unreadable"), "an unreadable listener names its guard (\(unreadable.reason))")
         let listing = Server.listingProcesses("lsof: WARNING: can't stat() fixture\np42\ncbun\nu501\nf9\np77\ncbun\nu502\nf9\n")
