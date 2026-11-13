@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { NextRequest } from "next/server";
@@ -32,7 +32,7 @@ function request(body?: unknown) {
   return new NextRequest(`http://localhost/api/tasks/${TASK}/prototypes`, { headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", "sec-fetch-site": "same-origin" }, ...(body ? { method: "POST", body: JSON.stringify(body) } : {}) });
 }
 beforeEach(async () => { await resetPrototypeDeliveryWorkerForTests(); saveTasks([task()]); });
-afterEach(async () => { await resetPrototypeDeliveryWorkerForTests(); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
+afterEach(async () => { setSystemTime(); await resetPrototypeDeliveryWorkerForTests(); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 
 async function publish(key: string): Promise<string> {
   const root = await fs.mkdtemp(path.join(process.env.HOME!, "prototype-delivery-")); roots.push(root);
@@ -298,6 +298,8 @@ test("retries the runtime admits that each end failed keep their failure history
 
 
 test("bounded delivery passes rotate permanently due decisions and recover after worker reset", async () => {
+  const boundedNow = Date.parse("2026-11-12T08:00:00.000Z");
+  setSystemTime(boundedNow);
   const roundId = (n: number) => `pr_${n.toString(16).padStart(32, "0")}`;
   const seed = await publish("bounded-seed");
   const { ports, state } = seat();
@@ -324,7 +326,7 @@ test("bounded delivery passes rotate permanently due decisions and recover after
   const childSource = `
     import { sweepPrototypeDeliveries, startPrototypeDeliveryWorker, settlePrototypeDeliveriesForTests, resetPrototypeDeliveryWorkerForTests } from ${JSON.stringify(new URL("./deliveryWorker.ts", import.meta.url).pathname)};
     const counts = []; let calls = 0;
-    const ports = { now: () => Date.parse("2030-01-01T00:00:00.000Z"),
+    const ports = { now: () => ${boundedNow + 1000},
       world: { pipeline: () => null, orchestrator: () => "conversation_seat" },
       delivery: { recover: async decision => { calls++; return { state: "pending", operationId: decision.delivery.operationId }; },
         send: async () => { throw new Error("already admitted"); }, retry: async () => { throw new Error("already pending"); } } };

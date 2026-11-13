@@ -1,12 +1,20 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expect, test } from "bun:test";
 
 import { RuntimeReplayGapError, type RuntimeEvent } from "./engineHost";
+import { FileRuntimeEventStore } from "./eventStore";
 import {
   attachRuntimeEvents,
+  assertReleasedHostEventLedger,
   boundMap,
   HOST_EVENT_WINDOW,
   runtimeEventsAfter,
-  trimHostEventWindow,
+  releaseHostEventWindow,
+  HostEventWindow,
+  HOST_EVENT_WINDOW_BYTES,
+  hostEventWindowByteLimit,
   type RuntimeEventSubscriber,
 } from "./hostEventWindow";
 
@@ -15,14 +23,14 @@ const delta = (seq: number): RuntimeEvent => ({ kind: "delta", turnId: "turn", t
 /** A host's ledger and its in-memory window, kept the way the hosts keep them. */
 function source(count: number) {
   const ledger: RuntimeEvent[] = [];
-  const window: RuntimeEvent[] = [];
+  const owner = new HostEventWindow();
+  const window = owner.events;
   const subscribers = new Set<RuntimeEventSubscriber>();
   let ledgerReads = 0;
   const emit = () => {
     const event = delta(ledger.length + 1);
     ledger.push(event);
-    window.push(event);
-    trimHostEventWindow(window);
+    owner.append(event);
     for (const subscriber of subscribers) { subscriber.queue.push(event); subscriber.wake?.(); }
   };
   for (let index = 0; index < count; index++) emit();
@@ -69,6 +77,42 @@ test("a request older than the ledger is still a replay gap", () => {
   const trimmedLedger = host.ledger.slice(firstKept);
   expect(() => runtimeEventsAfter(host.window, 10, () => trimmedLedger)).toThrow(RuntimeReplayGapError);
   expect(() => runtimeEventsAfter(host.window, 0, () => [])).toThrow(RuntimeReplayGapError);
+});
+
+test("byte eviction keeps replay gap evidence after the ledger is lost", () => {
+  const window = new HostEventWindow(500);
+  window.append({ kind: "delta", turnId: "turn", text: "x".repeat(1000), seq: 1 });
+  expect(window.events).toEqual([]);
+  expect(() => runtimeEventsAfter(window.events, 0, () => [])).toThrow(RuntimeReplayGapError);
+  expect(() => runtimeEventsAfter(new HostEventWindow(500).events, 0, () => [])).not.toThrow();
+});
+
+test("a torn ledger tail cannot hide lost sequences behind a recovered prefix", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-window-replay-"));
+  try {
+    const store = new FileRuntimeEventStore(directory);
+    const first = delta(1);
+    const second = { ...delta(2), text: "x".repeat(1000) };
+    store.append("thread", first);
+    store.append("thread", second);
+
+    const window = new HostEventWindow(500);
+    window.append(first);
+    window.append(second);
+    expect(window.events).toEqual([]);
+
+    const filename = path.join(directory, "thread.jsonl");
+    const contents = fs.readFileSync(filename, "utf8");
+    fs.writeFileSync(filename, contents.slice(0, contents.indexOf("\n") + 1) + JSON.stringify(second).slice(0, -1));
+    const tornTailReplay = store.load("thread");
+    expect(tornTailReplay).toEqual([first]);
+    expect(() => runtimeEventsAfter(window.events, 0, () => tornTailReplay)).toThrow(RuntimeReplayGapError);
+
+    expect(runtimeEventsAfter(window.events, 0, () => [first, second])).toEqual([first, second]);
+    expect(runtimeEventsAfter(new HostEventWindow(500).events, 0, () => [])).toEqual([]);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("a stream returned before its first read leaves the host at once", async () => {
@@ -131,4 +175,212 @@ test("a bounded map drops its oldest settled entries and keeps open ones whateve
   for (let index = 0; index < 10; index++) map.set(`settled-${index}`, { open: false });
   boundMap(map, 4, value => !value.open);
   expect([...map.keys()]).toEqual(["open-oldest", "settled-7", "settled-8", "settled-9"]);
+});
+
+for (const afterSeq of [0, 7]) test(`empty-window UI replay and producer cursor ${afterSeq} read the ledger`, async () => {
+  const host = source(12);
+  host.window.length = 0;
+  expect(runtimeEventsAfter(host.window, afterSeq, host.events.ledger)).toEqual(host.ledger.slice(afterSeq));
+  const stream = attachRuntimeEvents(afterSeq, host.events)[Symbol.asyncIterator]();
+  try {
+    expect(await take(stream, 12 - afterSeq)).toEqual(host.ledger.slice(afterSeq).map(event => event.seq));
+    host.emit();
+    expect(await take(stream, 1)).toEqual([13]);
+  } finally { await stream.return?.(); }
+});
+
+test("an emptied window retains replay-gap refusal for a truncated ledger", () => {
+  expect(() => runtimeEventsAfter([], 0, () => [delta(4)])).toThrow(RuntimeReplayGapError);
+});
+
+test("released windows refuse missing and shortened ledgers until the acknowledged cursor", () => {
+  const events = [delta(1), delta(2), delta(3)];
+  releaseHostEventWindow(events);
+  expect(() => runtimeEventsAfter(events, 0, () => [])).toThrow(RuntimeReplayGapError);
+  expect(() => runtimeEventsAfter(events, 0, () => [delta(1)])).toThrow(RuntimeReplayGapError);
+  expect(runtimeEventsAfter(events, 3, () => [])).toEqual([]);
+});
+
+test("refill refuses a shortened ledger and can retry when its tail returns", () => {
+  const events = [delta(1), delta(2)];
+  releaseHostEventWindow(events);
+  expect(() => assertReleasedHostEventLedger(events, [delta(1)])).toThrow(RuntimeReplayGapError);
+  expect(events).toEqual([]);
+  expect(() => assertReleasedHostEventLedger(events, [delta(1), delta(2)])).not.toThrow();
+});
+
+const toolEvent = (seq: number, output = "x".repeat(20 * 1024)): RuntimeEvent => ({
+  kind: "item", turnId: "turn", phase: "completed", seq,
+  item: { type: "commandExecution", id: `command-${seq}`, command: "printf output", status: "completed", exitCode: 7, aggregatedOutput: output },
+});
+const bytesOf = (events: readonly RuntimeEvent[]) => events.reduce((sum, event) => sum + Buffer.byteLength(JSON.stringify(event)), 0);
+
+test("byte eviction, count eviction and restoration keep an exactly accounted contiguous suffix", () => {
+  const window = new HostEventWindow(12_000);
+  for (let seq = 1; seq <= 50; seq++) {
+    window.append(toolEvent(seq));
+    expect(window.heapAttribution()).toEqual({ windowBytes: bytesOf(window.events), windowByteLimit: 12_000, trimmedEvents: window.events.length });
+    expect(bytesOf(window.events)).toBeLessThanOrEqual(12_000);
+    expect(window.events.map(event => event.seq)).toEqual(Array.from({ length: window.events.length }, (_, index) => seq - window.events.length + index + 1));
+  }
+  const restored = new HostEventWindow(12_000);
+  restored.restore(Array.from({ length: 50 }, (_, index) => toolEvent(index + 1)));
+  expect(restored.events).toEqual(window.events);
+  expect(restored.heapAttribution()).toEqual(window.heapAttribution());
+  restored.restore([delta(51)]);
+  expect(restored.heapAttribution()).toMatchObject({ windowBytes: bytesOf(restored.events), trimmedEvents: 0 });
+  restored.restore(restored.events);
+  expect(restored.events).toEqual([delta(51)]);
+  const countBound = new HostEventWindow();
+  for (let seq = 1; seq <= HOST_EVENT_WINDOW * 2; seq++) countBound.append(delta(seq));
+  expect(countBound.events).toHaveLength(HOST_EVENT_WINDOW);
+  expect(countBound.heapAttribution().windowBytes).toBe(bytesOf(countBound.events));
+});
+
+test("previews copy large UTF-8 command output, file contents, diffs and tool results without mutating the ledger", () => {
+  const body = "😀ї".repeat(5000);
+  const items = [
+    { type: "commandExecution", id: "cmd", aggregatedOutput: body },
+    { type: "fileChange", id: "patch", changes: [{ path: "file.ts", diff: body }] },
+    { type: "assistant", message: { content: [{ type: "tool_use", id: "write", name: "Write", input: { file_path: "file.ts", content: body } }] } },
+    { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "write", is_error: true, content: [{ type: "text", text: body }] }] } },
+    { type: "mcpToolCall", id: "mcp", result: { content: [{ type: "text", text: body }] } },
+    { sessionUpdate: "tool_call_update", toolCallId: "acp", rawOutput: body, status: "failed" },
+  ];
+  for (const item of items) {
+    const original = { kind: "item", turnId: "turn", phase: "completed", seq: 1, item } as RuntimeEvent;
+    const recorded = JSON.stringify(original);
+    const window = new HostEventWindow();
+    window.append(original);
+    const preview = JSON.stringify(window.events[0]);
+    expect(preview).toContain(`[truncated; original UTF-8 bytes: ${Buffer.byteLength(body)}; full text in transcript]`);
+    expect(preview).not.toContain("�");
+    expect(preview.length).toBeLessThan(5000);
+    expect(window.heapAttribution().trimmedEvents).toBe(1);
+    expect(JSON.stringify(original)).toBe(recorded);
+  }
+});
+
+test("unpreviewable oversized events evict the whole prefix and remain replayable from the ledger", () => {
+  const ledger = [delta(1), { ...delta(2), text: "large exact delta".repeat(1000) }];
+  const window = new HostEventWindow(500);
+  for (const event of ledger) window.append(event);
+  expect(window.events).toEqual([]);
+  expect(window.heapAttribution()).toMatchObject({ windowBytes: 0, trimmedEvents: 0 });
+  expect(runtimeEventsAfter(window.events, 0, () => ledger)).toEqual(ledger);
+  expect(() => runtimeEventsAfter(window.events, 0, () => ledger.slice(1))).toThrow(RuntimeReplayGapError);
+  ledger.push(delta(3)); window.append(ledger[2]!);
+  expect(runtimeEventsAfter(window.events, 0, () => ledger)).toEqual(ledger);
+  expect(() => runtimeEventsAfter(window.events, 0, () => ledger.slice(1))).toThrow(RuntimeReplayGapError);
+});
+
+test("new subscribers replay previews and old ledger events in sequence; returning and continuing still work", async () => {
+  const ledger = Array.from({ length: 4 }, (_, index) => toolEvent(index + 1));
+  const window = new HostEventWindow(12_000);
+  ledger.forEach(event => window.append(event));
+  const subscribers = new Set<RuntimeEventSubscriber>();
+  const stream = attachRuntimeEvents(0, { window: () => window.events, ledger: () => ledger, subscribers })[Symbol.asyncIterator]();
+  const replay: RuntimeEvent[] = [];
+  for (let index = 0; index < 4; index++) replay.push((await stream.next()).value as RuntimeEvent);
+  expect(replay.map(event => event.seq)).toEqual([1, 2, 3, 4]);
+  expect(replay[0]).toEqual(ledger[0]);
+  expect(JSON.stringify(replay.at(-1))).toContain("[truncated;");
+  const waiting = stream.next();
+  const next = toolEvent(5);
+  ledger.push(next); window.append(next);
+  for (const subscriber of subscribers) { subscriber.queue.push(next); subscriber.wake?.(); }
+  expect((await waiting).value).toEqual(next);
+  await stream.return?.();
+  expect(subscribers.size).toBe(0);
+});
+
+test("sizes are serialized once on insertion; scalar diagnostics and eviction do no serialization", () => {
+  let serializations = 0;
+  const item = { type: "commandExecution", toJSON() { serializations++; return { type: "commandExecution", command: "true" }; } };
+  const window = new HostEventWindow(200);
+  window.append({ kind: "item", seq: 1, turnId: "turn", phase: "completed", item });
+  expect(serializations).toBe(1);
+  for (let index = 0; index < 20; index++) { window.heapAttribution(); window.append(delta(index + 2)); }
+  expect(serializations).toBe(1);
+});
+
+test("configuration is validated and new processes start with fresh byte counters", () => {
+  for (const value of [undefined, "", "0", "-1", "NaN", "Infinity", "1.5"]) expect(hostEventWindowByteLimit(value)).toBe(HOST_EVENT_WINDOW_BYTES);
+  expect(hostEventWindowByteLimit("8192")).toBe(8192);
+  for (const value of [0, -1, Infinity]) expect(() => new HostEventWindow(value)).toThrow("positive safe integer");
+  const source = `import { HostEventWindow } from ${JSON.stringify(import.meta.path.replace(/\.test\.ts$/, ".ts"))};
+    const window = new HostEventWindow();
+    console.log(JSON.stringify(window.heapAttribution()));
+    window.append({kind: "delta", seq: 1, turnId: "t", text: "hello"});
+    console.log(JSON.stringify(window.heapAttribution()));`;
+  for (let restart = 0; restart < 2; restart++) {
+    const child = Bun.spawnSync([process.execPath, "-e", source], { env: { ...process.env, LLV_HOST_EVENT_WINDOW_BYTES: "8192" } });
+    expect(child.exitCode).toBe(0);
+    const states = child.stdout.toString().trim().split("\n").map(line => JSON.parse(line));
+    expect(states[0]).toEqual({ windowBytes: 0, windowByteLimit: 8192, trimmedEvents: 0 });
+    expect(states[1].windowBytes).toBeGreaterThan(0);
+  }
+});
+
+test("identical recorded large-output data stays below the per-host budget in repeated before/after measurements", () => {
+  // 2500 events fit the previous count limit plus its 512-event slack.
+  const recorded = Array.from({ length: 2500 }, (_, index) => JSON.stringify(toolEvent(index + 1)));
+  const beforeBytes = recorded.reduce((sum, record) => sum + Buffer.byteLength(record), 0);
+  const measurements: { beforeBytes: number; afterBytes: number; events: number; trimmed: number }[] = [];
+  for (let repeat = 0; repeat < 3; repeat++) {
+    const host = new HostEventWindow();
+    for (const record of recorded) host.append(JSON.parse(record));
+    const { windowBytes, trimmedEvents } = host.heapAttribution();
+    expect(windowBytes).toBeLessThanOrEqual(HOST_EVENT_WINDOW_BYTES);
+    expect(windowBytes).toBe(bytesOf(host.events));
+    expect(windowBytes).toBeLessThan(beforeBytes / 8);
+    expect(host.events.at(-1)!.seq).toBe(2500);
+    expect(trimmedEvents).toBe(host.events.length);
+    measurements.push({ beforeBytes, afterBytes: windowBytes, events: host.events.length, trimmed: trimmedEvents });
+  }
+  expect(measurements[1]).toEqual(measurements[0]);
+  expect(measurements[2]).toEqual(measurements[0]);
+  console.log("host-window recorded-data measurement (serialized UTF-8 bytes)", JSON.stringify(measurements));
+});
+
+
+test("delivery echoes, user content digests, callback requests, terminal voice and deltas stay exact beside a trimmed payload", () => {
+  const text = "exact user text".repeat(1000);
+  const events: RuntimeEvent[] = [
+    { kind: "item", turnId: "turn", phase: "completed", seq: 1, codexItemIdentity: { threadId: "thread", turnId: "turn" },
+      item: { type: "userMessage", id: "user", clientId: "send", content: [{ type: "text", text }] } },
+    { kind: "item", turnId: "turn", phase: "completed", seq: 2, deliveryEcho: { operationId: "send", at: "2026-11-12T00:00:00.000Z", memberOperationIds: ["part"] },
+      item: { type: "user", contentDigest: "exact-digest", message: { content: [{ type: "text", text }, { type: "tool_result", tool_use_id: "tool", content: text }] } } },
+    { kind: "item", turnId: "turn", phase: "completed", seq: 3, item: { type: "agentMessage", text } },
+    { kind: "attention", id: "request", method: "can_use_tool", attention: { input: { command: text } }, seq: 4 },
+    { kind: "delta", turnId: "turn", text, seq: 5 },
+  ];
+  const window = new HostEventWindow();
+  events.forEach(event => window.append(event));
+  expect(window.events[0]).toBe(events[0]);
+  expect(window.events[2]).toBe(events[2]);
+  expect(window.events[3]).toBe(events[3]);
+  expect(window.events[4]).toBe(events[4]);
+  expect(window.events[1]).toMatchObject({ deliveryEcho: { operationId: "send", memberOperationIds: ["part"] },
+    item: { contentDigest: "exact-digest", message: { content: [{ type: "text", text }, { type: "tool_result", tool_use_id: "tool", content: expect.stringContaining("[truncated;") }] } } });
+  expect(window.heapAttribution().trimmedEvents).toBe(1);
+});
+
+
+test("idle release clears byte accounting, retains its replay watermark and refills under the same budget", () => {
+  const window = new HostEventWindow(12_000);
+  const ledger = [toolEvent(1), toolEvent(2), toolEvent(3)];
+  window.restore(ledger);
+  expect(window.heapAttribution().trimmedEvents).toBeGreaterThan(0);
+  window.release();
+  expect(window.events).toEqual([]);
+  expect(window.heapAttribution()).toEqual({ windowBytes: 0, windowByteLimit: 12_000, trimmedEvents: 0 });
+  expect(() => assertReleasedHostEventLedger(window.events, ledger.slice(0, 2))).toThrow(RuntimeReplayGapError);
+  expect(() => runtimeEventsAfter(window.events, 0, () => ledger.slice(0, 2))).toThrow(RuntimeReplayGapError);
+  expect(runtimeEventsAfter(window.events, 0, () => ledger)).toEqual(ledger);
+  window.restore(ledger);
+  expect(window.heapAttribution().windowBytes).toBe(bytesOf(window.events));
+  expect(window.heapAttribution().windowBytes).toBeLessThanOrEqual(12_000);
+  window.append(toolEvent(4));
+  expect(window.heapAttribution().windowBytes).toBe(bytesOf(window.events));
 });

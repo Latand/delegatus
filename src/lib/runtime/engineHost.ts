@@ -252,6 +252,9 @@ export interface EngineHost {
       an operator's ordinary send while the turn runs, one input at a time.
       The receipt is `steered` when the running turn took it. */
   readonly acceptsInputDuringTurn?: boolean;
+  /** Drops idle payloads while the caller still owns this host and its
+      conversation remains outside a realtime binding. */
+  releaseIdleEventWindow?(canRelease: () => boolean): Promise<boolean>;
   attach(afterSeq: number): AsyncIterable<RuntimeEvent>;
   send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void, observeTiming?: DeliveryTimingObserver): Promise<DeliveryReceipt>;
   /** Acknowledges the write before waiting for input to land in the running turn. */
