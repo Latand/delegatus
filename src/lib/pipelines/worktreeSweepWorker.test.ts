@@ -33,9 +33,9 @@ const counters = (report: unknown) => (report as {cacheStats:{allocationHits:num
 function productionFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sweep-protocol-")); roots.push(root);
   const env = { ...process.env, HOME: path.join(root, "home"), XDG_CONFIG_HOME: path.join(root, "config"),
-    LLV_STATE_DIR: path.join(root, "state"), TMPDIR: root,
+    LLV_STATE_DIR: path.join(root, "state"), TMPDIR: path.join(root, "tmp"),
     LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_TEMP_SWEEP: "on" };
-  for (const directory of [env.HOME, env.XDG_CONFIG_HOME, env.LLV_STATE_DIR]) fs.mkdirSync(directory);
+  for (const directory of [env.HOME, env.XDG_CONFIG_HOME, env.LLV_STATE_DIR, env.TMPDIR]) fs.mkdirSync(directory);
   const preload = path.join(root, "preload.ts");
   fs.writeFileSync(preload, `
     import fs from "node:fs";
@@ -116,25 +116,6 @@ test("production helper returns attempt reports and survives its own abandoned l
       if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
     }
   }
-}, 30_000);
-
-test("production maintenance keeps Docker dry and all ledger writes inside its fixture", async () => {
-  const { root, env } = productionFixture(), calls = path.join(root, "docker-calls");
-  fs.writeFileSync(path.join(root, "docker"), `#!/usr/bin/python3 -IB\nwith open(${JSON.stringify(calls)},'a') as f: f.write('unexpected call\\n')\nraise RuntimeError('unexpected Docker runner')\n`, { mode: 0o700 });
-  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "../worktreeSweep.worker.ts")], {
-    env: { ...env, PATH: root }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
-  });
-  const stdout = new Response(child.stdout).text(), stderr = new Response(child.stderr).text();
-  try {
-    child.stdin.write(JSON.stringify({ kind: "maintenance", deadline: Date.now() + 20000 }) + "\n"); child.stdin.end();
-    expect(await child.exited, await stderr).toBe(0);
-    const frames = (await stdout).trim().split("\n").map(line => JSON.parse(line));
-    expect(frames).toHaveLength(1);
-    expect(frames[0]).toMatchObject({ report: { checked: 0, removed: 0, errors: 0 } });
-    expect(fs.existsSync(path.join(env.LLV_STATE_DIR, "temporary-data.sqlite"))).toBeTrue();
-    expect(fs.existsSync(path.join(env.LLV_STATE_DIR, "docker-cache-retention.json"))).toBeFalse();
-    expect(fs.existsSync(calls)).toBeFalse();
-  } finally { if (child.exitCode === null) { child.kill(); await child.exited; } }
 }, 30_000);
 
 test("production helper takeover of a killed helper lease emits only reply frames on stdout", async () => {
@@ -428,13 +409,6 @@ test("attempt retirement coalesces through the owned worker", async () => {
   expect(worker.attemptTemp()).toBe(request);
   expect(await request).toMatchObject({ checked: 0, removed: 0, removedBytes: 0 });
   expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("attempt-temp\n");
-});
-
-test("temporary data maintenance coalesces and carries its deadline through the owned worker", async () => {
-  const { root, worker } = fixture(); const before = Date.now(), request = worker.maintenance();
-  expect(worker.maintenance()).toBe(request); expect(await request).toMatchObject({ checked: 0, removed: 0 });
-  expect(Number(fs.readFileSync(path.join(root, "maintenance-deadline"), "utf8"))).toBeGreaterThan(before);
-  expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("maintenance\n");
 });
 
 test("an attempt tick whose queue budget expired defers, then a fresh tick runs", async () => {

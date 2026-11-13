@@ -636,20 +636,6 @@ test("copies retain unfinished, recent and unattributed data and never touch dur
   } finally { process.env.LLV_STATE_DIR = priorState; f.store.close(); }
 });
 
-test("a creation-expired agent copy waits for the host-finish retention owner", async () => {
-  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
-  process.env.LLV_STATE_DIR = path.join(f.root, "agent-copy-state");
-  const destination = statePath("evidence", "attempt-temp", digest("agent-copy")); fs.mkdirSync(destination, { recursive: true });
-  fs.writeFileSync(path.join(destination, "capture.png"), "capture");
-  f.store.registerCopy({ destination, pipelineId: null, launchId: "agent-copy", kind: "agent", createdAt: NOW - 8 * 86400000,
-    expiresAt: NOW - 1000, checkedAt: 0, bytes: 4096 });
-  try {
-    const report = await sweepEvidenceCopies(f.store, { now: () => NOW, state: async () => "expired",
-      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true }, { agentCopiesManagedSeparately: true });
-    expect(report.removed).toBe(0); expect(fs.existsSync(destination)).toBeTrue(); expect(f.store.copy(destination)?.expiresAt).toBeNull();
-  } finally { process.env.LLV_STATE_DIR = priorState; f.store.close(); }
-});
-
 async function retentionProcess(filename: string, now: number, mode: string, ...args: string[]) {
   const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), filename, String(now), mode, ...args],
     { stdout: "pipe", stderr: "pipe", env: { ...process.env } });

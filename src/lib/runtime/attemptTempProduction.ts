@@ -103,7 +103,7 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
       retentionMs: FINISHED_LANE_RETENTION_MS,
     };
     const roots = await sweepAttemptTemps(store, options);
-    const copies = await sweepEvidenceCopies(store, options, { agentCopiesManagedSeparately: true });
+    const copies = await sweepEvidenceCopies(store, options);
     const report = { ...roots, copies, retention: store.retention(Date.now(), options.retentionMs) };
     const file = statePath("attempt-temp-report.json");
     const condition: TickCondition = { mode, overCap: report.overCapBytes > 0, failing: report.errors > 0 || copies.errors > 0 };

@@ -6859,26 +6859,6 @@ export class AgentRegistry {
     return this.readKeyed(file => clone(file.receipts[launchId] ?? null));
   }
 
-  /** Bounded retention discovery refuses the unindexed JSON fallback. */
-  temporaryDataReceiptKeys(after: string, limit = 32): string[] {
-    if (!this.sqliteStore || !["sqlite", "read"].includes(this.sqliteMode)) throw new RegistryReadError("retention requires the indexed registry");
-    return this.sqliteStore.temporaryDataReceiptKeys(after, limit);
-  }
-
-  temporaryDataFacts(input: { launchId?: string; key?: SessionKey }) {
-    return this.readKeyed(file => {
-      const receipt = input.launchId ? file.receipts[input.launchId] ?? null : null;
-      const key = input.key ?? receipt?.key;
-      const entry = key ? file.entries[sessionKeyId(key)] ?? null : null;
-      const ids = key ? registryConversationKeysForEntryKey(file, sessionKeyId(key)) : [];
-      if (!ids || ids.length > 32) throw new RegistryReadError("retention conversation inventory unavailable");
-      const conversations = new Set([...ids, ...(receipt ? [receipt.conversationId] : [])]);
-      for (const id of conversations) conversations.add(resolveConversationAlias(file, id as ViewerConversationId));
-      const memberships = [...conversations].flatMap(id => file.memberships[id] ?? []);
-      return clone({ receipt, entry, pipelines: memberships.filter(row => row.kind === "pipeline").map(row => row.containerId) });
-    }, { skipColdKeyInitialization: true });
-  }
-
   /** What structured recovery reads for one host: its row, optionally one
       launch receipt and one lineage edge, and the small quota table its park
       check asks. Recovery asks inside writer admission, where a whole snapshot

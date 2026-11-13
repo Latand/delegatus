@@ -432,11 +432,6 @@ test("the real minute scheduler logs the attempt failure message and command cau
     cause: Object.assign(new Error("find checkout failed"), { signal: "SIGTERM", killed: true }),
   });
   const run = spyOn(worker, "runAttemptTempSweepOffThread").mockRejectedValue(failure);
-  let maintenanceDone: () => void = () => {};
-  const maintenanceCalled = new Promise<void>(resolve => { maintenanceDone = resolve; });
-  const maintenance = spyOn(worker, "runTemporaryDataMaintenanceOffThread").mockImplementation(async () => {
-    maintenanceDone(); return { checked: 0, removed: 0 };
-  });
   const priorMode = process.env.LLV_TEMP_SWEEP;
   process.env.LLV_TEMP_SWEEP = "on";
   const original = globalThis.setTimeout;
@@ -457,9 +452,8 @@ test("the real minute scheduler logs the attempt failure message and command cau
     expect(line).toContain("attempt temp tick exceeded 60000 ms");
     expect(line).toContain("find checkout failed");
     expect(line).toContain("signal=SIGTERM");
-    await maintenanceCalled;
   } finally {
-    stopTempSweep(); timers.mockRestore(); log.mockRestore(); run.mockRestore(); maintenance.mockRestore();
+    stopTempSweep(); timers.mockRestore(); log.mockRestore(); run.mockRestore();
     if (priorMode === undefined) delete process.env.LLV_TEMP_SWEEP; else process.env.LLV_TEMP_SWEEP = priorMode;
   }
 });
