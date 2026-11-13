@@ -252,7 +252,7 @@ function processFixture() {
   fs.writeFileSync(path.join(f.root, "bunfig.toml"), "[test]\n");
   const source = `fs.writeFileSync(process.env.START, String(process.pid));
     while (!fs.existsSync(process.env.RELEASE)) await Bun.sleep(10);`;
-  fs.writeFileSync(path.join(f.root, "tsc"), `import fs from "node:fs"; ${source}`);
+  fs.writeFileSync(path.join(f.root, "tsc"), `import fs from "node:fs"; import { admitWorker } from ${JSON.stringify(path.join(import.meta.dir, "check-worker-client.mjs"))}; await admitWorker("compiler"); ${source}`);
   fs.writeFileSync(path.join(f.root, "worker.test.ts"), `import fs from "node:fs"; import { test } from "bun:test"; test("held worker", async () => { ${source} }, 30_000);`);
   new CheckAdmission(f.file).close();
   const db = new Database(f.file);

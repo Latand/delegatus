@@ -64,7 +64,7 @@ export function cacheDirectory(root: string, family: string): string {
  */
 export function gateToolFiles(root: string): string[] {
   const ts = new Bun.Transpiler({ loader: "ts" }), tsx = new Bun.Transpiler({ loader: "tsx" });
-  const pending = ["scripts/local-gate.ts", "scripts/local-gate-tests.ts", "scripts/owned-runner.ts", "scripts/cpu-admission.ts", "scripts/test-child-guardian.ts", "scripts/test-child-ownership.preload.ts", "test-preload.ts"];
+  const pending = ["scripts/local-gate.ts", "scripts/local-gate-tests.ts", "scripts/owned-runner.ts", "scripts/cpu-admission.ts", "scripts/test-child-guardian.ts", "scripts/test-child-ownership.preload.ts", "scripts/check-runtime-preload.mjs", "scripts/check-test-preload.ts", "test-preload.ts"];
   const seen = new Set<string>();
   while (pending.length) {
     const relative = pending.pop()!;

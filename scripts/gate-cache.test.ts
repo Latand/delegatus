@@ -13,6 +13,17 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 const fixture = () => { const root = mkdtempSync(path.join(tmpdir(), "gate-cache-")); roots.push(root); return root; };
 const valid = (value: unknown): value is { passed: true } => !!value && typeof value === "object" && "passed" in value && value.passed === true;
 
+test("runtime admission changes invalidate a cached gate verdict", () => {
+  const root = fixture();
+  mkdirSync(path.join(root, "scripts"));
+  const preload = path.join(root, "scripts/check-runtime-preload.mjs");
+  const key = () => gateToolFiles(root).map(file => fileFingerprint(path.join(root, file))).join(":");
+  writeFileSync(preload, "export const admission = true;");
+  const before = key();
+  writeFileSync(preload, "export const admission = false;");
+  expect(key()).not.toBe(before);
+});
+
 test("portable input capture retains values and explicit absences without placement or authority", () => {
   const inputs = checkInputEnvironment(checkEnvironment({
     PATH: "/usr/bin", HOME: "/fixture/home", LANG: "C.UTF-8", NODE_OPTIONS: "--max-old-space-size=1024",

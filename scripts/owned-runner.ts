@@ -22,6 +22,7 @@ import { producerReport, producerCommandIdentity, recordedSupervisorObligation, 
 import { startCheckBroker } from "./check-worker-broker";
 import { prepareTestHome } from "./check-test-home";
 import { withTestAdmission } from "./check-admission";
+import { withCompilerEntry } from "./check-compiler-entry";
 
 /** `namespace` marks a caller inside an agent signal domain. Its identities
  * are translated to the host, where the service checks them, and the service
@@ -32,31 +33,28 @@ if (!["--service", "--namespace-guardian"].includes(args[0] ?? "")) ownGateSandb
 const timeoutMs = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
 if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("owned runner needs a positive finite deadline");
 
-// Runtime preloads travel through package scripts and shells, including
-// absolute interpreter paths. Admit only the final worker/compiler, so a
-// waiting script runner never consumes its child's permit.
+// Test preloads travel through package scripts and shells. Compiler admission
+// is installed at its source entry below, independently of runtime options.
 const runtimePreload = path.join(import.meta.dir, "check-runtime-preload.mjs");
-for (const [key, flag] of [["BUN_OPTIONS", "--preload="], ["NODE_OPTIONS", "--import="]] as const) {
-  const option = `${flag}${pathToFileURL(runtimePreload).href}`;
-  if (!process.env[key]?.includes(option)) process.env[key] = `${process.env[key] ?? ""} ${option}`.trim();
-}
+const option = `--preload=${pathToFileURL(runtimePreload).href}`;
+if (!process.env.BUN_OPTIONS?.includes(option)) process.env.BUN_OPTIONS = `${process.env.BUN_OPTIONS ?? ""} ${option}`.trim();
 const launchOwner = args[0] === "--service"
   ? (JSON.parse(fs.readFileSync(args[1]!, "utf8")) as Launch).owner : undefined;
 const broker = await startCheckBroker(launchOwner);
 process.env.LLV_CHECK_BROKER = broker.address;
 delete process.env.DELEGATUS_CHECK_BROKER;
-const offset = ["--portable", "--namespace"].includes(args[0] ?? "") ? 1 : 0;
-if (!args[offset]?.startsWith("--")) {
+const offset = args[0] === "--budget" ? 2 : ["--portable", "--namespace"].includes(args[0] ?? "") ? 1 : 0;
+if (args[offset] && !args[offset]!.startsWith("--")) {
   const command = args.slice(offset), preload = path.join(import.meta.dir, "check-test-preload.ts");
   const admitted = withTestAdmission(command, preload);
-  if (admitted.includes(preload)) {
-    const startup = prepareTestHome();
-    if (startup) {
-      Object.assign(process.env, startup.env);
-      process.once("exit", startup.release);
-    }
+  const startup = prepareTestHome();
+  if (startup) {
+    Object.assign(process.env, startup.env);
+    process.once("exit", startup.release);
   }
-  args.splice(offset, args.length - offset, ...admitted);
+  const compiler = withCompilerEntry(admitted);
+  if (compiler) process.once("exit", compiler.release);
+  args.splice(offset, args.length - offset, ...(compiler?.command ?? admitted));
 }
 
 // Resolve automatic admission before dispatch so fallback has the same owner,
@@ -91,7 +89,8 @@ if (args[0] === "--namespace-guardian") {
   const stopTimer = cpuBudgetTimer(allowance, budget.elapsed, () => { console.error("owned runner: execution guard expired"); stop(124); });
   const code = await close;
   await cleanup;
-  stopTimer(); budget.close();
+  stopTimer();
+  try { await broker.close(); } finally { budget.close(); }
   process.exit(stopped || code);
 } else if (args[0] === "--portable") {
   warnGateTaskFallback("no systemd user gate unit on this host");
