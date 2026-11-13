@@ -40,7 +40,7 @@ test("check isolation retains admission transport without keying its per-run cap
 });
 
 test("alias folding preserves the canonical admission transport without keying the per-run nonce", () => {
-  const env = { PATH: "/usr/bin", DELEGATUS_CHECK_BROKER: "first" } as NodeJS.ProcessEnv;
+  const env: NodeJS.ProcessEnv = { PATH: "/usr/bin", NODE_ENV: "test", DELEGATUS_CHECK_BROKER: "first" };
   foldDelegatusEnvironment(env);
   expect(env.DELEGATUS_CHECK_BROKER).toBeUndefined();
   expect(checkEnvironment(env).LLV_CHECK_BROKER).toBe("first");
