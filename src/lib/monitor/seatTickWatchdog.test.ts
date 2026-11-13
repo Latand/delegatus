@@ -408,3 +408,36 @@ test("17 overflowing projects yield between slow alarm writes and do not rewrite
     process.env.LLV_STATE_DIR = previous;
   }
 }, 60_000);
+
+
+test("a long check-error snapshot keeps its monitor reference and skips later writes", async () => {
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "long-alarm-snapshot-"));
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  rig.deps.ensureCard = undefined;
+  let attempt = 0;
+  rig.deps.sources!.prepareRead = async () => { throw new Error(`failure ${++attempt}: ${"fixture source unavailable ".repeat(240)}`); };
+  const writes = spyOn(taskStore, "mutateTasksFile");
+  try {
+    for (let check = 0; check < 3; check++) await runSeatTickCheck(PROJECT, rig.deps);
+    const first = loadTasks(statePath("tasks.json")).find(task => task.project === PROJECT)!;
+    expect(first.text.length).toBeLessThanOrEqual(5_000);
+    expect(first.text.endsWith("monitor-ref: seat-tick-check-errors")).toBe(true);
+    expect(writes).toHaveBeenCalledTimes(1);
+    // Reproduce an older clipped snapshot after its create receipt expired.
+    const loaded = taskStore.loadTasksFile(statePath("tasks.json"));
+    for (const marker of ["", "\n\nmonitor-ref: other-alarm"]) {
+      taskStore.saveTasksFile({ ...loaded, recentCreates: [], tasks: loaded.tasks.map(task => task.id === first.id
+        ? { ...task, text: task.text.replace("\n\nmonitor-ref: seat-tick-check-errors", marker) } : task) }, statePath("tasks.json"));
+      writes.mockClear();
+      await runSeatTickCheck(PROJECT, rig.deps);
+      expect(writes).not.toHaveBeenCalled();
+      const cards = loadTasks(statePath("tasks.json")).filter(task => task.project === PROJECT);
+      expect(cards).toHaveLength(1);
+      expect(cards[0]!.id).toBe(first.id);
+    }
+    rig.deps.sources!.prepareRead = async () => {};
+    await runSeatTickCheck(PROJECT, rig.deps);
+    expect(loadTasks(statePath("tasks.json")).find(task => task.id === first.id)?.status).toBe("done");
+  } finally { writes.mockRestore(); process.env.LLV_STATE_DIR = previous; }
+});
