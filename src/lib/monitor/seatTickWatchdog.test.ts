@@ -346,7 +346,7 @@ test.skipIf(!!restartRoot)("the fifteen-minute delivery alarm survives restarts 
 });
 
 
-test("17 overflowing projects yield between slow alarm writes and do not rewrite an open episode", async () => {
+test.each([1_000, 20])("17 overflowing projects yield between %s ms alarm writes and do not rewrite an open episode", async injectedWriteMs => {
   const previous = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "slow-alarm-probe-"));
   const projects = Array.from({ length: 17 }, (_, index) => `alarm-project-${String(index).padStart(2, "0")}`);
@@ -365,7 +365,7 @@ test("17 overflowing projects yield between slow alarm writes and do not rewrite
   const writes = spyOn(taskStore, "mutateTasksFile").mockImplementation((...args) => {
     writeTurns.push(turns);
     const start = performance.now();
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_000);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, injectedWriteMs);
     const result = mutate(...args);
     count++;
     maxWriteMs = Math.max(maxWriteMs, performance.now() - start);
@@ -389,7 +389,11 @@ test("17 overflowing projects yield between slow alarm writes and do not rewrite
     expect(count).toBe(17);
     expect(projects.map((project, index) => rigs[index]!.deps.readState!(project).checkErrorAlarmVersion)).toEqual(projects.map(() => 1));
     expect(new Set(writeTurns).size).toBe(17);
-    expect(maxWriteMs).toBeGreaterThanOrEqual(1_000);
+    expect(maxWriteMs).toBeGreaterThanOrEqual(injectedWriteMs);
+    // A bounds the work surrounding one store write and yields before the next.
+    // With a cheap store write the literal 250 ms opening bound also holds.
+    expect(openingDelayMs).toBeLessThanOrEqual(injectedWriteMs === 20 ? 250 : 1_250);
+    expect(openingDelayMs).toBeLessThanOrEqual(maxWriteMs + 250);
     maxDelayMs = 0;
     last = performance.now();
     for (let pass = 0; pass < 3; pass++) {
@@ -397,7 +401,7 @@ test("17 overflowing projects yield between slow alarm writes and do not rewrite
       expect(records.filter(record => record?.verdict === "error")).toHaveLength(17);
     }
     await new Promise(resolve => setTimeout(resolve, 10));
-    console.log(JSON.stringify({ projects: 17, passes: 6, failedChecks: 102, tasksWrites: count,
+    console.log(JSON.stringify({ projects: 17, passes: 6, failedChecks: 102, injectedWriteMs, tasksWrites: count,
       writeTurns: new Set(writeTurns).size, maxWriteMs, openingDelayMs, repeatedDelayMs: maxDelayMs }));
     expect(count).toBe(17);
     expect(loadTasks(statePath("tasks.json"))).toHaveLength(17);
