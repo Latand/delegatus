@@ -1159,6 +1159,8 @@ export const en = {
   "accounts.resetsExpire": "expires {at}",
   "accounts.useReset": "Use one reset",
   "accounts.useResetAria": "Use one usage-limit reset on {label}",
+  "accounts.useResetConfirm": "One reset is spent for this account and cannot be taken back.",
+  "accounts.useResetCancel": "Cancel",
   "accounts.resetUsed": "Reset used on {label} — the new window is shown",
   "accounts.resetNone": "{label} has no resets available",
   "accounts.resetNothing": "Nothing to reset on {label} — no window is exhausted",
