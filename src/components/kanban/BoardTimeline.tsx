@@ -14,7 +14,7 @@ import type { Pipeline, PipelineRoleId } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import { STAGE_TONES, stageDisplayName, type StageChipState } from "@/components/pipelines/pipelineModel";
 import { StageGlyph } from "./StageGlyph";
-import { TIMELINE_HOURS, groupKey, groupOpen, timelineExpanded, type TimelinePreference } from "./boardTimelineStore";
+import { TIMELINE_HOURS, earlierKey, earlierOpen, groupKey, groupOpen, timelineExpanded, type TimelinePreference } from "./boardTimelineStore";
 
 const STILL_LONG_DAYS = DONE_TASK_BOARD_RETENTION_MS / 86_400_000;
 const chipState = (attempt: TimelineAttempt): StageChipState => attempt.state === "spawning" || attempt.stopped
@@ -252,13 +252,13 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
   const needsOpen = groupOpen(preference, "needs-you"), stillOpen = groupOpen(preference, "still"), longOpen = groupOpen(preference, "still-long");
   const shown = [...working, ...(needsOpen ? needs : []), ...(stillOpen ? [...still, ...(longOpen ? stillLong : [])] : [])];
   // A history control above the visible range grows a phone stage row, so the fitted viewport is measured again when the count changes.
-  const earlierCount = shown.reduce((count, row) => timelineExpanded(preference, row.task.taskId, row.group === "working")
+  const earlierCount = shown.reduce((count, row) => timelineExpanded(preference, row.task.taskId, row.group === "working") && earlierOpen(preference, row.task.taskId)
     ? count + [...row.task.pipelines.flatMap(pipeline => pipeline.attempts), ...row.task.agents].filter(hiddenBefore).length : count, 0);
   useLayoutEffect(() => fit(false), [fit, earlierCount]);
+  // The axis grows a row for the return control while the window is paged back.
+  useLayoutEffect(() => fit(true), [fit, view.paged]);
   const nowLine = nowX >= 0 && nowX <= laneWidth ? <i className="bt-now" style={{ left: nowX }} aria-hidden /> : null;
   const stepHours = [1, 3, 6, 12, 24, 48, 72, 168].find(hours => hours * HOUR * pxPerMs >= 44) ?? 168;
-  // Right-hand room the return control takes while the window is paged back.
-  const returnRoom = view.paged ? 112 : 0;
   const ticks = [];
   for (let ms = Math.ceil(view.start / (stepHours * HOUR)) * stepHours * HOUR; ms <= view.end; ms += stepHours * HOUR) ticks.push(ms);
   const days: { start: number; end: number }[] = [];
@@ -273,7 +273,11 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
   const lane = (children: ReactNode) => <div className="bt-lane" style={{ width: laneWidth, backgroundSize: `${stepHours * HOUR * pxPerMs}px 100%`,
     backgroundPosition: `${(Math.ceil(view.start / (stepHours * HOUR)) * stepHours * HOUR - view.start) * pxPerMs}px 0` }}>{children}{nowLine}</div>;
   const toggleExpanded = (key: string, open: boolean) => onPreference({ expanded: { ...preference.expanded, [key]: !open } });
-  const overdueIn = (list: readonly ChartRow[]) => list.filter(row => row.card.task!.dueAt && dueMark(row.card.task!.dueAt, nowMs, view, laneWidth)?.overdue).length;
+  // How many of the rows are past their due date, and the greatest lateness among them.
+  const overdueIn = (list: readonly ChartRow[]) => list.reduce((found, row) => {
+    const mark = row.card.task!.dueAt ? dueMark(row.card.task!.dueAt, nowMs, view, laneWidth) : null;
+    return mark?.overdue ? { count: found.count + 1, lateMs: Math.max(found.lateMs, mark.lateMs) } : found;
+  }, { count: 0, lateMs: 0 });
 
   // The board due date as words: «до 13 лист., 14:00 · переносили 6 разів», or the lateness in danger ink.
   const dueWords = (task: BoardTask, mark: DueMark) => {
@@ -308,6 +312,11 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
     const attempts = [...stages, ...task.agents];
     const current = attempts.findLast(attempt => attempt.live) ?? attempts.at(-1);
     const open = timelineExpanded(preference, task.taskId, rowGroup === "working");
+    // Stages that ended before the window are one line, opened with its own chevron; the others are rows.
+    const folded = attempts.filter(attempt => !attempt.live && hiddenBefore(attempt));
+    const foldOpen = earlierOpen(preference, task.taskId);
+    const foldEnd = folded.reduce((latest, attempt) => Math.max(latest, Math.min(attempt.endAtMs!, nowMs)), 0);
+    const foldWords = t("timeline.earlierStages", { count: folded.length, end: `${date(foldEnd)} ${time(foldEnd)}` });
     const lineSpan = task.startedAtMs !== null && task.startedAtMs <= nowMs ? clipSpan(task.startedAtMs, nowMs, view, laneWidth, 0) : null;
     const clipped = task.startedAtMs !== null && task.startedAtMs < view.start;
     return <Fragment key={task.taskId}>
@@ -354,7 +363,17 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
           </div>
         </>)}
       </div>
-      {open ? attempts.map(attempt => {
+      {open && folded.length ? <div className="bt-row bt-group bt-fold" data-timeline-fold={task.taskId} data-expanded={foldOpen ? "1" : "0"}>
+        <div className="bt-label">
+          <button type="button" className="bt-disclosure" data-timeline-fold-expand="" aria-expanded={foldOpen} aria-label={t(foldOpen ? "timeline.collapse" : "timeline.expand", { title: foldWords })}
+            onClick={() => onPreference({ expanded: { ...preference.expanded, [earlierKey(task.taskId)]: !foldOpen } })}>
+            <ChevronRight size={14} className={foldOpen ? "rotate-90" : ""} aria-hidden />
+            <span className="bt-text"><span className="bt-title">{foldWords}</span></span>
+          </button>
+        </div>
+        {phone ? null : lane(null)}
+      </div> : null}
+      {open ? attempts.filter(attempt => foldOpen || !folded.includes(attempt)).map(attempt => {
         const bounds = bar(attempt.startedAtMs, attempt.endAtMs);
         const work = attempt.observedTurn ? bar(attempt.observedTurn.startedAtMs, attempt.observedTurn.endAtMs) : null;
         const model = attempt.engine && attempt.model ? { engine: attempt.engine, model: attempt.model } : null;
@@ -395,15 +414,17 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
       {phone ? null : lane(null)}
     </div>
   );
-  const overdueNote = (count: number) => count > 0 ? <span className="bt-overdue-note" data-timeline-group-overdue="">{t("timeline.group.overdue", { count })}</span> : null;
+  const overdueNote = ({ count, lateMs }: { count: number; lateMs: number }, attribute: "data-timeline-group-overdue" | "data-timeline-head-overdue" = "data-timeline-group-overdue") => count > 0
+    ? <span className="bt-overdue-note" {...{ [attribute]: "" }}>{t("timeline.group.overdue", { count, duration: timelineDuration(lateMs, locale, t) })}</span> : null;
   const workingAgents = working.reduce((sum, row) => sum + row.card.working, 0);
 
   return <section ref={root} className="board-timeline" data-board-timeline="" data-phone={phone ? "1" : "0"} aria-label={t("timeline.title")}>
     <header className="bt-head">
       <div><span className="bt-split text-ui font-semibold text-secondary" data-timeline-count="" data-working={workingAgents}>
         <span className="bt-count"><i className="bt-dot" style={{ background: "var(--color-success)" }} aria-hidden />{t("kanban.columnWorking", { count: workingAgents })}</span>
-        <span className="bt-count"><i className="bt-dot" style={{ background: "var(--color-warning)" }} aria-hidden />{t("kanban.columnNeeds", { count: needs.length })}</span>
+        <span className="bt-count"><i className="bt-dot" style={{ background: "var(--color-warning)" }} aria-hidden />{t("timeline.needsCount", { count: needs.length })}</span>
         <span className="bt-count"><i className="bt-dot" style={{ background: "var(--color-muted)" }} aria-hidden />{t("timeline.stillCount", { count: still.length + stillLong.length })}</span>
+        {overdueNote(overdueIn(rows), "data-timeline-head-overdue")}
       </span>
         <p className="bt-legend text-caption text-secondary">{t("timeline.legend")}</p></div>
       <div className="bt-zoom bar-slot" role="group" aria-label={t("timeline.scale")}>
@@ -423,15 +444,15 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
         fitRows();
       }}>
       <div style={{ width: laneWidth + labelWidth, "--bt-label": `${labelWidth}px`, "--bt-phone-width": `${viewport}px` } as CSSProperties}>
-        <div className="bt-axis">
+        <div className="bt-axis" data-paged={view.paged ? "1" : undefined}>
           {phone ? null : <div className="bt-axis-label text-label text-secondary">{t("timeline.task")}</div>}
           <div className="bt-axis-lane" style={{ width: laneWidth }}>
             {days.map(day => {
               const left = Math.max(x(day.start), 0);
               const right = Math.min(x(day.end), laneWidth);
-              return right - left >= 52 && left + 5 + 52 <= laneWidth - returnRoom ? <span className="bt-day text-caption text-secondary" key={day.start} style={{ left: left + 5 }}>{date(day.start)}</span> : null;
+              return right - left >= 52 && left + 5 + 52 <= laneWidth ? <span className="bt-day text-caption text-secondary" key={day.start} style={{ left: left + 5 }}>{date(day.start)}</span> : null;
             })}
-            {ticks.filter(ms => x(ms) >= 0 && x(ms) + 40 <= laneWidth - returnRoom && (nowLabelLeft === null || x(ms) + 40 <= nowLabelLeft - 46 || x(ms) >= nowLabelLeft + 46)).map(ms => <span className="bt-tick text-caption text-muted" key={ms} style={{ left: x(ms) }}>{time(ms)}</span>)}
+            {ticks.filter(ms => x(ms) >= 0 && x(ms) + 40 <= laneWidth && (nowLabelLeft === null || x(ms) + 40 <= nowLabelLeft - 46 || x(ms) >= nowLabelLeft + 46)).map(ms => <span className="bt-tick text-caption text-muted" key={ms} style={{ left: x(ms) }}>{time(ms)}</span>)}
             {nowLabelLeft !== null ? <span data-timeline-now-label="" className="bt-now-label text-caption font-semibold text-accent"
               style={{ left: nowLabelLeft }}>{t("timeline.now")} {time(nowMs)}</span> : null}
             {view.paged ? <button type="button" data-timeline-now-label="" data-timeline-back="" className="bt-now-back text-caption font-semibold text-accent" aria-label={t("timeline.backToNow")} title={t("timeline.backToNow")}

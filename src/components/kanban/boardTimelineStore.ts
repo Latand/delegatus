@@ -57,6 +57,11 @@ export const groupKey = (group: "needs-you" | "still" | "still-long") => `group:
 /** A group is closed until the person opens it. */
 export const groupOpen = (preference: TimelinePreference, group: "needs-you" | "still" | "still-long") => preference.expanded[groupKey(group)] === true;
 
+/** The key a task's fold of stages that ended before the window keeps in `expanded`. Task ids never start with `earlier:`. */
+export const earlierKey = (taskId: string) => `earlier:${taskId}`;
+/** The stages that ended before the window stay folded into one line until the person opens it. */
+export const earlierOpen = (preference: TimelinePreference, taskId: string) => preference.expanded[earlierKey(taskId)] === true;
+
 export function timelineExpanded(preference: TimelinePreference, taskId: string, live: boolean): boolean {
   return Object.hasOwn(preference.expanded, taskId) ? preference.expanded[taskId]! : live;
 }

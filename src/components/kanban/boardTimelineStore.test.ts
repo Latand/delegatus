@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { BoardTimelineStore, groupKey, groupOpen, parseTimelinePreference, timelineExpanded, TIMELINE_HOURS } from "./boardTimelineStore";
+import { BoardTimelineStore, earlierKey, earlierOpen, groupKey, groupOpen, parseTimelinePreference, timelineExpanded, TIMELINE_HOURS } from "./boardTimelineStore";
 
 function storage() {
   const values = new Map<string, string>();
@@ -68,4 +68,16 @@ test("group folds share the task record, survive a write and a parse, and never 
   expect(groupOpen(reader, "still-long")).toBe(false);
   expect(timelineExpanded(reader, "task-a", true)).toBe(false);
   expect(Object.keys(reader.expanded).filter(key => key.startsWith("group:")).sort()).toEqual(["group:needs-you", "group:still"]);
+});
+
+test("a task's fold of earlier stages is closed until opened, is kept per task, and does not touch the task's own expansion", () => {
+  const disk = storage();
+  const writer = new BoardTimelineStore("project-a", disk);
+  expect(earlierOpen(writer.snapshot(), "task-a")).toBe(false);
+  writer.update({ expanded: { ...writer.snapshot().expanded, [earlierKey("task-a")]: true } });
+  const reader = new BoardTimelineStore("project-a", disk).snapshot();
+  expect(earlierOpen(reader, "task-a")).toBe(true);
+  expect(earlierOpen(reader, "task-b")).toBe(false);
+  expect(timelineExpanded(reader, "task-a", true)).toBe(true);
+  expect(timelineExpanded(reader, "task-a", false)).toBe(false);
 });

@@ -379,8 +379,8 @@ async function timelineGeometry(target: Locator) {
       lane: row.querySelector<HTMLElement>(".bt-lane")!.offsetHeight, label: row.querySelector<HTMLElement>(".bt-label")!.offsetHeight, row: row.offsetHeight }));
     const visibleRows = [...element.querySelectorAll(".bt-row")].filter(row => {
       const box = row.getBoundingClientRect(); return clip && box.top >= clip.top + axis - 1 && box.bottom <= clip.top + scroller!.clientHeight + 1;
-    }).map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt") ?? row.getAttribute("data-timeline-group-row")!);
-    const labelRects = [...element.querySelectorAll(".bt-label")].slice(0, 3).map(label => {
+    }).map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt") ?? row.getAttribute("data-timeline-group-row") ?? `fold:${row.getAttribute("data-timeline-fold")}`);
+    const labelRects = [...element.querySelectorAll(".bt-row:not(.bt-fold) .bt-label")].slice(0, 3).map(label => {
       const box = label.getBoundingClientRect();
       return { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) };
     });
@@ -556,6 +556,10 @@ describe("board timeline hybrid", () => {
           expect(knownWorkFraction).toBeLessThan(0.01);
           const runtimeLabels = await chart.locator(".bt-runtime").allTextContents();
           expect(runtimeLabels.every(label => !/\b(builder|reviewer)\b/.test(label))).toBe(true);
+          // Stages that ended before the window are one line; opening it lists them, each with its paging control. Open here so the rows, and their frozen labels, do not change with the scale.
+          const foldedLine = page.locator('[data-timeline-fold-expand][aria-expanded="false"]').first();
+          await foldedLine.waitFor();
+          for (const fold of await page.locator('[data-timeline-fold-expand][aria-expanded="false"]').all()) await fold.click();
           await frame("default");
           const timeScroll = page.locator("[data-timeline-scroll]");
           await page.getByRole("button", { name: translate(lang, "timeline.zoomIn"), exact: true }).click();
@@ -1329,6 +1333,8 @@ describe("board timeline manager view", () => {
         const days = (hours: number) => lang === "uk" ? `${Math.floor(hours / 24)} д` : `${Math.floor(hours / 24)}d`;
         for (const theme of ["light", "dark"] as const) for (const { width, height } of SIZES) {
           const tag = `${width}-${lang}-${theme}`;
+          // `LLV_TIMELINE_ONLY=1440-uk-light,390-en-dark` runs only those combinations; without it every one runs.
+          if (process.env.LLV_TIMELINE_ONLY && !process.env.LLV_TIMELINE_ONLY.split(",").includes(tag)) continue;
           const phone = width === 390;
           const frameOf = (page: Page, pageErrors: string[]) => async (state: string, target?: Locator, strict = true) => {
             await settleChart(page).catch(() => undefined);
@@ -1423,13 +1429,27 @@ describe("board timeline manager view", () => {
             check(working.every(row => row.expanded === "1"), `${tag}: a working task is not expanded by default`);
             check(JSON.stringify(rows.filter(row => row.groupRow).map(row => [row.groupRow, row.expanded])) === JSON.stringify([["needs-you", "0"], ["still", "0"]]), `${tag}: groups on fresh storage ${JSON.stringify(rows.filter(row => row.groupRow).map(row => [row.groupRow, row.expanded]))}`);
             const header = await chart.locator("[data-timeline-count]").innerText();
-            check(header.includes(t("kanban.columnWorking", { count: green })) && header.includes(t("kanban.columnNeeds", { count: 6 })) && header.includes(t("timeline.stillCount", { count: 14 })), `${tag}: header «${header}»`);
+            check(header.includes(t("kanban.columnWorking", { count: green })) && header.includes(t("timeline.needsCount", { count: 6 })) && header.includes(t("timeline.stillCount", { count: 14 })), `${tag}: header «${header}»`);
+            // The count of overdue tasks and the greatest lateness sit in the header, whatever is folded (the two overdue tasks are 96 h and 92 h late).
+            const overdueWords = t("timeline.group.overdue", { count: 2, duration: days(96) });
+            check(header.includes(overdueWords), `${tag}: header lacks «${overdueWords}»: «${header}»`);
+            check(lang === "uk" || ((await page.locator("body").innerText()).match(/need(s)? you/gi)?.length ?? 0) <= 1, `${tag}: «needs you» is on the screen twice`);
             check(Number(await chart.locator("[data-timeline-count]").getAttribute("data-working")) === green, `${tag}: the header's working number differs from the kanban's ${green}`);
             const closedStill = rows.find(row => row.groupRow === "still")!;
-            check(closedStill.label.includes(t("timeline.group.still", { count: 14 })) && closedStill.label.includes(t("timeline.group.longCount", { days: 3, count: 8 })) && closedStill.label.includes(t("timeline.group.overdue", { count: 2 })), `${tag}: closed «Stopped» row «${closedStill.label}»`);
+            check(closedStill.label.includes(t("timeline.group.still", { count: 14 })) && closedStill.label.includes(t("timeline.group.longCount", { days: 3, count: 8 })) && closedStill.label.includes(overdueWords), `${tag}: closed «Stopped» row «${closedStill.label}»`);
             check(rows.find(row => row.groupRow === "needs-you")!.label.includes(t("timeline.group.needs", { count: 6 })), `${tag}: closed needs-you row`);
             const sorted = (list: ManagerRow[]) => list.every((row, index) => index === 0 || Date.parse(list[index - 1]!.dueAt!) <= Date.parse(row.dueAt!));
             check(sorted(working), `${tag}: the top rows are not in due order`);
+            // First screen on fresh storage: a task's stages that ended before the window are one line, closed, so none of them is a row.
+            const firstScreen = await page.evaluate(() => {
+              const scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = scroller.getBoundingClientRect();
+              const axis = scroller.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect().bottom;
+              const whole = (row: Element) => { const rect = row.getBoundingClientRect(); return rect.top >= axis - 1 && rect.bottom <= box.top + scroller.clientHeight + 1; };
+              return { working: [...scroller.querySelectorAll('[data-timeline-group="working"]')].filter(whole).length,
+                folds: scroller.querySelectorAll('[data-timeline-fold][data-expanded="0"]').length, hiddenRows: scroller.querySelectorAll('[data-timeline-attempt][data-earlier="1"]').length };
+            });
+            check(firstScreen.folds > 0 && firstScreen.hiddenRows === 0, `${tag}: ${firstScreen.folds} folded lines, ${firstScreen.hiddenRows} stage rows from before the window on the first screen`);
+            check(firstScreen.working >= (width >= 1024 ? 2 : 1), `${tag}: first screen shows ${firstScreen.working} working tasks`);
             await frame("default");
             for (const row of working) await page.locator(`[data-timeline-task="${row.task}"] [data-timeline-expand]`).click();
             await settleChart(page);
@@ -1475,12 +1495,23 @@ describe("board timeline manager view", () => {
             const liveStart = await viewStart();
             await page.locator(`[data-timeline-task="${idOf(1)}"] [data-timeline-expand]`).click();
             await settleChart(page);
+            const foldLine = page.locator(`[data-timeline-fold="${idOf(1)}"] [data-timeline-fold-expand]`);
+            check(await foldLine.count() === 1 && await foldLine.getAttribute("aria-expanded") === "false", `${tag}: task 1 does not fold its earlier stages`);
+            await foldLine.click(); await settleChart(page);
             const earlier = page.locator(".bt-earlier").first();
             await earlier.scrollIntoViewIfNeeded();
             await earlier.click();
             await settleChart(page);
             check(await viewStart() < liveStart && await page.locator("[data-timeline-back]").count() === 1, `${tag}: paging did not move the window back`);
             await page.locator(`[data-timeline-task="${idOf(1)}"]`).scrollIntoViewIfNeeded();
+            // The return control has a row of its own: no time label of the axis is under it, cut by an edge or left out.
+            const axisLabels = await page.evaluate(() => {
+              const back = document.querySelector<HTMLElement>("[data-timeline-back]")!.getBoundingClientRect(), scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!;
+              const edge = scroller.getBoundingClientRect().left + scroller.clientWidth, range = document.createRange();
+              const labels = [...scroller.querySelectorAll<HTMLElement>(".bt-axis .bt-tick, .bt-axis .bt-day")].map(label => { range.selectNodeContents(label); const box = range.getBoundingClientRect(); return { right: box.right, top: box.top, bottom: box.bottom, left: box.left }; });
+              return { labels: labels.length, covered: labels.filter(box => box.left < back.right && box.right > back.left && box.top < back.bottom && box.bottom > back.top).length, cut: labels.filter(box => box.right > edge + 0.5).length };
+            });
+            check(axisLabels.labels >= 2 && axisLabels.covered === 0 && axisLabels.cut === 0, `${tag}: paged axis has ${axisLabels.labels} labels, ${axisLabels.covered} under the return control, ${axisLabels.cut} cut`);
             await frame("paged");
             check((await chart.locator("[data-timeline-back]").innerText()).includes(t("timeline.now")), `${tag}: the return control lacks the now label`);
             await page.locator("[data-timeline-back]").click(); await settleChart(page);
@@ -1522,7 +1553,7 @@ describe("board timeline manager view", () => {
                 const state = await scrollerOf.evaluate(element => {
                   const box = element.getBoundingClientRect(), axis = element.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect().bottom;
                   const ids = [...element.querySelectorAll<HTMLElement>(".bt-row")].filter(row => { const rect = row.getBoundingClientRect(); return rect.top >= axis - 1 && rect.bottom <= box.top + element.clientHeight + 1; })
-                    .map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt") ?? row.getAttribute("data-timeline-group-row")!);
+                    .map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt") ?? row.getAttribute("data-timeline-group-row") ?? `fold:${row.getAttribute("data-timeline-fold")}`);
                   const before = element.scrollTop; element.scrollTop += element.clientHeight - 60;
                   return { ids, before, after: element.scrollTop };
                 });
@@ -1590,7 +1621,7 @@ describe("board timeline manager view", () => {
       for (const [name, reading] of Object.entries(result)) {
         const width = Number(name.split("-")[0]);
         expect(reading.taskMax).toBeLessThanOrEqual(width === 390 ? 91 : 67);
-        expect(reading.head).toBeLessThanOrEqual(width === 390 ? 95 : width === 1024 ? 60 : 45);
+        expect(reading.head).toBeLessThanOrEqual(width === 390 ? 100 : width === 1024 ? 60 : 45);
       }
       const beforeFile = path.join(evidence, "density-before.json");
       if (fs.existsSync(beforeFile)) {

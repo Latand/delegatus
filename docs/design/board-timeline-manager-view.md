@@ -687,3 +687,24 @@ Close every browser the run opens.
   kanban does (decision 4).
 - 31.10: no field is removed (§9), labels do not gain lines, and the density readings
   must show no loss at 390, 1024 and 1440.
+
+## 18. Changes after the visual check
+
+- **Earlier stages fold.** An expanded task draws a row for each stage that ran in
+  the window or is live. Stages that ended before the window's left edge are one line
+  under the task, «ще N етапів до 12 лист. 08:42» / «N more stages until 12 Nov, 08:42»,
+  closed until its own chevron opens it; the open state is kept per task in the same
+  record as the other folds (`earlier:<task id>`). Opened, the line lists them with
+  their «‹ date time» paging controls. The line depends on the window, so its count
+  changes with the scale. The task stays expanded by default (§14). On the fixture a
+  first screen still holds fewer than eight working tasks at 1024 and 390: every
+  expanded task keeps its in-window stage rows, which the standing «task in work is
+  expanded» choice requires.
+- **Overdue in the header and on a closed group.** The header carries
+  «прострочено: N · до 4 д» / «overdue: N · up to 4d» beside the three counts, and a
+  closed group row carries the same words for its own rows, so the count and the
+  greatest lateness are on the first screen whatever is folded.
+- **The return control has a row.** While the window is paged back the axis grows a
+  row (24 px, 44 px on the phone) for «Зараз 08:10 ›»; no time label gives way to it.
+- **One name for the waiting group in English.** The header reads «6 waiting for you»,
+  as the group row does; «Needs you» stays the top bar button's.
