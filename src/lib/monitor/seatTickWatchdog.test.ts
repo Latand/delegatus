@@ -9,6 +9,38 @@ import { spyOn } from "bun:test";
 import { createTask } from "@/lib/tasks/commands";
 import { monitorClientRequestId } from "./cards";
 
+test("an open check-error episode does not rewrite tasks when overflow age changes", async () => {
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "alarm-snapshot-"));
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  let instant = 0, overrun = 1_000;
+  Object.assign(rig.deps, { workClock: () => instant, workBudgetMs: 800, ensureCard: undefined });
+  rig.deps.sources!.prepareRead = async () => { instant += overrun++; };
+  const writes = spyOn(taskStore, "mutateTasksFile");
+  try {
+    for (let check = 0; check < 3; check++) {
+      expect((await runSeatTickCheck(PROJECT, rig.deps))?.verdict).toBe("error");
+    }
+    expect(writes).toHaveBeenCalledTimes(1);
+    const first = loadTasks(statePath("tasks.json")).find(task => task.project === PROJECT)!;
+    expect(first.text).toContain("ageMs=1002");
+    await runSeatTickCheck(PROJECT, rig.deps);
+    expect(rig.journal.at(-1)!.detail).toContain("ageMs=1003");
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect(loadTasks(statePath("tasks.json")).find(task => task.id === first.id)).toEqual(first);
+    rig.deps.sources!.prepareRead = async () => {};
+    await runSeatTickCheck(PROJECT, rig.deps);
+    expect(loadTasks(statePath("tasks.json")).find(task => task.id === first.id)?.status).toBe("done");
+    expect(writes).toHaveBeenCalledTimes(2);
+    rig.deps.sources!.prepareRead = async () => { instant += overrun++; };
+    for (let check = 0; check < 3; check++) await runSeatTickCheck(PROJECT, rig.deps);
+    expect(writes).toHaveBeenCalledTimes(3);
+    const next = loadTasks(statePath("tasks.json")).find(task => task.id === first.id)!;
+    expect(next.status).toBe("inbox");
+    expect(next.details).not.toBe(first.details);
+  } finally { writes.mockRestore(); process.env.LLV_STATE_DIR = previous; }
+});
+
 test.each([0, 500])("healthy checks never enumerate a board with %s unrelated tasks to close an error notice", async count => {
   const rig = harness({ pipelines: [], state: { lastProposalAt: new Date(NOW).toISOString() } });
   rig.deps.ensureCard = undefined;
@@ -312,3 +344,64 @@ test.skipIf(!!restartRoot)("the fifteen-minute delivery alarm survives restarts 
   expect(cards()).toHaveLength(1);
   expect(cards()[0]).toMatchObject({ id: card.id, status: "done" });
 });
+
+
+test("17 overflowing projects yield between slow alarm writes and do not rewrite an open episode", async () => {
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "slow-alarm-probe-"));
+  const projects = Array.from({ length: 17 }, (_, index) => `alarm-project-${String(index).padStart(2, "0")}`);
+  const rigs = projects.map(() => {
+    const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+    let instant = 0, overrun = 1_000;
+    Object.assign(rig.deps, { workClock: () => instant, workBudgetMs: 800, ensureCard: undefined });
+    rig.deps.sources!.prepareRead = async () => { instant += overrun++; };
+    return rig;
+  });
+  const mutate = taskStore.mutateTasksFile;
+  let count = 0, maxWriteMs = 0, turns = 0;
+  const writeTurns: number[] = [];
+  const writes = spyOn(taskStore, "mutateTasksFile").mockImplementation((...args) => {
+    writeTurns.push(turns);
+    const start = performance.now();
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_000);
+    const result = mutate(...args);
+    count++;
+    maxWriteMs = Math.max(maxWriteMs, performance.now() - start);
+    return result;
+  });
+  let last = performance.now(), maxDelayMs = 0;
+  const heartbeat = setInterval(() => {
+    turns++;
+    const now = performance.now();
+    maxDelayMs = Math.max(maxDelayMs, now - last - 5);
+    last = now;
+  }, 5);
+  try {
+    await new Promise(resolve => setTimeout(resolve, 10));
+    for (let pass = 0; pass < 3; pass++) {
+      const records = await Promise.all(projects.map((project, index) => runSeatTickCheck(project, rigs[index]!.deps)));
+      expect(records.filter(record => record?.verdict === "error")).toHaveLength(17);
+    }
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const openingDelayMs = maxDelayMs;
+    expect(count).toBe(17);
+    expect(new Set(writeTurns).size).toBe(17);
+    expect(maxWriteMs).toBeGreaterThanOrEqual(1_000);
+    maxDelayMs = 0;
+    last = performance.now();
+    for (let pass = 0; pass < 3; pass++) {
+      const records = await Promise.all(projects.map((project, index) => runSeatTickCheck(project, rigs[index]!.deps)));
+      expect(records.filter(record => record?.verdict === "error")).toHaveLength(17);
+    }
+    await new Promise(resolve => setTimeout(resolve, 10));
+    console.log(JSON.stringify({ projects: 17, passes: 6, failedChecks: 102, tasksWrites: count,
+      writeTurns: new Set(writeTurns).size, maxWriteMs, openingDelayMs, repeatedDelayMs: maxDelayMs }));
+    expect(count).toBe(17);
+    expect(loadTasks(statePath("tasks.json"))).toHaveLength(17);
+    expect(maxDelayMs).toBeLessThanOrEqual(250);
+  } finally {
+    clearInterval(heartbeat);
+    writes.mockRestore();
+    process.env.LLV_STATE_DIR = previous;
+  }
+}, 60_000);

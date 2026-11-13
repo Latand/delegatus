@@ -274,8 +274,9 @@ function absorbedAttempts(existing: BoardTask | undefined, key: string): number 
 
 function cardText(project: string, card: SeatTickCard, at: string, existing?: BoardTask): string {
   if (card.kind === "check-errors") return redactBounded([
-    "Seat tick checks keep failing", "", card.detail,
-    "The next check retries. Inspect the latest failure and restore the failing source so wakes can resume.",
+    "Seat tick checks keep failing", "", `Alarm opening snapshot at ${at}:`,
+    card.detail.replace("latest failure:", "failure at opening:"),
+    "This snapshot stays unchanged during this episode. Current failures are in the seat tick journal and diagnostics. The next check retries; recovery closes this card.",
     "", `${MONITOR_REF_PREFIX} ${card.ref}`,
   ].join("\n"), CARD_TEXT_LIMIT);
   if (card.kind === "auto-rotation" || card.kind === "host-recovery") return redactBounded(card.detail, CARD_TEXT_LIMIT);
@@ -441,6 +442,7 @@ export function ensureSeatTickCard(project: string, card: SeatTickCard, at: stri
          card that tracks a standing state — the one kind that declares its
          `state` — is kept in step with what it describes. */
       if (card.state !== "open") return unchanged;
+      if (card.kind === "check-errors" && existing.details?.split("\n").includes(details)) return unchanged;
       if (existing.text === text && existing.details === details) return unchanged;
       const updated = patchTask(state.tasks, existing.id, { text, details });
       return updated.ok
@@ -494,6 +496,8 @@ function seatTickCardIsCurrent(project: string, card: SeatTickCard, at: string, 
   if (!existing) return false;
   if (card.state !== "open") return true;
   const details = cardDetails(card);
+  // Check-error cards retain the opening snapshot of their durable episode.
+  if (card.kind === "check-errors") return existing.details?.split("\n").includes(details) ?? false;
   return existing.text === cardText(project, card, at, existing) && existing.details === details;
 }
 
@@ -1556,6 +1560,9 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
       // Older writers have no marker. Their recent errors can still owe a
       // close; once reconciled the explicit false ends this compatibility read.
       if (alarm || (record.verdict !== "error" && (pending === true || (pending === undefined && recent.some(row => row.verdict === "error"))))) {
+        // Alarms survive the expired check. The shared cooperative queue gives
+        // timers and requests a turn between projects' synchronous board writes.
+        await outsideSeatTickWork(() => yieldToRuntime());
         const mark = (pending: boolean) => {
           const state = read(project);
           const episodeActive = alarm !== null;
