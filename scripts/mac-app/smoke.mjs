@@ -5,7 +5,7 @@ import { userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
-import { appSessionData, comparablePath, commandFailure, intelIsTranslated, smokeEnvironment, smokeStdio } from "./smoke-platform.mjs";
+import { appSessionData, comparablePath, commandFailure, intelIsTranslated, runCommand, smokeEnvironment, smokeStdio } from "./smoke-platform.mjs";
 
 const [image, reportArg] = process.argv.slice(2);
 if (process.platform !== "darwin" || !image || !reportArg || process.env.CI !== "true") throw new Error("Usage on disposable macOS CI: node smoke.mjs DMG REPORT");
@@ -26,6 +26,8 @@ let app = "";
 const homes = [];
 let mount;
 const owned = new Map();
+// Launchers this driver started itself; `stop --all` must see them reaped.
+const replacements = new Set();
 const surfaces = ["install", "installing", "cancelling", "menu", "stop", "login", "update", "quit"];
 const visualCases = [
   ...["en", "uk"].flatMap(language => ["Light", "Dark"].flatMap(appearance => [
@@ -46,9 +48,14 @@ function run(command, args, options = {}) {
   catch (error) { status = error.status ?? 1; throw new Error(redact(commandFailure(command, error))); }
   finally { commands.push({ command: redact([command, ...args].join(" ")), exit: status }); }
 }
-// Runs a windowless command against one case's data.
-function inHome(caseHome, command, args = [], options = {}) {
-  return run(command, args, { ...options, env: smokeEnvironment({ user, home: caseHome }, options.settings) });
+// Runs a windowless command against one case's data without blocking the
+// event loop, so a command that waits on a process this driver started sees
+// it reaped.
+async function inHome(caseHome, command, args = []) {
+  let status = 0;
+  try { return await runCommand(command, args, { env: smokeEnvironment({ user, home: caseHome }) }); }
+  catch (error) { status = error.status ?? 1; throw new Error(redact(commandFailure(command, error))); }
+  finally { commands.push({ command: redact([command, ...args].join(" ")), exit: status }); }
 }
 function freshHome(label) {
   const caseHome = join(root, `h${homes.length}`);
@@ -115,7 +122,9 @@ function startViewer(bun, cli, settings = {}) {
   const child = spawn(bun, [cli, "--no-open", "--port", "8898"], { env: smokeEnvironment({ user, home }, settings), stdio: "ignore" });
   child.on("error", () => {});
   commands.push({ command: redact([bun, cli, "--no-open", "--port", "8898"].join(" ")), exit: "started" });
-  return own(child, "replacement Delegatus");
+  const pid = own(child, "replacement Delegatus");
+  replacements.add(pid);
+  return pid;
 }
 async function http(method = "GET", authorized = false) {
   try { return await fetch("http://127.0.0.1:8898" + (method === "HEAD" ? "/api/onboarding/diagnostics" : "/"), { method, headers: authorized ? { Authorization: `Bearer ${accessKey}` } : {}, signal: AbortSignal.timeout(2000) }); } catch { return null; }
@@ -137,9 +146,19 @@ function listenerSnapshot() {
     .filter(line => root && comparablePath(line).includes(comparablePath(root))).join("\n");
   return redact(`lsof listener:\n${listing || "(empty)"}\nprocesses under the run root:\n${rows || "(none)"}`);
 }
-function stopAll() {
+// stop --all signals the launcher and waits until its PID is gone. A launcher
+// this driver started is gone only once this event loop reaps it, so the stop
+// runs asynchronously and must still exit 0; then that child's own exit is
+// awaited before the case goes on.
+async function stopAll() {
   const runtime = runtimeOf(home);
-  return inHome(home, join(runtime, "bun/bin/bun"), [join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"), "stop", "--all"]);
+  const output = await inHome(home, join(runtime, "bun/bin/bun"), [join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"), "stop", "--all"]);
+  for (const pid of replacements) {
+    const child = owned.get(pid);
+    if (child) await until(`replacement Delegatus ${pid} exit after stop --all`, () => exited(child), 30_000);
+    owned.delete(pid); replacements.delete(pid);
+  }
+  return output;
 }
 function seedInstalledRelease(runtime) {
   const packageRoot = join(runtime, "packages/node_modules/delegatus-cli");
@@ -276,7 +295,7 @@ try {
   }
   await check("protected-reuse-and-refusal", async () => {
     const runtime = runtimeOf(home);
-    stopAll();
+    await stopAll();
     await until("port free before protected server", async () => !(await http()));
     seedInstalledRelease(runtime);
     writeFileSync(join(home, ".config/delegatus/phone-access"), "enabled\n");
@@ -296,14 +315,14 @@ try {
     const recovery = () => `${instance.diagnostics()}\napp log:\n${processLog(instance) || "(empty)"}\n${listenerSnapshot()}`;
     await until("recovery app attaches", () => processLog(instance).includes("STATE reused"), 60_000, recovery);
     const runtime = runtimeOf(home);
-    stopAll();
+    await stopAll();
     await until("monitor reports stopped", () => processLog(instance).includes("STATE stopped"), 90_000, recovery);
     startViewer(join(runtime, "bun/bin/bun"), join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"));
     await until("monitor restores the web view", async () => processLog(instance).includes("STATE recovered") && /WEB language=/.test(processLog(instance)) && (await http("GET", true))?.status === 200, 90_000, recovery);
     await sleep(4000); await end(instance);
   });
   await check("busy-port-setup", async () => {
-    stopAll();
+    await stopAll();
     await until("port free", async () => !(await http()));
     const file = join(home, "listener.py");
     const foreignAuth = join(home, "foreign-auth-received");
@@ -358,7 +377,7 @@ finally {
   }
   if (foreignListener) { try { process.kill(foreignListener, "SIGTERM"); } catch { /* already exited */ } }
   for (const child of owned.values()) { if (!exited(child)) child.kill("SIGTERM"); }
-  if (home && existsSync(runtimeOf(home))) { try { stopAll(); } catch { /* failed installation has no server */ } }
+  if (home && existsSync(runtimeOf(home))) { try { await stopAll(); } catch { /* failed installation has no server */ } }
   for (const [pid, child] of owned) {
     try { await until("owned process exit", () => exited(child), 10_000); }
     catch { commands.push({ command: `owned process ${pid} after SIGTERM`, exit: "running" }); }

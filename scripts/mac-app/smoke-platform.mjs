@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { join } from "node:path";
 
 export function intelIsTranslated({ status, stdout = "", stderr = "" }) {
@@ -67,4 +68,26 @@ export function commandFailure(command, error) {
   const stdout = String(error?.stdout ?? "").trim();
   const message = !stderr && !stdout && error?.message ? `; ${error.message}` : "";
   return `${head.join(" ")}: stderr: ${stderr || "(empty)"}; stdout tail: ${stdout ? stdout.slice(-4000) : "(empty)"}${message}`;
+}
+
+// Runs a command while the driver's event loop keeps turning. `stop --all`
+// waits until the launcher it signalled is gone; when that launcher is the
+// driver's own child, only the driver's event loop can reap it, and a
+// synchronous call would leave it a zombie that still answers as running.
+// Resolves with stdout; rejects with the exit status, signal, Node code and
+// both streams that commandFailure reports.
+/** @param {string} command @param {string[]} args @param {{ env?: Record<string, string>, timeout?: number, maxBuffer?: number }} [options] @returns {Promise<string>} */
+export function runCommand(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = execFile(command, args, { encoding: "utf8", timeout: 180_000, maxBuffer: 16 * 1024 * 1024, ...options }, (error, stdout, stderr) => {
+      if (!error) { resolve(stdout); return; }
+      const exitCode = /** @type {{ code?: unknown }} */ (error).code;
+      reject(Object.assign(error, {
+        status: typeof exitCode === "number" ? exitCode : null,
+        code: typeof exitCode === "string" ? exitCode : undefined,
+        stdout, stderr,
+      }));
+    });
+    child.stdin?.end();
+  });
 }

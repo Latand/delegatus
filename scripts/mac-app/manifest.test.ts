@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { digest, validatePackage, verifiedBun } from "./manifest";
-import { appSessionData, commandFailure, comparablePath, intelIsTranslated, smokeEnvironment, smokeStdio } from "./smoke-platform.mjs";
+import { appSessionData, commandFailure, comparablePath, intelIsTranslated, runCommand, smokeEnvironment, smokeStdio } from "./smoke-platform.mjs";
 
 describe("Mac runtime manifest", () => {
   const bytes = new TextEncoder().encode("archive fixture");
@@ -127,5 +127,35 @@ describe("Mac smoke command failures", () => {
   });
   test("falls back to the error message when both streams are empty", () => {
     expect(commandFailure("/bin/ps", { status: 2, message: "spawn failed" })).toBe("/bin/ps exited 2: stderr: (empty); stdout tail: (empty); spawn failed");
+  });
+});
+
+describe("Mac smoke commands that wait on the driver's own child", () => {
+  // The shape of `stop --all` against a launcher the driver started: signal
+  // the PID, then wait until kill -0 stops answering. A zombie still answers,
+  // so this ends only when the caller's event loop reaps its child.
+  const waitGone = 'kill "$1"; while kill -0 "$1" 2>/dev/null; do sleep 0.05; done; echo gone';
+  test("finishes because the driver keeps reaping while it waits", async () => {
+    const child = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
+    const exited = new Promise(resolve => child.once("exit", (code, signal) => resolve(signal)));
+    try {
+      const output = await runCommand("/bin/sh", ["-c", waitGone, "sh", String(child.pid)], { timeout: 10_000 });
+      expect(output.trim()).toBe("gone");
+      expect(await exited).toBe("SIGTERM");
+    } finally { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); }
+  });
+  test("rejects with the exit status and both streams", async () => {
+    const failure = await runCommand("/bin/sh", ["-c", "echo out; echo err >&2; exit 3"]).catch(error => error);
+    expect(failure.status).toBe(3);
+    expect(commandFailure("/bin/sh", failure)).toBe("/bin/sh exited 3: stderr: err; stdout tail: out");
+  });
+  test("rejects a command that outlives its deadline with the signal", async () => {
+    const failure = await runCommand("/bin/sleep", ["5"], { timeout: 200 }).catch(error => error);
+    expect(failure.status).toBe(null);
+    expect(failure.signal).toBe("SIGTERM");
+    expect(commandFailure("/bin/sleep", failure)).toStartWith("/bin/sleep exited 1 signal SIGTERM: stderr: (empty); stdout tail: (empty)");
+  });
+  test("gives a command that reads stdin an immediate end of input", async () => {
+    expect(await runCommand("/bin/cat", [], { timeout: 5_000 })).toBe("");
   });
 });
