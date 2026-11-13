@@ -9581,32 +9581,42 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
           return [prompt, runtime].join("\n\n");
         });
         const prompt = recovering ? "" : await prepareCloudPrompt();
-        const submitInput: CloudStageSubmitInput = { environmentId: cloud.environmentId,
-          environmentScope: { repository: githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? "", ref: pipeline.baseBranch },
-          branch: cloud.branch, headSha: cloud.headSha, prompt, preparePrompt: prepareCloudPrompt,
-          writable: bound.effectiveRole.access === "read-write", model: bound.model!, reasoningEffort: attempt.effectiveRole.effort, allowProviderModelFallback: false,
-          account, ...(cloud.environmentPrincipal ? { environmentPrincipal: cloud.environmentPrincipal } : {}), signal: abort.signal, assertCurrent,
-          ...(runtime === "claude-cloud" ? { claudeSubmission: cloud.claudeSubmission, checkpointSubmission: async submission => {
-            assertCurrent(); cloud.claudeSubmission = submission;
-            if (!await checkpoint(cloud)) throw new Error("Claude Cloud submission journal was superseded");
-            assertCurrent();
-          } } : {}) };
-        const recovered = recovering ? await boundedCloudCall(() => client.recoverSubmission
-          ? client.recoverSubmission(submitInput) : Promise.resolve({ state: "unknown" as const, reason: "Claude Cloud transport cannot look up the interrupted submission" }), abort.signal) : null;
-        assertCurrent();
-        if (recovered && recovered.state !== "found") {
-          cloud.submissionRecovery!.state = recovered.state;
-          cloud.submissionUnresolved = recovered.state !== "absent";
-          cloud.phase = "failed"; cloud.error = [original.error, recovered.reason].filter(Boolean).join("; ").slice(0, 2000);
-          await checkpoint(cloud); return;
-        }
-        const submitted = recovered?.state === "found" ? recovered.receipt
-          : await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => {
-            assertCurrent(); submissionDispatched = true; return client.submit(submitInput);
-          }, abort.signal));
-        if (recovering) {
-          cloud.submissionRecovery!.state = "found";
-          cloud.deadlineAt = new Date(unixMs(ports.now()) + cloudStageDeadlineMs(runtime, attempt.effectiveRole.access)).toISOString();
+        let submitted: Awaited<ReturnType<CloudStageClient["submit"]>>;
+        if (runtime === "claude-cloud") {
+          const submitInput: CloudStageSubmitInput = { environmentId: cloud.environmentId,
+            environmentScope: { repository: githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? "", ref: pipeline.baseBranch },
+            branch: cloud.branch, headSha: cloud.headSha, prompt, preparePrompt: prepareCloudPrompt,
+            writable: bound.effectiveRole.access === "read-write", model: bound.model!, reasoningEffort: attempt.effectiveRole.effort, allowProviderModelFallback: false,
+            account, ...(cloud.environmentPrincipal ? { environmentPrincipal: cloud.environmentPrincipal } : {}), signal: abort.signal, assertCurrent,
+            ...(runtime === "claude-cloud" ? { claudeSubmission: cloud.claudeSubmission, checkpointSubmission: async submission => {
+              assertCurrent(); cloud.claudeSubmission = submission;
+              if (!await checkpoint(cloud)) throw new Error("Claude Cloud submission journal was superseded");
+              assertCurrent();
+            } } : {}) };
+          const recovered = recovering ? await boundedCloudCall(() => client.recoverSubmission
+            ? client.recoverSubmission(submitInput) : Promise.resolve({ state: "unknown" as const, reason: "Claude Cloud transport cannot look up the interrupted submission" }), abort.signal) : null;
+          assertCurrent();
+          if (recovered && recovered.state !== "found") {
+            cloud.submissionRecovery!.state = recovered.state;
+            cloud.submissionUnresolved = recovered.state !== "absent";
+            cloud.phase = "failed"; cloud.error = [original.error, recovered.reason].filter(Boolean).join("; ").slice(0, 2000);
+            await checkpoint(cloud); return;
+          }
+          submitted = recovered?.state === "found" ? recovered.receipt
+            : await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => {
+              assertCurrent(); submissionDispatched = true; return client.submit(submitInput);
+            }, abort.signal));
+          if (recovering) {
+            cloud.submissionRecovery!.state = "found";
+            cloud.deadlineAt = new Date(unixMs(ports.now()) + cloudStageDeadlineMs(runtime, attempt.effectiveRole.access)).toISOString();
+          }
+        } else {
+          // Preserve the existing Codex submission and its bounded execution context.
+          submitted = await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => { assertCurrent(); submissionDispatched = true; return client.submit({ environmentId: cloud.environmentId,
+            environmentScope: { repository: githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? "", ref: pipeline.baseBranch },
+            branch: cloud.branch, headSha: cloud.headSha, prompt, preparePrompt: prepareCloudPrompt,
+            writable: bound.effectiveRole.access === "read-write", model: bound.model!, reasoningEffort: attempt.effectiveRole.effort, allowProviderModelFallback: false,
+            account, ...(cloud.environmentPrincipal ? { environmentPrincipal: cloud.environmentPrincipal } : {}), signal: abort.signal, assertCurrent }); }, abort.signal));
         }
         if (!validCloudTaskReference(submitted.taskId, submitted.taskUrl)
           || submitted.thread !== undefined && !validCloudThreadReference(submitted.thread)) throw new Error(`${label} transport returned an invalid task reference; submission outcome unknown`);
