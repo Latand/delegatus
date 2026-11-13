@@ -165,19 +165,29 @@ test.each([false, true])("a Claude limit-only first turn with no spare holds wit
   expect(f.sends).toHaveLength(0);
 });
 
-test("an exhausted pool wakes at the earliest reset while retaining the source account's later reset", async () => {
-  const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your weekly limit", 7200_000);
+test.each([[3600_000, 7200_000], [7200_000, 3600_000]] as const)(
+  "an exhausted pool wakes at the earliest authorized reset after reload (source=%i ms, fallback=%i ms)", async (sourceDelay, fallbackDelay) => {
+  const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your weekly limit", sourceDelay);
   f.h.durableTurns.get("/codex/stage-1.jsonl")!.lastAgentOutputAt = null;
-  const earliest = Math.floor(f.now() / 1000) + 3600;
+  const earliest = Math.floor((f.now() + Math.min(sourceDelay, fallbackDelay)) / 1000);
+  const later = Math.floor((f.now() + Math.max(sourceDelay, fallbackDelay)) / 1000);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.usageLimitedAccounts = [{ accountId: SPARE_ACCOUNT, engine: "claude", limitedAt: f.now(), resetsAt: fallbackDelay ? Math.floor((f.now() + fallbackDelay) / 1000) : null }];
+  savePipelines([lane]);
   f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT];
-  f.h.ports.resolveProjectSpawn = () => ({ kind: "exhausted", resetsAt: earliest, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] });
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "exhausted", resetsAt: later, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] });
   await tickPipelines([], f.h.ports);
+  savePipelines(loadPipelines());
   const after = loadPipelines()[0]!;
   const wait = after.runs[0]!.attempts[0]!.providerWait!;
-  expect(after.state).toBe("running");
+  expect(after.state).toBe("needs_decision");
   expect(wait.resetsAt).toBe(f.resetsAt);
   expect(wait.resumeAt).toBe(new Date(earliest * 1000 + 60_000).toISOString());
   expect(after.stateDetail).toContain(new Date(earliest * 1000).toISOString());
+  f.advance(Math.min(sourceDelay, fallbackDelay) - 1);
+  await tickPipelines([], { ...f.h.ports });
+  expect(f.h.spawnInputs).toHaveLength(1);
 });
 
 test("an unavailable quota writer retains the limit cause and retries the observation before any new launch", async () => {

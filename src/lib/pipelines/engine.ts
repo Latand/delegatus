@@ -3823,7 +3823,7 @@ async function recoverProviderCut(
           .map((item) => item.accountId).concat(wait.failedAccounts ?? [], triedAccounts),
       });
       if (condition.kind === "usage_limit" && resolution.kind === "exhausted") {
-        exhaustedReset = resolution.resetsAt;
+        exhaustedReset = providerRetryReset(pipeline, attempt, ports) ?? resolution.resetsAt;
         await refreshReset(resolution.resetsAt);
       }
       const pool = ports.allowedAccountIds?.(pipeline.project, engine);
