@@ -10,11 +10,11 @@ const { recoveryRequest } = await import("./postMerge");
 import type { Pipeline } from "@/lib/pipelines/types";
 
 const at = "2026-10-30T12:00:00.000Z";
-const host = globalThis as typeof globalThis & { __llvPostMergeRunning?: Promise<void> | null; __llvAutoMergeRunning?: Promise<void> | null };
+const host = globalThis as typeof globalThis & { __llvIssueDeliveryRunning?: Promise<void> | null; __llvPostMergeRunning?: Promise<void> | null; __llvAutoMergeRunning?: Promise<void> | null };
 let cleanup: Array<() => void> = [];
 beforeEach(() => { savePipelines([]); saveTasks([]); resetAutoMergeForTests(); });
 afterEach(async () => {
-  await host.__llvPostMergeRunning;
+  await host.__llvPostMergeRunning; await host.__llvIssueDeliveryRunning;
   await host.__llvAutoMergeRunning;
   for (const restore of cleanup.reverse()) restore();
   cleanup = [];
@@ -60,7 +60,7 @@ async function fixture(project = "viewer") {
       if (route.includes("/commits/")) return JSON.stringify({ sha: route.endsWith("parent") ? "parent" : "a".repeat(40), parents: [{ sha: "parent" }] });
       throw new Error(`unexpected forge read: ${args.join(" ")}`);
     }, write: async () => { throw new Error("forge write forbidden"); }, log: (message, error) => { logs.push(`${message}: ${String(error ?? "")}`); } });
-    await host.__llvPostMergeRunning; await host.__llvAutoMergeRunning;
+    await host.__llvPostMergeRunning; await host.__llvIssueDeliveryRunning; await host.__llvAutoMergeRunning;
     now += 60_000;
   };
   const current = () => findPipelineRecord("source")!;
