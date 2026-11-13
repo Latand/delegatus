@@ -40,7 +40,7 @@ for (const code of [0, 7]) test(`portable runner returns command exit ${code} af
 }, 30000);
 
 
-for (const launch of ["direct", "shell", "package"] as const) test.skipIf(launch === "shell" && process.platform === "win32")(`legacy ${launch} test preloads receive private startup homes before admission and emit JUnit`, async () => {
+for (const launch of ["direct", "shell", "package"] as const) for (const cache of ["explicit", "default"] as const) test.skipIf(launch === "shell" && process.platform === "win32")(`legacy ${launch} test preloads receive private startup homes and retain ${cache} selected caches before admission`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "portable-legacy-home-"));
   const env = withoutInheritedGate({ ...process.env });
   for (const [key, leaf] of Object.entries({ HOME: "home", USERPROFILE: "home", XDG_CONFIG_HOME: "config", LLV_STATE_DIR: "state", TMPDIR: "tmp" })) {
@@ -49,17 +49,24 @@ for (const launch of ["direct", "shell", "package"] as const) test.skipIf(launch
   env.LLV_CHECK_ADMISSION_FILE = path.join(root, "checks.sqlite");
   env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
   delete env.LLV_TEST_STARTUP_HOME;
+  const selectedCache = cache === "explicit" ? path.join(root, "cache") : path.join(env.HOME!, ".cache");
+  if (cache === "explicit") env.XDG_CACHE_HOME = selectedCache;
+  else delete env.XDG_CACHE_HOME;
+  fs.mkdirSync(selectedCache, { recursive: true });
+  fs.writeFileSync(path.join(selectedCache, "selected-tool"), "pinned");
   fs.writeFileSync(path.join(root, "bunfig.toml"), '[test]\npreload = ["./legacy-preload.ts"]\n');
   fs.writeFileSync(path.join(root, "legacy-preload.ts"), `import os from "node:os"; import fs from "node:fs";
     if (process.env.LLV_TEST_STARTUP_HOME !== os.homedir()) {
       fs.writeFileSync(${JSON.stringify(path.join(root, "old-runner-requested"))}, "reentry"); process.exit(79);
     }`);
-  fs.writeFileSync(path.join(root, "worker.test.ts"), `import { test, expect } from "bun:test"; import os from "node:os";
+  fs.writeFileSync(path.join(root, "worker.test.ts"), `import { test, expect } from "bun:test"; import os from "node:os"; import fs from "node:fs";
     test("private startup", () => {
       expect(process.env.LLV_TEST_STARTUP_HOME).toBe(os.homedir());
       expect(os.homedir()).not.toBe(${JSON.stringify(env.HOME)});
       expect(process.env.DELEGATUS_CLAUDE_HOME).toBe(process.env.LLV_CLAUDE_HOME);
       expect(process.env.DELEGATUS_CODEX_HOME).toBe(process.env.LLV_CODEX_HOME);
+      expect(process.env.XDG_CACHE_HOME).toBe(${JSON.stringify(selectedCache)});
+      expect(fs.readFileSync(${JSON.stringify(path.join(selectedCache, "selected-tool"))}, "utf8")).toBe("pinned");
     });`);
   const report = path.join(root, "junit.xml");
   const command = [process.execPath, "test", "./worker.test.ts", "--reporter=junit", `--reporter-outfile=${report}`];

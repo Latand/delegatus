@@ -6,18 +6,42 @@ import { pathToFileURL } from "node:url";
 // TypeScript's command-line entry is shared by its CLI and module wrappers.
 // Interpose there in a private mount namespace: neither interpreter options
 // nor the name of the script determines whether the compiler is counted.
-const mountAndExec = String.raw`
-import ctypes, json, os, sys
-libc = ctypes.CDLL(None, use_errno=True)
-for source, target in json.loads(sys.argv[1]):
-    if libc.mount(source.encode(), target.encode(), None, 4096, None) != 0:
-        raise OSError(ctypes.get_errno(), "compiler admission bind refused")
-    # Keep nosuid/nodev/noexec flags locked by an enclosing agent namespace.
-    flags = 4096 | 32 | 1 | (os.statvfs(target).f_flag & 14)
-    if libc.mount(source.encode(), target.encode(), None, flags, None) != 0:
-        raise OSError(ctypes.get_errno(), "compiler admission mount refused")
+const mountFiles = String.raw`
+def _compiler_mounts(pairs):
+    libc = ctypes.CDLL(None, use_errno=True)
+    for source, target in pairs:
+        if libc.mount(source.encode(), target.encode(), None, 4096, None) != 0:
+            raise OSError(ctypes.get_errno(), "compiler admission bind refused")
+        # Keep security flags locked by an enclosing agent namespace.
+        flags = 4096 | 32 | 1 | (os.statvfs(target).f_flag & 14)
+        if libc.mount(source.encode(), target.encode(), None, flags, None) != 0:
+            raise OSError(ctypes.get_errno(), "compiler admission mount refused")
+`;
+const mountAndExec = `import ctypes, json, os, sys\n${mountFiles}
+_compiler_mounts(json.loads(sys.argv[1]))
 os.execvp(sys.argv[2], sys.argv[2:])
 `;
+
+/** The service's single-threaded namespace entry holds mount capabilities
+ * until exec. Make only a mount namespace there: a new user namespace would
+ * invalidate the inherited CPU lease's kernel namespace proof. */
+export function compilerNamespaceEntry(entry: string[], mounts: [string, string][]): string[] {
+  if (entry[1] !== "-I" || entry[2] !== "-c") throw new Error("compiler admission needs the owned namespace entry; command did not run");
+  const encoded = Buffer.from(JSON.stringify(mounts)).toString("base64");
+  const setup = `import base64, ctypes, json, os\n${mountFiles}
+_compiler_execvp = os.execvp
+def _compiler_exec(file, args):
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.unshare(0x00020000) != 0:
+        raise OSError(ctypes.get_errno(), "compiler mount namespace refused")
+    if libc.mount(None, b"/", None, 0x40000 | 0x4000, None) != 0:
+        raise OSError(ctypes.get_errno(), "compiler mount propagation refused")
+    _compiler_mounts(json.loads(base64.b64decode("${encoded}")))
+    _compiler_execvp(file, args)
+os.execvp = _compiler_exec
+`;
+  return [...entry.slice(0, 3), setup + entry[3], ...entry.slice(4)];
+}
 
 export function withCompilerEntry(command: string[], cwd = process.cwd()) {
   // Mount namespaces are a Linux gate facility. Other platforms retain their
@@ -90,6 +114,7 @@ export function withCompilerEntry(command: string[], cwd = process.cwd()) {
     const unshare = Bun.which("unshare") ?? "/usr/bin/unshare";
     const python = Bun.which("python3") ?? "/usr/bin/python3";
     return {
+      original: [...command], mounts,
       command: [unshare, "--user", "--map-current-user", "--keep-caps", "--mount", "--propagation", "private",
         python, "-I", "-c", mountAndExec, JSON.stringify(mounts), ...command],
       release: () => fs.rmSync(root!, { recursive: true, force: true }),

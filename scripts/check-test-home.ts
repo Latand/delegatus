@@ -20,10 +20,14 @@ export function isolateHomes(root: string, env: NodeJS.ProcessEnv): void {
 export function prepareTestHome(env: NodeJS.ProcessEnv = process.env) {
   if (env.LLV_TEST_STARTUP_HOME === os.homedir()) return;
   const prepared = { ...env };
+  // A caller can select and validate a native tool before entering the runner.
+  // Moving its cache would select different bytes during the same check.
+  const selectedCache = env.XDG_CACHE_HOME ?? path.join(os.homedir(), ".cache");
   const startup = claimProcessTempRoot(TEST_RUN_TEMP_PREFIX, prepared);
   if (env.TMPDIR === undefined) delete prepared.TMPDIR;
   else prepared.TMPDIR = env.TMPDIR;
   isolateHomes(startup.root, prepared);
+  prepared.XDG_CACHE_HOME = selectedCache;
   prepared.LLV_TEST_STARTUP_HOME = prepared[process.platform === "win32" ? "USERPROFILE" : "HOME"];
   return { env: prepared, release: startup.release };
 }
