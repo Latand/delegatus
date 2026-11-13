@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import net from "node:net";
@@ -10,6 +11,7 @@ import { captureProcessIdentity, processIdentityStatus } from "../src/lib/proces
 import { hostProcessIdentity, cpuOwnerStatus, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
 import { reportCpuWait } from "../src/lib/runtime/cpuAdmissionBudget";
 import type { ProcessIdentity } from "../src/lib/processIdentity";
+import { inheritedCpuSlot, type CpuSlotLease } from "../src/lib/runtime/cpuAdmission";
 
 /** The owning runner supervises admission without creating an extra child
  * in the test's cgroup. The inherited capability follows shell/package forks. */
@@ -21,6 +23,7 @@ export async function startCheckBroker(caller?: ProcessIdentity) {
   const workers = new Set<number>();
   const sockets = new Set<net.Socket>();
   const failures: Error[] = [];
+  let providedSlot: { lease: string; env: NodeJS.ProcessEnv } | undefined;
   const server = net.createServer(socket => {
     sockets.add(socket); socket.unref();
     socket.setEncoding("utf8");
@@ -35,6 +38,17 @@ export async function startCheckBroker(caller?: ProcessIdentity) {
         const request = JSON.parse(input);
         if (request.nonce !== nonce || !Number.isSafeInteger(request.pid)) throw new Error("invalid worker admission capability");
         const target = signalSandboxContext() ? request.pid : request.hostPid ?? request.pid;
+        if (request.kind === "slot") {
+          const worker = verifyWorker(request.pid, request.hostPid);
+          if (typeof request.directory !== "string" || !path.isAbsolute(request.directory)
+            || typeof request.slots !== "string" || !/^[1-9]\d*$/.test(request.slots)) throw new Error("invalid slot reuse policy");
+          const reused = !!providedSlot && request.lease === providedSlot.lease && !!inheritedCpuSlot({ ...providedSlot.env,
+            LLV_GATE_LOCK_DIR: request.directory, LLV_GATE_SLOTS: request.slots });
+          const current = verifyWorker(request.pid, request.hostPid);
+          if (current.localOwner.startIdentity !== worker.localOwner.startIdentity || current.localOwner.bootEpoch !== worker.localOwner.bootEpoch) throw new Error("slot requester changed during verification");
+          socket.end(JSON.stringify({ reused }) + "\n");
+          return;
+        }
         if (workers.has(target)) throw new Error("worker already has an admission controller");
         workers.add(target);
         try { await supervise(socket, request.pid, request.hostPid, request.kind, request.env, caller); }
@@ -52,15 +66,16 @@ export async function startCheckBroker(caller?: ProcessIdentity) {
   const port = (server.address() as net.AddressInfo).port;
   const address = JSON.stringify({ port, nonce });
   let closing: Promise<void> | undefined;
-  return { address, close: () => closing ??= (async () => {
+  return { address, provideCpuSlot: (lease: CpuSlotLease, env: NodeJS.ProcessEnv) => {
+    providedSlot = { lease: JSON.stringify(lease), env: { ...env, LLV_GATE_SLOT_LEASE: JSON.stringify(lease) } };
+  }, close: () => closing ??= (async () => {
     server.close(); for (const socket of sockets) socket.destroy();
     await Promise.all(pending);
     if (failures.length) throw new AggregateError(failures, "check admission failed");
   })() };
 }
 
-async function supervise(socket: net.Socket, workerPid: number, hostPid: number | undefined, kind: string, env: NodeJS.ProcessEnv, caller?: ProcessIdentity) {
-  if (kind !== "test" && kind !== "compiler") throw new Error("invalid admitted worker kind");
+function verifyWorker(workerPid: number, hostPid: number | undefined) {
   const context = signalSandboxContext();
   const pid = context ? workerPid : hostPid ?? workerPid;
   if (!Number.isSafeInteger(pid) || pid < 2) throw new Error("invalid worker process identity");
@@ -74,9 +89,15 @@ async function supervise(socket: net.Socket, workerPid: number, hostPid: number 
     parent = procBackend.readPpid(parent) ?? 0;
   }
   if (pid === process.pid || parent !== process.pid) throw new Error("admission worker is outside this runner's process tree");
-  if (processIdentityStatus(localOwner) !== "alive") throw new Error("admission worker exited during ancestry verification");
+  if (processIdentityStatus(localOwner) !== "alive" || procBackend.processExited(pid)) throw new Error("admission worker exited during ancestry verification");
   const owner = hostProcessIdentity(localOwner);
   if (hostPid !== undefined && owner.pid !== hostPid) throw new Error("worker namespace identity disagrees with the kernel");
+  return { context, pid, localOwner, owner };
+}
+
+async function supervise(socket: net.Socket, workerPid: number, hostPid: number | undefined, kind: string, env: NodeJS.ProcessEnv, caller?: ProcessIdentity) {
+  if (kind !== "test" && kind !== "compiler") throw new Error("invalid admitted worker kind");
+  const { context, pid, localOwner, owner } = verifyWorker(workerPid, hostPid);
   const capacity = checkCapacity(env), retry = admissionLockWait();
   const root = context?.hostProc ?? "/proc";
   // The service's authenticated launch owner retains the causal ancestry

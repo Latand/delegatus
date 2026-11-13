@@ -10,6 +10,9 @@ import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { onlineCpuCount } from "../src/lib/runtime/cpuPlacement";
 import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import * as ownerContext from "../src/lib/runtime/signalSandboxContext";
+import { captureProcessIdentity } from "../src/lib/processIdentity";
+import { inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
+import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 
 async function until(check: () => boolean) {
   const deadline = performance.now() + 5_000;
@@ -141,3 +144,106 @@ test("an unverified host probe cannot release a still-running local worker", asy
     queue.close(); fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+for (const state of ["held", "unregistered", "different lease", "different directory", "released"] as const) test.skipIf(process.platform !== "linux")(`slot broker rechecks its kernel lease: ${state}`, async () => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"slot-broker-")), ready=path.join(root,"ready");
+  const slot=path.join(root,"llv-heavy-gate.slot1.lock");
+  const holder=spawn("bash",["-c",'exec 9>"$1"; flock 9; printf ready >"$2"; exec sleep 60',"holder",slot,ready],{stdio:"ignore"});
+  const broker=await startCheckBroker();
+  let requester:ReturnType<typeof spawn>|undefined;
+  try {
+    await until(()=>fs.existsSync(ready));
+    const lease={owner:captureProcessIdentity(holder.pid!),slot};
+    const env=withoutInheritedGate({...process.env});
+    Object.assign(env,{LLV_GATE_LOCK_DIR:root,LLV_GATE_SLOTS:"1",LLV_GATE_SLOT_LEASE:JSON.stringify(lease),LLV_GATE_SLOT_BROKER:broker.address});
+    expect(inheritedCpuSlot(env)).toEqual(lease);
+    if(state!=="unregistered") broker.provideCpuSlot(lease,env);
+    if(state==="different lease") env.LLV_GATE_SLOT_LEASE="null";
+    if(state==="different directory") {env.LLV_GATE_LOCK_DIR=path.join(root,"other");fs.mkdirSync(env.LLV_GATE_LOCK_DIR);}
+    if(state==="released") await stopFixtureProcess(holder);
+    const source=`import { reuseGateSlot } from ${JSON.stringify(path.join(import.meta.dir,"check-worker-client.mjs"))}; console.log(await reuseGateSlot());`;
+    requester=spawn(process.execPath,["-e",source],{env,stdio:["ignore","pipe","pipe"]});
+    let output="",error=""; requester.stdout!.on("data",v=>output+=v); requester.stderr!.on("data",v=>error+=v);
+    const code=await new Promise<number|null>(resolve=>requester!.once("close",resolve));
+    expect(code,error).toBe(0);expect(output.trim()).toBe(String(state==="held"));
+    await broker.close();
+  } finally {
+    if(requester) await stopFixtureProcess(requester);await stopFixtureProcess(holder);await broker.close().catch(()=>{});
+    fs.rmSync(root,{recursive:true,force:true});
+  }
+},30_000);
+
+test.skipIf(process.platform !== "linux")("a private user namespace reuses its owned broker's slot without another admission", async () => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"slot-namespace-")),ready=path.join(root,"ready");
+  const slot=path.join(root,"llv-heavy-gate.slot1.lock");
+  const holder=spawn("bash",["-c",'exec 9>"$1"; flock 9; printf ready >"$2"; exec sleep 60',"holder",slot,ready],{stdio:"ignore"});
+  const broker=await startCheckBroker();let requester:ReturnType<typeof spawn>|undefined;
+  try {
+    await until(()=>fs.existsSync(ready));
+    const lease={owner:captureProcessIdentity(holder.pid!),slot};
+    const env=withoutInheritedGate({...process.env});
+    Object.assign(env,{LLV_GATE_LOCK_DIR:root,LLV_GATE_SLOTS:"1",LLV_GATE_SLOT_LEASE:JSON.stringify(lease),LLV_GATE_SLOT_BROKER:broker.address});
+    expect(inheritedCpuSlot(env)).toEqual(lease);broker.provideCpuSlot(lease,env);
+    const source=`import { inheritedCpuSlot } from ${JSON.stringify(path.resolve(import.meta.dir,"../src/lib/runtime/cpuAdmission.ts"))};
+      console.log("native="+Boolean(inheritedCpuSlot()));
+      const child=Bun.spawn([process.execPath,${JSON.stringify(path.join(import.meta.dir,"cpu-admission.ts"))},"--reuse-slot"],{stdin:"ignore",stdout:"inherit",stderr:"inherit"});process.exit(await child.exited);`;
+    requester=spawn("unshare",["--user","--map-current-user",process.execPath,"-e",source],{env,stdio:["ignore","pipe","pipe"]});
+    let output="",error="";requester.stdout!.on("data",v=>output+=v);requester.stderr!.on("data",v=>error+=v);
+    const code=await new Promise<number|null>(resolve=>requester!.once("close",resolve));
+    expect(code,error).toBe(0);expect(output.trim()).toBe("native=false");
+    expect(fs.existsSync(path.join(root,"admission.sqlite"))).toBe(false);
+    await broker.close();
+  } finally {if(requester)await stopFixtureProcess(requester);await stopFixtureProcess(holder);await broker.close().catch(()=>{});fs.rmSync(root,{recursive:true,force:true});}
+},30_000);
+
+for (const refusal of ["nonce","ancestor","self","host namespace","policy"] as const) test.skipIf(process.platform !== "linux")(`slot broker refuses ${refusal} before acknowledging reuse`, async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"slot-refusal-")),ready=path.join(root,"ready"),slot=path.join(root,"llv-heavy-gate.slot1.lock");
+  const holder=spawn("bash",["-c",'exec 9>"$1"; flock 9; printf ready >"$2"; exec sleep 60',"holder",slot,ready],{stdio:"ignore"});
+  const broker=await startCheckBroker(),address=JSON.parse(broker.address);
+  const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});
+  let socket:net.Socket|undefined;
+  try {
+    await until(()=>fs.existsSync(ready));
+    const lease={owner:captureProcessIdentity(holder.pid!),slot};
+    const env=withoutInheritedGate({...process.env});Object.assign(env,{LLV_GATE_LOCK_DIR:root,LLV_GATE_SLOTS:"1",LLV_GATE_SLOT_LEASE:JSON.stringify(lease)});
+    expect(inheritedCpuSlot(env)).toEqual(lease);broker.provideCpuSlot(lease,env);
+    socket=net.connect(address.port,"127.0.0.1");let response="";socket.on("data",v=>response+=v);
+    const closed=new Promise(resolve=>socket!.once("close",resolve));
+    socket.once("connect",()=>socket!.write(JSON.stringify({nonce:refusal==="nonce"?"invalid":address.nonce,pid:refusal==="self"?process.pid:refusal==="policy"?child.pid:process.ppid,
+      hostPid:refusal==="host namespace"?process.pid:undefined,kind:"slot",lease:JSON.stringify(lease),directory:root,slots:refusal==="policy"?"0":"1"})+"\n"));
+    await closed;expect(response).toContain("error");await expect(broker.close()).rejects.toThrow("check admission failed");
+  } finally {socket?.destroy();await stopFixtureProcess(child);await stopFixtureProcess(holder);await broker.close().catch(()=>{});fs.rmSync(root,{recursive:true,force:true});}
+});
+
+for (const state of ["alive","ended","rebound"] as const) test.skipIf(process.platform !== "linux")(`slot CLI rechecks its owner after awaiting a valid broker reply: ${state}`,async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"slot-authority-")),ready=path.join(root,"ready"),verified=path.join(root,"verified"),release=path.join(root,"release");
+  const slot=path.join(root,"llv-heavy-gate.slot1.lock");
+  const holder=spawn("bash",["-c",'exec 9>"$1"; flock 9; printf ready >"$2"; exec sleep 60',"holder",slot,ready],{stdio:"ignore"});
+  const broker=await startCheckBroker();let requester:ReturnType<typeof spawn>|undefined;
+  try {
+    await until(()=>fs.existsSync(ready));
+    const lease={owner:captureProcessIdentity(holder.pid!),slot},env=withoutInheritedGate({...process.env});
+    Object.assign(env,{LLV_GATE_LOCK_DIR:root,LLV_GATE_SLOTS:"1",LLV_GATE_SLOT_LEASE:JSON.stringify(lease),LLV_GATE_SLOT_BROKER:broker.address});
+    expect(inheritedCpuSlot(env)).toEqual(lease);broker.provideCpuSlot(lease,env);
+    const client=path.join(import.meta.dir,"check-worker-client.mjs"),preload=path.join(root,"hold-reply.ts");
+    fs.writeFileSync(preload,`import { mock } from "bun:test"; import fs from "node:fs";
+      const client=await import(${JSON.stringify(client)}),reuse=client.reuseGateSlot;
+      mock.module(${JSON.stringify(client)},()=>({...client,reuseGateSlot:async(env)=>{
+        const value=await reuse(env);fs.writeFileSync(${JSON.stringify(verified)},String(value));
+        while(!fs.existsSync(${JSON.stringify(release)}))await Bun.sleep(10);
+        if(${JSON.stringify(state)}==="rebound")process.env.LLV_GATE_SLOT_BROKER="null";
+        return value;
+      }}));`);
+    requester=spawn("unshare",["--user","--map-current-user",process.execPath,"--preload",preload,path.join(import.meta.dir,"cpu-admission.ts"),"--reuse-slot"],{env,stdio:["ignore","ignore","pipe"]});
+    let error="";requester.stderr!.on("data",v=>error+=v);
+    const closed=new Promise<number|null>(resolve=>requester!.once("close",resolve));
+    await until(()=>fs.existsSync(verified)||requester!.exitCode!==null);
+    expect(requester.exitCode,error).toBeNull();expect(fs.readFileSync(verified,"utf8")).toBe("true");
+    if(state==="ended")await stopFixtureProcess(holder);
+    fs.writeFileSync(release,"release");
+    expect(await closed,error).toBe(state==="alive"?0:69);
+    if(state!=="alive")expect(error).toContain("slot lease changed while validating");
+    expect(fs.existsSync(path.join(root,"admission.sqlite"))).toBe(false);
+    await broker.close();
+  } finally {if(requester)await stopFixtureProcess(requester);await stopFixtureProcess(holder);await broker.close().catch(()=>{});fs.rmSync(root,{recursive:true,force:true});}
+},30_000);

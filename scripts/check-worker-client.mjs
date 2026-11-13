@@ -1,6 +1,37 @@
 import net from "node:net";
 import fs from "node:fs";
+import path from "node:path";
 const key = Symbol.for("delegatus.checkAdmission.worker");
+
+/** The broker remains outside private compiler namespaces and verifies its
+ * own kernel-held lease for this exact descendant. No new admission is taken. */
+export function reuseGateSlot(env = process.env) {
+  if (!env.LLV_GATE_SLOT_BROKER || !env.LLV_GATE_SLOT_LEASE) return Promise.resolve(false);
+  const broker = JSON.parse(env.LLV_GATE_SLOT_BROKER);
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(broker.port, "127.0.0.1");
+    let settled = false, response = "";
+    const timer = setTimeout(() => socket.destroy(new Error("slot lease broker did not answer")), 5000);
+    socket.once("error", reject);
+    socket.once("close", () => { clearTimeout(timer); if (!settled) reject(new Error("slot lease broker closed without a verdict")); });
+    socket.once("connect", () => {
+      const boundary = env.LLV_SIGNAL_SANDBOX ? JSON.parse(env.LLV_SIGNAL_SANDBOX) : null;
+      const hostPid = boundary ? Number(fs.readlinkSync(`${boundary.hostProc}/self`)) : undefined;
+      socket.write(JSON.stringify({ nonce: broker.nonce, pid: process.pid, hostPid, kind: "slot", lease: env.LLV_GATE_SLOT_LEASE,
+        directory: path.resolve(env.LLV_GATE_LOCK_DIR ?? "/var/tmp"), slots: env.LLV_GATE_SLOTS ?? "6" }) + "\n");
+    });
+    socket.on("data", data => {
+      response += String(data);
+      if (response.length > 64000) { socket.destroy(new Error("invalid slot lease verdict")); return; }
+      if (!response.includes("\n")) return;
+      try {
+        const message = JSON.parse(response);
+        if (typeof message.reused !== "boolean") throw new Error(message.error ?? "invalid slot lease verdict");
+        settled = true; clearTimeout(timer); socket.end(); resolve(message.reused);
+      } catch (error) { socket.destroy(); reject(error); }
+    });
+  });
+}
 
 /** The owning runner keeps this exact process counted until its socket closes. */
 export function admitWorker(kind) {

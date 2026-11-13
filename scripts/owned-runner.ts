@@ -22,12 +22,12 @@ import { producerReport, producerCommandIdentity, recordedSupervisorObligation, 
 import { startCheckBroker } from "./check-worker-broker";
 import { prepareTestHome } from "./check-test-home";
 import { withTestAdmission } from "./check-admission";
-import { withCompilerEntry, compilerNamespaceEntry } from "./check-compiler-entry";
+import { withCompilerEntry } from "./check-compiler-entry";
 
 /** `namespace` marks a caller inside an agent signal domain. Its identities
  * are translated to the host, where the service checks them, and the service
  * runs the command inside the owner's namespaces. */
-type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; unit: string; timeoutMs: number; namespace?: true; compilerMounts?: [string, string][] };
+type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; unit: string; timeoutMs: number; namespace?: true };
 const args = process.argv.slice(2);
 if (!["--service", "--namespace-guardian"].includes(args[0] ?? "")) ownGateSandboxes();
 const timeoutMs = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
@@ -44,7 +44,6 @@ const broker = await startCheckBroker(launchOwner);
 process.env.LLV_CHECK_BROKER = broker.address;
 delete process.env.DELEGATUS_CHECK_BROKER;
 const offset = args[0] === "--budget" ? 2 : ["--portable", "--namespace"].includes(args[0] ?? "") ? 1 : 0;
-let compilerSetup: ReturnType<typeof withCompilerEntry> = undefined;
 if (args[offset] && !args[offset]!.startsWith("--")) {
   const command = args.slice(offset), preload = path.join(import.meta.dir, "check-test-preload.ts");
   const admitted = withTestAdmission(command, preload);
@@ -54,7 +53,6 @@ if (args[offset] && !args[offset]!.startsWith("--")) {
     process.once("exit", startup.release);
   }
   const compiler = withCompilerEntry(admitted);
-  compilerSetup = compiler;
   if (compiler) process.once("exit", compiler.release);
   args.splice(offset, args.length - offset, ...(compiler?.command ?? admitted));
 }
@@ -74,11 +72,7 @@ if (args[0] === "--namespace-guardian") {
   warnGateTaskFallback("namespace cleanup fallback has no systemd gate unit");
   await runSandboxGate(args.slice(1), timeoutMs, import.meta.path);
 } else if (args[0] === "--budget") {
-  const allowance = Number(args[1]);
-  // Delegate mount preparation to the native entry, before it drops its
-  // capabilities. Keep the caller's user namespace and CPU lease intact.
-  const command = compilerSetup && signalSandboxContext()
-    ? [process.execPath, import.meta.path, ...compilerSetup.original] : args.slice(2);
+  const allowance = Number(args[1]), command = args.slice(2);
   if (!Number.isFinite(allowance) || allowance <= 0 || !command.length) throw new Error("owned runner budget needs a finite allowance and a command");
   const budget = cpuWaitBudget(process.env);
   const child = spawn(command[0]!, command.slice(1), { stdio: "inherit", env: { ...budget.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) } });
@@ -125,7 +119,11 @@ if (args[0] === "--namespace-guardian") {
   guardian.unref();
   const budget = cpuWaitBudget(process.env);
   const slot = inheritedCpuSlot() ?? cpuSlotForOwner(captureProcessIdentity(process.pid));
-  if (slot) budget.env.LLV_GATE_SLOT_LEASE = JSON.stringify(slot);
+  if (slot) {
+    budget.env.LLV_GATE_SLOT_LEASE = JSON.stringify(slot);
+    broker.provideCpuSlot(slot, process.env);
+    budget.env.LLV_GATE_SLOT_BROKER = broker.address;
+  }
   // A portable child cannot inherit a native parent's scope admission.
   delete budget.env.LLV_OWNED_TEST_RUNNER_PID;
   delete budget.env.LLV_OWNED_TEST_RUN_CGROUP;
@@ -218,7 +216,11 @@ if (args[0] === "--namespace-guardian") {
   const recorded = recordedSupervisorObligation();
   const budget = cpuWaitBudget(launch.env);
   const slot = inheritedCpuSlot(hostEnv) ?? cpuSlotForOwner(launch.owner, hostEnv);
-  if (slot) budget.env.LLV_GATE_SLOT_LEASE = JSON.stringify(slot);
+  if (slot) {
+    budget.env.LLV_GATE_SLOT_LEASE = JSON.stringify(slot);
+    broker.provideCpuSlot(slot, hostEnv);
+    budget.env.LLV_GATE_SLOT_BROKER = broker.address;
+  }
   const cgroup = fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").find(line => line.startsWith("0::"))?.slice(3);
   if (!cgroup?.endsWith(`/${launch.unit}`)) throw new Error("owned runner was not admitted to its declared service cgroup");
   const tasks = new GateTasks(path.join("/sys/fs/cgroup", cgroup));
@@ -248,11 +250,7 @@ if (args[0] === "--namespace-guardian") {
   // exec preserves the shell's kernel start identity and binds the admission
   // token to this command's PID. A nested test cannot reuse its parent's token.
   const shell = timedCommand(launch.command, 'export LLV_OWNED_TEST_RUNNER_PID=$$; ');
-  let argv = launch.namespace ? sandboxGateEntryCommand(launch.owner, launch.cwd, shell) : shell;
-  if (launch.compilerMounts) {
-    if (!launch.namespace) throw new Error("compiler mounts require the owned namespace entry");
-    argv = compilerNamespaceEntry(argv, launch.compilerMounts);
-  }
+  const argv = launch.namespace ? sandboxGateEntryCommand(launch.owner, launch.cwd, shell) : shell;
   const child = spawn(argv[0]!, argv.slice(1), { cwd: launch.cwd, env: { ...budget.env, INVOCATION_ID: invocation, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, stdio: ["inherit", "inherit", "inherit", "pipe"] });
   const execution = observeCommandExecution(child);
   // Capture before any await; systemd owns every fork in the cgroup from birth.
@@ -361,8 +359,7 @@ if (args[0] === "--namespace-guardian") {
     try { parent = hostProcessIdentity(parent); }
     catch (error) { throw new Error(`owned runner cannot verify its supervising process from the gate service: ${(error as Error).message}`); }
   }
-  fs.writeFileSync(file, JSON.stringify({ command: sandbox && compilerSetup ? compilerSetup.original : args, cwd: process.cwd(), env: process.env, owner, parent, unit, timeoutMs,
-    ...(sandbox ? { namespace: true as const, ...(compilerSetup ? { compilerMounts: compilerSetup.mounts } : {}) } : {}) } satisfies Launch), { mode: 0o600 });
+  fs.writeFileSync(file, JSON.stringify({ command: args, cwd: process.cwd(), env: process.env, owner, parent, unit, timeoutMs, ...(sandbox ? { namespace: true as const } : {}) } satisfies Launch), { mode: 0o600 });
   const cpu = [...gateServiceProperties(), ...gateTaskProperties()];
   const recorded = process.env.LLV_RECORDED_CHECK_ID ? [`--setenv=LLV_RECORDED_CHECK_ID=${process.env.LLV_RECORDED_CHECK_ID}`] : [];
   const service = spawn("systemd-run", [...cpu, "--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, ...recorded, "--service-type=exec", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", "WatchdogSec=60s", "-p", "NotifyAccess=all", "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "14G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
