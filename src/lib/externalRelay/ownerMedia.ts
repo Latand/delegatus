@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { Transform, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { setTimeout as pause } from "node:timers/promises";
+import { MIMEType } from "node:util";
 import type { IncomingMessage } from "node:http";
 import { z } from "zod";
 import { statePath } from "@/lib/configDir";
@@ -307,7 +308,10 @@ export class OwnerMediaRegistry {
     const size = Number(length), kind = rawKind as Kind;
     if (size > OWNER_MEDIA_LIMIT) fail("too_large", { limitBytes: OWNER_MEDIA_LIMIT, sizeBytes: size, note: `The per-call limit is ${OWNER_MEDIA_LIMIT} bytes. ${notes.too_large}` });
     const mime = response.headers["content-type"];
-    if (typeof mime !== "string" || mime.length > 100 || !/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/.test(mime)) fail("malformed_response");
+    if (typeof mime !== "string" || mime.length > 100) fail("malformed_response");
+    let mediaType: string;
+    try { mediaType = new MIMEType(mime).essence; }
+    catch { fail("malformed_response"); }
     await this.reserveSpace(job, size, check);
     const dir = await fs.open(job.directory.real, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     let file: Awaited<ReturnType<typeof fs.open>> | undefined;
@@ -321,7 +325,7 @@ export class OwnerMediaRegistry {
       const anchor = process.platform === "linux" ? `/proc/self/fd/${dir.fd}` : job.directory.real;
       await this.sweepParts(anchor, job); check(); await this.checkDirectory(job.directory);
       const ext = ({ "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "video/mp4": "mp4", "application/pdf": "pdf",
-        "audio/ogg": "ogg", "audio/mpeg": "mp3" } as Record<string, string>)[mime.toLowerCase()] ?? "bin";
+        "audio/ogg": "ogg", "audio/mpeg": "mp3" } as Record<string, string>)[mediaType] ?? "bin";
       const stem = `relay-${createHash("sha256").update(job.input.chat).digest("hex").slice(0, 12)}-${job.input.messageId}`;
       part = path.join(anchor, `${stem}-${randomUUID()}.${ext}.part`);
       file = await fs.open(part, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);

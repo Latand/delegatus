@@ -92,6 +92,50 @@ test("A1: photo is whole, private, safely named and hashed; document and video u
   } finally { await f.close(); }
 });
 
+test("A1: a complete text document may carry Content-Type parameters", async () => {
+  const f = await fixture();
+  try {
+    Object.assign(f.state, { kind: "document", size: 64, mime: "text/plain; charset=utf-8" });
+    const answer = await f.done();
+    expect(answer).toMatchObject({ status: "done", kind: "document", size: 64,
+      mimeType: "text/plain; charset=utf-8", sha256: createHash("sha256").update(Buffer.alloc(64, 7)).digest("hex") });
+    if (answer.status !== "done") throw new Error("expected complete document");
+    expect(await fs.readFile(answer.path)).toEqual(Buffer.alloc(64, 7));
+    expect((await fs.stat(answer.path)).size).toBe(64);
+  } finally { await f.close(); }
+});
+
+test("A1: parameterized MIME types retain parameters and choose extensions by type and subtype", async () => {
+  const f = await fixture();
+  try {
+    for (const [kind, mime, ext] of [
+      ["document", 'Application/PDF; name="report; draft.pdf"', ".pdf"],
+      ["photo", "image/jpeg; profile=example", ".jpg"],
+      ["video", 'video/mp4; codecs="avc1.42E01E"', ".mp4"],
+    ] as const) {
+      Object.assign(f.state, { kind, size: 64, mime });
+      const answer = await f.done();
+      expect(answer).toMatchObject({ status: "done", kind, mimeType: mime, size: 64,
+        sha256: createHash("sha256").update(Buffer.alloc(64, 7)).digest("hex") });
+      if (answer.status !== "done") throw new Error("expected complete media");
+      expect(path.extname(answer.path)).toBe(ext);
+      expect(await fs.readFile(answer.path)).toEqual(Buffer.alloc(64, 7));
+    }
+  } finally { await f.close(); }
+});
+
+test("A1: malformed MIME types are refused before writing evidence", async () => {
+  const f = await fixture();
+  try {
+    for (const mime of ["not-a-mime", "text/pla in; charset=utf-8", "/plain; charset=utf-8",
+      "text/; charset=utf-8", "text/plain, application/pdf", `text/plain; name=${"x".repeat(100)}`]) {
+      Object.assign(f.state, { kind: "document", size: 64, mime });
+      expect(await f.done()).toMatchObject({ status: "refused", reason: "malformed_response" });
+      expect(await fs.readdir(f.directory)).toEqual([]);
+    }
+  } finally { await f.close(); }
+});
+
 test("A2: explicit remote and local size limits, truncation and digest mismatch never return a partial", async () => {
   const f = await fixture();
   try {
