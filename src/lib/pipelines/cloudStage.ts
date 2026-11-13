@@ -103,6 +103,8 @@ export interface CloudStageClient {
   readFinalMessage(input: CloudTaskAccess): Promise<{ message: string; model: string }>;
   /** Catalog read under this account's subscription, before any work is submitted. */
   hasEnvironment(input: { account: AccountContext; environmentId: string; signal: AbortSignal; assertCurrent: () => void }): Promise<boolean>;
+  /** Queue account preparation before execution-capacity selection. Starts no session. */
+  demandPreparation?(input: { project: string; repository: string; assertCurrent: () => void }): Promise<void>;
   prepareEnvironment?(input: import("@/lib/projects/codexCloudEnvironments").PrepareCloudEnvironmentInput): Promise<import("@/lib/projects/codexCloudEnvironments").CloudEnvironmentPreparation>;
   /** Read-only stages never request/apply a diff. */
   readDiff(input: CloudTaskAccess): Promise<string>;

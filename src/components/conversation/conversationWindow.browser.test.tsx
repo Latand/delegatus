@@ -7,7 +7,7 @@ import { deflateSync } from "node:zlib";
 import type { Browser, LaunchOptions } from "playwright-core";
 
 import { translate } from "@/lib/i18n";
-import { browserCase, caseChromium as chromium, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { browserCase, caseChromium as chromium, openFixture, serveEvidenceFixture, ownedBrowserSocketEnvironment } from "@/components/kanban/issue1695BrowserHarness";
 
 /*
  * The one rendered-evidence driver for the conversation window. Every case
@@ -7846,4 +7846,32 @@ describe("message document links", () => {
       fs.rmSync(fixture, { recursive: true, force: true });
     }
   }, 240_000);
+});
+
+
+describe("dictation recovery status", () => {
+  browserTest("the missing tail and buffer stop remain readable with the draft", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "dictation-status");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const sockets = ownedBrowserSocketEnvironment();
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [320, 1280]) for (const issue of ["tail", "buffer"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=dictation-status&lang=${lang}&issue=${issue}`, { width, height: 844 }, theme, lang);
+        try {
+          const message = page.getByText(translate(lang, issue === "tail" ? "dictation.tailMissing" : "dictation.bufferLimit"), { exact: true });
+          await message.waitFor();
+          expect(await page.locator("textarea").inputValue()).toBe("Confirmed opening words remain in the draft.");
+          const bounds = await message.boundingBox(); expect(bounds).not.toBeNull();
+          expect(bounds!.y).toBeGreaterThanOrEqual(0); expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(844);
+          expect(await message.evaluate(element => element.scrollHeight <= element.clientHeight)).toBe(true);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-${issue}.png`), fullPage: true });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser?.close(); sockets.close(); served.stop(); }
+  });
 });

@@ -4,6 +4,9 @@ import type { Dictionary } from "./core";
    Plural entries use Intl.LDMLPluralRule forms; {name} placeholders are
    filled from t()'s params. uk.ts must mirror this key set. */
 export const en = {
+  "claudeCloud.connectGithub": "Connect GitHub to this Claude account on claude.ai.",
+  "claudeCloud.createEnvironment": "Create a cloud environment for this Claude account on claude.ai.",
+
   "pipelineCreation.accepted": "Accepted — waiting to create",
   "pipelineCreation.linkPending": "Created — source link awaits attachment",
   "pipelineCreation.attach": "Attach saved link",
@@ -3927,6 +3930,8 @@ export const en = {
   "dictation.silence": "silence — nothing recognized",
   "dictation.unsupported": "recording is not supported in this browser",
   "dictation.liveError": "live transcription error",
+  "dictation.tailMissing": "Final words were not received. Confirmed text remains in the draft. Review it before sending.",
+  "dictation.bufferLimit": "Dictation stopped: the audio buffer filled. Recovered text is in the draft. Review it before continuing.",
   "dictation.connectionLost": "transcription connection dropped",
   "dictation.noMic": "no microphone access",
 

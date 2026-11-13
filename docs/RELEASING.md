@@ -1,5 +1,12 @@
 # Releasing
 
+The publish workflow builds one universal Mac disk image, tests it in fresh
+accounts on Apple Silicon and Intel, and attaches `Delegatus-<version>-mac.dmg`
+and its checksum only after both smoke legs pass. The initial app uses ad-hoc
+signing. An Apple Developer account enables Developer ID signing, hardened
+runtime entitlements and notarization; it is required before removing the
+documented **Open Anyway** step.
+
 ## Production Viewer deployment
 
 Production application releases are admitted by the durable runtime host:

@@ -800,6 +800,316 @@ describe("board timeline hybrid", () => {
       await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
     }
   }, 600_000);
+
+  /*
+   * #scroll: the chart follows the gesture. A chart of 30 tasks (collapsed and
+   * with every task expanded) is driven by real touch input through CDP and by
+   * real wheel, key and scrollbar input, next to a plain scroller given the same
+   * gesture. Numbers land in $LLV_EVIDENCE_DIR/timeline-scroll-<label>.json
+   * (label: LLV_TIMELINE_SCROLL_LABEL) before any assertion runs.
+   */
+  browserTest("chart follows touch, trackpad, wheel and key scrolling without jumps", async () => {
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const { pipelineRoleLookup, resolvePipelineRole } = await import("@/lib/pipelines/roles");
+    const { filesReadSummary } = await import("@/lib/filesReadSummary");
+    const label = process.env.LLV_TIMELINE_SCROLL_LABEL ?? "run";
+    const evidence = process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts/board-timeline-scroll");
+    const out = path.resolve(".artifacts/board-timeline-scroll"); fs.mkdirSync(out, { recursive: true }); fs.mkdirSync(evidence, { recursive: true });
+    const now = Date.parse("2026-10-26T13:20:00Z");
+    const iso = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+    const titles = ["Експорт CSV на великих проєктах з вибором колонок і кодування", "Зберегти фільтри пошуку", "Відновити оплату карткою після відмови банку та повторної спроби", "Перевірити контраст підказок",
+      "Доставка сповіщень", "Пошук у логах агентів за часом і за роллю виконавця у вибраному проєкті"];
+    const records = (count: number) => {
+      const tasks: BoardTask[] = Array.from({ length: count }, (_, index) => ({ id: `scroll-task-${index}`, project: "atlas", text: `${titles[index % titles.length]} ${index + 1}`,
+        status: "assigned" as const, placement: "unplaced" as const, assignments: [], createdAt: iso(1600), updatedAt: iso(1) }));
+      const pipelines: Pipeline[] = tasks.map((task, index) => {
+        const stageIds = ["builder", "reviewer", "fix"];
+        const stages = stageIds.map((id, stageIndex) => {
+          const role = { roleId: stageIndex === 1 ? "reviewer" as const : "builder" as const };
+          const resolved = resolvePipelineRole({ role, engine: stageIndex === 1 ? "codex" : "claude", model: stageIndex === 1 ? "gpt-6-astra" : "fable", effort: "high", access: stageIndex === 1 ? "read-only" : "read-write" }, "run", pipelineRoleLookup);
+          if (!resolved.role) throw new Error(resolved.error);
+          return { id, kind: "run" as const, role, effectiveRole: resolved.role, next: stageIds[stageIndex + 1] ?? null, "prompt": "{{task}}" };
+        });
+        const lane = buildPipeline({ id: `scroll-lane-${index}`, task: task.text, taskIds: [task.id], project: task.project, repoDir: "/fixture/atlas", srcPath: null, srcConversationId: null, now: iso(1500 - index * 40), stages });
+        const running = index % 3 === 0;
+        lane.state = running ? "running" : "needs_decision";
+        lane.cursor = { stageId: "fix", state: running ? "running" : "pending", input: null, activatedBy: null };
+        lane.runs.forEach((run, stageIndex) => {
+          const start = 1490 - index * 40 - stageIndex * 100 + (index === count - 1 ? -1480 + 6 + stageIndex * 100 : 0);
+          const live = stageIndex === 2 && running;
+          run.attempts.push({ n: 1, state: stageIndex < 2 ? "passed" : running ? "running" : "needs_decision", effectiveRole: structuredClone(stages[stageIndex]!.effectiveRole), launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+            startedAt: iso(Math.max(start, 6)), completedAt: live ? null : iso(Math.max(start - 80, 1)), input: null, output: null, activatedBy: null, verdict: null, error: null });
+        });
+        return lane;
+      });
+      return { ...filesReadSummary([], pipelines), files: [] as FileEntry[], tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }], projectCwds: { atlas: "/fixture/atlas" } };
+    };
+    let payload = records(30);
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(payload), "/api/tasks": () => Response.json({ tasks: payload.tasks }) });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const report: Record<string, unknown> = { label, now, rows: {} as Record<string, number>, touch: [] as unknown[], control: [] as unknown[], desktop: [] as unknown[], refresh: [] as unknown[], rest: [] as unknown[] };
+    const failures: string[] = [];
+    const check = (ok: boolean, detail: string) => { if (!ok) failures.push(detail); };
+    const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+    /* Records, per animation frame, where the chart is, and every script write to its position or height. */
+    const install = (page: Page) => page.evaluate(() => {
+      const scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!;
+      const rec = { on: false, frames: [] as { top: number; left: number; h: number }[], writes: [] as string[] };
+      (window as unknown as { __rec: typeof rec }).__rec = rec;
+      const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+      Object.defineProperty(scroller, "scrollTop", { configurable: true, get() { return descriptor.get!.call(this); },
+        set(value) { if (rec.on) rec.writes.push(`scrollTop=${value}`); descriptor.set!.call(this, value); } });
+      new MutationObserver(() => { if (rec.on) rec.writes.push(`style=${scroller.getAttribute("style")}`); }).observe(scroller, { attributes: true, attributeFilter: ["style"] });
+      const loop = () => { if (rec.on) rec.frames.push({ top: scroller.scrollTop, left: scroller.scrollLeft, h: scroller.clientHeight }); requestAnimationFrame(loop); };
+      requestAnimationFrame(loop);
+    });
+    const startRec = (page: Page) => page.evaluate(() => { const rec = (window as unknown as { __rec: { on: boolean; frames: unknown[]; writes: string[] } }).__rec; rec.frames = []; rec.writes = []; rec.on = true; });
+    const stopRec = (page: Page) => page.evaluate(() => { const rec = (window as unknown as { __rec: { on: boolean; frames: { top: number; left: number; h: number }[]; writes: string[] } }).__rec; rec.on = false; return rec; });
+    const series = (frames: { top: number }[]) => {
+      let maxJump = 0, backRun = 0, maxBack = 0, last = 0;
+      for (let index = 1; index < frames.length; index++) {
+        const delta = frames[index]!.top - frames[index - 1]!.top;
+        maxJump = Math.max(maxJump, Math.abs(delta));
+        if (!delta) continue;
+        if (last && Math.sign(delta) !== last) backRun = 0;
+        // A reversal is the length of a run against the direction of the finger's first leg (positive = chart moving down the list).
+        last = Math.sign(delta); if (delta < 0) { backRun += -delta; maxBack = Math.max(maxBack, backRun); } else backRun = 0;
+      }
+      return { maxJump: Math.round(maxJump * 10) / 10, maxBackwardRun: Math.round(maxBack * 10) / 10 };
+    };
+    const position = (page: Page) => page.evaluate(() => { const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!; return { top: s.scrollTop, left: s.scrollLeft, h: s.clientHeight, sh: s.scrollHeight }; });
+    const cuts = (page: Page) => page.evaluate(() => {
+      const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = s.getBoundingClientRect(), axis = s.querySelector<HTMLElement>(".bt-axis")!.offsetHeight;
+      const top = box.top + axis, bottom = box.top + s.clientHeight, cut: string[] = [];
+      for (const row of s.querySelectorAll<HTMLElement>(".bt-row")) {
+        const rect = row.getBoundingClientRect();
+        if (rect.bottom <= top + 0.5 || rect.top >= bottom - 0.5) continue;
+        if (rect.top < top - 0.5 || rect.bottom > bottom + 0.5) cut.push(`${row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")}:${Math.round(rect.top - top)}..${Math.round(rect.bottom - bottom)}`);
+      }
+      return cut;
+    });
+    const settle = async (page: Page) => { await sleep(700); await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))); };
+    const open = async (phone: boolean, expandedAll: boolean, hold = 0) => {
+      payload = records(30);
+      const opened = await openFixture(browser, "about:blank", { width: phone ? 390 : 1440, height: phone ? 844 : 900 }, "light", "uk", "reduce", phone);
+      const { page, context, pageErrors } = opened;
+      await context.addInitScript(({ stored }) => {
+        localStorage.setItem("llv:board-timeline:v1:atlas", JSON.stringify(stored));
+        localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: true }, placement: "top", height: null, width: null }));
+      }, { stored: { view: "timeline", hours: 24, expanded: Object.fromEntries(payload.tasks.map(task => [task.id, expandedAll])) } });
+      await page.clock.setFixedTime(new Date(now));
+      await page.goto(`${served.base}?scenario=board-timeline#p=atlas`);
+      if (phone) { const tab = page.locator('[data-phone-kanban-tab="timeline"]'); await tab.waitFor(); if (await tab.getAttribute("aria-selected") !== "true") await tab.click(); }
+      else { const toggle = page.locator("[data-board-timeline-toggle]"); await toggle.waitFor(); if (await toggle.getAttribute("aria-pressed") !== "true") await toggle.click(); }
+      await page.locator("[data-timeline-scroll]").waitFor();
+      await page.waitForFunction(() => (document.querySelector("[data-timeline-scroll]") as HTMLElement | null)?.style.height !== undefined);
+      await settle(page); void hold;
+      return { page, context, pageErrors };
+    };
+    const geometry = (page: Page) => page.evaluate(() => {
+      const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = s.getBoundingClientRect(), axis = s.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect().bottom;
+      const rows = [...s.querySelectorAll<HTMLElement>(".bt-row")].filter(row => { const rect = row.getBoundingClientRect(); return rect.top >= axis - 1 && rect.bottom <= box.top + s.clientHeight + 1; });
+      if (!rows.length) throw new Error(`no whole row in view: scroller ${box.top}+${s.clientHeight}, axis ${axis}, scrollTop ${s.scrollTop}`);
+      const row = rows[Math.floor(rows.length / 2)]!;
+      const title = row.querySelector<HTMLElement>(".bt-title, .bt-stage-name")!.getBoundingClientRect(), lane = row.querySelector<HTMLElement>(".bt-lane")!.getBoundingClientRect(), bar = row.querySelector<HTMLElement>(".bt-summary-bar, .bt-stage-bar")?.getBoundingClientRect();
+      const laneY = lane.top + lane.height / 2;
+      const barX = bar && bar.right > 12 && bar.left < 378 ? Math.min(378, Math.max(12, (Math.max(bar.left, 0) + Math.min(bar.right, 390)) / 2)) : null;
+      const emptyX = [8, 380, 200, 100].find(x => !bar || x < bar.left - 6 || x > bar.right + 6) ?? 8;
+      return { label: { x: title.left + 24, y: title.top + 8 }, bar: barX === null ? { x: emptyX, y: laneY } : { x: barX, y: laneY }, empty: { x: emptyX, y: laneY }, visibleRows: rows.length, rowHeights: rows.map(r => Math.round(r.getBoundingClientRect().height)) };
+    });
+    try {
+      for (const mode of ["collapsed", "expanded"] as const) {
+        const { page, context, pageErrors } = await open(true, mode === "expanded");
+        try {
+          const cdp = await context.newCDPSession(page);
+          const touch = (type: "touchStart" | "touchMove" | "touchEnd", x: number, y: number) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }] });
+          await install(page);
+          const rowCount = await page.locator("[data-board-timeline] .bt-row").count();
+          (report.rows as Record<string, number>)[mode] = rowCount;
+          check(rowCount >= 28, `${mode}: chart has ${rowCount} rows, at least 28 needed`);
+          const rest: { mode: string; atOpen: string[]; zoomOut?: string[]; toggled?: string[] } = { mode, atOpen: await cuts(page) };
+          // A plain scroller beside the chart gets each gesture too, as the reference for what a finger moves.
+          await page.evaluate(() => {
+            const box = document.createElement("div"); box.id = "scroll-control"; box.style.cssText = "position:fixed;left:0;top:420px;width:390px;height:300px;overflow:auto;background:#fff;z-index:99999;border:2px solid #06c;visibility:hidden";
+            const inner = document.createElement("div"); inner.style.cssText = "width:3000px;height:4000px;background:repeating-linear-gradient(#eee 0 40px,#ccc 40px 80px)"; box.append(inner); document.body.append(box);
+          });
+          const shapes: { name: string; legs: [number, number][]; step: number; starts: ("bar" | "label" | "empty")[]; holds: number[] }[] = [
+            { name: "drag200", legs: [[0, -200]], step: 4, starts: ["bar", "label", "empty"], holds: [0, 700] },
+            { name: "drag30", legs: [[0, -30]], step: 3, starts: ["bar", "label", "empty"], holds: [0] },
+            { name: "slow60", legs: [[0, -60]], step: 1, starts: ["bar", "label", "empty"], holds: [0] },
+            { name: "wobble", legs: [[0, -40], [0, 12], [0, -40], [0, 12], [0, -40]], step: 3, starts: ["bar", "label", "empty"], holds: [0, 700] },
+            { name: "drag200down", legs: [[0, 200]], step: 4, starts: ["bar", "label", "empty"], holds: [0] },
+          ];
+          const reference: Record<string, number> = {};
+          for (const shape of shapes) {
+            await page.evaluate(() => { const b = document.getElementById("scroll-control")!; b.style.visibility = "visible"; b.scrollTop = 1000; });
+            await touch("touchStart", 200, 600); await sleep(100);
+            let y = 600; for (const [, dy] of shape.legs) { const n = Math.ceil(Math.abs(dy) / shape.step); for (let i = 0; i < n; i++) { y += dy / n; await touch("touchMove", 200, y); await sleep(16); } await sleep(60); }
+            await sleep(350); await touch("touchEnd", 0, 0); await sleep(900);
+            reference[shape.name] = await page.evaluate(() => document.getElementById("scroll-control")!.scrollTop - 1000);
+            await page.evaluate(() => { document.getElementById("scroll-control")!.style.visibility = "hidden"; });
+            (report.control as unknown[]).push({ mode, shape: shape.name, moved: reference[shape.name] });
+          }
+          for (const shape of shapes) for (const start of shape.starts) for (const hold of shape.holds) {
+            await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 400; });
+            await settle(page);
+            const g = await geometry(page), at = g[start], before = await position(page);
+            await startRec(page);
+            await touch("touchStart", at.x, at.y); await sleep(hold);
+            let x = at.x, y = at.y; const marks: number[] = [];
+            for (const [dx, dy] of shape.legs) {
+              const n = Math.ceil(Math.hypot(dx, dy) / shape.step);
+              for (let i = 0; i < n; i++) { x += dx / n; y += dy / n; await touch("touchMove", x, y); await sleep(16); }
+              await sleep(60); marks.push((await position(page)).top - before.top);
+            }
+            await sleep(350); await touch("touchEnd", 0, 0); await sleep(900);
+            const recorded = await stopRec(page); const after = await position(page); const stats = series(recorded.frames);
+            const moved = after.top - before.top, heights = [...new Set(recorded.frames.map(frame => frame.h))];
+            const entry = { mode, shape: shape.name, start, hold, before: before.top, moved, expected: -shape.legs.reduce((sum, [, dy]) => sum + dy, 0), control: reference[shape.name], afterEachLeg: marks, movedX: after.left - before.left,
+              heights, scriptWrites: recorded.writes.length, writes: recorded.writes.slice(0, 3), ...stats };
+            (report.touch as unknown[]).push(entry);
+            const tag = `${mode}/${shape.name}/${start}/hold${hold}`;
+            check(recorded.writes.length === 0, `${tag}: ${recorded.writes.length} script writes to scrollTop or height during the gesture`);
+            check(heights.length === 1, `${tag}: viewport height took ${heights.length} values`);
+            if (shape.name === "drag200") check(Math.abs(moved - 185) <= 10, `${tag}: moved ${moved}, expected 185±10`);
+            if (shape.name === "drag200down") check(Math.abs(moved + 185) <= 10, `${tag}: moved ${moved}, expected -185±10`);
+            if (shape.name === "drag30") check(moved >= 0 && moved <= 30, `${tag}: moved ${moved}, expected at most 30`);
+            if (shape.name === "slow60") check(moved > 0 && moved <= 62 && Math.abs(moved - reference.slow60!) <= 10, `${tag}: moved ${moved}, a plain scroller moved ${reference.slow60}`);
+            if (shape.name === "wobble") check(stats.maxBackwardRun <= 14 && Math.abs(moved - reference.wobble!) <= 10, `${tag}: moved ${moved} (plain ${reference.wobble}), largest reversal ${stats.maxBackwardRun}, finger's own 12`);
+            check(stats.maxJump <= 40, `${tag}: largest one-frame jump ${stats.maxJump}`);
+            if (shape.name === "drag200" && hold === 0 && start === "label") await page.screenshot({ path: path.join(evidence, `timeline-scroll-${label}-phone-${mode}-after-drag200.png`) });
+          }
+          // A data refresh while the user has scrolled leaves the position where the user put it.
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          const before = await position(page), g = await geometry(page);
+          await touch("touchStart", g.label.x, g.label.y);
+          for (let i = 0; i < 40; i++) { await touch("touchMove", g.label.x, g.label.y - i * 3); await sleep(16); }
+          await touch("touchEnd", 0, 0); await sleep(900);
+          const placed = await position(page); const cutsBefore = await cuts(page);
+          await startRec(page);
+          payload = records(31); payload.tasks[3]!.updatedAt = iso(0);
+          await page.evaluate(() => { for (const name of ["llv:tasks-changed", "llv:files-changed", "llv:pipelines-changed"]) window.dispatchEvent(new Event(name)); });
+          await page.waitForFunction(() => document.querySelectorAll("[data-timeline-task]").length >= 31, undefined, { timeout: 15_000 }).catch(() => undefined);
+          await sleep(1200);
+          const recorded = await stopRec(page); const refreshed = await position(page);
+          const rows31 = await page.locator("[data-timeline-task]").count();
+          (report.refresh as unknown[]).push({ mode, phone: true, scrolledFrom: before.top, placedAt: placed.top, afterRefreshTop: refreshed.top, heightBefore: placed.h, heightAfter: refreshed.h, taskRows: rows31, writes: recorded.writes.length, cutsAtPlacement: cutsBefore });
+          check(rows31 >= 31, `${mode}: the refresh did not reach the chart (${rows31} task rows)`);
+          check(refreshed.top === placed.top && refreshed.h === placed.h && recorded.writes.length === 0, `${mode}: refresh moved the position ${placed.top}→${refreshed.top} or height ${placed.h}→${refreshed.h} (${recorded.writes.length} writes)`);
+          // Layout changes still fit whole rows: zoom, and expand/collapse of a task.
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          await page.getByRole("button", { name: translate("uk", "timeline.zoomOut"), exact: true }).click(); await settle(page);
+          rest.zoomOut = await cuts(page);
+          await page.locator("[data-timeline-expand]").nth(2).click(); await settle(page);
+          rest.toggled = await cuts(page);
+          (report.rest as unknown[]).push(rest);
+          check(rest.atOpen.length === 0 && rest.zoomOut!.length === 0 && rest.toggled!.length === 0, `${mode}: rows cut at rest after open/zoom/toggle: ${JSON.stringify(rest)}`);
+          await page.screenshot({ path: path.join(evidence, `timeline-scroll-${label}-phone-${mode}-rest.png`) });
+          check(pageErrors.length === 0, `${mode}: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+      for (const mode of ["collapsed", "expanded"] as const) {
+        const { page, context, pageErrors } = await open(false, mode === "expanded");
+        try {
+          await install(page);
+          const scroller = page.locator("[data-timeline-scroll]");
+          const box = (await scroller.boundingBox())!;
+          const wheelPoint = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+          await page.evaluate(() => {
+            const control = document.createElement("div"); control.id = "scroll-control"; const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!;
+            control.style.cssText = `position:fixed;left:0;top:0;width:${s.clientWidth}px;height:${s.clientHeight}px;overflow:auto;visibility:hidden;z-index:99999`;
+            const inner = document.createElement("div"); inner.style.cssText = "height:6000px"; control.append(inner); document.body.append(control);
+          });
+          const rest: { mode: string; atOpen: string[]; zoomOut?: string[]; toggled?: string[] } = { mode, atOpen: await cuts(page) };
+          const wheelOnce = async (delta: number, target: "chart" | "control") => {
+            await page.evaluate(target => { const c = document.getElementById("scroll-control")!; c.style.visibility = target === "control" ? "visible" : "hidden"; c.scrollTop = 0; if (target === "chart") document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; }, target);
+            await settle(page);
+            await page.mouse.move(wheelPoint.x, wheelPoint.y);
+            const before = target === "chart" ? (await position(page)).top : 0;
+            if (target === "chart") await startRec(page);
+            await page.mouse.wheel(0, delta); await sleep(900);
+            const writes = target === "chart" ? (await stopRec(page)).writes : [];
+            const top = target === "chart" ? (await position(page)).top : await page.evaluate(() => document.getElementById("scroll-control")!.scrollTop);
+            return { moved: top - before, writes: writes.length };
+          };
+          for (const delta of [40, 100]) {
+            const chart = await wheelOnce(delta, "chart"), control = await wheelOnce(delta, "control");
+            (report.desktop as unknown[]).push({ mode, input: `wheel ${delta}`, moved: chart.moved, control: control.moved, scriptWrites: chart.writes });
+            check(chart.writes === 0, `${mode}: wheel ${delta} wrote scrollTop or height ${chart.writes} times`);
+            check(Math.abs(chart.moved - control.moved) <= 4 && (delta !== 40 || Math.abs(chart.moved - 40) <= 6), `${mode}: wheel ${delta} moved ${chart.moved}, a plain scroller moved ${control.moved}`);
+          }
+          await page.evaluate(() => { document.getElementById("scroll-control")!.style.visibility = "hidden"; });
+          // Arrow keys: one row at a time, each landing on a row's top edge below the pinned axis.
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          await scroller.focus();
+          const edges = await page.evaluate(() => {
+            const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, top = s.getBoundingClientRect().top + s.querySelector<HTMLElement>(".bt-axis")!.offsetHeight;
+            return [...s.querySelectorAll<HTMLElement>(".bt-row")].map(row => Math.round(row.getBoundingClientRect().top - top + s.scrollTop));
+          });
+          let previous = 0; const stepped: number[] = [];
+          for (let press = 0; press < 3; press++) {
+            await startRec(page); await page.keyboard.press("ArrowDown"); await sleep(500);
+            const recorded = await stopRec(page); const top = (await position(page)).top; stepped.push(top - previous);
+            check(edges.some(edge => Math.abs(edge - top) <= 1), `${mode}: arrow down ${press + 1} landed at ${top}, not on a row edge`);
+            check(top > previous && edges.filter(edge => edge > previous + 1 && edge < top - 1).length === 0, `${mode}: arrow down ${press + 1} moved ${previous}→${top}, more than one row`);
+            previous = top; void recorded;
+          }
+          const upTop = (await (async () => { await page.keyboard.press("ArrowUp"); await sleep(500); return (await position(page)).top; })());
+          check(edges.some(edge => Math.abs(edge - upTop) <= 1) && upTop < previous, `${mode}: arrow up landed at ${upTop} from ${previous}`);
+          (report.desktop as unknown[]).push({ mode, input: "arrow down x3 then up", steps: stepped, upTop, firstRowEdges: edges.slice(0, 6) });
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page); await scroller.focus();
+          const pageHeight = (await position(page)).h;
+          await page.keyboard.press("PageDown"); await sleep(600);
+          const paged = (await position(page)).top;
+          (report.desktop as unknown[]).push({ mode, input: "PageDown", moved: paged, clientHeight: pageHeight });
+          check(paged > pageHeight * 0.5 && paged <= pageHeight, `${mode}: PageDown moved ${paged} of a ${pageHeight}px viewport`);
+          await page.keyboard.press("PageUp"); await sleep(600);
+          check((await position(page)).top < paged, `${mode}: PageUp did not scroll back`);
+          // The scrollbar: a click on its track below the thumb pages the chart. (A synthesized press on the
+          // thumb itself starts no drag in headless Chromium, with or without this change, so the track is the input.)
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          const gutter = await scroller.evaluate(element => (element as HTMLElement).offsetWidth - element.clientWidth);
+          check(gutter >= 12, `${mode}: scrollbar gutter is ${gutter}px, so the scrollbar is not exercised`);
+          const barX = box.x + box.width - gutter / 2;
+          await startRec(page);
+          await page.mouse.move(barX, box.y + box.height - 60); await sleep(150);
+          await page.mouse.down(); await sleep(60); await page.mouse.up(); await sleep(700);
+          const dragged = await stopRec(page); const thumbTop = (await position(page)).top;
+          (report.desktop as unknown[]).push({ mode, input: "scrollbar track click", moved: thumbTop, scriptWrites: dragged.writes.length, writes: dragged.writes.slice(0, 3) });
+          check(thumbTop > 0 && dragged.writes.length === 0, `${mode}: scrollbar track click moved ${thumbTop} with ${dragged.writes.length} script writes`);
+          // A refresh while scrolled leaves the position.
+          const placed = await position(page);
+          await startRec(page);
+          payload = records(31); payload.tasks[3]!.updatedAt = iso(0);
+          await page.evaluate(() => { for (const name of ["llv:tasks-changed", "llv:files-changed", "llv:pipelines-changed"]) window.dispatchEvent(new Event(name)); });
+          await page.waitForFunction(() => document.querySelectorAll("[data-timeline-task]").length >= 31, undefined, { timeout: 15_000 }).catch(() => undefined);
+          await sleep(1200);
+          const recorded = await stopRec(page); const refreshed = await position(page);
+          (report.refresh as unknown[]).push({ mode, phone: false, placedAt: placed.top, afterRefreshTop: refreshed.top, heightBefore: placed.h, heightAfter: refreshed.h, writes: recorded.writes.length });
+          check(refreshed.top === placed.top && refreshed.h === placed.h && recorded.writes.length === 0, `${mode} desktop: refresh moved ${placed.top}→${refreshed.top}, height ${placed.h}→${refreshed.h}, ${recorded.writes.length} writes`);
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          await page.getByRole("button", { name: translate("uk", "timeline.zoomOut"), exact: true }).click(); await settle(page);
+          rest.zoomOut = await cuts(page);
+          (report.rest as unknown[]).push({ phone: false, ...rest });
+          check(rest.atOpen.length === 0 && rest.zoomOut!.length === 0, `${mode} desktop: rows cut at rest ${JSON.stringify(rest)}`);
+          await page.screenshot({ path: path.join(evidence, `timeline-scroll-${label}-desktop-${mode}.png`) });
+          check(pageErrors.length === 0, `${mode} desktop: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+    } finally {
+      report.failures = failures;
+      fs.writeFileSync(path.join(evidence, `timeline-scroll-${label}.json`), JSON.stringify(report, null, 2) + "\n");
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 900_000);
 });
 
 describe("project default stage runtime", () => {

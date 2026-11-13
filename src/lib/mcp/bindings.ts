@@ -1,3 +1,4 @@
+import { setTimeout as ownerMediaPause } from "node:timers/promises";
 import { stageExecution } from "@/lib/pipelines/cloudStage";
 import { boundedStageExecution } from "@/lib/pipelines/listProjection";
 import { textLengthError } from "@/lib/textLimits";
@@ -144,6 +145,7 @@ import { bridgeDirectiveBody, bridgeDirectiveId, type BridgeTrailer } from "@/li
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { BRIDGE_REPORT_COMPLETE_MAX_BYTES, isBridgeReportClass, isBridgeReportOutcomeKind, type BridgeReportCompleteV1, type BridgeReportOutcome, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
 import { bridgeReportComplete, findBridgeReport, recordBridgeReportTelegram, scopedReportId } from "@/lib/bridge/store";
+import { scrubTelegramDiagnostic } from "@/lib/telegram/bot/diagnostics";
 import { EMPTY_DENY_LIST, type PublicDenyList } from "@/lib/bridge/publicSafe";
 import { ISSUE_REPORT_RESPONSE_RULE, issueReportApprovalForm, issueReportApprovalReplies, issueReportDecisionApproves, issueReportFormLanguage } from "@/lib/issueReports/approvalForm";
 import { delegatusIssueRepository, issueReportFinder, issueReportPublisher, type IssueReportFinder, type IssueReportPublisher } from "@/lib/issueReports/publish";
@@ -303,6 +305,7 @@ import {
   type McpToolPayload,
 } from "./server";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
+import { stateLockDeferral } from "@/lib/state/lockWait";
 import { RETRYABLE_TELEGRAM_BOT_CODES, readTelegramBotRefusals, type TelegramBotErrorCode } from "@/lib/telegram/bot/contracts";
 import { telegramSetUp } from "@/lib/telegram/launchReadiness";
 import { voiceTools } from "./voiceTools";
@@ -816,6 +819,8 @@ async function dispatchViewerControl(
     }
     throw new McpDispatchVerdictError(message, {
       status: response.status,
+      ...(pathname === "/api/telegram/bot/agent" && body.op === "send" && typeof body.reportId === "string"
+        && result.reportSendDeferred === true ? { reportSendDeferred: true } : {}),
       ...(text(result.code) ? { code: text(result.code) } : {}),
       // The failed condition behind a stable refusal code, a short identifier.
       ...(/^[a-z][a-z_]{0,63}$/.test(text(result.reason)) ? { reason: text(result.reason) } : {}),
@@ -4125,21 +4130,16 @@ async function bridgeReport(
   if (outcomeKind === "autonomy" && (origin.kind !== "manager" || reportClass !== "status" || (!autonomyEpisode && !(project && findBridgeReport(scopedReportId(project, key))?.outcome?.kind === "autonomy")))) {
     throw new Error("autonomy report must name an ended episode owed by this project's seat");
   }
-  /* #2146: the operator turned this project's reports off. An answer, not an
-     error: the caller did nothing wrong, and nothing is stored. */
-  if (project && !bridgeReportsEnabled(project) && outcomeKind !== "autonomy") {
-    return { recorded: false, replayed: false, bridgeReports: false, message: "bridge reports are off for this project" };
-  }
   const seats = dependencies.authorizedSeats?.()
     ?? authorizedManagerSeats(productionManagerAuthoritySources());
   const targetSeat = project
     ? seats.find((seat) => seat.project === project)
     : undefined;
 
-  /* A replay stores nothing. Its one job is a Telegram copy whose send failed
-     retryably: the row's stored HTML is re-sent byte for byte, and this call's
+  /* A replay stores nothing. Its one job is a pending or retryably failed
+     Telegram copy: the row's stored HTML is re-sent byte for byte, and this call's
      own arguments are ignored (§5.5). Only the manager's own replay re-sends:
-     the post goes out under the caller's capability and attribution. A row
+     the caller authorizes recovery of the original sender's bot receipt. A row
      filed under the caller's old project key before it was folded is still
      the same report. The stored copy goes out only while the project still
      reports to the chat it was rendered for: a project whose operator chose
@@ -4149,14 +4149,15 @@ async function bridgeReport(
   const reportId = scopedReportId(project, key);
   const existing = findBridgeReport(reportId)
     ?? (callerProject && callerProject !== project ? findBridgeReport(scopedReportId(callerProject, key)) : null);
-  if (existing) {
+  const recordedReport = async (existing: NonNullable<ReturnType<typeof findBridgeReport>>): Promise<McpToolPayload> => {
     if (outcomeKind === "autonomy" && existing.outcome?.kind !== "autonomy") throw new Error("autonomy report key is occupied by another report");
     if (autonomyEpisode && project) markAutonomyReported(project, autonomyEpisode.startedAt, existing.at);
-    const telegram = existing.telegram && existing.telegram.state === "failed" && existing.origin?.kind === "manager"
-      && origin.kind === "manager" && isRetryableReportSend(existing.telegram.code)
-      && project !== null && effectiveReportTelegram(project)?.chat === existing.telegram.chat
+    const telegram = existing.telegram && (existing.telegram.state === "pending"
+      || existing.telegram.state === "failed" && isRetryableReportSend(existing.telegram.code))
+      && existing.origin?.kind === "manager" && origin.kind === "manager"
+      && project !== null && bridgeReportsEnabled(project) && effectiveReportTelegram(project)?.chat === existing.telegram.chat
       && effectiveReportTelegram(project)?.topicId === existing.telegram.topicId
-      ? await postReportTelegram(existing.id, existing.telegram.chat, existing.telegram.html, existing.telegram.topicId, `bridge-report:${existing.id}:r${existing.telegram.attempts}`, dependencies, control)
+      ? await postReportTelegram(existing.id, existing.telegram, dependencies, control)
       : existing.telegram ?? null;
     /* `alreadyRecorded`, because the tool service's envelope owns `replayed`
        (a replay of the same clientRequestId). */
@@ -4168,6 +4169,13 @@ async function bridgeReport(
       reportId: existing.id,
       destinations: reportDestinations(existing.seq, telegram),
     };
+  };
+  if (existing) return recordedReport(existing);
+
+  /* #2146: the operator turned this project's reports off. An answer, not an
+     error: the caller did nothing wrong, and nothing is stored. */
+  if (project && !bridgeReportsEnabled(project) && outcomeKind !== "autonomy") {
+    return { recorded: false, replayed: false, bridgeReports: false, message: "bridge reports are off for this project" };
   }
 
   const locale = dependencies.operatorLocale ? dependencies.operatorLocale() : operatorLocale();
@@ -4258,12 +4266,11 @@ async function bridgeReport(
      to have delivered a second report. */
   if (!appended) {
     const winner = findBridgeReport(reportId);
-    if (autonomyEpisode && project && winner) markAutonomyReported(project, autonomyEpisode.startedAt, winner.at);
-    return { recorded: false, alreadyRecorded: true, ...(outcomeKind === "autonomy" && winner ? { chatText: winner.body, nextAction: "Repeat chatText exactly in the seat conversation." } : {}) };
+    return winner ? recordedReport(winner) : { recorded: false, alreadyRecorded: true };
   }
   if (autonomyEpisode && project) markAutonomyReported(project, autonomyEpisode.startedAt, appended.at);
   const telegram = appended.telegram
-    ? await postReportTelegram(appended.id, appended.telegram.chat, appended.telegram.html, appended.telegram.topicId, `bridge-report:${appended.id}`, dependencies, control)
+    ? await postReportTelegram(appended.id, appended.telegram, dependencies, control)
     : null;
   return {
     recorded: true,
@@ -4290,7 +4297,9 @@ function reportSectionsArg(value: unknown): Record<SeatSectionId, string[]> {
   return sections;
 }
 
-function reportDestinations(seq: number, telegram: BridgeReportTelegram | null): Record<string, unknown> {
+type ReportTelegramDelivery = BridgeReportTelegram & { bookkeeping?: { state: "pending" } };
+
+function reportDestinations(seq: number, telegram: ReportTelegramDelivery | null): Record<string, unknown> {
   return {
     bridge: { seq },
     ...(telegram
@@ -4298,6 +4307,7 @@ function reportDestinations(seq: number, telegram: BridgeReportTelegram | null):
         telegram: {
           chat: telegram.chat,
           state: telegram.state,
+          ...(telegram.bookkeeping ? { bookkeeping: telegram.bookkeeping } : {}),
           ...(telegram.messageIds?.length ? { messageIds: telegram.messageIds } : {}),
           ...(telegram.code ? { code: telegram.code, retryable: isRetryableReportSend(telegram.code) } : {}),
           ...(telegram.message ? { message: telegram.message } : {}),
@@ -4318,41 +4328,67 @@ function isRetryableReportSend(code: string | null | undefined): boolean {
 
 /**
  * Post a report's stored Telegram copy through the bot service, silently and
- * as HTML, attributed to the calling seat and idempotent under the given
+ * as HTML, using the stored origin's bot receipt and idempotent under the given
  * request id, and record the outcome on the row. A failed post never loses
  * the report: the bridge row stays either way.
  */
 async function postReportTelegram(
   reportId: string,
-  chat: string,
-  html: string,
-  topicId: number | undefined,
-  clientRequestId: string,
+  copy: BridgeReportTelegram,
   dependencies: ViewerMcpDomainDependencies,
   control: ViewerControlDependencies | null,
-): Promise<BridgeReportTelegram | null> {
+): Promise<ReportTelegramDelivery> {
+  const { chat, html, topicId } = copy;
+  // The bot re-admits a confirmed failed receipt itself. Keep that receipt
+  // across bridge bookkeeping so an unfinished recovery cannot fork a send.
+  const receiptAttempt = copy.receiptAttempt ?? copy.attempts;
+  const clientRequestId = `bridge-report:${reportId}${receiptAttempt ? `:r${receiptAttempt}` : ""}`;
   const send = dependencies.sendReportTelegram ?? ((input: ReportTelegramSend) => productionSendReportTelegram(input, control));
   let outcome: ReportTelegramSendOutcome;
+  let attempted = true;
   try {
-    outcome = await send({ chat, html, ...(topicId ? { topicId } : {}), clientRequestId });
+    outcome = await send({ reportId, chat, html, ...(topicId ? { topicId } : {}), clientRequestId });
+    attempted = outcome.deferred !== true;
   } catch (error) {
+    // A busy admission did not settle a bot attempt. Keep its receipt key so
+    // recovery can join a concurrent sender instead of creating a new send.
+    attempted = stateLockDeferral(error) === null;
     outcome = { ok: false, code: "telegram_failed", message: error instanceof Error ? error.message : String(error) };
   }
   const at = new Date().toISOString();
   const evidence = { ...(outcome.bot ? { bot: outcome.bot } : {}), ...(outcome.refusals ? { refusals: outcome.refusals } : {}) };
-  return recordBridgeReportTelegram(reportId, outcome.ok
-    ? { state: "sent", messageIds: outcome.messageIds, at, ...evidence }
-    : { state: outcome.code === "send_uncertain" ? "uncertain" : "failed", code: outcome.code, message: outcome.message ?? `Telegram report send failed (${outcome.code})`, at, ...evidence })?.telegram ?? null;
+  const delivery: BridgeReportTelegram = {
+    chat, html, ...(topicId ? { topicId } : {}), attempts: copy.attempts + (attempted ? 1 : 0), receiptAttempt, at, ...evidence,
+    ...(copy.messageIds ? { messageIds: copy.messageIds } : {}),
+    ...(outcome.ok
+      ? { state: "sent", messageIds: outcome.messageIds }
+      : { state: outcome.code === "send_uncertain" ? "uncertain" : "failed", code: outcome.code,
+        message: scrubTelegramDiagnostic(outcome.message ?? `Telegram report send failed (${outcome.code})`) }),
+  };
+  try {
+    return recordBridgeReportTelegram(reportId, { ...delivery, attempted, expectedAttempts: copy.attempts })?.telegram ?? delivery;
+  } catch {
+    // A concurrent recovery may already have confirmed delivery while this
+    // attempt waited for bookkeeping admission.
+    try {
+      const current = findBridgeReport(reportId)?.telegram;
+      if (current?.state === "sent") return current;
+    } catch { /* The observed send remains evidence even if storage is busy. */ }
+    // The bridge row is already committed and the send has its own receipt.
+    // Report the observed delivery and let a report-key retry finish bookkeeping.
+    return { ...delivery, bookkeeping: { state: "pending" } };
+  }
 }
 
 export interface ReportTelegramSend {
+  reportId: string;
   chat: string;
   html: string;
   topicId?: number;
   clientRequestId: string;
 }
 
-export type ReportTelegramSendOutcome = { bot?: string; refusals?: { bot: string; code: string }[] } & (
+export type ReportTelegramSendOutcome = { bot?: string; refusals?: { bot: string; code: string }[]; deferred?: true } & (
   | { ok: true; messageIds: number[] }
   | { ok: false; code: string; message?: string });
 
@@ -4361,6 +4397,7 @@ async function productionSendReportTelegram(input: ReportTelegramSend, control: 
   try {
     const result = await dispatchControl(control)("/api/telegram/bot/agent", {
       op: "send",
+      reportId: input.reportId,
       clientRequestId: input.clientRequestId,
       chat: input.chat,
       ...(input.topicId ? { topicId: input.topicId } : {}),
@@ -4373,7 +4410,8 @@ async function productionSendReportTelegram(input: ReportTelegramSend, control: 
       ...(result.refusals ? { refusals: readTelegramBotRefusals(result.refusals).map(r => ({ bot: r.bot.username ?? r.bot.name, code: r.code })) } : {}) };
   } catch (error) {
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
-      return { ok: false, code: error.details.code, message: error.message,
+      return { ok: false, code: error.details.reportSendDeferred === true ? "telegram_failed" : error.details.code, message: error.message,
+        ...(error.details.reportSendDeferred === true ? { deferred: true } : {}),
         ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals).map(r => ({ bot: r.bot.username ?? r.bot.name, code: r.code })) } : {}) };
     }
     return { ok: false, code: "telegram_failed", message: error instanceof Error ? error.message : String(error) };
@@ -4850,6 +4888,16 @@ function cloudEnvironmentWriteAuthority(args: McpToolArgs, dependencies: ViewerM
   if (caller.kind === "worker" && seats.some(seat => seat.conversationId === caller.conversationId && seat.project
     && canonicalProject(seat.project) === canonicalProject(required(args, "project")))) return;
   throw new McpToolRefusal("Cloud environment overrides require the operator or this project's designated seat", { code: "cloud_environment_write_refused", status: 403 });
+}
+
+function claudeCloudTaskWriteAuthority(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): void {
+  if (args.action !== "prepare") return;
+  const caller = authorityOf(dependencies);
+  if (caller.kind === "root") return;
+  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+  if (caller.kind === "worker" && seats.some(seat => seat.conversationId === caller.conversationId && seat.project
+    && canonicalProject(seat.project) === canonicalProject(required(args, "project")))) return;
+  throw new McpToolRefusal("Claude task preparation requires the operator or this project’s designated seat", { code: "claude_cloud_task_write_refused", status: 403 });
 }
 
 /**
@@ -5813,11 +5861,18 @@ function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
   return redactPayload({ count: accounts.length, accounts });
 }
 
-async function relayOwnerHistory(args: McpToolArgs, control: ViewerControlDependencies, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+async function relayOwnerHistory(args: McpToolArgs, control: ViewerControlDependencies, dependencies: ViewerMcpDomainDependencies, context?: McpToolCallContext): Promise<McpToolPayload> {
   if (ownerRelayCaller(dependencies)) throw new McpToolRefusal("Group history cannot be read while answering in Telegram.", { code: "owner_history_refused" });
-  return redactPayload(await control.post("/api/external-relay/owner-history", {
-    op: args.action, ...Object.fromEntries(["chat", "from", "to", "limit", "cursor"].filter(key => args[key] !== undefined).map(key => [key, args[key]])),
-  }, callerCapabilityHeaders()));
+  const body = { op: args.action, ...Object.fromEntries(["chat", "from", "to", "limit", "cursor", "messageId", "directory"]
+    .filter(key => args[key] !== undefined).map(key => [key, args[key]])) };
+  const deadline = Math.min(Date.now() + 30_000, context?.deadlineAt ?? Infinity);
+  for (;;) {
+    context?.signal?.throwIfAborted(); context?.assertCaller?.();
+    if (ownerRelayCaller(dependencies)) throw new McpToolRefusal("Group history cannot be read while answering in Telegram.", { code: "owner_history_refused" });
+    const answer = await control.post("/api/external-relay/owner-history", body, callerCapabilityHeaders());
+    if (args.action !== "media" || answer.status !== "in_progress" || Date.now() + 3500 >= deadline) return redactPayload(answer);
+    await ownerMediaPause(Math.min(1000, Math.max(1, Number(answer.retryAfterSeconds) || 1) * 1000), undefined, { signal: context?.signal });
+  }
 }
 
 /*
@@ -8917,6 +8972,16 @@ export function viewerMcpBindings(
       cloudEnvironmentWriteAuthority(args, domainDependencies);
       return control.post("/api/projects/cloud-environments", args, callerCapabilityHeaders());
     }, false, false), { authorizeReceipt: (args: McpToolArgs) => cloudEnvironmentWriteAuthority(args, domainDependencies) }),
+    claude_cloud_task: Object.assign(orchestratorProjectBinding(domainDependencies, async (args, context) => {
+      const control = viewerControlForCall(controlDependencies, context);
+      if (args.action === "read") {
+        const query = new URLSearchParams({ project: required(args, "project") });
+        if (args.accountId !== undefined) query.set("accountId", String(args.accountId));
+        return readViewerControl(control, `/api/projects/claude-cloud-tasks?${query}`);
+      }
+      claudeCloudTaskWriteAuthority(args, domainDependencies);
+      return control.post("/api/projects/claude-cloud-tasks", args, callerCapabilityHeaders());
+    }, false, false), { authorizeReceipt: (args: McpToolArgs) => claudeCloudTaskWriteAuthority(args, domainDependencies) }),
     role_presets: async (args) => waitForStateLock("mcp.role-presets", () => rolePresetsTool(args, domainDependencies)),
     auto_updates: (args, context) => autoUpdatesTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     voice_tools: (args, context) => voiceTools(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
@@ -8949,7 +9014,7 @@ export function viewerMcpBindings(
       if (result === null) throw new McpToolRefusal("Service tools exist only while you answer a relay message as its owner.", { code: "relay_tools_unavailable", retryable: false });
       return result;
     },
-    relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies),
+    relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
     github_app_connect: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => {
       const capability = callerCapability();
