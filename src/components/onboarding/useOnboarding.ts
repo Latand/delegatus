@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { onOpenKeys } from "@/components/keys/openKeys";
 import type { OnboardingMarker, OnboardingPatch, OnboardingStepId } from "@/lib/onboarding/marker";
@@ -91,6 +91,11 @@ export function landingAllowsGuide(location: Pick<Location, "hash" | "search" | 
   return !location.pathname.startsWith("/pipelines");
 }
 
+/** Why the guide is open: the person asked for it, a first run opened it, or
+    only the inherited-state notice is owed on an install the guide had already
+    settled (completed, left, or marked an existing install). */
+type OpenOrigin = "user" | "first-run" | "notice";
+
 export function useOnboarding(): {
   mode: OnboardingMode | null;
   step: OnboardingStepId | null;
@@ -109,6 +114,9 @@ export function useOnboarding(): {
   const [marker, setMarker] = useState<OnboardingMarker | null>(null);
   const [markerStatus, setMarkerStatus] = useState<OnboardingMarkerStatus>("pending");
   const [legacyState, setLegacyState] = useState(false);
+  const [origin, setOrigin] = useState<OpenOrigin>("user");
+  /* Set by an open request, which can land before the first read answers. */
+  const askedByUser = useRef(false);
   const [checkMinutes, setCheckMinutes] = useState<number | null>(null);
 
   useEffect(() => publishOnboarding({ guideOpen: mode !== null }), [mode]);
@@ -118,6 +126,8 @@ export function useOnboarding(): {
     const onOpen = (event: Event) => {
       const detail = (event as CustomEvent<OpenRequest | OnboardingMode | undefined>).detail;
       const request = typeof detail === "string" ? { mode: detail, step: null } : detail;
+      askedByUser.current = true;
+      setOrigin("user");
       setMode(request?.mode ?? "guide");
       setStep(request?.step ?? null);
       setOpening((value) => value + 1);
@@ -147,7 +157,12 @@ export function useOnboarding(): {
         /* First run: never decided. A marker neither completed nor dismissed is
            a guide the page died in the middle of; both reopen by themselves. */
         const unfinished = body.marker === null || (!body.marker.completedAt && !body.marker.dismissedAt);
-        if (!unfinished || !landingAllowsGuide(window.location)) return;
+        /* The inherited-state notice is owed once whatever the guide's own
+           state: an upgrade marker, a finished guide and a left one all hide
+           the guide, and none of them told the person about the old data. */
+        const noticeOwed = body.legacyState === true && !body.marker?.legacyNoticeAckedAt;
+        if ((!unfinished && !noticeOwed) || !landingAllowsGuide(window.location)) return;
+        if (!askedByUser.current) setOrigin(unfinished ? "first-run" : "notice");
         setMode((current) => current ?? "guide");
         /* Writing the marker now keeps a restart mid-guide from re-deciding
            this install as an upgrade. */
@@ -164,9 +179,17 @@ export function useOnboarding(): {
     setMode(null);
     /* Each step wrote its own state as it was left; completing adds only the
        fact of completion, and whatever the closing step itself decided. */
-    void putOnboarding({ ...(outcome === "completed" ? { completed: true as const } : { dismissed: true as const }), ...(steps ? { steps } : {}) })
+    /* A guide opened only for the notice leaves the settled marker as it was:
+       closing it records the acknowledgement and nothing else. */
+    const acknowledge = legacyState && mode === "guide" ? { legacyNoticeAcknowledged: true as const } : {};
+    const verdict = origin === "notice" && outcome === "dismissed" ? {} : outcome === "completed" ? { completed: true as const } : { dismissed: true as const };
+    void putOnboarding({ ...verdict, ...acknowledge, ...(steps ? { steps } : {}) })
       .then((written) => { if (written) setMarker(written); });
-  }, []);
+  }, [legacyState, mode, origin]);
 
-  return { mode, step, opening, marker, markerStatus, legacyState, checkMinutes, close };
+  /* Opened by hand, the guide always carries the notice, where the clean-start
+     steps live; opened by itself it carries it only until it was closed once. */
+  const noticeShown = legacyState && (origin === "user" || !marker?.legacyNoticeAckedAt);
+
+  return { mode, step, opening, marker, markerStatus, legacyState: noticeShown, checkMinutes, close };
 }
