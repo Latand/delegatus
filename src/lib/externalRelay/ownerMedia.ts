@@ -17,7 +17,7 @@ import { assertOwnerHistoryCooldown, ownerHistoryDestination, ownerHistoryProduc
 import type { PairedRelay } from "./store";
 
 export const OWNER_MEDIA_LIMIT = 2 * 1024 ** 3;
-const RESERVE = 2 * 1024 ** 3, RETAIN_MS = 15 * 60_000;
+const RESERVE = 2 * 1024 ** 3, DEADLINE_MS = 15 * 60_000;
 export const ownerMediaInputSchema = z.object({ action: z.literal("media"), chat: z.string().regex(/^-[1-9][0-9]{0,18}$/),
   messageId: z.number().int().min(1).max(2147483647), directory: z.string().max(4096).optional() }).strict();
 type Input = z.infer<typeof ownerMediaInputSchema>;
@@ -60,9 +60,19 @@ interface Job {
   controller: AbortController; timer: ReturnType<typeof setTimeout>; started: boolean; finishedAt?: number;
   phase: "queued" | "preparing" | "downloading"; receivedBytes: number; totalBytes: number | null;
   release?: (revoke: boolean) => Promise<void>;
+  releaseSpace?: (kept: boolean) => void;
+  uncertainSpace?: boolean;
   evidence?: { dev: number; ino: number; mtimeMs: number; ctimeMs: number };
   result?: OwnerMediaOutcome; promise: Promise<OwnerMediaOutcome>; resolve: (result: OwnerMediaOutcome) => void;
 }
+
+// Shared by every registry using this filesystem. Entries live only while a
+// probe or admitted write owns them. Committed bytes also fence a probe whose
+// free-space snapshot predates another job's completion and reservation release.
+interface DiskBudget { users: number; reserved: number; committed: number }
+const budgetKey = Symbol.for("delegatus.ownerMedia.diskBudgets");
+const budgetOwner = globalThis as typeof globalThis & { [budgetKey]?: Map<number, DiskBudget> };
+const diskBudgets = budgetOwner[budgetKey] ??= new Map<number, DiskBudget>();
 export interface OwnerMediaOptions {
   evidenceRoot?: string; history?: OwnerHistoryPorts; joinMs?: number; deadlineMs?: number;
   headerMs?: number; idleMs?: number;
@@ -118,6 +128,9 @@ export class OwnerMediaRegistry {
       const selected = this.destination();
       const parsed = ownerMediaInputSchema.safeParse(input);
       if (!parsed.success) return refused("invalid_arguments");
+      // A job active when this request arrived can finish during directory IO.
+      // Preserve that join without making completed jobs available to new reads.
+      const joining = [...this.jobs.values()].filter(job => !job.result);
       const directory = await this.directory(parsed.data);
       // Every await may have changed pairing, switch, directory or admission.
       const current = this.destination();
@@ -126,7 +139,7 @@ export class OwnerMediaRegistry {
       this.prune();
       const key = createHash("sha256").update(JSON.stringify([caller, current.relay.id, current.relay.api_base,
         current.relay.credential, current.relay.pairedAt, current.targetId, parsed.data.chat, parsed.data.messageId, directory.real, directory.dev, directory.ino])).digest("hex");
-      let job = this.jobs.get(key);
+      let job = joining.find(candidate => candidate.key === key) ?? this.jobs.get(key);
       if (!job) {
         assertOwnerHistoryCooldown(current.relay, this.history.now());
         if (this.running >= 2 && this.queue.length >= 8) return refused("busy", { retryAfterSeconds: 3 });
@@ -135,7 +148,7 @@ export class OwnerMediaRegistry {
         const promise = new Promise<OwnerMediaOutcome>(r => { resolve = r; });
         job = { key, input: parsed.data, directory, relay: structuredClone(current.relay), targetId: current.targetId,
           controller, promise, resolve, started: false, phase: "queued", receivedBytes: 0, totalBytes: null,
-          timer: setTimeout(() => controller.abort(new MediaFailure(refused("deadline_exceeded"))), this.options.deadlineMs ?? RETAIN_MS) };
+          timer: setTimeout(() => controller.abort(new MediaFailure(refused("deadline_exceeded"))), this.options.deadlineMs ?? DEADLINE_MS) };
         const admitted = job;
         controller.signal.addEventListener("abort", () => {
           if (!admitted.started) {
@@ -156,8 +169,14 @@ export class OwnerMediaRegistry {
           if (!observed.evidence || !sameIdentity(observed.evidence, stat) || stat.mtimeMs !== observed.evidence.mtimeMs
             || stat.ctimeMs !== observed.evidence.ctimeMs || !stat.isFile() || stat.nlink !== 1
             || stat.size !== observed.result.size || (stat.mode & 0o077)) throw new Error("changed_evidence");
-        } catch { this.jobs.delete(observed.key); return refused("incomplete"); }
+        } catch {
+          if (this.jobs.get(observed.key) === observed) this.jobs.delete(observed.key);
+          return refused("incomplete");
+        }
         this.assertCurrent(observed);
+        // Deliver a pending operation's result once. A later fetch must ask H4
+        // for current access and bytes, including after an attachment edit.
+        if (this.jobs.get(observed.key) === observed) this.jobs.delete(observed.key);
       }
       if (observed.result) return observed.result;
       return { available: true, status: "in_progress", phase: observed.phase, receivedBytes: observed.receivedBytes,
@@ -185,14 +204,18 @@ export class OwnerMediaRegistry {
   }
   private prune() {
     const completed = [...this.jobs.values()].filter(job => job.finishedAt !== undefined);
-    for (const job of completed) if (Date.now() - job.finishedAt! >= RETAIN_MS) this.jobs.delete(job.key);
+    for (const job of completed) if (Date.now() - job.finishedAt! >= DEADLINE_MS) this.jobs.delete(job.key);
     const retained = completed.filter(job => this.jobs.has(job.key));
     for (const job of retained.slice(0, Math.max(0, retained.length - 64))) this.jobs.delete(job.key);
   }
   private finish(job: Job, result: OwnerMediaOutcome) {
     clearTimeout(job.timer); job.result = result; job.finishedAt = Date.now();
-    this.jobs.delete(job.key); this.jobs.set(job.key, job);
-    job.resolve(result); this.prune();
+    if (this.jobs.get(job.key) === job) this.jobs.delete(job.key);
+    // A large transfer can finish between polls. Retain its undelivered result
+    // within the original operation's bounded lifetime, then consume it above.
+    if (result.status === "done") this.jobs.set(job.key, job);
+    this.prune();
+    job.resolve(result);
   }
   private drain() {
     while (!this.closed && this.running < 2 && this.queue.length) {
@@ -207,6 +230,7 @@ export class OwnerMediaRegistry {
   private async run(job: Job): Promise<OwnerMediaOutcome> {
     const started = performance.now();
     let status: number | null = null;
+    let kept = false;
     try {
       for (;;) {
         this.assertCurrent(job); assertOwnerHistoryCooldown(job.relay, this.history.now()); job.phase = "preparing";
@@ -219,6 +243,7 @@ export class OwnerMediaRegistry {
         if (result.status === 200) {
           await this.checkDirectory(job.directory); this.assertCurrent(job);
           await job.release?.(false); job.release = undefined;
+          kept = true;
           return result.value;
         }
         status = 202;
@@ -228,7 +253,7 @@ export class OwnerMediaRegistry {
       }
     } catch (error) {
       if (job.release) {
-        try { await job.release(true); } catch (cleanupError) { error = cleanupError; }
+        try { await job.release(true); } catch (cleanupError) { kept = true; error = cleanupError; }
         job.release = undefined;
       }
       if (error instanceof ExternalRelayError && error.status === 429) {
@@ -240,7 +265,31 @@ export class OwnerMediaRegistry {
         elapsedMs: Math.round(performance.now() - started), receivedBytes: job.receivedBytes, errno: errno(error) };
       if (this.options.log) this.options.log(line); else console.warn(`[relay owner-media] ${JSON.stringify(line)}`);
       return result;
+    } finally {
+      job.releaseSpace?.(kept || job.uncertainSpace === true); job.releaseSpace = undefined;
     }
+  }
+
+  private async reserveSpace(job: Job, size: number, check: () => void) {
+    const dev = job.directory.dev;
+    const budget = diskBudgets.get(dev) ?? { users: 0, reserved: 0, committed: 0 };
+    diskBudgets.set(dev, budget); budget.users++;
+    const committedBeforeProbe = budget.committed;
+    const release = () => { if (--budget.users === 0) diskBudgets.delete(dev); };
+    try {
+      const free = this.options.freeBytes ? await this.options.freeBytes(job.directory.real)
+        : await fs.statfs(job.directory.real).then(s => s.bavail * s.bsize);
+      check(); await this.checkDirectory(job.directory); check();
+      const needed = size + RESERVE + budget.reserved + budget.committed - committedBeforeProbe;
+      if (!Number.isFinite(free) || free < needed) fail("insufficient_space", { freeBytes: free, neededBytes: needed });
+      // No await between testing and debiting the shared filesystem budget.
+      budget.reserved += size;
+      job.releaseSpace = kept => {
+        budget.reserved -= size;
+        if (kept) budget.committed += size;
+        release();
+      };
+    } catch (error) { release(); throw error; }
   }
 
   private async write(job: Job, response: IncomingMessage, signal: AbortSignal): Promise<Done> {
@@ -253,14 +302,13 @@ export class OwnerMediaRegistry {
     };
     const length = response.headers["content-length"], rawKind = response.headers["delegatus-media-kind"];
     if (typeof length !== "string" || !/^(0|[1-9][0-9]*)$/.test(length) || !Number.isSafeInteger(Number(length))
-      || response.headers["content-encoding"] !== undefined || typeof rawKind !== "string" || !kinds.includes(rawKind as Kind)) fail("malformed_response");
+      || response.headers["content-encoding"] !== undefined || response.headers["content-range"] !== undefined
+      || typeof rawKind !== "string" || !kinds.includes(rawKind as Kind)) fail("malformed_response");
     const size = Number(length), kind = rawKind as Kind;
     if (size > OWNER_MEDIA_LIMIT) fail("too_large", { limitBytes: OWNER_MEDIA_LIMIT, sizeBytes: size, note: `The per-call limit is ${OWNER_MEDIA_LIMIT} bytes. ${notes.too_large}` });
     const mime = response.headers["content-type"];
     if (typeof mime !== "string" || mime.length > 100 || !/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/.test(mime)) fail("malformed_response");
-    const free = this.options.freeBytes ? await this.options.freeBytes(job.directory.real) : await fs.statfs(job.directory.real).then(s => s.bavail * s.bsize);
-    check(); await this.checkDirectory(job.directory); check();
-    if (!Number.isFinite(free) || free < size + RESERVE) fail("insufficient_space", { freeBytes: free, neededBytes: size + RESERVE });
+    await this.reserveSpace(job, size, check);
     const dir = await fs.open(job.directory.real, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     let file: Awaited<ReturnType<typeof fs.open>> | undefined;
     let part: string | undefined, linked: string | undefined, keep = false;
@@ -344,11 +392,13 @@ export class OwnerMediaRegistry {
       }
       return fail("busy");
     } finally {
-      try { await file?.close(); }
-      finally {
-        try { if (part) await fs.unlink(part); }
-        finally { try { if (linked && !keep) await fs.unlink(linked); } finally { if (!keep) await dir.close(); } }
-      }
+      try {
+        try { await file?.close(); }
+        finally {
+          try { if (part) await fs.unlink(part); }
+          finally { try { if (linked && !keep) await fs.unlink(linked); } finally { if (!keep) await dir.close(); } }
+        }
+      } catch (error) { job.uncertainSpace = true; throw error; }
     }
   }
   private async sweepParts(anchor: string, job: Job) {
