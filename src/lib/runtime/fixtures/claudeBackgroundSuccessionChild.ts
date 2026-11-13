@@ -67,6 +67,10 @@ for await (const line of input) {
       ...(mode ? { user_message_uuid: "fixture-notice" } : {}),
       message: { id: "succession-answer", role: "assistant", model: "fixture", stop_reason: "end_turn", content: [{ type: "text", text: "background result" }] } };
     if (mode) append([answer]);
+    if (mode && fs.existsSync(path.join(root, "hold-delivery"))) {
+      fs.writeFileSync(path.join(root, "native-terminal-written"), "done");
+      while (!fs.existsSync(path.join(root, "allow-delivery"))) await new Promise(resolve => setTimeout(resolve, 5));
+    }
     process.stdout.write(`${JSON.stringify(answer)}\n`);
     process.stdout.write(`${JSON.stringify({ type: "result", session_id: sessionId, subtype: "success", is_error: false })}\n`);
   }, 10);

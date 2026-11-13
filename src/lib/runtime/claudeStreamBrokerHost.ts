@@ -1454,11 +1454,13 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   agentStateMemory() {
     return { activeTurnRef: this.activeTurnId, pendingAttention: [...this.attentions.keys()], eventCursor: this.cursor,
       nativeTurnId: this.activeTurnId ? this.agentStateNativePromptId : null, startedAt: this.agentStateTurnStartedAt,
+      deliveredNativeTurnId: this.agentStateDeliveredNativePromptId,
       attentionUnverified: [...this.attentions.values()].some(request => !this.agentStateLiveAttentions.has(request)) };
   }
 
   private agentStateTurnStartedAt: number | null = null;
   private agentStateNativePromptId: string | null = null;
+  private agentStateDeliveredNativePromptId: string | null | undefined;
   private readonly agentStateLiveAttentions = new WeakSet<object>();
 
   private currentState(): HostState {
@@ -1918,6 +1920,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       : message.subtype === "success" && message.is_error !== true ? "completed" : "error";
     this.emit({ kind: "turn-ended", turnId, status, accountingAt: new Date().toISOString(), ...(resultUuid ? { claudeResultUuid: resultUuid } : {}) });
     if (this.ledgerFailed) return;
+    this.agentStateDeliveredNativePromptId = this.agentStateNativePromptId;
     this.lastResultUuid = resultUuid;
     if (this.turnQueue[0] === turnId) this.turnQueue.shift();
     this.partialTurns.delete(turnId);

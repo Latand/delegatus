@@ -13,8 +13,11 @@ import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIden
 import { ClaudeStreamBrokerHost, FileClaudeDeliveryLedger } from "./claudeStreamBrokerHost";
 import { FileRuntimeEventStore } from "./eventStore";
 import { interruptionObligationDirectory, interruptionObligationStore } from "./interruptionObligations";
+import { RuntimeJournal } from "@/runtime-host/journal";
+import type { RuntimeHostClient } from "./client";
 import { adoptClaudeRegistryHosts, bindClaudeHostPersistence, claudeHostColumns, demoteSkippedStructuredRegistryHosts, stopTerminalStructuredOrphan } from "./registry";
-import { releaseStructuredDeliveryHostsForDemotion, retainUnpublishedStructuredLaunchHost } from "./structuredDeliveryController";
+import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost, releaseStructuredDeliveryHostsForDemotion, retainUnpublishedStructuredLaunchHost } from "./structuredDeliveryController";
+import { adoptStructuredHostsAtStartup, releaseUnpublishedStartupHostsForDemotion, type StructuredStartupDependencies } from "./startup";
 
 async function until(check: () => boolean | Promise<boolean>) {
   const deadline = performance.now() + 7000;
@@ -51,7 +54,7 @@ async function fixture(mode: string) {
   const unbind = await bindClaudeHostPersistence(registry, { engine: "claude", sessionId: FIXTURE_SESSION }, host,
     initial.entries[`claude:${FIXTURE_SESSION}`]!.claimOwner!, 1);
   const forget = retainUnpublishedStructuredLaunchHost({ key: { engine: "claude", sessionId: FIXTURE_SESSION }, host, registry, release: () => host.release() });
-  return { root, file, gate, host, engine, tool, eventStore, registry: () => registry,
+  return { root, file, gate, host, engine, tool, eventStore, forget, registry: () => registry,
     restart: async () => { await unbind(); registry.close(); registry = new AgentRegistry(file("registry.json"), undefined, undefined, { sqliteMode: "sqlite" }); setAgentRegistryForTests(registry); },
     cleanup: async () => {
       forget(); await host.release().catch(() => {}); await unbind();
@@ -65,8 +68,8 @@ async function fixture(mode: string) {
 
 // Retained idle-background reproduction, extended to the two health-read race
 // and a native notice that precedes delivery on the broker's event stream.
-test.each(["idle", "between-health", "result-delayed"])("planned Claude succession retains background custody: %s", async mode => {
-  const f = await fixture(mode === "idle" || mode === "result-delayed" ? "idle" : "gated");
+test.each(["idle", "between-health", "result-delayed", "start-after-native"])("planned Claude succession retains background custody: %s", async mode => {
+  const f = await fixture(mode === "between-health" ? "gated" : "idle");
   const backgroundAnchors: Array<string | null | undefined> = [];
   const stopObserving = f.host.onStateChange(state => {
     if (state.activeTurnRef?.startsWith("claude-background:")) backgroundAnchors.push(state.agentStateNativeTurnId);
@@ -74,6 +77,10 @@ test.each(["idle", "between-health", "result-delayed"])("planned Claude successi
   let demotion: Promise<void> | undefined;
   try {
     if (mode === "result-delayed") f.gate("hold-result");
+    if (mode === "start-after-native") {
+      f.gate("hold-delivery"); f.gate("allow-tool-completion");
+      await until(() => fs.existsSync(f.file("native-terminal-written")));
+    }
     const originalHealth = f.host.health.bind(f.host);
     let reads = 0;
     f.host.health = async () => {
@@ -91,11 +98,12 @@ test.each(["idle", "between-health", "result-delayed"])("planned Claude successi
     await until(() => fs.existsSync(f.file("foreground-ended")));
     expect(settled).toBeFalse();
     expect(processIdentityStatus(f.engine)).toBe("alive");
-    expect(processIdentityStatus(f.tool!)).toBe("alive");
+    if (mode !== "start-after-native") expect(processIdentityStatus(f.tool!)).toBe("alive");
     // Two complete polls ensure that idle custody has actually been exercised.
     await Bun.sleep(550);
     expect(settled).toBeFalse();
     f.gate("allow-tool-completion");
+    f.gate("allow-delivery");
     if (mode === "result-delayed") {
       await until(() => fs.existsSync(f.file("notice-written")));
       await Bun.sleep(300);
@@ -114,7 +122,120 @@ test.each(["idle", "between-health", "result-delayed"])("planned Claude successi
     expect(backgroundAnchors).toContain("fixture-notice");
     expect(backgroundAnchors.every(anchor => anchor === "fixture-notice")).toBeTrue();
     expect(interruptionObligationStore(interruptionObligationDirectory(f.registry().filename)).list()).toHaveLength(0);
-  } finally { stopObserving(); f.gate("allow-foreground-completion"); f.gate("allow-tool-completion"); f.gate("allow-result"); await demotion?.catch(() => {}); await f.cleanup(); }
+  } finally { stopObserving(); f.gate("allow-foreground-completion"); f.gate("allow-tool-completion"); f.gate("allow-result"); f.gate("allow-delivery"); await demotion?.catch(() => {}); await f.cleanup(); }
+}, 15000);
+
+test.each(["demotion", "revalidation", "revalidation-revoked"])("startup-retained Claude background custody: %s", async path => {
+  const f = await fixture("idle");
+  f.forget(); // Startup alone retains this handle; no controller registration.
+  const journal = new RuntimeJournal(f.file("runtime.sqlite"), { structuredHosts: true });
+  const client = {
+    snapshot: async () => journal.snapshot(), readSession: async identity => journal.readSession(identity),
+    append: async event => journal.append(event), command: async command => journal.executeOperation(command),
+    operationStatus: async id => journal.operationResult(id),
+    effectBatch: async (kinds, after) => journal.effectBatch(100, kinds, after),
+    transitionOperation: async (id, status, details) => journal.transitionOperation(id, status, details),
+  } as RuntimeHostClient;
+  let adopted = false;
+  const dependencies: StructuredStartupDependencies = {
+    registry: f.registry(), client, orchestratorSeats: () => [], schedule: () => ({ unref() {} }),
+    refreshTranscriptState: async () => new Set(),
+    pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+    adopt: async () => [],
+    adoptClaude: async () => { adopted = true; return [{ key: { engine: "claude", sessionId: FIXTURE_SESSION }, host: f.host }]; },
+    assertActive: () => { if (adopted) throw new Error("fixture paused after adoption"); },
+  };
+  let release: Promise<void> | undefined;
+  try {
+    await expect(adoptStructuredHostsAtStartup(dependencies)).rejects.toThrow("fixture paused after adoption");
+    expect(adopted).toBeTrue();
+    expect(hasStructuredDeliveryHost({ engine: "claude", sessionId: FIXTURE_SESSION })).toBeFalse();
+    let settled = false;
+    let revoked = false;
+    let failure: unknown;
+    if (path.startsWith("revalidation")) {
+      await f.registry().deliveryWriteOrBusy({ label: "fixture.supersede-retained" }, () => f.registry().agentStateWrite(rows => {
+        rows.conversations![FIXTURE_CONVERSATION]!.supersededBy = {
+          conversationId: "conversation_fixture-successor", at: new Date(FIXTURE_NOW).toISOString(), reason: "stage-retry",
+        };
+      }));
+      const originalRelease = f.host.release.bind(f.host);
+      let released = false;
+      f.host.release = async () => { await originalRelease(); released = true; };
+      release = adoptStructuredHostsAtStartup({ ...dependencies, adoptClaude: async () => [],
+        assertActive: () => {
+          if (revoked) throw new Error("fixture retained cleanup revoked");
+          if (released) throw new Error("fixture retained cleanup finished");
+        },
+      }).then(() => {}, error => { if (!String(error).includes("fixture retained cleanup finished")) throw error; });
+    } else release = releaseUnpublishedStartupHostsForDemotion({ boundary: "fixture-startup-succession" });
+    release = release.then(() => { settled = true; }, error => { failure = error; settled = true; });
+    await Bun.sleep(550);
+    expect(settled).toBeFalse();
+    expect(processIdentityStatus(f.engine)).toBe("alive");
+    expect(processIdentityStatus(f.tool!)).toBe("alive");
+    if (path === "revalidation-revoked") {
+      revoked = true;
+      await until(() => settled);
+      await release;
+      expect(String(failure)).toContain("fixture retained cleanup revoked");
+      expect(processIdentityStatus(f.engine)).toBe("alive");
+      expect(processIdentityStatus(f.tool!)).toBe("alive");
+      return;
+    }
+    f.gate("allow-tool-completion");
+    await release;
+    expect(failure).toBeUndefined();
+    const events = f.eventStore.load(FIXTURE_SESSION);
+    expect(events.filter(event => event.kind === "delta" && event.text === "background result")).toHaveLength(1);
+    expect(events.filter(event => event.kind === "turn-ended" && event.turnId?.startsWith("claude-background:") && event.status === "completed")).toHaveLength(1);
+    expect(fs.readFileSync(f.file("tool-starts"), "utf8")).toBe("start\n");
+    expect(fs.readFileSync(f.file("tool-done"), "utf8")).toBe("done");
+  } finally {
+    f.gate("allow-tool-completion"); await release?.catch(() => {});
+    await bindStructuredDeliveryQueue([], { registry: f.registry(), client: null }); journal.close(); await f.cleanup();
+  }
+}, 30000);
+
+test.each(["missing", "empty"])("a %s native artifact refuses release until the same background job can deliver", async artifact => {
+  const f = await fixture("idle");
+  const originalOpen = fs.promises.open;
+  let release: Promise<void> | undefined;
+  try {
+    fs.renameSync(f.file("native.jsonl"), f.file("saved-native"));
+    if (artifact === "empty") fs.writeFileSync(f.file("native.jsonl"), "");
+    await expect(releaseStructuredDeliveryHostsForDemotion()).rejects.toThrow("failed to release");
+    expect(processIdentityStatus(f.engine)).toBe("alive");
+    expect(processIdentityStatus(f.tool!)).toBe("alive");
+    fs.renameSync(f.file("saved-native"), f.file("native.jsonl"));
+    f.gate("hold-delivery");
+    let appended = false;
+    fs.promises.open = async (...args: Parameters<typeof originalOpen>) => {
+      const handle = await originalOpen(...args);
+      if (String(args[0]) === f.file("native.jsonl")) {
+        const originalStat = handle.stat.bind(handle);
+        handle.stat = (async (...options: Parameters<typeof handle.stat>) => {
+          const snapshot = await originalStat(...options);
+          if (!appended) {
+            appended = true; f.gate("allow-tool-completion");
+            await until(() => fs.existsSync(f.file("native-terminal-written")));
+            f.gate("allow-delivery");
+          }
+          return snapshot;
+        }) as typeof handle.stat;
+      }
+      return handle;
+    };
+    release = releaseStructuredDeliveryHostsForDemotion();
+    await release;
+    expect(appended).toBeTrue();
+    expect(fs.readFileSync(f.file("tool-starts"), "utf8")).toBe("start\n");
+    expect(f.eventStore.load(FIXTURE_SESSION).filter(event => event.kind === "delta" && event.text === "background result")).toHaveLength(1);
+  } finally {
+    fs.promises.open = originalOpen;
+    if (fs.existsSync(f.file("saved-native"))) fs.renameSync(f.file("saved-native"), f.file("native.jsonl"));
+    f.gate("allow-tool-completion"); f.gate("allow-delivery"); await release?.catch(() => {}); await f.cleanup();
+  }
 }, 15000);
 
 test.each(["owner", "artifact"])("replacement during a background read refuses demotion and preserves both processes: %s", async replacement => {
@@ -292,7 +413,7 @@ test("background custody reads zero payload for unchanged versions and folds the
 
 // Retained real-broker correlation reproduction. Restart both the registry and
 // reconciliation service after owner loss; exercise the ledger fallback too.
-test.each([false, true])("tool output preserves the native prompt through restart (legacy anchor: %s)", async legacy => {
+test.each(["checkpoint", "missing", "tool-result"])("tool output preserves the native prompt through restart (stored anchor: %s)", async anchor => {
   const f = await fixture("anchor");
   try {
     await until(async () => (await f.host.health()).eventCursor >= 3);
@@ -302,7 +423,7 @@ test.each([false, true])("tool output preserves the native prompt through restar
     const key = { engine: "claude" as const, sessionId: FIXTURE_SESSION };
     await registry.deliveryWriteOrBusy({ label: "fixture.owner-loss" }, () => registry.agentStateWrite(rows => {
       rows.entries[`claude:${FIXTURE_SESSION}`]!.claimOwner = null;
-      if (legacy) rows.entries[`claude:${FIXTURE_SESSION}`]!.structuredHost!.agentStateNativeTurnId = null;
+      if (anchor !== "checkpoint") rows.entries[`claude:${FIXTURE_SESSION}`]!.structuredHost!.agentStateNativeTurnId = anchor === "missing" ? null : "native-tool-output";
     }));
     f.gate("allow-terminal");
     await until(() => fs.existsSync(f.file("terminal-written")));

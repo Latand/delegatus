@@ -64,6 +64,7 @@ import {
   hasStructuredDeliveryController,
   hasStructuredDeliveryHost,
   handOverHostForDemotion,
+  releaseClaudeHostForDemotion,
   onStructuredDeliveryHostReleased,
   releaseStructuredDeliveryHostsForDemotion,
   releaseStructuredDeliveryHost,
@@ -262,12 +263,15 @@ async function revalidateRetainedStartupHosts(
     // Each cleanup pass removes at least one candidate, bounding rechecks.
     if (retired.length === 0) return current;
     await forEachStartupBatch(retired, async item => {
-      await withHostStopOrigin({ path: "startup-retained-host-release", operationId: sessionKeyId(item.key) }, async () => {
+      const release = () => withHostStopOrigin({ path: "startup-retained-host-release", operationId: sessionKeyId(item.key) }, async () => {
         if (!await releaseStructuredDeliveryHost(item.key, item.host)) {
           await item.host.release();
           await flushStructuredHostPersistence(item.host);
         }
+        forgetReleasedStartupHost(item.host);
       });
+      if (item.key.engine === "claude") await releaseClaudeHostForDemotion(registry, item.key, item.host, {}, release, assertStartupReadActive);
+      else await release();
     });
     remaining = current;
     preparedSnapshot = undefined;
@@ -3760,6 +3764,15 @@ export async function releaseUnpublishedStartupHostsForDemotion(
     .filter((item) => !hasStructuredDeliveryHost(item.key));
   const released = new Set<string>();
   const outcomes = await Promise.allSettled(unpublished.map(async ({ key, host }) => {
+    if (key.engine === "claude") {
+      await releaseClaudeHostForDemotion(registry, key, host, options, async () => {
+        await withHostStopOrigin({ path: "deploy-cut", operationId: options.boundary ?? sessionKeyId(key) }, () => host.release());
+        await flushStructuredHostPersistence(host);
+        forgetReleasedStartupHost(host);
+      });
+      released.add(sessionKeyId(key));
+      return;
+    }
     if (await detachCodexHostForViewerRestart(registry, key, host)) { released.add(sessionKeyId(key)); return; }
     const state = await host.health();
     try {

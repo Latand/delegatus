@@ -36,11 +36,26 @@ Background readers: `verifiedBackgroundWork` is shared by restart-cut/custody; i
 
 Prior evidence: retained manifest and review transcript confirm all three findings; scoped and unscoped memory searches found no reusable alternative repair. Parallel diffs for PRs #3970 and #3982 inspected; their registry/termination decision work remains separate. Reuse the existing broker succession child fixture and retained reproductions.
 
+### Startup inventory correction
+
+The initial enumeration conflated unpublished launch handles with startup's separate retained handles. Final inventory review found these additional release paths after the first committed implementation passed its pre-push hook. They were enumerated before their repair and exercised against the earlier implementation:
+
+| Startup path | Custody before the additional repair | Required handling |
+| --- | --- | --- |
+| `releaseUnpublishedStartupHostsForDemotion` | Calls handoff and broker release directly for adopted/retry handles that have no controller registration. An idle background child can still be killed. | Enter the same Claude custody and release boundary as registered and unpublished launch hosts. |
+| `revalidateRetainedStartupHosts` | A terminal or superseded conversation releases its retained handle directly. Foreground status does not establish background completion. | Preserve custody through completion and delivery before releasing; forget the released handle from every retained startup set. |
+
+Both paths now call `releaseClaudeHostForDemotion`. Its only custody loop remains `settleClaudeWorkBeforeDemotion`; callers retain their existing identity-bound release and stop-origin policies. Startup regressions pause the real adoption pass after retaining a broker, before registration, then exercise both release paths with a separate unfinished tool process.
+
+The delivery-order inventory also includes demotion starting after a native background terminal is written, before its first broker result arrives. A file-only initial check cannot prove delivery in that window. The broker now retains one last-delivered native opening in memory; the common custody loop compares it with the native boundary before authorizing release. Claude alone produces this optional host-memory fact; custody consumes it, the other engines omit it, and registry persistence and reconciliation do not copy it.
+
+That memory fact distinguishes a broker that has never ended a turn from one that ended an unidentified turn. Once a broker has ended a turn, a missing or empty native artifact refuses release. Restoration permits the same pending job to finish without rerunning it. Retained startup cleanup also passes its existing lifetime guard into custody, so cancellation and the startup deadline keep their authority during the wait.
+
 ## Implementation and scope
 
 The common demotion custody loop now covers an already idle host, a foreground transition during health reads, native self-started work, and terminal delivery after a background notification. It preserves the original process, claim epoch and artifact identity after asynchronous reads, under one expiry. A refused stream records the owed interruption and preserves the live tree. Successful Claude releases run immediately against the expected registration after custody, so waiting for a sibling host cannot invalidate the completed check.
 
-Implementation references: `src/lib/runtime/structuredDeliveryController.ts:2999`, `src/lib/runtime/registry.ts:840`, `src/lib/claudeProtocolUser.ts:160`, `src/lib/pipelines/backgroundTasks.ts:439`, and the real broker-owner restart at `src/lib/agentState/restart.test.ts:47`.
+Implementation references: `src/lib/runtime/structuredDeliveryController.ts:3010` and `:3144`, retained startup cleanup at `src/lib/runtime/startup.ts:244` and demotion at `:3759`, `src/lib/runtime/registry.ts:840`, `src/lib/claudeProtocolUser.ts:160`, `src/lib/pipelines/backgroundTasks.ts:439`, and the real broker-owner restart at `src/lib/agentState/restart.test.ts:47`.
 
 All shared orphan recovery callers now require verified background absence for a living Claude root, pinned through each stop callback. This also closes the terminal-status path identified during implementation review. Proven-dead-root descendant cleanup retains its existing authority.
 
@@ -106,7 +121,7 @@ Every test row expands to `bun test --timeout=60000 <path>` through the supplied
 
 The verified run contains **1,493 pass, 7 known baseline failures and 1 skip across 28 files**. The 27 green files contain 1,347 passes. `releaseInterruption.test.ts` retains exactly the seven baseline failure names and assertions (146 pass, 7 fail, 1 skip); the verification driver compares that set with the retained baseline and refuses new failures. The previously green suites remain green.
 
-The final review then added a fourteenth succession case: it holds all 64 background-read slots, starts demotion, releases the readers, and requires the same job's result once. Capacity deferrals now retry under the original custody deadline. That final case is checked by the unmodified post-commit hook; its receipt is included in the delivery report.
+Subsequent review added a fourteenth succession case: it holds all 64 background-read slots, starts demotion, releases the readers, and requires the same job's result once. Capacity deferrals now retry under the original custody deadline. The first unmodified post-commit hook checks that case; later class controls are recorded below.
 
 Other check commands and controls:
 
@@ -122,7 +137,7 @@ Other check commands and controls:
 | `bun node_modules/eslint/bin/eslint.js --no-cache <51 changed TypeScript/JavaScript paths>` | 0 | 0 errors, 9 warnings before removal of one new unused argument |
 | `bun node_modules/eslint/bin/eslint.js --no-cache src/lib/runtime/registry.ts` | 0 | 0 errors, 0 warnings after the annotation cleanup |
 
-The unused argument was removed with a type annotation; its direct lint and the final commit hook are recorded in the delivery receipt. The hook and pinned design are unmodified. `git diff --check` and both `git fetch origin main` observations exited 0. Main remained an ancestor, so no merge was needed. No branch switch or publication command was used.
+The unused argument was removed with a type annotation; its direct lint and the final commit hook are recorded in the delivery receipt. The hook and pinned design are unmodified. `git diff --check` and the `git fetch origin main` observations exited 0. Main remained an ancestor, so no merge was needed. No branch switch or push was performed.
 
 ## Repeated background read measurement
 
@@ -138,6 +153,43 @@ Command: `bun background-cost.probe.ts <private-data-root>`, under the gate, in 
 In both candidate samples the unchanged versions read **zero payload bytes**. The 191-byte terminal append costs 703 bytes including overlap validation, clears the pending fact, and the real broker custody regression waits through delivery of its result before release.
 
 Final privacy, commit and unmodified pre-push receipts are attached to the delivery report after the commit exists. All raw output, wrapper cleanup evidence, exact invocation arguments and statuses remain retained locally.
+
+### Additional class controls
+
+| Command | Exit | Counts / result |
+| --- | ---: | --- |
+| `bash .githooks/pre-push` on the first successor commit | 0 | Types, ESLint, privacy, touched tests and scoped Linux gates pass; comparator: 0 new failures, 25 pre-existing, 3 flaky. Includes the cache-saturation regression. |
+| `bun test --timeout=60000 src/lib/runtime/claudeSuccession.test.ts -t startup-retained` before the startup repair | 1 | 0 pass, 2 fail, 14 filtered, 8 assertions; pending-work assertions fail. Revalidation setup is corrected below. |
+| `bun test --timeout=60000 src/lib/runtime/claudeSuccession.test.ts` after startup repair | 1 | 15 pass, 1 fail, 107 assertions; demotion passes, revalidation fixture had an invalid supersedence shape. |
+| `bun test --timeout=60000 src/lib/runtime/claudeSuccession.test.ts -t 'start-after-native\|startup-retained'` before the delivery-order repair | 1 | 2 pass, 1 fail, 14 filtered, 23 assertions; corrected startup cases pass, native-terminal-ahead-of-delivery control fails. |
+| `bun test --timeout=60000 src/lib/runtime/claudeSuccession.test.ts -t 'startup-retained.*revalidation'` on the first successor commit with corrected fixtures | 1 | 0 pass, 2 fail, 17 filtered, 8 assertions; the original retained cleanup releases pending work. |
+| `bun test --timeout=60000 src/lib/runtime/claudeSuccession.test.ts` with polluted-anchor and cancellation cases | 0 | 19 pass, 0 fail, 143 assertions. |
+| `bun node_modules/typescript/bin/tsc --noEmit --incremental false` after the shared-boundary extraction | 2 | 1 diagnostic: the controller's nullable registry did not fit the helper signature; the helper now accepts the same nullable input. |
+| `bun test --timeout=60000 src/lib/runtime/claudeSuccession.test.ts -t 'native artifact refuses release'` on the first successor commit | 1 | 0 pass, 2 fail, 19 filtered, 2 assertions; missing and empty artifacts incorrectly permit release. |
+| `bun test --timeout=60000 src/lib/runtime/claudeSuccession.test.ts` with artifact refusal and recovery cases | 1 | 20 pass, 1 fail, 151 assertions; a terminal append during recovery triggers a version-change refusal. |
+| `bun test --timeout=60000 src/lib/runtime/claudeSuccession.test.ts` with deterministic append interleavings | 0 | 21 pass, 0 fail, 155 assertions. |
+| `bun node_modules/typescript/bin/tsc --noEmit --incremental false` after the nullable-input fix | 0 | 0 diagnostics. |
+| Touched runtime ESLint, invocation below | 0 | 0 errors, 2 unchanged warnings. |
+
+The additional delivery-order case holds the native process after its terminal append and before its broker output, begins demotion in that window, and then permits delivery. It requires one job start, one delivered result and one background terminal, using the same broker fixture.
+
+Anchor recovery also covers an existing checkpoint polluted with a tool-result UUID, alongside the valid checkpoint and missing-anchor cases. The shared ledger reader recovers the opening prompt; convergence records one divergence and still protects a newer prompt.
+
+The renewed 28-file campaign after the startup and delivery-order repairs exits 0: **1,497 pass, 7 known baseline failures, 1 skip**. Every row in the last table column keeps its status and counts except `claudeSuccession.test.ts`, which now has 17 passes. The baseline file again has exactly 146 pass, 7 fail and 1 skip, with matching retained failure names; the other 27 files contain 1,351 passes. Later focused checks below add polluted-anchor, startup-cancellation and native-artifact refusal cases.
+
+Restoration now forces a terminal append after the reader captures its initial file stat. Custody retries temporary version changes, incomplete appends, page recovery and cache capacity under the same deadline. It retains the last deferred-read cause if that deadline expires; owner or artifact replacement still refuses immediately.
+
+Touched runtime ESLint invocation:
+
+```sh
+bun node_modules/eslint/bin/eslint.js --no-cache \
+  src/lib/runtime/claudeStreamBrokerHost.ts \
+  src/lib/runtime/claudeSuccession.test.ts \
+  src/lib/runtime/engineHost.ts \
+  src/lib/runtime/fixtures/claudeBackgroundSuccessionChild.ts \
+  src/lib/runtime/startup.ts \
+  src/lib/runtime/structuredDeliveryController.ts
+```
 
 
 Full ESLint invocation for the 51-path run:
