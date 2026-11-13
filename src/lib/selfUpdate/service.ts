@@ -169,6 +169,14 @@ const PENDING_RESTART_MS = 60_000;
 const SAVE_DELAY_MS = 1_000;
 const DEPLOYMENT_WATCH_MS = 1_000;
 const UNDESCRIBABLE_HOLD_MS = 30_000;
+const DEPLOY_BUSY_WAIT_MS = 1000;
+const DEPLOY_ADMISSION_WAIT_MS = 10_000;
+
+type CheckoutBusyReceipt = { state: "busy"; deploymentId?: string; revision?: string;
+  holder: { kind: "retention" | "restart" | "update"; role?: LauncherRole; requestId?: string; revision?: string };
+  outcome: "not-executed"; nextAction: "retry-same-key"; waitBudgetMs: number };
+type CheckoutGreenRefusal = { state: "refused"; revision: string; deploymentId?: never; code: "deploy_not_green";
+  outcome: "not-executed"; evidence: "not-admitted"; nextAction: "retry-same-key"; retryable: true; green: GreenVerdict; error: string };
 
 interface PendingManualRestart { role: LauncherRole; requestId: string; at: number; from: string | null; target: string }
 interface Persisted { slice: CheckSlice; update: UpdateState | null; pendingRestart?: PendingManualRestart | null; autoPending?: AutoState["pending"]; autoRollbackPointer?: string | null; autoRollbackCaptured?: boolean }
@@ -1603,13 +1611,14 @@ export class SelfUpdateService {
     return green.state === "green" ? null : refuse(409, "deployment-refused", "The selected revision is not green", green.state);
   }
 
-  private async installRevisionGreen(record: LauncherRecord, target: string): Promise<GreenVerdict> {
+  private async installRevisionGreen(record: LauncherRecord, target: string, fresh = false): Promise<GreenVerdict> {
     const repo = record.checkout ?? await this.deps.prepareCheckRepo();
     if (!record.checkout) {
       try { await ensureCommit(repo, this.deps.remote, this.deps.branch, target); }
       catch (error) { return { state: "unknown", detail: error instanceof Error ? error.message : String(error) }; }
     }
-    return this.greenReader.read(this.deps.remote, this.deps.branch, target, repo);
+    return fresh ? this.greenReader.read(this.deps.remote, this.deps.branch, target, repo, undefined, true, "exact-deploy")
+      : this.greenReader.read(this.deps.remote, this.deps.branch, target, repo);
   }
 
   private startCheckout(record: LauncherRecord, target: Revision, trigger: "operator" | "seat" = "operator", deploymentId?: string): ActionResult {
@@ -1849,8 +1858,46 @@ export class SelfUpdateService {
     return { ok: true };
   }
 
-  async deployRevision(request: ViewerDeploymentRequest, authorize?: () => void): Promise<ViewerDeploymentReceipt | { state: "action-required"; action: Snapshot["action"]; error: string; code: "self-update-action-required" }> {
-    const settled = await checkoutAdmission(this.deps.dir, request, authorize, () => null);
+  /** This observes custody, never a completed apply's display identity. */
+  private checkoutHolder(record: LauncherRecord): CheckoutBusyReceipt | null {
+    const answer = (holder: CheckoutBusyReceipt["holder"]): CheckoutBusyReceipt => ({ state: "busy", holder,
+      outcome: "not-executed", nextAction: "retry-same-key", waitBudgetMs: DEPLOY_BUSY_WAIT_MS });
+    if (this.retaining) return answer({ kind: "retention" });
+    record = readLauncherRecord(this.deps.env[LAUNCHER_RECORD_ENV]?.trim() || launcherControlFile(record.requestFile, "launcher")) ?? record;
+    const pending = this.pendingRestart ?? this.auto.pending;
+    if (pending) return answer({ kind: "restart", role: pending.role, requestId: pending.requestId });
+    if (existsSync(record.requestFile)) {
+      try {
+        const request = JSON.parse(readFileSync(record.requestFile, "utf8"));
+        return answer({ kind: "restart", ...(["web", "runtime-host"].includes(request.role) ? { role: request.role } : {}),
+          ...(typeof request.requestId === "string" ? { requestId: request.requestId } : {}) });
+      } catch { return answer({ kind: "restart" }); }
+    }
+    if (this.runner?.state.state === "running" || managedActive(this.managed)
+      || ["building", "ready", "switching"].includes(this.apply.current?.state ?? "")) return answer({ kind: "update",
+        ...(this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state)
+          ? { requestId: this.apply.current.requestId, revision: this.apply.current.target } : {}) });
+    for (const role of ["web", "runtime-host"] as const) {
+      const entry = role === "web" ? record.web : record.runtimeHost;
+      if (["starting", "stopping"].includes(entry.state) && entry.pid !== null && entry.startIdentity !== null
+        && this.deps.processAlive(entry.pid, entry.startIdentity)) return answer({ kind: "restart", role, ...(entry.requestId ? { requestId: entry.requestId } : {}) });
+    }
+    return null;
+  }
+
+  private async waitForCheckoutHolder(record: LauncherRecord): Promise<CheckoutBusyReceipt | null> {
+    const deadline = performance.now() + DEPLOY_BUSY_WAIT_MS;
+    let holder = this.checkoutHolder(record);
+    while (holder && performance.now() < deadline) {
+      await new Promise<void>(resolve => setTimeout(resolve, Math.min(25, Math.max(1, deadline - performance.now()))));
+      holder = this.checkoutHolder(record);
+    }
+    return holder;
+  }
+
+  async deployRevision(request: ViewerDeploymentRequest, authorize?: () => void): Promise<ViewerDeploymentReceipt | CheckoutBusyReceipt | CheckoutGreenRefusal | { state: "action-required"; action: Snapshot["action"]; error: string; code: "self-update-action-required" }> {
+    let attempt = 0;
+    const settled = await checkoutAdmission(this.deps.dir, request, authorize, generation => { attempt = generation; return null; });
     if (settled) return settled;
     // Serialize target resolution with admission so two exact requests cannot build together.
     const preceding = this.deploying;
@@ -1876,8 +1923,16 @@ export class SelfUpdateService {
       const action = await this.actionFor(decision);
       if (!record || (!record.launcher.relaunch && action?.id !== "restart-service" && !(action?.id === "update-first" && (this.deps.install?.unit ? this.deps.install.unit(record) : launcherService(record.launcher.pid, record.checkout ?? packageRoot(record))))))
         return { state: "action-required" as const, code: "self-update-action-required" as const, action, error: "Restore or upgrade launcher supervision using the install action" };
-      const snapshot = await this.snapshot();
-      const active = rows.find(row => !row.terminal);
+      await this.snapshot();
+      authorize?.();
+      const joinDeployment = (current: ViewerDeploymentStatus) => {
+        const idempotencyKeys = [...new Set([...(current.idempotencyKeys ?? []), request.idempotencyKey])];
+        const idempotencyRequests = [...(current.idempotencyRequests ?? []).filter(row => row.idempotencyKey !== request.idempotencyKey),
+          { idempotencyKey: request.idempotencyKey, requestedRevision: request.ref ?? request.revision! }];
+        saveCheckoutDeployment(this.deps.dir, { ...current, idempotencyKeys, idempotencyRequests });
+        return { state: "accepted" as const, deploymentId: current.deploymentId, revision: current.revision, replayed: false };
+      };
+      const active = checkoutDeployments(this.deps.dir).find(row => !row.terminal);
       if (active) {
         const requested = request.revision?.toLowerCase() ?? "";
         if (/^[0-9a-f]{7,40}$/.test(requested) && active.revision.toLowerCase().startsWith(requested)) {
@@ -1888,17 +1943,15 @@ export class SelfUpdateService {
               // phase and joins rather than writing the pre-lock snapshot.
               const current = checkoutDeployments(this.deps.dir).find(row => row.deploymentId === active.deploymentId);
               if (!current || !current.revision.toLowerCase().startsWith(requested)) throw new Error("The deployment changed during admission");
-              const idempotencyKeys = [...new Set([...(current.idempotencyKeys ?? []), request.idempotencyKey])];
-              const idempotencyRequests = [...(current.idempotencyRequests ?? []).filter(row => row.idempotencyKey !== request.idempotencyKey),
-                { idempotencyKey: request.idempotencyKey, requestedRevision: request.revision! }];
-              saveCheckoutDeployment(this.deps.dir, { ...current, idempotencyKeys, idempotencyRequests });
-              return { state: "accepted" as const, deploymentId: current.deploymentId, revision: current.revision, replayed: false };
-            });
+              return joinDeployment(current);
+            }, { attempt });
           }
         }
         return { state: "busy" as const, deploymentId: active.deploymentId, revision: active.revision };
       }
-      if (snapshot.busy) return { state: "busy" as const, deploymentId: this.apply.current?.deploymentId ?? "checkout-update", revision: snapshot.update.target ?? "" };
+      const holder = await this.waitForCheckoutHolder(record);
+      authorize?.();
+      if (holder) return holder;
       let target = request.revision ?? "";
       if (/^[a-f0-9]{7,39}$/i.test(target)) {
         if (!record.checkout) throw new Error("pass the full SHA or a ref");
@@ -1917,17 +1970,32 @@ export class SelfUpdateService {
         revision = await registryRevision();
         if (revision.sha !== target) throw new Error("The requested revision has no published package; deploy its published revision");
       }
-      const green = await this.installRevisionGreen(record, target);
-      if (green.state !== "green") throw new Error(`The requested revision is not green (${green.state})`);
+      const observedGreen = await this.installRevisionGreen(record, target, true);
+      // Running CI remains pending after the automatic check-wait budget expires.
+      const green: GreenVerdict = observedGreen.state === "checks-timeout" ? { ...observedGreen, state: "pending" } : observedGreen;
+      if (green.state !== "green") return checkoutAdmission(this.deps.dir, request, authorize, () => ({ state: "refused" as const, revision: target, code: "deploy_not_green" as const,
+        outcome: "not-executed" as const, evidence: "not-admitted" as const, nextAction: "retry-same-key" as const, retryable: true as const, green,
+        error: `The requested revision is not green (${green.state})${green.checks?.length ? `: ${green.checks.join(", ")}` : green.detail ? `: ${green.detail}` : ""}. Retry the same key once checks are green.` }), { attempt, refuse: true });
       const health = await this.deps.hostHealth().catch(() => null);
       const current = await this.decide();
       if (current.record?.launcher.pid !== record.launcher.pid || current.record.launcher.startIdentity !== record.launcher.startIdentity) throw new Error("The launcher changed during deployment admission");
       // Target, green checks and launcher observation can all wait. Authority
       // belongs to the attributable request at admission, after those waits.
-      return checkoutAdmission(this.deps.dir, request, authorize, () => {
+      const lateHolder = await this.waitForCheckoutHolder(current.record!);
+      authorize?.();
+      if (lateHolder) return lateHolder;
+      const admit = () => checkoutAdmission(this.deps.dir, request, authorize, () => {
         const admitted = checkoutDeployments(this.deps.dir).find(row => !row.terminal);
-        if (this.reserve(record, () => {}) || admitted)
-          return { state: "busy" as const, deploymentId: admitted?.deploymentId ?? this.apply.current?.deploymentId ?? "checkout-update", revision: admitted?.revision ?? this.apply.current?.target ?? target };
+        if (admitted) return admitted.revision.toLowerCase() === target.toLowerCase() ? joinDeployment(admitted)
+          : { state: "busy" as const, deploymentId: admitted.deploymentId, revision: admitted.revision };
+        const occupied = this.checkoutHolder(current.record!);
+        if (occupied) return occupied;
+        const reservation = this.reserve(record, () => {});
+        if (reservation && !reservation.ok) {
+          if (reservation.code.startsWith("busy-")) return this.checkoutHolder(current.record!) ?? { state: "busy" as const,
+            holder: { kind: "update" as const }, outcome: "not-executed" as const, nextAction: "retry-same-key" as const, waitBudgetMs: DEPLOY_BUSY_WAIT_MS };
+          throw new Error(reservation.error);
+        }
         const serving = current.record!;
         const alreadyServing = serving.launcher.state === "healthy" && !serving.launcher.error && serving.launcher.revision === target
           && serving.web.state === "healthy" && serving.runtimeHost.state === "healthy"
@@ -1950,10 +2018,32 @@ export class SelfUpdateService {
           throw error;
         }
         return { state: "accepted" as const, deploymentId, revision: target, replayed: false };
-      });
+      }, { attempt });
+      for (;;) {
+        const receipt = await admit();
+        if (receipt.state !== "busy" || !("holder" in receipt)) return receipt;
+        // A transient holder can appear while the admission lock waits.
+        // Release that lock before waiting, under this request's outer budget.
+        const holder = await this.waitForCheckoutHolder(current.record!);
+        authorize?.();
+        if (holder) return holder;
+      }
     })();
-    this.deploying = run;
-    try { return await run; } finally { if (this.deploying === run) this.deploying = null; }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<ViewerDeploymentReceipt>((resolve, reject) => {
+      timer = setTimeout(() => {
+        // Fence before answering. A target/health read may finish later, but
+        // its admission can only replay this acceptance or closed key.
+        void checkoutAdmission(this.deps.dir, { ...request, reconcileOnly: true }, authorize,
+          (): never => { throw new Error("Reconciliation cannot admit a deployment"); }, { attempt }).then(resolve, reject);
+      }, DEPLOY_ADMISSION_WAIT_MS);
+    });
+    const bounded = Promise.race([run, timeout]);
+    this.deploying = bounded;
+    try { return await bounded; } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      if (this.deploying === bounded) this.deploying = null;
+    }
   }
 
   private async deploy(target: Revision, clientKey: string, trigger: "operator" | "auto" = "operator"): Promise<DeploymentResult> {

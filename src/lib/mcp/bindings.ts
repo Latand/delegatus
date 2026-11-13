@@ -621,8 +621,13 @@ async function postViewerControl(
     return { conflict: true, binding: result.binding };
   }
   if (deployment && result.code === "deploy_not_admitted" && response.status === 409) {
-    throw new McpToolRefusal("Deployment was not admitted; this request key is permanently closed.", {
-      code: "deploy_not_admitted", outcome: "not-executed", evidence: "not-admitted", retryable: false,
+    throw new McpToolRefusal("Deployment was not admitted; this request key is permanently closed. A new key is permitted.", {
+      code: "deploy_not_admitted", outcome: "not-executed", evidence: "not-admitted", retryable: false, nextAction: "new-request-permitted",
+    });
+  }
+  if (deployment && ["deploy_not_green", "deploy_attempt_superseded"].includes(String(result.code)) && result.outcome === "not-executed" && response.status === 409) {
+    throw new McpUnadmittedRefusal(controlFailureMessage(response.status, result.error), {
+      code: result.code, retryable: true, ...(result.green ? { green: result.green } : {}),
     });
   }
   if (deployment && uncertainPriorPost && !response.ok) {
@@ -878,7 +883,10 @@ function viewerControlForCall(
   };
   return {
     ...(control.get ? { get: (pathname: string) => timed(() => control.get!(pathname, context)) } : {}),
-    post: (pathname, body, headers) => timed(() => control.post(pathname, body, headers, context)),
+    post: (pathname, body, headers, override) => timed(() => control.post(pathname, body, headers,
+      pathname === "/api/runtime/deployments/reconcile" && body.reconcileOnly === true && override
+        ? { ...context, signal: override.signal, deadlineAt: override.deadlineAt }
+        : context)),
     ...(control.dispatch ? { dispatch: (pathname, body, headers) => timed(() => control.dispatch!(pathname, body, headers, context)) } : {}),
   };
 }
@@ -3942,6 +3950,11 @@ async function deployExactSha(
     throw error;
   }
   assertSeat();
+  const reconcile = () => control.post("/api/runtime/deployments/reconcile", { revision, idempotencyKey, reconcileOnly: true }, {}, {
+    // Admission may have consumed the caller's control timeout. Settlement
+    // has its own five-second read/fence budget and never sends admission.
+    ...callContext, signal: undefined, deadlineAt: Date.now() + 5000,
+  });
   let recoveredReceipt: Record<string, unknown> | null = null;
   if (callContext.priorAttemptUncertain && !seatDeploymentForRequestKey(idempotencyKey)
     && dependencies.findDeploymentByIdempotencyKey) {
@@ -3976,7 +3989,7 @@ async function deployExactSha(
       // The backend settles under its admission lock, bypassing target resolution.
       // No read of an eventually visible ledger can prove non-admission.
       assertSeat();
-      reconciledReceipt = await control.post("/api/runtime/deployments/reconcile", { revision, idempotencyKey, reconcileOnly: true });
+      reconciledReceipt = await reconcile();
       assertSeat();
     } catch (error) {
       if (error instanceof McpToolRefusal) throw error;
@@ -4028,13 +4041,28 @@ async function deployExactSha(
       throw error;
     }
     receipt = admittedReceipt();
-    if (!receipt) throw new McpDeploymentPendingError(error instanceof Error ? error.message : "Deployment control wait ended");
+    if (!receipt) {
+      try {
+        assertSeat();
+        receipt = await reconcile();
+        assertSeat();
+      } catch (settlementError) {
+        if (settlementError instanceof McpToolRefusal) {
+          await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
+          throw settlementError;
+        }
+        throw new McpDeploymentPendingError(`deployment reconciliation is unavailable: ${settlementError instanceof Error ? settlementError.message : String(settlementError)}`);
+      }
+    }
   }
   const matchingBusy = receipt.state === "busy" && typeof receipt.revision === "string"
     && /^[0-9a-f]{40}$/i.test(receipt.revision) && receipt.revision.toLowerCase().startsWith(revision.toLowerCase());
   if (matchingBusy) receipt = { ...receipt, state: "accepted" };
   if (receipt.state === "busy" || receipt.state === "refused") {
     await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
+  }
+  if (receipt.state === "refused" && receipt.code === "deploy_not_green" && receipt.outcome === "not-executed") {
+    throw new McpUnadmittedRefusal(String(receipt.error), { code: "deploy_not_green", retryable: true, green: receipt.green });
   }
   /* #2063: the ledger never learns who asked, and the seat ends its turn so
      the promotion can replace its host. Recording the pair is what lets the
@@ -4061,6 +4089,9 @@ async function deployExactSha(
     }
   }
   return {
+    ...receipt,
+    ...(receipt.state === "busy" ? { outcome: "not-executed", nextAction: "retry-same-key",
+      holder: receipt.holder ?? { kind: "deployment", deploymentId: receipt.deploymentId, revision: receipt.revision } } : {}),
     deploymentId: receipt.deploymentId,
     revision: receipt.revision,
     replayed: receipt.state === "accepted" && receipt.replayed === true,

@@ -163,8 +163,7 @@ test("SDK deploy replay durably refuses absent admission and fences the original
   const args = { revision: "a".repeat(40), clientRequestId: "absent-http-deploy" };
   try {
     const initial = session.client.callTool({ name: "deploy_exact_sha", arguments: args, _meta: { "delegatus/deadlineAt": Date.now() + 1500 } });
-    expect(payload(await initial)).toMatchObject({ ok: false, code: "outcome_unknown" });
-    const terminal = payload(await session.client.callTool({ name: "deploy_exact_sha", arguments: args }));
+    const terminal = payload(await initial);
     expect(terminal).toMatchObject({ ok: false, code: "deploy_not_admitted", details: { outcome: "not-executed", evidence: "not-admitted" }, retryable: false });
     release.resolve();
     expect(await lateAnswer.promise).toMatchObject({ code: "deploy_not_admitted" });

@@ -74,7 +74,7 @@ test("a lost busy-join reply replays its durable admission before and after sett
   `;
   try {
     const lost = await service.callTool("deploy_exact_sha", args);
-    expect(lost).toMatchObject({ ok: false, code: "outcome_unknown", retryable: false });
+    expect(lost).toMatchObject({ ok: true, state: "accepted", deploymentId, wakeOnSettle: false });
     attributionWritable = true;
     const replay = await service.callTool("deploy_exact_sha", args);
     expect(replay).toMatchObject({ ok: true, state: "accepted", deploymentId, wakeOnSettle: true });
@@ -130,7 +130,10 @@ test("an attribution failure during uncertain replay stays pending until admissi
     },
   };
   const bindings = viewerMcpBindings(undefined, { post: async (_url, body) => {
-    if (body.reconcileOnly === true) return coordinator.requestViewerDeployment(body as { revision: string; idempotencyKey: string; reconcileOnly: boolean });
+    if (body.reconcileOnly === true) {
+      if (!lookupReady) throw new Error("admission reconciliation temporarily unavailable");
+      return coordinator.requestViewerDeployment(body as { revision: string; idempotencyKey: string; reconcileOnly: boolean });
+    }
     posts++;
     await coordinator.requestViewerDeployment(body as { revision: string; idempotencyKey: string });
     throw new Error("response lost after durable admission");
@@ -197,7 +200,7 @@ test("an uncertain deploy replay recovers a durable admission through the bounde
     const admitted = journal.viewerDeploymentByIdempotencyKey(key);
     expect(recovered).toMatchObject({ ok: true, state: "accepted", deploymentId: admitted?.deploymentId });
     expect(elapsedMs).toBeLessThan(1_500);
-    expect({ admissions, reconciliations, lookups }).toEqual({ admissions: 1, reconciliations: 0, lookups: 1 });
+    expect({ admissions, reconciliations, lookups }).toEqual({ admissions: 1, reconciliations: 1, lookups: 1 });
     expect(adapter.calls.filter(call => call.startsWith("build:"))).toHaveLength(1);
   } finally {
     build.resolve();

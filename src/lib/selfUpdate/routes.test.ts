@@ -725,6 +725,277 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     return h;
   }
 
+  test("exact admission reports target CI pending and retries while the equal-tree PR head remains red", async () => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const head = "a".repeat(40), tree = "b".repeat(40);
+    let green = false;
+    const reader = new GreenReader({ now: () => 1000, treeOf: async () => tree, fetch: (async input => {
+      const url = String(input);
+      const body = url.includes("/pulls") ? [{ merged_at: "2026-01-01", merge_commit_sha: tipSha, base: { ref: "main" }, head: { sha: head } }]
+        : url.includes("/check-runs") ? { check_runs: url.includes(`/commits/${tipSha}/`) ? [
+          { id: 12, name: "runtime-gate", status: green ? "completed" : "in_progress", conclusion: green ? "success" : null, app: { id: 15368 } },
+          { id: 13, name: "build", status: "in_progress", conclusion: null, app: { id: 15368 } },
+        ] : [{ name: "Minimum macOS SQLite", status: "completed", conclusion: "failure", app: { id: 15368 } }] }
+        : url.includes("/statuses") ? [] : url.includes("/branches/") ? { protected: true, protection: { required_status_checks: { checks: [{ context: "runtime-gate", app_id: 15368 }] } } }
+        : { commit: { tree: { sha: tree } } };
+      return Response.json(body);
+    }) as typeof fetch });
+    h.deps.green = { read: (...args: Parameters<GreenReader["read"]>) => {
+      args[0] = "github.com/example/project"; return reader.read(...args);
+    } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const request = { revision: tipSha, idempotencyKey: "target-required-ci" };
+    try {
+      expect(await (await deployPost(post("/runtime/deployments", request))).json()).toMatchObject({ state: "refused", code: "deploy_not_green",
+        outcome: "not-executed", nextAction: "retry-same-key", green: { state: "pending", checks: ["runtime-gate"] } });
+      green = true;
+      expect(await (await deployPost(post("/runtime/deployments", request))).json()).toMatchObject({ state: "accepted" });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+    } finally {
+      if (checkoutDeployments(h.deps.dir).length) {
+        await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
+        await until(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
+      }
+    }
+  });
+
+  test.each(["pending", "red", "checks-timeout"] as const)("slow green refusal is definite and the same key admits after %s", async state => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const entered = Promise.withResolvers<void>(), held = Promise.withResolvers<GreenVerdict>();
+    let verdict: GreenVerdict | null = null;
+    h.deps.green = { read: () => { entered.resolve(); return verdict ? Promise.resolve(verdict) : held.promise; } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const request = { revision: tipSha, idempotencyKey: `slow-not-green-${state}` };
+    const attempt = deployPost(post("/runtime/deployments", request));
+    try {
+      await entered.promise;
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+      held.resolve({ state, detail: "runtime-gate" });
+      const response = await attempt;
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ state: "refused", code: "deploy_not_green", outcome: "not-executed",
+        nextAction: "retry-same-key", green: { state: state === "checks-timeout" ? "pending" : state, detail: "runtime-gate" } });
+      verdict = { state: "green" };
+      expect(await (await deployPost(post("/runtime/deployments", request))).json()).toMatchObject({ state: "accepted" });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+    } finally {
+      held.resolve({ state, detail: "runtime-gate" }); await attempt;
+      if (checkoutDeployments(h.deps.dir).length) {
+        await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
+        await until(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
+      }
+    }
+  });
+
+  test("retention busy names its holder and never the last finished deployment", async () => {
+    const h = harness({ relaunch: true });
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    mkdirSync(h.deps.dir, { recursive: true });
+    saveCheckoutDeployment(h.deps.dir, { deploymentId: "checkout-finished", idempotencyKey: "finished-key", requestedRevision: firstSha, revision: firstSha,
+      phase: "succeeded", terminal: true, candidate: null, previous: null, health: [], error: null,
+      mcpRuntime: { candidate: null, previous: null, publications: [], health: [] }, owner: { pid: process.pid, startIdentity: readStartIdentity(process.pid) },
+      createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", revisionNumber: 1 });
+    writeFileSync(join(h.deps.dir, "apply.json"), JSON.stringify({ requestId: "finished-apply", target: firstSha,
+      deploymentId: "checkout-finished", state: "done", trigger: "seat", rollbackPointer: null,
+      launcherPid: process.pid, launcherIdentity: readStartIdentity(process.pid), rolledBack: false, startedAt: "2026-01-01T00:00:00Z" }));
+    h.deps.prune = () => { entered.resolve(); return release.promise; };
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const retention = h.service.retentionTick();
+    try {
+      await entered.promise;
+      const receipt = await h.service.deployRevision({ revision: tipSha, idempotencyKey: "retention-busy" });
+      expect(receipt).toMatchObject({ state: "busy", holder: { kind: "retention" }, waitBudgetMs: 1000, outcome: "not-executed" });
+      expect(receipt).not.toHaveProperty("deploymentId");
+      expect(checkoutDeployments(h.deps.dir)).toMatchObject([{ deploymentId: "checkout-finished", terminal: true }]);
+    } finally { release.resolve(); await retention; }
+  });
+
+  test("a not-green refusal fences a concurrent older green read and the same key retries", async () => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<GreenVerdict>();
+    h.deps.green = { read: () => { entered.resolve(); return release.promise; } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    let green = false;
+    const other = new SelfUpdateService({ ...h.deps, green: { read: async () => green ? { state: "green" } : { state: "pending", detail: "runtime-gate" } } as unknown as GreenReader });
+    const request = { revision: tipSha, idempotencyKey: "concurrent-green-refusal" };
+    const older = h.service.deployRevision(request);
+    const observed = older.then(value => ({ value, error: null }), error => ({ value: null, error }));
+    try {
+      await entered.promise;
+      expect(await other.deployRevision(request)).toMatchObject({ state: "refused", code: "deploy_not_green" });
+      release.resolve({ state: "green" });
+      expect((await observed).error).toMatchObject({ code: "deploy_attempt_superseded" });
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+      green = true;
+      expect(await other.deployRevision(request)).toMatchObject({ state: "accepted" });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+    } finally {
+      release.resolve({ state: "green" }); await observed;
+      setSelfUpdateServiceForTests(other);
+      if (checkoutDeployments(h.deps.dir).length) {
+        await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
+        await until(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
+      }
+    }
+  });
+
+  test("a retention pass that settles after the busy snapshot permits admission", async () => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    h.deps.prune = () => { entered.resolve(); return release.promise; };
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const retention = h.service.retentionTick();
+    await entered.promise;
+    const snapshot = h.service.snapshot.bind(h.service);
+    h.service.snapshot = async () => { const result = await snapshot(); release.resolve(); await retention; return result; };
+    try {
+      expect(await h.service.deployRevision({ revision: tipSha, idempotencyKey: "retention-settled" })).toMatchObject({ state: "accepted" });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+    } finally {
+      release.resolve(); await retention;
+      if (checkoutDeployments(h.deps.dir).length) {
+        await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
+        await until(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
+      }
+    }
+  });
+
+  test("a same-revision deployment admitted during a slow green read durably joins the original key", async () => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<GreenVerdict>();
+    h.deps.green = { read: () => { entered.resolve(); return release.promise; } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const other = new SelfUpdateService({ ...h.deps, green: { read: async () => ({ state: "green" }) } as unknown as GreenReader });
+    const request = { revision: tipSha, idempotencyKey: "delayed-join-key" };
+    const attempt = h.service.deployRevision(request);
+    try {
+      await entered.promise;
+      const admitted = await other.deployRevision({ revision: tipSha, idempotencyKey: "earlier-join-holder" });
+      expect(admitted).toMatchObject({ state: "accepted" });
+      release.resolve({ state: "green" });
+      expect(await attempt).toMatchObject({ state: "accepted", deploymentId: "deploymentId" in admitted ? admitted.deploymentId : undefined });
+      expect(checkoutDeployments(h.deps.dir)).toMatchObject([{ idempotencyKeys: [request.idempotencyKey] }]);
+      expect(await h.service.deployRevision({ ...request, reconcileOnly: true })).toMatchObject({ state: "accepted", replayed: true });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+    } finally {
+      release.resolve({ state: "green" }); await attempt;
+      setSelfUpdateServiceForTests(other);
+      if (checkoutDeployments(h.deps.dir).length) {
+        await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
+        await until(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
+      }
+    }
+  });
+
+  test.each(["web", "runtime-host"])("a pending %s restart names its request without a deployment id", async role => {
+    const h = harness({ relaunch: true });
+    setSelfUpdateServiceForTests(h.service);
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    writeFileSync(record.requestFile, JSON.stringify({ requestId: "pending-restart", role, requestedAt: "2026-01-01T00:00:00Z" }));
+    try {
+      expect(await h.service.deployRevision({ revision: tipSha, idempotencyKey: `restart-holder-${role}` }))
+        .toMatchObject({ state: "busy", holder: { kind: "restart", role, requestId: "pending-restart" }, waitBudgetMs: 1000 });
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+    } finally { rmSync(record.requestFile, { force: true }); }
+  });
+
+  test("a transient restart appearing inside admission is waited for before returning busy", async () => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const record = readLauncherRecord(h.recordFile)!;
+    const entered = Promise.withResolvers<void>();
+    const request = { revision: tipSha, idempotencyKey: "late-transient-restart" };
+    const original = deploymentAdmission.checkoutAdmission;
+    let calls = 0;
+    const hook = spyOn(deploymentAdmission, "checkoutAdmission").mockImplementation((directory, input, authorize, write, options) => {
+      const intercept = input.idempotencyKey === request.idempotencyKey && ++calls === 2;
+      return original(directory, input, authorize, generation => {
+        if (intercept) {
+          writeFileSync(record.requestFile, JSON.stringify({ requestId: "transient-restart-holder", role: "web", requestedAt: "2026-01-01T00:00:00Z" }));
+          entered.resolve();
+        }
+        return write(generation);
+      }, options);
+    });
+    const attempt = h.service.deployRevision(request);
+    try {
+      await entered.promise;
+      rmSync(record.requestFile);
+      expect(await attempt).toMatchObject({ state: "accepted" });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+    } finally {
+      hook.mockRestore();
+      if (existsSync(record.requestFile) && JSON.parse(readFileSync(record.requestFile, "utf8")).requestId === "transient-restart-holder") rmSync(record.requestFile);
+      await attempt;
+      if (checkoutDeployments(h.deps.dir).length) {
+        await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
+        await until(() => existsSync(record.requestFile));
+      }
+    }
+  });
+
+  test("a delayed host-health read settles closed and cannot admit after reconciliation", async () => {
+    const h = harness({ relaunch: true });
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<Awaited<ReturnType<ServiceDeps["hostHealth"]>>>();
+    const health = h.deps.hostHealth;
+    let slow = false;
+    h.deps.green = { read: async () => { slow = true; return { state: "green" }; } } as unknown as GreenReader;
+    h.deps.hostHealth = () => { if (!slow) return health(); entered.resolve(); return release.promise; };
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const request = { revision: tipSha, idempotencyKey: "slow-host-health" };
+    const attempt = deployPost(post("/runtime/deployments", request));
+    try {
+      await entered.promise;
+      const response = await deployPost(post("/runtime/deployments", { ...request, reconcileOnly: true }));
+      expect(await response.json()).toMatchObject({ code: "deploy_not_admitted", outcome: "not-executed", nextAction: "new-request-permitted" });
+      release.resolve(await health());
+      expect(await (await attempt).json()).toMatchObject({ code: "deploy_not_admitted", outcome: "not-executed" });
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+    } finally { release.resolve(null); await attempt; }
+  });
+
+  test.each(["green", "host-health"])("admission expires during a held %s read and releases the next request", async heldRead => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    const health = h.deps.hostHealth;
+    let hold = true, afterGreen = false;
+    h.deps.green = { read: async () => {
+      if (hold && heldRead === "green") { entered.resolve(); await release.promise; }
+      afterGreen = true; return { state: "green" };
+    } } as unknown as GreenReader;
+    h.deps.hostHealth = async () => {
+      if (hold && heldRead === "host-health" && afterGreen) { entered.resolve(); await release.promise; }
+      return health();
+    };
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const request = { revision: tipSha, idempotencyKey: `expired-${heldRead}` };
+    const attempt = deployPost(post("/runtime/deployments", request));
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await entered.promise;
+      const response = await Promise.race([attempt, new Promise<never>((_, reject) => {
+        guard = setTimeout(() => reject(new Error("admission did not settle within its bound")), 15_000);
+      })]);
+      expect(await response.json()).toMatchObject({ code: "deploy_not_admitted", outcome: "not-executed", nextAction: "new-request-permitted" });
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+      hold = false;
+      expect(await (await deployPost(post("/runtime/deployments", { ...request, idempotencyKey: `after-${heldRead}` }))).json())
+        .toMatchObject({ state: "accepted" });
+      release.resolve();
+      expect(await (await deployPost(post("/runtime/deployments", request))).json()).toMatchObject({ code: "deploy_not_admitted" });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+    } finally {
+      if (guard !== undefined) clearTimeout(guard);
+      hold = false; release.resolve(); await attempt;
+      if (checkoutDeployments(h.deps.dir).length) {
+        await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
+        await until(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
+      }
+    }
+  });
+
   for (const retry of [false, true]) test(`concurrent operator ${retry ? "Retry" : "Update"} reserves one apply after the final quiet observation`, async () => {
     const h = harness({ holdBuild: true, failBuildOnce: retry });
     setSelfUpdateServiceForTests(h.service);
@@ -1417,13 +1688,13 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     const joinKey = `same-sha-join-${proof.replace(" ", "-")}`;
     const originalAdmission = deploymentAdmission.checkoutAdmission;
     let admissionCalls = 0;
-    const hook = spyOn(deploymentAdmission, "checkoutAdmission").mockImplementation((directory, request, authorize, admit) => {
-      if (request.idempotencyKey !== joinKey || ++admissionCalls !== 2) return originalAdmission(directory, request, authorize, admit);
+    const hook = spyOn(deploymentAdmission, "checkoutAdmission").mockImplementation((directory, request, authorize, admit, options) => {
+      if (request.idempotencyKey !== joinKey || ++admissionCalls !== 2) return originalAdmission(directory, request, authorize, admit, options);
       return originalAdmission(directory, request, () => {
         authorize?.();
         const current = checkoutDeployments(directory).find(row => row.deploymentId === deploymentId)!;
         saveCheckoutDeployment(directory, { ...current, phase: "post-promotion-health", servingProgress: "waiting for readiness", revisionNumber: 2 });
-      }, admit);
+      }, admit, options);
     });
     try {
       expect(await h.service.deployRevision({ revision: tipSha, idempotencyKey: joinKey }))
@@ -1914,7 +2185,7 @@ for (const operation of ["update", "retry", "deploy", "rebuild"] as const) test.
     if (operation === "deploy") {
       const attempt = service.deployRevision({ revision: tipSha, idempotencyKey: "fresh-package-deploy" });
       if (verdict === "green") expect(await attempt).toMatchObject({ state: "accepted", revision: tipSha });
-      else await expect(attempt).rejects.toThrow(`not green (${expected})`);
+      else expect(await attempt).toMatchObject({ state: "refused", code: "deploy_not_green", green: { state: expected } });
     } else {
       const result = operation !== "retry" ? await service.startUpdate("fresh-package-update") : await service.retry("fresh-package-retry");
       expect(result).toMatchObject(verdict === "green" ? { ok: true } : { ok: false, code: "deployment-refused", detail: expected });
