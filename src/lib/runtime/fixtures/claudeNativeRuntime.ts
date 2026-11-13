@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type { ClaudeDeliveryState } from "../claudeStreamBrokerHost";
+import type { ClaudeDeliveryState, ClaudeStreamBrokerHost } from "../claudeStreamBrokerHost";
 import type { HostState, RuntimeEvent } from "../engineHost";
 import type { RuntimeJournal } from "@/runtime-host/journal";
 
@@ -20,6 +20,7 @@ export interface NativeRuntimeSnapshot {
   pid: number;
   health: HostState;
   nativeQueued: boolean;
+  memory: ReturnType<ClaudeStreamBrokerHost["agentStateMemory"]>;
   wire: Record<string, unknown>[];
   rows: ClaudeDeliveryState[];
   events: RuntimeEvent[];
@@ -55,6 +56,7 @@ export async function startNativeClaudeRuntime(options: NativeRuntimeOptions) {
     return { ...info, pid: child.pid!,
       async call<T = NativeRuntimeSnapshot>(action: string, body?: unknown): Promise<T> {
         const response = await fetch(info.url + action, { method: body === undefined ? "GET" : "POST",
+          signal: AbortSignal.timeout(15_000),
           ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) });
         if (!response.ok) throw new Error(`native runtime fixture ${action}: ${response.status}`);
         return response.json() as Promise<T>;
@@ -93,7 +95,7 @@ async function serve(options: NativeRuntimeOptions) {
   const { claudeTranscriptPath } = await import("@/lib/agent/transcript");
   const { FileRuntimeEventStore } = await import("../eventStore");
   const { claudeHostColumns } = await import("../registry");
-  const { bindStructuredDeliveryQueue, releaseStructuredDeliveryHost } = await import("../structuredDeliveryController");
+  const { bindStructuredDeliveryQueue, releaseStructuredDeliveryHost, releaseClaudeHostForDemotion } = await import("../structuredDeliveryController");
   const { kickStructuredDeliveryQueue } = await import("../structuredDeliverySignal");
   const { handleRuntimeCommand } = await import("../http");
   const { enqueueStructuredMessage } = await import("../structuredMessageDelivery");
@@ -151,11 +153,19 @@ async function serve(options: NativeRuntimeOptions) {
     } as import("../client").RuntimeHostClient;
     await bindStructuredDeliveryQueue([{ key, host }], { registry, client, watchdogIntervalMs: 0, settlementSweepMs: 0 });
     let stop!: () => void;
-    const stopped = new Promise<void>(resolve => { stop = resolve; });
+    let stopping = false;
+    const stopped = new Promise<void>(resolve => { stop = () => { stopping = true; resolve(); }; });
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
       const url = new URL(request.url);
       if (url.pathname === "/stop") { stop(); return Response.json({ stopped: true }); }
+      if (url.pathname === "/demote") {
+        await releaseClaudeHostForDemotion(registry, key, host, { boundary: "fixture-demotion" }, async () => {
+          if (!await releaseStructuredDeliveryHost(key, host)) throw new Error("fixture demotion registration changed");
+        }, () => { if (stopping) throw new Error("fixture demotion cancelled"); });
+        return Response.json({ released: true });
+      }
       if (url.pathname === "/snapshot") return Response.json({ pid: process.pid, health: await host.health(), nativeQueued: host.supportsQueuedSend,
+        memory: host.agentStateMemory(),
         wire, rows: ledger.load(sessionId), events: store.load(sessionId), journal: journal.snapshot() });
       if (url.pathname === "/image") {
         const body = await request.json() as { base64: string };

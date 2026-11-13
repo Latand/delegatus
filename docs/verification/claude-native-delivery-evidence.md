@@ -106,25 +106,44 @@ previous attempted inputs remain unconfirmed and cannot be replayed. An
 unresolved intent or a protocol inconsistency keeps the stronger fence.
 The change makes no performance claim.
 
+The ledger retains original payloads only in its bounded active-input window;
+terminal and no-write records remove them. Combined replay validation uses
+that window rather than rereading retained session history. The focused
+regression counts full-history reads around the actual merged proof append.
+
 ## Parallel integration and remaining acceptance
 
 This branch merges #3934's ordered-delivery verification and extends its native
 fixture and receipt path. It introduces no replacement queue or receipt store.
 
-#3975 was re-read at `5cfc6042187b8e58ba9c248a18fa9b06fffc145e`. It requires joint integration at these method boundaries:
+The first final-commit hook passed, then refreshed `origin/main` to include
+#3975's changes in `bbbd18ae3a`. The forge subsequently reports that PR closed
+without a merge timestamp. This branch merges the actual main changes and
+integrates their shared broker methods:
 
-- Initialize its turn timestamps and prompt anchor in both the legacy send path
-  and `sendNative`; retain the stable batch owner.
-- Set its `agentStateDeliveredNativePromptId` from the verified native boundary.
-  Derive its successor anchor in `finishResultTurn` from the next unresolved
-  batch. A later replay cannot replace the incumbent anchor.
-- Its `reconcileAgentStateTerminal` must require owned native boundary evidence
-  when native inputs are outstanding. A singular synthetic result supplies no
-  such evidence. Delivery settlement still requires its independent input proof.
-- Preserve `settleClaudeWorkBeforeDemotion` and `releaseClaudeHostForDemotion`,
-  including their foreground/background custody, terminal-event wait, artifact
-  identity and writer/turn CAS. The controller
-  changes here are confined to typed receipt confirmation and queue wiring.
+- Both send paths initialize turn timestamps; native inputs use their assigned
+  input UUID as the provisional prompt anchor. A queued replay cannot replace
+  the incumbent anchor.
+- `finishResultTurn` derives the successor anchor from that input's durable
+  identity. Native terminal proofs record the last canonical member as
+  `agentStateDeliveredNativePromptId`, including error and singular boundaries.
+  Recovery restores the delivered anchor from persisted proof.
+- `reconcileAgentStateTerminal` refuses a synthetic completion while native
+  input custody or its boundary is outstanding. The actual owned result must
+  establish terminal membership before receipt settlement or local turn closure.
+- `settleClaudeWorkBeforeDemotion` and `releaseClaudeHostForDemotion` retain
+  their foreground/background custody, terminal-event wait, artifact identity
+  and writer/turn CAS. The installed-CLI completed restart case now drives
+  their real planned-demotion path after three native inputs; the uncertain
+  case keeps the unplanned process-replacement coverage.
+- The installed CLI inserts metadata image-caption rows into parent ancestry.
+  The native transcript reader preserves that link without granting a prompt
+  opening. Owned, foreign and absent parents are covered through warm and cold
+  caches; the installed-CLI image batch passes planned demotion before restart.
+
+The joint integration is checked by the broker, native queue, central
+agent-state service, Claude succession, release-interruption and startup test
+files. These are explicit per-file checks in isolated owned runners.
 
 Native admission now uses a broker-local `QueueEntry.attemptTurnId`. The queue
 produces it from observed health, preserves it through inbox composition and

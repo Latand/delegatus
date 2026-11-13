@@ -1374,7 +1374,7 @@ test.skipIf(!binary).each(["completed", "unconfirmed"] as const)("native Viewer 
     const body = await request.json() as { tools?: unknown; messages: unknown[] };
     if (new URL(request.url).pathname !== "/v1/messages" || body.tools === undefined) return new Response("{}", { status: 404 });
     requests.push(body);
-    if (cut === "unconfirmed") await held;
+    await held;
     const message = { id: `msg_controller_${requests.length}`, type: "message", role: "assistant", model: "fixture-model", content: [],
       stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
     return new Response([
@@ -1400,12 +1400,12 @@ test.skipIf(!binary).each(["completed", "unconfirmed"] as const)("native Viewer 
     image = images[0]!;
     await runtime.call("/command", command("restart-decision"));
     let before = await runtime.call("/snapshot");
-    for (let i = 0; i < 1200 && (!before.wire.some(frame => frame.type === "user") || cut === "completed" && !before.rows[0]?.nativeResult); i++) {
+    for (let i = 0; i < 1200 && !before.wire.some(frame => frame.type === "user"); i++) {
       await Bun.sleep(25); before = await runtime.call("/snapshot");
     }
     expect(before.health.protocolVersion).toBe(installedVersion);
     expect(before.wire.filter(frame => frame.type === "user")).toHaveLength(1);
-    if (cut === "unconfirmed") {
+    {
       await runtime.call("/command", command("restart-first"));
       await runtime.call("/command", command("restart-second"));
       for (let i = 0; i < 1200 && before.wire.filter(frame => frame.type === "user").length < 3; i++) {
@@ -1413,11 +1413,20 @@ test.skipIf(!binary).each(["completed", "unconfirmed"] as const)("native Viewer 
       }
       expect(before.wire.filter(frame => frame.type === "user")).toHaveLength(3);
       expect(before.rows[1]!.entry.content.images).toEqual([image]);
-      for (let i = 0; i < 1200 && before.nativeQueued; i++) { await Bun.sleep(25); before = await runtime.call("/snapshot"); }
-      expect(before.nativeQueued).toBe(false);
+      if (cut === "unconfirmed") {
+        for (let i = 0; i < 1200 && before.nativeQueued; i++) { await Bun.sleep(25); before = await runtime.call("/snapshot"); }
+        expect(before.nativeQueued).toBe(false);
+      } else {
+        release();
+        for (let i = 0; i < 1200 && (!before.rows.every(row => row.nativeResult) || before.health.status !== "idle"
+          || before.memory.deliveredNativeTurnId !== before.rows.at(-1)!.native!.inputUuid); i++) { await Bun.sleep(25); before = await runtime.call("/snapshot"); }
+        expect(before.rows.every(row => row.nativeResult)).toBe(true);
+        expect(before.memory.deliveredNativeTurnId).toBe(before.rows.at(-1)!.native!.inputUuid);
+      }
     }
     const { captureProcessIdentity, processIdentityStatus } = await import("@/lib/processIdentity");
     const nativeProcess = captureProcessIdentity(before.health.pid!);
+    if (cut === "completed") expect(await runtime.call<{ released: boolean }>("/demote", {})).toEqual({ released: true });
     await runtime.stop(); runtime = undefined;
     expect(processIdentityStatus(nativeProcess)).toBe("dead");
     release();
@@ -1438,7 +1447,7 @@ test.skipIf(!binary).each(["completed", "unconfirmed"] as const)("native Viewer 
       await runtime.call("/command", command("restart-later"));
       let after = await runtime.call("/snapshot");
       for (let i = 0; i < 1200 && !after.rows.find(row => row.entry.id === "restart-later")?.nativeResult; i++) { await Bun.sleep(25); after = await runtime.call("/snapshot"); }
-      expect(after.rows.map(row => row.entry.id)).toEqual(["restart-decision", "restart-later"]);
+      expect(after.rows.map(row => row.entry.id)).toEqual(["restart-decision", "restart-first", "restart-second", "restart-later"]);
       expect(after.wire.filter(frame => frame.type === "user")).toHaveLength(1);
     } else {
       expect(restored.nativeQueued).toBe(false);

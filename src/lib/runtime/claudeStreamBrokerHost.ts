@@ -17,7 +17,7 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 import { statePath } from "@/lib/configDir";
-import { claudeQueuedPromptUser, isClaudeTurnWindowMeta } from "@/lib/claudeProtocolUser";
+import { claudeQueuedPromptUser, isClaudeTurnWindowMeta, isClaudePrompt } from "@/lib/claudeProtocolUser";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import type { ProcessIdentity } from "@/lib/agent/registry";
@@ -213,7 +213,9 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
     this.nativeHistory.set(sessionId, history);
     this.nativeSessions.set(sessionId, states.filter(state => state.native
       && !state.nativeResult && !state.nativeTerminal && !state.nativeTurnBoundary && !state.nativeNoWrite)
-      .map(state => ({ ...state, entry: settledDeliveryEntry(state.entry) })));
+      // The bounded active window owns the original payload until a boundary.
+      // Combined replay validation must not reread retained session history.
+      .map(state => ({ ...state })));
   }
 
   async recordNativeIntent(sessionId: string, entry: QueueEntry, disposition: ClaudeDeliveryState["disposition"], input: ClaudeNativeInput): Promise<void> {
@@ -240,7 +242,7 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
         existing.native = parsed; existing.nativeNoWrite = false; existing.disposition = disposition;
         states.splice(states.indexOf(existing), 1); states.push(existing);
       }
-      else states.push({ entry: settledDeliveryEntry(normalized), disposition, queuedAt: row.queuedAt, delivered: false, native: parsed });
+      else states.push({ entry: normalized, disposition, queuedAt: row.queuedAt, delivered: false, native: parsed });
       this.rememberNativeStates(sessionId, states);
     });
   }
@@ -284,7 +286,7 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
     return this.serializeNative(async () => {
       const evidence = nativeConsumed(value);
       if (!evidence || evidence.sessionId !== sessionId) return "refused";
-      const states = evidence.mergedInputUuids ? await this.loadDurable(sessionId) : await this.nativeStates(sessionId, [evidence.entryId]);
+      const states = await this.nativeStates(sessionId, [evidence.entryId, ...(evidence.mergedInputUuids ?? [])]);
       const state = states.find(row => row.entry.id === evidence.entryId);
       if (!state?.native || !sameNativeWriter(state.native, evidence) || state.native.inputUuid !== evidence.inputUuid
         || state.entry.contentDigest !== evidence.contentDigest || state.nativeNoWrite
@@ -1441,6 +1443,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     markTiming("claude-write-end");
     this.turnQueue.push(entry.id);
     if (!this.activeTurnId) {
+      this.agentStateTurnStartedAt = Date.now();
       this.activeTurnId = entry.id;
       this.armDeliveryConfirmation(entry.id);
       this.emit({ kind: "turn-started", turnId: entry.id, accountingAt: new Date().toISOString() });
@@ -1622,7 +1625,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       this.turnQueue.push(entry.id);
       this.nativeOutstanding.set(entry.id, state);
       const startsTurn = !this.activeTurnId;
-      if (startsTurn) this.activeTurnId = entry.id;
+      if (startsTurn) {
+        this.activeTurnId = entry.id;
+        this.agentStateTurnStartedAt = Date.now();
+        this.agentStateNativePromptId = input.inputUuid;
+      }
       mark("claude-write-start");
       try {
         this.write({ type: "user", session_id: this.identity.sessionId, uuid: input.inputUuid,
@@ -1740,7 +1747,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         state.entry = settledDeliveryEntry(state.entry);
       }
       this.emit({ kind: "turn-ended", turnId: evidence.turnId, status: evidence.status, claudeResultUuid: evidence.resultUuid });
-      if (!this.ledgerFailed) { this.refreshNativeUncertainty(); this.finishResultTurn(evidence.turnId); }
+      if (!this.ledgerFailed) {
+        this.agentStateDeliveredNativePromptId = evidence.inputUuids.at(-1)!;
+        this.refreshNativeUncertainty(); this.finishResultTurn(evidence.turnId);
+      }
       return;
     }
     const proof = nativeBoundary(message, this.nativeWriter!, turnId, this.deliveries);
@@ -1766,6 +1776,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.emit({ kind: "turn-ended", turnId: proof.turnId, status: proof.status,
       claudeResultUuid: proof.resultUuid, accountingAt: new Date().toISOString() });
     if (this.ledgerFailed) return;
+    this.agentStateDeliveredNativePromptId = proof.inputUuids.at(-1)!;
     this.lastResultUuid = proof.resultUuid;
     for (const state of members) {
       const index = this.turnQueue.indexOf(state.entry.id);
@@ -1805,6 +1816,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     state.entry = settledDeliveryEntry(state.entry);
     this.emit({ kind: "turn-ended", turnId: proof.turnId, status: proof.status, claudeResultUuid: proof.resultUuid });
     if (this.ledgerFailed) return;
+    this.agentStateDeliveredNativePromptId = proof.inputUuid;
     this.lastResultUuid = proof.resultUuid;
     const index = this.turnQueue.indexOf(proof.turnId);
     if (index >= 0) this.turnQueue.splice(index, 1);
@@ -2065,6 +2077,27 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     try { return this.writerFence?.() === false; } catch { return true; }
   }
 
+  reconcileAgentStateTerminal(turnRef: string, nativeId: string | null, _at: number, outcome: "completed" | "interrupted" | "error" = "completed"): boolean {
+    if (this.activeTurnId !== turnRef || this.writerFence?.() === false || this.activeUserUuid && nativeId !== this.activeUserUuid && !this.joinedUserUuids.has(nativeId ?? "")) return false;
+    // The transcript service cannot manufacture the owned terminal membership
+    // that settles native input receipts. The broker retains the real result.
+    if (this.nativeOutstanding.size || this.nativeBoundaryPending || this.deliveries.some(state => state.entry.id === turnRef && (state.native || state.nativeUnverified))) return false;
+    this.acceptResult({ type: "result", subtype: outcome === "completed" ? "success" : outcome, ...(this.activeUserUuid ? { user_message_uuid: this.activeUserUuid } : {}) });
+    return this.activeTurnId !== turnRef;
+  }
+
+  agentStateMemory() {
+    return { activeTurnRef: this.activeTurnId, pendingAttention: [...this.attentions.keys()], eventCursor: this.cursor,
+      nativeTurnId: this.activeTurnId ? this.agentStateNativePromptId : null, startedAt: this.agentStateTurnStartedAt,
+      deliveredNativeTurnId: this.agentStateDeliveredNativePromptId,
+      attentionUnverified: [...this.attentions.values()].some(request => !this.agentStateLiveAttentions.has(request)) };
+  }
+
+  private agentStateTurnStartedAt: number | null = null;
+  private agentStateNativePromptId: string | null = null;
+  private agentStateDeliveredNativePromptId: string | null | undefined;
+  private readonly agentStateLiveAttentions = new WeakSet<object>();
+
   private currentState(): HostState {
     const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
     const status: HostState["status"] = this.dead ? "dead"
@@ -2084,6 +2117,9 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       eventCursor: this.cursor,
       protocolVersion: this.protocolVersion,
       activeTurnRef: this.activeTurnId,
+      agentStateTurnStartedAt: this.agentStateTurnStartedAt,
+      agentStateNativeTurnId: this.activeTurnId ? this.agentStateNativePromptId : null,
+      agentStateAttention: { pending: [...this.attentions.keys()], unverified: this.agentStateMemory().attentionUnverified },
       pendingAttention: [...this.attentions.keys()],
       pendingPermissions: this.pendingPermissions(),
       pendingQuestions: this.pendingQuestions(),
@@ -2180,9 +2216,13 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     const restoredProofs = new Set<string>();
     for (const state of this.deliveries) {
       const proof = state.nativeResult ?? state.nativeTerminal ?? state.nativeTurnBoundary;
+      if (proof?.resultUuid === this.lastResultUuid) {
+        this.agentStateDeliveredNativePromptId = "inputUuids" in proof ? proof.inputUuids.at(-1)! : proof.inputUuid;
+      }
       if (!proof || projected.has(proof.resultUuid) || restoredProofs.has(proof.resultUuid)) continue;
       restoredProofs.add(proof.resultUuid);
       this.emit({ kind: "turn-ended", turnId: proof.turnId, status: proof.status, claudeResultUuid: proof.resultUuid });
+      this.agentStateDeliveredNativePromptId = "inputUuids" in proof ? proof.inputUuids.at(-1)! : proof.inputUuid;
       if (restoredTurn === proof.turnId) restoredTurn = null;
     }
     if (restoredTurn) this.emit({ kind: "turn-ended", turnId: restoredTurn, status: "error" });
@@ -2420,6 +2460,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         }
       }
       const attachedAt = echoOperationId ? new Date().toISOString() : undefined;
+      if (this.activeTurnId && isClaudePrompt(message)
+        && (!delivery || delivery.entry.id === this.activeTurnId)) {
+        this.agentStateNativePromptId ??= stringField(message, "uuid");
+      }
       this.emit({ kind: "item", turnId: this.activeTurnId, item: sanitizedUserReplay(message, content), phase: "completed", accountingAt: receivedAt,
         ...(echoOperationId ? { deliveryEcho: { operationId: echoOperationId, at: receivedAt, attachedAt,
           ...(delivery?.entry.parts ? { memberOperationIds: delivery.entry.parts.map(part => part.operationId) } : {}) } } : {}) });
@@ -2468,6 +2512,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       const requestId = stringField(message, "request_id");
       if (!requestId) return this.fail(new Error("Claude control request had no request id"));
       const request = record(message.request) ?? {};
+      this.agentStateLiveAttentions.add(request);
       this.attentions.set(requestId, request);
       this.attentionSince.set(requestId, new Date().toISOString());
       this.emit({ kind: "attention", id: requestId, method: stringField(request, "subtype") ?? "control_request", attention: request });
@@ -2547,13 +2592,16 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     }
     const token = messageId ? `message:${messageId}` : `sequence:${this.cursor + 1}`;
     const digest = crypto.createHash("sha256").update(JSON.stringify([this.identity.sessionId, token])).digest("hex");
+    this.agentStateTurnStartedAt = Date.now();
     const follower = this.deliveries.find(state => state.entry.id === this.turnQueue[0]);
     // Actual assistant work after an incomplete boundary can start the next
     // written input's turn. Its receipt still requires complete membership.
     this.activeTurnId = follower?.native && this.nativeWriter && sameNativeWriter(follower.native, this.nativeWriter)
       && !follower.nativeNoWrite && !follower.nativeUnverified && !follower.nativeResult && !follower.nativeTerminal && !follower.nativeTurnBoundary
       && (!userUuid || userUuid === follower.native.inputUuid) ? follower.entry.id : `${CLAUDE_BACKGROUND_TURN_PREFIX}${digest}`;
+
     this.activeUserUuid = userUuid;
+    this.agentStateNativePromptId = userUuid ?? follower?.native?.inputUuid ?? null;
     this.emit({ kind: "turn-started", turnId: this.activeTurnId, accountingAt: new Date().toISOString() });
   }
 
@@ -2592,6 +2640,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       : message.subtype === "success" && message.is_error !== true ? "completed" : "error";
     this.emit({ kind: "turn-ended", turnId, status, accountingAt: new Date().toISOString(), ...(resultUuid ? { claudeResultUuid: resultUuid } : {}) });
     if (this.ledgerFailed) return;
+    this.agentStateDeliveredNativePromptId = this.agentStateNativePromptId;
     this.lastResultUuid = resultUuid;
     if (this.turnQueue[0] === turnId) this.turnQueue.shift();
     this.finishResultTurn(turnId);
@@ -2620,6 +2669,9 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     }
     this.attentions.clear();
     this.activeTurnId = promote ? this.turnQueue[0] ?? null : null;
+    this.agentStateTurnStartedAt = this.activeTurnId ? Date.now() : null;
+    const successor = this.deliveries.find(delivery => delivery.entry.id === this.activeTurnId);
+    this.agentStateNativePromptId = this.activeTurnId ? successor?.native?.inputUuid ?? successor?.engineMessageId ?? null : null;
     if (this.activeTurnId) this.armDeliveryConfirmation(this.activeTurnId);
     if (this.activeTurnId) this.emit({ kind: "turn-started", turnId: this.activeTurnId });
     else this.emit({ kind: "session-status", status: "idle" });

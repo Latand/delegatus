@@ -8558,6 +8558,22 @@ test("heap counters observe events and subscriber queues without consuming them"
   } finally { stop(); await stream.return?.(); await host.release(); }
 });
 
+test("central native completion releases an unanswered old tool and admits the next ordinary message", async () => {
+  const server = new FakeAppServer("central-completion");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  try {
+    await host.send({ id: "first-central-message", text: "first" });
+    server.notify("item/started", { threadId: host.identity.threadId, turnId: "turn-1",
+      item: { id: "historical-tool", type: "commandExecution", status: "inProgress" } });
+    expect(host.reconcileAgentStateTerminal("older-turn", "older-turn", 1000)).toBe(false);
+    expect(host.reconcileAgentStateTerminal("turn-1", "turn-1", 1000)).toBe(true);
+    expect(host.agentStateMemory().activeTurnRef).toBeNull();
+    expect(await host.send({ id: "second-central-message", text: "second" })).toMatchObject({ outcome: "turn-started", turnId: "turn-2" });
+    expect(host.reconcileAgentStateTerminal("turn-1", "turn-1", 1000)).toBe(false);
+    expect(host.agentStateMemory().activeTurnRef).toBe("turn-2");
+  } finally { await host.release(); }
+});
+
 test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
   const server = new FakeAppServer("idle-window-thread");
   const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
