@@ -1,6 +1,7 @@
 // One driver for the native launcher. Runs only on disposable macOS CI machines.
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, existsSync, readdirSync, readFileSync, statSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, existsSync, readdirSync, readFileSync, statSync, rmSync, symlinkSync, cpSync } from "node:fs";
+import { createServer } from "node:net";
 import { userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
@@ -23,6 +24,15 @@ const runnerHome = process.env.HOME || userInfo().homedir;
 let root = "";
 let home = "";
 let app = "";
+let port;
+const origin = () => `http://127.0.0.1:${port}`;
+async function disposablePort() {
+  const reservation = createServer();
+  await new Promise((resolve, reject) => { reservation.once("error", reject); reservation.listen(0, "127.0.0.1", resolve); });
+  const assigned = reservation.address().port;
+  await new Promise((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
+  return assigned;
+}
 const homes = [];
 let mount;
 const owned = new Map();
@@ -51,9 +61,9 @@ function run(command, args, options = {}) {
 // Runs a windowless command against one case's data without blocking the
 // event loop, so a command that waits on a process this driver started sees
 // it reaped.
-async function inHome(caseHome, command, args = []) {
+async function inHome(caseHome, command, args = [], options = {}) {
   let status = 0;
-  try { return await runCommand(command, args, { env: smokeEnvironment({ user, home: caseHome }) }); }
+  try { return await runCommand(command, args, { ...options, env: caseEnvironment(caseHome) }); }
   catch (error) { status = error.status ?? 1; throw new Error(redact(commandFailure(command, error))); }
   finally { commands.push({ command: redact([command, ...args].join(" ")), exit: status }); }
 }
@@ -67,6 +77,14 @@ function freshHome(label) {
 function resetSessionData() {
   try { run("/usr/bin/defaults", ["delete", bundle]); } catch { /* no preferences yet */ }
   for (const path of appSessionData(runnerHome, bundle)) rmSync(path, { recursive: true, force: true });
+}
+function caseEnvironment(caseHome, settings = {}) {
+  const temporary = join(caseHome, "Library/Caches/tmp");
+  mkdirSync(temporary, { recursive: true });
+  return smokeEnvironment({ user, home: caseHome }, {
+    ...settings, TMPDIR: temporary, XDG_CONFIG_HOME: join(caseHome, ".config"),
+    XDG_CACHE_HOME: join(caseHome, ".cache"), LLV_STATE_DIR: join(caseHome, ".config/delegatus/state"),
+  });
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(label, check, timeout = 60_000, diagnostics = () => "") {
@@ -100,8 +118,8 @@ function own(child, label) {
 function launch(caseHome, args, label) {
   resetSessionData();
   const frames = join(report, "frames", label);
-  const child = spawn(app, ["--evidence-dir", frames, "-ApplePersistenceIgnoreState", "YES", ...args],
-    { env: smokeEnvironment({ user, home: caseHome }), stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(app, ["--evidence-dir", frames, "-ApplePersistenceIgnoreState", "YES", "--evidence-port", String(port), ...args],
+    { env: caseEnvironment(caseHome), stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "", stderr = "", spawnError = null;
   const append = (current, chunk) => (current + redact(chunk.toString("utf8"))).slice(-12_000);
   child.stdout.on("data", chunk => { stdout = append(stdout, chunk); });
@@ -119,15 +137,15 @@ async function end(entry) {
   owned.delete(entry.pid);
 }
 function startViewer(bun, cli, settings = {}) {
-  const child = spawn(bun, [cli, "--no-open", "--port", "8898"], { env: smokeEnvironment({ user, home }, settings), stdio: "ignore" });
+  const child = spawn(bun, [cli, "--no-open", "--port", String(port)], { env: caseEnvironment(home, settings), stdio: "ignore" });
   child.on("error", () => {});
-  commands.push({ command: redact([bun, cli, "--no-open", "--port", "8898"].join(" ")), exit: "started" });
+  commands.push({ command: redact([bun, cli, "--no-open", "--port", String(port)].join(" ")), exit: "started" });
   const pid = own(child, "replacement Delegatus");
   replacements.add(pid);
   return pid;
 }
 async function http(method = "GET", authorized = false) {
-  try { return await fetch("http://127.0.0.1:8898" + (method === "HEAD" ? "/api/onboarding/diagnostics" : "/"), { method, headers: authorized ? { Authorization: `Bearer ${accessKey}` } : {}, signal: AbortSignal.timeout(2000) }); } catch { return null; }
+  try { return await fetch(origin() + (method === "HEAD" ? "/api/onboarding/diagnostics" : "/"), { method, headers: authorized ? { Authorization: `Bearer ${accessKey}` } : {}, signal: AbortSignal.timeout(2000) }); } catch { return null; }
 }
 const runtimeOf = caseHome => join(caseHome, "Library/Application Support/Delegatus/Runtime");
 function launcherPID() {
@@ -141,7 +159,7 @@ function launcherPID() {
 // chain above it. Diagnostics only; a failed read is recorded, never thrown.
 function listenerSnapshot() {
   const read = (command, args) => { try { return run(command, args, { timeout: 20_000 }); } catch (error) { return error.message; } };
-  const listing = read("/usr/sbin/lsof", ["-nP", "-a", "-iTCP:8898", "-sTCP:LISTEN", "-Fpcu"]);
+  const listing = read("/usr/sbin/lsof", ["-nP", "-a", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpcu"]);
   const rows = read("/bin/ps", ["-ww", "-U", String(userInfo().uid), "-o", "pid=,ppid=,command="]).split("\n")
     .filter(line => root && comparablePath(line).includes(comparablePath(root))).join("\n");
   return redact(`lsof listener:\n${listing || "(empty)"}\nprocesses under the run root:\n${rows || "(none)"}`);
@@ -178,6 +196,202 @@ function seedInstalledRelease(runtime) {
   assert(existsSync(join(release, "dist/standalone/server.js")), "updated release contains its Viewer");
   return { release, pointerFile };
 }
+// Keep every regression verdict even when an earlier case is red. The first
+// checkpoint deliberately runs these against the unchanged readiness rules.
+async function regression(name, action) {
+  try { await check(name, action); }
+  catch (error) { exit = 1; console.error(`Regression failed: ${name}\n${redact(error.message)}`); }
+}
+async function download(url) {
+  const response = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(120_000) });
+  assert(response.ok, `fixture download HTTP ${response.status}`);
+  return Buffer.from(await response.arrayBuffer());
+}
+async function legacyFixture() {
+  const directory = join(root, "legacy"); mkdirSync(directory);
+  const base = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.3";
+  const archive = process.arch === "arm64" ? "bun-darwin-aarch64.zip" : "bun-darwin-x64-baseline.zip";
+  const sums = (await download(`${base}/SHASUMS256.txt`)).toString();
+  const bytes = await download(`${base}/${archive}`);
+  const checksum = sums.split(/\r?\n/).map(line => /^([a-f0-9]{64})\s+\*?(.+)$/.exec(line)).find(row => row?.[2] === archive)?.[1];
+  assert.equal(createHash("sha256").update(bytes).digest("hex"), checksum, "old-runtime archive checksum");
+  writeFileSync(join(directory, "bun.zip"), bytes);
+  run("/usr/bin/ditto", ["-xk", join(directory, "bun.zip"), directory]);
+  const bun = join(directory, archive.slice(0, -4), "bun");
+  const metadata = JSON.parse((await download("https://registry.npmjs.org/delegatus-cli/1.11.0")).toString());
+  assert.equal(metadata.name, "delegatus-cli"); assert.equal(metadata.version, "1.11.0");
+  assert.equal(metadata.gitHead, "56f63d33d84f812e267f1498d9eddf735ab9b4c4", "released tag identity");
+  assert.equal(metadata.dist.tarball, "https://registry.npmjs.org/delegatus-cli/-/delegatus-cli-1.11.0.tgz");
+  const packed = await download(metadata.dist.tarball);
+  assert.equal(`sha512-${createHash("sha512").update(packed).digest("base64")}`, metadata.dist.integrity, "released package integrity");
+  writeFileSync(join(directory, "legacy.tgz"), packed);
+  run("/usr/bin/tar", ["-xzf", join(directory, "legacy.tgz"), "-C", directory]);
+  const packageRoot = join(directory, "package");
+  const installed = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+  assert.equal(installed.name, "delegatus-cli"); assert.equal(installed.version, "1.11.0");
+  await inHome(directory, bun, ["install", "--production", "--ignore-scripts"], { cwd: packageRoot });
+  return { bun, packageRoot };
+}
+function seedInstallation(fixture, caseHome, community = false) {
+  const base = community ? join(caseHome, "Library/Application Support/Delegatus Launcher/Runtime") : join(caseHome, ".bun");
+  const bun = join(base, community ? "bun/bin/bun" : "bin/bun");
+  const packageRoot = join(base, community ? "packages/node_modules/delegatus-cli" : "install/global/node_modules/delegatus-cli");
+  mkdirSync(join(bun, ".."), { recursive: true }); cpSync(fixture.bun, bun);
+  if (fixture.packageRoot) cpSync(fixture.packageRoot, packageRoot, { recursive: true });
+  else for (const file of ["bin/cli.mjs", "dist/standalone/server.js", "dist/runtime-host.mjs"]) {
+    const destination = join(packageRoot, file);
+    mkdirSync(join(destination, ".."), { recursive: true }); writeFileSync(destination, "");
+  }
+  return { bun, cli: join(packageRoot, "bin/cli.mjs") };
+}
+async function stopLegacy(caseHome, installation, child) {
+  await inHome(caseHome, installation.bun, [installation.cli, "stop", "--all"]);
+  if (child) await end(child);
+  await until("legacy port released", async () => !(await http()));
+}
+async function notFoundCases() {
+  for (const mode of ["not-found", "key", "unauthorized", "open"]) {
+    await regression(`foreign-${mode}-no-key`, async () => {
+      const caseHome = freshHome(`foreign-${mode}`);
+      const authFile = join(caseHome, "auth-received");
+      mkdirSync(join(caseHome, ".config/delegatus"), { recursive: true });
+      writeFileSync(join(caseHome, ".config/delegatus/token"), accessKey, { mode: 0o600 });
+      const child = spawn("/usr/bin/python3", ["macos/Tests/ProbeServer.py"], {
+        env: caseEnvironment(caseHome, { PROBE_MODE: mode, PROBE_AUTH_FILE: authFile }), stdio: ["ignore", "pipe", "pipe"],
+      });
+      const pid = own(child, "foreign ephemeral probe");
+      let output = ""; child.stdout.on("data", bytes => { output += bytes.toString(); });
+      const savedPort = port;
+      try {
+        await until("foreign ephemeral address", () => /^\d+\s*$/.test(output)); port = Number(output.trim());
+        for (const language of ["en", "uk"]) {
+          const instance = launch(caseHome, ["-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", language === "uk" ? "Dark" : "Light"], `foreign-${mode}-${language}`);
+          try {
+            await until("foreign listener refusal", () => processLog(instance).includes("STATE port-busy"), 60_000, () => processLog(instance));
+            assert(!processLog(instance).includes("WEB language="), "no foreign page opens");
+            assert(!existsSync(authFile), "even a copied diagnostics marker receives no key");
+            assert(!existsSync(runtimeOf(caseHome)), "refusal installs no replacement");
+            assert(alive(pid), "foreign listener survives"); await sleep(900);
+          } finally { await end(instance); }
+        }
+      } finally { port = savedPort; await end(child); }
+    });
+  }
+  let fixture;
+  await check("released-1.11.0-fixture", async () => { fixture = await legacyFixture(); });
+  for (const mode of ["already-running", "app-started", "protected", "missing-key", "community-running", "community-stopped"]) {
+    await regression(`released-1.11.0-${mode}`, async () => {
+      const caseHome = freshHome(`legacy-${mode}`);
+      const installation = seedInstallation(fixture, caseHome, mode.startsWith("community"));
+      const protectedServer = mode === "protected" || mode === "missing-key";
+      if (protectedServer) {
+        mkdirSync(join(caseHome, ".config/delegatus"), { recursive: true });
+        writeFileSync(join(caseHome, ".config/delegatus/phone-access"), "enabled\n");
+        if (mode === "protected") writeFileSync(join(caseHome, ".config/delegatus/token"), accessKey, { mode: 0o600 });
+      }
+      let child;
+      let instance;
+      try {
+        if (!["app-started", "community-stopped"].includes(mode)) {
+          child = spawn(installation.bun, [installation.cli, "--no-open", "--port", String(port)], {
+            env: caseEnvironment(caseHome, protectedServer ? { LLV_TOKEN: accessKey } : {}), stdio: ["ignore", "pipe", "pipe"],
+          });
+          own(child, "released legacy launcher");
+          let log = ""; child.stdout.on("data", bytes => { log = (log + redact(bytes)).slice(-16000); });
+          child.stderr.on("data", bytes => { log = (log + redact(bytes)).slice(-16000); });
+          await until("released legacy root", async () => (await http("GET", protectedServer))?.status === 200, 180_000, () => log);
+          assert.equal((await http("HEAD", protectedServer))?.status, 404, "real released package lacks diagnostics");
+          if (mode === "missing-key") rmSync(join(caseHome, ".config/delegatus/token"), { force: true });
+          checks.push({ name: `reproduced-1.11.0-${mode}-diagnostics-404`, exit: 0 });
+        }
+        for (const language of ["en", "uk"]) {
+          instance = launch(caseHome, ["-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", language === "uk" ? "Dark" : "Light"], `legacy-${mode}-${language}`);
+          const diagnostics = () => `${instance.diagnostics()}\n${processLog(instance)}\n${listenerSnapshot()}`;
+          if (mode === "community-stopped") {
+            await until("stopped community installation offers install", () => processLog(instance).includes("STATE needs-install"), 60_000, diagnostics);
+          } else if (mode === "missing-key") {
+            await until("plain legacy access message", () => {
+              if (processLog(instance).includes("STATE port-busy")) throw new Error(diagnostics());
+              return processLog(instance).includes("STATE access-unavailable");
+            }, 60_000, diagnostics);
+            assert(!processLog(instance).includes("WEB language="));
+            const message = processLog(instance).split("STATE access-unavailable").at(-1);
+            assert(message.includes("1.11.0") && (language === "en" ? /access key/i : /ключ/i).test(message), "localized access guidance names the old Delegatus");
+          } else {
+            await until("legacy opens in app", () => {
+              if (/STATE (port-busy|failed)/.test(processLog(instance))) throw new Error(diagnostics());
+              return /STATE (ready|reused)/.test(processLog(instance)) && /WEB language=/.test(processLog(instance));
+            },
+              APP_START_BOUND_MS + 30_000, diagnostics);
+            await sleep(32_000);
+            assert(!processLog(instance).includes("STATE stopped"), "monitor retains the verified legacy page");
+            assert.equal((await http("GET", protectedServer))?.status, 200);
+          }
+          await sleep(900); await end(instance); instance = undefined;
+        }
+      } finally {
+        if (instance) await end(instance);
+        if (mode !== "community-stopped") await stopLegacy(caseHome, installation, child);
+      }
+    });
+  }
+  for (const mode of ["transient", "persistent", "exit"]) for (const language of ["en", "uk"]) {
+    await regression(`owned-boot-404-${mode}-${language}`, async () => {
+      const caseHome = freshHome(`boot-${mode}-${language}`);
+      const installation = seedInstallation({ bun: fixture.bun }, caseHome);
+      const packageRoot = join(installation.cli, "../..");
+      // This deliberately uses the real launcher/server process relationship;
+      // only their HTTP sequence is synthetic. It proves no real boot 404.
+      writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", version: "2.0.0" }));
+      const handshake = join(caseHome, "owned-boot.json"), ready = join(caseHome, "ready"), exitFile = join(caseHome, "exit");
+      writeFileSync(installation.cli, `import { spawn } from 'node:child_process';
+const child = spawn(process.execPath, [${JSON.stringify(join(packageRoot, "dist/standalone/server.js"))}, process.argv.at(-1)], {stdio:'inherit'});
+process.on('SIGTERM', () => child.kill('SIGTERM'));
+child.on('exit', () => process.exit(0));\n`);
+      writeFileSync(join(packageRoot, "dist/standalone/server.js"), `import {existsSync,writeFileSync} from 'node:fs';
+writeFileSync(${JSON.stringify(handshake)}, JSON.stringify({launcher:process.ppid,server:process.pid}));
+const server=Bun.serve({hostname:'127.0.0.1',port:Number(process.argv.at(-1)),fetch(request){
+ const diagnostics=new URL(request.url).pathname==='/api/onboarding/diagnostics';
+ const status=diagnostics?(existsSync(${JSON.stringify(ready)})?204:404):200;
+ return new Response(request.method==='HEAD'?null:'<html lang="en"><title>Delegatus fixture</title></html>',{status,headers:status===204?{'x-delegatus-diagnostics':'1'}:{}});
+}});
+process.on('SIGTERM',()=>{server.stop(true);process.exit(0)});
+${mode === "exit" ? `setInterval(()=>{if(existsSync(${JSON.stringify(exitFile)}))process.exit(1)},100);` : ""}\n`);
+      let pids;
+      const instance = launch(caseHome, ["-AppleLanguages", `(${language})`, "-AppleInterfaceStyle", language === "uk" ? "Dark" : "Light"], `owned-boot-${mode}-${language}`);
+      try {
+        await until("owned boot handshake", () => existsSync(handshake), 60_000, () => processLog(instance));
+        pids = JSON.parse(readFileSync(handshake, "utf8"));
+        assert(pids.launcher > 1 && pids.server > 1);
+        await until("app observes boot 404", () => processLog(instance).includes("HEAD 404"), 30_000, () => processLog(instance));
+        if (mode === "transient") {
+          writeFileSync(ready, "ready");
+          await until("owned transient 404 recovers", () => processLog(instance).includes("STATE ready") && /WEB language=/.test(processLog(instance)), 60_000, () => processLog(instance));
+        } else {
+          if (mode === "exit") writeFileSync(exitFile, "exit");
+          const began = Date.now();
+          await until("owned boot bounded plain failure", () => processLog(instance).includes("STATE failed"), APP_START_BOUND_MS + 30_000, () => processLog(instance));
+          const elapsed = Date.now() - began;
+          if (mode === "persistent") {
+            assert(elapsed >= APP_START_BOUND_MS - 10_000 && elapsed <= APP_START_BOUND_MS + 30_000, "persistent 404 uses the existing readiness bound");
+            assert(alive(pids.launcher) && alive(pids.server), "owned children survive the pending readiness wait");
+          } else assert(elapsed < 45_000, "exited CLI keeps its shorter exit grace");
+          assert(!processLog(instance).includes("WEB language="), "root 200 alone cannot accept a modern persistent 404");
+          const message = processLog(instance).split("STATE failed").at(-1).split("CAPTURED")[0];
+          assert(!/HEAD \d|PROBE |LISTENER |START timed out/.test(message), "failed screen contains one plain message without raw log tail");
+        }
+        await sleep(900);
+      } finally {
+        await end(instance);
+        if (pids) {
+          // Both IDs came from this fixture's handshake, never from a port scan.
+          if (alive(pids.launcher)) process.kill(pids.launcher, "SIGTERM");
+          await until("owned boot launcher and server exit", () => !alive(pids.launcher) && !alive(pids.server), 30_000);
+        }
+      }
+    });
+  }
+}
 let exit = 0;
 try {
   await check("intel-translation-probe", () => {
@@ -196,7 +410,7 @@ try {
     assert.equal(intelIsTranslated({ status, stdout, stderr }), false,
       "Intel smoke must run natively; an arm64 process under Rosetta is refused");
   });
-  await check("runner-session-fresh-data", () => {
+  await check("runner-session-fresh-data", async () => {
     // The hosted runner has one graphical session, the runner user's. The app
     // runs there; a fresh data root per run and a fresh home per case replace
     // a second operating-system account, which has no window-server access.
@@ -205,6 +419,7 @@ try {
     session.bootstrap = run("/bin/launchctl", ["manageruid"]).trim() === String(userInfo().uid) ? "runner" : "other";
     root = mkdtempSync("/private/tmp/dlg-");
     home = freshHome("installed");
+    port = await disposablePort();
   });
   await check("drag-install", () => {
     const plist = run("hdiutil", ["attach", "-readonly", "-nobrowse", "-plist", resolve(image)]);
@@ -225,6 +440,8 @@ try {
     assert.equal(statSync(tokenPath).mode & 0o777, 0o600);
   });
   const before = readdirSync(home);
+  await notFoundCases();
+  await until("regression fixtures released their port", async () => !(await http()));
   await check("confirm-without-install", async () => {
     const instance = launch(home, ["--evidence-minimum-size", "-AppleLanguages", "(en)"], "confirm-en-light-minimum");
     await until("confirmation", () => processLog(instance).includes("STATE needs-install"), 60_000, instance.diagnostics);
@@ -269,7 +486,13 @@ try {
   let original;
   await check("first-run-http-200", async () => {
     const instance = launch(home, ["--accept-install", "-AppleLanguages", "(en)"], "first-en-light");
-    await until("HTTP 200", async () => (await http())?.status === 200, 720_000, () => `${instance.diagnostics()}\napp log:\n${processLog(instance) || "(empty)"}`);
+    const bootResponses = [];
+    await until("HTTP 200", async () => {
+      const head = await http("HEAD");
+      bootResponses.push({ elapsedMs: Date.now() - startedAt, status: head?.status ?? "unavailable-or-timeout", marker: head?.headers.get("x-delegatus-diagnostics") ?? null });
+      return (await http())?.status === 200;
+    }, 720_000, () => `${instance.diagnostics()}\napp log:\n${processLog(instance) || "(empty)"}`);
+    writeFileSync(join(report, "first-run-head.json"), JSON.stringify(bootResponses, null, 2));
     const head = await http("HEAD"); assert.equal(head?.status, 204); assert.equal(head?.headers.get("x-delegatus-diagnostics"), "1");
     // The app gives its start 180 s from STATE starting; wait that bound plus
     // margin, and stop at once when the app reports failure.
@@ -302,7 +525,7 @@ try {
     const protectedPID = startViewer(join(runtime, "bun/bin/bun"), join(runtime, "packages/node_modules/delegatus-cli/bin/cli.mjs"), { LLV_TOKEN: accessKey });
     original = protectedPID;
     await until("protected anonymous rejection", async () => (await http())?.status === 403);
-    const authorized = await fetch("http://127.0.0.1:8898/", { headers: { Authorization: `Bearer ${accessKey}` }, signal: AbortSignal.timeout(2000) });
+    const authorized = await fetch(origin() + "/", { headers: { Authorization: `Bearer ${accessKey}` }, signal: AbortSignal.timeout(2000) });
     assert.equal(authorized.status, 200, "the saved key opens the protected Viewer");
     const instance = launch(home, ["-AppleLanguages", "(uk)", "-AppleInterfaceStyle", "Dark"], "protected-reuse-uk-dark");
     await until("protected saved-key reuse", () => processLog(instance).includes("STATE reused") && /WEB language=uk/.test(processLog(instance)), 60_000,
@@ -326,8 +549,8 @@ try {
     await until("port free", async () => !(await http()));
     const file = join(home, "listener.py");
     const foreignAuth = join(home, "foreign-auth-received");
-    writeFileSync(file, 'import http.server,os\nopen(os.path.expanduser("~/listener.pid"),"w").write(str(os.getpid()))\nclass Handler(http.server.BaseHTTPRequestHandler):\n def refuse(self):\n  if self.headers.get("Authorization"): open(os.path.expanduser("~/foreign-auth-received"),"w").write("credential received")\n  self.send_response(401); self.end_headers()\n def do_GET(self): self.refuse()\n def do_HEAD(self): self.refuse()\n def log_message(self,*args): pass\nhttp.server.HTTPServer(("127.0.0.1",8898),Handler).serve_forever()\n');
-    const listener = spawn("/usr/bin/python3", [file], { env: smokeEnvironment({ user, home }), stdio: "ignore" });
+    writeFileSync(file, 'import http.server,os\nopen(os.path.expanduser("~/listener.pid"),"w").write(str(os.getpid()))\nclass Handler(http.server.BaseHTTPRequestHandler):\n def refuse(self):\n  if self.headers.get("Authorization"): open(os.path.expanduser("~/foreign-auth-received"),"w").write("credential received")\n  self.send_response(401); self.end_headers()\n def do_GET(self): self.refuse()\n def do_HEAD(self): self.refuse()\n def log_message(self,*args): pass\nhttp.server.HTTPServer(("127.0.0.1",int(os.environ["SMOKE_PORT"])),Handler).serve_forever()\n');
+    const listener = spawn("/usr/bin/python3", [file], { env: caseEnvironment(home, { SMOKE_PORT: String(port) }), stdio: "ignore" });
     listener.on("error", () => {});
     own(listener, "foreign listener");
     await until("foreign listener", async () => !!(await http()));

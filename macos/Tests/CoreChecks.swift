@@ -133,7 +133,7 @@ import Foundation
         expect(Server.key(home: home, environment: [:]) == key, "key file resolution")
         let probeInstall = Installation(bun: bun, cli: package.appendingPathComponent("bin/cli.mjs"))
         let authMarker = home.appendingPathComponent("probe-auth-received")
-        for mode in ["open", "key", "unauthorized", "foreign", "redirect"] {
+        for mode in ["open", "key", "unauthorized", "foreign", "redirect", "not-found"] {
             let child = Process(); child.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
             child.arguments = ["macos/Tests/ProbeServer.py"]; child.environment = ["PROBE_MODE": mode, "PROBE_AUTH_FILE": authMarker.path]
             let pipe = Pipe(); child.standardOutput = pipe
@@ -144,6 +144,9 @@ import Foundation
             guard let number = Int(port), (1...65535).contains(number),
                   let address = URL(string: "http://127.0.0.1:\(number)") else { fatalError("fixture port") }
             let result = await Server.probe(home: home, environment: [:], install: probeInstall, address: address)
+            if mode == "not-found" {
+                expect(result == .busy && !fm.fileExists(atPath: authMarker.path), "foreign 404 receives no saved key")
+            }
             if mode == "key" || mode == "unauthorized" {
                 expect(result == .busy && !fm.fileExists(atPath: authMarker.path), "refusing listener receives no saved key")
                 try fm.removeItem(at: config.appendingPathComponent("token"))
