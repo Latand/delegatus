@@ -9,13 +9,20 @@ import type { AgentRegistryEntry } from "@/lib/agent/registry";
 import type { AgentProjection, AgentStateMetrics } from "./model";
 import type { StructuredHostRetirementReport } from "@/lib/runtime/structuredHostRetirement";
 import { FIXTURE_CONVERSATION, type FixtureEngine } from "./testFixture";
+import { processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 
-interface FixtureAnswer { port: number; ready: boolean; entry: AgentRegistryEntry; projection: AgentProjection; metrics: AgentStateMetrics; report: StructuredHostRetirementReport }
+interface FixtureAnswer { port: number; ready: boolean; native?: ProcessIdentity; entry: AgentRegistryEntry; projection: AgentProjection; metrics: AgentStateMetrics; report: StructuredHostRetirementReport }
 const children: ChildProcess[] = [], roots: string[] = [];
+const natives: ProcessIdentity[] = [];
 afterEach(async () => {
   for (const child of children.splice(0).reverse()) {
     if (child.exitCode !== null || child.signalCode !== null) continue;
     const exited = once(child, "exit"); child.kill("SIGKILL"); await exited;
+  }
+  for (const identity of natives.splice(0)) {
+    if (processIdentityStatus(identity) === "alive") process.kill(identity.pid, "SIGKILL");
+    for (let attempt = 0; attempt < 100 && processIdentityStatus(identity) === "alive"; attempt++) await Bun.sleep(5);
+    expect(processIdentityStatus(identity)).not.toBe("alive");
   }
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
@@ -37,6 +44,32 @@ function start(role: string, root: string, engine: FixtureEngine, ...args: strin
     readers.push(value => { clearTimeout(timer); resolve(value as FixtureAnswer); });
   }) };
 }
+test("Claude tool output converges after the real broker owner exits and native completion arrives", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "central-broker-restart-")); roots.push(root);
+  for (const dir of ["state", "home", "config"]) fs.mkdirSync(path.join(root, dir));
+  const owner = start("broker-owner", root, "claude");
+  const checkpoint = await owner.next();
+  expect(checkpoint.ready).toBeTrue();
+  natives.push(checkpoint.native!);
+  expect(processIdentityStatus(checkpoint.native!)).toBe("alive");
+  const exited = once(owner.child, "exit"); owner.child.kill("SIGTERM"); await exited;
+  fs.writeFileSync(path.join(root, "allow-terminal"), "go");
+  const deadline = performance.now() + 7000;
+  while (!fs.existsSync(path.join(root, "terminal-written"))) {
+    if (performance.now() > deadline) throw new Error("native terminal handshake expired");
+    await Bun.sleep(5);
+  }
+  const successor = start("successor", root, "claude");
+  const repaired = await successor.next();
+  expect(repaired.entry.structuredHost!.activeTurnRef).toBeNull();
+  expect(repaired.projection.facts.turn).toMatchObject({ determined: true, value: { state: "closed", nativeId: "succession-native-prompt" } });
+  expect(repaired.metrics.registryTranscriptDivergencesTotal).toBe(1);
+  const stopped = once(successor.child, "exit"); successor.child.kill("SIGTERM"); await stopped;
+  const restarted = start("successor", root, "claude");
+  const replayed = await restarted.next();
+  expect(replayed.entry.structuredHost!.activeTurnRef).toBeNull();
+  expect(replayed.metrics.registryTranscriptDivergencesTotal).toBe(1);
+}, 30000);
 for (const engine of ["codex", "claude", "copilot"] as FixtureEngine[]) {
   test(`${engine}: successor scheduler repairs an ownerless native completion, survives restart, and retires only after the idle bound`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "central-restart-")); roots.push(root);

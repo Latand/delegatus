@@ -9,6 +9,45 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 function fixture() { const root = fs.mkdtempSync(path.join(os.tmpdir(), "central-native-")); roots.push(root); return path.join(root, "native.jsonl"); }
 const encode = (rows: unknown[]) => rows.map(row => JSON.stringify(row)).join("\n") + "\n";
+test.each([
+  { message: { role: "user", content: [{ type: "tool_result", content: "done" }] } },
+  { isCompactSummary: true, message: { role: "user", content: "summary" } },
+  { isMeta: true, message: { role: "user", content: "metadata" } },
+  { promptSource: "system", message: { role: "user", content: "notification" } },
+  { interruptedByShutdown: true, message: { role: "user", content: "interrupted" } },
+  { message: { role: "tool", content: "output" } },
+])("Claude native and ledger readers exclude non-prompt user frames: %#", frame => {
+  const user = { type: "user", uuid: "non-prompt", ...frame };
+  expect(nativeBoundaryEvent(user, "claude")?.kind).not.toBe("start");
+  expect(nativeBoundaryEvent({ kind: "item", turnId: "local-ref", item: user }, "claude-ledger", "local-ref")).toBeNull();
+});
+
+test("ledger fallback recovers the opening before a large tool result and joined prompt", async () => {
+  const file = fixture(), cache = new AgentTranscriptCache();
+  fs.writeFileSync(file, encode([
+    { kind: "turn-started", turnId: "local-ref" },
+    { kind: "item", turnId: "local-ref", item: { type: "user", uuid: "opening", message: { role: "user", content: "start" } } },
+    { kind: "item", turnId: "local-ref", item: { type: "user", uuid: "tool-result", message: { role: "user", content: [{ type: "tool_result", content: "x".repeat(200000) }] } } },
+    { kind: "item", turnId: "local-ref", item: { type: "user", uuid: "steering", message: { role: "user", content: "joined prompt" } } },
+  ]));
+  const input = { engine: "claude-ledger" as const, path: file, localRef: "local-ref", revision: "fixture", observedAt: FIXTURE_NOW };
+  expect((await cache.acquire(input)).turn).toMatchObject({ determined: true, value: { nativeId: "opening" } });
+  const bytes = cache.counters.payloadBytes;
+  await cache.acquire(input);
+  expect(cache.counters.payloadBytes).toBe(bytes);
+});
+
+test("a delivered background notification retains its own opening across tool output", () => {
+  const records = [
+    { type: "user", uuid: "foreground", message: { role: "user", content: "start" } },
+    { type: "assistant", message: { role: "assistant", model: "fixture", stop_reason: "end_turn", content: [] } },
+    { type: "user", uuid: "background-notice", isMeta: true, origin: "task", message: { role: "user", content: "<task-notification><task-id>fixture-job</task-id><status>completed</status></task-notification>" } },
+    { type: "user", uuid: "background-output", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "follow-up", content: "done" }] } },
+    { type: "assistant", message: { role: "assistant", model: "fixture", stop_reason: "end_turn", content: [] } },
+  ];
+  const events = records.map(row => nativeBoundaryEvent(row, "claude")).filter((event): event is NonNullable<typeof event> => event !== null);
+  expect(foldNativeBoundaries(events, "claude", "background-local-ref")).toMatchObject({ state: "closed", nativeId: "background-notice" });
+});
 for (const engine of ["codex", "claude", "copilot"] as FixtureEngine[]) {
   test(`${engine}: native completion wins, a later prompt reopens, and unchanged reads acquire no payload`, async () => {
     const file = fixture(), cache = new AgentTranscriptCache(2), rows = fixtureRecords(engine);

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import crypto from "node:crypto";
+import { isClaudePrompt } from "@/lib/claudeProtocolUser";
 import { turnStateFromRecords } from "./nativeTurnState";
 import { fact, unknown, type Evidence, type Fact, type NativeTurn, type TranscriptVersion, type NativePromptAnchor } from "./model";
 
@@ -34,9 +35,12 @@ export interface BoundaryEvent {
 /** Remove message bodies before retaining any recovery page. */
 export function nativeBoundaryEvent(record: RecordLike, engine: Engine, localRef: string | null = null): BoundaryEvent | null {
   if (engine === "claude-ledger") {
+    if (record.kind === "turn-started" && record.turnId === localRef) {
+      return { kind: "continue", type: "host-turn-start", id: null, at: time(record.accountingAt) };
+    }
     const item = object(record.item);
     const uuid = identity(item.uuid);
-    return record.kind === "item" && record.turnId === localRef && item.type === "user" && uuid
+    return record.kind === "item" && record.turnId === localRef && isClaudePrompt(item) && uuid
       ? { kind: "start", type: "host-user-frame", id: uuid, at: time(record.accountingAt) } : null;
   }
   const data = engine === "codex" ? object(record.payload) : engine === "copilot" ? object(record.data) : record;
@@ -64,6 +68,7 @@ export function nativeBoundaryEvent(record: RecordLike, engine: Engine, localRef
       }
       const content = object(record.message).content;
       if (Array.isArray(content) && content.some(part => object(part).type === "tool_result")) return { kind: "output", type, id, at, parentId: identity(record.parentUuid) };
+      if (!isClaudePrompt(record)) return { kind: "continue", type, id, at, parentId: identity(record.parentUuid) };
       return { kind: "start", type, id, at, parentId: identity(record.parentUuid) };
     }
     if (record.type !== "assistant" && record.type !== "result") return null;
@@ -89,6 +94,9 @@ export function foldNativeBoundaries(events: readonly BoundaryEvent[], engine: E
   let recoveryClosed: NativeTurn | null = previous?.state === "closed" ? { ...previous } : null;
   for (const event of events) {
     if (event.kind === "start") {
+      // Several deliveries can join one held turn. The first native opening
+      // remains its anchor even when a later prompt steers that turn.
+      if (engine === "claude-ledger" && turn) continue;
       if (engine === "codex" && event.type === "user_message" && !event.id && turn?.state === "open" && turn.nativeId) {
         turn.tools = 0; continue;
       }
@@ -290,8 +298,10 @@ export class AgentTranscriptCache {
         // Recover the latest opening before deciding the agent is settled.
         // A late terminal for an older native id cannot close a later start.
         const recoveryPending = input.engine === "claude" && cached.events.at(-1)?.release && turn?.state !== "closed";
-        cached.complete = cached.before === base || input.engine !== "copilot" && !recoveryPending && Boolean(turn?.opening)
-          && (input.engine !== "codex" || turn?.nativeId !== null);
+        cached.complete = cached.before === base || (input.engine === "claude-ledger"
+          ? cached.events.some(event => event.type === "host-turn-start")
+          : input.engine !== "copilot" && !recoveryPending && Boolean(turn?.opening)
+            && (input.engine !== "codex" || turn?.nativeId !== null));
         if (turn && input.engine === "copilot") turn.promptOrdinal = cached.before === base ? cached.promptStarts ?? 0 : null;
         cached.turn = turn;
         if (!cached.complete && (cached.events.length > MAX_EVENTS || JSON.stringify(cached.events).length > 256 * 1024)) {

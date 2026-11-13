@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import net from "node:net";
 import readline from "node:readline";
+import { spawn } from "node:child_process";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { determined } from "@/lib/runtime/determinable";
@@ -9,6 +10,9 @@ import { runStructuredHostRetirementSweep } from "@/lib/runtime/structuredHostRe
 import { AgentStateService } from "./service";
 import { readAgentStateMetrics, readAgentProjection, subjectId } from "./store";
 import { FIXTURE_NOW, FIXTURE_SESSION, FIXTURE_CONVERSATION, fixtureRegistry, fixtureRecords, type FixtureEngine } from "./testFixture";
+import { ClaudeStreamBrokerHost, FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
+import { FileRuntimeEventStore } from "@/lib/runtime/eventStore";
+import { claudeHostColumns } from "@/lib/runtime/registry";
 
 const [role, root, engineValue, pidValue, portValue] = process.argv.slice(2);
 const engine = engineValue as FixtureEngine;
@@ -26,6 +30,29 @@ if (role === "native") {
   input.on("line", line => {
     if (line === "end") { append(records.close); output({ ended: true, starts }); }
   });
+} else if (role === "broker-owner") {
+  const host = await ClaudeStreamBrokerHost.start({ cwd: root!, sessionId: FIXTURE_SESSION,
+    eventStore: new FileRuntimeEventStore(), deliveryLedger: new FileClaudeDeliveryLedger(path.join(root!, "deliveries")),
+    readTranscript: () => [], readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    spawnProcess: (_command, _args, options) => spawn(process.execPath,
+      [path.join(import.meta.dir, "../runtime/fixtures/claudeBackgroundSuccessionChild.ts"), root!, FIXTURE_SESSION, "anchor"],
+      { ...options, stdio: ["pipe", "pipe", "pipe"], detached: true }),
+  });
+  const events = host.attach(0)[Symbol.asyncIterator]();
+  await host.send({ id: "local-prompt-ref", text: "fixture work" });
+  for (;;) {
+    const next = await events.next();
+    if (next.done) throw new Error("broker ended before the tool output");
+    if (next.value.kind === "item" && (next.value.item as Record<string, unknown>)?.uuid === "native-tool-output") break;
+  }
+  await events.return?.();
+  const health = await host.health();
+  const native = captureProcessIdentity(health.pid!);
+  const registry = new AgentRegistry(path.join(root!, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const initial = fixtureRegistry(root!, "claude", native, captureProcessIdentity(process.pid));
+  initial.entries[`claude:${FIXTURE_SESSION}`]!.structuredHost = claudeHostColumns(health, 1);
+  await registry.deliveryWriteOrBusy({ label: "fixture.broker-owner-checkpoint" }, () => registry.agentStateWrite(rows => Object.assign(rows, initial)));
+  output({ ready: true, native });
 } else if (role === "owner") {
   const registry = new AgentRegistry(path.join(root!, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
   const initial = fixtureRegistry(root!, engine, captureProcessIdentity(Number(pidValue)), captureProcessIdentity(process.pid));

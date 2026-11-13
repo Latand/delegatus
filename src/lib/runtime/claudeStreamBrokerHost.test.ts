@@ -3459,10 +3459,14 @@ describe("ClaudeStreamBrokerHost", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-orphan-tree-"));
     const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
     const tree = await orphanWriterTree(options);
+    // Terminal cleanup of a living root now needs verified background
+    // absence. This fixture has detached writers, with no native jobs.
+    const transcript = path.join(directory, "native.jsonl");
+    fs.writeFileSync(transcript, "");
     const goneViewer = { pid: 2_000_000_119, startIdentity: "gone-viewer" };
     registry.upsert({
       key: { engine: "claude", sessionId },
-      artifactPath: `/sessions/${sessionId}.jsonl`,
+      artifactPath: transcript,
       cwd: "/repo",
       accountId: null,
       status: "dead",
@@ -3490,6 +3494,20 @@ describe("ClaudeStreamBrokerHost", () => {
      before the escalation would. */
   const incompleteCleanup = { graceMs: 60_000, deadlineMs: 300 };
   const successor = () => captureProcessIdentity(process.pid);
+
+  test("terminal cleanup of a living root refuses unreadable background evidence before capturing or signalling", async () => {
+    const fixture = await terminalRowOverWriterTree("orphan-tree-unreadable");
+    const transcript = fixture.row().artifactPath!;
+    try {
+      fs.writeFileSync(transcript, '{"toolUseResult":{"backgroundTaskId":BROKEN}}\n');
+      expect(await stopTerminalStructuredOrphan(fixture.registry, fixture.key)).toBe(false);
+      expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: true, tool: true });
+      expect(fixture.row().structuredTerminationSurvivors).toBeUndefined();
+      fs.writeFileSync(transcript, "");
+      expect(await stopTerminalStructuredOrphan(fixture.registry, fixture.key)).toBe(true);
+      expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: false, tool: false });
+    } finally { await fixture.stop(); }
+  }, 15_000);
 
   for (const engineIgnoresTerm of [false, true]) {
     test(`a terminal-row orphan stop ends its detached writer before a successor claims the row${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {

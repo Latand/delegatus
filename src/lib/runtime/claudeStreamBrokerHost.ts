@@ -15,7 +15,7 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 import { statePath } from "@/lib/configDir";
-import { claudeQueuedPromptUser } from "@/lib/claudeProtocolUser";
+import { claudeQueuedPromptUser, isClaudePrompt } from "@/lib/claudeProtocolUser";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import type { ProcessIdentity } from "@/lib/agent/registry";
@@ -1751,7 +1751,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         }
       }
       const attachedAt = echoOperationId ? new Date().toISOString() : undefined;
-      if (this.activeTurnId) this.agentStateNativePromptId = stringField(message, "uuid");
+      if (this.activeTurnId && isClaudePrompt(message)
+        && (!delivery || delivery.entry.id === this.activeTurnId)) {
+        this.agentStateNativePromptId ??= stringField(message, "uuid");
+      }
       this.emit({ kind: "item", turnId: this.activeTurnId, item: sanitizedUserReplay(message, content), phase: "completed", accountingAt: receivedAt,
         ...(echoOperationId ? { deliveryEcho: { operationId: echoOperationId, at: receivedAt, attachedAt,
           ...(delivery?.entry.parts ? { memberOperationIds: delivery.entry.parts.map(part => part.operationId) } : {}) } } : {}) });

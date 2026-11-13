@@ -1,0 +1,198 @@
+# Successor verification report
+
+Revision inspected before edits: `a4c5c7cee5a4bcb0babf98a6c23a3945c4ff0cdf`.
+Scope: slice 1 succession custody, Claude prompt identity and background evidence cost. Later slices and heap work remain deferred.
+
+## Enumeration recorded before implementation
+
+| Planned succession path | Existing custody at the inspected revision | Required handling |
+| --- | --- | --- |
+| Active Claude turn in `releaseStructuredDeliveryHostsForDemotion` | Two health reads admit an event wait under the original process/claim. Background wait runs only when both reads are active. | One custody loop must cover active, idle and transitions; revalidate process and claim after every await. |
+| Already idle Claude with unfinished child | Skips the active block; handoff records interruption then `release` ends the tree. Custody fails. | Retain stdio broker and child through background completion and terminal delivery. |
+| Foreground completes between the first and second health reads | Second-active condition fails, bypassing background wait. Custody fails. | Same loop as the idle path; health snapshots cannot bypass custody. |
+| Foreground ends during event wait; background result starts a new turn | Existing wait uses foreground end then transcript polling. It can observe task completion before the broker has delivered its result. | Continue until background facts and the current broker turn/event delivery agree. |
+| `handOverHostForDemotion` / registered and unpublished launch release callbacks | Handoff validates row/claim and evidence; continuation alone permits process termination. Both registration kinds share demotion. | Both must pass the same custody mechanism immediately before handoff/release. |
+| Old owner exits; `claimStructuredHost`, `adoptClaudeRegistryHosts`, `structuredSpawn` | Claim refuses a living stdio process; no pipes can be reconnected. Adoption generally preserves it. | Preserve live work; never create a competing native process. |
+| Shared registry stop: `stopSettledOrphanForPendingDelivery` → `terminateVerifiedStructuredOrphan` → `endRecordedStructuredTree` | Checks central settled-turn/owner/attention/obligation projection and transcript signature; foreground closure alone does not prove background completion. | Require verified background absence and retain that file version through every signal callback. |
+| Skipped registry demotion and terminal orphan recovery | Existing live-stdio protection and owner/process guards preserve living work; dead-root cleanup captures descendants. | Keep protections and proven-dead-root descendant cleanup. |
+| Broker release and checkpoint/adoption cleanup | Explicit release reaps its recorded tree. Failure/explicit stop are separate operation policies. | Planned succession must establish custody before calling release; preserve typed cleanup failures. |
+
+Native prompt anchor contract and all producers/consumers:
+
+| Site | Existing behaviour / disposition |
+| --- | --- |
+| Broker send and queue advance | Local queue entry ref identifies the held turn; next delivery's confirmed native UUID seeds the anchor. Preserve distinction. |
+| Broker user-frame handler | Every user UUID overwrites `agentStateNativePromptId`, including tool output and steering echoes. Fails prompt identity. Use the shared prompt definition and the opening delivery's identity. |
+| Broker `startBackgroundTurn` | Seeds background turn from associated `user_message_uuid`. Keep its correlation to native opening. |
+| Broker `currentState` / `agentStateMemory` | Expose native UUID separately from local ref; `acceptAgentStateTerminal` consumes it. Preserve. |
+| `claudeHostColumns`, binding checkpoints, registry normalization/copies and `entryRevision` | Persist/copy/invalidate `agentStateNativeTurnId`; no new independent identity inference. Preserve. |
+| `nativeBoundaryEvent` for native transcript | Tool-result user frames are outputs; interrupt/compact records have separate qualifiers. Reuse this prompt qualification for live and ledger paths. |
+| `nativeBoundaryEvent` for Claude host ledger | Every user item is treated as a start, so fallback picks tool output's UUID. Fails. Share native prompt qualification; retain the first opening for a local ref. |
+| `AgentTranscriptCache` / `AgentStateService` correlation | Native terminal must match cached UUID or ledger opening; unknown correlation retains the ref. Preserve newer prompt/claim/revision protection. |
+| Guarded registry repair / journal / runtime publication | Repair clears exact matching stale cache, journals divergence and publishes convergence. Preserve transaction and restart fences. |
+| Delivery ledger replay matching, `activeUserUuid`, joined steering UUIDs, restart-cut frame-before/after evidence | Protocol/delivery identities also track user frames. They must retain their existing delivery semantics; the prompt anchor remains a separate opening identity. |
+
+Background readers: `verifiedBackgroundWork` is shared by restart-cut/custody; it currently rescans the whole file. Keep its strict integrity refusals and introduce a bounded shared version cache with incremental suffix folding. The permissive legacy `readBackgroundTaskLedger` is unsuitable for authorizing termination.
+
+Prior evidence: retained manifest and review transcript confirm all three findings; scoped and unscoped memory searches found no reusable alternative repair. Parallel diffs for PRs #3970 and #3982 inspected; their registry/termination decision work remains separate. Reuse the existing broker succession child fixture and retained reproductions.
+
+## Implementation and scope
+
+The common demotion custody loop now covers an already idle host, a foreground transition during health reads, native self-started work, and terminal delivery after a background notification. It preserves the original process, claim epoch and artifact identity after asynchronous reads, under one expiry. A refused stream records the owed interruption and preserves the live tree. Successful Claude releases run immediately against the expected registration after custody, so waiting for a sibling host cannot invalidate the completed check.
+
+Implementation references: `src/lib/runtime/structuredDeliveryController.ts:2999`, `src/lib/runtime/registry.ts:840`, `src/lib/claudeProtocolUser.ts:160`, `src/lib/pipelines/backgroundTasks.ts:439`, and the real broker-owner restart at `src/lib/agentState/restart.test.ts:47`.
+
+All shared orphan recovery callers now require verified background absence for a living Claude root, pinned through each stop callback. This also closes the terminal-status path identified during implementation review. Proven-dead-root descendant cleanup retains its existing authority.
+
+`isClaudePrompt` supplies prompt qualification for host memory, native boundaries and ledger fallback. The held turn retains its opening identity across tool output and joined deliveries. Ledger recovery reads back to that local turn's opening boundary. Reconciliation keeps its existing guarded repair, journal and newer-prompt fences.
+
+Delivered task notifications that request a provider turn retain their own native opening. The work-duration metadata classifier has a separate purpose, so its task-notification exclusion is qualified explicitly here.
+
+The strict background cache retains at most 64 summaries, bounds each serialized summary to 128 Ki UTF-16 units and each suffix acquisition to 4 MiB plus at most 512 overlap bytes, folds changed suffixes, evicts least recently used rows and refuses incomplete or invalid evidence. It verifies file identity, size, nanosecond modification/change times and append overlap. Native boundary polling uses the existing transcript cache.
+
+The one-hour idle retirement policy, its environment override, event-window hotfix and startup behavior are preserved. Slices 2–5, heap attribution, parallel pipeline-termination work and deployment remain outside this change.
+
+Regression sources reuse `src/lib/runtime/fixtures/claudeBackgroundSuccessionChild.ts`. Separate broker-owner, native engine, successor scheduler and tool processes exercise restart and custody; no provider request or live installation is involved.
+
+## Verification
+
+The retained reproductions were run first on the published input, one file per private gate command:
+
+| Command | Exit | Pass | Fail | Assertions |
+| --- | ---: | ---: | ---: | ---: |
+| `bun test --timeout=60000 src/lib/runtime/review-idle-background.test.ts` | 1 | 0 | 1 | 6 |
+| `bun test --timeout=60000 src/lib/runtime/review-correlation.test.ts` | 1 | 0 | 1 | 2 |
+| `bun test --timeout=60000 src/lib/runtime/review-background-cost.test.ts` | 1 | 0 | 1 | 7 |
+
+These scratch source names refer to the retained review reproductions. The committed successors are `src/lib/runtime/claudeSuccession.test.ts`, `src/lib/agentState/restart.test.ts`, `src/lib/agentState/transcript.test.ts` and `src/lib/pipelines/backgroundTasks.test.ts`.
+
+Checks run through the supplied `scripts/gate-slot.sh`, with a separate HOME, XDG config, temporary root and state directory per file and the Viewer control URL on a closed local port. Full command outputs, actual statuses and counts are retained by the delivery stage. The post-commit hook receipt is recorded in the final delivery report.
+
+
+## Command and count record
+
+Every test row expands to `bun test --timeout=60000 <path>` through the supplied gate. Cells show `exit; pass/fail/skip`. The first two columns retain intermediate results; the last column is the completed functional verification.
+
+| Test path | Iteration 1 | Iteration 2 | Verified |
+| --- | ---: | ---: | ---: |
+| `src/lib/runtime/claudeSuccession.test.ts` | 0; 8/0/0 | 1; 10/3/0 | 0; 13/0/0 |
+| `src/lib/pipelines/backgroundTasks.test.ts` | 1; 19/1/0 | 0; 20/0/0 | 0; 20/0/0 |
+| `src/lib/agentState/transcript.test.ts` | 0; 22/0/0 | 0; 22/0/0 | 0; 23/0/0 |
+| `src/app/api/operator/agent-state/route.test.ts` | 0; 2/0/0 | 0; 2/0/0 | 0; 2/0/0 |
+| `src/lib/accounts/migration/turnState.test.ts` | 0; 46/0/0 | 0; 46/0/0 | 0; 46/0/0 |
+| `src/lib/agent/registry.test.ts` | 0; 139/0/0 | 0; 139/0/0 | 0; 139/0/0 |
+| `src/lib/agentState/model.test.ts` | 0; 2/0/0 | 0; 2/0/0 | 0; 2/0/0 |
+| `src/lib/agentState/restart.test.ts` | 0; 3/0/0 | 0; 4/0/0 | 0; 4/0/0 |
+| `src/lib/agentState/service.test.ts` | 0; 26/0/0 | 0; 26/0/0 | 0; 26/0/0 |
+| `src/lib/agentState/store.test.ts` | 0; 6/0/0 | 0; 6/0/0 | 0; 6/0/0 |
+| `src/lib/resources.structuredHosts.test.ts` | 0; 10/0/0 | 0; 10/0/0 | 0; 10/0/0 |
+| `src/lib/runtime/claudeStreamBrokerHost.test.ts` | 0; 198/0/0 | 1; 195/3/0 | 0; 199/0/0 |
+| `src/lib/runtime/codexAppServerHost.test.ts` | 0; 384/0/0 | 0; 384/0/0 | 0; 384/0/0 |
+| `src/lib/runtime/copilotAcpHost.test.ts` | 0; 47/0/0 | 0; 47/0/0 | 0; 47/0/0 |
+| `src/lib/runtime/liveness.test.ts` | 0; 76/0/0 | 0; 76/0/0 | 0; 76/0/0 |
+| `src/lib/runtime/structuredHostControl.history.test.ts` | 0; 2/0/0 | 0; 2/0/0 | 0; 2/0/0 |
+| `src/lib/runtime/structuredHostControl.test.ts` | 0; 50/0/0 | 0; 50/0/0 | 0; 50/0/0 |
+| `src/lib/runtime/structuredHostRetirement.test.ts` | 0; 88/0/0 | 0; 88/0/0 | 0; 88/0/0 |
+| `src/lib/runtime/hostEventWindow.test.ts` | 0; 25/0/0 | 0; 25/0/0 | 0; 25/0/0 |
+| `src/lib/runtime/idleHostEventWindow.test.ts` | 0; 13/0/0 | 0; 13/0/0 | 0; 13/0/0 |
+| `src/lib/runtime/startupIdleHosts.test.ts` | 0; 3/0/0 | 0; 3/0/0 | 0; 3/0/0 |
+| `src/app/api/operator/heap/route.test.ts` | 0; 8/0/0 | 0; 8/0/0 | 0; 8/0/0 |
+| `src/lib/heapAttribution.test.ts` | 0; 5/0/0 | 0; 5/0/0 | 0; 5/0/0 |
+| `src/lib/runtime/engineHostEvents.test.ts` | 0; 27/0/0 | 0; 27/0/0 | 0; 27/0/0 |
+| `src/lib/runtime/structuredDeliveryController.test.ts` | 0; 25/0/0 | 0; 25/0/0 | 0; 25/0/0 |
+| `src/lib/viewerInstrumentation.test.ts` | 0; 12/0/0 | 0; 12/0/0 | 0; 12/0/0 |
+| `src/lib/runtime/registryPersistence.test.ts` | 0; 92/0/0 | 0; 92/0/0 | 0; 92/0/0 |
+| `src/lib/runtime/releaseInterruption.test.ts` | 1; 145/8/1 | 1; 146/7/1 | 1; 146/7/1 |
+
+The verified run contains **1,493 pass, 7 known baseline failures and 1 skip across 28 files**. The 27 green files contain 1,347 passes. `releaseInterruption.test.ts` retains exactly the seven baseline failure names and assertions (146 pass, 7 fail, 1 skip); the verification driver compares that set with the retained baseline and refuses new failures. The previously green suites remain green.
+
+The final review then added a fourteenth succession case: it holds all 64 background-read slots, starts demotion, releases the readers, and requires the same job's result once. Capacity deferrals now retry under the original custody deadline. That final case is checked by the unmodified post-commit hook; its receipt is included in the delivery report.
+
+Other check commands and controls:
+
+| Command / control | Exit | Counts |
+| --- | ---: | --- |
+| `bun test --timeout=60000 src/lib/runtime/claudeSuccession.test.ts` | 1 | 3 pass, 3 fail, 0 skip, 0 filtered |
+| `bun test --timeout=60000 src/lib/runtime/claudeSuccession.test.ts` | 0 | 6 pass, 0 fail, 0 skip, 0 filtered |
+| `bun test --timeout=60000 src/lib/runtime/claudeSuccession.test.ts` | 0 | 13 pass, 0 fail, 0 skip, 0 filtered |
+| `bun test --timeout=60000 src/lib/runtime/releaseInterruption.test.ts --test-name-pattern "failed demotion cleanup keeps the obligation"` (published input) | 0 | 1 pass, 0 fail, 0 skip, 153 filtered |
+| `bun test --timeout=60000 src/lib/runtime/claudeStreamBrokerHost.test.ts --test-name-pattern "terminal-row orphan stop\|writer that outlives"` (published input) | 0 | 3 pass, 0 fail, 0 skip, 195 filtered |
+| `bunx tsc --noEmit --incremental false` (initial) | 2 | 1 missing test argument diagnostic |
+| `bun node_modules/typescript/bin/tsc --noEmit --incremental false` (intermediate and verified) | 0, 0 | 0 diagnostics |
+| `bun node_modules/eslint/bin/eslint.js --no-cache <51 changed TypeScript/JavaScript paths>` | 0 | 0 errors, 9 warnings before removal of one new unused argument |
+| `bun node_modules/eslint/bin/eslint.js --no-cache src/lib/runtime/registry.ts` | 0 | 0 errors, 0 warnings after the annotation cleanup |
+
+The unused argument was removed with a type annotation; its direct lint and the final commit hook are recorded in the delivery receipt. The hook and pinned design are unmodified. `git diff --check` and both `git fetch origin main` observations exited 0. Main remained an ancestor, so no merge was needed. No branch switch or publication command was used.
+
+## Repeated background read measurement
+
+Command: `bun background-cost.probe.ts <private-data-root>`, under the gate, in a fresh process and private state for every sample. The probe source and raw records are retained with the stage evidence. Each process checks two file versions twice. Both revisions use identical synthetic records: version sizes 4,231,382 and 4,231,573 bytes, with matching SHA-256 digests in every sample. This measures FileHandle payload bytes. No latency or resident-memory gain is claimed.
+
+| Revision / sample | Exit | Observations | Cold bytes | Unchanged bytes | Terminal suffix + overlap | Unchanged terminal version | Total bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Published input / 1 | 0 | 4 | 4,231,382 | 4,231,382 | 4,231,573 | 4,231,573 | 16,925,910 |
+| Published input / 2 | 0 | 4 | 4,231,382 | 4,231,382 | 4,231,573 | 4,231,573 | 16,925,910 |
+| Candidate / 1 | 0 | 4 | 4,232,218 | 0 | 703 | 0 | 4,232,921 |
+| Candidate / 2 | 0 | 4 | 4,232,218 | 0 | 703 | 0 | 4,232,921 |
+
+In both candidate samples the unchanged versions read **zero payload bytes**. The 191-byte terminal append costs 703 bytes including overlap validation, clears the pending fact, and the real broker custody regression waits through delivery of its result before release.
+
+Final privacy, commit and unmodified pre-push receipts are attached to the delivery report after the commit exists. All raw output, wrapper cleanup evidence, exact invocation arguments and statuses remain retained locally.
+
+
+Full ESLint invocation for the 51-path run:
+
+```sh
+bun node_modules/eslint/bin/eslint.js --no-cache \
+  src/app/api/operator/agent-state/route.test.ts \
+  src/app/api/operator/agent-state/route.ts \
+  src/lib/accounts/migration/turnState.test.ts \
+  src/lib/accounts/migration/turnState.ts \
+  src/lib/agent/registry.test.ts \
+  src/lib/agent/registry.ts \
+  src/lib/agent/sqliteRegistryStore.ts \
+  src/lib/agentState/index.ts \
+  src/lib/agentState/invalidation.ts \
+  src/lib/agentState/model.test.ts \
+  src/lib/agentState/model.ts \
+  src/lib/agentState/nativeTurnState.ts \
+  src/lib/agentState/process.ts \
+  src/lib/agentState/projectionCache.ts \
+  src/lib/agentState/restart.fixture.ts \
+  src/lib/agentState/restart.test.ts \
+  src/lib/agentState/service.test.ts \
+  src/lib/agentState/service.ts \
+  src/lib/agentState/store.test.ts \
+  src/lib/agentState/store.ts \
+  src/lib/agentState/testFixture.ts \
+  src/lib/agentState/transcript.test.ts \
+  src/lib/agentState/transcript.ts \
+  src/lib/claudeProtocolUser.ts \
+  src/lib/pipelines/backgroundTasks.test.ts \
+  src/lib/pipelines/backgroundTasks.ts \
+  src/lib/resourceWorkerRequest.ts \
+  src/lib/resources.structuredHosts.test.ts \
+  src/lib/resources.ts \
+  src/lib/runtime/claudeStreamBrokerHost.test.ts \
+  src/lib/runtime/claudeStreamBrokerHost.ts \
+  src/lib/runtime/claudeSuccession.test.ts \
+  src/lib/runtime/codexAppServerHost.test.ts \
+  src/lib/runtime/codexAppServerHost.ts \
+  src/lib/runtime/copilotAcpHost.test.ts \
+  src/lib/runtime/copilotAcpHost.ts \
+  src/lib/runtime/engineHost.ts \
+  src/lib/runtime/fixtures/claudeBackgroundSuccessionChild.ts \
+  src/lib/runtime/liveness.test.ts \
+  src/lib/runtime/liveness.ts \
+  src/lib/runtime/registry.ts \
+  src/lib/runtime/structuredDeliveryController.ts \
+  src/lib/runtime/structuredHostControl.history.test.ts \
+  src/lib/runtime/structuredHostControl.test.ts \
+  src/lib/runtime/structuredHostControl.ts \
+  src/lib/runtime/structuredHostRetirement.paging.fixture.ts \
+  src/lib/runtime/structuredHostRetirement.test.ts \
+  src/lib/runtime/structuredHostRetirement.ts \
+  src/lib/types.ts \
+  src/lib/viewerInstrumentation.ts \
+  src/lib/viewerLoopMonitor.ts
+```

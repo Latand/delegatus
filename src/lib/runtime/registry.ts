@@ -1,5 +1,6 @@
 import { recordedAgentScope, sameAgentScope } from "./agentScope";
 import fs from "node:fs";
+import { verifiedBackgroundWork } from "@/lib/pipelines/backgroundTasks";
 import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { startupHostSnapshot, startupStructuredHostEntries } from "./startupSnapshot";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
@@ -847,9 +848,25 @@ async function terminateVerifiedStructuredOrphan(
   if (claimOwnerBlocksOrphanReap(claimOwner)) return false;
   const entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
   const custody = structuredCustodyIdentity(entry);
+  // Every recovery caller shares this fence, including terminal rows and
+  // skipped adoption. A closed foreground turn does not settle native jobs.
+  // A proven-dead root still owes the existing captured-descendant cleanup.
+  let backgroundStands: (current: AgentRegistryEntry | undefined) => boolean = () => true;
+  if (key.engine === "claude" && !processIdentityProvenDead(processIdentity)) {
+    const pathname = entry?.artifactPath;
+    if (!pathname) return false;
+    let version: string;
+    try { version = fileSignature(fs.statSync(pathname, { bigint: true })); } catch { return false; }
+    const background = await verifiedBackgroundWork(pathname, Date.now());
+    if (background.state !== "read" || background.names.length) return false;
+    backgroundStands = current => {
+      if (current?.artifactPath !== pathname) return false;
+      try { return fileSignature(fs.statSync(pathname, { bigint: true })) === version; } catch { return false; }
+    };
+  }
   return endRecordedStructuredTree(registry, key, processIdentity, "structured-orphan-stop",
     (current) => structuredCustodyIdentity(current) === custody
-      && !claimOwnerBlocksOrphanReap(current?.claimOwner ?? null) && mayEnd(current), dependencies);
+      && !claimOwnerBlocksOrphanReap(current?.claimOwner ?? null) && backgroundStands(current) && mayEnd(current), dependencies);
 }
 
 /** A native-settled stdio orphan cannot receive accepted work. Reap it only
