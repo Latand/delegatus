@@ -231,14 +231,31 @@ def script_argument(args):
     return Path(args[index]) if len(args) > index and Path(args[index]).is_absolute() else None
 
 
-def trusted_process_script(args, install):
-    """Return a verified Delegatus script only when its interpreter is this Bun."""
+def trusted_process_script(args, install, pid=None, proc=Path('/proc')):
+    """Return a verified Delegatus script running under the expected Bun."""
     script = script_argument(args)
     if not script or not args:
         return None
     try:
-        if Path(args[0]).resolve() != install.bun.resolve():
-            return None
+        interpreter = Path(args[0]).resolve()
+        if pid is not None:
+            executable = (proc / str(pid) / 'exe').resolve()
+            if interpreter != executable:
+                return None
+        else:
+            executable = None
+        if install is not None:
+            expected = install.bun.resolve()
+            if interpreter != expected or (executable is not None and executable != expected):
+                return None
+        else:
+            # A fresh home has no installation path to compare against. In
+            # that case, bind the command line to the executable of this exact
+            # process and require the executable itself to be Bun.
+            if executable is None:
+                return None
+            if executable.name != 'bun' or interpreter != executable:
+                return None
         script = script.resolve()
         root = script.parent.parent.parent.resolve() if script.name == 'server.js' else script.parent.parent.resolve()
         expected = {
@@ -289,16 +306,23 @@ def listener(port, install=None, proc=Path('/proc')):
         except OSError:
             name = '?'
         outcome = Listener('program', pid, name)
-        cursor, seen, server = pid, set(), False
+        owner_row = process_row(proc, pid)
+        server_script = trusted_process_script(owner_row[0], install, pid, proc) if owner_row else None
+        if not server_script or server_script.name not in ('runtime-host.mjs', 'server.js'):
+            # The process that owns the listening socket must itself be the
+            # verified server. A matching Bun/CLI higher in its ancestry
+            # cannot lend its identity to an unrelated descendant.
+            outcomes.append(outcome)
+            continue
+        cursor, seen, server = owner_row[1], {pid}, True
         while cursor > 1 and cursor not in seen and len(seen) < 64:
-            seen.add(cursor)
-            row = process_row(proc, cursor)
+            current = cursor
+            seen.add(current)
+            row = process_row(proc, current)
             if not row:
                 break
             args, cursor = row
-            script = trusted_process_script(args, install)
-            if script and script.name in ('runtime-host.mjs', 'server.js'):
-                server = True
+            script = trusted_process_script(args, install, current, proc)
             if server and script and script.name == 'cli.mjs' and script.parent.name == 'bin':
                 root = script.parent.parent.resolve()
                 info = package_info(root)

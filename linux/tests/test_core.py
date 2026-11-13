@@ -85,12 +85,14 @@ console.log(renderLoginService(JSON.parse(process.argv[1])));'''
         with self.assertRaisesRegex(core.LauncherError, 'service-invalid'):
             core.read_service(file, 43210)
 
-    def process(self, proc, pid, parent, args, inode=None):
+    def process(self, proc, pid, parent, args, inode=None, executable=None):
         directory = proc / str(pid)
         (directory / 'fd').mkdir(parents=True)
         (directory / 'cmdline').write_bytes(b'\0'.join(os.fsencode(x) for x in args) + b'\0')
         (directory / 'stat').write_text(f'{pid} (bun worker) S {parent} ' + '0 ' * 20)
         (directory / 'comm').write_text('bun\n')
+        if executable:
+            (directory / 'exe').symlink_to(executable)
         if inode:
             (directory / 'fd/4').symlink_to(f'socket:[{inode}]')
 
@@ -102,13 +104,13 @@ console.log(renderLoginService(JSON.parse(process.argv[1])));'''
         table.write_text('header\n' + row)
         root = self.package(self.home / 'root')
         install = core.Installation(Path('/fixture/bun'), root / 'bin/cli.mjs')
-        self.process(proc, 40, 1, ['/fixture/bun', str(install.cli)])
-        self.process(proc, 41, 40, ['/fixture/bun', str(root / 'dist/runtime-host.mjs')], '123')
+        self.process(proc, 40, 1, ['/fixture/bun', str(install.cli)], executable='/fixture/bun')
+        self.process(proc, 41, 40, ['/fixture/bun', str(root / 'dist/runtime-host.mjs')], '123', executable='/fixture/bun')
         self.assertEqual(core.listener(43210, install, proc).kind, 'own-install')
         other = core.Installation(Path('/fixture/bun'), self.home / 'other/bin/cli.mjs')
         self.assertEqual(core.listener(43210, other, proc).kind, 'other-delegatus')
         active = self.package(self.home / 'cache/release')
-        self.process(proc, 42, 40, ['/fixture/bun', str(active / 'bin/cli.mjs')])
+        self.process(proc, 42, 40, ['/fixture/bun', str(active / 'bin/cli.mjs')], executable='/fixture/bun')
         (proc / '41/stat').write_text('41 (bun worker) S 42 ' + '0 ' * 20)
         self.assertEqual(core.listener(43210, install, proc).kind, 'own-install')
         (proc / '41/cmdline').write_bytes(b'python3\0server.py\0')
@@ -125,15 +127,47 @@ console.log(renderLoginService(JSON.parse(process.argv[1])));'''
         (proc / 'net/tcp6').write_text('header\n' + ipv6_loopback)
         root = self.package(self.home / 'root')
         install = core.Installation(Path('/fixture/bun'), root / 'bin/cli.mjs')
-        self.process(proc, 40, 1, ['/fixture/bun', str(install.cli)])
-        self.process(proc, 41, 40, ['/fixture/bun', str(root / 'dist/runtime-host.mjs')], '123')
+        self.process(proc, 40, 1, ['/fixture/bun', str(install.cli)], executable='/fixture/bun')
+        self.process(proc, 41, 40, ['/fixture/bun', str(root / 'dist/runtime-host.mjs')], '123', executable='/fixture/bun')
         self.assertEqual(core.listener(43210, install, proc).kind, 'own-install')
 
         dual_stack = ipv6_loopback.replace('00000000000000000000000001000000', '00000000000000000000000000000000').replace(' 456 1', ' 789 1')
         (proc / 'net/tcp6').write_text('header\n' + dual_stack)
         self.assertEqual(core.listener(43210, install, proc).kind, 'other-user')
 
-    def test_real_python_listener_with_package_shaped_ancestry_is_busy_and_gets_no_key(self):
+    def test_foreign_socket_owner_cannot_borrow_verified_bun_ancestry(self):
+        proc = self.home / 'proc'
+        (proc / 'net').mkdir(parents=True)
+        table = proc / 'net/tcp'
+        table.write_text(f'header\n 0: 0100007F:A8CA 00000000:0000 0A 0:0 00:0 0 {os.getuid()} 0 123 1\n')
+        root = self.package(self.home / 'packages/node_modules/delegatus-cli')
+        install = core.Installation(Path('/fixture/bun'), root / 'bin/cli.mjs')
+        self.process(proc, 40, 1, ['/fixture/bun', str(install.cli)], executable='/fixture/bun')
+        self.process(proc, 41, 40, ['/fixture/bun', str(root / 'dist/runtime-host.mjs')], executable='/fixture/bun')
+        # argv claims Bun, while /proc/PID/exe proves Python owns the socket.
+        self.process(proc, 42, 41, ['/fixture/bun', str(root / 'dist/runtime-host.mjs')], '123', executable='/usr/bin/python3')
+        self.assertEqual(core.listener(43210, install, proc).kind, 'program')
+
+    def test_nullable_install_classifies_genuine_older_listener_and_foreign_script(self):
+        proc = self.home / 'proc'
+        (proc / 'net').mkdir(parents=True)
+        table = proc / 'net/tcp'
+        table.write_text(f'header\n 0: 0100007F:A8CA 00000000:0000 0A 0:0 00:0 0 {os.getuid()} 0 123 1\n')
+        root = self.package(self.home / 'older/node_modules/delegatus-cli')
+        bun = self.home / 'runtime/bin/bun'
+        bun.parent.mkdir(parents=True)
+        bun.touch()
+        bun.chmod(0o700)
+        self.process(proc, 40, 1, [str(bun), str(root / 'bin/cli.mjs')], executable=bun)
+        self.process(proc, 41, 40, [str(bun), str(root / 'dist/runtime-host.mjs')], '123', executable=bun)
+        self.assertEqual(core.listener(43210, None, proc).kind, 'other-delegatus')
+
+        (proc / '41/cmdline').write_bytes(b'/usr/bin/python3\0' + os.fsencode(root / 'dist/runtime-host.mjs') + b'\0')
+        (proc / '41/exe').unlink()
+        (proc / '41/exe').symlink_to('/usr/bin/python3')
+        self.assertEqual(core.listener(43210, None, proc).kind, 'program')
+
+    def test_real_python_descendant_cannot_receive_access_key(self):
         bun = shutil.which('bun')
         self.assertIsNotNone(bun, 'the pinned Bun executable is needed to verify interpreter identity')
         root = self.package(self.home / 'packages/node_modules/delegatus-cli')
@@ -152,13 +186,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
 http.server.HTTPServer(('127.0.0.1', int(os.environ['PORT'])), Handler).serve_forever()
 ''')
         cli = root / 'bin/cli.mjs'
-        cli.write_text('''import subprocess, sys
-subprocess.run([sys.executable, sys.argv[1]], check=False)
+        cli.write_text('''import { spawnSync } from 'node:child_process';
+const result = spawnSync('python3', ['-I', new URL('../dist/runtime-host.mjs', import.meta.url).pathname], {stdio: 'inherit'});
+process.exit(result.status ?? 1);
 ''')
         with socket.socket() as probe:
             probe.bind(('127.0.0.1', 0))
             port = probe.getsockname()[1]
-        child = subprocess.Popen([sys.executable, '-I', str(cli), str(host)], env={**os.environ, 'PORT': str(port), 'CREDENTIALS': str(seen)},
+        child = subprocess.Popen([bun, str(cli)], env={**os.environ, 'PORT': str(port), 'CREDENTIALS': str(seen)},
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         def stop():
             if child.poll() is None:
@@ -178,6 +213,9 @@ subprocess.run([sys.executable, sys.argv[1]], check=False)
         result = core.observe(port, install, 'fixture-secret')
         self.assertEqual(result.state, 'port-busy')
         self.assertFalse(seen.exists(), 'the unverified Python listener must not receive the access key')
+        nullable_result = core.observe(port, None, 'fixture-secret')
+        self.assertEqual(nullable_result.state, 'port-busy')
+        self.assertFalse(seen.exists(), 'nullable installation inspection must not send the access key')
 
     def test_probe_never_sends_key_to_unverified_listener_or_redirect(self):
         requests = []
