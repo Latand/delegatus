@@ -1714,10 +1714,12 @@ with the claim retention duration and at most 16 action keys per request.
 Every restored POST consumes that budget. A later authorization refusal cannot
 establish that an earlier action had no effect. Settled action receipts remain
 service-owned.
-A negative state snapshot never establishes no effect. A fresh member message's
-retry identity is unresolved under the current contract and blocks acceptance;
-the full runner reproduction is retained as an expected failure. This adds no
-cross-turn identity or new wire field. See the linked outcome report above.
+A negative state snapshot never establishes no effect. A definite no-effect
+receipt fences the original worker, so a later member message may apply a new
+action once under its own identity. An unresolved outcome produces an explicit
+verification failure. The runner tests both paths and terminal redelivery;
+same-key reuse across separate member messages is deferred because it needs a
+paired-service wire change. See the linked outcome report above.
 
 **[ra]** The service commits its action ledger entry and L5 stamp together
 before execution. Stamped requests are never re-claimed and fall back silently

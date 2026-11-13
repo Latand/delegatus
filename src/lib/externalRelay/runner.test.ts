@@ -2514,6 +2514,14 @@ test("fresh member retry after definite not done applies once under its new iden
     expect(posts[1]!.body.lease_id).toBe(second.lease_id);
     expect("arguments" in posts[1]!.body && posts[1]!.body.arguments)
       .toEqual("arguments" in posts[0]!.body && posts[0]!.body.arguments);
+    // Redelivery recovers each request's own terminal answer without
+    // dispatching another action, including the earlier no-effect action.
+    for (const [request, text] of [[first, "Not done: trigger rule update."], [second, "Done: trigger rule update."]] as const) {
+      expect(await runClaimedRequest(paired, request, undefined, { command, sleep: async () => {} }))
+        .toMatchObject({ outcome: "answered", answer: { text } });
+      expect(posts).toHaveLength(2);
+      expect(effects).toBe(1);
+    }
   } finally { await server.close(); }
 });
 
