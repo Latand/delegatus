@@ -1,3 +1,4 @@
+import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
@@ -199,7 +200,7 @@ test.skipIf(process.platform !== "linux")("native removal after the final fence 
       const pinned = path.join(replacement, path.basename(trash));
       fs.mkdirSync(path.join(pinned, "cache"), { recursive: true });
       fs.writeFileSync(path.join(pinned, "cache", "payload"), "protected replacement");
-      fs.writeFileSync(path.join(pinned, ".delegatus-keep"), "pin");
+      plantKeepMarker(path.join(pinned, ".delegatus-keep"), "pin");
       protectedPath = pinned;
       fs.renameSync(container, moved); fs.symlinkSync(replacement, container, "dir"); injected = true;
     }
@@ -230,7 +231,7 @@ test.skipIf(process.platform !== "linux")("a final protection read cannot admit 
   const container = path.join(parent,"container"), directory = path.join(container,"llv-stage-expired"), cache = path.join(directory,"cache");
   const archive = path.join(parent,"archive"), moved = path.join(archive,"held-container"), replacement = path.join(parent,"replacement");
   fs.mkdirSync(cache,{recursive:true});fs.writeFileSync(path.join(cache,"payload"),"retain mode");fs.chmodSync(cache,0o555);
-  fs.mkdirSync(archive);fs.writeFileSync(path.join(archive,".delegatus-keep"),"permanent pin");
+  fs.mkdirSync(archive);plantKeepMarker(path.join(archive,".delegatus-keep"),"permanent pin");
   fs.mkdirSync(replacement);
   const store = new AttemptTempStore(path.join(parent,"registry/owners.sqlite"));
   store.register({directory,pipelineId:null,launchId:"fixture",retainUntilClose:true,createdAt:1});
@@ -241,7 +242,10 @@ test.skipIf(process.platform !== "linux")("a final protection read cannot admit 
     const value=nativeStat(file,options as {bigint:false});const stack=String(new Error().stack);
     if(!injected&&String(file).endsWith("/cache")&&stack.includes("at permissionChange")&&stack.includes("at attemptMutationCurrent")&&stack.includes("at current")&&++reads===2){
       trash=JSON.parse(fs.readFileSync(attemptTempJournalPath(directory),"utf8")).trash;
-      const replacementCache=path.join(replacement,path.basename(trash),"cache");fs.mkdirSync(replacementCache,{recursive:true});fs.writeFileSync(path.join(replacementCache,"payload"),"protected replacement");fs.writeFileSync(path.join(replacement,path.basename(trash),".delegatus-keep"),"pin");
+      const replacementCache = path.join(replacement, path.basename(trash), "cache");
+      fs.mkdirSync(replacementCache, { recursive: true });
+      fs.writeFileSync(path.join(replacementCache, "payload"), "protected replacement");
+      plantKeepMarker(path.join(replacement, path.basename(trash), ".delegatus-keep"), "pin");
       fs.renameSync(container,moved);fs.symlinkSync(replacement,container,"dir");injected=true;
     }
     return value;
@@ -261,6 +265,7 @@ test.skipIf(process.platform !== "linux")("a final protection read cannot admit 
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
+  removeKeepMarkers();
   for (const restore of cleanup.splice(0).reverse()) await restore();
 });
 
@@ -282,7 +287,7 @@ test.skipIf(process.platform !== "linux").each(["linux", "darwin", "win32"])(
           if (++observations === 2) {
             if (mutation === "link") execFileSync(process.execPath, ["-e", 'require("node:fs").symlinkSync(process.argv[1], process.argv[2], "dir")',
               directory, path.join(checkout, "dependency")]);
-            else fs.writeFileSync(path.join(directory, ".delegatus-keep"), "late pin");
+            else plantKeepMarker(path.join(directory, ".delegatus-keep"), "late pin");
           }
           return clear;
         }, mutation === "expired" ? 0 : 30_000));
@@ -379,7 +384,7 @@ test.skipIf(process.platform !== "linux").each(["keep", "swap"] as const)(
     const f = fixture(), replacement = path.join(f.parent, "replacement"), moved = path.join(f.parent, "moved-admitted");
     fs.mkdirSync(replacement);
     fs.writeFileSync(path.join(replacement, "payload"), "protected replacement");
-    fs.writeFileSync(path.join(replacement, ".delegatus-keep"), "permanent pin");
+    plantKeepMarker(path.join(replacement, ".delegatus-keep"), "permanent pin");
     const originalIdentity = fs.statSync(f.directory).ino, replacementIdentity = fs.statSync(replacement).ino;
     const nativeRead = fs.readFileSync.bind(fs);
     let injected = false, trash = "";
@@ -389,7 +394,7 @@ test.skipIf(process.platform !== "linux").each(["keep", "swap"] as const)(
         const stack = String(new Error().stack);
         if (!injected && stack.includes("at removeAttemptTree") && !stack.includes("at repairAttemptPermissions")) {
           trash = JSON.parse(nativeRead(attemptTempJournalPath(f.directory), "utf8")).trash;
-          if (mutation === "keep") fs.writeFileSync(path.join(trash, "cache/.delegatus-keep"), "late pin");
+          if (mutation === "keep") plantKeepMarker(path.join(trash, "cache/.delegatus-keep"), "late pin");
           else { fs.renameSync(trash, moved); fs.renameSync(replacement, trash); }
           injected = true;
         }
@@ -505,7 +510,7 @@ test.skipIf(process.platform !== "linux")(
       if (!injected && String(file) === path.join(consumer, ".git")
         && stack.includes("at permissionChange") && stack.includes("at unchangedAll")) {
         expect(fs.statSync(path.join(f.retainedRoot(), "cache")).mode & 0o777).toBe(0o555);
-        fs.writeFileSync(path.join(f.retainedRoot(), ".delegatus-keep"), "late checkout pin");
+        plantKeepMarker(path.join(f.retainedRoot(), ".delegatus-keep"), "late checkout pin");
         injected = true;
       }
       return value;

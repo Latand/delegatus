@@ -1,3 +1,4 @@
+import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,7 @@ import { attemptTempJournalPath } from "@/lib/tempSweep";
 import { RepositoryLinkInventory, repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
 
 const roots: string[] = [];
-afterEach(() => {
+afterEach(() => { removeKeepMarkers();
   for (const root of roots.splice(0)) {
     const restore = (directory: string) => {
       fs.chmodSync(directory, 0o700);
@@ -74,7 +75,7 @@ test.skipIf(process.platform !== "linux" || process.env.LLV_ATTEMPT_TEMP_DOCKER_
   .each([0o000, 0o111])("unreadable root mode %o uses parent binding and namespace protection", async mode => {
     for (const kind of ["remove", "keep", "late-keep", "replace"] as const) {
       const f = fixture(); fs.chmodSync(f.cache, 0o700);
-      if (kind === "keep") fs.writeFileSync(path.join(f.directory, ".delegatus-keep"), "pin");
+      if (kind === "keep") plantKeepMarker(path.join(f.directory, ".delegatus-keep"), "pin");
       fs.chmodSync(f.directory, mode);
       let injected = false, retained = f.directory;
       try {
@@ -85,7 +86,7 @@ test.skipIf(process.platform !== "linux" || process.env.LLV_ATTEMPT_TEMP_DOCKER_
                 retained = path.join(f.parent, "moved-root"); fs.renameSync(current, retained);
                 fs.mkdirSync(current); fs.writeFileSync(path.join(current, "replacement"), "protected");
               } else fs.chmodSync(current, 0o700);
-              fs.writeFileSync(path.join(current, ".delegatus-keep"), "pin");
+              plantKeepMarker(path.join(current, ".delegatus-keep"), "pin");
               fs.chmodSync(current, mode); injected = true;
             }
             return true;
@@ -204,7 +205,7 @@ test.skipIf(process.platform !== "linux").each(["move", "keep", "revision"] as c
           fs.chmodSync(cache, 0o755); fs.renameSync(cache, outside); fs.chmodSync(outside, 0o555);
         }
         if (mutation === "keep") {
-          fs.chmodSync(cache, 0o755); fs.writeFileSync(path.join(cache, ".delegatus-keep"), "pin"); fs.chmodSync(cache, 0o555);
+          fs.chmodSync(cache, 0o755); plantKeepMarker(path.join(cache, ".delegatus-keep"), "pin"); fs.chmodSync(cache, 0o555);
         }
         if (mutation === "revision") current = false;
       }
@@ -228,7 +229,7 @@ test.skipIf(process.platform !== "linux").each(["move", "keep", "revision"] as c
 test.skipIf(process.platform === "win32").each(["live", "unknown", "settled", "orphan", "keep", "git", "references", "dry-run", "revision", "expiry"] as const)(
   "an ineligible root is never permission-repaired (%s)", async reason => {
     const f = fixture();
-    if (reason === "keep") { fs.chmodSync(f.cache, 0o755); fs.writeFileSync(path.join(f.cache, ".delegatus-keep"), "pin"); fs.chmodSync(f.cache, 0o555); }
+    if (reason === "keep") { fs.chmodSync(f.cache, 0o755); plantKeepMarker(path.join(f.cache, ".delegatus-keep"), "pin"); fs.chmodSync(f.cache, 0o555); }
     if (reason === "git") fs.writeFileSync(path.join(f.directory, ".git"), "gitdir: ../outside\n");
     const states = new Set(["live", "unknown", "settled", "orphan"]);
     const state = (states.has(reason) ? reason : "expired") as AttemptTempState;
@@ -249,14 +250,14 @@ test.skipIf(process.platform !== "linux" || process.env.LLV_ATTEMPT_TEMP_DOCKER_
   "an expired unreadable tree preserves namespace protection (%s)", async kind => {
     const f = fixture(); fs.chmodSync(f.cache, 0o700); fs.mkdirSync(path.join(f.cache, "deep"));
     const pin = path.join(f.cache, "deep", ".delegatus-keep");
-    if (kind === "keep") fs.writeFileSync(pin, "pin");
+    if (kind === "keep") plantKeepMarker(pin, "pin");
     if (kind !== "late-keep") fs.chmodSync(f.cache, 0);
     let injected = false;
     try {
       const report = await sweepAttemptTemps(f.store, { now: () => NOW, maxRoots: 1, state: async () => "expired", scan: emptyScan,
         references: async () => {
           if (kind === "late-keep" && !injected) {
-            fs.chmodSync(f.cache, 0o700); fs.writeFileSync(pin, "late pin"); fs.chmodSync(f.cache, 0); injected = true;
+            fs.chmodSync(f.cache, 0o700); plantKeepMarker(pin, "late pin"); fs.chmodSync(f.cache, 0); injected = true;
           }
           return true;
         } });
@@ -286,7 +287,7 @@ test.skipIf(process.platform !== "linux").each(["move-child", "move-ancestor", "
         injected = true;
         const current = fs.realpathSync(String(file));
         if (kind === "keep") {
-          fs.chmodSync(current, 0o755); fs.writeFileSync(path.join(current, ".delegatus-keep"), "pin"); fs.chmodSync(current, 0o555);
+          fs.chmodSync(current, 0o755); plantKeepMarker(path.join(current, ".delegatus-keep"), "pin"); fs.chmodSync(current, 0o555);
         } else {
           const moving = kind === "move-ancestor" ? path.dirname(current) : current;
           const priorMode = fs.statSync(moving).mode & 0o777;

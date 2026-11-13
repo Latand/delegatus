@@ -1047,3 +1047,39 @@ test("a marked root the attempt ledger does not list stays and is reported as he
   expect(report.held).toEqual([{ path: unlisted, via: "", reason: "attempt-owner-unlisted", bytes: 0 }]);
   expect(tempSweepStatus(report)?.heldCounts).toEqual({ "attempt-owner-unlisted": 1 });
 });
+
+// The integration keeps W4 restoration and retention's last dispatch fence.
+test.each([false, true])("trash custody follows the removal boundary (started=%s)", async started => {
+  const { removeTreeViaTrash, finishTreeTrash } = await import("./tempSweep");
+  const root = tempRoot(), directory = path.join(root, "root"), journal = path.join(root, "intent.json");
+  fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "payload"), "preserved bytes");
+  fs.writeFileSync(path.join(directory, "disposable"), "remove first");
+  const inode = fs.statSync(directory).ino;
+  const failure = new Error("fixture native removal interrupted");
+  await expect(removeTreeViaTrash(directory, { journal, held: () => false,
+    remove: async (trash, markStarted) => {
+      if (started) { markStarted(); fs.unlinkSync(path.join(trash, "disposable")); }
+      throw failure;
+    },
+  })).rejects.toBe(failure);
+  expect(fs.existsSync(journal)).toBe(started);
+  expect(fs.existsSync(directory)).toBe(!started);
+  if (started) {
+    const { trash } = JSON.parse(fs.readFileSync(journal, "utf8")) as { trash: string };
+    expect(fs.statSync(trash).ino).toBe(inode);
+    expect(fs.readFileSync(path.join(trash, "payload"), "utf8")).toBe("preserved bytes");
+    expect(fs.existsSync(path.join(trash, "disposable"))).toBeFalse();
+    // A final dispatch refusal retains the interrupted tree and its intent.
+    expect(await finishTreeTrash(journal, () => false, undefined, undefined, false, () => false)).toBeFalse();
+    expect(fs.readFileSync(path.join(trash, "payload"), "utf8")).toBe("preserved bytes");
+    expect(fs.existsSync(journal)).toBeTrue();
+    expect(await finishTreeTrash(journal, () => false, undefined, undefined, false, () => true)).toBeTrue();
+  } else {
+    expect(fs.statSync(directory).ino).toBe(inode);
+    expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("preserved bytes");
+    expect(fs.readFileSync(path.join(directory, "disposable"), "utf8")).toBe("remove first");
+    expect(await removeTreeViaTrash(directory, { journal, held: () => false })).toBeTrue();
+  }
+  expect(fs.readdirSync(root)).toEqual([]);
+});

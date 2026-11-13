@@ -1,3 +1,4 @@
+import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,8 +7,10 @@ import { TemporaryDataStore } from "./temporaryDataStore";
 import { sweepTemporaryData } from "./temporaryDataRetention";
 import { attemptTempJournalPath, removeTreeViaTrash } from "@/lib/tempSweep";
 
+// A replay fixture must cross the irreversible-removal boundary. A refusal
+// before started() now restores the original root and clears its journal (W4).
 const roots: string[] = [], stores: TemporaryDataStore[] = [];
-afterEach(() => {
+afterEach(() => { removeKeepMarkers();
   for (const store of stores.splice(0)) store.close();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
@@ -27,7 +30,7 @@ for (const replay of [false, true]) for (const seam of ["close", "authority"]) f
      adoptedAt: 0, checkedAt: 0, bytes: 0, reason: "fixture" });
    if (replay) {
      await expect(removeTreeViaTrash(directory, { journal, disposable: true, held: () => false,
-       remove: async () => { throw new Error("fixture interruption before native removal"); }
+       remove: async (_trash, started) => { started(); throw new Error("fixture interruption during native removal"); }
      })).rejects.toThrow("fixture interruption");
      expect(fs.existsSync(journal)).toBeTrue();
      store.close(); stores.splice(stores.indexOf(store), 1);
@@ -36,8 +39,8 @@ for (const replay of [false, true]) for (const seam of ["close", "authority"]) f
    let mounts = 0, armed = false, closed = false, planted = false, allowed = true, plantedPath = "";
    const plant = () => {
      planted = true;
-     if (mutation === "marker") fs.writeFileSync(path.join(plantedPath, ".delegatus-keep"), "keep");
-     if (mutation === "ancestor-marker") fs.writeFileSync(path.join(scope, ".delegatus-keep"), "keep");
+     if (mutation === "marker") plantKeepMarker(path.join(plantedPath, ".delegatus-keep"), "keep");
+     if (mutation === "ancestor-marker") plantKeepMarker(path.join(scope, ".delegatus-keep"), "keep");
      if (mutation === "authority") allowed = false;
      if (mutation === "content") fs.writeFileSync(path.join(root, "outside-link"), "late content");
      if (mutation === "checkout") fs.symlinkSync(directory, path.join(checkout, "late-link"));
@@ -126,7 +129,7 @@ for (const replay of [false, true]) for (const binding of ["target", "hop", "par
       adoptedAt: 0, checkedAt: 0, bytes: 0, reason: "fixture" });
     if (replay) {
       await expect(removeTreeViaTrash(directory, { journal, disposable: true, held: () => false,
-        remove: async () => { throw new Error("fixture interruption before native removal"); }
+        remove: async (_trash, started) => { started(); throw new Error("fixture interruption during native removal"); }
       })).rejects.toThrow("fixture interruption");
       expect(fs.existsSync(journal)).toBeTrue();
       store.close(); stores.splice(stores.indexOf(store), 1);

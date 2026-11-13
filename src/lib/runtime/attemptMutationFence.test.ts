@@ -1,3 +1,4 @@
+import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +7,7 @@ import { afterEach, expect, test } from "bun:test";
 import { attemptMutationCurrent, attemptPathWatches } from "./attemptMutationFence";
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { removeKeepMarkers(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mutation-fence-")); roots.push(root);
   const tree = path.join(root, "tree"), checkout = path.join(root, "checkout");
@@ -21,8 +22,8 @@ test.skipIf(process.platform !== "linux").each(["tree", "checkout"] as const)(
       // Both validators may return stale successful observations. The queue
       // must reject either ordering without relying on a JS watcher callback.
       fs.lstatSync(f.tree); fs.lstatSync(f.checkout);
-      execFileSync(process.execPath, ["-e", 'require("node:fs").writeFileSync(process.argv[1], "pin")',
-        path.join(f[changed], ".delegatus-keep")]);
+      execFileSync(process.execPath, ["-e", 'require(process.argv[2]).plantKeepMarker(process.argv[1], "pin")',
+        path.join(f[changed], ".delegatus-keep"), path.join(import.meta.dir, "keepMarker.testSupport.ts")]);
       return true;
     });
     expect(current).toBeFalse();
@@ -115,7 +116,7 @@ test.skipIf(process.platform !== "linux")("row authority runs after observations
   expect(() => attemptMutationCurrent([f.tree], () => { current = false; return true; }, 30_000, () => current))
     .toThrow("fence authority changed");
   expect(() => attemptMutationCurrent([f.tree], () => true, 30_000, () => {
-    fs.writeFileSync(path.join(f.tree, ".delegatus-keep"), "pin"); return true;
+    plantKeepMarker(path.join(f.tree, ".delegatus-keep"), "pin"); return true;
   })).toThrow("filesystem proof changed");
 });
 

@@ -1,3 +1,4 @@
+import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,7 +9,7 @@ import { sweepTemporaryData, temporaryDataProtection, TEMPORARY_DATA_RETENTION_M
 
 const roots: string[] = [], stores: TemporaryDataStore[] = [];
 const NOW = Date.UTC(2035, 0, 15);
-afterEach(() => { for (const store of stores.splice(0)) store.close(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { removeKeepMarkers(); for (const store of stores.splice(0)) store.close(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 function fixture(directory = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "temporary-retention-")); roots.push(root);
   const scope = path.join(root, "evidence"), candidate = path.join(scope, "lane", directory ? "captures" : "capture.png");
@@ -47,7 +48,7 @@ test.each(["young", "open-lane", "owner-missing"])("%s authority retains evidenc
 });
 
 test.each(["ancestor", "descendant"])("a %s keep marker retains evidence", async where => {
-  const f = fixture(); fs.writeFileSync(path.join(where === "ancestor" ? path.dirname(f.row.directory) : f.row.directory, ".delegatus-keep"), "keep");
+  const f = fixture(); plantKeepMarker(path.join(where === "ancestor" ? path.dirname(f.row.directory) : f.row.directory, ".delegatus-keep"), "keep");
   const report = await sweepTemporaryData(f.store, f.ports);
   expect(report.removed).toBe(0); expect(report.kept["keep-marker"]).toBe(1);
 });
@@ -91,7 +92,7 @@ test("a keep marker planted during the last protection listing blocks dispatch",
   const spy = spyOn(fs, "opendirSync").mockImplementation(((directory: fs.PathLike, ...args: unknown[]) => {
     const stream = (original as (...values: unknown[]) => fs.Dir).call(fs, directory, ...args);
     if (armed && !planted && String(directory).includes(".delegatus-trash-")) {
-      fs.writeFileSync(marker, "late hold"); planted = true;
+      plantKeepMarker(marker, "late hold"); planted = true;
     }
     return stream;
   }) as typeof fs.opendirSync);
@@ -118,7 +119,7 @@ test("last protection reads recheck descendant markers and authority before dele
       const close = stream.closeSync.bind(stream);
       stream.closeSync = () => {
         close();
-        fs.writeFileSync(path.join(String(directory), markerName), "late hold");
+        plantKeepMarker(path.join(String(directory), markerName), "late hold");
         allowed = false;
         planted = true;
       };
@@ -142,7 +143,7 @@ test("last protection reads recheck descendant markers and authority before dele
 test.each([true, false])("a keep marker appearing after quarantine restores the candidate (%s)", async directory => {
   const f = fixture(directory); let calls = 0;
   const report = await sweepTemporaryData(f.store, { ...f.ports, references: async (_row, target) => {
-    if (++calls === 2) fs.writeFileSync(path.join(path.dirname(target), ".delegatus-keep"), "new hold"); return true;
+    if (++calls === 2) plantKeepMarker(path.join(path.dirname(target), ".delegatus-keep"), "new hold"); return true;
   } });
   expect(report.removed).toBe(0); expect(fs.existsSync(f.row.directory)).toBeTrue();
   expect(fs.existsSync(attemptTempJournalPath(f.row.directory))).toBeFalse();
@@ -153,7 +154,7 @@ test.each([true, false])("a keep marker created by the final mount read retains 
   const read = fs.readFileSync; let mountReads = 0, planted = false;
   const readSpy = spyOn(fs, "readFileSync").mockImplementation(((file: unknown, ...args: unknown[]) => {
     const result = (read as (...values: unknown[]) => unknown)(file, ...args);
-    if (String(file) === "/proc/self/mountinfo" && ++mountReads === 4) { fs.writeFileSync(marker, "keep"); planted = true; }
+    if (String(file) === "/proc/self/mountinfo" && ++mountReads === 4) { plantKeepMarker(marker, "keep"); planted = true; }
     return result;
   }) as typeof fs.readFileSync);
   try {
@@ -253,7 +254,7 @@ test("quarantine replay restores the same identity when a keep marker appears at
   let mountReads = 0, planted = false;
   const readSpy = spyOn(fs, "readFileSync").mockImplementation(((file: unknown, ...args: unknown[]) => {
     const result = (read as (...values: unknown[]) => unknown)(file, ...args);
-    if (String(file) === "/proc/self/mountinfo" && ++mountReads === 4) { fs.writeFileSync(marker, "keep"); planted = true; }
+    if (String(file) === "/proc/self/mountinfo" && ++mountReads === 4) { plantKeepMarker(marker, "keep"); planted = true; }
     return result;
   }) as typeof fs.readFileSync);
   try {
