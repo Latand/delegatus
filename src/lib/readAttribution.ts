@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { Worker, isMainThread, parentPort, threadId } from "node:worker_threads";
+import { attachSqliteMemoryWorker } from "./sqliteMemoryDiagnostics";
 
 export type ReadCounter = { bytes: number; observerBytes: number; observerMs?: number; degraded?: boolean; available?: boolean;
   sampledAt?: number; sequence?: number; owner?: number; };
@@ -319,6 +320,7 @@ export const readAttribution = shared.__delegatusReadAttribution ??= createReadA
 /** Attach bounded worker batches to the parent process monitor. */
 export function attachReadAttributionWorker(worker: Worker, identity: string): () => void {
   if (!/^[a-z0-9][a-z0-9._-]{0,47}$/i.test(identity)) throw new Error("worker attribution identity must be a short static label");
+  const detachMemory = attachSqliteMemoryWorker(worker);
   const listener = (message: unknown) => {
     if (!message || typeof message !== "object" || (message as { type?: unknown }).type !== "delegatus-read-attribution") return;
     const batch = message as { threadId: number; events: WorkerReadEvent[]; dropped: number };
@@ -327,5 +329,5 @@ export function attachReadAttributionWorker(worker: Worker, identity: string): (
     catch { readAttribution.noteWorkerTransportDrop(); }
   };
   worker.on("message", listener);
-  return () => worker.off("message", listener);
+  return () => { detachMemory(); worker.off("message", listener); };
 }

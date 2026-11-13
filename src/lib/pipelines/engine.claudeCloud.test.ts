@@ -5,7 +5,6 @@ import { spawnSync } from "node:child_process";
 import { settlePipelineControllerJobs } from "./controllerJobs";
 import { createClaudeCloudStageClient } from "./cloudClaudeClient";
 import { fakeClaudeCloud } from "./claudeCloud.fixture";
-import { statePath } from "@/lib/configDir";
 import { resetProjectSettingsForTests, setClaudeCloudTaskFor, setClaudeCloudTasks } from "@/lib/projects/settings";
 import type { PipelineStageInput } from "./types";
 
@@ -19,7 +18,6 @@ let fixtureSequence = 0;
 async function fixture(options: Parameters<typeof fakeClaudeCloud>[0] & { stages?: PipelineStageInput[]; repoDir?: string; taskBinding?: boolean } = {}) {
   await settlePipelineControllerJobs();
   resetProjectSettingsForTests();
-  fs.rmSync(statePath("cloud/claude-write-access.json"), { force: true });
   const h = harness();
   let clock = Date.UTC(2026, 10, 1);
   h.ports.now = () => new Date(clock).toISOString();
@@ -63,6 +61,30 @@ test("a Claude cloud reviewer runs as one session on the account's login and set
     /* The run call carries a header only: the brief goes as the account's own follow-ups. */
     expect(JSON.stringify(fake.calls.find(call => call.path.endsWith("/run"))!.body)).not.toContain("Preserve the accepted scope.");
   } finally { fake.stop(); }
+});
+
+test("a write-capable GitHub connection is never queried and the stage completes in the cloud", async () => {
+  const { h, fake } = await fixture();
+  const client = h.ports.claudeCloudClient!;
+  // Any GitHub permission request would succeed; cloud admission must never depend on it.
+  const githubCalls: string[] = [];
+  h.ports.claudeCloudClient = createClaudeCloudStageClient({ ...fake.dependencies, fetch: (async (target, init) => {
+    const url = new URL(typeof target === "string" || target instanceof URL ? target : target.url);
+    if (url.origin === "https://api.github.com") {
+      githubCalls.push(url.pathname);
+      return Response.json({ permissions: { pull: true, push: true, admin: false } });
+    }
+    return fake.dependencies.fetch!(target, init);
+  }) as typeof fetch });
+  try {
+    for (let i = 0; i < 10 && !attempt()?.verdict; i++) await step(h);
+    expect(attempt().verdict).toMatchObject({ status: "pass", findings: [] });
+    expect(attempt().executionRuntime).toBe("cloud");
+    expect(attempt().cloud?.fallback).toBeUndefined();
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(fake.runCalls()).toBe(1);
+    expect(githubCalls).toEqual([]);
+  } finally { h.ports.claudeCloudClient = client; fake.stop(); }
 });
 
 test("the session receipt survives a real process restart and the session completes without a second run", async () => {
@@ -152,16 +174,6 @@ test.each([
     expect(fake.runCalls()).toBe(1);
     expect(h.spawnInputs).toHaveLength(1);
     expect(attempt().cloud?.fallback?.reason).toContain(cause);
-  } finally { fake.stop(); }
-});
-
-test("a session that can write to GitHub gets no assignment and the stage runs locally with that cause", async () => {
-  const { h, fake } = await fixture({ probe: { comment: "write" } });
-  try {
-    for (let i = 0; i < 6 && !h.spawnInputs.length; i++) await step(h);
-    expect(fake.sent.filter(text => text.startsWith("Input part"))).toEqual([]);
-    expect(attempt().cloud?.fallback?.reason).toContain("can write to GitHub");
-    expect(h.spawnInputs).toHaveLength(1);
   } finally { fake.stop(); }
 });
 

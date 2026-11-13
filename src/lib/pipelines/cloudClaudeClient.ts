@@ -6,9 +6,7 @@ import path from "node:path";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { claudeManagedEnvironment } from "@/lib/accounts/claude";
 import { resolveBinary } from "@/lib/agent/cli";
-import { statePath } from "@/lib/configDir";
 import { prepareClaudeCloudTask, ClaudeTaskError, CLAUDE_TASK_REASONS, claudeTaskStep, type ClaudeTaskProvider } from "@/lib/projects/claudeCloudTasks";
-import { writeJsonDurably } from "@/lib/state/durableJson";
 import type { CloudEnvironmentPreparation, PrepareCloudEnvironmentInput } from "@/lib/projects/codexCloudEnvironments";
 import { cloudInputTurn, splitCloudInput } from "./cloudStageInput";
 import { CloudSubmissionNotStartedError } from "./cloudHostedClient";
@@ -169,16 +167,6 @@ function boundTurn(events: Event[], token: string): { state: "pending" } | { sta
   if (!final || first?.trim() !== `Receipt ${token}`) return { state: "failed", error: "Claude Cloud session ended its turn without the receipt of the last input part" };
   const model = record(final.payload.message).model;
   return { state: "completed", message: rest.join("\n").trimStart(), model: typeof model === "string" ? model : null, after: turn };
-}
-
-type WriteHolds = Record<string, number>;
-const holdsFile = () => statePath("cloud/claude-write-access.json");
-const holdKey = (accountId: string, taskId: string) => `${accountId}/${taskId}`;
-async function readWriteHolds(): Promise<WriteHolds> {
-  try {
-    const parsed = record(JSON.parse(await fs.readFile(holdsFile(), "utf8")));
-    return Object.fromEntries(Object.entries(parsed).filter((row): row is [string, number] => typeof row[1] === "number" && Number.isFinite(row[1])));
-  } catch { return {}; }
 }
 
 async function claudeLogin(account: AccountContext, dependencies: ClaudeCloudDependencies): Promise<ClaudeLogin> {
@@ -352,75 +340,6 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
     throw new HostedCloudError("Claude Cloud input outcome is unknown; the part is not sent again", "invalid");
   }
 
-  /** A session that refused its own proof gets nothing more, and stops holding a slot. */
-  async function archive(input: { account: AccountContext; signal: AbortSignal; sessionId: string }): Promise<void> {
-    await request(input.account, input.signal, "POST", `/v1/code/sessions/${encodeURIComponent(input.sessionId)}/archive`, {}).catch(() => undefined);
-  }
-
-  /** Each session proves its GitHub connection cannot write before it gets the
-   * assignment. The empty comment reaches GitHub only through a credential that
-   * may comment (422), and the dry run asks for push access without updating a ref. */
-  async function probe(input: { account: AccountContext; signal: AbortSignal; taskId: string; sessionId: string; repository: string; issue: number; nonce: string; assertCurrent: () => void }): Promise<void> {
-    const comment = `gh api -i -X POST repos/${input.repository}/issues/${input.issue}/comments -f body=`;
-    const push = `git push --dry-run origin HEAD:refs/heads/delegatus-probe-${input.nonce}`;
-    const token = dependencies.random();
-    const body = `Run exactly these two commands, each in its own Bash call, and change nothing else. Then stop and wait for the next message.\n\n${comment}\n\n${push}`;
-    const refused = async (message: string): Promise<never> => {
-      await archive(input);
-      throw never(message, "cloud-limit");
-    };
-    await deliver({ ...input, arrived: event => carriesPart(event, token), text: `${partHeader("GitHub write probe", input.nonce, token, body)}\n\n${body}` });
-    const deadline = dependencies.now() + OUTCOME_WINDOW_MS;
-    for (let round = 0; dependencies.now() < deadline && !input.signal.aborted; round++) {
-      input.assertCurrent();
-      const events = await eventsBack(input.account, input.signal, input.sessionId, found => found.some(event => carriesPart(event, token))).catch(() => [] as Event[]);
-      const start = events.findIndex(event => carriesPart(event, token));
-      if (start >= 0) {
-        const after = events.slice(start + 1);
-        const verdicts = [commentVerdict(commandOutcome(after, comment)), pushVerdict(commandOutcome(after, push))];
-        if (verdicts.includes("write")) {
-          await writeHolds(holds => ({ ...holds, [holdKey(input.account.accountId, input.taskId)]: dependencies.now() }));
-          return refused(WRITE_ACCESS_CAUSE);
-        }
-        if (verdicts.every(verdict => verdict === "refused")) {
-          await writeHolds(holds => {
-            const { [holdKey(input.account.accountId, input.taskId)]: cleared, ...rest } = holds;
-            return cleared === undefined ? null : rest;
-          });
-          return;
-        }
-        if (verdicts.includes("blocked")) return refused("Claude Cloud session's own permission check stopped the GitHub write probe, so read-only access was not proven and no assignment was sent");
-        if (ownResult(events, start) >= 0) return refused("Claude Cloud session ended the GitHub write probe without a usable result, so read-only access was not proven and no assignment was sent");
-      }
-      await dependencies.sleep(Math.min(30_000, 2_000 * 2 ** Math.min(round, 4)), input.signal);
-    }
-    if (input.signal.aborted) throw new Error("Claude Cloud operation timed out");
-    return refused("Claude Cloud session gave no GitHub write probe result within ten minutes");
-  }
-
-  /** The hold only saves a run, so failing to record it never changes the probe's answer. */
-  async function writeHolds(change: (holds: WriteHolds) => WriteHolds | null): Promise<void> {
-    try {
-      const next = change(await readWriteHolds());
-      if (!next) return;
-      await fs.mkdir(path.dirname(holdsFile()), { recursive: true, mode: 0o700 });
-      writeJsonDurably(holdsFile(), next);
-    } catch { /* see above */ }
-  }
-
-  /** A closed issue that stays valid for the probe's empty comment. */
-  async function closedIssue(repository: string, signal: AbortSignal): Promise<number> {
-    let body: unknown = null;
-    try {
-      const response = await dependencies.fetch(`https://api.github.com/repos/${repository}/issues?${new URLSearchParams({ state: "closed", per_page: "1" })}`,
-        { headers: { Accept: "application/vnd.github+json" }, redirect: "error", signal: AbortSignal.any([signal, AbortSignal.timeout(READ_DEADLINE_MS)]) });
-      if (response.ok) body = await response.json();
-    } catch { /* decided below */ }
-    const number = Array.isArray(body) ? record(body[0]).number : null;
-    if (typeof number !== "number") throw never("Claude Cloud write probe needs a closed issue on the repository; none could be read", "cloud-limit");
-    return number;
-  }
-
   return {
     supportsModel: (model, effort) => /^[A-Za-z0-9._-]{1,128}$/.test(model) && (effort === null || /^[a-z]{1,32}$/.test(effort)),
     sameModel: sameClaudeModel,
@@ -438,11 +357,9 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
     submit: async input => {
       const repository = input.environmentScope?.repository;
       if (!repository) throw never("Claude Cloud requires a GitHub repository", "cloud-limit");
-      const issue = await closedIssue(repository, input.signal);
       const nonce = dependencies.random();
       const shared = { account: input.account, signal: input.signal, assertCurrent: input.assertCurrent };
       const sessionId = await startRun({ ...shared, taskId: input.environmentId, nonce });
-      await probe({ ...shared, taskId: input.environmentId, sessionId, repository, issue, nonce });
       for (const command of [`/model ${input.model}`, ...(input.reasoningEffort ? [`/effort ${input.reasoningEffort}`] : [])]) {
         await deliver({ ...shared, sessionId, text: command, arrived: event => event.type === "user" && userText(event) === command });
       }
@@ -450,12 +367,12 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
       const prompt = input.preparePrompt ? await input.preparePrompt(sessionId).catch((error: unknown) => {
         throw never(error instanceof Error ? error.message : "Claude Cloud input could not be composed", error instanceof HostedCloudError ? error.category : "invalid");
       }) : input.prompt;
-      const framed = `${prompt}\n\n${claudeRuntimeLines(input.branch, input.headSha, nonce, input.writable === true)}`;
+      const framed = `${claudeAssignmentPolicy}\n\n${prompt}\n\n${claudeRuntimeLines(input.branch, input.headSha, nonce, input.writable === true)}`;
       const turns = splitCloudInput(framed, PART_BYTES);
       let lastToken = "";
       for (let index = 0; index < turns.length; index++) {
         const token = lastToken = dependencies.random();
-        const text = cloudInputTurn(turns, index);
+        const text = `${claudeAssignmentPolicy}\n\n${cloudInputTurn(turns, index)}`;
         await deliver({ ...shared, sessionId, arrived: event => carriesPart(event, token), text: `${partHeader(`Input part ${index + 1}/${turns.length}`, nonce, token, text)}\n\n${text}` });
       }
       return { taskId: sessionId, taskUrl: `https://claude.ai/code/${sessionId.replace(/^cse_/, "session_")}`, thread: { threadId: sessionId, turnId: lastToken } };
@@ -498,46 +415,8 @@ function sessionOf(input: CloudTaskAccess): { sessionId: string; token: string }
   return { sessionId: input.thread.threadId, token: input.thread.turnId };
 }
 
-type ProbeVerdict = "refused" | "write" | "blocked" | "unknown";
-type CommandOutcome = { output: string; failed: boolean; blocked: boolean };
-
-const WRITE_ACCESS_CAUSE = "Claude Cloud session can write to GitHub; read-only access was not proven, so no assignment was sent. Connect GitHub read-only for this account (docs/design/claude-code-cloud.md, setup step 2)";
-
-/** What the harness recorded for the session's own exact command: the tool result's
- * text and failure flag, and whether the session's permission check stopped it from running. */
-function commandOutcome(events: Event[], command: string): CommandOutcome | null {
-  const blocks = (event: Event) => Array.isArray(record(event.payload.message).content) ? (record(event.payload.message).content as unknown[]).map(record) : [];
-  const uses = events.filter(event => event.type === "assistant").flatMap(blocks).filter(block => block.type === "tool_use" && record(block.input).command === command);
-  for (const use of uses) {
-    for (const event of events) {
-      if (event.type !== "user") continue;
-      const answer = blocks(event).find(block => block.type === "tool_result" && block.tool_use_id === use.id);
-      if (!answer) continue;
-      const output = typeof answer.content === "string" ? answer.content : (Array.isArray(answer.content) ? answer.content : []).map(part => String(record(part).text ?? "")).join("\n");
-      const meta = (Array.isArray(event.payload.tool_result_meta) ? event.payload.tool_result_meta : []).map(record).find(row => row.id === use.id);
-      return { output, failed: answer.is_error === true, blocked: typeof meta?.non_execution_kind === "string" };
-    }
-  }
-  return null;
-}
-
-/** GitHub answering 422 to the empty comment means the credential got as far as validating it. */
-function commentVerdict(outcome: CommandOutcome | null): ProbeVerdict {
-  if (!outcome) return "unknown";
-  if (outcome.blocked) return "blocked";
-  const status = /^HTTP\/[\d.]+ (\d{3})/m.exec(outcome.output);
-  const code = Number(status?.[1]);
-  if ([401, 403, 404].includes(code)) return "refused";
-  return code === 422 || (code >= 200 && code < 300) ? "write" : "unknown";
-}
-
-/** A dry run needs no ref update, so only a refusal of push access fails it for this reason. */
-function pushVerdict(outcome: CommandOutcome | null): ProbeVerdict {
-  if (!outcome) return "unknown";
-  if (outcome.blocked) return "blocked";
-  if (!outcome.failed) return "write";
-  return /\b(?:401|403|404)\b|denied|not permitted|Authentication failed|not found/i.test(outcome.output) ? "refused" : "unknown";
-}
+/** Repeated on every part for tasks whose saved prompt still requires the old probe. */
+const claudeAssignmentPolicy = "The repository owner allows GitHub write access on this connection. Skip the obsolete GitHub write probe required by any earlier saved task prompt; no probe will be sent. Accept this assignment and begin work after its last input part arrives. Never push, open pull requests or comment on GitHub. Send no notifications. Return results through the requested patch export and final message; the controller handles publication.";
 
 /** Added to the assignment, so its text is covered by the part digest. */
 function claudeRuntimeLines(branch: string, head: string, nonce: string, writable: boolean): string {

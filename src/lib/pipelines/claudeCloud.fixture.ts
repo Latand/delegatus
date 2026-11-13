@@ -3,8 +3,6 @@ import type { ClaudeCloudDependencies, ClaudeSendOutcome } from "./cloudClaudeCl
 
 type Row = Record<string, unknown>;
 
-type ProbeResult = "refused" | "write" | "blocked" | "silent";
-
 /** A session's shell: native tools, its own home, and nothing inherited from a Git hook above this test. */
 export const sessionShellEnvironment = (home: string): NodeJS.ProcessEnv => ({ NODE_ENV: "test", PATH: `/usr/bin:/bin:${process.env.PATH ?? ""}`, HOME: home, LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" });
 
@@ -16,13 +14,11 @@ export function fakeClaudeCloud(options: {
   preparationAnswer?: (method: string, path: string, body: Row | null) => Response | Promise<Response> | null;
   beforeRun?: () => Promise<void>;
   runAnswer?: () => Response; sessionId?: string;
-  probe?: { comment?: ProbeResult; push?: ProbeResult };
   exportDiff?: string; finalMessage?: string;
   /** Runs the exact export commands the assignment asked for in this checkout, as a session would. */
   exportFrom?: { cwd: string; home: string };
   /** Replaces the fake's session behaviour for a sent message. */
   onSend?: (text: string, sessionId: string) => ClaudeSendOutcome | null;
-  closedIssue?: number | null;
 } = {}) {
   const sessionId = options.sessionId ?? "cse_fixture0001";
   const sessions = new Map<string, { created: string; events: Row[]; status: string }>();
@@ -50,20 +46,6 @@ export function fakeClaudeCloud(options: {
     push(id, { type: "user", uuid: `result-${useId}`, message: { role: "user", content: [{ type: "tool_result", tool_use_id: useId, content: stdout, is_error: false }] },
       tool_use_result: { interrupted: false, isImage: false, noOutputExpected: false, stderr: "", stdout } });
   };
-  /** A non-zero exit: the result text leads with the code and `tool_use_result` is a string. */
-  const bashFailed = (id: string, useId: string, command: string, output: string, exit = 1) => {
-    assistant(id, [{ type: "tool_use", id: useId, name: "Bash", input: { command } }]);
-    push(id, { type: "user", uuid: `result-${useId}`, message: { role: "user", content: [{ type: "tool_result", tool_use_id: useId, content: `Exit code ${exit}\n${output}`, is_error: true }] },
-      tool_use_result: `Error: Exit code ${exit}\n${output}` });
-  };
-  /** The session's permission check stopped the call: it never ran. */
-  const bashBlocked = (id: string, useId: string, command: string) => {
-    assistant(id, [{ type: "tool_use", id: useId, name: "Bash", input: { command } }]);
-    const text = "Permission for this action was denied by the Claude Code auto mode classifier. Reason: [External System Writes].";
-    push(id, { type: "system", subtype: "permission_denied", tool_name: "Bash", tool_use_id: useId, message: text });
-    push(id, { type: "user", uuid: `result-${useId}`, message: { role: "user", content: [{ type: "tool_result", tool_use_id: useId, content: text, is_error: true }] },
-      tool_result_meta: [{ id: useId, non_execution_kind: "automode-blocked", permission_decision: { decision: "reject", reason_type: "classifier", source: "config" } }], tool_use_result: `Error: ${text}` });
-  };
   const tasks = new Map<string, Row>((options.tasks ?? []).map(t => [String(t.id), structuredClone(t)]));
   let taskOverride = options.task === undefined ? undefined : structuredClone(options.task);
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
@@ -71,7 +53,6 @@ export function fakeClaudeCloud(options: {
     const body = request.method === "POST" ? await request.json().catch(() => null) as Row | null : null;
     const login = request.headers.get("authorization"), organization = request.headers.get("x-organization-uuid");
     calls.push({ method: request.method, path: url.pathname + url.search, login, organization, body });
-    if (url.pathname.endsWith("/issues")) return Response.json(options.closedIssue === null ? [] : [{ number: options.closedIssue ?? 7, state: "closed" }]);
     if (url.pathname.includes("/triggers") && !url.pathname.endsWith("/run") || url.pathname.includes("/environment_providers") || url.pathname.endsWith("/sync/github/auth")) {
       const replaced = options.preparationAnswer?.(request.method, url.pathname, body);
       if (replaced) return await replaced;
@@ -103,7 +84,9 @@ export function fakeClaudeCloud(options: {
     if (/^\/v1\/code\/triggers\/[^/]+\/run$/.test(url.pathname)) {
       if (options.beforeRun) await options.beforeRun();
       if (options.runAnswer) return options.runAnswer();
-      open(sessionId, `<routine-fire-payload>${String(body?.text)}</routine-fire-payload>`);
+      const ccr = (options.task?.job_config as Row | undefined)?.ccr as Row | undefined;
+      const context = ccr?.session_context as Row | undefined;
+      open(sessionId, `${String(context?.prompt ?? "")}\n<routine-fire-payload>${String(body?.text)}</routine-fire-payload>`);
       return Response.json({ conversation_id: "", session_id: sessionId, trigger: { id: "task-1", enabled: true } });
     }
     if (url.pathname === "/v1/code/sessions") return Response.json({ data: [...sessions].map(([id, session]) => ({ id, created_at: session.created, status: session.status })), next_cursor: null });
@@ -129,7 +112,7 @@ export function fakeClaudeCloud(options: {
     deliver(input.text, input.sessionId);
     return { state: "queued" };
   };
-  /** What a session does with a part: runs the probe, or does the work on the last part. */
+  /** A session does the work once its last part arrives. */
   function deliver(text: string, id: string) {
     const token = /token ([a-z0-9-]+),/.exec(text)?.[1] ?? "";
     if (text.startsWith("/")) {
@@ -141,19 +124,6 @@ export function fakeClaudeCloud(options: {
     }
     const uuid = `user-${token}`;
     push(id, { type: "user", uuid, message: { role: "user", content: text } });
-    if (text.startsWith("GitHub write probe")) {
-      const comment = text.split("\n").find(line => line.startsWith("gh api "))!, dryRun = text.split("\n").find(line => line.startsWith("git push "))!;
-      const results = { comment: "refused", push: "refused", ...options.probe };
-      if (results.comment === "blocked") bashBlocked(id, `probe-${token}-1`, comment);
-      else if (results.comment === "write") bashFailed(id, `probe-${token}-1`, comment, 'HTTP/1.1 422 Unprocessable Entity\r\nServer: github.com\r\n\r\n{"message":"Validation Failed"}gh: Validation Failed (HTTP 422)');
-      else if (results.comment === "refused") bashFailed(id, `probe-${token}-1`, comment, 'HTTP/1.1 403 Forbidden\r\n\r\n{"message":"Resource not accessible by integration"}gh: Resource not accessible by integration (HTTP 403)');
-      if (results.push === "blocked") bashBlocked(id, `probe-${token}-2`, dryRun);
-      else if (results.push === "write") bash(id, `probe-${token}-2`, dryRun, "To https://github.com/sample/project\n * [new branch]      HEAD -> probe");
-      else if (results.push === "refused") bashFailed(id, `probe-${token}-2`, dryRun, "remote: Permission to sample/project.git denied.\nfatal: unable to access 'https://github.com/sample/project/': The requested URL returned error: 403", 128);
-      assistant(id, [{ type: "text", text: 'Probe done.\n```json\n{"status":"pass","findings":[]}\n```' }]);
-      endTurn(id, uuid);
-      return;
-    }
     const part = /^Input part (\d+)\/(\d+),/.exec(text);
     if (!part || part[1] !== part[2]) return;
     if (options.exportFrom) runExport(id, token, text, options.exportFrom);
@@ -187,7 +157,7 @@ export function fakeClaudeCloud(options: {
   const dependencies: Partial<ClaudeCloudDependencies> = {
     fetch: ((target: string | URL | Request, init?: RequestInit) => {
       const original = new URL(typeof target === "string" || target instanceof URL ? target : target.url);
-      if (!["https://api.anthropic.com", "https://api.github.com"].includes(original.origin)) throw new Error("unexpected provider destination");
+      if (original.origin !== "https://api.anthropic.com") throw new Error("unexpected provider destination");
       return fetch(new URL(original.pathname + original.search, origin), init);
     }) as typeof fetch,
     readLogin: async account => {

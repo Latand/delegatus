@@ -1,3 +1,4 @@
+import { withBriefWarnings, type BriefWarning } from "./briefWarnings";
 import { declaredClassSchema, repeatReasonSchema, type RepeatReason } from "./accounting";
 import { settleClosedPipelineAttempts } from "./closeAttempts";
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
@@ -188,7 +189,7 @@ import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLi
 import { recordedAttemptReceipts, recordedHostHeld } from "@/lib/recordedChecks/store";
 import { recordedReportReceipts } from "@/lib/recordedChecks/reportGate";
 import { pipelineRecordRevalidator } from "./revalidation";
-import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
+import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, completedComparisonPass, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
@@ -491,6 +492,8 @@ export interface PipelinePorts {
   /** Repair custody needs host absence even when its last turn completed.
       Null retains missing, conflicting or unavailable runtime evidence. */
   publicationRepairProducerGone?(conversationId: string): Promise<boolean | null>;
+  /** Latest native ownership observation; missing probes retain legacy recovery. */
+  publicationRepairProducerState?(conversationId: string): Promise<"active" | "idle" | "gone" | "blocked" | "unknown">;
   /** Whether a delivery for this conversation is still waiting to land. A
       continuation is never added on top of one (#1747). */
   conversationDeliveryOutstanding?(conversationId: string): boolean;
@@ -2450,6 +2453,23 @@ export function defaultPipelinePorts(
         runtimeReads.reset();
       }
     },
+    publicationRepairProducerState: async (conversationId) => {
+      const client = runtimeHostClient();
+      if (!client) return "unknown";
+      try {
+        const sessions = await pipelineRuntimeReads({ ...dependencies.runtimeObservation, conversationIds: [conversationId] }).sessions(client, conversationId);
+        if (!sessions.length) return "unknown";
+        if (exitStatusPending(conversationId) || sessions.some(session => session.host === "conflict" || session.attentionIds.length > 0)) return "blocked";
+        if (sessions.every(session => ["dead", "unhosted"].includes(session.host))) return "gone";
+        // This scoped activity projection carries turn and attention only;
+        // omitted owner fields cannot be interpreted as an active turn claim.
+        if (sessions.some(session => !["dead", "unhosted"].includes(session.host)
+          && (session.turn === "running" || session.turn === "interrupt_requested"))) return "active";
+        if (sessions.every(session => ["dead", "unhosted"].includes(session.host) || session.host === "hosted" && session.turn === "idle")) return "idle";
+        return "unknown";
+      } catch { return "unknown"; }
+      finally { runtimeReads.reset(); }
+    },
     restartRecoveryBootId: () => PIPELINE_RECOVERY_BOOT_ID,
     restartRecoveryBootStartedAt: () => PIPELINE_RECOVERY_BOOT_STARTED_AT,
     conversationTurnInterrupted: async (conversationId) => {
@@ -3020,12 +3040,15 @@ async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineSt
         && (await attemptTurnTranscript(pipeline, stage.id, { ...attempt, launchId: receipt.launchId,
           conversationId: receipt.conversationId, agentPath: null }, ports,
         projected?.retryClaimId === claimId ? claimId : undefined, true))?.nonExecution === true;
-      const nonExecution = projected?.neverBegan === true || noNativeTurn
+      const journalProofRequired = isPrepublicationSpawnFailure(receipt.error ?? "")
+        || isUnverifiedDeliverySpawnFailure(receipt.error ?? "");
+      const journalProof = journalProofRequired
+        && await ports.unpublishedLaunchRetrySafe?.(receipt.launchId, deadline) === true;
+      const nonExecution = journalProof || !journalProofRequired && (
+        projected?.neverBegan === true || noNativeTurn
         || stopped && !receipt.key && !receipt.artifactPath
         || receipt.error === SEND_LOST_REASON
-          && await ports.fencedFirstMessageRetrySafe?.(receipt.launchId, receipt.conversationId, currentAttemptMatches) === true
-        || (isPrepublicationSpawnFailure(receipt.error ?? "") || isUnverifiedDeliverySpawnFailure(receipt.error ?? ""))
-          && await ports.unpublishedLaunchRetrySafe?.(receipt.launchId, deadline) === true;
+          && await ports.fencedFirstMessageRetrySafe?.(receipt.launchId, receipt.conversationId, currentAttemptMatches) === true);
       if (deadline.aborted) return "stage launch recovery cannot prove no dispatch began: evidence deadline expired; original operations retained";
       if (!currentAttemptMatches() || activationFence(pipeline) !== control || JSON.stringify(attempt) !== expected
         || JSON.stringify(registry.spawnReceipt(receipt.launchId)) !== before
@@ -4105,6 +4128,7 @@ async function newAttempt(pipeline: Pipeline, stage: PipelineStage, now: string,
     return null;
   }
   const cursorRelay = pipeline.cursor?.stageId === stage.id ? pipeline.cursor : null;
+  const previous = run.attempts.at(-1);
   const attempt: PipelineStageAttempt = {
     n: run.attempts.length + 1,
     accounting: { admittedAt: run.attempts.length && cursorRelay?.admittedAt === run.attempts.at(-1)?.accounting?.admittedAt
@@ -4133,6 +4157,9 @@ async function newAttempt(pipeline: Pipeline, stage: PipelineStage, now: string,
     output: null,
     verdict: null,
     error: null,
+    // Retrying a repair refused before dispatch must not drop its custody gate.
+    ...(previous?.publicationRepairFrom && !previous.startedAt && !previous.launchId && !previous.conversationId
+      ? { publicationRepairFrom: { ...previous.publicationRepairFrom } } : {}),
   };
   /* One hand launches one attempt; a relaunch the engine makes after it is the engine's. */
   if (pipeline.cursor) { delete pipeline.cursor.launchedBy; delete pipeline.cursor.repeatReason; }
@@ -5534,12 +5561,24 @@ async function readRepairProducerEvidence(pipeline: Pipeline, stage: PipelineSta
   // probe reporting attention or an unknown host.
   const active = proveGone && hostGone !== true && observedActive !== true ? null
     : proveGone && hostGone === true ? false : observedActive;
-  return { conversationId, repairIdentity, delivery, durable, active, idle: interrupted === "idle",
+  const evidence: RepairProducerEvidence = { conversationId, repairIdentity, delivery, durable, active, idle: interrupted === "idle",
     // The interruption read can precede a host adoption while durable evidence
     // is awaited. A fresh host observation that says it is present supersedes
     // that earlier death result.
     dead: proveGone ? hostGone === true
       : active !== true && (hostGone === true || (hostGone !== false && interrupted === "dead")), hostGone };
+  const observeState = confirmHostGone ? ports.publicationRepairProducerState : undefined;
+  const state = observeState ? await observeState.call(ports, conversationId).catch(() => "unknown" as const) : undefined;
+  // A final native observation supersedes earlier cached absence or activity.
+  // Conflict and attention are affirmative holds, rather than missing evidence
+  // that the ordinary twenty-minute recovery bound can release.
+  if (state && state !== "unknown") {
+    evidence.active = state === "active" || state === "blocked";
+    evidence.idle = state === "idle";
+    evidence.dead = state === "gone";
+    evidence.hostGone = state === "gone";
+  }
+  return evidence;
 }
 
 function publicationRepairDeliveryDetail(repair: NonNullable<PipelineStageAttempt["publicationRepair"]>, delivery = repair.delivery): string {
@@ -5623,16 +5662,92 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
   return repair && !repair.settledAt ? refusal : null;
 }
 
-/** Refresh parked records too: older rejected repairs can lack every send
- * checkpoint. Healing never publishes or sends another repair prompt. */
+const PUBLICATION_PRODUCER_REPAIR_LIMIT = 2;
+
+/** Only code-check refusals authorize another producer. Transport, privacy and
+ * capacity failures retain their existing recovery paths. */
+function publicationCodeRepairDetail(pipeline: Pipeline, attempt: PipelineStageAttempt): string | null {
+  const refused = settledPublicationRefusal(pipeline);
+  const repair = attempt.publicationRepair;
+  const failure: import("./types").PipelinePublicationFailure | undefined = refused?.failure ?? (repair ? { step: "publishing the pipeline branch", code: 1, signal: null,
+    durationMs: 0, outputTail: repair.detail } : undefined);
+  if (failure) {
+    if (failure.step !== "publishing the pipeline branch" || failure.changedFiles === 0
+      || failure.retryableApp403 || failure.retryableDeadline || refused && publicationNotLanded(refused)
+      || publicationRemoteRefusal(failure) || !/types?|lint|tests?/i.test(publicationFailurePhase(failure) ?? "")) return null;
+    return refused?.error ?? repair!.detail;
+  }
+  return null;
+}
+
+function publicationProducerRepairReady(pipeline: Pipeline, attempt: PipelineStageAttempt,
+  evidence: RepairProducerEvidence | undefined, ports: PipelinePorts): boolean {
+  const worker = publicationRepairWorker(pipeline, attempt)?.attempt ?? attempt;
+  if (!evidence || evidence.conversationId !== (worker.conversationId ?? null)
+    || evidence.repairIdentity !== publicationRepairIdentity(pipeline, attempt) || evidence.active === true) return false;
+  const durable = evidence.durable;
+  // The existing recovery guard above owns expiry and delivery admission.
+  // A fresh writer also waits for any work the old harness still owns, even
+  // when its foreground host is idle or gone.
+  return liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(ports.now())).length === 0
+    && !(durable?.turn === "busy" && unixMs(ports.now()) - (durable.lastRecordAt ?? durable.message?.ts ?? 0) < IDLE_TURN_QUIET_MS);
+}
+
+/** Shared by automatic recovery and retry-stage. No Git reset or publication:
+ * the next native launch owns its own receipts and can report a fresh result. */
+async function startPublicationProducerRepair(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  detail: string, ports: PipelinePorts, actor: PauseResumeActor | null = null): Promise<string | null> {
+  if (pipeline.delivery?.operation?.state === "running" || pipeline.delivery?.operation?.state === "pending") {
+    return "the publication is still settling";
+  }
+  const worker = publicationRepairWorker(pipeline, attempt) ?? { stage, attempt };
+  if (worker.stage.kind !== "run" || worker.attempt.effectiveRole.access !== "read-write"
+    || worker.stage.effectiveRole.access !== "read-write" || !runFor(pipeline, worker.stage.id)) return "the publication repair has no writable producer";
+  const round = (pipeline.publicationProducerRepairs ?? 0) + 1;
+  if (round > PUBLICATION_PRODUCER_REPAIR_LIMIT) return `publication producer repair exhausted after ${PUBLICATION_PRODUCER_REPAIR_LIMIT} fresh attempts; inspect the refusal before publishing`;
+  recordSettledPublicationFailure(pipeline, attempt, ports);
+  if (pipeline.delivery) delete pipeline.delivery.operation;
+  pipeline.publishedCommit = null;
+  // A repair of reviewed content re-enters the producer's normal pass edge,
+  // carrying its activation so the existing review budgets remain authoritative.
+  setCursorState(pipeline, worker.stage.id, "pending");
+  pipeline.cursor!.activatedBy = worker.attempt.activatedBy ? { ...worker.attempt.activatedBy } : null;
+  pipeline.cursor!.input = [worker.attempt.input,
+    `Publication repair round ${round} of ${PUBLICATION_PRODUCER_REPAIR_LIMIT}. The previous attempt passed; its committed work is preserved at the accepted head.`,
+    "Repair the following publication refusal using this stage's current instructions, commit the fix on this branch, then report the result:",
+    hookOutputForRepair(detail)].filter(Boolean).join("\n\n");
+  recordHandLaunch(pipeline, actor, ports.now());
+  const replacement = await newAttempt(pipeline, worker.stage, ports.now(), "unknown");
+  if (!replacement) return "the publication repair producer run is missing";
+  replacement.publicationRepairFrom = { stageId: stage.id, attempt: attempt.n, round };
+  pipeline.publicationProducerRepairs = round;
+  pipeline.state = "running";
+  pipeline.pausedState = null;
+  pipeline.stateDetail = `publication repair round ${round} of ${PUBLICATION_PRODUCER_REPAIR_LIMIT}: fresh producer attempt pending`;
+  return null;
+}
+
+/** Refresh parked records too: a settled code repair can need a new producer
+ * identity when the accepted conversation cannot execute another turn. */
 async function reconcileParkedPublicationRepair(pipeline: Pipeline, ports: PipelinePorts): Promise<boolean> {
   const stage = currentStage(pipeline);
   const attempt = stage && currentAttempt(pipeline, stage.id);
   if (pipeline.state !== "needs_decision" || !stage || !attempt
     || !passedStagePublicationPark(pipeline, attempt)) return false;
   const before = JSON.stringify([attempt.publicationRepair, attempt.publicationRepairAbandonment]);
-  const evidence = await readRepairProducerEvidence(pipeline, stage, attempt, ports);
-  publicationRepairProducerRefusal(pipeline, attempt, evidence, ports);
+  const detail = publicationCodeRepairDetail(pipeline, attempt);
+  const evidence = await readRepairProducerEvidence(pipeline, stage, attempt, ports, !!detail);
+  const refusal = publicationRepairProducerRefusal(pipeline, attempt, evidence, ports);
+  const outcome = attempt.publicationRepair?.outcome;
+  if (detail && !refusal && publicationProducerRepairReady(pipeline, attempt, evidence, ports)
+    && !(outcome?.status === "rejected" && outcome.reason.includes("reported it cannot:"))) {
+    const error = await startPublicationProducerRepair(pipeline, stage, attempt, detail, ports);
+    if (!error) return true;
+    if (!pipeline.stateDetail?.includes(error)) {
+      pipeline.stateDetail = `${pipeline.stateDetail}\n${error}`;
+      return true;
+    }
+  }
   return before !== JSON.stringify([attempt.publicationRepair, attempt.publicationRepairAbandonment]);
 }
 
@@ -9941,6 +10056,37 @@ async function tickRunStage(
     if (await holdForPriorStageWriters(pipeline, stage, attempt, ports, persist)) return;
     // Consume CPU admission only once the other launch gates allow a start.
     if (await holdStageLaunch(pipeline, ports, persist)) return;
+    if (attempt.publicationRepairFrom) {
+      const origin = attempt.publicationRepairFrom;
+      const source = runFor(pipeline, origin.stageId)?.attempts[origin.attempt - 1];
+      const producer = source && (publicationRepairWorker(pipeline, source)?.attempt ?? source);
+      if (!source || !stageHeadAccepted(source)) {
+        await park(pipeline, "publication repair cannot prove its accepted producer", attempt);
+        return;
+      }
+      const refuse = (detail: string) => park(pipeline, source.publicationRepair
+        ? publicationRepairParkDetail(source.publicationRepair, detail) : [source.error, detail].filter(Boolean).join("\n"), attempt);
+      const head = await ports.exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir, pipelineLiteralGitEnv());
+      const branch = await ports.exec("git", ["branch", "--show-current"], pipeline.worktreeDir, pipelineLiteralGitEnv());
+      if (head.code !== 0 || !/^[0-9a-f]{40}$/i.test(head.stdout.trim()) || branch.code !== 0
+        || ![pipeline.branch, pipeline.delivery?.target.branch.replace(/^refs\/heads\//, "")].includes(branch.stdout.trim())) {
+        await refuse("The publication repair checkout is not on its pipeline or delivery branch.");
+        return;
+      }
+      if (producer?.launchId) {
+        // The accepted head can be a controller commit. Only a moved head
+        // needs the original producer's native creation receipts.
+        if (head.stdout.trim() !== pipeline.lastPassedCommit) {
+          const proof = await settleStageAttemptPush(pipeline, producer, ports.exec, ports.now(),
+            { acceptedHead: pipeline.lastPassedCommit, allowDirty: true });
+          if (!proof?.ok || (await ports.exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, proof.sha],
+            pipeline.worktreeDir, pipelineLiteralGitEnv())).code !== 0) {
+            await refuse(proof && !proof.ok ? proof.error : "publication repair does not preserve the accepted producer head");
+            return;
+          }
+        }
+      }
+    }
     bindAttemptDefinition(stage, attempt, ports);
     attempt.executionRuntime ??= "local";
     const bound = attemptStage(stage, attempt);
@@ -12259,7 +12405,12 @@ function isPrepublicationSpawnFailure(failure: string): boolean {
   const releasedBeforePublication = "staged launch was released before publication completed";
   // A journal outage can park the live failure with our evidence diagnostic.
   // Keep its retry identity so later ticks recheck the same safety fences.
-  return failure === releasedBeforePublication
+  // Setup custody can refuse both before exec and while recording a child.
+  // Reuse journal proof and confirmed host termination before replacing it.
+  const setupWriterBusy = `${REGISTRY_WRITER_BUSY} (spawn.setup-custody)`;
+  return failure === setupWriterBusy
+    || failure === `${setupWriterBusy}${PREPUBLICATION_RETRY_REFUSAL_SUFFIX}`
+    || failure === releasedBeforePublication
     || failure === `${releasedBeforePublication}${PREPUBLICATION_RETRY_REFUSAL_SUFFIX}`
     || failure.startsWith("structured spawn interrupted before identity staging: ")
     || failure.startsWith("structured spawn interrupted before runtime admission: ");
@@ -12730,6 +12881,22 @@ async function applySkippedStage(pipeline: Pipeline, stage: PipelineStage, attem
   }
 }
 
+function parkFailedTakeover(pipeline: Pipeline, superseded: boolean): void {
+  const action = pipeline.remoteAction;
+  if (action?.action !== "takeover" || !action.error) return;
+  // A newer pause, close or decision remains authoritative. Its refusal is
+  // still visible in the remote receipt, delivery journal and lifecycle event.
+  if (pipeline.state !== "provisioning" && pipeline.state !== "running" && pipeline.state !== "completed"
+    && !(pipeline.state === "needs_decision" && !superseded)) return;
+  const stage = completedComparisonPass(pipeline);
+  if (stage) {
+    pipeline.cursor = { stageId: stage, state: "committing", input: null, activatedBy: null };
+    pipeline.closedAt = null;
+  }
+  if (pipeline.state === "completed" && !stage) return;
+  parkPipelineState(pipeline, `publishing the passed stage: delivery takeover failed: ${action.error}`);
+}
+
 /** Remote repair runs outside the registry lease, under an inherited kernel
     lock. A restart rechecks pending intent only after its old children stop. */
 export async function settlePendingRemoteActions(ports: PipelinePorts = defaultPipelinePorts()): Promise<void> {
@@ -12746,8 +12913,10 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
       await withPipelineMutation(async (pipelines, persist) => {
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || current.remoteAction?.id !== action.id || current.remoteAction.state !== "pending") return;
+        const superseded = remoteActionFence(current) !== action.fence;
         current.remoteAction = { ...action, state: "settled", settledAt: ports.now(), error: detail };
-        if (remoteActionFence(current) === action.fence) current.stateDetail = detail;
+        if (!superseded) current.stateDetail = detail;
+        parkFailedTakeover(current, superseded);
         if (current.delivery) deliveryJournal(current, "recovery", `${action.action} remote verification refused: ${detail}`, action.actor?.kind === "agent" ? action.actor.conversationId : null);
         await persist();
       });
@@ -12845,10 +13014,14 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
       const stale = Boolean(refusal) || !matches(pipeline) || !receiptMatches()
         || (action.retryReceipt?.claimId !== undefined && (await ports.claimSpawnRetry(action.retryReceipt.launchId, action.retryReceipt.claimId)) !== "claimed");
       pipeline.remoteAction = { ...action, state: "settled", settledAt: ports.now(), ...(!result.ok || stale ? { error: refusal?.error ?? (stale ? "remote action superseded" : (result as { error: string }).error) } : {}) };
+      parkFailedTakeover(pipeline, stale);
       if (pipeline.delivery) deliveryJournal(pipeline, "recovery", stale ? `${action.action} remote verification superseded`
         : result.ok ? `${action.action} remote verification settled` : `${action.action} remote verification failed: ${result.error}`, action.actor?.kind === "agent" ? action.actor.conversationId : null);
       if (stale) { await persist(); return; }
-      if (!result.ok) { pipeline.stateDetail = result.error; await persist(); return; }
+      if (!result.ok) {
+        if (action.action !== "takeover") pipeline.stateDetail = result.error;
+        await persist(); return;
+      }
       if (action.action === "retry-stage") {
         const stage = currentStage(pipeline)!;
         if (pipeline.delivery?.operation?.state === "settled") {
@@ -13613,6 +13786,9 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         const lanePorts = controllerSnapshotPorts(controllerPorts, () => assertCurrent(pipeline));
         if (publishesRemoteBranch(pipeline) && !pipeline.delivery) return;
         const persistPipeline = async () => await persist([pipeline]);
+        // The delivery request owns this boundary until its durable outcome.
+        // A comparison must not finish locally while takeover is pending.
+        if (pipeline.remoteAction?.state === "pending" && pipeline.remoteAction.action === "takeover") return;
         const operation = pipeline.delivery?.operation;
         const passed = pipeline.cursor?.state === "committing" ? currentAttempt(pipeline, pipeline.cursor.stageId) : null;
         const deliveryRefusalCleared = pipeline.delivery
@@ -14485,6 +14661,8 @@ export type PipelineMutationResult = {
   /** Set with ENGINE_NOT_CONNECTED: the stage, role and engine, and the two
       surfaces that resolve it (#1876). */
   details?: EngineNotConnectedDetails;
+  /** Advisory brief diagnostics for its author; these never refuse admission. */
+  briefWarnings?: BriefWarning[];
   /** A draft created with stages whose engine has nobody signed in: one line
       per stage, so the author sees it before pressing Start (#1876). */
   warnings?: { stageId: string; engine: FlowEngine; reason: Exclude<EngineReadiness, "connected">; message: string }[];
@@ -14640,6 +14818,14 @@ function preflightFailure(result: Extract<PipelineRepoPreflight, { ok: false }>)
 }
 
 export async function createPipelineFromRequest(
+  req: CreatePipelineRequest,
+  ports: PipelinePorts = defaultPipelinePorts(),
+  options: CreatePipelineOptions = {},
+): Promise<PipelineMutationResult> {
+  return withBriefWarnings(await admitPipelineFromRequest(req, ports, options));
+}
+
+async function admitPipelineFromRequest(
   req: CreatePipelineRequest,
   ports: PipelinePorts = defaultPipelinePorts(),
   options: CreatePipelineOptions = {},
@@ -16089,6 +16275,19 @@ export async function patchPipeline(
   assertAuthority?: () => void,
   workspaceMemberId?: string,
 ): Promise<PipelinePatchResult> {
+  const result = await applyPipelinePatch(id, req, ports, actor, assertAuthority, workspaceMemberId);
+  return GRAPH_EDIT_ACTIONS.has(req.action) || ["start", "update-draft", "retry-stage", "resolve-decision"].includes(req.action)
+    ? withBriefWarnings(result) : result;
+}
+
+async function applyPipelinePatch(
+  id: string,
+  req: PatchPipelineRequest,
+  ports: PipelinePorts = defaultPipelinePorts(),
+  actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
+  assertAuthority?: () => void,
+  workspaceMemberId?: string,
+): Promise<PipelinePatchResult> {
   if (req.repeatReason !== undefined && (!repeatReasonSchema.safeParse(req.repeatReason).success || !["retry-stage", "resolve-decision"].includes(req.action)))
     return { error: "invalid repeatReason for this action", status: 400 };
   assertAuthority?.();
@@ -16963,7 +17162,8 @@ export async function patchPipeline(
         && pipeline.state === "needs_decision"
         && (attempt.error?.startsWith("stage launch recovery cannot prove no dispatch began:")
           || attempt.retiredLaunches?.length && ports.spawnReceipt(attempt.launchId)?.state === "failed"
-          || isUnverifiedDeliverySpawnFailure(ports.spawnReceipt(attempt.launchId)?.error ?? ""));
+          || isUnverifiedDeliverySpawnFailure(ports.spawnReceipt(attempt.launchId)?.error ?? "")
+          || isPrepublicationSpawnFailure(ports.spawnReceipt(attempt.launchId)?.error ?? ""));
       const unreservedSpawnRetry = stage?.kind === "run" && attempt
         && (boundSpawnRetry || !attempt.launchId && (attempt.retiredLaunches?.length || isStructuredSpawnPark(pipeline, attempt))
           && pipeline.state === "needs_decision");
@@ -17110,6 +17310,16 @@ export async function patchPipeline(
         if (attempt.publicationRepair || passedStagePublicationPark(pipeline, attempt)) {
           const repairRefusal = publicationRepairProducerRefusal(pipeline, attempt, decisionProducerEvidence, ports);
           if (repairRefusal) return { error: repairRefusal, status: 409 };
+        }
+        const codeRepair = publicationCodeRepairDetail(pipeline, attempt);
+        if (codeRepair) {
+          if (!publicationProducerRepairReady(pipeline, attempt, decisionProducerEvidence, ports)) {
+            return { error: "the producer repair turn may still be running or queued; recent transcript or background work is still held", status: 409 };
+          }
+          const error = await startPublicationProducerRepair(pipeline, stage, attempt, codeRepair, ports, actor);
+          if (error) return { error, status: 409 };
+          await persist(); requestPipelineTick();
+          return { pipeline };
         }
         const repair = attempt.publicationRepair;
         const delivery = decisionProducerEvidence?.delivery ?? repair?.delivery;
