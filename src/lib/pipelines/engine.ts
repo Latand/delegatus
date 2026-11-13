@@ -17301,6 +17301,7 @@ async function applyPipelinePatch(
       }
       const retryStageId = explicitReceiptRetry ? req.stageId! : stage?.id ?? null;
       const retryLaunchId = explicitReceiptRetry ? req.launchId! : attempt?.launchId ?? null;
+      const settledAttempt = !!attempt?.verdict && !!attempt.completedAt;
       const receiptRetry = (explicitReceiptRetry || attempt?.paneId === null)
         && retryStageId !== null
         && retryLaunchId !== null;
@@ -17369,20 +17370,17 @@ async function applyPipelinePatch(
         return { pipeline };
       }
       const parkedRunningReceipt = (state: string, receipt: { error?: string | null } | null | undefined, settlementWasPending = false): boolean =>
-        state === "path-pending" && !explicitReceiptRetry && !settlementWasPending && attempt !== null && stage?.kind === "run"
+        state === "path-pending" && !settledAttempt && !explicitReceiptRetry && !settlementWasPending && attempt !== null && stage?.kind === "run"
         && attempt.launchId === retryLaunchId && !!attempt.agentPath && !!attempt.conversationId && !!attempt.completedAt
         && attempt.state === "needs_decision" && !attempt.report && !isStructuredSpawnPark(pipeline, attempt) && !stagedLaunchRecovery(receipt);
-      /* A native completed fail owns its verdict even if path publication
-         never closed the launch receipt (#2034). Pin that proof across the
-         cleanup awaits; neither the receipt nor the scanner projection proves
-         execution ended. The settled-writer stop below also fences live hosts. */
-      const completedRetryReceipt = receiptRetry && retryLaunchId ? ports.spawnReceipt(retryLaunchId) : null;
-      const completedRetry = stage?.kind === "run" && attempt?.state === "failed" && !attempt.paneId && !attempt.cloud && !attempt.historical
+      /* Settlement is authoritative for launch admission, including retained
+         recovery receipts. Keep native execution and writer checks independent
+         of the launch ledger so a stale receipt cannot veto a settled stage. */
+      const completedRetry = settledAttempt && stage?.kind === "run" && attempt?.state === "failed" && !attempt.paneId && !attempt.cloud && !attempt.historical
         && !!attempt.completedAt && attempt.verdict?.status === "fail" && (!attempt.report || attempt.report.verdict.status === "fail")
         && !!attempt.agentPath && !!attempt.conversationId && attempt.launchId === retryLaunchId
-        && completedRetryReceipt?.state === "path-pending" && !stagedLaunchRecovery(completedRetryReceipt);
+        && ports.spawnReceipt(retryLaunchId!)?.state === "path-pending";
       const completedRetryFence = completedRetry ? remoteActionFence(pipeline) : null;
-      const completedReceiptProof = completedRetry ? JSON.stringify(completedRetryReceipt) : null;
       let completedEvidence: StageTurnEvidence | null = null;
       const completedTurnFinished = (evidence: StageTurnEvidence | null): boolean => {
         if (attempt!.report) return reportTurnFinished(attempt!, evidence);
@@ -17394,14 +17392,8 @@ async function applyPipelinePatch(
       const completedRetryRefusal = (checkTranscript = true): PipelinePatchResult | null => {
         if (!completedRetry) return null;
         assertAuthority?.();
-        const receipt = ports.spawnReceipt(retryLaunchId!);
         const ownerError = pipeline.delivery && deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery.target, active: true }));
         if (remoteActionFence(pipeline) !== completedRetryFence || ownerError
-          || JSON.stringify(receipt) !== completedReceiptProof || receipt?.launchId !== attempt!.launchId
-          || receipt?.conversationId !== attempt!.conversationId
-          || (ports.spawnReceiptState ? ports.spawnReceiptState(retryLaunchId!) : receipt?.state) !== "path-pending"
-          || !receipt?.retryIdentity || receipt.retryIdentity.engine !== attempt!.effectiveRole.engine
-          || receipt.retryIdentity.sessionId !== attempt!.sessionId || receipt.retryIdentity.artifactPath !== attempt!.agentPath
           || !ports.sourcePathAllowed(attempt!.agentPath!) || pipelineSurvivorRefusal(pipeline)
           || ports.conversationDeliveryOutstanding?.(attempt!.conversationId!) !== false) {
           return { error: ownerError || "the completed attempt's retry ownership or delivery evidence changed; retry was cancelled", status: 409 };
@@ -17427,6 +17419,9 @@ async function applyPipelinePatch(
         if (!receiptRetry) return { conflict: null, claimRequired: false };
         const completedRefusal = completedRetryRefusal();
         if (completedRefusal) return { conflict: { error: completedRefusal.error!, status: 409 }, claimRequired: false };
+        // A settled attempt retries its stage, preserving the original launch.
+        // Read this rule for old rows too; no receipt repair or claim is needed.
+        if (settledAttempt) return { conflict: null, claimRequired: false };
         const receipt = ports.spawnReceipt(retryLaunchId);
         const state = ports.spawnReceiptState ? ports.spawnReceiptState(retryLaunchId) : receipt?.state;
         if (!receipt || !state) return {
@@ -17448,7 +17443,6 @@ async function applyPipelinePatch(
         ) {
           return { conflict: null, claimRequired: false };
         }
-        if (completedRetry && completedEvidence && !settlementWasPending) return { conflict: null, claimRequired: false };
         /* A stage that ran and was then parked can still hold a launch
            receipt that never closed, when its transcript bound the attempt
            before the receipt completed (#3760). The stage is the one to
