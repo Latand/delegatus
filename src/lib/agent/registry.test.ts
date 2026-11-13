@@ -74,6 +74,28 @@ test.each(["cleared", "missing"] as const)("resume setup claims %s host entries 
   expect(current().structuredHost).toBeNull();
 });
 
+for (const sqliteMode of ["off", "sqlite"] as const) test(`resume setup writer output agrees with the persisted reader in ${sqliteMode} mode`, () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "registry-setup-replay-"));
+  const filename = path.join(directory, "registry.json");
+  const store = new AgentRegistry(filename, () => true, undefined, { sqliteMode });
+  let restarted: AgentRegistry | null = null;
+  try {
+    const setupHost = { kind: "codex-app-server" as const, endpoint: "stdio:pending", process: null,
+      eventCursor: 0, protocolVersion: null, writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+      agentStateTurnStartedAt: Date.parse("2026-10-28T09:00:00Z") };
+    const claimed = store.claimStructuredHost(KEY, { pid: 41_001, startIdentity: "fixture-setup" }, {
+      allowUnhosted: true, setupHost, setupEntry: { artifactPath: "/sessions/fixture.jsonl", cwd: "/repo", accountId: null },
+    })!;
+    expect(claimed.structuredHost).toMatchObject({ attentionVerified: true, agentStateNativePromptAnchor: null,
+      agentStateNativePromptOrdinal: null, agentStateNativeTurnId: null, agentStateTurnStartedAt: setupHost.agentStateTurnStartedAt });
+    expect(store.hostEntry(KEY)).toEqual(claimed);
+    restarted = new AgentRegistry(filename, () => true, undefined, { sqliteMode });
+    expect(restarted.hostEntry(KEY)).toEqual(claimed);
+    expect(restarted.ownsStructuredHostClaim(KEY, claimed.claimOwner!, claimed.claimEpoch)).toBe(true);
+    expect(setupHost.writerClaimEpoch).toBe(0);
+  } finally { restarted?.close(); store.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 function structuredLaunchFixture(store: AgentRegistry, pendingAction: "spawn" | "handoff" = "spawn") {
   const sessionId = crypto.randomUUID();
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-1583-registry-"));
