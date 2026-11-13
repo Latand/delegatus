@@ -39,9 +39,10 @@ Readiness is API-only: settings GET includes `claudeCloudReadiness`, and MCP
 at 256 project/account pairs with a ten-minute execution deadline per pair.
 Preparation rechecks the project pool, repository and account home; provider
 calls also fence the organization after reading the current subscription login.
-Human-only steps are translated when readiness is read. Healthy admission uses
-one provider GET and records the validation in the readiness row; no performance
-gain is claimed.
+Human-only steps are translated when readiness is read. Inline validation reads
+both the bound task and its GitHub connection and records the validation in the
+readiness row. The demand queue validates allowed accounts separately; no
+performance gain is claimed.
 
 Claude uses the existing fallback record. The companion runtime-visibility
 lane consumes that record through its shared projection; this implementation
