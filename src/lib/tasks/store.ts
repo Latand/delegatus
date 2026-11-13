@@ -899,9 +899,48 @@ function writeTaskState<R>(
 
 const writeSnapshots = new WeakMap<object, { aliases: string; state: TasksFileState }>();
 
-type MutationHistory = { revision: number; rows: Map<string, BoardTask>; tasks: BoardTask[]; indices: Map<string, number>; orders: Map<string, number>; sizes: Map<string, number>; bytes: number };
-const mutationHistoryOwner = globalThis as typeof globalThis & { __delegatusTaskMutationHistoriesV1?: Map<string, MutationHistory> };
-const mutationHistories = mutationHistoryOwner.__delegatusTaskMutationHistoriesV1 ??= new Map<string, MutationHistory>();
+/** A persistent indexed projection. A journaled patch replaces only the path
+ * to its leaf; every already-issued draft keeps its original root. */
+type TaskVectorNode = BoardTask | readonly [TaskVectorNode, TaskVectorNode];
+class TaskHistoryVector {
+  readonly tasks: BoardTask[];
+  constructor(readonly length: number, readonly root: TaskVectorNode | undefined) {
+    this.tasks = new Proxy<BoardTask[]>([], {
+      get: (target, key) => {
+        if (key === "length") return length;
+        const index = typeof key === "string" && /^(0|[1-9][0-9]*)$/.test(key) ? Number(key) : -1;
+        return index >= 0 && index < length ? this.at(index) : Reflect.get(target, key);
+      },
+      has: (target, key) => typeof key === "string" && /^(0|[1-9][0-9]*)$/.test(key) && Number(key) < length || Reflect.has(target, key),
+    });
+  }
+  static from(tasks: readonly BoardTask[]): TaskHistoryVector {
+    const build = (start: number, end: number): TaskVectorNode => end - start === 1 ? tasks[start]!
+      : [build(start, (start + end) >>> 1), build((start + end) >>> 1, end)];
+    return new TaskHistoryVector(tasks.length, tasks.length ? build(0, tasks.length) : undefined);
+  }
+  at(index: number): BoardTask {
+    let node = this.root!, start = 0, end = this.length;
+    while (end - start > 1) {
+      const middle = (start + end) >>> 1, pair = node as readonly [TaskVectorNode, TaskVectorNode];
+      if (index < middle) { node = pair[0]; end = middle; }
+      else { node = pair[1]; start = middle; }
+    }
+    return node as BoardTask;
+  }
+  replace(index: number, task: BoardTask): TaskHistoryVector {
+    const put = (node: TaskVectorNode, start: number, end: number): TaskVectorNode => {
+      if (end - start === 1) return task;
+      const middle = (start + end) >>> 1, pair = node as readonly [TaskVectorNode, TaskVectorNode];
+      return index < middle ? [put(pair[0], start, middle), pair[1]] : [pair[0], put(pair[1], middle, end)];
+    };
+    return new TaskHistoryVector(this.length, put(this.root!, 0, this.length));
+  }
+}
+
+type MutationHistory = { revision: number; rows: Map<string, BoardTask>; vector: TaskHistoryVector; indices: Map<string, number>; orders: Map<string, number>; sizes: Map<string, number>; bytes: number };
+const mutationHistoryOwner = globalThis as typeof globalThis & { __delegatusTaskMutationHistoriesV2?: Map<string, MutationHistory> };
+const mutationHistories = mutationHistoryOwner.__delegatusTaskMutationHistoriesV2 ??= new Map<string, MutationHistory>();
 
 /** Array readers reuse immutable rows and refresh only journal entries. The
  * bounded owner holds references to reader payloads, never mutable drafts. */
@@ -925,14 +964,13 @@ function mutationHistory(collection: SqliteStateCollection<TaskStateRow>, aliase
     }
     const metadata = collection.keyMetadata(tasks.map(task => `t:${task.id}`));
     const sizes = new Map([...metadata].map(([key, value]) => [key.slice(2), value.bytes]));
-    return { revision, tasks, rows: new Map(tasks.map(task => [task.id, task])), indices: new Map(tasks.map((task, index) => [task.id, index])),
+    return { revision, vector: TaskHistoryVector.from(tasks), rows: new Map(tasks.map(task => [task.id, task])), indices: new Map(tasks.map((task, index) => [task.id, index])),
       orders: new Map([...metadata].map(([key, value]) => [key, value.order])), sizes, bytes: [...sizes.values()].reduce((sum, size) => sum + size, 0) };
   };
   if (!held || held.revision > revision) held = fill();
   if (held.revision !== revision) {
     // Already returned array views keep their revision while this reader
     // installs the journal's next immutable row references once.
-    held.tasks = held.tasks.slice();
     let from = held.revision, cursor = "", reordered = false;
     const findings = new Map<string, { project: string; key: string }>();
     const rememberFinding = (task: BoardTask | undefined) => {
@@ -956,7 +994,7 @@ function mutationHistory(collection: SqliteStateCollection<TaskStateRow>, aliase
         if (task) {
           persistedRows.set(task, raw); deepFreeze(task); held.rows.set(id, task);
           rememberFinding(task);
-          if (index !== undefined) held.tasks[index] = task;
+          if (index !== undefined) held.vector = held.vector.replace(index, task);
         } else held.rows.delete(id);
         held.bytes -= held.sizes.get(id) ?? 0;
         const size = entry.valueJson?.length ? entry.valueJson.length * 2 : 0;
@@ -989,12 +1027,13 @@ function mutationHistory(collection: SqliteStateCollection<TaskStateRow>, aliase
         }
         deepFreeze(task); held.rows.set(task.id, task);
         const index = held.indices.get(task.id);
-        if (index !== undefined) held.tasks[index] = task;
+        if (index !== undefined) held.vector = held.vector.replace(index, task);
       }
     }
     if (reordered) {
-      held.tasks = [...held.rows.values()].sort((a, b) => held!.orders.get(`t:${a.id}`)! - held!.orders.get(`t:${b.id}`)! || a.id.localeCompare(b.id));
-      held.indices = new Map(held.tasks.map((task, index) => [task.id, index]));
+      const tasks = [...held.rows.values()].sort((a, b) => held!.orders.get(`t:${a.id}`)! - held!.orders.get(`t:${b.id}`)! || a.id.localeCompare(b.id));
+      held.vector = TaskHistoryVector.from(tasks);
+      held.indices = new Map(tasks.map((task, index) => [task.id, index]));
     }
   }
   mutationHistories.delete(key); mutationHistories.set(key, held);
@@ -1010,7 +1049,6 @@ function mutationHistory(collection: SqliteStateCollection<TaskStateRow>, aliase
     after array replacement, sorting or deletion for revision comparison. */
 function taskDrafts(pristine: readonly BoardTask[], shared?: (task: BoardTask, index: number, peek: boolean) => BoardTask | undefined) {
   const copies = new Map<number, BoardTask>();
-  const proxies = new Map<number, BoardTask>();
   const nested = new Map<number, Map<string, unknown>>();
   const materialize = (index: number): BoardTask => {
     let copy = copies.get(index);
@@ -1035,28 +1073,7 @@ function taskDrafts(pristine: readonly BoardTask[], shared?: (task: BoardTask, i
     }
     return copy;
   };
-  const peek = (index: number): BoardTask => {
-    let proxy = proxies.get(index);
-    if (!proxy) {
-      proxy = shared?.(pristine[index]!, index, true);
-      if (!proxy) proxy = new Proxy({} as BoardTask, {
-        get: (_target, key) => {
-          const row = copies.get(index) ?? pristine[index]!;
-          const value = Reflect.get(row, key);
-          return value && typeof value === "object" ? Reflect.get(materialize(index), key) : value;
-        },
-        set: (_target, key, value) => Reflect.set(materialize(index), key, value),
-        has: (_target, key) => Reflect.has(copies.get(index) ?? pristine[index]!, key),
-        ownKeys: () => Reflect.ownKeys(materialize(index)),
-        getOwnPropertyDescriptor: (_target, key) => Reflect.getOwnPropertyDescriptor(materialize(index), key),
-        deleteProperty: (_target, key) => Reflect.deleteProperty(materialize(index), key),
-        defineProperty: (_target, key, descriptor) => Reflect.defineProperty(materialize(index), key, descriptor),
-      });
-      persistedRows.set(proxy, persistedRows.get(pristine[index]!));
-      proxies.set(index, proxy);
-    }
-    return proxy;
-  };
+  const peek = (index: number): BoardTask => shared?.(pristine[index]!, index, true) ?? copies.get(index) ?? pristine[index]!;
   const original = (index: number): BoardTask => shared?.(pristine[index]!, index, false) ?? materialize(index);
   // No per-row array slots or shallow task copies for a scalar lookup.
   const target: BoardTask[] = new Array(pristine.length);
@@ -1383,7 +1400,7 @@ function writeTaskCommands<R>(filePath: string,
       const readFull = () => {
         if (!full) {
           const history = mutationHistory(collection, aliasKey, canonical);
-          const pristine: TasksFileState = { tasks: history.tasks, recentCreates: [], migrations: {} };
+          const pristine: TasksFileState = { tasks: history.vector.tasks, recentCreates: [], migrations: {} };
           const draft = taskDrafts(pristine.tasks, (task, _index, peek) => {
             const held = mutable.get(task.id);
             return held ? peek ? held.peek(0) : held.original(0) : undefined;
@@ -1522,7 +1539,7 @@ function writeTaskCommands<R>(filePath: string,
         const prior = full.pristine.tasks[index]!;
         if (full.draft.changed(index, task) && !deletedIds.has(prior.id) && !replacements.has(task.id)) edits.set(task.id, task);
       }
-      if (plan) for (const [id, task] of plan) edits.set(id, task);
+      if (plan && !structural) for (const [id, task] of plan) edits.set(id, task);
       let tasks = [...edits.values()];
       if (outputPositions) tasks.sort((left, right) => outputPositions!.get(left.id)! - outputPositions!.get(right.id)!);
       else if (plan && tasks.length > 1) {

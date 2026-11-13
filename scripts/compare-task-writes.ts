@@ -157,6 +157,28 @@ if (process.argv[2] === "--worker") {
   create("mixed-finding", "mixed-new", { findingKey: "incident" });
   patch("accounting", { findingKey: "incident" });
   checkpoint({ finalMixed: true });
+  for (const mode of ["replace-patched", "splice-created", "splice-patched", "truncate-patched"]) {
+    instant += 1000; freeze();
+    const before = store.loadTasksFile(file);
+    const structural = (rollback: boolean) => store.mutateTasksFile(state => {
+      const command = mode === "splice-created"
+        ? commands.createTask(state.tasks, { project: "dir-after", text: "Structural", placement: "unplaced", clientRequestId: "structural-request" }, state.recentCreates, { now: at, id: () => "structural-new" })
+        : commands.patchTask(state.tasks, "plain", { note: `Structural ${mode}` }, at());
+      if (!command.ok) throw new Error(command.error);
+      const index = command.tasks.findIndex(task => task.id === command.task.id);
+      if (mode === "replace-patched") command.tasks[index] = { ...command.task, text: "Final replacement" };
+      else if (mode === "truncate-patched") command.tasks.length = 0;
+      else command.tasks.splice(index, 1);
+      if (rollback) throw new Error("structural rollback");
+      return { state: { ...state, tasks: command.tasks, recentCreates: "recentCreates" in command ? command.recentCreates : state.recentCreates }, result: null };
+    }, file);
+    assert.throws(() => structural(true), /structural rollback/);
+    assert.deepEqual(store.loadTasksFile(file), before);
+    structural(false);
+    checkpoint({ structural: mode, list: store.loadTasksForList(file) });
+    if (mode === "splice-created") create("structural-retry", "structural-request", { text: "Structural" });
+    if (mode === "splice-patched") create("plain", "restore-plain", { project: "dir-moved" });
+  }
   db.close();
   console.log(JSON.stringify(snapshots));
 } else {

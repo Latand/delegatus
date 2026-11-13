@@ -64,8 +64,8 @@ for timestamp ties. A synchronous alias snapshot removes per-row metadata probes
 
 Callers that explicitly enumerate history retain an array view and the old
 ordering, replacement, deletion and nested mutation behavior. Scalar
-`find`/`findLast` predicates inspect lazy row views; a match, nested field
-read, enumeration or edit opens the row's mutable shallow copy. A command
+`find`/`findLast` predicates inspect the cached row projection; a match
+opens the row's mutable shallow copy. A command
 shares those drafts with its input and output arrays, including assignment
 arrays read before the command. Structural array edits end the command
 shortcut; subsequent commands consume the actual reordered array.
@@ -79,7 +79,10 @@ facts, before the next command. Repeated reads of that snapshot skip this work.
 Warming verifies the database identity, revision and aliases before publishing
 its caches; a concurrent change discards the unverified projections.
 Later revisions decode only journaled rows, and seek their order and
-byte metadata by key. Ordinary patches keep the existing index; insertions,
+byte metadata by key. A persistent binary index copies the path to a changed
+row and shares its other branches with earlier views. Scalar lookup allocates
+no wrapper for each inspected row and copies no full task reference vector.
+Ordinary patches keep the existing index; insertions,
 deletions and moved rows rebuild the ordered reference array once per changed
 reader revision. A previous array view retains its own revision. Journal
 expiry, alias changes, file replacement and eviction cause a fresh reader
@@ -455,3 +458,40 @@ a 74.392 ms first lookup and a 50.092 ms cold rotation sample; those runs stay
 in evidence. The final run warms the reusable projections during preparation
 and genuine list reads, after the tasks transaction has ended. Its 115/115
 transactions meet the bound without dropping a repetition.
+
+## Structural output and lookup allocation regressions
+
+The final callback array controls persistence after a structural edit. A prior
+command plan cannot restore a spliced row, undo a replacement or refill a
+truncated array. The keyed regression file covers each of those cases and a
+create removed before commit, with rollback, unchanged neighboring rows,
+reader projections and receipt retry. The maintained differential now compares
+36 exact states, including those four reproductions, against the original
+writer. Task revisions, SQLite row revisions and order, receipts and rollback
+all match.
+
+The lookup regression refuses a full reference-vector slice and counts every
+new Proxy constructor call while repeatedly patching and updating a note on
+4599 rows without intervening list reads. It also retains earlier mutation
+views and verifies their original values after later commits. Both bounds
+include command output lookups.
+
+The repeated before/after lookup measurement uses the unchanged synthetic
+fixture above (4599 rows, 25,165,834 bytes), Bun 1.4.0, three admitted CPUs,
+one active writer and nine alternating repetitions per operation. Starting
+load averages were 14.02/18.83/19.85. The reference is `d040eef4955f`.
+Only the existing transaction logger's threshold and rounding were changed
+in both measurement exports. All 27 candidate transactions were below 50 ms;
+no repetition was discarded.
+
+| Operation | Before median / max, ms | After median / max, ms |
+| --- | ---: | ---: |
+| Patch after find | 98.175 / 115.468 | 4.652 / 10.905 |
+| Note after find | 100.417 / 131.120 | 5.530 / 8.842 |
+| Create | 106.143 / 138.764 | 2.112 / 9.815 |
+
+Reproduce with `scripts/measure-task-writes.ts "$REFERENCE" "$CANDIDATE"
+--lookup` through the gate, using the preparation, isolation and measurement
+procedure above. Patch and note each clone one task root; create clones none.
+Raw observations, the red regressions and the final hook verdict are retained
+with the stage evidence outside the source tree.

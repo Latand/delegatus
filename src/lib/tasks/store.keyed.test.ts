@@ -119,6 +119,17 @@ test("array lookup and command refresh only changed payloads over successive rev
     return orders.call(this, keys);
   });
   const stringify = JSON.stringify;
+  const retained: BoardTask[][] = [];
+  const slice = Array.prototype.slice;
+  const slices = spyOn(Array.prototype, "slice").mockImplementation(function(this: unknown[], ...args: [number?, number?]) {
+    if (this.length >= 4599) throw new Error("full task reference vector copied during lookup write");
+    return Reflect.apply(slice, this, args);
+  });
+  const NativeProxy = Proxy;
+  let wrappers = 0;
+  globalThis.Proxy = new NativeProxy(NativeProxy, {
+    construct(target, args) { wrappers++; return Reflect.construct(target, args); },
+  });
   let payloads = 0;
   const json = spyOn(JSON, "stringify").mockImplementation((value, ...args) => {
     if (value && typeof value === "object" && "id" in value && "status" in value) payloads++;
@@ -126,6 +137,7 @@ test("array lookup and command refresh only changed payloads over successive rev
   });
   try {
     for (let i = 0; i < 3; i++) mutateTasks(tasks => {
+      retained.push(tasks);
       expect(tasks.findLast(row => row.id === "lookup-4598")?.id).toBe("lookup-4598");
       expect(tasks.find(row => row.id === "lookup-4598")?.id).toBe("lookup-4598");
       const result = patchTask(tasks, "lookup-4598", i % 2 ? { note: `note ${i}` } : { text: `text ${i}` }, at);
@@ -135,8 +147,56 @@ test("array lookup and command refresh only changed payloads over successive rev
     expect(payloads).toBeLessThan(30);
     expect(clone.mock.calls.length).toBeLessThan(30);
     expect(shallow).toBeLessThan(30);
-  } finally { full.mockRestore(); clone.mockRestore(); json.mockRestore(); copies.mockRestore(); metadata?.mockRestore(); }
+    expect(wrappers).toBeLessThan(60);
+  } finally { globalThis.Proxy = NativeProxy; slices.mockRestore(); full.mockRestore(); clone.mockRestore(); json.mockRestore(); copies.mockRestore(); metadata?.mockRestore(); }
+  expect(retained.map(rows => rows.find(row => row.id === "lookup-4598")?.text)).toEqual(["Task lookup-4598", "text 0", "text 0"]);
 });
+
+for (const mode of ["replace-patched", "splice-patched", "truncate-patched", "splice-created"] as const) {
+  test(`final structural array wins over command plan: ${mode}, rollback and receipt replay`, () => {
+    setSystemTime(new Date(at));
+    const { file } = sandbox();
+    seed(file, [task("target"), task("other")]); prepareTaskRows(file);
+    const before = raw(file);
+    const original = loadTasksForList(file);
+    const revision = taskRevision(original[0]!);
+    const write = (refuse: boolean) => mutateTasksFile(state => {
+      const out = mode === "splice-created"
+        ? createTask(state.tasks, { project: "fixture", text: "New", placement: "unplaced", clientRequestId: "structural-create" }, state.recentCreates, { now: () => at, id: () => "new" })
+        : patchTask(state.tasks, "target", { note: "Command edit", expectedProject: "fixture", expectedRevision: revision }, at);
+      if (!out.ok) throw new Error(out.error);
+      const index = out.tasks.findIndex(row => row.id === out.task.id);
+      if (mode === "replace-patched") out.tasks[index] = { ...out.task, text: "Replacement" };
+      else if (mode === "truncate-patched") out.tasks.length = 0;
+      else out.tasks.splice(index, 1);
+      if (refuse) throw new Error("structural rollback");
+      return { state: { ...state, tasks: out.tasks, recentCreates: "recentCreates" in out ? out.recentCreates : state.recentCreates }, result: null };
+    }, file);
+    expect(() => write(true)).toThrow("structural rollback");
+    expect(raw(file)).toEqual(before);
+    write(false);
+    const expectedIds = mode === "truncate-patched" ? [] : mode === "splice-patched" ? ["other"] : ["target", "other"];
+    const persisted = loadTasksFile(file);
+    expect(persisted.tasks.map(row => row.id)).toEqual(expectedIds);
+    expect(loadTasksForList(file).map(row => row.id)).toEqual(expectedIds);
+    expect(original.map(row => row.id)).toEqual(["target", "other"]);
+    expect(original[0]!.text).toBe("Task target");
+    if (mode === "replace-patched") {
+      expect(persisted.tasks[0]).toMatchObject({ text: "Replacement", note: { text: "Command edit" } });
+      expect(taskRevision(persisted.tasks[0]!)).not.toBe(revision);
+    }
+    if (mode !== "truncate-patched") expect(raw(file).find(row => row.row_key === "t:other")).toEqual(before.find(row => row.row_key === "t:other"));
+    if (mode === "splice-created") {
+      expect(persisted.recentCreates).toHaveLength(1);
+      const replay = mutateTasksFile(state => {
+        const out = createTask(state.tasks, { project: "fixture", text: "New", placement: "unplaced", clientRequestId: "structural-create" }, state.recentCreates, { now: () => at, id: () => "replacement-new" });
+        return { state: out.ok ? { ...state, tasks: out.tasks, recentCreates: out.recentCreates } : undefined, result: out };
+      }, file);
+      expect(replay.ok && replay.task.id).toBe("replacement-new");
+      expect(loadTasksFile(file).tasks.map(row => row.id)).toEqual(["target", "other", "replacement-new"]);
+    }
+  });
+}
 
 test("seventeen project rotations retain admission facts and apply journaled edits", () => {
   setSystemTime(new Date(at));
@@ -176,6 +236,7 @@ test("array reader follows peer edits and deletion while an earlier view keeps i
     return { tasks: undefined, result: null };
   }, file);
   expect(old.find(row => row.id === "b")?.text).toBe("Task b");
+  expect(old.find(row => row.id === "a")?.text).toBe("Task a");
   expect(raw(file)).toEqual(before);
 });
 
