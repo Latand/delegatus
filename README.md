@@ -42,6 +42,17 @@ Delegatus runs on your own machine with your own agent accounts. What it adds:
 
 ## Quick start
 
+**On a Mac:** download `Delegatus-<version>-mac.dmg` from the
+[latest release](../../releases/latest), open it, drag **Delegatus** to
+**Applications**, and double-click it. After one confirmation the app installs
+Bun and Delegatus privately and opens the setup guide in its own window.
+Connect Claude Code or Codex in that guide.
+
+The app is ad-hoc signed. On macOS 13–14, Control-click (or right-click)
+**Delegatus**, choose **Open**, then **Open** again. On macOS 15 and later,
+double-click once and close the warning, then go to **System Settings →
+Privacy & Security → Open Anyway** next to Delegatus and confirm.
+
 These steps take you from nothing to an orchestrator working on your project.
 
 1. Install [Bun](https://bun.com) 1.4 or newer:
