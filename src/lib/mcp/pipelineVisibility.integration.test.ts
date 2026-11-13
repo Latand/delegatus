@@ -11,6 +11,7 @@ const { setMcpHttpDependenciesForTests } = await import("./http");
 const { POST } = await import("@/app/api/mcp/route");
 const { buildMobileBoard, needsDecisionPipelineRows } = await import("@/components/mobile/mobileBoardModel");
 const { laneNeed } = await import("@/components/attention/needReason");
+const { mergeNeedsYou } = await import("@/components/pipelines/pipelineBlockModel");
 import type { ViewerMcpDomainDependencies } from "./bindings";
 import type { Pipeline } from "@/lib/pipelines/types";
 
@@ -52,8 +53,12 @@ async function protocol(h: ReturnType<typeof harness>) {
 
 function assertUi(pipeline: Pipeline, hidden: boolean) {
   const now = 1_000_000;
-  expect(needsDecisionPipelineRows([pipeline], "viewer", now)).toHaveLength(hidden ? 0 : 1);
-  expect(buildMobileBoard({ files: [], pipelines: [pipeline], project: "viewer", now }).attentionCount).toBe(hidden ? 0 : 1);
+  if (pipeline.state === "completed" && pipeline.merge?.state === "blocked") {
+    expect(mergeNeedsYou(pipeline)).toBe(!hidden);
+  } else {
+    expect(needsDecisionPipelineRows([pipeline], "viewer", now)).toHaveLength(hidden ? 0 : 1);
+    expect(buildMobileBoard({ files: [], pipelines: [pipeline], project: "viewer", now }).attentionCount).toBe(hidden ? 0 : 1);
+  }
   expect(Boolean(laneNeed(pipeline)?.cleared)).toBe(hidden);
 }
 
@@ -137,4 +142,49 @@ test("draft and closed lanes are already clear over MCP and retain their record"
       expect(loadPipelines()).toEqual(before);
     }
   }
+});
+
+test("a dismissed completed lane with a blocked merge is hidden consistently over HTTP MCP", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  const blockedAt = "1970-01-01T00:00:00.000Z";
+  const pipeline = {
+    ...created,
+    state: "completed",
+    cursor: null,
+    closedAt: blockedAt,
+    dismissedAt: null,
+    merge: {
+      state: "blocked", by: null, repository: "owner/repo", prNumber: 12,
+      policyChangedAt: blockedAt, reviewedHead: "head", chain: ["head"], updates: [],
+      seenChecks: [], head: "head", headSeenAt: blockedAt, lastChecks: [], readAt: blockedAt,
+      nextReadAt: null, readFailures: 0, requestedAt: blockedAt, mergedHead: null,
+      mergeCommit: null, method: "squash", mergedAt: null, attempts: 0,
+      reason: "required check failed", blockedAt, updatedAt: blockedAt,
+    },
+  } as Pipeline;
+  savePipelines([pipeline]);
+  const call = await protocol(h);
+  const action = async (name: "dismiss" | "undismiss") => {
+    const answer = await call("pipeline_action", { pipelineId: pipeline.id, action: name });
+    expect(answer.error, answer.raw).toBe(false);
+  };
+  const lists = async (hidden: boolean) => {
+    for (const view of [{}, { compact: false }, { statusOnly: true }]) {
+      const answer = await call("list_pipelines", { project: "viewer", ...view });
+      expect(answer.error, answer.raw).toBe(false);
+      expect(answer.data.pipelines).toEqual([expect.objectContaining({ id: pipeline.id, hiddenFromBoard: hidden })]);
+    }
+    assertUi(loadPipelines()[0]!, hidden);
+  };
+
+  await lists(false);
+  await action("dismiss");
+  await lists(true);
+  await action("undismiss");
+  await lists(false);
+  await action("dismiss");
+  const dismissedAt = loadPipelines()[0]!.dismissedAt!;
+  savePipelines([{ ...loadPipelines()[0]!, merge: { ...loadPipelines()[0]!.merge!, blockedAt: new Date(Date.parse(dismissedAt) + 1).toISOString() } }]);
+  await lists(false);
 });
