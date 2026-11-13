@@ -26,6 +26,174 @@ function fixture(directory = true) {
   return { root, store, row, ports };
 }
 
+async function runRecovery(f: ReturnType<typeof fixture>, mode: string, time: number) {
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "temporaryDataRetention.fixture.ts"), f.store.filename, mode, String(time)], { stdout: "pipe", stderr: "pipe" });
+  const [output, error] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(await child.exited, error).toBe(0);
+  return output;
+}
+
+function trashOf(f: ReturnType<typeof fixture>) {
+  return (JSON.parse(fs.readFileSync(attemptTempJournalPath(f.row.directory), "utf8")) as { trash: string }).trash;
+}
+
+test.each([true, false])("crash after durable intent before rename recovers (directory=%s)", async directory => {
+  const f = fixture(directory), inode = fs.lstatSync(f.row.directory).ino;
+  expect(await runRecovery(f, "crash-before-rename", NOW)).toBe("intent-written\n");
+  expect(fs.lstatSync(f.row.directory).ino).toBe(inode);
+  const trash = trashOf(f);
+  expect(fs.existsSync(trash)).toBeFalse();
+  expect(JSON.parse(await runRecovery(f, "recover", NOW + 60001))).toMatchObject({ removed: 1, errors: 0 });
+  expect(JSON.parse(await runRecovery(f, "recover", NOW + 120002))).toMatchObject({ checked: 0, removed: 0, errors: 0 });
+  expect(fs.existsSync(f.row.directory)).toBeFalse();
+  expect(fs.existsSync(attemptTempJournalPath(f.row.directory))).toBeFalse();
+  expect(f.store.get(f.row.directory)).toBeNull();
+});
+
+test("preservation written during downtime restores the quarantined owner path", async () => {
+  const f = fixture(), inode = fs.lstatSync(f.row.directory).ino;
+  expect(await runRecovery(f, "crash", NOW)).toBe("quarantined\n");
+  const trash = trashOf(f), backup = "only preservation record\n";
+  fs.writeFileSync(path.join(trash, "worktree-backup.json"), backup);
+  for (const time of [NOW + 60001, NOW + 120002]) {
+    expect(JSON.parse(await runRecovery(f, "recover", time))).toMatchObject({ removed: 0, errors: 1, kept: { "preservation-record": 1 } });
+    expect(fs.lstatSync(f.row.directory).ino).toBe(inode);
+    expect(fs.readFileSync(path.join(f.row.directory, "screen.png"), "utf8")).toBe("capture");
+    expect(fs.readFileSync(path.join(f.row.directory, "worktree-backup.json"), "utf8")).toBe(backup);
+    expect(fs.existsSync(trash)).toBeFalse();
+    expect(fs.existsSync(attemptTempJournalPath(f.row.directory))).toBeFalse();
+  }
+  fs.unlinkSync(path.join(f.row.directory, "worktree-backup.json"));
+  expect(JSON.parse(await runRecovery(f, "recover", NOW + 180003))).toMatchObject({ removed: 1, errors: 0 });
+  expect(f.store.get(f.row.directory)).toBeNull();
+});
+
+for (const directory of [true, false]) {
+  test(`a refusal thrown after quarantine restores before releasing the claim (directory=${directory})`, async () => {
+    const f = fixture(directory), inode = fs.lstatSync(f.row.directory).ino;
+    let calls = 0, released = false;
+    const report = await sweepTemporaryData(f.store, { ...f.ports,
+      references: async () => { if (++calls === 2) throw new Error("references-unavailable"); return true; },
+      claim: async () => () => {
+        expect(fs.lstatSync(f.row.directory).ino).toBe(inode);
+        expect(fs.existsSync(attemptTempJournalPath(f.row.directory))).toBeFalse();
+        released = true;
+      },
+    });
+    expect(calls).toBe(2); expect(released).toBeTrue();
+    expect(report).toMatchObject({ removed: 0, errors: 1, kept: { "references-unavailable": 1 } });
+    expect(JSON.parse(await runRecovery(f, "recover", NOW + 60001))).toMatchObject({ removed: 1, errors: 0 });
+  });
+
+  for (const mode of ["crash-before-rename", "crash"]) {
+    test(`dry-run preserves the ${mode} intent (directory=${directory})`, async () => {
+      const f = fixture(directory);
+      await runRecovery(f, mode, NOW);
+      const journal = attemptTempJournalPath(f.row.directory), before = fs.readFileSync(journal, "utf8");
+      const target = mode === "crash" ? trashOf(f) : f.row.directory, inode = fs.lstatSync(target).ino;
+      const report = await sweepTemporaryData(f.store, { ...f.ports, now: () => NOW + 60001, mode: "dry-run",
+        claim: async () => { throw new Error("dry-run claimed"); },
+      });
+      expect(report.removed).toBe(0);
+      expect(fs.lstatSync(target).ino).toBe(inode);
+      expect(fs.readFileSync(journal, "utf8")).toBe(before);
+    });
+  }
+
+  test(`replay leaves a replaced trash identity and its journal untouched (directory=${directory})`, async () => {
+    const f = fixture(directory);
+    await runRecovery(f, "crash", NOW);
+    const trash = trashOf(f), journal = attemptTempJournalPath(f.row.directory), before = fs.readFileSync(journal, "utf8");
+    fs.renameSync(trash, trash + "-original");
+    fs.writeFileSync(trash, "replacement");
+    for (const time of [NOW + 60001, NOW + 120002]) {
+      expect(JSON.parse(await runRecovery(f, "recover", time)).removed).toBe(0);
+      expect(fs.existsSync(f.row.directory)).toBeFalse();
+      expect(fs.readFileSync(trash, "utf8")).toBe("replacement");
+      expect(fs.readFileSync(directory ? path.join(trash + "-original", "screen.png") : trash + "-original", "utf8")).toBe("capture");
+      expect(fs.readFileSync(journal, "utf8")).toBe(before);
+    }
+  });
+
+  for (const mode of ["references-held", "references-error", "authority-error"]) {
+    test(`replay restores pre-dispatch ${mode} and later retires (directory=${directory})`, async () => {
+      const f = fixture(directory), inode = fs.lstatSync(f.row.directory).ino;
+      expect(await runRecovery(f, "crash", NOW)).toBe("quarantined\n");
+      const trash = trashOf(f), reason = mode === "references-held" ? "live-reference" : mode === "references-error" ? "references-unavailable" : "authority-unavailable";
+      for (const time of [NOW + 60001, NOW + 120002]) {
+        expect(JSON.parse(await runRecovery(f, mode, time))).toMatchObject({ removed: 0, errors: mode === "references-held" ? 0 : 1, kept: { [reason]: 1 } });
+        expect(fs.lstatSync(f.row.directory).ino).toBe(inode);
+        expect(fs.readFileSync(directory ? path.join(f.row.directory, "screen.png") : f.row.directory, "utf8")).toBe("capture");
+        expect(fs.existsSync(trash)).toBeFalse();
+        expect(fs.existsSync(attemptTempJournalPath(f.row.directory))).toBeFalse();
+      }
+      expect(JSON.parse(await runRecovery(f, "recover", NOW + 180003))).toMatchObject({ removed: 1, errors: 0 });
+    });
+  }
+
+  test(`a crash after restoration completes intent cancellation (directory=${directory})`, async () => {
+    const f = fixture(directory), inode = fs.lstatSync(f.row.directory).ino;
+    expect(await runRecovery(f, "crash", NOW)).toBe("quarantined\n");
+    expect(await runRecovery(f, "crash-after-restore", NOW + 60001)).toBe("restored\n");
+    expect(fs.lstatSync(f.row.directory).ino).toBe(inode);
+    expect(fs.existsSync(attemptTempJournalPath(f.row.directory))).toBeTrue();
+    expect(JSON.parse(await runRecovery(f, "recover", NOW + 120002))).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(attemptTempJournalPath(f.row.directory))).toBeFalse();
+  });
+
+  for (const control of ["replacement", "preservation", "binding", "both-paths"]) {
+    test(`pre-rename recovery preserves ${control} (directory=${directory})`, async () => {
+      const f = fixture(directory);
+      expect(await runRecovery(f, "crash-before-rename", NOW)).toBe("intent-written\n");
+      const journal = attemptTempJournalPath(f.row.directory), trash = trashOf(f), before = fs.readFileSync(journal, "utf8");
+      if (control === "replacement") {
+        fs.renameSync(f.row.directory, f.row.directory + "-original");
+        if (directory) { fs.mkdirSync(f.row.directory); fs.writeFileSync(path.join(f.row.directory, "screen.png"), "replacement"); }
+        else fs.writeFileSync(f.row.directory, "replacement");
+      } else if (control === "preservation") plantKeepMarker(path.join(f.row.scope, ".delegatus-keep"), "hold");
+      else if (control === "binding") fs.writeFileSync(journal, JSON.stringify({ ...JSON.parse(before), identity: "changed" }));
+      else fs.writeFileSync(trash, "conflicting trash");
+      const expectedJournal = fs.readFileSync(journal, "utf8"), inode = fs.lstatSync(f.row.directory).ino;
+      for (const time of [NOW + 60001, NOW + 120002]) {
+        const report = JSON.parse(await runRecovery(f, "recover", time));
+        expect(report.removed).toBe(0); expect(report.errors).toBe(1);
+        expect(fs.lstatSync(f.row.directory).ino).toBe(inode);
+        expect(fs.readFileSync(directory ? path.join(f.row.directory, "screen.png") : f.row.directory, "utf8")).toBe(control === "replacement" ? "replacement" : "capture");
+        if (control === "preservation") {
+          expect(report.kept["keep-marker"]).toBe(1);
+          expect(fs.existsSync(journal)).toBeFalse();
+        } else expect(fs.readFileSync(journal, "utf8")).toBe(expectedJournal);
+      }
+      if (control === "preservation") {
+        removeKeepMarkers();
+        expect(JSON.parse(await runRecovery(f, "recover", NOW + 180003))).toMatchObject({ removed: 1, errors: 0 });
+      }
+    });
+  }
+}
+
+test.each([false, true])("a native removal failure retains partial-removal custody until replay (replay=%s)", async replay => {
+  const f = fixture(), remove = fs.promises.rm;
+  if (replay) await runRecovery(f, "crash", NOW);
+  let trash = "";
+  const spy = spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+    if (String(target).includes(".delegatus-trash-")) {
+      trash = String(target); fs.unlinkSync(path.join(trash, "screen.png"));
+      throw new Error("native-removal-interrupted");
+    }
+    return remove(target, options);
+  });
+  try {
+    expect(await sweepTemporaryData(f.store, { ...f.ports, now: () => NOW + (replay ? 60001 : 0) })).toMatchObject({ removed: 0, errors: 1, kept: { "native-removal-interrupted": 1 } });
+    expect(fs.existsSync(f.row.directory)).toBeFalse();
+    expect(fs.existsSync(trash)).toBeTrue();
+    expect(fs.existsSync(attemptTempJournalPath(f.row.directory))).toBeTrue();
+  } finally { spy.mockRestore(); }
+  expect(JSON.parse(await runRecovery(f, "recover", NOW + 120002))).toMatchObject({ removed: 1, errors: 0 });
+  expect(fs.existsSync(trash)).toBeFalse();
+  expect(fs.existsSync(attemptTempJournalPath(f.row.directory))).toBeFalse();
+});
+
 test.each([true, false])("expired evidence is removed through a journal (directory=%s)", async directory => {
   const f = fixture(directory);
   const report = await sweepTemporaryData(f.store, f.ports);

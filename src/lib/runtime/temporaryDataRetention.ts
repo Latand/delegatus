@@ -258,6 +258,7 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
       report.checked++;
       store.record(row.directory, now() + 60000, row.bytes, "pending");
       let release: (() => void) | undefined;
+      let claimed = false, mutationStarted = false;
       let bytes = row.bytes, reason = "held";
       let nextCheck = now() + 60000;
       const journal = attemptTempJournalPath(row.directory);
@@ -284,7 +285,14 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
           }
         }
         // A claim also protects replay when a previous process died in trash.
-        if (ports.mode !== "dry-run") release = await ports.claim(row);
+        if (ports.mode !== "dry-run") {
+          release = await ports.claim(row);
+          claimed = true;
+          // The durable writer can stop before rename, or after restoration
+          // but before cancelling its intent. Reconcile only the recorded
+          // original identity; competing paths and identities remain fenced.
+          if (fs.lstatSync(row.directory, { throwIfNoEntry: false }) && fs.existsSync(journal)) restoreCandidate(row, journal);
+        }
         assertRetentionTestPath(row.directory);
         const authority = await ports.authority(row);
         assertRetentionTestPath(row.directory);
@@ -354,13 +362,20 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
           if (currentAuthority.revision !== authority.revision || !validate(current)) { reason = "fence-changed"; return true; }
           return false;
         };
-        if (await held(target)) continue;
+        if (await held(target)) {
+          if (claimed) restoreCandidate(row, journal);
+          continue;
+        }
         if (ports.mode === "dry-run") { report.wouldRemove++; report.wouldRemoveBytes += bytes; reason = "due"; continue; }
         const stat = fs.lstatSync(target);
         let removed = false;
         if (stat.isDirectory()) {
-          removed = fs.existsSync(journal) ? await finishTreeTrash(journal, held, undefined, validate, true, dispatch)
-            : await removeTreeViaTrash(row.directory, { journal, held, validate, dispatch, disposable: true });
+          const remove = (current: string, started: () => void) => {
+            mutationStarted = true; started();
+            return fs.promises.rm(current, { recursive: true, force: true });
+          };
+          removed = fs.existsSync(journal) ? await finishTreeTrash(journal, held, remove, validate, true, dispatch)
+            : await removeTreeViaTrash(row.directory, { journal, held, remove, validate, dispatch, disposable: true });
           if (!removed) restoreRefusedAttemptTrash(row.directory, row.identity);
         } else {
           if (!file) {
@@ -373,6 +388,7 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
           const moved = fs.lstatSync(file.trash);
           if (!moved.isFile() || moved.uid !== file.uid || identity(moved) !== row.identity) throw new Error("file-identity-changed");
           if (!await held(file.trash) && validate(file.trash)) {
+            mutationStarted = true;
             fs.unlinkSync(file.trash); fs.unlinkSync(journal); removed = true;
           } else if (!fs.existsSync(row.directory) && identity(fs.lstatSync(file.trash)) === row.identity) {
             fs.renameSync(file.trash, row.directory); fs.unlinkSync(journal);
@@ -382,6 +398,13 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
       } catch (error) {
         if (error instanceof RetentionTestSafetyError) throw error;
         reason = error instanceof Error ? error.message : "inspection-unavailable"; report.errors++;
+        // Protection and reference inspection can throw before dispatch, even
+        // on replay. Return that verified resource to its owner in this call.
+        // A native removal error keeps the intent and partial tree in custody.
+        if (claimed && !mutationStarted) {
+          try { restoreCandidate(row, journal); }
+          catch (restoreError) { reason += `; restoration: ${restoreError instanceof Error ? restoreError.message : "unavailable"}`; }
+        }
       }
       finally {
         try { release?.(); } catch { report.errors++; }
