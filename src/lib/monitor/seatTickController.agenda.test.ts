@@ -524,25 +524,31 @@ test("automatic drain holds seat sweeps and release resumes the next sweep", asy
   stopSeatTick();
 });
 
-test("a pass that outran its interval still checks due projects on each callback", async () => {
+test("a pass that outran its interval skips callbacks until completion", async () => {
   let fire = () => {};
-  let sweeps = 0;
+  let sweeps = 0, now = 0;
   const releases: (() => void)[] = [];
   startSeatTick({
+    clock: () => now, recordSuccessions: () => [], handoffHeld: () => false, drainHeld: () => false,
     scheduleInterval: (callback) => { fire = callback; return { unref() {} } as never; },
     sweep: () => { sweeps += 1; return new Promise<void>((resolve) => { releases.push(resolve); }); },
     policy: DEFAULT_SEAT_TICK_POLICY,
     log: () => {},
   });
-  fire();
-  fire();
-  expect(sweeps).toBe(3);
-  releases.forEach(release => release());
-  await Promise.resolve();
-  await Promise.resolve();
-  fire();
-  expect(sweeps).toBe(4);
-  releases.forEach(release => release());
+  try {
+    now = DEFAULT_SEAT_TICK_POLICY.checkIntervalMs * 2;
+    fire();
+    fire();
+    expect(sweeps).toBe(1);
+    releases[0]!();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    fire();
+    expect(sweeps).toBe(2);
+  } finally {
+    releases.forEach(release => release());
+    stopSeatTick();
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
 });
 
 test("a wake drops a lane closed during gathering and carries the current monitor note", async () => {
