@@ -1,5 +1,5 @@
-import { claudeNativeUuid, nativeBoundary, nativeConsumed, nativeInput, nativeResult, nativeResultMembers, nativeTerminal, nativeUuids, sameNativeWriter,
-  deliveryRecord, parseDeliveryRecords, replayClaudeDeliveries, sameNormalizedEntry, type ClaudeNativeConsumed, type ClaudeNativeInput, type ClaudeNativeResult, type ClaudeNativeTerminal, type ClaudeNativeWriter } from "./claudeNativeDelivery";
+import { CLAUDE_NATIVE_INPUT_LIMIT, claudeNativeUuid, nativeBoundary, nativeTurnBoundary, nativeTurnBoundaryMember, nativeConsumed, nativeInput, nativeResult, nativeResultMembers, nativeTerminal, nativeUuids, sameNativeWriter,
+  deliveryRecord, parseDeliveryRecords, replayClaudeDeliveries, sameNormalizedEntry, type ClaudeNativeTurnBoundary, type ClaudeNativeConsumed, type ClaudeNativeInput, type ClaudeNativeResult, type ClaudeNativeTerminal, type ClaudeNativeWriter } from "./claudeNativeDelivery";
 import { assertReleasedHostEventLedger } from "./hostEventWindow";
 import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
 import { heapAttribution } from "@/lib/heapAttribution";
@@ -116,6 +116,7 @@ export interface ClaudeDeliveryState {
   nativeNoWrite?: boolean;
   nativeResult?: ClaudeNativeResult;
   nativeTerminal?: ClaudeNativeTerminal;
+  nativeTurnBoundary?: ClaudeNativeTurnBoundary;
   nativeConsumed?: ClaudeNativeConsumed;
   /** Scalar replay checks survive releasing a closed/zero-byte payload. */
   nativeReplayShape?: { textDigest: string; imageCount: number };
@@ -127,6 +128,7 @@ export interface ClaudeDeliveryLedger {
   load(sessionId: string): ClaudeDeliveryState[];
   loadDurable?(sessionId: string, seedNativeCache?: boolean): Promise<ClaudeDeliveryState[]>;
   recordNativeIntent?(sessionId: string, entry: QueueEntry, disposition: ClaudeDeliveryState["disposition"], input: ClaudeNativeInput): Promise<void>;
+  recordNativeTurnBoundary?(sessionId: string, evidence: ClaudeNativeTurnBoundary): Promise<ClaudeDeliveryConfirmation>;
   recordNativeTerminal?(sessionId: string, evidence: ClaudeNativeTerminal): Promise<ClaudeDeliveryConfirmation>;
   recordNativeConsumed?(sessionId: string, evidence: ClaudeNativeConsumed): Promise<ClaudeDeliveryConfirmation>;
   confirmNativeResult?(sessionId: string, proof: ClaudeNativeResult): Promise<ClaudeDeliveryConfirmation>;
@@ -136,6 +138,7 @@ export interface ClaudeDeliveryLedger {
 }
 
 export type ClaudeDeliveryRecord =
+  | { kind: "native-turn-boundary"; evidence: ClaudeNativeTurnBoundary }
   | { kind: "native-terminal"; evidence: ClaudeNativeTerminal }
   | { kind: "native-consumed"; evidence: ClaudeNativeConsumed }
   | { kind: "native-result"; proof: ClaudeNativeResult }
@@ -160,14 +163,16 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
     if (!file) { if (seedNativeCache) this.rememberNativeStates(sessionId, []); return []; }
     try {
       const states = replayClaudeDeliveries(parseDeliveryRecords(await file.readFile("utf8")), sessionId);
-      if (states.some(state => state.nativeResult || state.nativeTerminal || state.nativeConsumed?.turnId)) await file.sync();
-      if (seedNativeCache) this.rememberNativeStates(sessionId, states.map(state => structuredClone({ ...state,
-        entry: settledDeliveryEntry(state.entry) })));
+      if (states.some(state => state.nativeResult || state.nativeTerminal || state.nativeTurnBoundary || state.nativeConsumed?.turnId)) await file.sync();
+      if (seedNativeCache) this.rememberNativeStates(sessionId, states);
       return states;
     } finally { await file.close(); }
   }
 
   private readonly nativeSessions = new Map<string, ClaudeDeliveryState[]>();
+  // Fixed-size negative lookup filter. A possible historical hit is always
+  // resolved from the durable ledger; collisions grant no authority.
+  private readonly nativeHistory = new Map<string, Uint8Array>();
   private nativeWriting: Promise<unknown> = Promise.resolve();
 
   private serializeNative<T>(action: () => Promise<T>): Promise<T> {
@@ -176,18 +181,39 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
     return next;
   }
 
-  private async nativeStates(sessionId: string): Promise<ClaudeDeliveryState[]> {
-    const cached = this.nativeSessions.get(sessionId);
-    if (cached) return cached;
-    await this.loadDurable(sessionId, true);
-    return this.nativeSessions.get(sessionId)!;
+  private nativeKeys(state: ClaudeDeliveryState): string[] {
+    return [state.entry.id, state.native?.inputUuid, state.engineMessageId,
+      state.nativeResult?.resultUuid, state.nativeTerminal?.resultUuid, state.nativeTurnBoundary?.resultUuid]
+      .filter((key): key is string => Boolean(key));
+  }
+
+  private historyBits(key: string): number[] {
+    const hash = crypto.createHash("sha256").update(key).digest();
+    return [0, 4, 8].map(offset => hash.readUInt32LE(offset) % (8192 * 8));
+  }
+
+  private async nativeStates(sessionId: string, lookup: readonly string[] = []): Promise<ClaudeDeliveryState[]> {
+    if (!this.nativeSessions.has(sessionId)) await this.loadDurable(sessionId, true);
+    const cached = this.nativeSessions.get(sessionId)!;
+    const history = this.nativeHistory.get(sessionId)!;
+    const historical = lookup.some(key => !cached.some(state => this.nativeKeys(state).includes(key))
+      && this.historyBits(key).every(bit => (history[bit >> 3]! & 1 << (bit & 7)) !== 0));
+    return historical ? this.loadDurable(sessionId) : cached;
   }
 
   private rememberNativeStates(sessionId: string, states: ClaudeDeliveryState[]): void {
-    // A broker owns one conversation. Auxiliary use is FIFO bounded; settled
-    // payloads stay on disk. restore() seeds this before the first request.
-    if (this.nativeSessions.size >= 8) this.nativeSessions.delete(this.nativeSessions.keys().next().value!);
-    this.nativeSessions.set(sessionId, states);
+    if (!this.nativeSessions.has(sessionId) && this.nativeSessions.size >= 8) {
+      const oldest = this.nativeSessions.keys().next().value!;
+      this.nativeSessions.delete(oldest); this.nativeHistory.delete(oldest);
+    }
+    const history = this.nativeHistory.get(sessionId) ?? new Uint8Array(8192);
+    for (const state of states) for (const key of this.nativeKeys(state)) for (const bit of this.historyBits(key)) {
+      history[bit >> 3] = history[bit >> 3]! | 1 << (bit & 7);
+    }
+    this.nativeHistory.set(sessionId, history);
+    this.nativeSessions.set(sessionId, states.filter(state => state.native
+      && !state.nativeResult && !state.nativeTerminal && !state.nativeTurnBoundary && !state.nativeNoWrite)
+      .map(state => ({ ...state, entry: settledDeliveryEntry(state.entry) })));
   }
 
   async recordNativeIntent(sessionId: string, entry: QueueEntry, disposition: ClaudeDeliveryState["disposition"], input: ClaudeNativeInput): Promise<void> {
@@ -195,7 +221,7 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
       const normalized = normalizeQueueEntry(entry);
       const parsed = nativeInput(input);
       if (!parsed || parsed.sessionId !== sessionId) throw new Error("Claude native input binding is invalid");
-      const states = await this.nativeStates(sessionId);
+      const states = await this.nativeStates(sessionId, [entry.id, parsed.inputUuid]);
       const existing = states.find(row => row.entry.id === entry.id);
       if (existing) {
         if (!sameNormalizedEntry(existing.entry, normalized) || !existing.native || existing.native.inputUuid !== parsed.inputUuid
@@ -205,6 +231,9 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
       if (states.some(row => row.entry.id !== entry.id && (row.native?.inputUuid === parsed.inputUuid || row.delivered && row.engineMessageId === parsed.inputUuid))) {
         throw new Error("Claude native input identity is already allocated");
       }
+      if (states.filter(state => state.native && !state.nativeResult && !state.nativeTerminal && !state.nativeTurnBoundary && !state.nativeNoWrite).length >= CLAUDE_NATIVE_INPUT_LIMIT) {
+        throw new Error("Claude native active input capacity is exhausted");
+      }
       const row: ClaudeDeliveryRecord = { kind: "queued", entry: normalized, disposition, queuedAt: new Date().toISOString(), native: parsed };
       await this.appendNative(sessionId, row);
       if (existing) {
@@ -212,6 +241,24 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
         states.splice(states.indexOf(existing), 1); states.push(existing);
       }
       else states.push({ entry: settledDeliveryEntry(normalized), disposition, queuedAt: row.queuedAt, delivered: false, native: parsed });
+      this.rememberNativeStates(sessionId, states);
+    });
+  }
+
+  async recordNativeTurnBoundary(sessionId: string, value: ClaudeNativeTurnBoundary): Promise<ClaudeDeliveryConfirmation> {
+    return this.serializeNative(async () => {
+      const proof = nativeTurnBoundary(value);
+      if (!proof || proof.sessionId !== sessionId) return "refused";
+      const states = await this.nativeStates(sessionId, [proof.resultUuid]);
+      const prior = states.find(state => state.nativeTurnBoundary?.resultUuid === proof.resultUuid)?.nativeTurnBoundary;
+      if (prior) return JSON.stringify(prior) === JSON.stringify(proof) ? "already-confirmed" : "refused";
+      if (states.some(state => state.nativeResult?.resultUuid === proof.resultUuid || state.nativeTerminal?.resultUuid === proof.resultUuid)) return "refused";
+      const state = nativeTurnBoundaryMember(states, proof);
+      if (!state || state.nativeTurnBoundary) return "refused";
+      await this.appendNative(sessionId, { kind: "native-turn-boundary", evidence: proof });
+      state.nativeTurnBoundary = proof;
+      this.rememberNativeStates(sessionId, states);
+      return "accepted";
     });
   }
 
@@ -219,14 +266,16 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
     return this.serializeNative(async () => {
       const evidence = nativeTerminal(value);
       if (!evidence || evidence.sessionId !== sessionId) return "refused";
-      const states = await this.nativeStates(sessionId);
+      const states = await this.nativeStates(sessionId, [evidence.resultUuid, ...evidence.inputUuids]);
       const prior = states.find(state => state.nativeTerminal?.resultUuid === evidence.resultUuid)?.nativeTerminal;
       if (prior) return JSON.stringify(prior) === JSON.stringify(evidence) ? "already-confirmed" : "refused";
+      if (states.some(state => state.nativeResult?.resultUuid === evidence.resultUuid || state.nativeTurnBoundary?.resultUuid === evidence.resultUuid)) return "refused";
       const attempted = nativeResultMembers(states, { ...evidence, status: "completed" });
       if (!attempted || attempted.some(row => row.nativeNoWrite)) return "refused";
       await this.appendNative(sessionId, { kind: "native-terminal", evidence });
       await this.retireNativeImageRefs(sessionId, attempted.filter(state => state.delivered));
       for (const state of attempted) { state.nativeTerminal = evidence; state.entry = settledDeliveryEntry(state.entry); }
+      this.rememberNativeStates(sessionId, states);
       return "accepted";
     });
   }
@@ -235,7 +284,7 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
     return this.serializeNative(async () => {
       const evidence = nativeConsumed(value);
       if (!evidence || evidence.sessionId !== sessionId) return "refused";
-      const states = await this.nativeStates(sessionId);
+      const states = await this.nativeStates(sessionId, [evidence.entryId]);
       const state = states.find(row => row.entry.id === evidence.entryId);
       if (!state?.native || !sameNativeWriter(state.native, evidence) || state.native.inputUuid !== evidence.inputUuid
         || state.entry.contentDigest !== evidence.contentDigest || state.nativeNoWrite
@@ -245,6 +294,7 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
       state.nativeConsumed = evidence;
       state.engineMessageId = evidence.canonicalUuid;
       if (evidence.turnId) { state.delivered = true; state.confirmation = "operation-bound"; }
+      this.rememberNativeStates(sessionId, states);
       return "accepted";
     });
   }
@@ -253,9 +303,10 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
     return this.serializeNative(async () => {
       const proof = nativeResult(value);
       if (!proof || proof.sessionId !== sessionId) return "refused";
-      const states = await this.nativeStates(sessionId);
+      const states = await this.nativeStates(sessionId, [proof.resultUuid, ...proof.inputUuids]);
       const prior = states.find(state => state.nativeResult?.resultUuid === proof.resultUuid)?.nativeResult;
       if (prior) return JSON.stringify(prior) === JSON.stringify(proof) ? "already-confirmed" : "refused";
+      if (states.some(state => state.nativeTerminal?.resultUuid === proof.resultUuid || state.nativeTurnBoundary?.resultUuid === proof.resultUuid)) return "refused";
       const members = nativeResultMembers(states, proof);
       if (!members || members.some(row => row.nativeNoWrite)) return "refused";
       // One fsynced record carries the entire batch. A cut cannot confirm only
@@ -268,17 +319,20 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
         state.confirmation = "operation-bound";
         state.entry = settledDeliveryEntry(state.entry);
       }
+      this.rememberNativeStates(sessionId, states);
       return "accepted";
     });
   }
 
   async recordNativeNoWrite(sessionId: string, entryId: string, inputUuid: string): Promise<void> {
     return this.serializeNative(async () => {
-      const state = (await this.nativeStates(sessionId)).find(row => row.entry.id === entryId);
-      if (!state?.native || state.native.inputUuid !== inputUuid || state.nativeResult || state.nativeTerminal || state.nativeConsumed) throw new Error("Claude native no-write binding conflicts");
+      const states = await this.nativeStates(sessionId, [entryId]);
+      const state = states.find(row => row.entry.id === entryId);
+      if (!state?.native || state.native.inputUuid !== inputUuid || state.nativeResult || state.nativeTerminal || state.nativeTurnBoundary || state.nativeConsumed) throw new Error("Claude native no-write binding conflicts");
       await this.appendNative(sessionId, { kind: "native-no-write", entryId, inputUuid });
       state.nativeNoWrite = true;
       state.entry = settledDeliveryEntry(state.entry);
+      this.rememberNativeStates(sessionId, states);
     });
   }
 
@@ -363,6 +417,7 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
     } finally {
       fs.closeSync(fd);
       this.nativeSessions.delete(sessionId);
+      this.nativeHistory.delete(sessionId);
     }
   }
 
@@ -1563,7 +1618,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         if (evidence.turnId) {
           state.delivered = true;
           state.confirmation = "operation-bound";
-          if (state.nativeTerminal) this.refreshNativeUncertainty();
+          if (state.nativeTerminal || state.nativeTurnBoundary) this.refreshNativeUncertainty();
           const waiting = this.pendingDeliveries.get(state.entry.id);
           if (waiting) {
             if (waiting.timer) clearTimeout(waiting.timer);
@@ -1583,15 +1638,15 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private async acceptNativeResult(message: JsonObject): Promise<void> {
     if (!this.nativeCurrent(true) || !this.activeTurnId) return;
     if (message.parent_tool_use_id != null || message.agent_id != null) return;
-    const prior = this.deliveries.map(state => state.nativeResult ?? state.nativeTerminal).find(proof => proof?.resultUuid === message.uuid);
+    const prior = this.deliveries.map(state => state.nativeResult ?? state.nativeTerminal ?? state.nativeTurnBoundary).find(proof => proof?.resultUuid === message.uuid);
     if (prior) {
-      if (JSON.stringify(prior.inputUuids) !== JSON.stringify(message.user_message_uuids)) this.nativeUncertain = this.nativeProtocolUncertain = true;
+      if ("inputUuids" in prior && JSON.stringify(prior.inputUuids) !== JSON.stringify(message.user_message_uuids)) this.nativeUncertain = this.nativeProtocolUncertain = true;
       return;
     }
     const interrupted = this.interruptedTurns.has(this.activeTurnId) || message.subtype === "interrupted";
     if (interrupted || message.subtype !== "success" || message.is_error === true) {
       const attempted = nativeBoundary({ ...message, subtype: "success", is_error: false, error: null }, this.nativeWriter!, this.activeTurnId, this.deliveries);
-      if (!attempted) { this.nativeUncertain = this.nativeProtocolUncertain = true; return; }
+      if (!attempted) { await this.acceptNativeTurnBoundary(message); return; }
       const evidence: ClaudeNativeTerminal = { ...attempted, status: interrupted ? "interrupted" : "error" };
       const members = nativeResultMembers(this.deliveries, attempted)!;
       if (!this.deliveryLedger.recordNativeTerminal || await this.deliveryLedger.recordNativeTerminal(this.identity.sessionId, evidence) === "refused") {
@@ -1619,7 +1674,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (!proof) {
       // Repeated old boundaries cannot close a newer batch.
       if (this.deliveries.some(state => state.nativeResult?.resultUuid === message.uuid)) return;
-      this.nativeUncertain = this.nativeProtocolUncertain = true;
+      await this.acceptNativeTurnBoundary(message);
       return;
     }
     const members = nativeResultMembers(this.deliveries, proof)!;
@@ -1654,9 +1709,38 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.finishResultTurn(proof.turnId);
   }
 
+  private async acceptNativeTurnBoundary(message: JsonObject): Promise<void> {
+    const state = this.deliveries.find(row => row.entry.id === this.activeTurnId);
+    // Singular identity proves only this incumbent's terminal boundary. It
+    // cannot supply the absent/invalid membership of other written inputs.
+    if (!this.nativeCurrent(true) || !state?.native || !sameNativeWriter(state.native, this.nativeWriter!)
+      || state.nativeNoWrite || state.nativeUnverified || message.session_id !== this.identity.sessionId
+      || !claudeNativeUuid(message.uuid) || message.user_message_uuid !== state.native.inputUuid
+      || !["success", "interrupted", "error_during_execution", "error_max_turns", "error_max_budget_usd", "error_max_structured_output_retries"].includes(String(message.subtype))) {
+      this.nativeUncertain = this.nativeProtocolUncertain = true; return;
+    }
+    const proof: ClaudeNativeTurnBoundary = { ...state.native, resultUuid: message.uuid, turnId: state.entry.id,
+      status: this.interruptedTurns.has(state.entry.id) || message.subtype === "interrupted" ? "interrupted"
+        : message.subtype === "success" && message.is_error !== true && message.aborted !== true && message.error == null ? "completed" : "error" };
+    if (!this.deliveryLedger.recordNativeTurnBoundary || await this.deliveryLedger.recordNativeTurnBoundary(this.identity.sessionId, proof) === "refused") {
+      this.nativeUncertain = this.nativeProtocolUncertain = true; return;
+    }
+    if (!this.nativeCurrent(true)) return;
+    state.nativeTurnBoundary = proof;
+    state.entry = settledDeliveryEntry(state.entry);
+    this.emit({ kind: "turn-ended", turnId: proof.turnId, status: proof.status, claudeResultUuid: proof.resultUuid });
+    if (this.ledgerFailed) return;
+    this.lastResultUuid = proof.resultUuid;
+    this.turnQueue.splice(0);
+    // Any already-written followers retain their intents and receipts. With
+    // unknown membership they acquire no invented new running turn.
+    this.refreshNativeUncertainty();
+    this.finishResultTurn(proof.turnId);
+  }
+
   private nativeIdleSafe(unwrittenEntryId?: string): boolean {
     return this.activeTurnId === null && !this.nativeProtocolUncertain && this.deliveries.every(state => !state.nativeUnverified
-      && (state.entry.id === unwrittenEntryId || !state.native || state.delivered || state.nativeNoWrite || state.nativeTerminal));
+      && (state.entry.id === unwrittenEntryId || !state.native || state.delivered || state.nativeNoWrite || state.nativeTerminal || state.nativeTurnBoundary));
   }
 
   private refreshNativeUncertainty(): void {
@@ -1991,7 +2075,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     for (const delivery of initialDeliveries) {
       const entry = normalizeQueueEntry(delivery.entry);
       this.deliveries.push({ ...delivery, ...(delivery.native ? { nativeReplayShape: nativeReplayShape(entry) } : {}),
-        entry: delivery.nativeTerminal || delivery.nativeNoWrite || delivery.delivered && delivery.confirmation !== "unverified" ? settledDeliveryEntry(entry) : entry });
+        entry: delivery.nativeTerminal || delivery.nativeTurnBoundary || delivery.nativeNoWrite || delivery.delivered && delivery.confirmation !== "unverified" ? settledDeliveryEntry(entry) : entry });
     }
     this.nativeUncertain = this.deliveries.some(state => state.nativeUnverified || state.native && !state.nativeResult && !state.nativeNoWrite && !state.delivered);
     let restoredTurn: string | null = null;
@@ -2009,7 +2093,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     const projected = new Set(stored.filter(event => event.kind === "turn-ended").map(event => event.claudeResultUuid));
     const restoredProofs = new Set<string>();
     for (const state of this.deliveries) {
-      const proof = state.nativeResult ?? state.nativeTerminal;
+      const proof = state.nativeResult ?? state.nativeTerminal ?? state.nativeTurnBoundary;
       if (!proof || projected.has(proof.resultUuid) || restoredProofs.has(proof.resultUuid)) continue;
       restoredProofs.add(proof.resultUuid);
       this.emit({ kind: "turn-ended", turnId: proof.turnId, status: proof.status, claudeResultUuid: proof.resultUuid });
@@ -2177,12 +2261,15 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (this.providerRetry && (type === "stream_event" || type === "assistant" || type === "result" || type === "control_request")) {
       this.providerRetry = null;
     }
-    if (type === "user" && this.nativeWriter) return this.acceptNativeReplay(message, receivedAt);
+    if (type === "user" && this.nativeWriter && (this.deliveries.some(state => state.native && state.native.inputUuid === message.uuid)
+      || !this.deliveries.some(state => !state.native && !state.nativeUnverified && this.pendingDeliveries.has(state.entry.id)))) {
+      return this.acceptNativeReplay(message, receivedAt);
+    }
     if (type === "user") {
       let echoOperationId: string | null = null;
       const content = messageContent(message);
       const directUserEcho = stringField(message.message, "role") === "user" && content !== null;
-      const directMatches = directUserEcho
+      const directMatches = directUserEcho && !this.deliveries.some(state => state.native && state.native.inputUuid === message.uuid || state.nativeUnverified)
         ? this.deliveries.filter((candidate) => (!candidate.delivered || candidate.confirmation === "unverified") && !candidate.native && !candidate.nativeUnverified && matchesClaudeUserContent(candidate.entry, {
             contentDigest: content.contentDigest,
             text: content.content.text,
@@ -2323,7 +2410,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       return;
     }
     if (type === "result") {
-      if (this.nativeWriter && this.deliveries.some(state => state.native && this.turnQueue.includes(state.entry.id))) return this.acceptNativeResult(message);
+      if (this.nativeWriter && this.deliveries.some(state => state.native && this.turnQueue.includes(state.entry.id)
+        || claudeNativeUuid(message.uuid) && (state.nativeResult ?? state.nativeTerminal ?? state.nativeTurnBoundary)?.resultUuid === message.uuid)) return this.acceptNativeResult(message);
       this.acceptResult(message);
     }
   }

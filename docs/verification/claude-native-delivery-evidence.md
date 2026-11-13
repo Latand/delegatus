@@ -101,8 +101,9 @@ fixture and receipt path. It introduces no replacement queue or receipt store.
 - Set its `agentStateDeliveredNativePromptId` from the verified native boundary.
   Derive its successor anchor in `finishResultTurn` from the next unresolved
   batch. A later replay cannot replace the incumbent anchor.
-- Its `reconcileAgentStateTerminal` singular synthetic result must require the
-  full native boundary proof when native inputs are outstanding.
+- Its `reconcileAgentStateTerminal` must require owned native boundary evidence
+  when native inputs are outstanding. A singular synthetic result supplies no
+  such evidence. Delivery settlement still requires its independent input proof.
 - Preserve `settleClaudeWorkBeforeDemotion` and `releaseClaudeHostForDemotion`,
   including their foreground/background custody, terminal-event wait, artifact
   identity and writer/turn CAS. The controller
@@ -132,8 +133,8 @@ remain retained alongside the final verification ledger.
 All commands below use the isolated source export and the pinned wrapper above;
 each test file has its own owned runner. The retained command ledger includes
 failed runs, their actual exits, assertion counts and terminal cleanup receipts.
-The installed-CLI file contains twenty loopback CLI cases and thirty protocol,
-durable-reader and recovery controls.
+The initial installed-CLI file contained twenty loopback CLI cases and thirty
+protocol, durable-reader and recovery controls.
 
 The source campaign before the final mixed-record guard was:
 
@@ -220,3 +221,37 @@ filtered tests. The full file also covers process exit while the pipe remains
 live, post-close replay rejection, lost writer ownership and successor replay
 with zero additional writes. The final source campaign and hook renew these
 checks after this lifecycle change.
+
+## Evidence-slice review regressions
+
+Run the existing native queue file with the installed binary and isolated
+directories as above. The `native-evidence-review-omitted` and
+`native-evidence-review-invalid` cases alter only terminal membership from
+real CLI frames. They require the incumbent's terminal event, subsequent
+ordered delivery exactly once, and the original journal receipts. The
+`native-evidence-review-legacy` case restores an old queued row with an
+explicit idle fence, then verifies its original receipt after CLI adoption.
+
+A top-level terminal frame bound to the current writer, session and singular
+incumbent input can now record `native-turn-boundary`. This record closes the
+turn independently of delivery membership. It confirms no input. Missing
+echoes retain their original uncertainty and write fences; already-written
+followers with unknown membership prevent new input writes. Unwritten queued
+operations may progress after a proven safe boundary. Restoring the ledger
+replays this terminal event under its original result UUID. An exact late
+incumbent replay may still settle its original receipt without closing a
+subsequent turn.
+
+The file ledger's native working index retires closed and proven no-write
+entries. Active intent allocation is limited to three inputs. An 8 KiB
+negative lookup filter per cached conversation avoids retaining historical
+payloads or proofs; a possible historical match reads the authoritative
+ledger asynchronously. The cache retains at most eight conversations. Filter
+matches confer no receipt or write authority. The 128-batch regression checks
+retirement, old operation/result replay, conflicting identity refusal and
+recovery in a new process. No performance improvement is claimed.
+
+These changes retain `supportsQueuedSend=false`. Enabling native admission,
+the complete Viewer restart matrix, rendered fallback and integration with
+the agent-state lane remain the second slice of
+`docs/design/claude-native-queued-send.md`.

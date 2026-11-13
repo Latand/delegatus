@@ -5124,6 +5124,198 @@ describe("native evidence with admission contained", () => {
   const result = (child: FakeClaude, inputUuids: unknown[], ordinal: number) => child.emitJson({ type: "result", session_id: sessionId,
     uuid: resultUuid(ordinal), subtype: "success", user_message_uuid: inputUuids.at(-1), user_message_uuids: inputUuids });
 
+  test.each([{ membership: undefined }, { membership: [] }, { membership: ["invalid"] }])("incumbent terminal without usable membership closes only its turn (%j)", async ({ membership }) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-anchor-"));
+    let active = await openNative(directory);
+    const entry = { id: "incumbent", text: "fixture instruction" };
+    try {
+      const pending = active.host.send(entry).catch(() => null);
+      await until(() => users(active.child).length === 1);
+      active.child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success",
+        user_message_uuid: users(active.child)[0]!.uuid, user_message_uuids: membership });
+      await until(() => active.store.load(sessionId).some(event => event.kind === "turn-ended"));
+      expect(await active.host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      expect(active.ledger.load(sessionId)[0]).toMatchObject({ delivered: false, nativeTurnBoundary: { resultUuid: resultUuid(1) } });
+      const later = active.host.send({ id: "later", text: "fixture next" });
+      await until(() => users(active.child).length === 2);
+      // Replay of the old terminal cannot close the next turn.
+      active.child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success",
+        user_message_uuid: users(active.child)[0]!.uuid });
+      result(active.child, [users(active.child)[1]!.uuid], 2);
+      expect(await later).toMatchObject({ turnId: "later" });
+      expect(active.ledger.load(sessionId)[0]?.delivered).toBe(false);
+      await active.host.release(); await pending;
+      for (let iteration = 0; iteration < 2; iteration++) {
+        active = await openNative(directory);
+        await expect(active.host.send(entry)).rejects.toThrow("uncertain");
+        expect(users(active.child)).toHaveLength(0);
+        expect(active.store.load(sessionId).filter(event => event.kind === "turn-ended" && event.claudeResultUuid === resultUuid(1))).toHaveLength(1);
+        await active.host.release();
+      }
+    } finally { await active.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test.each(["session", "input", "result", "subagent", "tool", "writer"])("incomplete terminal refuses a foreign %s anchor", async kind => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-foreign-anchor-"));
+    let owns = true;
+    const active = await openNative(directory);
+    active.host.setWriterFence(() => owns);
+    try {
+      const sending = active.host.send({ id: "incumbent", text: "fixture" }).catch(() => null);
+      await until(() => users(active.child).length === 1);
+      const frame = { type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success",
+        user_message_uuid: users(active.child)[0]!.uuid };
+      Object.assign(frame, kind === "session" ? { session_id: resultUuid(99) } : kind === "input" ? { user_message_uuid: resultUuid(99) }
+          : kind === "result" ? { uuid: "invalid" } : kind === "subagent" ? { agent_id: "worker" }
+          : kind === "tool" ? { parent_tool_use_id: "tool" } : {});
+      if (kind === "writer") owns = false;
+      active.child.emitJson(frame);
+      await (active.host as unknown as { nativeWork: Promise<void> }).nativeWork;
+      expect(await active.host.health()).toMatchObject({ activeTurnRef: "incumbent" });
+      expect(active.ledger.load(sessionId)[0]?.nativeTurnBoundary).toBeUndefined();
+      expect(active.store.load(sessionId).filter(event => event.kind === "turn-ended")).toHaveLength(0);
+      await active.host.release(); await sending;
+    } finally { await active.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("incomplete membership leaves already-written followers uncertain without a phantom running turn", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-unknown-members-"));
+    const { host, child, ledger, store } = await openNative(directory);
+    try {
+      const first = host.send({ id: "first", text: "fixture first" }).catch(() => null);
+      await until(() => users(child).length === 1);
+      const follower = host.send({ id: "follower", text: "fixture follower" }).catch(() => null);
+      await until(() => users(child).length === 2);
+      child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success", user_message_uuid: users(child)[0]!.uuid });
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-ended"));
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      expect(ledger.load(sessionId).map(row => row.delivered)).toEqual([false, false]);
+      expect(await host.send({ id: "later", text: "fixture later" })).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(users(child)).toHaveLength(2);
+      await host.release(); await first; await follower;
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("a cut between an incomplete boundary and its event restores the boundary without a receipt", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-anchor-cut-"));
+    let active = await openNative(directory, options => {
+      const store = options.eventStore!;
+      options.eventStore = { load: id => store.load(id), append: (id, event) => {
+        if (event.kind === "turn-ended") throw new Error("fixture projection unavailable");
+        store.append(id, event);
+      } };
+    });
+    const entry = { id: "incumbent", text: "fixture instruction" };
+    try {
+      const sending = active.host.send(entry).catch(() => null);
+      await until(() => users(active.child).length === 1);
+      active.child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success", user_message_uuid: users(active.child)[0]!.uuid });
+      await sending;
+      expect(active.ledger.load(sessionId)[0]).toMatchObject({ delivered: false, nativeTurnBoundary: { resultUuid: resultUuid(1) } });
+      await active.host.release();
+      active = await openNative(directory);
+      expect(active.store.load(sessionId).filter(event => event.kind === "turn-ended" && event.claudeResultUuid === resultUuid(1))).toHaveLength(1);
+      await expect(active.host.send(entry)).rejects.toThrow("uncertain");
+      expect(users(active.child)).toHaveLength(0);
+    } finally { await active.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test.each([true, false])("restored legacy replay confirms its original receipt after its terminal boundary (canonical UUID: %s)", async canonical => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-legacy-late-echo-"));
+    const entry = { id: "old-operation", text: "fixture legacy", expectedTurnId: null };
+    new FileClaudeDeliveryLedger(path.join(directory, "ledger")).recordQueued(sessionId, entry, "turn-started");
+    const { host, child, ledger, store } = await openNative(directory);
+    try {
+      const sent = host.send(entry);
+      await until(() => users(child).length === 1);
+      expect(users(child)[0]!.uuid).toBeUndefined();
+      child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success" });
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-ended"));
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      echo(child, { ...users(child)[0]!, uuid: canonical ? resultUuid(2) : undefined });
+      expect(await sent).toMatchObject({ turnId: entry.id });
+      expect(ledger.load(sessionId)[0]).toMatchObject({ delivered: true, engineMessageId: canonical ? resultUuid(2) : null });
+      await host.send(entry);
+      expect(users(child)).toHaveLength(1);
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("an exact late incumbent replay after an incomplete boundary settles only its original receipt", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-anchor-late-echo-"));
+    const { host, child, ledger, store } = await openNative(directory);
+    try {
+      const first = host.send({ id: "incumbent", text: "fixture incumbent" });
+      await until(() => users(child).length === 1);
+      child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success", user_message_uuid: users(child)[0]!.uuid });
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-ended"));
+      expect(ledger.load(sessionId)[0]?.delivered).toBe(false);
+      const later = host.send({ id: "later", text: "fixture later" });
+      await until(() => users(child).length === 2);
+      echo(child, users(child)[0]!);
+      expect(await first).toMatchObject({ turnId: "incumbent" });
+      expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: "later" });
+      expect(ledger.load(sessionId).map(row => row.delivered)).toEqual([true, false]);
+      result(child, [users(child)[1]!.uuid], 2);
+      expect(await later).toMatchObject({ turnId: "later" });
+      expect(users(child)).toHaveLength(2);
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("a historical native boundary cannot terminate a restored legacy input", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-old-legacy-"));
+    const legacy = { id: "legacy", text: "fixture legacy", expectedTurnId: null };
+    new FileClaudeDeliveryLedger(path.join(directory, "ledger")).recordQueued(sessionId, legacy, "turn-started");
+    const { host, child, store } = await openNative(directory);
+    try {
+      const first = host.send({ id: "first", text: "fixture first" }).catch(() => null);
+      await until(() => users(child).length === 1);
+      const old = { type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success", user_message_uuid: users(child)[0]!.uuid };
+      child.emitJson(old);
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-ended"));
+      const second = host.send({ id: "second", text: "fixture second" });
+      await until(() => users(child).length === 2);
+      result(child, [users(child)[1]!.uuid], 2);
+      await second;
+      const restored = host.send(legacy);
+      await until(() => users(child).length === 3);
+      child.emitJson(old);
+      await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+      expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: legacy.id });
+      echo(child, { ...users(child)[2]!, uuid: resultUuid(3) });
+      expect(await restored).toMatchObject({ turnId: legacy.id });
+      child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(4), subtype: "success", user_message_uuid: resultUuid(3) });
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-ended" && event.turnId === legacy.id));
+      expect(users(child)).toHaveLength(3);
+      await host.release(); await first;
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test.each(["append", "writer"] as const)("incomplete boundary cannot project after %s fails at persistence", async kind => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-anchor-persistence-"));
+    let owns = true;
+    const active = await openNative(directory, (_options, ledger) => {
+      const persist = ledger.recordNativeTurnBoundary.bind(ledger);
+      ledger.recordNativeTurnBoundary = async (...args) => {
+        if (kind === "append") throw new Error("fixture append unavailable");
+        const result = await persist(...args);
+        owns = false;
+        return result;
+      };
+    });
+    active.host.setWriterFence(() => owns);
+    try {
+      const sending = active.host.send({ id: "incumbent", text: "fixture" }).catch(() => null);
+      await until(() => users(active.child).length === 1);
+      active.child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success", user_message_uuid: users(active.child)[0]!.uuid });
+      await (active.host as unknown as { nativeWork: Promise<void> }).nativeWork;
+      expect(active.store.load(sessionId).filter(event => event.kind === "turn-ended")).toHaveLength(0);
+      expect(active.ledger.load(sessionId)[0]?.delivered).toBe(false);
+      expect(Boolean(active.ledger.load(sessionId)[0]?.nativeTurnBoundary)).toBe(kind === "writer");
+      expect(users(active.child)).toHaveLength(1);
+      await active.host.release(); await sending;
+    } finally { await active.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
   test.each([false, true])("early queued echo retains its own next result (missing initial echo: %s)", async (missingEcho) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-early-"));
     const { host, child, ledger, store } = await openNative(directory);

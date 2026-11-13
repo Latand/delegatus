@@ -19,6 +19,7 @@ const installedVersion = binary ? execFileSync(binary, ["--version"], { cwd: os.
 }).toString().match(/\b\d+\.\d+\.\d+\b/)?.[0] ?? null : null;
 test.skipIf(!binary).each([
   "combined-replay", "guarded-delivery", "serialized-delivery", "seat-inbox", "seat-inbox-native",
+  "native-evidence-review-omitted", "native-evidence-review-invalid", "native-evidence-review-legacy",
   "native-evidence", "native-evidence-restart", "native-evidence-error", "native-evidence-interruption",
   "native-evidence-permission-allow", "native-evidence-permission-deny", "native-evidence-permission-cancel",
   "images", "restart", "interruption", "permission-allow", "permission-deny", "permission-cancel",
@@ -32,6 +33,8 @@ test.skipIf(!binary).each([
     const store = new FileRuntimeEventStore(path.join(directory, "events"));
     const ledger = new FileClaudeDeliveryLedger(path.join(directory, "deliveries"));
     const conversationId = "native-queue-fixture";
+    let upgraded = false;
+    const originalResults: Array<Record<string, unknown>> = [];
     const rawKinds: string[] = [];
     const replays: Array<Array<{ type: string; text?: string }>> = [];
     const replayUuids: unknown[] = [];
@@ -106,7 +109,7 @@ test.skipIf(!binary).each([
         model: "fixture-model", requestTimeoutMs: nativeEvidence ? 30_000 : 20_000, deliveryLedger: ledger,
         claudeProjectsDir: path.join(config, "projects"), readImage: () => imageBytes,
         readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max",
-          ...(nativeEvidence ? { version: installedVersion } : {}) }),
+          ...(nativeEvidence && (mode !== "native-evidence-review-legacy" || upgraded) ? { version: installedVersion } : {}) }),
         eventStore: {
           load: id => store.load(id),
           append: (id, frame) => {
@@ -120,6 +123,27 @@ test.skipIf(!binary).each([
             env: { ...options.env, NODE_ENV: "test", CLAUDE_CONFIG_DIR: config, ANTHROPIC_BASE_URL: `http://127.0.0.1:${api.port}`,
               CLAUDE_CODE_OAUTH_TOKEN: "isolated-fixture-credential", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } });
           let buffer = "";
+          if (mode.includes("review-")) {
+            const emit = child.stdout.emit.bind(child.stdout);
+            let transformed = "";
+            child.stdout.emit = ((name: string, ...args: unknown[]) => {
+              if (name !== "data") return Reflect.apply(emit, child.stdout, [name, ...args]);
+              transformed += String(args[0]);
+              let newline: number;
+              while ((newline = transformed.indexOf("\n")) >= 0) {
+                const line = transformed.slice(0, newline); transformed = transformed.slice(newline + 1);
+                if (!line) continue;
+                const frame = JSON.parse(line);
+                if (frame.type === "result") {
+                  originalResults.push(structuredClone(frame));
+                  if (mode === "native-evidence-review-omitted") delete frame.user_message_uuids;
+                  if (mode === "native-evidence-review-invalid") frame.user_message_uuids = [frame.user_message_uuid, frame.user_message_uuid];
+                }
+                emit("data", Buffer.from(JSON.stringify(frame) + "\n"));
+              }
+              return true;
+            }) as typeof child.stdout.emit;
+          }
 
           child.stdout.on("data", chunk => {
             buffer += String(chunk);
@@ -190,6 +214,53 @@ test.skipIf(!binary).each([
         transition: async (...args) => { journal.transitionOperation(...args); },
       }, () => host, undefined, undefined, undefined, undefined, undefined, undefined, { passBudgetMs: 20 });
       let queue = newQueue();
+      if (mode.includes("review-")) {
+        const command = (id: string) => ({ kind: "send" as const, operationId: id, idempotencyKey: id,
+          conversationId, text: `fixture ${id}`, policy: "queue" as const });
+        const seed = command("review-seed");
+        journal.executeOperation(seed);
+        await queue.drain();
+        await wait(() => apiCalls === 1);
+        const next = command("review-next");
+        if (mode !== "native-evidence-review-legacy") {
+          journal.executeOperation(next);
+          await queue.drain();
+          expect(journal.operationResult(next.operationId)?.receipt.status).toBe("queued");
+          expect(wireInputs.filter(frame => frame.type === "user")).toHaveLength(1);
+        }
+        releaseFirst();
+        await wait(() => originalResults.length === 1);
+        await wait(() => store.load(host!.identity.sessionId).some(frame => frame.kind === "turn-ended" && frame.turnId === seed.operationId));
+        await driveUntilReceipt(queue, seed.operationId, "delivered");
+        if (mode === "native-evidence-review-legacy") {
+          const sessionId = host.identity.sessionId;
+          await host.release();
+          ledger.recordQueued(sessionId, { id: next.operationId, text: next.text, expectedTurnId: null }, "turn-started");
+          upgraded = true;
+          host = await openHost(sessionId);
+          queue = newQueue();
+          journal.executeOperation(next);
+        }
+        await driveUntilReceipt(queue, next.operationId, "delivered");
+        await wait(() => store.load(host!.identity.sessionId).some(frame => frame.kind === "turn-ended" && frame.turnId === next.operationId));
+        expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+        expect(journal.snapshot().sessions.find(session => session.conversationId === conversationId)).toMatchObject({ turn: "idle", activeTurnId: null });
+        expect(originalResults).toHaveLength(2);
+        expect(wireInputs.filter(frame => frame.type === "user")).toHaveLength(2);
+        const rows = ledger.load(host.identity.sessionId);
+        expect(rows.map(row => [row.entry.id, row.delivered])).toEqual([[seed.operationId, true], [next.operationId, true]]);
+        if (mode !== "native-evidence-review-legacy") {
+          expect(rows.every(row => row.nativeTurnBoundary && !row.nativeResult)).toBe(true);
+          expect(originalResults.every(frame => Array.isArray(frame.user_message_uuids))).toBe(true);
+        } else {
+          expect(rows.every(row => !row.native)).toBe(true);
+          expect(journal.operationResult(next.operationId)?.receipt).toMatchObject({ operationId: next.operationId, status: "delivered" });
+        }
+        journal.executeOperation(next);
+        await queue.drain();
+        expect(wireInputs.filter(frame => frame.type === "user")).toHaveLength(2);
+        return;
+      }
       if (lifecycle) {
         expect(host.supportsQueuedSend).toBe(false);
         const command = (id: string, withImage = false) => ({ kind: "send" as const, operationId: id,
@@ -408,7 +479,7 @@ test.skipIf(!binary).each([
         fs.mkdirSync(evidence, { recursive: true });
         const rows = ledger.load(host.identity.sessionId);
         fs.writeFileSync(path.join(evidence, `${process.env.LLV_NATIVE_EVIDENCE_RUN ?? "run"}-${mode}.json`), JSON.stringify({
-          version: installedVersion, mode, wireInputs, resultFrames, requests, rows,
+          version: installedVersion, mode, originalResults, wireInputs, resultFrames, requests, rows,
           receipts: rows.map(row => journal.operationResult(row.entry.id)?.receipt ?? null),
           events: store.load(host.identity.sessionId),
         }, null, 2));
@@ -642,10 +713,101 @@ function nativeUuid(ordinal: number): string {
   return `00000000-0000-4000-8000-${String(ordinal).padStart(12, "0")}`;
 }
 
+test("native working cache retires 128 batches and recovers old identities on demand", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-cache-"));
+  try {
+    const sessionId = nativeUuid(20), writerId = nativeUuid(21);
+    const ledger = new FileClaudeDeliveryLedger(directory);
+    const entry = (n: number) => ({ id: `batch-${n}`, text: `fixture ${n}` });
+    const input = (n: number) => ({ version: 1 as const, sessionId, writerId,
+      process: { pid: 4100, startIdentity: "4100:fixture" }, inputUuid: nativeUuid(100 + n), intent: "may-have-written" as const });
+    const proof = (n: number) => nativeResult(sessionId, writerId, [input(n).inputUuid], entry(n).id, nativeUuid(1000 + n));
+    const cacheRows = (owner: FileClaudeDeliveryLedger) => [...(owner as unknown as { nativeSessions: Map<string, unknown[]> }).nativeSessions.values()].flat();
+    const retained: number[] = [];
+    for (let n = 1; n <= 128; n++) {
+      await ledger.recordNativeIntent(sessionId, entry(n), "turn-started", input(n));
+      expect(await ledger.confirmNativeResult(sessionId, proof(n))).toBe("accepted");
+      retained.push(cacheRows(ledger).length);
+    }
+    expect(retained).toEqual(Array(128).fill(0));
+    const size = fs.statSync(path.join(directory, `${sessionId}.jsonl`)).size;
+    for (const owner of [ledger, new FileClaudeDeliveryLedger(directory)]) {
+      await owner.loadDurable(sessionId, true);
+      expect(cacheRows(owner)).toHaveLength(0);
+      await owner.recordNativeIntent(sessionId, entry(1), "turn-started", input(1));
+      expect(await owner.confirmNativeResult(sessionId, proof(1))).toBe("already-confirmed");
+      expect(await owner.confirmNativeResult(sessionId, { ...proof(1), turnId: "other" })).toBe("refused");
+      await expect(owner.recordNativeIntent(sessionId, { ...entry(1), text: "different" }, "turn-started", input(1))).rejects.toThrow("conflicts");
+      await expect(owner.recordNativeIntent(sessionId, entry(129), "turn-started", input(1))).rejects.toThrow("already allocated");
+      expect(cacheRows(owner)).toHaveLength(0);
+    }
+    expect(ledger.load(sessionId)).toHaveLength(128);
+    const child = Bun.spawnSync([process.execPath, "-e", `
+      const { FileClaudeDeliveryLedger } = await import(${JSON.stringify(new URL("./claudeStreamBrokerHost.ts", import.meta.url).href)});
+      const ledger = new FileClaudeDeliveryLedger(process.argv[1]);
+      await ledger.recordNativeIntent(process.argv[2], JSON.parse(process.argv[3]), "turn-started", JSON.parse(process.argv[4]));
+      console.log(await ledger.confirmNativeResult(process.argv[2], JSON.parse(process.argv[5])));
+    `, directory, sessionId, JSON.stringify(entry(1)), JSON.stringify(input(1)), JSON.stringify(proof(1))], { env: { ...process.env }, cwd: process.cwd() });
+    expect(child.exitCode).toBe(0);
+    expect(child.stdout.toString().trim()).toBe("already-confirmed");
+    expect(fs.statSync(path.join(directory, `${sessionId}.jsonl`)).size).toBe(size);
+    // Even a saturated negative filter supplies no receipt/allocation authority.
+    for (const bits of (ledger as unknown as { nativeHistory: Map<string, Uint8Array> }).nativeHistory.values()) bits.fill(255);
+    await ledger.recordNativeIntent(sessionId, entry(129), "turn-started", input(129));
+    expect(await ledger.confirmNativeResult(sessionId, proof(129))).toBe("accepted");
+    expect(cacheRows(ledger)).toHaveLength(0);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 function nativeResult(sessionId: string, writerId: string, inputUuids: string[], turnId: string, resultUuid: string) {
   return { version: 1 as const, sessionId, writerId, process: { pid: 4100, startIdentity: "4100:fixture" },
     resultUuid, inputUuids, turnId, status: "completed" as const };
 }
+
+test.each(["completed", "interrupted", "error"] as const)("independent %s boundary round-trips without confirming consumption", async status => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-boundary-record-"));
+  try {
+    const sessionId = nativeUuid(20), writerId = nativeUuid(21);
+    const ledger = new FileClaudeDeliveryLedger(directory);
+    const input = { version: 1 as const, sessionId, writerId, process: { pid: 4100, startIdentity: "4100:fixture" }, inputUuid: nativeUuid(1), intent: "may-have-written" as const };
+    await ledger.recordNativeIntent(sessionId, { id: "incumbent", text: "fixture" }, "turn-started", input);
+    const boundary = { ...input, resultUuid: nativeUuid(30), turnId: "incumbent", status };
+    expect(await ledger.recordNativeTurnBoundary(sessionId, boundary)).toBe("accepted");
+    const restored = new FileClaudeDeliveryLedger(directory);
+    expect(restored.load(sessionId)[0]).toMatchObject({ delivered: false, nativeTurnBoundary: { status, resultUuid: nativeUuid(30) } });
+    expect(await restored.recordNativeTurnBoundary(sessionId, boundary)).toBe("already-confirmed");
+    expect(await restored.recordNativeTurnBoundary(sessionId, { ...boundary, turnId: "other" })).toBe("refused");
+    expect(await restored.confirmNativeResult(sessionId, nativeResult(sessionId, writerId, [input.inputUuid], "incumbent", boundary.resultUuid))).toBe("refused");
+    expect(restored.load(sessionId)[0]?.delivered).toBe(false);
+    await expect(restored.recordNativeNoWrite(sessionId, "incumbent", input.inputUuid)).rejects.toThrow("conflicts");
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("native active capacity survives process restart and frees only after a durable boundary", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-capacity-"));
+  try {
+    const sessionId = nativeUuid(20), writerId = nativeUuid(21);
+    const ledger = new FileClaudeDeliveryLedger(directory);
+    const input = (n: number) => ({ version: 1 as const, sessionId, writerId,
+      process: { pid: 4100, startIdentity: "4100:fixture" }, inputUuid: nativeUuid(n), intent: "may-have-written" as const });
+    for (const n of [1, 2, 3]) await ledger.recordNativeIntent(sessionId, { id: `input-${n}`, text: "fixture" }, n === 1 ? "turn-started" : "queued-next-turn", input(n));
+    const fourth = { id: "input-4", text: "fixture" };
+    await expect(ledger.recordNativeIntent(sessionId, fourth, "queued-next-turn", input(4))).rejects.toThrow("capacity");
+    const child = Bun.spawnSync([process.execPath, "-e", `
+      const { FileClaudeDeliveryLedger } = await import(${JSON.stringify(new URL("./claudeStreamBrokerHost.ts", import.meta.url).href)});
+      try {
+        await new FileClaudeDeliveryLedger(process.argv[1]).recordNativeIntent(process.argv[2], JSON.parse(process.argv[3]), "queued-next-turn", JSON.parse(process.argv[4]));
+        process.exitCode = 1;
+      } catch (error) { console.log(error instanceof Error && error.message === "Claude native active input capacity is exhausted" ? "refused" : "unexpected"); }
+    `, directory, sessionId, JSON.stringify(fourth), JSON.stringify(input(4))], { env: { ...process.env }, cwd: process.cwd() });
+    expect(child.exitCode).toBe(0);
+    expect(child.stdout.toString().trim()).toBe("refused");
+    expect(ledger.load(sessionId)).toHaveLength(3);
+    expect(await ledger.confirmNativeResult(sessionId, nativeResult(sessionId, writerId, [input(1).inputUuid], "input-1", nativeUuid(30)))).toBe("accepted");
+    await ledger.recordNativeIntent(sessionId, fourth, "queued-next-turn", input(4));
+    expect(ledger.load(sessionId).map(row => row.entry.id)).toEqual(["input-1", "input-2", "input-3", "input-4"]);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
 
 
 test.each([

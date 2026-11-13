@@ -21,6 +21,31 @@ export interface ClaudeNativeResult extends ClaudeNativeWriter {
   status: "completed";
 }
 
+/** A terminal anchor closes only its owning turn. It supplies no batch
+ * membership and cannot settle any delivery receipt. */
+export interface ClaudeNativeTurnBoundary extends ClaudeNativeWriter {
+  version: 1;
+  resultUuid: string;
+  inputUuid: string;
+  turnId: string;
+  status: "completed" | "interrupted" | "error";
+}
+
+export function nativeTurnBoundary(value: unknown): ClaudeNativeTurnBoundary | null {
+  const row = object(value), writer = nativeWriter(value);
+  return row?.version === 1 && writer && claudeNativeUuid(row.resultUuid) && claudeNativeUuid(row.inputUuid)
+    && typeof row.turnId === "string" && row.turnId.length > 0 && row.turnId.length <= 512
+    && ["completed", "interrupted", "error"].includes(String(row.status))
+    ? { ...writer, version: 1, resultUuid: row.resultUuid, inputUuid: row.inputUuid,
+      turnId: row.turnId, status: row.status as ClaudeNativeTurnBoundary["status"] } : null;
+}
+
+export function nativeTurnBoundaryMember(states: readonly ClaudeDeliveryState[], proof: ClaudeNativeTurnBoundary): ClaudeDeliveryState | null {
+  return states.find(state => state.entry.id === proof.turnId && state.native?.inputUuid === proof.inputUuid
+    && sameNativeWriter(state.native, proof) && !state.nativeNoWrite && !state.nativeUnverified
+    && !state.nativeResult && !state.nativeTerminal) ?? null;
+}
+
 export type ClaudeNativeTerminal = Omit<ClaudeNativeResult, "status"> & { status: "interrupted" | "error" };
 
 export function nativeTerminal(value: unknown): ClaudeNativeTerminal | null {
@@ -98,7 +123,7 @@ export function sameNativeWriter(left: ClaudeNativeWriter, right: ClaudeNativeWr
 /** A boundary consumes an ordered prefix of this writer's outstanding inputs.
  * Neither an echo nor an assistant's singular anchor can remove an input. */
 export function nativeResultMembers(states: readonly ClaudeDeliveryState[], proof: ClaudeNativeResult): ClaudeDeliveryState[] | null {
-  const outstanding = states.filter(state => state.native && sameNativeWriter(state.native, proof) && !state.nativeResult && !state.nativeTerminal && !state.nativeNoWrite);
+  const outstanding = states.filter(state => state.native && sameNativeWriter(state.native, proof) && !state.nativeResult && !state.nativeTerminal && !state.nativeTurnBoundary && !state.nativeNoWrite);
   const members = outstanding.slice(0, proof.inputUuids.length);
   return members.length === proof.inputUuids.length && members[0]?.entry.id === proof.turnId
     && members.every((state, index) => !state.nativeUnverified && state.native!.inputUuid === proof.inputUuids[index])
@@ -142,6 +167,7 @@ export function sameNormalizedEntry(left: NormalizedQueueEntry, right: Normalize
 
 export function deliveryRecord(value: unknown): ClaudeDeliveryRecord | null {
   const candidate = object(value);
+  if (candidate?.kind === "native-turn-boundary" && object(candidate.evidence)) return candidate as unknown as ClaudeDeliveryRecord;
   if (candidate?.kind === "native-terminal" && object(candidate.evidence)) return candidate as unknown as ClaudeDeliveryRecord;
   if (candidate?.kind === "native-consumed" && object(candidate.evidence)) return candidate as unknown as ClaudeDeliveryRecord;
   if (candidate?.kind === "native-result" && object(candidate.proof)) return candidate as unknown as ClaudeDeliveryRecord;
@@ -215,6 +241,13 @@ export function replayClaudeDeliveries(records: ClaudeDeliveryRecord[], sessionI
         || states.some(state => state.native?.inputUuid === input.inputUuid || state.delivered && state.engineMessageId === input.inputUuid));
       states.push({ entry: row.entry, disposition: row.disposition, queuedAt: row.queuedAt, delivered: false,
         ...(invalid ? { nativeUnverified: true } : input ? { native: input } : {}) });
+    } else if (row.kind === "native-turn-boundary") {
+      const proof = nativeTurnBoundary(row.evidence);
+      if (!proof || proof.sessionId !== sessionId || boundaries.has(proof.resultUuid)) continue;
+      const state = nativeTurnBoundaryMember(states, proof);
+      if (!state || state.nativeTurnBoundary) continue;
+      boundaries.add(proof.resultUuid);
+      state.nativeTurnBoundary = proof;
     } else if (row.kind === "native-terminal") {
       const evidence = nativeTerminal(row.evidence);
       if (!evidence || evidence.sessionId !== sessionId || boundaries.has(evidence.resultUuid)) continue;
@@ -240,7 +273,7 @@ export function replayClaudeDeliveries(records: ClaudeDeliveryRecord[], sessionI
       for (const state of members) { state.nativeResult = proof; state.delivered = true; state.confirmation = "operation-bound"; }
     } else if (row.kind === "native-no-write") {
       const state = states.find(state => state.entry.id === row.entryId);
-      if (state?.native?.inputUuid === row.inputUuid && !state.nativeResult && !state.nativeTerminal && !state.nativeConsumed) state.nativeNoWrite = true;
+      if (state?.native?.inputUuid === row.inputUuid && !state.nativeResult && !state.nativeTerminal && !state.nativeTurnBoundary && !state.nativeConsumed) state.nativeNoWrite = true;
     } else {
       const state = states.find(state => state.entry.id === row.entryId);
       if (!state || state.native || state.nativeUnverified
