@@ -9,6 +9,7 @@ import { prepareClaudeCloudTask, readClaudeCloudReadiness } from "./claudeCloudT
 import { updateOperatorSettings } from "@/lib/operator/settings";
 import { claudeCloudTasks, setClaudeCloudTasks, setClaudeCloudTaskFor } from "./settings";
 import { persistProjectAliases, recordProjectRemote } from "./aliases";
+import { projectIdentityFromRemote } from "./identity";
 
 const previous = process.env.LLV_STATE_DIR;
 const roots: string[] = [], stops: (() => void)[] = [];
@@ -44,6 +45,14 @@ test("creation uses the shipped prompt, removes default connectors, binds once a
   expect(f.fake.calls.filter(c => c.method === "POST").map(c => c.path)).toEqual(["/v1/code/triggers", "/v1/code/triggers/task-created-1"]);
   expect(await f.restart()).toMatchObject({ state: "ready", environmentId: "task-created-1" });
   expect(f.posts()).toHaveLength(1);
+  expect(readClaudeCloudReadiness(f.input.project)[0]).toMatchObject({ state: "ready", taskId: "task-created-1" });
+});
+
+test("readiness accepts the canonical remote emitted by the production identity writer", async () => {
+  const f = fixture();
+  expect(await f.prepare()).toMatchObject({ state: "ready" });
+  const identity = projectIdentityFromRemote("https://github.com/sample/project.git", "/")!;
+  recordProjectRemote({ project: f.input.project, canonicalRemote: identity.canonicalRemote });
   expect(readClaudeCloudReadiness(f.input.project)[0]).toMatchObject({ state: "ready", taskId: "task-created-1" });
 });
 
@@ -94,6 +103,20 @@ test.each([
   expect(readClaudeCloudReadiness(f.input.project)[0]).toMatchObject({ state: "unavailable", code: "github_not_connected" });
   expect(f.posts()).toHaveLength(0);
   expect(f.fake.calls.some(call => call.method === "GET" && call.path.endsWith("/sync/github/auth"))).toBe(true);
+});
+
+test.each(["bound task", "saved receipt"])("a disconnected GitHub account cannot confirm a %s as ready", async path => {
+  const f = fixture();
+  expect(await f.prepare()).toMatchObject({ state: "ready" });
+  if (path === "saved receipt") setClaudeCloudTasks(f.input.project, []);
+  const provider = { ...f.provider, request: async (...args: Parameters<typeof f.provider.request>) => {
+    const [, , method, target] = args;
+    if (method === "GET" && target.endsWith("/sync/github/auth")) return Response.json({ is_authenticated: false });
+    return f.provider.request(...args);
+  } };
+  expect(await prepareClaudeCloudTask(f.input, provider)).toMatchObject({ state: "unavailable", reason: expect.stringContaining("GitHub is not connected") });
+  expect(readClaudeCloudReadiness(f.input.project)[0]).toMatchObject({ state: "unavailable", code: "github_not_connected", step: { code: "connect_github", url: "https://claude.ai/connect-github" } });
+  expect(f.posts()).toHaveLength(1);
 });
 
 test.each([400, 401])("definitive creation refusal %s releases only its claim and keeps provider text private", async status => {

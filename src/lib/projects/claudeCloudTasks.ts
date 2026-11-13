@@ -10,6 +10,7 @@ import { operatorLocale } from "@/lib/operator/settings";
 import { initializeStateCollectionsAsync, readStateCollectionRevision, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { HostedCloudError } from "@/lib/pipelines/cloudHostedErrors";
 import { CLAUDE_CLOUD_TASK_PROMPT, CLAUDE_CLOUD_TASK_PROMPT_LEGACY_SHA256 } from "@/lib/pipelines/claudeCloudTaskPrompt";
+import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { canonicalProject, projectAliasKeys, recordedProjectRemote } from "./aliases";
 import { claudeCloudTasks, claudeCloudTaskFingerprint, setClaudeCloudTaskFor } from "./settings";
 import type { PrepareCloudEnvironmentInput, CloudEnvironmentPreparation } from "./codexCloudEnvironments";
@@ -82,7 +83,7 @@ export function readClaudeCloudReadiness(project: string, options: { accountId?:
   return listClaudeAccounts().filter(a => (!options.accountId || a.id === options.accountId) && projectAllowsAccount(project, "claude", a.id)).map(account => {
     const row = read(project, account.id), repository = recordedProjectRemote(project);
     const selected = claudeCloudTasks(project).find(task => task.accountId === account.id)?.taskId;
-    const current = row && normalizeClaudeGithubUrl(repository) === row.repository && (row.state !== "ready" || selected === row.taskId) ? row : null;
+    const current = row && githubRepositoryOfRemote(repository) === row.repository && (row.state !== "ready" || selected === row.taskId) ? row : null;
     const expired = current?.state === "preparing" && current.deadlineAt <= (options.now ?? Date.now());
     const code = expired ? "provider_unavailable" : current?.code ?? null;
     return { project: canonicalProject(project), accountId: account.id, label: account.label,
@@ -189,12 +190,10 @@ export async function prepareClaudeCloudTask(input: PrepareCloudEnvironmentInput
           return result("create_uncertain");
         }
       }
-    // Existing tasks also require the account's GitHub connection to start a
-    // Claude Cloud session. Check before either creating or confirming ready.
-    const auth = await get(`/api/oauth/organizations/current/sync/github/auth`).catch(error => {
-      if (!task && error instanceof ClaudeTaskError && ["provider_unavailable", "task_invalid"].includes(error.code)) return {} as Row;
-      throw error;
-    });
+    }
+    // Every selected task, whether bound, recovered from a receipt, discovered,
+    // or newly created, requires the account's GitHub connection to start.
+    const auth = await get(`/api/oauth/organizations/current/sync/github/auth`);
     if (auth.is_authenticated === false) throw new ClaudeTaskError("github_not_connected");
     if (!task) {
         const environments = await get("/v1/environment_providers");
@@ -227,7 +226,6 @@ export async function prepareClaudeCloudTask(input: PrepareCloudEnvironmentInput
         const createdTaskId = task.id;
         if (!/^[A-Za-z0-9_-]{1,160}$/.test(createdTaskId)) throw new ClaudeTaskError("create_uncertain");
         row = await settleCreation(row, dispatch, current => ({ ...current, taskId: createdTaskId }));
-      }
     }
     const taskId = task.id;
     if (typeof taskId !== "string" || !/^[A-Za-z0-9_-]{1,160}$/.test(taskId)) throw new ClaudeTaskError("task_invalid");
