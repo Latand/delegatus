@@ -40,7 +40,8 @@ import { verifiedSignalDomainProcesses } from "./agentSignalSandbox";
 import { isDeepStrictEqual } from "node:util";
 import { randomUUID } from "node:crypto";
 import { registryConversationsForEntryKey, registryKeysMatchingBounded, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
-import { readAgentProjection, subjectId as agentStateSubjectId } from "@/lib/agentState/store";
+import { entryRevision, readAgentProjection, subjectId as agentStateSubjectId } from "@/lib/agentState/store";
+import { cachedAgentObservationForRevision } from "@/lib/agentState/projectionCache";
 import { fileSignature } from "@/lib/agentState/transcript";
 import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
 import { assertMemberLaunchAllowed } from "@/lib/team/memberLaunchAuthority";
@@ -861,9 +862,17 @@ function settledOrphanWithPendingDelivery(registry: AgentRegistry, entry: AgentR
   const process = entry.structuredHost?.process;
   if (!process || claimOwnerBlocksOrphanReap(entry.claimOwner) || !entry.structuredHost || entry.structuredHost.activeTurnRef !== null
     || entry.structuredHost.pendingAttention.length || entry.pendingAction) return false;
-  const projection = readAgentProjection(registry, agentStateSubjectId(entry));
+  const subject = agentStateSubjectId(entry);
+  const currentRevision = entryRevision(entry);
+  // Tree capture may update termination metadata during the stop ladder. Once
+  // the initial current-row match has been made, callbacks stay pinned to that
+  // facts revision and separately recheck the exact process/claim/obligation
+  // identities below.
+  const factsRevision = expectedFactsRevision ?? currentRevision;
+  const projection = cachedAgentObservationForRevision(subject, factsRevision)
+    ?? readAgentProjection(registry, subject);
   if (!projection || projection.entryKey !== sessionKeyId(entry.key) || projection.subject !== agentStateSubjectId(entry)
-    || expectedFactsRevision !== undefined && projection.facts.revision !== expectedFactsRevision || projection.verdict.state !== "unowned"
+    || projection.facts.revision !== factsRevision || projection.verdict.state !== "unowned"
     || projection.verdict.quality !== "verified" || projection.verdict.missing.length !== 0) return false;
   const { process: proc, owner, turn, attention, transcript, obligations } = projection.facts;
   const fresh = [proc, owner, turn, attention, transcript, obligations].every(fact => fact.determined

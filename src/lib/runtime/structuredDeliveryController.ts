@@ -55,7 +55,7 @@ import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { hostlessConversations, hostlessConversationEvidence } from "./hostlessRegistryEvidence";
 import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
-import { captureProcessIdentity, sameRecordedProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { canonicalOrchestratorProject, isCurrentOrchestratorSeat, readOrchestratorSeatRetirementEvidenceOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 
 import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, type RuntimeHostClient } from "./client";
@@ -2991,6 +2991,55 @@ export async function handOverHostForDemotion(
   throw new Error(`structured host ${sessionKeyId(key)} evidence kept moving before Viewer demotion`);
 }
 
+async function settleActiveClaudeTurnBeforeDemotion(
+  registry: AgentRegistry,
+  key: SessionKey,
+  host: EngineHost,
+  ownerRow: AgentRegistryEntry,
+  initial: HostState,
+): Promise<HostState> {
+  const process = ownerRow.structuredHost?.process;
+  if (!process || initial.pid !== process.pid || initial.processStartIdentity !== process.startIdentity) {
+    throw new Error(`Claude host ${sessionKeyId(key)} process changed before Viewer demotion`);
+  }
+  const assertOwner = () => {
+    const current = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
+    const recorded = current?.structuredHost?.process;
+    if (!current || current.claimOwner !== ownerRow.claimOwner || current.claimEpoch !== ownerRow.claimEpoch
+      || current.structuredHost?.writerClaimEpoch !== ownerRow.structuredHost?.writerClaimEpoch
+      || recorded?.pid !== process.pid || recorded.startIdentity !== process.startIdentity
+      || processIdentityStatus(process) !== "alive") {
+      throw new Error(`Claude host ${sessionKeyId(key)} owner changed while its turn settled for Viewer demotion`);
+    }
+  };
+  let current = initial;
+  while (current.status === "active" && current.activeTurnRef !== null) {
+    const turnRef = current.activeTurnRef;
+    const events = host.attach(current.eventCursor)[Symbol.asyncIterator]();
+    try {
+      let settled = false;
+      while (!settled) {
+        const next = await events.next();
+        assertOwner();
+        if (next.done) throw new Error(`Claude host ${sessionKeyId(key)} event stream ended before turn ${turnRef} settled`);
+        if (next.value.kind === "session-status" && (next.value.status === "dead" || next.value.status === "unhosted")) {
+          throw new Error(`Claude host ${sessionKeyId(key)} ended before turn ${turnRef} settled`);
+        }
+        settled = next.value.kind === "turn-ended" && next.value.turnId === turnRef;
+      }
+    } finally {
+      await events.return?.();
+      assertOwner();
+    }
+    current = await host.health();
+    assertOwner();
+    if (current.pid !== process.pid || current.processStartIdentity !== process.startIdentity) {
+      throw new Error(`Claude host ${sessionKeyId(key)} process changed after turn ${turnRef} settled`);
+    }
+  }
+  return current;
+}
+
 /** Releases every engine host owned by this Viewer before release demotion.
  *
  * Structured engines run outside the Viewer container namespace, so exiting
@@ -3023,6 +3072,24 @@ export async function releaseStructuredDeliveryHostsForDemotion(
   await Promise.allSettled(registrations.map(async ({ key, host }) => {
     const registry = unpublishedLaunchHosts.get(sessionKeyId(key))?.registry ?? state.activeRegistry;
     try {
+      if (registry && key.engine === "claude") {
+        const rowBefore = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
+        const before = await host.health();
+        if (before.status === "active" && before.pid !== null && before.processStartIdentity !== null) {
+          const after = await host.health();
+          const current = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
+          const recorded = current?.structuredHost?.process;
+          if (after.status === "active" && after.pid === before.pid && after.processStartIdentity === before.processStartIdentity
+            && recorded?.pid === before.pid && recorded.startIdentity === before.processStartIdentity
+            && rowBefore?.claimOwner === current?.claimOwner && rowBefore?.claimEpoch === current?.claimEpoch
+            && rowBefore?.structuredHost?.writerClaimEpoch === current?.structuredHost?.writerClaimEpoch) {
+            // The predecessor Viewer must keep the stdio reader alive until
+            // Claude delivers the active turn's terminal event. Only then may
+            // release close the broker and let the successor claim this row.
+            await settleActiveClaudeTurnBeforeDemotion(registry, key, host, rowBefore!, after);
+          }
+        }
+      }
       if (registry && await detachCodexHostForViewerRestart(registry, key, host)) return;
       const current = await host.health();
       if (registry) await handOverHostForDemotion(registry, key, current, options, () => host.health());

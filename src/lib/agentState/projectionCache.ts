@@ -11,4 +11,11 @@ export function cacheAgentObservation(row: AgentProjection): void {
 export function cachedAgentObservation(subject: string): AgentProjection | null {
   return rows.get(subject) ?? null;
 }
+/** Current-process evidence can be fresher than the durable semantic row.
+ * Callers must still bind it to the current subject revision and validate each
+ * fact's validity window before using it to authorize an effect. */
+export function cachedAgentObservationForRevision(subject: string, revision: string): AgentProjection | null {
+  const row = rows.get(subject) ?? null;
+  return row?.facts.revision === revision ? row : null;
+}
 export function clearAgentObservations(): void { rows.clear(); }

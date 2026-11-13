@@ -290,6 +290,14 @@ export class AgentStateService {
         { ...ev("host-memory", `seq:${memory.eventCursor}`), ...(provisional ? { validUntil: startedAt + AGENT_STATE_POLICY.startupGraceMs } : {}) });
     }
     const localRef = memory?.activeTurnRef ?? entry.structuredHost!.activeTurnRef;
+    const idleMemoryNativeOpen = Boolean(memory && memory.activeTurnRef === null && source.artifactBound
+      && native.turn.determined && native.turn.value.state === "open");
+    if (idleMemoryNativeOpen) {
+      // A live host's idle snapshot cannot prove that its native turn ended.
+      // Keep the transcript's opposing evidence visible and block effects until
+      // a later observation establishes the order of the two boundaries.
+      turn = unknown("host-memory-idle-conflicts-with-native-open-turn", ev("native-transcript", "open-turn"));
+    }
     const nativeClosed = native.turn.determined && native.turn.value.state === "closed";
     const correlation = nativeClosed && source.artifactBound && (entry.key.engine === "codex"
       ? native.turn.determined && native.turn.value.nativeId === localRef
@@ -307,8 +315,9 @@ export class AgentStateService {
     const repair = Boolean(localRef !== null && owner.determined && (owner.value === "absent" && (correlation || superseded)
       || owner.value === "held" && correlation && currentMemoryBoundary && memory?.pendingAttention.length === 0
         && !memory.attentionUnverified && Boolean(this.ports.settleMemory)));
-    let divergence = localRef !== null && (nativeClosed && correlation || superseded)
-      ? (repair ? superseded ? "native-start-superseded-cache" : "native-terminal-cache-open" : "boundary-unresolved") : null;
+    let divergence = idleMemoryNativeOpen ? "native-open-memory-idle"
+      : localRef !== null && (nativeClosed && correlation || superseded)
+        ? (repair ? superseded ? "native-start-superseded-cache" : "native-terminal-cache-open" : "boundary-unresolved") : null;
     const attention = memory?.pendingAttention ?? entry.structuredHost!.agentStateAttention?.pending ?? entry.structuredHost!.pendingAttention;
     const attentionUnverified = memory?.attentionUnverified ?? entry.structuredHost!.agentStateAttention?.unverified ?? false;
     const facts: AgentFacts = { subject: subjectId(entry), engine: entry.key.engine, revision, process: processFact, owner, turn,
@@ -356,7 +365,9 @@ export class AgentStateService {
       { entry, conversationRevision: source.conversationRevision, projection, repair, repairConversation,
         journal: { version: 1, id: eventId, subject: facts.subject, at: observedAt, from: null, to: projection.verdict.state,
           reason: divergence ?? projection.verdict.reason, divergence, writer: this.writer, release: this.ports.release,
-          evidence: [facts.process.evidence, facts.owner.evidence, facts.turn.evidence, ...(ledger?.turn.determined ? [ledger.turn.evidence] : [])] } }, guard);
+          evidence: [facts.process.evidence, facts.owner.evidence, facts.turn.evidence,
+            ...(idleMemoryNativeOpen ? [ev("host-memory", `seq:${memory!.eventCursor}`)] : []),
+            ...(ledger?.turn.determined ? [ledger.turn.evidence] : [])] } }, guard);
       // No await separates the committed repair from its host-memory adapter.
       // A journal insertion refusal therefore has no native-memory effects.
       if (committed && repair && owner.determined && owner.value === "held" && native.turn.determined) {

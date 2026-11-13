@@ -16,7 +16,7 @@ import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
 import { describe, expect, setSystemTime, spyOn, test } from "bun:test";
 
-import { AgentRegistry, type AgentRegistryStorageOptions } from "@/lib/agent/registry";
+import { AgentRegistry, setAgentRegistryForTests, type AgentRegistryStorageOptions } from "@/lib/agent/registry";
 import { registryLockHolder, type RegistryLockHolder } from "@/lib/agent/registryLockHolderFixture";
 import { defaultRegistrySqliteFilename } from "@/lib/agent/registryBackendIdentity";
 import { RuntimeJournal } from "@/runtime-host/journal";
@@ -45,7 +45,7 @@ import {
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 import { DeliveryProgressStore } from "./deliveryProgress";
-import { observeDeliveryEcho } from "./structuredDeliveryController";
+import { observeDeliveryEcho, releaseStructuredDeliveryHostsForDemotion, retainUnpublishedStructuredLaunchHost } from "./structuredDeliveryController";
 import { projectEngineHostEvent } from "./engineHostEvents";
 import { normalizeQueueEntry, type HostState, type QueueEntry, type RuntimeEvent } from "./engineHost";
 import { structuredContent, type StructuredImageRef } from "./structuredContent";
@@ -61,11 +61,13 @@ import {
   type StructuredHostPersistenceOptions,
 } from "./registry";
 import { orphanWriterTree } from "./fixtures/orphanWriterTree";
-import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { captureProcessTree } from "@/lib/processGroup";
 import { claudeStartupHostOptions, type ClaudeStartupOwner } from "./startup";
 import { AgentStateService } from "@/lib/agentState/service";
 import { FIXTURE_CONVERSATION, FIXTURE_SESSION, fixtureRecords, fixtureRegistry } from "@/lib/agentState/testFixture";
+import { cachedAgentObservation, clearAgentObservations } from "@/lib/agentState/projectionCache";
+import { entryRevision, readAgentProjection, subjectId } from "@/lib/agentState/store";
+import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 
 /* #1905: the config and state root a spawned agent runs under, plus the `gh`
    configuration pinned for it because it no longer inherits XDG_CONFIG_HOME.
@@ -3272,7 +3274,9 @@ describe("ClaudeStreamBrokerHost", () => {
     const source = fixtureRegistry(directory, "claude", identity, null);
     fs.writeFileSync(registryPath, JSON.stringify(source));
     const registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
-    const service = new AgentStateService({ registry, now: Date.now, owns: () => true, process: processIdentityStatus,
+    let clock = Date.now();
+    setSystemTime(clock);
+    const service = new AgentStateService({ registry, now: () => clock, owns: () => true, process: processIdentityStatus,
       memory: () => null, release: "fixture", publish: async () => false });
     const replacement = new FakeClaude(new RecordingDeliveryLedger());
     const message = "accepted work survives the owner restart";
@@ -3288,6 +3292,21 @@ describe("ClaudeStreamBrokerHost", () => {
       await service.reconcile(registry.hostEntry(key)!);
       const held = registry.agentStateRead(file => file.heldDeliveries[deliveryId]);
       expect(held?.state).toBe("assigned");
+      const subject = subjectId(registry.hostEntry(key)!);
+      const durableBeforeNoop = readAgentProjection(registry, subject)!;
+      clock += 6_000;
+      setSystemTime(clock);
+      await service.reconcile(registry.hostEntry(key)!);
+      const durableAfterNoop = readAgentProjection(registry, subject)!;
+      const volatile = cachedAgentObservation(subject)!;
+      expect(durableAfterNoop.revision).toBe(durableBeforeNoop.revision);
+      const durableValidities = [durableAfterNoop.facts.process, durableAfterNoop.facts.owner, durableAfterNoop.facts.turn,
+        durableAfterNoop.facts.attention, durableAfterNoop.facts.transcript, durableAfterNoop.facts.obligations]
+        .map(fact => fact.evidence.validUntil).filter((value): value is number => value !== undefined);
+      expect(durableValidities.some(value => value < clock)).toBeTrue();
+      expect(volatile.facts.revision).toBe(entryRevision(registry.hostEntry(key)!));
+      expect([volatile.facts.process, volatile.facts.owner, volatile.facts.attention].every(fact =>
+        fact.evidence.validUntil === undefined || fact.evidence.validUntil >= clock)).toBeTrue();
       adopted = await adoptClaudeRegistryHosts(registry, () => {
         optionsSawOrphanGone = procBackend.processIdentity(orphan.pid!) !== startIdentity;
         const ledger = new RecordingDeliveryLedger();
@@ -3309,6 +3328,8 @@ describe("ClaudeStreamBrokerHost", () => {
     } finally {
       service.stop();
       for (const item of adopted) await item.host.release();
+      clearAgentObservations();
+      setSystemTime();
       registry.close();
       if (procBackend.processIdentity(orphan.pid) === startIdentity) {
         try { orphan.kill("SIGKILL"); } catch { /* the owned test child already exited */ }
@@ -5069,6 +5090,75 @@ describe("meaningful background turns", () => {
     } finally { await f.host.release(); }
   });
 });
+
+test("planned succession preserves an active Claude broker until its background result settles once", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-background-succession-"));
+  const sessionId = FIXTURE_SESSION;
+  const eventStore = new FileRuntimeEventStore(path.join(root, "events"));
+  const host = await ClaudeStreamBrokerHost.start({
+    cwd: root, sessionId, eventStore, deliveryLedger: new FileClaudeDeliveryLedger(path.join(root, "deliveries")),
+    readTranscript: () => [], readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    spawnProcess: (_command, _args, options) => spawn(process.execPath,
+      [path.join(import.meta.dir, "fixtures/claudeBackgroundSuccessionChild.ts"), root, sessionId],
+      { ...options, stdio: ["pipe", "pipe", "pipe"], detached: true }),
+  });
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  let engineIdentity: ReturnType<typeof captureProcessIdentity> | undefined;
+  let toolIdentity: ReturnType<typeof captureProcessIdentity> | undefined;
+  let unbind: (() => Promise<void>) | undefined;
+  let forget: (() => void) | undefined;
+  try {
+    await host.send({ id: "succession-prompt", text: "start background work" });
+    const health = await host.health();
+    engineIdentity = captureProcessIdentity(health.pid!);
+    const toolPidPath = path.join(root, "tool.pid");
+    const readyDeadline = Date.now() + 5_000;
+    while (!fs.existsSync(toolPidPath) && Date.now() < readyDeadline) await new Promise(resolve => setTimeout(resolve, 10));
+    expect(fs.existsSync(toolPidPath)).toBeTrue();
+    toolIdentity = captureProcessIdentity(Number(fs.readFileSync(toolPidPath, "utf8")));
+    const initial = fixtureRegistry(root, "claude", engineIdentity, captureProcessIdentity(process.pid));
+    const entry = initial.entries[`claude:${sessionId}`]!;
+    entry.structuredHost = claudeHostColumns(health, 1);
+    await registry.deliveryWriteOrBusy({ label: "fixture.background-succession" }, () => registry.agentStateWrite(file => Object.assign(file, initial)));
+    setAgentRegistryForTests(registry);
+    unbind = await bindClaudeHostPersistence(registry, { engine: "claude", sessionId }, host, entry.claimOwner!, 1);
+    forget = retainUnpublishedStructuredLaunchHost({ key: { engine: "claude", sessionId }, host, registry, release: () => host.release() });
+    expect(health.status).toBe("active");
+    expect(health.activeTurnRef).toBe("succession-prompt");
+    expect(registry.hostEntry({ engine: "claude", sessionId })?.structuredHost?.process).toMatchObject({ pid: engineIdentity.pid, startIdentity: engineIdentity.startIdentity });
+
+    let demotionSettled = false;
+    const demotion = releaseStructuredDeliveryHostsForDemotion({ boundary: "fixture-planned-succession" })
+      .then(() => { demotionSettled = true; });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(demotionSettled).toBeFalse();
+    expect(processIdentityStatus(engineIdentity)).toBe("alive");
+    expect(processIdentityStatus(toolIdentity)).toBe("alive");
+    await demotion;
+    expect(demotionSettled).toBeTrue();
+
+    const completionDeadline = Date.now() + 7_000;
+    while (eventStore.load(sessionId).filter(event => event.kind === "turn-ended").length === 0 && Date.now() < completionDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const terminal = eventStore.load(sessionId).filter(event => event.kind === "turn-ended");
+    expect(terminal).toMatchObject([{ kind: "turn-ended", turnId: "succession-prompt", status: "completed" }]);
+    expect(terminal).toHaveLength(1);
+    const delivered = eventStore.load(sessionId).filter(event => event.kind === "delta" && event.text === "background result");
+    expect(delivered).toHaveLength(1);
+    expect(fs.readFileSync(path.join(root, "tool-starts"), "utf8").trim().split("\n")).toEqual(["start"]);
+    expect(fs.readFileSync(path.join(root, "tool-done"), "utf8")).toBe("done");
+  } finally {
+    forget?.();
+    await host.release().catch(() => {});
+    await unbind?.();
+    if (engineIdentity) await stopFixtureIdentity(engineIdentity);
+    if (toolIdentity) await stopFixtureIdentity(toolIdentity);
+    setAgentRegistryForTests(null);
+    registry.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 15_000);
 
 
 test("native accounting clocks reach the retained time reader through the real Claude producer", async () => {

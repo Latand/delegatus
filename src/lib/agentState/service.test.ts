@@ -192,6 +192,38 @@ test("unchanged idle evidence refreshes in memory without changing the durable r
   expect(centralIdleEligible(cachedAgentObservation(first.subject)!.facts, FIXTURE_NOW + 62_000)).toBe(true);
 });
 
+test("idle host memory cannot hide a generation-bound native open turn", async () => {
+  const f = fixture();
+  fs.writeFileSync(f.transcript, fixtureRecords("codex").open.map(row => JSON.stringify(row)).join("\n") + "\n");
+  const entry = f.entry();
+  await f.registry.deliveryWriteOrBusy({ label: "fixture.memory-owner" }, () => f.registry.agentStateWrite(file => {
+    file.entries[`codex:${FIXTURE_SESSION}`]!.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+  }));
+  f.service.ports.memory = () => ({ activeTurnRef: null, pendingAttention: [], eventCursor: entry.structuredHost!.eventCursor + 1 });
+  await f.service.request();
+  const row = readAgentProjection(f.registry, subjectId(f.entry()))!;
+  expect(row).toMatchObject({ divergence: "native-open-memory-idle", verdict: { state: null, quality: "unverified" } });
+  expect(row.facts.turn).toMatchObject({ determined: false, why: "host-memory-idle-conflicts-with-native-open-turn" });
+  expect(readAgentStateMetrics(f.registry)).toMatchObject({ registryTranscriptDivergencesTotal: 1, registryTranscriptDivergencesCurrent: 1 });
+  expect(f.entry().structuredHost!.activeTurnRef).toBe("native-turn-one");
+});
+
+test("a newer owned memory turn stays ahead of an older native terminal boundary", async () => {
+  const f = fixture();
+  const entry = f.entry();
+  await f.registry.deliveryWriteOrBusy({ label: "fixture.new-memory-owner" }, () => f.registry.agentStateWrite(file => {
+    file.entries[`codex:${FIXTURE_SESSION}`]!.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+  }));
+  f.service.ports.memory = () => ({ activeTurnRef: "new-memory-turn", pendingAttention: [], eventCursor: entry.structuredHost!.eventCursor + 1,
+    nativeTurnId: "new-native-turn", startedAt: FIXTURE_NOW + 2000 });
+  await f.service.request();
+  const row = readAgentProjection(f.registry, subjectId(f.entry()))!;
+  expect(row).toMatchObject({ divergence: null, verdict: { state: "working", quality: "verified" },
+    facts: { turn: { determined: true, value: { state: "open", localRef: "new-memory-turn", at: FIXTURE_NOW + 2000 } } } });
+  expect(row.facts.turn.evidence.source).toBe("host-memory");
+  expect(f.entry().structuredHost!.activeTurnRef).toBe("native-turn-one");
+});
+
 test("resource inventory reports central turn evidence and marks expired observations before a keyed refresh", async () => {
   const f = fixture();
   await f.service.request();
