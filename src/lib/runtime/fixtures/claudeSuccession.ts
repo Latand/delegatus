@@ -66,7 +66,7 @@ if (mode === "job") {
     await adoptClaudeRegistryHosts(registry, () => {
       optionsCalls++;
       throw new Error("fixture refuses a replacement engine");
-    }, { LLV_STRUCTURED_HOSTS: "1" });
+    }, { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" });
   } else if (mode === "demotion") {
     await demoteSkippedStructuredRegistryHosts(registry, () => false);
   } else if (mode === "terminal") {
