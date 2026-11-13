@@ -6,6 +6,8 @@ import { procBackend } from "@/lib/proc";
 import type { ExternalRelayAnswer, ExternalRelayCompletion, ExternalRelayOwner, ExternalRelayTarget } from "./protocol";
 import type { OwnerBridgeContext } from "./ownerBridgeContext";
 import type { OwnerTurnDiagnostic } from "./diagnostic";
+import { ACTION_VERIFICATION_READS } from "./actionOutcome";
+import { ExternalRelayError } from "./errors";
 
 export type RelayTargetSettings = {
   id: string;
@@ -156,7 +158,8 @@ export function runHoldsCapacity(run: RunRecord): boolean {
   return !run.capacityReleased && !run.ownerTurn?.confirmed && !run.ownerTurn?.released;
 }
 type RelayRequestClaim = { requestId: string; leaseId: string; ownerPid: number; ownerIdentity: string; claimedAt: number; terminalAt?: number; completion?: ExternalRelayCompletion };
-type RelayRequestLedger = { v: 1; claims: RelayRequestClaim[] };
+export type RelayActionVerification = { deadlineAt: number; reads: number; sent?: true };
+type RelayRequestLedger = { v: 1; claims: RelayRequestClaim[]; actionVerifications?: Record<string, Record<string, RelayActionVerification>> };
 const RELAY_REQUEST_CLAIM_RETENTION_MS = 24 * 60 * 60_000;
 export const externalRelayFile = (name: "relays" | "runs" | "requests") =>
   statePath(`external-relay/${name}.json`);
@@ -478,19 +481,23 @@ export async function claimRelayRequestAsync(requestId: string, leaseId: string,
     if (existing) {
       if (existing.terminalAt !== undefined) {
         result = { kind: "terminal", completion: existing.completion ?? null };
-        writeRelayFile(file, { v: 1, claims });
+        writeRelayFile(file, { ...ledger, claims });
         return;
       }
       if (procBackend.processIdentity(existing.ownerPid) === existing.ownerIdentity) {
-        writeRelayFile(file, { v: 1, claims });
+        writeRelayFile(file, { ...ledger, claims });
         return;
       }
       const recovered = claims.filter(claim => claim.requestId !== requestId || claim.leaseId !== leaseId);
-      writeRelayFile(file, { v: 1, claims: [...recovered, { requestId, leaseId, ownerPid, ownerIdentity, claimedAt: now }] });
+      writeRelayFile(file, { ...ledger, claims: [...recovered, { requestId, leaseId, ownerPid, ownerIdentity, claimedAt: now }] });
       result = { kind: "claimed" };
       return;
     }
-    writeRelayFile(file, { v: 1, claims: [...claims, { requestId, leaseId, ownerPid, ownerIdentity, claimedAt: now }] });
+    const actionVerifications = Object.fromEntries(Object.entries(ledger.actionVerifications ?? {}).flatMap(([key, values]) => {
+      const retained = Object.fromEntries(Object.entries(values).filter(([, value]) => !value || !Number.isFinite(value.deadlineAt) || now - value.deadlineAt < RELAY_REQUEST_CLAIM_RETENTION_MS));
+      return Object.keys(retained).length ? [[key, retained]] : [];
+    }));
+    writeRelayFile(file, { ...ledger, actionVerifications, claims: [...claims, { requestId, leaseId, ownerPid, ownerIdentity, claimedAt: now }] });
     result = { kind: "claimed" };
   }, until);
   return result;
@@ -512,8 +519,40 @@ export async function settleRelayRequestClaimAsync(
       if (claim.requestId !== requestId || claim.leaseId !== leaseId || claim.ownerPid !== ownerPid || claim.ownerIdentity !== ownerIdentity || claim.terminalAt !== undefined) return [claim];
       return disposition === "terminal" ? [{ ...claim, terminalAt: Date.now(), ...(completion ? { completion } : {}) }] : [];
     });
-    writeRelayFile(file, { v: 1, claims });
+    writeRelayFile(file, { ...ledger, claims });
   }, until);
+}
+
+/** The existing request ledger owns verification bounds, independently of
+ * process ownership and completion delivery. It stores no action outcome. */
+export async function reserveRelayActionVerificationAsync(requestId: string, leaseId: string, callId: string,
+  proposedDeadline: number, consume: boolean | "send", now = Date.now()): Promise<RelayActionVerification & { allowed: boolean; recovering?: boolean }> {
+  if (!Number.isFinite(proposedDeadline) || !Number.isFinite(now)) throw new ExternalRelayError("invalid_verification_bound", 409);
+  const file = externalRelayFile("requests");
+  let result!: RelayActionVerification & { allowed: boolean; recovering?: boolean };
+  await withFileLockAsync(file, () => {
+    const ledger = readRelayRequestLedger();
+    if (!ledger.claims.some(claim => claim.requestId === requestId && claim.leaseId === leaseId && claim.terminalAt === undefined &&
+      claim.ownerPid === process.pid && claim.ownerIdentity === procBackend.processIdentity(process.pid)))
+      throw new ExternalRelayError("verification_claim_unavailable", 409);
+    const all = ledger.actionVerifications ?? {};
+    const bucket = Object.hasOwn(all, requestId) ? all[requestId]! : {};
+    const hadSaved = Object.hasOwn(bucket, callId);
+    const saved = hadSaved ? bucket[callId] : undefined;
+    if (hadSaved && (!saved || !Number.isFinite(saved.deadlineAt) || !Number.isInteger(saved.reads) || saved.reads < 0 || saved.reads > ACTION_VERIFICATION_READS || saved.sent !== undefined && saved.sent !== true))
+      throw new ExternalRelayError("invalid_verification_bound", 409);
+    if (!saved && Object.keys(bucket).length >= 16) throw new ExternalRelayError("verification_bound_exhausted", 409);
+    const deadlineAt = Math.min(proposedDeadline, saved?.deadlineAt ?? proposedDeadline);
+    const reads = saved?.reads ?? 0;
+    const allowed = now < deadlineAt && (consume !== true || reads < ACTION_VERIFICATION_READS);
+    // Persist possible emission before the first POST. Older records were
+    // created only after uncertainty, so their presence also requires recovery.
+    const state = { deadlineAt, reads: reads + Number(consume === true && allowed),
+      ...(saved?.sent || consume === "send" ? { sent: true as const } : {}) };
+    writeRelayFile(file, { ...ledger, actionVerifications: { ...all, [requestId]: { ...bucket, [callId]: state } } });
+    result = { ...state, allowed, ...(consume === "send" ? { recovering: hadSaved } : {}) };
+  }, Math.min(proposedDeadline, Date.now() + 5000));
+  return result;
 }
 /** New targets use Cloud; existing settings are retained when targets refresh. */
 export function newTargetSettings(

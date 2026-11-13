@@ -71,9 +71,14 @@ Delegatus judges whether an agent is alive from file modification times.
 
 ## Choose how to install
 
-There are five ways to get Delegatus. Most people start with the first or
-the second.
+On a Mac, start with the app. The command-line options also work on the
+platforms listed above.
 
+- **Mac app.** Download `Delegatus-<version>-mac.dmg` from the
+  [latest release](../../../../releases/latest), drag Delegatus to Applications
+  and double-click it. Confirm the private installation once, then follow the
+  setup guide inside its window. Bun and Delegatus are installed for your user;
+  Claude Code and Codex are connected separately in the guide.
 - **Run the package.** For trying it out: `bunx delegatus-cli`.
 - **Keep a command installed.** For daily use: `bun add -g delegatus-cli`.
 - **Let your coding agent install it.** If you already work in Claude Code or
@@ -225,6 +230,17 @@ and in the start output. Turn it off in the sidebar's ⋯ menu under
 lists what it sends.
 
 ## Open Delegatus as an app
+
+**On a Mac:** use the native app from [Choose how to install](#choose-how-to-install).
+It starts Delegatus and gives it its own window and icon. Its menu offers
+**Start at Login**, **Stop Delegatus**, **Check for Updates…** and **Open Logs**.
+Quitting the window can leave the server and agents running; Stop asks for
+confirmation and stops the agents too.
+
+The initial release is ad-hoc signed. On macOS 13–14, Control-click (or
+right-click) Delegatus, choose **Open**, then confirm **Open**. On macOS 15
+and later, double-click once, dismiss the warning, open **System Settings →
+Privacy & Security**, choose **Open Anyway** next to Delegatus and confirm.
 
 Delegatus serves a web app manifest, so a browser can give it its own window
 and icon instead of a tab.
@@ -397,6 +413,10 @@ turn on **Merge when the review passes**; see
   before it can start.
 - **The port is busy.** The start output suggests the next port; start again
   with `--port` and that number.
+  The Mac app names the program using port 8898 and offers **Try Again** and
+  **Open Logs**. Close that program from its own account before retrying. The
+  app never kills a listener it finds. A protected Delegatus needs the access
+  key belonging to the same installation and macOS account.
 - **Only Copilot is installed.** Copilot cannot run the orchestrator. Install
   Claude Code or Codex as well.
 - **Repository initialization is refused, or the pipeline cannot resolve its base.**
