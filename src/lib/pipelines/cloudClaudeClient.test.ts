@@ -3,6 +3,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
+import type { ClaudeSubmission } from "./cloudStage";
+import { validClaudeSubmission } from "./cloudStage";
 import type { AccountContext } from "@/lib/accounts/contracts";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-cloud-client-"));
@@ -648,4 +651,122 @@ test("a hung CLI is ended by its abort as an unknown outcome, with its process g
   const pending = claudeCliSender(script)({ account, sessionId: "session_x", text: "x", signal: abort.signal });
   abort.abort();
   expect(await pending).toEqual({ state: "unknown" });
+});
+
+
+const submissionJournal = (): ClaudeSubmission => ({ nonce: "a".repeat(32), startedAt: Date.UTC(2026, 10, 1), sent: [] });
+
+test("a lost run reply is recovered by its persisted nonce and sends one assignment", async () => {
+  const fake = provider({ runAnswer: () => {
+    const call = fake.calls.find(call => call.path.endsWith("/run"))!;
+    fake.open(fake.sessionId, String(call.body!.text));
+    return new Response("{}", { status: 503 });
+  } });
+  const client = createClaudeCloudStageClient(fake.dependencies);
+  let journal = submissionJournal();
+  const input = () => submitInput({ claudeSubmission: journal, checkpointSubmission: async (next: ClaudeSubmission) => {
+    expect(validClaudeSubmission(JSON.parse(JSON.stringify(next)))).toBe(true);
+    journal = structuredClone(next);
+  } });
+  await expect(client.submit(input())).rejects.toThrow("outcome is unknown");
+  const recovered = await client.recoverSubmission!(input());
+  expect(recovered.state).toBe("found");
+  if (recovered.state !== "found") throw new Error("missing receipt");
+  expect(await client.poll(access(recovered.receipt))).toMatchObject({ state: "completed" });
+  expect(fake.runCalls()).toBe(1);
+  expect(fake.sent).toHaveLength(3);
+  expect(journal.complete).toBe(true);
+});
+
+test.each(["before session receipt", "before final queued receipt"])("recovery after a stop %s never repeats a run or a delivered part", async stop => {
+  const fake = provider();
+  const client = createClaudeCloudStageClient(fake.dependencies);
+  let journal = submissionJournal(), stopped = false;
+  const checkpoint = async (next: ClaudeSubmission) => {
+    expect(validClaudeSubmission(JSON.parse(JSON.stringify(next)))).toBe(true);
+    if (!stopped && (stop === "before session receipt" ? !!next.sessionId : next.complete)) {
+      stopped = true; throw new Error("fixture controller stopped before saving the receipt");
+    }
+    journal = structuredClone(next);
+  };
+  await expect(client.submit(submitInput({ claudeSubmission: journal, checkpointSubmission: checkpoint }))).rejects.toThrow("fixture controller stopped");
+  const recovered = await createClaudeCloudStageClient(fake.dependencies).recoverSubmission!(submitInput({ claudeSubmission: journal, checkpointSubmission: checkpoint }));
+  expect(recovered.state).toBe("found");
+  expect(fake.runCalls()).toBe(1);
+  expect(fake.sent).toHaveLength(3);
+  expect(journal.complete).toBe(true);
+});
+
+test("an in-flight part without its event remains unknown and is never sent again", async () => {
+  const fake = provider();
+  let journal = submissionJournal();
+  const checkpoint = async (next: ClaudeSubmission) => {
+    journal = structuredClone(next);
+    if (next.sending?.final) throw new Error("fixture stopped after durable send intent");
+  };
+  const client = createClaudeCloudStageClient(fake.dependencies);
+  await expect(client.submit(submitInput({ claudeSubmission: journal, checkpointSubmission: checkpoint }))).rejects.toThrow("durable send intent");
+  expect(fake.sent).toHaveLength(2);
+  const recovered = await client.recoverSubmission!(submitInput({ claudeSubmission: journal, checkpointSubmission: checkpoint }));
+  expect(recovered.state).toBe("unknown");
+  expect(fake.sent).toHaveLength(2);
+  expect(fake.runCalls()).toBe(1);
+});
+
+test.each(["empty", "foreign", "provisioning", "duplicate nonce", "too many", "pagination", "unreadable"])("bounded recovery leaves %s sessions unknown without any new run", async shape => {
+  const fake = provider();
+  const journal = submissionJournal();
+  const own = `Delegatus stage run, nonce ${journal.nonce}`;
+  if (["foreign", "provisioning", "duplicate nonce", "pagination", "unreadable"].includes(shape)) fake.open(fake.sessionId, shape === "provisioning" ? null : shape === "foreign" ? "unrelated run" : own);
+  if (shape === "duplicate nonce") fake.open("cse_duplicate", own);
+  if (shape === "too many") for (let i = 0; i < 6; i++) fake.open(`cse_foreign${i}`, "unrelated run");
+  const dependencies = { ...fake.dependencies, fetch: (async (target, init) => {
+    if (shape === "pagination" && String(target).includes("/sessions?")) return Response.json({ data: [], next_cursor: "another-page" });
+    if (shape === "unreadable" && String(target).includes("/events?")) return new Response("{}", { status: 503 });
+    return fake.dependencies.fetch!(target, init);
+  }) as typeof fetch };
+  const result = await createClaudeCloudStageClient(dependencies).recoverSubmission!(submitInput({ claudeSubmission: journal, checkpointSubmission: async () => {} }));
+  expect(result.state).toBe("unknown");
+  expect(fake.runCalls()).toBe(0);
+  expect(fake.sent).toHaveLength(0);
+  expect(fake.calls.filter(call => call.path.includes("/events?")).length).toBeLessThanOrEqual(5);
+});
+
+test("recovery with no saved identity stays unknown and performs no vendor request", async () => {
+  const fake = provider();
+  const result = await createClaudeCloudStageClient(fake.dependencies).recoverSubmission!(submitInput());
+  expect(result.state).toBe("unknown");
+  expect(fake.calls).toHaveLength(0);
+  expect(fake.sent).toHaveLength(0);
+});
+
+test("a changed subscription principal cannot adopt a saved session receipt", async () => {
+  const fake = provider();
+  const journal = { ...submissionJournal(), sessionId: fake.sessionId, lastToken: "b".repeat(32), complete: true };
+  const result = await createClaudeCloudStageClient(fake.dependencies).recoverSubmission!(submitInput({ claudeSubmission: journal, environmentPrincipal: "0".repeat(64) }));
+  expect(result.state).toBe("unknown");
+  expect(fake.calls).toHaveLength(0);
+});
+
+test("revoking authority during the run's login read prevents the remote write", async () => {
+  const fake = provider();
+  let current = true, reads = 0;
+  const client = createClaudeCloudStageClient({ ...fake.dependencies, readLogin: async account => {
+    const login = await fake.dependencies.readLogin!(account);
+    if (++reads === 3) current = false;
+    return login;
+  } });
+  await expect(client.submit(submitInput({ claudeSubmission: submissionJournal(), assertCurrent: () => { if (!current) throw new Error("superseded"); } }))).rejects.toThrow();
+  expect(fake.runCalls()).toBe(0);
+  expect(fake.sent).toHaveLength(0);
+});
+
+test("a changed prompt cannot replay an already delivered input digest", async () => {
+  const fake = provider();
+  const journal = { ...submissionJournal(), sessionId: fake.sessionId,
+    sent: [createHash("sha256").update("/model sonnet").digest("hex")] };
+  const result = await createClaudeCloudStageClient(fake.dependencies).recoverSubmission!(submitInput({ claudeSubmission: journal }));
+  expect(result.state).toBe("unknown");
+  expect(fake.runCalls()).toBe(0);
+  expect(fake.sent).toHaveLength(0);
 });

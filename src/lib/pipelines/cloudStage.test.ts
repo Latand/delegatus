@@ -132,3 +132,22 @@ test("claude-cloud admits Claude read-only and builder stages with a bound model
   expect(cloudStageConfigurationError({ ...stage({ effectiveRole: role({ roleId: "architect", engine: "codex" }) }), runtime: "codex-cloud" })).toContain("codex-cloud requires");
   expect(cloudStageConfigurationError(stage({ runtime: "other-cloud" }))).toContain("stage runtime must be local, codex-cloud or claude-cloud");
 });
+
+
+test("Claude submission journals and recovery decisions round-trip through the durable reader", () => {
+  const journal = { nonce: "a".repeat(32), startedAt: Date.UTC(2026, 10, 1), sent: ["b".repeat(64)] };
+  for (const claudeSubmission of [journal, { ...journal, sessionId: "cse_fixture", sending: { digest: "c".repeat(64), token: "d".repeat(32), final: true } },
+    { ...journal, sessionId: "cse_fixture", lastToken: "d".repeat(32), complete: true }]) {
+    for (const state of ["running", "found", "absent", "unknown"]) {
+      const cloud = { ...reserved, phase: "submitting", claudeSubmission, submissionUnresolved: true,
+        submissionRecovery: { state, deadlineAt: reserved.deadlineAt }, submissionAbandoned: { at: reserved.nextPollAt, reason: "Explicit local retry" } };
+      expect(isCloudStageAttempt(JSON.parse(JSON.stringify(cloud)))).toBe(true);
+    }
+  }
+  for (const claudeSubmission of [{ ...journal, nonce: "bad" }, { ...journal, sent: ["bad"] }, { ...journal, sent: Array(101).fill("b".repeat(64)) },
+    { ...journal, startedAt: -1 }, { ...journal, sessionId: "bad" }, { ...journal, complete: true }, { ...journal, sending: { digest: "bad" } }]) {
+    expect(isCloudStageAttempt({ ...reserved, claudeSubmission })).toBe(false);
+  }
+  expect(isCloudStageAttempt({ ...reserved, submissionRecovery: { state: "retry", deadlineAt: reserved.deadlineAt } })).toBe(false);
+  expect(isCloudStageAttempt({ ...reserved, submissionAbandoned: { at: "invalid", reason: "local" } })).toBe(false);
+});
