@@ -27,8 +27,8 @@ async function advance(ms: number) {
   }
   now = end; await tick();
 }
-const track = { stop() {} };
-const stream = { getTracks: () => [track] };
+const track = { enabled: true, stop() {} };
+const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
 Object.defineProperty(dom.navigator, "mediaDevices", { value: { getUserMedia: async () => stream } });
 class AudioFixture {
   static processors: Array<{ onaudioprocess: ((e: unknown) => void) | null; connect(): void; disconnect(): void }> = [];
@@ -351,3 +351,337 @@ test("untimed final overflow recovers PCM while retaining the committed draft", 
   expect(await stopped).toBe("recovered tail"); expect(commits).toEqual(["kept"]);
   expect(uploads).toHaveLength(1); expect(uploads[0].size).toBe(44 + 6400);
 });
+
+
+class ReviewChannel extends EventTarget {
+  closed = false;
+  send(_data: string) {}
+  close() { this.closed = true; this.dispatchEvent(new Event("close")); }
+}
+class ReviewPeer extends EventTarget {
+  static all: ReviewPeer[] = [];
+  static barrier = async (_peer: ReviewPeer, _step: string) => {};
+  channel = new ReviewChannel();
+  connectionState = "new";
+  closed = false;
+  constructor() { super(); ReviewPeer.all.push(this); }
+  createDataChannel(_label: string) { return this.channel; }
+  addTrack(_track: unknown, _stream: unknown) {}
+  async createOffer() { await ReviewPeer.barrier(this, "offer-created"); return { type: "offer", sdp: "v=0 review-offer" }; }
+  async setLocalDescription(_value: unknown) { await ReviewPeer.barrier(this, "local-description"); }
+  async setRemoteDescription(_value: unknown) {
+    await ReviewPeer.barrier(this, "remote-description");
+    this.connectionState = "connected";
+    await ReviewPeer.barrier(this, "channel-open");
+    queueMicrotask(() => this.channel.dispatchEvent(new Event("open")));
+  }
+  close() { this.closed = true; }
+}
+test("review: a retired OpenAI offer cannot close the next dictation socket", async () => {
+  mount();
+  const peerBefore = Object.getOwnPropertyDescriptor(globalThis, "RTCPeerConnection");
+  Object.defineProperty(globalThis, "RTCPeerConnection", { configurable: true, value: ReviewPeer });
+  Object.assign(stream, { getAudioTracks: () => [track] });
+  const previousFetch = globalThis.fetch;
+  let answer!: (response: Response) => void;
+  let offered!: () => void;
+  const atOffer = new Promise<void>(resolve => { offered = resolve; });
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (String(url) === "https://api.openai.com/v1/realtime/calls") {
+      offered(); return new Promise<Response>(resolve => { answer = resolve; });
+    }
+    return previousFetch(url as string, init);
+  }) as typeof fetch;
+  try {
+    tokenAnswer = async () => Response.json({ provider: "openai", token: "fixture" });
+    const firstStart = current.start(); await atOffer; audio();
+    expect(await current.stop()).toBe("recovered tail");
+    tokenAnswer = async () => Response.json({ provider: "elevenlabs", token: "fixture" });
+    await current.start(); const secondSocket = Socket.latest!; secondSocket.open();
+    expect(secondSocket.readyState).toBe(Socket.OPEN);
+    answer(new Response("v=0 review-answer")); await firstStart;
+    secondSocket.emit({ message_type: "committed_transcript", text: "new words" });
+    expect({ state: secondSocket.readyState, commits }).toEqual({ state: Socket.OPEN, commits: ["new words"] });
+  } finally {
+    current.discard(); globalThis.fetch = previousFetch;
+    if (peerBefore) Object.defineProperty(globalThis, "RTCPeerConnection", peerBefore); else Reflect.deleteProperty(globalThis, "RTCPeerConnection");
+  }
+});
+
+test("review: a retired OpenAI offer cannot orphan the next OpenAI recording", async () => {
+  mount();
+  const peerBefore = Object.getOwnPropertyDescriptor(globalThis, "RTCPeerConnection");
+  Object.defineProperty(globalThis, "RTCPeerConnection", { configurable: true, value: ReviewPeer });
+  Object.assign(stream, { getAudioTracks: () => [track] });
+  const previousFetch = globalThis.fetch;
+  let answer!: (response: Response) => void;
+  let offered!: () => void;
+  let calls = 0;
+  const atOffer = new Promise<void>(resolve => { offered = resolve; });
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (String(url) === "https://api.openai.com/v1/realtime/calls") {
+      if (++calls === 1) { offered(); return new Promise<Response>(resolve => { answer = resolve; }); }
+      return new Response("v=0 second-answer");
+    }
+    return previousFetch(url as string, init);
+  }) as typeof fetch;
+  let secondPeer: ReviewPeer | undefined;
+  try {
+    tokenAnswer = async () => Response.json({ provider: "openai", token: "fixture" });
+    const firstStart = current.start(); await atOffer; audio();
+    expect(await current.stop()).toBe("recovered tail");
+    await current.start(); secondPeer = ReviewPeer.all.at(-1)!;
+    expect(secondPeer.closed).toBe(false);
+    answer(new Response("v=0 first-answer")); await firstStart;
+    const stopped = current.stop();
+    secondPeer.channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", item_id: "second", transcript: "new words" }) }));
+    expect({ result: await stopped, closed: secondPeer.closed }).toEqual({ result: "new words", closed: true });
+  } finally {
+    current.discard(); secondPeer?.close(); globalThis.fetch = previousFetch;
+    if (peerBefore) Object.defineProperty(globalThis, "RTCPeerConnection", peerBefore); else Reflect.deleteProperty(globalThis, "RTCPeerConnection");
+  }
+});
+
+test("review: successful ElevenLabs live reports its actual audio and commit counters", async () => {
+  mount(); tokenAnswer = async () => Response.json({ provider: "elevenlabs", token: "fixture" });
+  await current.start(); const ws = Socket.latest!; ws.open(); audio();
+  ws.emit({ message_type: "committed_transcript", text: "recognized words" });
+  expect(commits).toEqual(["recognized words"]);
+  expect(await current.stop()).toBe("");
+  expect(traces.at(-1)).toMatchObject({ provider: "elevenlabs", path: "live", outcome: "complete", connectOutcome: "ok", capturedSamples: 1600, sentSamples: 1600, commits: 1, finalSegments: 1 });
+});
+
+
+test("review: Stop twice and a start during drain do not replace the old owner", async () => {
+  mount(); await current.start(); const ws = Socket.latest!; ws.open(); audio(3200);
+  const first = current.stop(); const second = current.stop();
+  await current.start(); expect(Socket.latest).toBe(ws);
+  ws.emit(segment("old final", 0, 100)); ws.emit({ finished: true });
+  expect(await Promise.all([first, second])).toEqual(["", null]); expect(commits).toEqual(["old final"]);
+  await current.start(); expect(Socket.latest).not.toBe(ws);
+  const next = Socket.latest!; next.open(); audio();
+  ws.emit(segment("stale", 100, 200)); next.emit(segment("next", 0, 100));
+  const third = current.stop(); next.emit({ finished: true }); expect(await third).toBe("");
+  expect(commits).toEqual(["old final", "next"]);
+});
+
+test("review: close while CONNECTING retains first and last PCM", async () => {
+  mount(); await current.start(); const ws = Socket.latest!; audio(); ws.drop(); audio(1600,0.5);
+  expect(await current.stop()).toBe("recovered tail"); expect(uploads).toHaveLength(1); expect(uploads[0].size).toBe(44+6400);
+  ws.open(); expect(ws.sent).toEqual([]);
+});
+
+test("review: close between partial and final excludes already acknowledged PCM", async () => {
+  mount(); await current.start(); const ws = Socket.latest!; ws.open(); audio(3200);
+  ws.emit(segment("opening",0,100)); ws.emit({tokens:[{text:"tail",is_final:false}]}); ws.drop();
+  const sentBeforeReopen = ws.sent.length; ws.open();
+  ws.emit(segment("late live tail",100,200)); audio(1600,0.5);
+  expect(ws.sent.length).toBe(sentBeforeReopen);
+  expect(await current.stop()).toBe("recovered tail"); expect(commits).toEqual(["opening"]);
+  expect(uploads).toHaveLength(1); expect(uploads[0].size).toBe(44+6400);
+  expect(Socket.latest).toBe(ws);
+});
+
+test("review: never answering token has a deadline while capture continues", async () => {
+  mount(); tokenAnswer = () => new Promise(() => undefined);
+  const started=current.start(); await tick(); audio(); await advance(10000); await started;
+  audio(1600,0.5); expect(Socket.latest).toBeUndefined(); expect(await current.stop()).toBe("recovered tail");
+  expect(uploads[0].size).toBe(44+6400); expect(traces.at(-1)).toMatchObject({tokenOutcome:"deadline",outcome:"complete"});
+});
+
+test("review: socket backpressure preserves bounded PCM for one batch", async () => {
+  mount(); await current.start(); const ws=Socket.latest!; ws.open(); ws.bufferedAmount=300000; audio(3200);
+  audio(1600,0.5); expect(await current.stop()).toBe("recovered tail");
+  expect(uploads).toHaveLength(1); expect(uploads[0].size).toBe(44+9600);
+  expect(ws.sent.filter(x=>x instanceof ArrayBuffer)).toHaveLength(0);
+});
+
+
+
+
+async function withReviewPeer(run: () => Promise<void>) {
+  const before = Object.getOwnPropertyDescriptor(globalThis, "RTCPeerConnection");
+  Object.defineProperty(globalThis, "RTCPeerConnection", { configurable: true, value: ReviewPeer });
+  ReviewPeer.all = []; track.enabled = true;
+  try { await run(); } finally {
+    current.discard(); ReviewPeer.barrier = async () => {};
+    if (before) Object.defineProperty(globalThis, "RTCPeerConnection", before); else Reflect.deleteProperty(globalThis, "RTCPeerConnection");
+  }
+}
+function completed(peer: ReviewPeer, text = "new words") {
+  peer.channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+    type: "conversation.item.input_audio_transcription.completed", item_id: "second", transcript: text,
+  }) }));
+}
+
+test.each(["close", "error"])("ElevenLabs %s checkpoints preserve live audio and commits", async kind => {
+  mount(); tokenAnswer = async () => Response.json({ provider: "elevenlabs", token: "fixture" });
+  await current.start(); const ws = Socket.latest!;
+  audio(); await advance(200); ws.open(); audio();
+  ws.emit({ message_type: "committed_transcript", text: "kept" });
+  if (kind === "close") ws.drop(); else ws.dispatchEvent(new Event("error"));
+  expect(commits).toEqual(["kept"]); expect(errors).toHaveLength(1);
+  expect(traces.at(-1)).toMatchObject({ provider: "elevenlabs", capturedSamples: 3200, sentSamples: 3200,
+    bufferedSamples: 0, peakBufferedSamples: 1600, finalSegments: 1, commits: 1, connectMs: 200,
+    connectOutcome: "ok", closeCode: kind === "close" ? 1006 : null,
+    closeReason: kind === "close" ? "abnormal" : "error", outcome: "incomplete" });
+  const snapshot = traces.at(-1); audio(); ws.emit({ message_type: "committed_transcript", text: "late" });
+  expect(traces.at(-1)).toEqual(snapshot); expect(commits).toEqual(["kept"]);
+});
+
+test("ElevenLabs connect deadline is explicit and retires late socket callbacks", async () => {
+  mount(); tokenAnswer = async () => Response.json({ provider: "elevenlabs", token: "fixture" });
+  await current.start(); const ws = Socket.latest!; audio(); await advance(10000);
+  expect(traces.at(-1)).toMatchObject({ connectOutcome: "deadline", connectMs: 10000, outcome: "incomplete", capturedSamples: 1600, sentSamples: 0 });
+  expect(errors).toHaveLength(1); ws.open(); expect(ws.sent).toEqual([]);
+});
+
+test.each(["complete", "drop", "deadline"])("OpenAI handoff retains capture and final counters through %s", mode => withReviewPeer(async () => {
+  mount(); const previousFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => String(url) === "https://api.openai.com/v1/realtime/calls"
+    ? new Response("v=0 answer") : previousFetch(url as string, init)) as typeof fetch;
+  try {
+    tokenAnswer = async () => Response.json({ provider: "openai", token: "fixture" });
+    await current.start(); const peer = ReviewPeer.all.at(-1)!; audio();
+    // A completed item is counted once even if the provider repeats its frame.
+    completed(peer); completed(peer);
+    let result: string | null = null;
+    if (mode === "drop") peer.channel.close();
+    else { const stopped = current.stop(); if (mode === "complete") completed(peer); else await advance(10000); result = await stopped; }
+    expect(result).toBe(mode === "complete" ? "new words" : null);
+    expect(traces.at(-1)).toMatchObject({ provider: "openai", capturedSamples: 1600, sentSamples: 1600,
+      finalSegments: 1, commits: 1, connectOutcome: "ok", connectMs: 0,
+      drainOutcome: mode === "complete" ? "ok" : mode === "drop" ? "unused" : "deadline",
+      outcome: mode === "complete" ? "complete" : "incomplete" });
+    expect(peer.closed).toBe(true); expect(peer.channel.closed).toBe(true);
+    const snapshot = traces.at(-1); audio(); completed(peer); expect(traces.at(-1)).toEqual(snapshot);
+  } finally { globalThis.fetch = previousFetch; }
+}));
+
+test.each(["offer-created", "local-description", "offer-response", "answer-body", "remote-description", "channel-open"])(
+  "retiring an OpenAI start at %s preserves the next peer and its own tracks", seam => withReviewPeer(async () => {
+    mount();
+    const previousFetch = globalThis.fetch; const previousMic = dom.navigator.mediaDevices.getUserMedia;
+    let release!: () => void; const held = new Promise<void>(r => { release = r; });
+    let entered!: () => void; const atBarrier = new Promise<void>(r => { entered = r; });
+    const pause = async (step: string) => { if (step === seam) { entered(); await held; } };
+    const tracks = [0, 1].map(() => ({ enabled: true, stops: 0, stop() { this.stops++; } }));
+    let mic = 0; let offers = 0;
+    dom.navigator.mediaDevices.getUserMedia = (async () => { const t = tracks[mic++]; return { getTracks: () => [t], getAudioTracks: () => [t] }; }) as unknown as typeof previousMic;
+    ReviewPeer.barrier = (peer, step) => peer === ReviewPeer.all[0] ? pause(step) : Promise.resolve();
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      if (String(url) !== "https://api.openai.com/v1/realtime/calls") return previousFetch(url as string, init);
+      if (++offers > 1) return new Response("v=0 next answer");
+      await pause("offer-response");
+      const response = new Response("v=0 old answer");
+      response.text = async () => { await pause("answer-body"); return "v=0 old answer"; };
+      return response;
+    }) as typeof fetch;
+    try {
+      tokenAnswer = async () => Response.json({ provider: "openai", token: "fixture" });
+      const first = current.start(); await atBarrier; const oldPeer = ReviewPeer.all[0]; audio();
+      expect(await current.stop()).toBe("recovered tail"); expect(tracks[0].stops).toBe(1);
+      await current.start(); const next = ReviewPeer.all[1];
+      expect(oldPeer.closed).toBe(true); expect(next.closed).toBe(false); expect(tracks[1].stops).toBe(0);
+      release(); await first; await tick();
+      expect(next.closed).toBe(false); expect(tracks[1].stops).toBe(0);
+      const stopped = current.stop(); completed(next); completed(next);
+      expect(await stopped).toBe("new words"); expect(next.closed).toBe(true); expect(next.channel.closed).toBe(true);
+      expect(tracks[1].stops).toBe(1); expect(unclaimed).toEqual([]);
+    } finally { release(); globalThis.fetch = previousFetch; dom.navigator.mediaDevices.getUserMedia = previousMic; }
+  }),
+);
+
+
+test("ElevenLabs queue overflow records its bound and stops explicitly", async () => {
+  mount(); tokenAnswer = async () => Response.json({ provider: "elevenlabs", token: "fixture" });
+  await current.start(); const ws = Socket.latest!; audio(1920000); audio();
+  expect(traces.at(-1)).toMatchObject({ capturedSamples: 1921600, bufferedSamples: 1920000,
+    peakBufferedSamples: 1920000, sentSamples: 0, outcome: "incomplete" });
+  expect(errors).toHaveLength(1); expect(ws.readyState).toBe(3);
+});
+
+test("ElevenLabs failed send counts captured samples without claiming they were sent", async () => {
+  mount(); tokenAnswer = async () => Response.json({ provider: "elevenlabs", token: "fixture" });
+  await current.start(); const ws = Socket.latest!; ws.open(); ws.send = () => { throw new Error("fixture send failed"); }; audio();
+  expect(traces.at(-1)).toMatchObject({ capturedSamples: 1600, sentSamples: 0, closeReason: "error", outcome: "incomplete" });
+  expect(errors).toHaveLength(1);
+});
+
+test.each(["refused", "deadline"])("OpenAI %s connection checkpoints survive batch recovery", mode => withReviewPeer(async () => {
+  mount(); const previousFetch = globalThis.fetch; let release!: (r: Response) => void;
+  let entered!: () => void; const offered = new Promise<void>(r => { entered = r; });
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (String(url) !== "https://api.openai.com/v1/realtime/calls") return previousFetch(url as string, init);
+    entered(); return mode === "refused" ? new Response(null, { status: 503 }) : new Promise<Response>(r => { release = r; });
+  }) as typeof fetch;
+  try {
+    tokenAnswer = async () => Response.json({ provider: "openai", token: "fixture" });
+    const started = current.start(); await offered; audio();
+    if (mode === "deadline") await advance(10000);
+    await started; expect(await current.stop()).toBe("recovered tail");
+    expect(traces.at(-1)).toMatchObject({ capturedSamples: 1600, sentSamples: 0, commits: 1,
+      connectOutcome: mode === "deadline" ? "deadline" : "error", connectMs: mode === "deadline" ? 10000 : 0,
+      batchOutcome: "ok", outcome: "complete" });
+    if (release) { release(new Response("v=0 late answer")); await tick(); }
+    expect(ReviewPeer.all[0].closed).toBe(true);
+  } finally { globalThis.fetch = previousFetch; }
+}));
+
+test("OpenAI unmount stops only its owned peer, microphone and sample observer", () => withReviewPeer(async () => {
+  mount(); const previousFetch = globalThis.fetch; const previousMic = dom.navigator.mediaDevices.getUserMedia;
+  const owned = { enabled: true, stops: 0, stop() { this.stops++; } };
+  dom.navigator.mediaDevices.getUserMedia = (async () => ({ getTracks: () => [owned], getAudioTracks: () => [owned] })) as unknown as typeof previousMic;
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => String(url) === "https://api.openai.com/v1/realtime/calls"
+    ? new Response("v=0 answer") : previousFetch(url as string, init)) as typeof fetch;
+  try {
+    tokenAnswer = async () => Response.json({ provider: "openai", token: "fixture" });
+    await current.start(); audio(); const peer = ReviewPeer.all[0];
+    flushSync(() => root!.unmount()); root = undefined;
+    expect(peer.closed).toBe(true); expect(peer.channel.closed).toBe(true); expect(owned.stops).toBe(1);
+    expect(traces.at(-1)).toMatchObject({ capturedSamples: 1600, sentSamples: 1600, outcome: "discarded" });
+    const snapshot = traces.at(-1); audio(); completed(peer); expect(traces.at(-1)).toEqual(snapshot);
+  } finally { globalThis.fetch = previousFetch; dom.navigator.mediaDevices.getUserMedia = previousMic; }
+}));
+
+
+test("ElevenLabs queue flushing counts only frames accepted before a failed send", async () => {
+  mount(); tokenAnswer = async () => Response.json({ provider: "elevenlabs", token: "fixture" });
+  await current.start(); const ws = Socket.latest!; audio(); audio();
+  const send = ws.send.bind(ws); let calls = 0;
+  ws.send = data => { if (++calls === 2) throw new Error("fixture send failed"); send(data); };
+  ws.open();
+  expect(traces.at(-1)).toMatchObject({ capturedSamples: 3200, sentSamples: 1600, bufferedSamples: 1600,
+    peakBufferedSamples: 3200, closeReason: "error", outcome: "incomplete" });
+  expect(errors).toHaveLength(1);
+});
+
+
+test("a delayed ElevenLabs close records its own code while the next socket keeps recording", async () => {
+  mount(); tokenAnswer = async () => Response.json({ provider: "elevenlabs", token: "fixture" });
+  await current.start(); const old = Socket.latest!; old.open(); audio();
+  expect(await current.stop()).toBe(""); const oldId = traces.at(-1)!.id;
+  await current.start(); const next = Socket.latest!; next.open(); audio();
+  old.dispatchEvent(Object.assign(new Event("close"), { code: 1000, reason: "untrusted reason" }));
+  expect(traces.at(-1)).toMatchObject({ id: oldId, closeCode: 1000, closeReason: "normal", capturedSamples: 1600 });
+  expect(next.readyState).toBe(Socket.OPEN); next.emit({ message_type: "committed_transcript", text: "next words" });
+  expect(await current.stop()).toBe(""); expect(commits).toEqual(["next words"]);
+  expect(traces.at(-1)!.id).not.toBe(oldId);
+});
+
+
+test.each([false, true])("OpenAI Stop retains one waiter and reports commit send errors (sendError=%s)", sendError => withReviewPeer(async () => {
+  mount(); const previousFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => String(url) === "https://api.openai.com/v1/realtime/calls"
+    ? new Response("v=0 answer") : previousFetch(url as string, init)) as typeof fetch;
+  try {
+    tokenAnswer = async () => Response.json({ provider: "openai", token: "fixture" });
+    await current.start(); const peer = ReviewPeer.all[0]; audio();
+    if (sendError) peer.channel.send = () => { throw new Error("fixture send failed"); };
+    const first = current.stop(); const second = current.stop();
+    if (!sendError) completed(peer);
+    expect(await Promise.all([first, second])).toEqual([sendError ? null : "new words", null]);
+    expect(errors).toHaveLength(sendError ? 1 : 0);
+    expect(traces.at(-1)).toMatchObject({ drainOutcome: sendError ? "error" : "ok", outcome: sendError ? "incomplete" : "complete" });
+  } finally { globalThis.fetch = previousFetch; }
+}));

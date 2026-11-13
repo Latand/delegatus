@@ -44,7 +44,19 @@ session keeps recording for batch. Those live transports cannot replay the
 early PCM. The handoff checks the buffer again after connection setup; audio
 captured during an OpenAI offer also stays with the batch owner. Retiring that
 connection preserves the microphone tracks. A handoff is admitted only before
-the first captured sample.
+the first captured sample. Pending OpenAI offers are cancelled when their capture
+ends, and an offer checks its recording generation before installing a peer. A late answer can close only the peer that requested it.
+
+After handoff, ElevenLabs counts PCM samples as frames are captured and passed
+to its socket, including queued frames flushed on open. OpenAI retains the
+early capture processor solely as a counter, with no PCM retained: captured
+samples are counted while recording, and sent samples count input offered to
+the connected WebRTC peer. WebRTC owns encoding and packetization, so this
+count does not prove delivery to the provider. Both paths record connection
+time/outcome, unique completed OpenAI items or ElevenLabs final events, draft
+commits, normalized closure and applicable deadlines. Counter observation ends
+at Stop, discard, disconnect or unmount. An OpenAI Stop deadline marks the
+result incomplete and keeps recovered text in the draft for review.
 
 Soniox Stop sends end of input and keeps the socket callbacks alive for up to
 eight seconds. Endpoint-final segments enter the draft once; `finished` also

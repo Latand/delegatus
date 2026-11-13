@@ -23,7 +23,7 @@ import {
   reduceOpenAiTranscript,
   type OpenAiTranscript,
 } from "@/lib/transcribe/openaiLive";
-import { DictationSession, DICTATION_TOKEN_MS } from "@/lib/transcribe/dictationSession";
+import { DictationSession, DICTATION_BUFFER_SAMPLES, DICTATION_CONNECT_MS, DICTATION_TOKEN_MS } from "@/lib/transcribe/dictationSession";
 import { newDictationTrace, publishDictationTrace, type DictationTrace } from "@/lib/transcribe/dictationTrace";
 
 /* Re-exported so existing importers (MicButton and friends) keep resolving
@@ -51,7 +51,7 @@ const LIVE_WS_URL = "wss://api.elevenlabs.io/v1/speech-to-text/realtime";
 const OPENAI_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 /* The whole connect (offer, answer, data channel open) must finish within
    this, or the press records and transcribes the clip instead. */
-const OPENAI_CONNECT_MS = 10_000;
+const OPENAI_CONNECT_MS = DICTATION_CONNECT_MS;
 
 /* Single-use realtime tokens are minted for free, so one can be requested
    the moment a recording looks likely (composer focus, mic hover) and spent
@@ -187,8 +187,11 @@ interface LiveSession {
   stream: MediaStream;
   /* ElevenLabs audio frames captured while its socket opens. Soniox's
      bounded capture, connection and drain are owned by DictationSession. */
-  preOpenQueue: string[];
+  preOpenQueue: Array<{ frame: string; samples: number }>;
   partial: string;
+  trace: DictationTrace;
+  connectTimer: number | null;
+  connectBegan: number;
 }
 
 /** An OpenAI live session: the microphone on a peer connection, its events on one data channel. */
@@ -201,17 +204,24 @@ interface OpenAiSession {
   committed: string | null;
   stopping: boolean;
   deadline: number | null;
+  trace: DictationTrace;
+  capture: DictationSession;
 }
 
 /** Offers the microphone to OpenAI with the client secret and resolves once the data channel is open, or null on any failure. */
-async function connectOpenAiLive(stream: MediaStream, minted: LiveToken): Promise<{ pc: RTCPeerConnection; channel: RTCDataChannel } | null> {
+async function connectOpenAiLive(stream: MediaStream, minted: LiveToken, signal: AbortSignal, trace: DictationTrace): Promise<{ pc: RTCPeerConnection; channel: RTCDataChannel } | null> {
+  const began = Date.now();
+  trace.connectOutcome = "pending";
   let pc: RTCPeerConnection;
   try {
     pc = new RTCPeerConnection();
   } catch {
-    return null;
+    trace.connectOutcome = "error"; trace.connectMs = Date.now() - began;
+    publishDictationTrace(trace); return null;
   }
   const abort = new AbortController();
+  let cancelled: (() => void) | undefined;
+  let timedOut = false;
   let timer: number | null = null;
   try {
     const channel = pc.createDataChannel("oai-events");
@@ -220,9 +230,14 @@ async function connectOpenAiLive(stream: MediaStream, minted: LiveToken): Promis
       channel.addEventListener("open", () => resolve(), { once: true });
       channel.addEventListener("close", () => reject(new Error("closed")), { once: true });
     });
+    // A close can precede the SDP answer and therefore the await below.
+    void opened.catch(() => undefined);
+    const assertCurrent = () => { signal.throwIfAborted(); abort.signal.throwIfAborted(); };
     const connect = (async () => {
       const offer = await pc.createOffer();
+      assertCurrent();
       await pc.setLocalDescription(offer);
+      assertCurrent();
       if (minted.authority !== tokenAuthority) throw new Error("authority changed");
       const response = await fetch(OPENAI_CALLS_URL, {
         method: "POST",
@@ -230,19 +245,33 @@ async function connectOpenAiLive(stream: MediaStream, minted: LiveToken): Promis
         headers: { authorization: `Bearer ${minted.token}`, "content-type": "application/sdp" },
         signal: abort.signal,
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      await pc.setRemoteDescription({ type: "answer", sdp: await response.text() });
+      assertCurrent();
+      if (!response.ok) throw new Error("Offer refused");
+      const sdp = await response.text();
+      assertCurrent();
+      await pc.setRemoteDescription({ type: "answer", sdp });
+      assertCurrent();
       await opened;
+      assertCurrent();
     })();
-    const deadline = new Promise<never>((_, reject) => { timer = window.setTimeout(() => reject(new Error("timeout")), OPENAI_CONNECT_MS); });
-    await Promise.race([connect, deadline]);
+    const deadline = new Promise<never>((_, reject) => { timer = window.setTimeout(() => { timedOut = true; reject(new Error("timeout")); }, OPENAI_CONNECT_MS); });
+    const cancellation = new Promise<never>((_, reject) => {
+      cancelled = () => { abort.abort(); reject(new Error("Retired connection")); };
+      if (signal.aborted) cancelled(); else signal.addEventListener("abort", cancelled, { once: true });
+    });
+    await Promise.race([connect, deadline, cancellation]);
+    trace.connectOutcome = "ok";
     return { pc, channel };
   } catch {
+    trace.connectOutcome = timedOut ? "deadline" : "error";
     abort.abort();
     try { pc.close(); } catch { /* already closed */ }
     return null;
   } finally {
     if (timer !== null) window.clearTimeout(timer);
+    if (cancelled) signal.removeEventListener("abort", cancelled);
+    trace.connectMs = Date.now() - began;
+    publishDictationTrace(trace);
   }
 }
 
@@ -319,6 +348,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
   const rtcRef = useRef<OpenAiSession | null>(null);
   const captureRef = useRef<DictationSession | null>(null);
   const traceRef = useRef<DictationTrace | null>(null);
+  const connectingRef = useRef<{ capture: DictationSession; abort: AbortController } | null>(null);
   const stopWaitersRef = useRef<Array<(text: string | null) => void>>([]);
   const discardRef = useRef(false);
   const timerRef = useRef<number | null>(null);
@@ -405,6 +435,8 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     const live = liveRef.current;
     liveRef.current = null;
     if (!live) return;
+    if (live.connectTimer !== null) window.clearTimeout(live.connectTimer);
+    live.processor.onaudioprocess = null;
     try {
       live.processor.disconnect();
     } catch {
@@ -423,6 +455,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     const session = rtcRef.current;
     rtcRef.current = null;
     if (!session) return;
+    session.capture.stopObservation();
     if (session.deadline !== null) window.clearTimeout(session.deadline);
     try { session.channel.close(); } catch { /* already closed */ }
     try { session.pc.close(); } catch { /* already closed */ }
@@ -432,7 +465,12 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
   /* Ends a live session and hands the uncommitted tail to whoever waits for
      it: the pending stop() resolver, or onUnclaimedText for the auto-stop.
      Committed segments are already in the draft via onLiveCommit. */
-  const finishLive = (live: LiveSession) => {
+  const finishLive = (live: LiveSession, dropped = false) => {
+    if (liveRef.current !== live) return;
+    live.trace.closeReason = live.trace.closeReason === "none" ? "normal" : live.trace.closeReason;
+    if (live.trace.connectOutcome === "pending") {
+      live.trace.connectOutcome = "error"; live.trace.connectMs = Date.now() - live.connectBegan;
+    }
     stopTimer();
     stopMeter();
     teardownLive();
@@ -444,10 +482,11 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       resolvePending?.(null);
       return;
     }
-    finishTrace();
     const tail = live.partial.trim();
-    if (resolvePending) resolvePending(tail);
-    else if (tail) onUnclaimedText(tail);
+    if (tail) live.trace.commits++;
+    finishTrace(dropped ? "incomplete" : "complete");
+    if (resolvePending && !dropped) resolvePending(tail);
+    else { if (tail) onUnclaimedText(tail); resolvePending?.(null); }
   };
 
   useEffect(() => {
@@ -457,6 +496,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       stopMeter();
       clearCapHold();
       discardRef.current = true;
+      connectingRef.current?.abort.abort();
       teardownLive();
       teardownOpenAi();
       captureRef.current?.discard();
@@ -466,7 +506,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     };
   }, []);
 
-  const startElevenLabsLive = (stream: MediaStream, token: string): boolean => {
+  const startElevenLabsLive = (stream: MediaStream, token: string, trace: DictationTrace): boolean => {
     let ctx: AudioContext;
     try {
       ctx = new AudioContext({ sampleRate: LIVE_SAMPLE_RATE });
@@ -484,9 +524,21 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     for (const language of TRANSCRIPTION_LANGUAGES) {
       if (language !== transcriptionLanguage(locale)) params.append("secondary_languages", language);
     }
-    const ws = new WebSocket(`${LIVE_WS_URL}?${params.toString()}`);
+    const began = Date.now();
+    trace.connectOutcome = "pending"; trace.sampleRate = ctx.sampleRate;
+    let ws: WebSocket;
+    try { ws = new WebSocket(`${LIVE_WS_URL}?${params.toString()}`); }
+    catch {
+      trace.connectOutcome = "error"; trace.connectMs = Date.now() - began;
+      void ctx.close().catch(() => undefined); publishDictationTrace(trace); return false;
+    }
     const processor = ctx.createScriptProcessor(4096, 1, 1);
-    const live: LiveSession = { ws, ctx, processor, stream, preOpenQueue: [], partial: "" };
+    const live: LiveSession = { ws, ctx, processor, stream, preOpenQueue: [], partial: "", trace, connectTimer: null, connectBegan: began };
+    live.connectTimer = window.setTimeout(() => {
+      if (liveRef.current !== live) return;
+      trace.connectOutcome = "deadline"; trace.connectMs = Date.now() - began;
+      onError(t("dictation.connectionLost")); finishLive(live, true);
+    }, OPENAI_CONNECT_MS);
     liveRef.current = live;
 
     const source = ctx.createMediaStreamSource(stream);
@@ -494,20 +546,39 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       if (liveRef.current !== live) return;
       const open = ws.readyState === WebSocket.OPEN;
       if (!open && ws.readyState !== WebSocket.CONNECTING) return;
+      const input = event.inputBuffer.getChannelData(0);
+      trace.capturedSamples += input.length;
       const frame = JSON.stringify({
         message_type: "input_audio_chunk",
-        audio_base_64: float32ToBase64Pcm16(event.inputBuffer.getChannelData(0)),
+        audio_base_64: float32ToBase64Pcm16(input),
       });
-      if (open) ws.send(frame);
-      else live.preOpenQueue.push(frame);
+      try {
+        if (open) { ws.send(frame); trace.sentSamples += input.length; }
+        else {
+          if (trace.bufferedSamples + input.length > DICTATION_BUFFER_SAMPLES) {
+            onError(t("dictation.bufferLimit")); finishLive(live, true); return;
+          }
+          live.preOpenQueue.push({ frame, samples: input.length });
+          trace.bufferedSamples += input.length;
+          trace.peakBufferedSamples = Math.max(trace.peakBufferedSamples, trace.bufferedSamples);
+        }
+      } catch { trace.closeReason = "error"; onError(t("dictation.connectionLost")); finishLive(live, true); }
     };
     source.connect(processor);
     processor.connect(ctx.destination);
 
     ws.addEventListener("open", () => {
       if (liveRef.current !== live) return;
-      for (const chunk of live.preOpenQueue) ws.send(chunk);
-      live.preOpenQueue = [];
+      if (live.connectTimer !== null) window.clearTimeout(live.connectTimer);
+      live.connectTimer = null;
+      trace.connectOutcome = "ok"; trace.connectMs = Date.now() - began;
+      try {
+        for (const chunk of live.preOpenQueue) {
+          ws.send(chunk.frame); trace.sentSamples += chunk.samples; trace.bufferedSamples -= chunk.samples;
+        }
+        live.preOpenQueue = [];
+      } catch { trace.closeReason = "error"; onError(t("dictation.connectionLost")); finishLive(live, true); }
+      publishDictationTrace(trace);
     });
 
     ws.addEventListener("message", (event) => {
@@ -522,6 +593,8 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
         ) {
           /* Straight into the draft, mid-recording. */
           live.partial = "";
+          trace.finalSegments++; trace.commits++;
+          publishDictationTrace(trace);
           onLiveCommit(msg.text, transcriptionResult(msg.text, [msg.language_code], locale).language ?? transcriptionLanguage(locale));
         } else if (
           msg.message_type === "auth_error" ||
@@ -529,8 +602,9 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
           msg.message_type === "invalid_request" ||
           msg.message_type === "quota_exceeded"
         ) {
-          onError(msg.error || t("dictation.liveError"));
-          finishLive(live);
+          trace.closeReason = "error";
+          onError(t("dictation.liveError"));
+          finishLive(live, true);
           return;
         }
         setLiveText(live.partial);
@@ -539,11 +613,22 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       }
     });
 
-    ws.addEventListener("close", () => {
+    ws.addEventListener("error", () => {
+      if (liveRef.current !== live) return;
+      trace.closeReason = "error";
+      if (trace.connectOutcome === "pending") { trace.connectOutcome = "error"; trace.connectMs = Date.now() - began; }
+      onError(t("dictation.connectionLost")); finishLive(live, true);
+    });
+    ws.addEventListener("close", event => {
+      trace.closeCode = event.code;
+      if (trace.closeReason !== "error") trace.closeReason = event.code === 1000 ? "normal" : "abnormal";
+      if (trace.connectOutcome === "pending") { trace.connectOutcome = "error"; trace.connectMs = Date.now() - began; }
+      publishDictationTrace(trace);
+      if (liveRef.current !== live) return;
       /* Unexpected drop mid-recording: keep what was already transcribed. */
       if (liveRef.current === live && !pendingRef.current) {
         onError(t("dictation.connectionLost"));
-        finishLive(live);
+        finishLive(live, true);
       }
     });
 
@@ -566,11 +651,14 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       resolvePending?.(null);
       return;
     }
-    finishTrace(dropped ? "incomplete" : "complete");
     const text = openAiTranscriptText(session.heard).trim();
+    if (text) session.trace.commits += session.heard.items.filter(item => item.text).length;
+    if (session.trace.drainOutcome === "pending") session.trace.drainOutcome = dropped ? "error" : "ok";
+    if (session.trace.closeReason === "none") session.trace.closeReason = dropped ? "abnormal" : "normal";
+    finishTrace(dropped ? "incomplete" : "complete");
     if (text) {
-      if (resolvePending) resolvePending(text);
-      else onUnclaimedText(text);
+      if (resolvePending && !dropped) resolvePending(text);
+      else { onUnclaimedText(text); resolvePending?.(null); }
       return;
     }
     if (!dropped) onError(t("dictation.silence"));
@@ -581,41 +669,56 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
   const stopOpenAi = (session: OpenAiSession) => {
     if (session.stopping) return;
     session.stopping = true;
+    session.capture.stopObservation();
+    session.trace.drainOutcome = "pending";
+    publishDictationTrace(session.trace);
     stopTimer();
     stopMeter();
     setPhase("busy");
     try {
       session.channel.send(JSON.stringify(openAiCommitEvent()));
     } catch {
+      session.trace.closeReason = "error"; onError(t("dictation.tailMissing"));
       finishOpenAi(session, true);
       return;
     }
     session.stream.getAudioTracks().forEach((track) => { track.enabled = false; });
-    session.deadline = window.setTimeout(() => finishOpenAi(session), OPENAI_TRANSCRIPTION_STOP_MS);
+    session.deadline = window.setTimeout(() => {
+      session.trace.drainOutcome = "deadline";
+      onError(t("dictation.tailMissing")); finishOpenAi(session, true);
+    }, OPENAI_TRANSCRIPTION_STOP_MS);
   };
 
-  const startOpenAiLive = async (stream: MediaStream, minted: LiveToken): Promise<boolean> => {
-    const connected = await connectOpenAiLive(stream, minted);
+  const startOpenAiLive = async (stream: MediaStream, minted: LiveToken, capture: DictationSession, trace: DictationTrace, generation: number, signal: AbortSignal): Promise<boolean> => {
+    const connected = await connectOpenAiLive(stream, minted, signal, trace);
     if (!connected) return false;
-    if (!mountedRef.current || discardRef.current) {
+    if (!mountedRef.current || discardRef.current || signal.aborted || startGenerationRef.current !== generation || captureRef.current !== capture || !capture.active) {
+      try { connected.channel.close(); } catch { /* already closed */ }
       try { connected.pc.close(); } catch { /* already closed */ }
       return false;
     }
-    const session: OpenAiSession = { ...connected, stream, heard: { items: [] }, committed: null, stopping: false, deadline: null };
+    const session: OpenAiSession = { ...connected, stream, heard: { items: [] }, committed: null, stopping: false, deadline: null, capture, trace };
     rtcRef.current = session;
     connected.channel.addEventListener("message", (event) => {
       if (rtcRef.current !== session) return;
       let value: unknown;
       try { value = JSON.parse(String(event.data)); } catch { return; }
       const message = value as { type?: unknown; item_id?: unknown };
-      session.heard = reduceOpenAiTranscript(session.heard, value);
+      const previous = session.heard;
+      session.heard = reduceOpenAiTranscript(previous, value);
+      if (message.type === "conversation.item.input_audio_transcription.completed" && session.heard !== previous) {
+        trace.finalSegments++; publishDictationTrace(trace);
+      }
       setLiveText(openAiTranscriptText(session.heard));
       if (message.type === "input_audio_buffer.committed" && typeof message.item_id === "string") session.committed = message.item_id;
       if (!session.stopping) return;
       const done = message.type === "conversation.item.input_audio_transcription.completed"
         && (session.committed === null || message.item_id === session.committed);
       /* An error once the turn is committed (an empty buffer, a refused turn) leaves nothing more to wait for. */
-      if (done || message.type === "error") finishOpenAi(session);
+      if (message.type === "error") {
+        trace.closeReason = "error"; onError(t("dictation.silence")); finishOpenAi(session, true);
+      }
+      else if (done) finishOpenAi(session);
     });
     const lost = () => {
       if (rtcRef.current !== session) return;
@@ -627,11 +730,6 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     connected.pc.addEventListener("connectionstatechange", () => { if (connected.pc.connectionState === "failed") lost(); });
     return true;
   };
-
-  /** Picks the socket that matches the token the server handed out. */
-  const startLive = (stream: MediaStream, minted: LiveToken): boolean | Promise<boolean> =>
-    minted.provider === "openai" ? startOpenAiLive(stream, minted)
-      : startElevenLabsLive(stream, minted.token);
 
   const start = async () => {
     /* getUserMedia can hang on a permission prompt; a second tap during that
@@ -671,6 +769,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
         busy: () => { stopTimer(); stopMeter(); if (mountedRef.current) setPhase("busy"); },
         done: (text, issue) => {
           if (captureRef.current !== capture) return;
+          if (connectingRef.current?.capture === capture) connectingRef.current.abort.abort();
           captureRef.current = null;
           if (startGenerationRef.current === generation) startingRef.current = false;
           stopTimer(); stopMeter();
@@ -722,11 +821,20 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
         // owner and use the existing batch route if any audio already arrived.
         if (trace.capturedSamples) { capture.useBatch(); return; }
         trace.provider = token.provider; trace.path = "live";
-        const started = await startLive(stream, token);
-        if (!mountedRef.current || discardRef.current || captureRef.current !== capture) {
-          teardownOpenAi(); teardownLive(); return;
-        }
-        if (started && capture.release()) captureRef.current = null;
+        const connection = { capture, abort: new AbortController() };
+        connectingRef.current = connection;
+        const started = token.provider === "openai"
+          ? await startOpenAiLive(stream, token, capture, trace, generation, connection.abort.signal)
+          : startElevenLabsLive(stream, token.token, trace);
+        if (connectingRef.current === connection) connectingRef.current = null;
+        if (!mountedRef.current || discardRef.current || captureRef.current !== capture || startGenerationRef.current !== generation) return;
+        if (started && capture.release(token.provider === "openai" ? count => {
+          const session = rtcRef.current;
+          if (session?.capture !== capture || session.stopping) return;
+          trace.capturedSamples += count;
+          // WebRTC owns packetization: count samples offered to the connected peer.
+          if (session.pc.connectionState === "connected") trace.sentSamples += count;
+        } : undefined)) captureRef.current = null;
         else {
           // Audio can arrive while OpenAI's asynchronous connection opens.
           // Retire the new transport without stopping the capture's tracks.
@@ -769,6 +877,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       const session = rtcRef.current;
       if (session) {
         /* OpenAI transcribes the committed turn: this resolves once its transcript arrives, or at the deadline. */
+        if (session.stopping) { resolve(null); return; }
         pendingRef.current = resolve;
         stopOpenAi(session);
         return;
@@ -779,6 +888,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
 
   const discard = () => {
     discardRef.current = true;
+    connectingRef.current?.abort.abort();
     captureRef.current?.discard();
     finishTrace("discarded");
     if (liveRef.current) finishLive(liveRef.current);

@@ -261,11 +261,19 @@ export class DictationSession {
     this.callbacks.done(text, this.limit && text !== null ? "buffer" : issue);
   }
   /** Retire the early capture when handing ownership to another live provider. */
-  release(): boolean {
+  release(observe?: (samples: number) => void): boolean {
     if (!this.active || this.trace.capturedSamples) return false;
-    this.ended = true; this.processor.onaudioprocess = null; this.processor.disconnect(); this.source.disconnect();
-    void this.ctx.close().catch(() => undefined); this.chunks = [];
+    this.ended = true; this.chunks = [];
+    if (observe) this.processor.onaudioprocess = event => observe(event.inputBuffer.getChannelData(0).length);
+    else this.stopObservation();
     return true;
+  }
+  /** End the counter-only observation retained by a WebRTC handoff. */
+  stopObservation(): void {
+    // A refused handoff leaves the same processor recording the batch clip.
+    if (!this.ended) return;
+    this.processor.onaudioprocess = null; this.processor.disconnect(); this.source.disconnect();
+    void this.ctx.close().catch(() => undefined);
   }
   discard(): void {
     if (this.ended) return;
