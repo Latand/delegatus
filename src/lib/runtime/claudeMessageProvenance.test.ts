@@ -249,3 +249,38 @@ test("seat inbox preserves a seat mandate's own provenance inside a combined inp
   expect(map["batch-mandate-uuid"]?.parts?.[0]!.provenance.mandate).toEqual({ kind: "version", version: 44 });
   expect(map["batch-mandate-uuid"]?.parts?.[1]!.provenance.mandate).toBeUndefined();
 });
+
+
+test("native result-only evidence preserves original authorship without allocating a shared canonical UUID", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-provenance-"));
+  tmpDirs.push(directory);
+  const transcript = path.join(directory, `${SESSION_ID}.jsonl`);
+  const ledger = new FileClaudeDeliveryLedger(path.join(directory, "ledger"));
+  const inputUuids = [1, 2].map(ordinal => `00000000-0000-4000-8000-${String(ordinal).padStart(12, "0")}`);
+  for (const [index, text] of ["first follow-up", "second follow-up"].entries()) {
+    await ledger.recordNativeIntent(SESSION_ID, { id: `original-${index}`, text,
+      origin: { kind: "operator" }, selectedContext: REFERENCE }, index ? "queued-next-turn" : "turn-started", {
+      version: 1, sessionId: SESSION_ID, writerId: ["00000000", "0000", "4000", "8000", "000000000021"].join("-"),
+      process: { pid: 4100, startIdentity: "4100:fixture" }, inputUuid: inputUuids[index]!, intent: "may-have-written",
+    });
+  }
+  await ledger.confirmNativeResult(SESSION_ID, {
+    version: 1, sessionId: SESSION_ID, writerId: ["00000000", "0000", "4000", "8000", "000000000021"].join("-"), process: { pid: 4100, startIdentity: "4100:fixture" },
+    resultUuid: ["00000000", "0000", "4000", "8000", "000000000030"].join("-"), inputUuids, turnId: "original-0", status: "completed",
+  });
+  const user = { type: "user", sessionId: SESSION_ID, uuid: inputUuids[1], mergedSendUuids: [inputUuids[0]],
+    message: { role: "user", content: [{ type: "text", text: "first follow-up\n" }, { type: "text", text: "second follow-up" }] } };
+  fs.writeFileSync(transcript, JSON.stringify(user) + "\n");
+  const { readClaudeTranscriptUsers } = await import("./claudeStreamBrokerHost");
+  const { nativeTranscriptMembers } = await import("./claudeNativeDelivery");
+  const canonical = readClaudeTranscriptUsers(transcript)[0]!;
+  const members = nativeTranscriptMembers(ledger.load(SESSION_ID), canonical, SESSION_ID)!;
+  expect(members.map(state => state.entry.id)).toEqual(["original-0", "original-1"]);
+  expect(members.every(state => state.entry.origin?.kind === "operator")).toBe(true);
+  for (const member of members) expect(member.entry.selectedContext).toEqual(REFERENCE);
+  expect(claudeMessageProvenance(transcript, { ledger, registrySnapshot: () => emptySnapshot() })).toEqual({});
+  for (const mutation of [{ sessionId: "wrong-session" }, { prompt: false }, { mergedSendUuids: [inputUuids[1]!] }, { nativeIdentityInvalid: true }]) {
+    expect(nativeTranscriptMembers(ledger.load(SESSION_ID), { ...canonical, ...mutation }, SESSION_ID)).toBeNull();
+  }
+  expect(ledger.load(SESSION_ID).map(state => state.engineMessageId ?? null)).toEqual([null, null]);
+});

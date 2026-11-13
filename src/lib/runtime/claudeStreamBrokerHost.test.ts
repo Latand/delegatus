@@ -5096,3 +5096,316 @@ test("large Write inputs retain previews while the durable event keeps complete 
     } finally { await stream.return?.(); }
   } finally { await host.release(); }
 });
+
+
+describe("native evidence with admission contained", () => {
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000000020"].join("-");
+  const resultUuid = (ordinal: number) => `00000000-0000-4000-9000-${String(ordinal).padStart(12, "0")}`;
+  async function openNative(directory: string, change?: (options: ClaudeStreamBrokerHostOptions, ledger: FileClaudeDeliveryLedger, child: FakeClaude) => void) {
+    const child = new FakeClaude(new RecordingDeliveryLedger());
+    const ledger = new FileClaudeDeliveryLedger(path.join(directory, "ledger"));
+    const store = new FileRuntimeEventStore(path.join(directory, "events"));
+    const options: ClaudeStreamBrokerHostOptions = { cwd: directory, sessionId, deliveryLedger: ledger, eventStore: store,
+      readTranscript: () => [], env: { NODE_ENV: "test" },
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version: "2.1.323" }),
+      processIdentity: () => "5150:fixture", signalProcess: (_pid, signal) => { child.kill(signal); },
+      captureProcessTree: () => ({ identities: [{ pid: child.pid, startIdentity: "5150:fixture" }], unresolved: [] }),
+      spawnProcess: fakeSpawn(child, {}),
+    };
+    change?.(options, ledger, child);
+    return { host: await ClaudeStreamBrokerHost.start(options), child, ledger, store };
+  }
+  async function until(check: () => boolean) {
+    for (let i = 0; i < 1000 && !check(); i++) await Bun.sleep(1);
+    expect(check()).toBe(true);
+  }
+  const users = (child: FakeClaude) => child.inputs.filter(frame => frame.type === "user");
+  const echo = (child: FakeClaude, input: Record<string, unknown>) => child.emitJson({ ...input, isReplay: true });
+  const result = (child: FakeClaude, inputUuids: unknown[], ordinal: number) => child.emitJson({ type: "result", session_id: sessionId,
+    uuid: resultUuid(ordinal), subtype: "success", user_message_uuid: inputUuids.at(-1), user_message_uuids: inputUuids });
+
+  test.each([false, true])("early queued echo retains its own next result (missing initial echo: %s)", async (missingEcho) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-early-"));
+    const { host, child, ledger, store } = await openNative(directory);
+    const entries = ["decision", "follow-up-one", "follow-up-two"].map(id => ({ id, text: `fixture ${id}` }));
+    try {
+      const a = host.send(entries[0]!); void a.catch(() => {});
+      await until(() => users(child).length === 1);
+      if (!missingEcho) { echo(child, users(child)[0]!); expect(await a).toMatchObject({ turnId: entries[0]!.id }); }
+      const b = host.send(entries[1]!); void b.catch(() => {});
+      await until(() => users(child).length === 2);
+      echo(child, users(child)[1]!);
+      await until(() => Boolean(ledger.load(sessionId)[1]?.nativeConsumed));
+      expect(ledger.load(sessionId)[1]?.delivered).toBe(false);
+      expect(await host.send(entries[2]!)).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      result(child, [users(child)[0]!.uuid], 1);
+      expect(await a).toMatchObject({ turnId: entries[0]!.id });
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-ended"));
+      expect(await host.health()).toMatchObject({ activeTurnRef: entries[1]!.id, status: "active" });
+      // A repeated old result must never close B.
+      result(child, [users(child)[0]!.uuid], 1);
+      result(child, [users(child)[1]!.uuid], 2);
+      expect(await b).toMatchObject({ turnId: entries[1]!.id });
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      const c = host.send(entries[2]!); void c.catch(() => {});
+      await until(() => users(child).length === 3);
+      result(child, [users(child)[2]!.uuid], 3);
+      expect(await c).toMatchObject({ turnId: entries[2]!.id });
+      for (const entry of entries) await host.send(entry);
+      expect(users(child)).toHaveLength(3);
+      expect(store.load(sessionId).filter(event => event.kind === "turn-ended").map(event => event.turnId)).toEqual(entries.map(entry => entry.id));
+      expect(ledger.load(sessionId).every(row => row.nativeResult)).toBe(true);
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("one result consumes both written inputs without individual echoes", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-batch-"));
+    const { host, child, ledger, store } = await openNative(directory);
+    try {
+      const a = host.send({ id: "decision", text: "fixture decision" }); void a.catch(() => {});
+      await until(() => users(child).length === 1);
+      const b = host.send({ id: "follow-up", text: "fixture follow-up" }); void b.catch(() => {});
+      await until(() => users(child).length === 2);
+      (host as unknown as { acceptResult(frame: Record<string, unknown>): void }).acceptResult({
+        type: "result", subtype: "success", user_message_uuid: users(child)[0]!.uuid,
+      });
+      expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: "decision" });
+      expect(ledger.load(sessionId).some(row => row.delivered)).toBe(false);
+      result(child, users(child).map(frame => frame.uuid), 1);
+      expect(await Promise.all([a, b])).toEqual([
+        { outcome: "turn-started", turnId: "decision" }, { outcome: "steered", turnId: "decision" },
+      ]);
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      expect(ledger.load(sessionId).map(row => row.nativeResult?.turnId)).toEqual(["decision", "decision"]);
+      expect(store.load(sessionId).filter(event => event.kind === "turn-ended")).toHaveLength(1);
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("authorization and writer claims are rechecked after intent persistence, then zero-byte retry is fenced", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-fence-"));
+    let current = true, calls = 0;
+    const { host, child, ledger } = await openNative(directory, (options, ledger) => {
+      const original = ledger.recordNativeIntent.bind(ledger);
+      ledger.recordNativeIntent = async (...args) => { await original(...args); if (++calls === 1) current = false; };
+    });
+    host.setWriterFence(() => current);
+    try {
+      const entry = { id: "original-operation", text: "fixture instruction" };
+      expect(await host.send(entry)).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(users(child)).toHaveLength(0);
+      expect(ledger.load(sessionId)[0]?.nativeNoWrite).toBe(true);
+      current = true;
+      const sent = host.send(entry); void sent.catch(() => {});
+      await until(() => users(child).length === 1);
+      result(child, [users(child)[0]!.uuid], 1);
+      expect(await sent).toMatchObject({ turnId: entry.id });
+      expect(ledger.load(sessionId)[0]?.nativeNoWrite).toBe(false);
+      expect(users(child)).toHaveLength(1);
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("adoption keeps possibly written inputs fenced and replays a durable missing boundary", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-adopt-"));
+    let active = await openNative(directory);
+    const entry = { id: "original-operation", text: "fixture instruction" };
+    try {
+      const first = active.host.send(entry).catch(() => null);
+      await until(() => users(active.child).length === 1);
+      const originalFrame = users(active.child)[0]!;
+      const uuid = originalFrame.uuid as string;
+      await active.host.release(); await first;
+      active = await openNative(directory);
+      await expect(active.host.send(entry)).rejects.toThrow("uncertain");
+      expect(users(active.child)).toHaveLength(0);
+      echo(active.child, originalFrame);
+      await until(() => active.store.load(sessionId).some(event => event.kind === "item" && (event.item as { uuid?: unknown }).uuid === uuid));
+      expect(active.ledger.load(sessionId)[0]?.nativeConsumed).toBeUndefined();
+      expect(active.ledger.load(sessionId)[0]?.delivered).toBe(false);
+      // The prior process's persisted proof is the only authority for recovery.
+      const input = active.ledger.load(sessionId)[0]!.native!;
+      await active.ledger.confirmNativeResult(sessionId, { ...input, version: 1, resultUuid: resultUuid(1),
+        inputUuids: [uuid], turnId: entry.id, status: "completed" });
+      await active.host.release();
+      active = await openNative(directory);
+      expect(await active.host.send(entry)).toMatchObject({ turnId: entry.id });
+      expect(users(active.child)).toHaveLength(0);
+      expect(active.store.load(sessionId).filter(event => event.kind === "turn-ended" && event.claudeResultUuid === resultUuid(1))).toHaveLength(1);
+    } finally { await active.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+  test.each(["attention", "boundary", "authorization"] as const)("an arriving %s during fsync prevents stdin", async kind => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-arrival-"));
+    let allowed = true;
+    const active = await openNative(directory, (_options, ledger, child) => {
+      const append = ledger.recordNativeIntent.bind(ledger);
+      ledger.recordNativeIntent = async (...args) => {
+        await append(...args);
+        if (kind === "attention") child.emitJson({ type: "control_request", request_id: "fixture-permission",
+          request: { subtype: "can_use_tool", tool_name: "Write", input: {} } });
+        if (kind === "boundary") result(child, [args[3].inputUuid], 1);
+        if (kind === "authorization") allowed = false;
+      };
+    });
+    try {
+      const sending = active.host.send({ id: "original-operation", text: "fixture instruction" }, undefined, () => {
+        if (!allowed) throw new Error("fixture authorization revoked");
+      });
+      if (kind === "authorization") await expect(sending).rejects.toThrow("authorization revoked");
+      else expect(await sending).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(users(active.child)).toHaveLength(0);
+      expect(active.ledger.load(sessionId)[0]?.nativeNoWrite).toBe(true);
+    } finally { await active.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("a cut after proof before its event restores the same boundary once", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-proof-cut-"));
+    let active = await openNative(directory, options => {
+      const store = options.eventStore!;
+      options.eventStore = { load: id => store.load(id), append: (id, event) => {
+        if (event.kind === "turn-ended") throw new Error("fixture event write unavailable");
+        store.append(id, event);
+      } };
+    });
+    const entry = { id: "original-operation", text: "fixture instruction" };
+    try {
+      const sent = active.host.send(entry).catch(() => null);
+      await until(() => users(active.child).length === 1);
+      result(active.child, [users(active.child)[0]!.uuid], 1);
+      await sent;
+      expect(active.ledger.load(sessionId)[0]?.nativeResult?.resultUuid).toBe(resultUuid(1));
+      await active.host.release();
+      for (let iteration = 0; iteration < 2; iteration++) {
+        active = await openNative(directory);
+        expect(await active.host.send(entry)).toMatchObject({ turnId: entry.id });
+        expect(users(active.child)).toHaveLength(0);
+        expect(active.store.load(sessionId).filter(event => event.kind === "turn-ended" && event.claudeResultUuid === resultUuid(1))).toHaveLength(1);
+        await active.host.release();
+      }
+    } finally { await active.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("a partial stdin failure stays fenced after reopening", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-write-cut-"));
+    let active = await openNative(directory);
+    const entry = { id: "original-operation", text: "fixture instruction" };
+    try {
+      const write = active.child.stdin.write.bind(active.child.stdin);
+      active.child.stdin.write = ((...args: Parameters<typeof write>) => {
+        Reflect.apply(write, active.child.stdin, args);
+        throw new Error("fixture partial write");
+      }) as unknown as typeof write;
+      await expect(active.host.send(entry)).rejects.toThrow("stdin failed");
+      expect(users(active.child)).toHaveLength(1);
+      expect(active.ledger.load(sessionId)[0]?.nativeNoWrite).not.toBe(true);
+      await active.host.release();
+      active = await openNative(directory);
+      await expect(active.host.send(entry)).rejects.toThrow("uncertain");
+      expect(users(active.child)).toHaveLength(0);
+    } finally { await active.host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("an observation timeout retains the write fence until exact late proof permits a later input", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-late-"));
+    const attempts: unknown[] = [];
+    const { host, child, ledger } = await openNative(directory, (options, ledger) => {
+      options.requestTimeoutMs = 500;
+      const confirm = ledger.confirmNativeResult.bind(ledger);
+      ledger.confirmNativeResult = async (...args) => {
+        const result = await confirm(...args);
+        attempts.push({ proof: args[1], result });
+        return result;
+      };
+    });
+    const entry = { id: "original", text: "fixture original" };
+    try {
+      const sent = host.send(entry); void sent.catch(() => {});
+      await until(() => users(child).length === 1);
+      await expect(sent).rejects.toThrow("timed out");
+      expect(await host.send({ id: "later", text: "fixture later" })).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      result(child, [users(child)[0]!.uuid], 1);
+      await until(() => Boolean(ledger.load(sessionId)[0]?.nativeResult));
+      const later = host.send({ id: "later", text: "fixture later" }); void later.catch(() => {});
+      await until(() => users(child).length === 2);
+      result(child, [users(child)[1]!.uuid], 2);
+      expect(await later).toMatchObject({ turnId: "later" });
+      expect(await host.send(entry)).toMatchObject({ turnId: "original" });
+      expect(users(child)).toHaveLength(2);
+    } finally {
+      if (process.env.LLV_EVIDENCE_DIR) {
+        const state = host as unknown as { nativeUncertain: boolean; nativeProtocolUncertain: boolean; activeTurnId: string | null; nativeWorkCount: number };
+        const evidence = path.join(process.env.LLV_EVIDENCE_DIR, "build");
+        fs.mkdirSync(evidence, { recursive: true });
+        fs.writeFileSync(path.join(evidence, `${process.env.LLV_NATIVE_EVIDENCE_RUN ?? "run"}-late-proof-debug.json`), JSON.stringify({
+          rows: ledger.load(sessionId), health: await host.health(), inputs: users(child), attempts,
+          uncertain: state.nativeUncertain, protocolUncertain: state.nativeProtocolUncertain, active: state.activeTurnId, work: state.nativeWorkCount,
+        }, null, 2));
+      }
+      await host.release(); fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("a timed-out append retains its lane while permission controls remain live", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-io-lane-"));
+    const { host, child, ledger } = await openNative(directory, options => { options.requestTimeoutMs = 500; });
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const writing = new Promise<void>(resolve => { entered = resolve; });
+    const append = ledger.recordNativeIntent.bind(ledger);
+    const confirm = ledger.confirmNativeResult.bind(ledger);
+    let proofStarted = false;
+    ledger.recordNativeIntent = async (...args) => { if (args[1].id === "follow-up") { entered(); await held; } await append(...args); };
+    ledger.confirmNativeResult = async (...args) => { proofStarted = true; return confirm(...args); };
+    const followUp = { id: "follow-up", text: "fixture follow-up" };
+    try {
+      const initial = host.send({ id: "incumbent", text: "fixture incumbent" }); void initial.catch(() => {});
+      await until(() => users(child).length === 1);
+      echo(child, users(child)[0]!); await initial;
+      const pending = host.send(followUp); void pending.catch(() => {});
+      await writing;
+      child.emitJson({ type: "control_request", request_id: "fixture-permission",
+        request: { subtype: "can_use_tool", tool_name: "Write", input: {} } });
+      await until(() => child.inputs.length > 0);
+      const answer = host.answer("fixture-permission", { behavior: "deny" });
+      await until(() => child.inputs.some(frame => frame.type === "control_response"));
+      child.emitJson({ type: "control_response", response: { subtype: "success", request_id: "fixture-permission" } });
+      await answer;
+      await expect(pending).rejects.toThrow("timed out");
+      result(child, [users(child)[0]!.uuid], 1);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(proofStarted).toBe(false);
+      expect(users(child)).toHaveLength(1);
+      release();
+      await until(() => Boolean(ledger.load(sessionId).find(row => row.entry.id === "incumbent")?.nativeResult));
+      expect(ledger.load(sessionId).find(row => row.entry.id === followUp.id)?.nativeNoWrite).toBe(true);
+      const retry = host.send(followUp); void retry.catch(() => {});
+      await until(() => users(child).length === 2);
+      result(child, [users(child)[1]!.uuid], 2);
+      expect(await retry).toMatchObject({ turnId: followUp.id });
+      expect(users(child)).toHaveLength(2);
+    } finally { release(); await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("an attempted interrupted batch stays unconfirmed while a later idle input is written once", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-attempted-"));
+    const { host, child, ledger, store } = await openNative(directory);
+    const entries = ["decision", "follow-up"].map(id => ({ id, text: `fixture ${id}` }));
+    try {
+      const pending = entries.map(entry => host.send(entry).catch(error => error as Error));
+      await until(() => users(child).length === 2);
+      child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "interrupted", is_error: true,
+        user_message_uuid: users(child)[0]!.uuid, user_message_uuids: users(child).map(frame => frame.uuid) });
+      for (const outcome of await Promise.all(pending)) expect(outcome).toBeInstanceOf(Error);
+      await until(() => store.load(sessionId).some(event => event.kind === "turn-ended"));
+      expect(ledger.load(sessionId).map(row => row.delivered)).toEqual([false, false]);
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+      expect(host.acceptsInputDuringTurn).toBe(false);
+      const later = host.send({ id: "later", text: "fixture later" }); void later.catch(() => {});
+      await until(() => users(child).length === 3);
+      result(child, [users(child)[2]!.uuid], 2);
+      expect(await later).toMatchObject({ turnId: "later" });
+      await expect(host.send(entries[1]!)).rejects.toThrow("uncertain");
+      expect(users(child)).toHaveLength(3);
+      expect(ledger.load(sessionId).map(row => row.delivered)).toEqual([false, false, true]);
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+});

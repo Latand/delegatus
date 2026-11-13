@@ -1,3 +1,4 @@
+import type { ConfirmedSendEvidence } from "./confirmedSend";
 import { SEND_SETTLEMENT_WINDOW_MS } from "./sendSettlement";
 import { DELIVERY_UNVERIFIED_AFTER_ACTUATION, INJECTION_UNVERIFIED_AFTER_ACTUATION } from "./unverifiedDeliveryReasons";
 import { withHostStopOrigin } from "./hostExit";
@@ -165,7 +166,7 @@ export interface StructuredDeliveryQueuePort {
       recipient, read by original key and never written by it: the Claude
       delivery ledger and transcript, the Codex thread. False when nothing
       proves it; a throw is unreadable evidence. */
-  confirmedDelivery?(operationId: string): Promise<boolean>;
+  confirmedDelivery?(operationId: string): Promise<boolean | ConfirmedSendEvidence | null>;
 }
 
 /** The clocks of the bounds below; tests shorten them. */
@@ -1643,7 +1644,7 @@ export class StructuredDeliveryQueue {
           : evidence.value ? "reconciling: host evidence shows it arrived" : "reconciling: no host evidence yet; the send is still held",
         !overdue);
         if (evidence.readable && evidence.value) {
-          await this.transitionUnlessSettled(operationId, "delivered", {});
+          await this.transitionUnlessSettled(operationId, "delivered", confirmationDetails(evidence.value));
           this.retrySoon();
         }
       })
@@ -1682,7 +1683,7 @@ export class StructuredDeliveryQueue {
     }
     if (now - issuedAt < this.timing.interruptReconcileMs) return "wait";
     this.interruptIssuedAt.set(effect.operationId, now);
-    let evidence: Evidence<boolean> | null = null;
+    let evidence: Evidence<boolean | ConfirmedSendEvidence | null> | null = null;
     if (this.port.confirmedDelivery) {
       this.noteWait(effect, "interrupt-reconciling", {
         attempted: true, wake: "retry", detail: "reading the host's evidence for this message",
@@ -1697,7 +1698,7 @@ export class StructuredDeliveryQueue {
       if (bound) clearTimeout(bound);
       if (answered === null) {
         void read.then(async (late) => {
-          if (late.readable && late.value && await this.transitionUnlessSettled(effect.operationId, "delivered", {}).catch(() => false)) {
+          if (late.readable && late.value && await this.transitionUnlessSettled(effect.operationId, "delivered", confirmationDetails(late.value)).catch(() => false)) {
             this.retrySoon();
           }
         });
@@ -1707,7 +1708,7 @@ export class StructuredDeliveryQueue {
       }
     }
     if (evidence?.readable && evidence.value) {
-      if (await this.transitionUnlessSettled(effect.operationId, "delivered", {})) return "delivered";
+      if (await this.transitionUnlessSettled(effect.operationId, "delivered", confirmationDetails(evidence.value))) return "delivered";
       return "wait";
     }
     this.interruptAcknowledged.delete(effect.operationId);
@@ -2211,7 +2212,7 @@ export class StructuredDeliveryQueue {
           () => this.port.confirmedDelivery!(effect.operationId), this.timing.reconcileReadMs,
           "host delivery evidence is unavailable") : null;
         if (arrived?.readable && arrived.value) {
-          await this.transitionUnlessSettled(effect.operationId, "delivered", {}, { confirmedDelivery: true });
+          await this.transitionUnlessSettled(effect.operationId, "delivered", confirmationDetails(arrived.value), { confirmedDelivery: true });
         } else {
           const echo = await readEvidence(() => this.port.progress?.get(effect.operationId) ?? null,
             "delivery timing evidence is unavailable");
@@ -3828,4 +3829,8 @@ export class StructuredDeliveryQueue {
       return { blocked: false, terminated: false };
     }
   }
+}
+
+function confirmationDetails(evidence: boolean | ConfirmedSendEvidence | null): { turnId?: string } {
+  return evidence && typeof evidence === "object" && evidence.turnId ? { turnId: evidence.turnId } : {};
 }

@@ -292,6 +292,46 @@ test("delivered reservations and ledger entries retire after the bounded grace w
   expect(DELIVERED_REF_RETIREMENT_GRACE_MS).toBeLessThanOrEqual(7 * 24 * 60 * 60 * 1000);
 });
 
+test("native image retirement requires the replayed proof; missing or unknown evidence retains images", async () => {
+  const { FileClaudeDeliveryLedger } = await import("./claudeStreamBrokerHost");
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000000040"].join("-");
+  const writer = { sessionId, writerId: ["00000000", "0000", "4000", "8000", "000000000041"].join("-"),
+    process: { pid: 4100, startIdentity: "4100:fixture" } };
+  const state = sandbox();
+  const directory = path.join(state, "claude-delivery-ledger");
+  const ledger = new FileClaudeDeliveryLedger(directory);
+  const inputs = ["closed", "pending"].map((id, index) => ({ id,
+    inputUuid: `00000000-0000-4000-8000-${String(50 + index).padStart(12, "0")}`,
+    image: { sha256: String(index + 1).repeat(64), mime: "image/png" as const, bytes: PNG.byteLength },
+  }));
+  for (const member of inputs) await ledger.recordNativeIntent(sessionId, {
+    id: member.id, text: "fixture image", images: [member.image],
+  }, "turn-started", { ...writer, version: 1, inputUuid: member.inputUuid, intent: "may-have-written" });
+  expect(await ledger.confirmNativeResult(sessionId, { ...writer, version: 1,
+    inputUuids: [inputs[0]!.inputUuid], resultUuid: ["00000000", "0000", "4000", "8000", "000000000060"].join("-"),
+    turnId: inputs[0]!.id, status: "completed",
+  })).toBe("accepted");
+  const filename = path.join(directory, `${sessionId}.jsonl`);
+  const rows = fs.readFileSync(filename, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  const retired = "2026-07-16T00:00:00.000Z";
+  for (const row of rows) if (row.kind === "delivered") row.deliveredAt = retired;
+  const now = Date.parse("2026-07-17T12:00:00.000Z");
+  const write = (records: unknown[]) => fs.writeFileSync(filename, records.map(row => JSON.stringify(row)).join("\n") + "\n");
+  write(rows);
+  expect([...collectRuntimeImageReachableDigests(state, { now, retiredGraceMs: 60_000 })]).toEqual([inputs[1]!.image.sha256]);
+  expect(new FileClaudeDeliveryLedger(directory).load(sessionId)[0]?.nativeResult?.turnId).toBe(inputs[0]!.id);
+  for (const mutation of ["missing-proof", "unknown-version", "wrong-session"]) {
+    const changed = structuredClone(rows).filter(row => mutation !== "missing-proof" || row.kind !== "native-result");
+    for (const row of changed) if (row.kind === "queued" && row.entry.id === "closed") {
+      if (mutation === "unknown-version") row.native.version = 2;
+      if (mutation === "wrong-session") row.native.sessionId = ["00000000", "0000", "4000", "8000", "000000000099"].join("-");
+    }
+    write(changed);
+    expect([...collectRuntimeImageReachableDigests(state, { now, retiredGraceMs: 60_000 })].sort())
+      .toEqual(inputs.map(member => member.image.sha256));
+  }
+});
+
 test("reachability tolerates a torn ledger tail and rejects interior corruption", () => {
   const state = sandbox();
   const now = Date.parse("2026-07-17T12:00:00.000Z");
