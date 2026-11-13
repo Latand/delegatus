@@ -31,7 +31,8 @@ The pinned specification asks for:
 8. a build on the macOS CI runners, a CI smoke test that installs the app
    into a fresh user, launches it and gets HTTP 200 from Delegatus, and
    attachment of the artifact to releases through the existing publish
-   workflow;
+   workflow (the smoke meets "a fresh user" with fresh data in the runner's own
+   session; §7 says why);
 9. ad-hoc signing, with the README and the guide saying how to open an
    unsigned app, and the PR saying what an Apple Developer account would add;
 10. a README Quick start that points a Mac user at the app first, and public
@@ -426,16 +427,27 @@ macos/Tests/CoreChecks.swift`, run against a temporary folder (the community
 **Smoke** (`node scripts/mac-app/smoke.mjs <dmg> <report-dir>`, the one driver
 for this surface; later cases are added to it):
 
-- **Fresh user.** `sudo sysadminctl -addUser dlgsmoke` with a random
-  password that is never printed, then `createhomedir`. The `.dmg` is
-  attached read-only, and `ditto` copies the app into `Applications` in the
-  new account's home. Commands first select that account's bootstrap and audit
-  context with `launchctl asuser`, then drop credentials with `sudo -u`.
-  The context check requires its launchd manager UID and effective UID to match
-  the fresh account and refuses an account with sudo rights.
-  Its environment holds `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, no Bun and
-  `DELEGATUS_TELEMETRY=0`. A wrapper writes the app's PID before `exec`, and
-  every stop goes by that PID or through `stop --all`.
+- **Runner session, fresh data.** A hosted macOS runner has one logged-in
+  graphical session, the runner user's. An app started from a second operating
+  system account has no connection to that session's window server, so it
+  cannot create a window. The smoke therefore runs every GUI step as the runner
+  user and gets its isolation from fresh data. The first check requires an
+  unprivileged runner user and records the launchd manager of the session. A
+  run creates one data root under the temporary directory, and each case that
+  needs a clean start gets its own empty home folder there and the app's `HOME`
+  points at it. The `.dmg` is attached read-only, and `ditto` copies the app into
+  `Applications` under that root. Every child gets
+  `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, no Bun and `DELEGATUS_TELEMETRY=0`,
+  and inherits nothing else from the runner's environment. AppKit and WebKit keep
+  preferences, restored window state, web data and caches under the session
+  user's own `Library`, whatever `HOME` says, so before each launch the smoke
+  deletes the app's preference domain and those folders for its bundle
+  identifier and passes `-ApplePersistenceIgnoreState YES`. Nothing carries
+  from one case to the next except the one home that the install cases share on
+  purpose. The smoke starts every app and every replacement server as its own
+  child and stops each by its recorded PID, or through `stop --all`, which it
+  runs without blocking its own event loop so that a launcher it started is
+  reaped.
 - **Case `confirm`.** Launch without `--accept-install` at the minimum window
   size, then at the default size in en/uk and light/dark. Each screen must show
   `STATE needs-install`; after 20 s nothing may exist under
@@ -445,16 +457,17 @@ for this surface; later cases are added to it):
   localized failure screen in the default window size for legibility review.
 - **Case `first-run`.** Launch with `--accept-install` and
   `-AppleLanguages (en)`. Within 12 minutes `GET /` must answer **200** and
-  the protected HEAD probe must answer 204 with the marker. The same temporary
-  access key is stored in the new account's mode-0600 token file to exercise
-  protected reuse without putting it in process arguments or logs. `ps` must show the
+  the protected HEAD probe must answer 204 with the marker. A temporary access
+  key is stored in the case home's mode-0600 token file to exercise protected
+  reuse without putting it in process arguments or logs. `ps` must show the
   listener's launcher as
   `…/Delegatus/Runtime/bun/bin/bun …/Runtime/packages/node_modules/delegatus-cli/bin/cli.mjs`
-  owned by `dlgsmoke`. A listing of the new home taken before the first
+  under this run's data root. A listing of the case home taken before the first
   launch and after this case may differ only under `Library/`, `.config/`
-  and `.cache/`, so no shell profile appears or changes. The account is a
-  standard user with no `sudo` rights, so nothing outside its home can
-  change. The log must show `STATE ready` and `WEB language=en…`.
+  and `.cache/`, so no shell profile appears or changes. The check covers the
+  case home only: the runner user is unprivileged, but the smoke does not watch
+  the rest of the runner's disk. The log must show `STATE ready` and
+  `WEB language=en…`.
 - **Case `reuse`.** End the app by its PID. The server must keep answering.
   Relaunch with `-AppleLanguages (uk)`. The log must show `STATE reused` and
   `WEB language=uk…`, and the launcher PID must be unchanged.
@@ -463,8 +476,8 @@ for this surface; later cases are added to it):
   access key. The running app must log recovery and return to HTTP 200 without
   a manual Start action.
 - **Case `busy-port`.** Run `stop --all` and require the port to be free
-  within 30 s. Start `python3 -m http.server 8898 --bind 127.0.0.1` as
-  `dlgsmoke` and record its PID, then launch the app. The log must show
+  within 30 s. Start a small Python listener on `127.0.0.1:8898` that answers
+  `401` and records any `Authorization` header it receives, and record its PID, then launch the app. The log must show
   `STATE port-busy` with the listener's name and PID, and no new `cli.mjs`
   process may exist. The harness stops the listener and the app by their
   PIDs.
@@ -474,10 +487,13 @@ launch arguments; a web page cannot set them. The app captures the composited
 native window so painted text and controls
 are included. The frames cover each confirmation layout, recovery and busy
 screens, plus loaded pages in en and uk, light and dark. Dark comes
-from the launch argument `-AppleInterfaceStyle Dark`; if AppKit ignores it
-in the argument domain, `--evidence-dir` also sets `NSApp.appearance` to
-dark for the dark frames. The report, frames and logs (with the home path
+from the launch argument `-AppleInterfaceStyle Dark`, and a launch with
+`--evidence-dir` also sets `NSApp.appearance` to dark or light from that
+argument. The report, frames and logs (with the home path
 replaced by `$HOME`) upload as an artifact for the visual critic.
+
+**Known limitation.** Frames labelled "dark" for the system menu keep the
+light system-menu look on the hosted runners. The dialogs do show both themes.
 
 **Required checks.** After the workflow lands, the seat adds
 `macOS app build`, `macOS app smoke (arm64)` and `macOS app smoke (x86_64)`
@@ -561,15 +577,16 @@ Community Launcher contributors". The bundle copies the notice into
 
 ## 12. Risks and facts the first CI run settles
 
-- **U1. Fresh-account session.** The Intel smoke on the earlier revision
-  crashed at its first `NSWindow`: the diagnostic log records the fresh
-  account's effective UID alongside the runner's audit UID, then a
-  `WMClientWindowManager` / `xpc_connection_set_target_uid` API-misuse trap.
-  The harness now selects the fresh account's launchd context before dropping
-  credentials. `asuser` does not create an Aqua login; successful window
-  creation, HTTP 200 and the PNG matrix on both hosted architectures remain
-  the required proof that the fresh account can use the runner's display.
-  There is no fallback to running the app under the runner account.
+- **U1. Session for the smoke (settled).** An earlier revision ran the app
+  under a second operating-system account. On the Intel runner it crashed at
+  its first `NSWindow` with a `WMClientWindowManager` /
+  `xpc_connection_set_target_uid` API-misuse trap: a hosted runner has one
+  logged-in graphical session, and a second account launched from it has no
+  window-server connection. Selecting that account's launchd context does not
+  create a graphical login. The smoke now runs its GUI steps in the runner's own
+  session and gets isolation from fresh data (§7). The hosted run on the final
+  head passed both native smokes, arm64 and x86_64, with window creation, HTTP
+  200 and the full PNG matrix.
 - **U2. `navigator.language` in `WKWebView`.** I expect it to follow the
   app's localization. The `WEB language=` assertions in cases `first-run`
   and `reuse` prove it or fail.
@@ -602,7 +619,7 @@ Community Launcher contributors". The bundle copies the notice into
 | 5. No Claude Code or Codex install or sign-in | §2 "After install" |
 | 6. System language, English and Ukrainian | §5; smoke language assertions |
 | 7. Community code reused with its notice | §10 |
-| 8. macOS CI build, fresh-user smoke with HTTP 200, release attachment | §7, §8 |
+| 8. macOS CI build, fresh-data smoke with HTTP 200, release attachment | §7, §8 |
 | 9. Ad-hoc signing, open-unsigned steps, developer-account note | §7 build step 4, §9, §11 |
 | 10. README points Mac users to the app; no names in public text | §9; the release repository comes from `$GITHUB_REPOSITORY` at build time |
 
@@ -622,8 +639,8 @@ Community Launcher contributors". The bundle copies the notice into
 - **A menu bar item, and web push notifications in the app window.**
 - **The app window opening at login.** The server starting at login is what
   is offered.
-- **Start at login exercised in CI.** The fresh account has no login session
-  of its own; `bin/login-service.test.ts` covers the command.
+- **Start at login exercised in CI.** The smoke never registers a login
+  service on the runner; `bin/login-service.test.ts` covers the command.
 - **An update rehearsal in CI** from the previous release's app through the
   Update dialog to the new release.
 - **Bun upgrades inside the in-product updater.** Today Bun moves with the
