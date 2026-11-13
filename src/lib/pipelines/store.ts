@@ -390,6 +390,13 @@ function isAttempt(value: unknown, index: number): boolean {
     )) &&
     isPublicationTextRepair(attempt.publicationTextRepair) &&
     isTerminalOutputPublication(attempt.terminalOutputPublication) &&
+    (attempt.publicationRepairFrom === undefined || (
+      attempt.publicationRepairFrom !== null && typeof attempt.publicationRepairFrom === "object"
+      && !Array.isArray(attempt.publicationRepairFrom)
+      && typeof (attempt.publicationRepairFrom as Record<string, unknown>).stageId === "string"
+      && ["attempt", "round"].every(key => Number.isSafeInteger((attempt.publicationRepairFrom as Record<string, unknown>)[key])
+        && Number((attempt.publicationRepairFrom as Record<string, unknown>)[key]) > 0)
+    )) &&
     (attempt.publicationRetry === undefined || (
       attempt.publicationRetry !== null && typeof attempt.publicationRetry === "object"
       && !Array.isArray(attempt.publicationRetry)
@@ -1084,6 +1091,8 @@ function isPipelineShape(value: unknown): value is Pipeline {
     typeof pipeline.lastPassedCommit === "string" &&
     (pipeline.publication === undefined || pipeline.publication === "internal" || pipeline.publication === "remote-branch") &&
     (pipeline.publishedCommit === undefined || isNullableString(pipeline.publishedCommit)) &&
+    (pipeline.publicationProducerRepairs === undefined
+      || Number.isSafeInteger(pipeline.publicationProducerRepairs) && Number(pipeline.publicationProducerRepairs) >= 0) &&
     Array.isArray(pipeline.stages) &&
     pipeline.stages.every(isStage) &&
     Array.isArray(pipeline.runs) &&
