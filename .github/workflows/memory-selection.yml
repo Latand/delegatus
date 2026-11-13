@@ -62,4 +62,4 @@ jobs:
         env:
           LLV_STATE_DIR: ${{ runner.temp }}/memory-replay-state
           XDG_CONFIG_HOME: ${{ runner.temp }}/memory-replay-config
-        run: bun test scripts/memory-selection.test.ts
+        run: bun scripts/ci-test.ts scripts/memory-selection.test.ts scripts/ci-test.test.ts scripts/source-nuls.test.ts
