@@ -530,6 +530,13 @@ export class MergeBatch {
   }
 
   private async assertGhCapabilities(): Promise<void> {
+    // headRefOid first joined the CLI's JSON field list in gh 2.18.0.
+    let version = "";
+    try { version = await this.gh(["--version"]); } catch { /* Refuse an unknown metadata capability. */ }
+    const match = /^gh version (\d+)\.(\d+)\.\d+\b/.exec(version);
+    if (!match || !(Number(match[1]) > 2 || (Number(match[1]) === 2 && Number(match[2]) >= 18))) {
+      throw new Error("Missing gh capability: pr view --json headRefOid (requires gh >= 2.18.0)");
+    }
     // Pinning the reviewed head is required for the eventual server-side write.
     // This flag first shipped in gh 2.13.0; probe help without making a write.
     let help = "";

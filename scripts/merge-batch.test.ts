@@ -250,6 +250,7 @@ function fixture() {
     base = git(repo, ["rev-parse", "HEAD"]);
   };
   const gh = async (args: string[]): Promise<string> => {
+    if (args[0] === "--version") return "gh version 2.45.0 (fixture)";
     if (args.join(" ") === "pr merge --help") return "--match-head-commit SHA";
     if (args[0] === "api" && args[1] === "graphql") {
       const number = Number(args.find(arg => arg.startsWith("number="))!.slice(7));
@@ -286,7 +287,7 @@ test("gh 2.45 builds a batch with the same closing lines despite its unsupported
   expect(calls.some(args => args[0] === "api" && args[1] === "graphql" && args.includes("--paginate"))).toBeTrue();
 });
 
-test.each(["missing flag", "help failed"])("gh without the pinned-head merge capability refuses before worktree or bootstrap: %s", async fault => {
+test.each(["missing flag", "help failed", "old metadata", "unknown version"])("gh without a required capability refuses before worktree or bootstrap: %s", async fault => {
   const f = fixture();
   const head = f.addPr(12, "a.txt", "healthy");
   const before = git(f.repo, ["worktree", "list", "--porcelain"]);
@@ -296,17 +297,35 @@ test.each(["missing flag", "help failed"])("gh without the pinned-head merge cap
     commands.push(args); return successfulCommand(args);
   }, async args => {
     calls.push(args);
+    if (args[0] === "--version") {
+      if (fault === "old metadata") return "gh version 2.17.0 (fixture)";
+      if (fault === "unknown version") throw new Error("version unavailable");
+      return f.gh(args);
+    }
     if (args.join(" ") === "pr merge --help") {
       if (fault === "help failed") throw new Error("unknown command");
       return "Usage: gh pr merge [flags]\n  --rebase";
     }
     return f.gh(args);
   });
-  await expect(batch.build(`12@${head}`)).rejects.toThrow("Missing gh capability: pr merge --match-head-commit (requires gh >= 2.13.0)");
-  expect(calls).toEqual([["pr", "merge", "--help"]]);
+  const metadataMissing = ["old metadata", "unknown version"].includes(fault);
+  await expect(batch.build(`12@${head}`)).rejects.toThrow(metadataMissing
+    ? "Missing gh capability: pr view --json headRefOid (requires gh >= 2.18.0)"
+    : "Missing gh capability: pr merge --match-head-commit (requires gh >= 2.13.0)");
+  expect(calls).toEqual(metadataMissing ? [["--version"]] : [["--version"], ["pr", "merge", "--help"]]);
   expect(commands).toEqual([]);
   expect(git(f.repo, ["worktree", "list", "--porcelain"])).toBe(before);
   expect(readdirSync(f.root).sort()).toEqual(files);
+});
+
+test.each(["2.18.0", "3.0.0"])("gh %s can build at the metadata floor or a later major", async version => {
+  const f = fixture();
+  const head = f.addPr(12, "a.txt", "healthy");
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), f.good, async args =>
+    args[0] === "--version" ? `gh version ${version} (fixture)` : f.gh(args));
+  const state = await batch.build(`12@${head}`);
+  expect(state.rows.map(row => row.status)).toEqual(["clean"]);
+  expect(batch["body"](state)).toContain("Closes #112");
 });
 
 test.each([0, 101])("GraphQL closing references preserve all %i issues in the batch body", async count => {
@@ -630,7 +649,7 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
   const run = runOverride ?? setupRun?.(f) ?? defaultRun;
   const gh = async (args: string[]): Promise<string> => {
     // Local capability discovery makes no forge request or merge attempt.
-    if (args.join(" ") === "pr merge --help") return f.gh(args);
+    if (args[0] === "--version" || args.join(" ") === "pr merge --help") return f.gh(args);
     calls.push(args);
     if (args[0] === "api" && args[1] === "graphql") return f.gh(args);
     const batch = JSON.parse(readFileSync(stateFile, "utf8"));
