@@ -4,6 +4,9 @@ import type { Dictionary } from "./core";
    Plural entries use Intl.LDMLPluralRule forms; {name} placeholders are
    filled from t()'s params. uk.ts must mirror this key set. */
 export const en = {
+  "claudeCloud.connectGithub": "Connect GitHub to this Claude account on claude.ai.",
+  "claudeCloud.createEnvironment": "Create a cloud environment for this Claude account on claude.ai.",
+
   "pipelineCreation.accepted": "Accepted — waiting to create",
   "pipelineCreation.linkPending": "Created — source link awaits attachment",
   "pipelineCreation.attach": "Attach saved link",
