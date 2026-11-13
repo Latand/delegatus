@@ -39,6 +39,24 @@ export function withCompilerEntry(command: string[], cwd = process.cwd()) {
   let root: string | undefined;
   const mounts: [string, string][] = [];
   try {
+    // Bun evaluates bunfig test preloads before BUN_OPTIONS preloads. Enter
+    // admission ahead of an older preload's ownership/reentry checks as well,
+    // including tests forked by a package script. The original preload still
+    // runs with all of its settings and isolation intact.
+    const config = path.join(cwd, "bunfig.toml");
+    if (fs.existsSync(config)) {
+      const settings = Bun.TOML.parse(fs.readFileSync(config, "utf8")) as { test?: { preload?: string | string[] } };
+      const preloads = settings.test?.preload;
+      for (const entry of typeof preloads === "string" ? [preloads] : preloads ?? []) {
+        const file = fs.realpathSync(path.resolve(cwd, entry));
+        const source = fs.readFileSync(file, "utf8");
+        root ??= fs.mkdtempSync(path.join(os.tmpdir(), "compiler-entry-"));
+        const copy = path.join(root, `${mounts.length}${path.extname(file)}`);
+        const preload = pathToFileURL(path.join(import.meta.dir, "check-runtime-preload.mjs")).href;
+        fs.writeFileSync(copy, `await import(${JSON.stringify(preload)});\n${source}`, { mode: 0o600 });
+        mounts.push([copy, file]);
+      }
+    }
     for (const installation of installations) {
       const lib = path.join(installation, "lib");
       if (!fs.existsSync(lib)) continue;
