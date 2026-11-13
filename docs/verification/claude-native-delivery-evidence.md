@@ -192,5 +192,15 @@ The first full-file privacy run exited 1: synthetic UUID literals in five test
 files and the object label for the computed prompt field matched generic
 resource/transcript detectors. The fixtures now build the same fixed UUID bytes
 from their components, and the reader computes the prompt field before its
-object. No publication rule or detector was changed. The final hook opts into
-the installed CLI cases as well as its standard scoped checks.
+object. No publication rule or detector was changed.
+
+The first implementation hook exited 0, with zero new failures and 23
+pre-existing failures in its broader comparator. Its canonical environment
+dropped the undeclared CLI opt-in. To include the installed CLI cases in the
+final hook, explicitly name `LLV_CLAUDE_BINARY` in `LLV_GATE_CHECK_ENV`; name
+`LLV_EVIDENCE_DIR` and `LLV_NATIVE_EVIDENCE_RUN` there to retain its native frames.
+The hook stays unmodified. These declared inputs are part of its check key.
+Its CLI integration helpers still see private empty credential directories,
+while the native queue fixture supplies its own loopback API and synthetic
+authentication. The final handover verifies that the native evidence files
+were actually produced, alongside the hook exit.
