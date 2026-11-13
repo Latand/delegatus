@@ -38630,9 +38630,64 @@ describe("pipeline from a PR or issue link", () => {
 });
 
 describe("saved decision delivery", () => {
+  browserTest("waiting forms can be withdrawn from Decisions with retry after refusal", async () => {
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "form-withdrawal");
+    fs.mkdirSync(out, { recursive: true });
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const readings: unknown[] = [];
+    try {
+      const served = await serveEvidenceFixture(out);
+      try {
+        for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+          const phone = width === 390;
+          const { context, page, pageErrors } = await openFixture(browser, `${served.base}?decisions=1`, { width, height: phone ? 844 : 900 }, scheme, lang, "reduce", phone);
+          try {
+            if (phone) {
+              await page.locator("[data-mobile2-seat-open]").click();
+              await page.locator("[data-decision-strip]").click();
+            }
+            const scope = page.locator(phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]');
+            await scope.locator('[data-decision-list="3"]').waitFor();
+            expect(await scope.locator("[data-decision-tab-count]").textContent()).toBe("3");
+            await page.evaluate(() => {
+              const original = window.fetch;
+              let refused = false;
+              window.fetch = Object.assign(async (input: Parameters<typeof original>[0], init?: Parameters<typeof original>[1]) => {
+                if (!refused && String(input) === "/api/attention/dismissals") {
+                  refused = true;
+                  return new Response(JSON.stringify({ error: "private backend failure" }), { status: 503 });
+                }
+                return original(input, init);
+              }, original);
+            });
+            await scope.locator("[data-decision-withdraw]").click();
+            await scope.locator("[data-decision-withdraw-error]").waitFor();
+            expect(await scope.textContent()).not.toContain("private backend failure");
+            expect(await scope.locator("[data-decision-list]").getAttribute("data-decision-list")).toBe("3");
+            const prefix = `${lang}-${scheme}-${width}`;
+            await page.screenshot({ path: path.join(out, `${prefix}-refused.png`) });
+            for (const remaining of [2, 1, 0]) {
+              await scope.locator("[data-decision-withdraw]").click();
+              await scope.locator(`[data-decision-list="${remaining}"]`).waitFor();
+            }
+            await page.waitForFunction(() => !document.querySelector("[data-decision-tab-count]"));
+            await page.screenshot({ path: path.join(out, `${prefix}-cleared.png`) });
+            expect(pageErrors).toEqual([]);
+            readings.push({ width, lang, scheme, before: 3, after: 0, frames: [`${prefix}-refused.png`, `${prefix}-cleared.png`] });
+          } finally { await context.close(); }
+        }
+      } finally { served.stop(); }
+      fs.writeFileSync(path.join(out, "results.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
+    } finally { await browser.close(); sockets.close(); }
+  }, 240_000);
+
   browserTest("C: the Decisions badge and panel retain saved answers until delivery", async () => {
-    const out = path.resolve(".artifacts/answer-delivery/frames"); fs.mkdirSync(out, { recursive: true });
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "answer-delivery/frames"); fs.mkdirSync(out, { recursive: true });
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: sockets.env });
     const readings: unknown[] = [];
     const savedIds = [`pr_${"e".repeat(32)}`, `pr_${"d".repeat(32)}`, `pr_${"c".repeat(32)}`];
     try {
@@ -38649,8 +38704,10 @@ describe("saved decision delivery", () => {
             await page.locator("[data-kanban-seat] [data-orchestrator-panel]").waitFor({ state: "attached" });
             await page.locator('[data-kanban-seat] [data-feed-state="items"]').waitFor();
           }
-          expect(await page.locator("[data-decision-strip]").count()).toBe(0);
-          expect(await page.locator("[data-decision-tab-count]").count()).toBe(0);
+          if (phone) expect(await page.locator("[data-decision-strip]").getAttribute("data-decision-strip")).toBe("3");
+          else expect(await page.locator("[data-decision-strip]").count()).toBe(0);
+          if (phone) expect(await page.locator("[data-decision-tab-count]").count()).toBe(0);
+          else expect(await page.locator("[data-decision-tab-count]").first().textContent()).toBe("3");
           const snapshot = await page.evaluate(async () => (await fetch("/api/projects/decisions?project=atlas")).json());
           expect(snapshot.decisions.map((entry: { id: string }) => entry.id).sort()).toEqual([...savedIds].sort());
           const frames: string[] = [];
@@ -38687,7 +38744,7 @@ describe("saved decision delivery", () => {
             await page.locator('[data-decision-column] [data-decision-tab="decisions"]').click();
             const column = page.locator('[data-decision-column="decisions"]');
             await column.locator('[data-decision-list="3"]').waitFor();
-            expect(await column.locator("[data-decision-tab-count]").count()).toBe(0);
+            expect(await column.locator("[data-decision-tab-count]").textContent()).toBe("3");
             expect(await column.locator("[data-decision-list-empty]").count()).toBe(0);
             const ids = await column.locator("[data-decision-review], [data-decision-row]").evaluateAll(nodes => nodes.map(n => n.getAttribute("data-decision-review") ?? n.getAttribute("data-decision-row")));
             expect(ids).toEqual(savedIds);
@@ -38715,6 +38772,7 @@ describe("saved decision delivery", () => {
               await column.locator(`[data-decision-review="${id}"], [data-decision-row="${id}"]`).first().waitFor({ state: "detached" });
             }
             await column.locator("[data-decision-list-empty]").waitFor();
+            await page.waitForFunction(() => !document.querySelector("[data-decision-column] [data-decision-tab-count]"));
             expect(await column.locator("[data-decision-tab-count]").count()).toBe(0);
             const posts = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts);
             expect(posts).toHaveLength(3);
@@ -38726,12 +38784,12 @@ describe("saved decision delivery", () => {
             }
           }
           expect(pageErrors).toEqual([]);
-          readings.push({ width, lang, scheme, waitingCount: 0, savedRecords: phone ? 1 : snapshot.decisions.length, afterRetry: phone ? "receipt sent" : 0, frames });
+          readings.push({ width, lang, scheme, waitingCount: 3, savedRecords: phone ? 1 : snapshot.decisions.length, afterRetry: phone ? "receipt sent" : 0, frames });
         } finally { await context.close(); served.stop(); }
       }
       fs.mkdirSync("evidence/answer-delivery", { recursive: true });
       fs.writeFileSync("evidence/answer-delivery/panel.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
-    } finally { await browser.close(); }
+    } finally { await browser.close(); sockets.close(); }
   }, 180_000);
 });
 
