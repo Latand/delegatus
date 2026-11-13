@@ -46,8 +46,8 @@ export function withCompilerEntry(command: string[], cwd = process.cwd()) {
     let previousConfig: string | undefined;
     process.env.BUN_OPTIONS = (process.env.BUN_OPTIONS ?? "").replace(configOption, (_match, file: string) => { previousConfig = file; return ""; }).trim();
     const config = path.join(cwd, "bunfig.toml");
-    if (fs.existsSync(config)) {
-      const settings = Bun.TOML.parse(fs.readFileSync(config, "utf8")) as { preload?: string[]; test?: { preload?: string | string[] } };
+    if (fs.existsSync(config) || previousConfig) {
+      const settings = (fs.existsSync(config) ? Bun.TOML.parse(fs.readFileSync(config, "utf8")) : {}) as { preload?: string[]; test?: { preload?: string | string[] } };
       const preloads = settings.test?.preload;
       const absolute = (entry: string) => fs.existsSync(path.resolve(cwd, entry)) ? path.resolve(cwd, entry) : entry;
       if (settings.preload) settings.preload = settings.preload.map(absolute);
@@ -57,8 +57,7 @@ export function withCompilerEntry(command: string[], cwd = process.cwd()) {
       // in this command's namespace. Its stable path binds prepare/transport
       // to identical BUN_OPTIONS without retaining per-run config files.
       const temp = os.tmpdir();
-      const target = previousConfig && (path.dirname(previousConfig) === temp || /\s/.test(temp))
-        ? previousConfig : path.join(temp, `delegatus-test-config-${process.getuid!()}.toml`);
+      const target = previousConfig ?? path.join(temp, `delegatus-test-config-${process.getuid!()}.toml`);
       if (/\s/.test(target)) throw new Error("Bun admission config requires a whitespace-free temp path");
       fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
       try { fs.writeFileSync(target, "", { flag: "wx", mode: 0o600 }); }
