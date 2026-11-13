@@ -2,7 +2,8 @@
 
 To investigate a reported dictation interruption, read the last 100 records in
 `$LLV_STATE_DIR/diagnostics/dictation.json` on the serving Viewer. An unfinished
-record (`endedAt: null`) identifies a browser that stopped reporting. Match the
+record (`endedAt: null`) has no recorded completion. Capture or recovery may
+still be running, or the browser may have stopped reporting. Match the
 numeric start/stop times to the incident window, then inspect the token,
 connection, drain and batch outcomes, audio sample counters, final segment and
 commit counters, and the normalized WebSocket close code/reason. The record
