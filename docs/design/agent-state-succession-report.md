@@ -179,6 +179,8 @@ The renewed 28-file campaign after the startup and delivery-order repairs exits 
 
 Restoration now forces a terminal append after the reader captures its initial file stat. Custody retries temporary version changes, incomplete appends, page recovery and cache capacity under the same deadline. It retains the last deferred-read cause if that deadline expires; owner or artifact replacement still refuses immediately.
 
+After merging the newer main, renewed verification passed all 21 focused succession cases and found one failure in the older active-broker fixture: it emitted its stream result without creating any native transcript. The reused child fixture now writes its actual opening and terminal in that mode too. Missing-artifact refusal remains covered by the focused suite; no production guard is relaxed. The renewed per-command counts and final hook receipt are retained in the delivery report.
+
 Touched runtime ESLint invocation:
 
 ```sh

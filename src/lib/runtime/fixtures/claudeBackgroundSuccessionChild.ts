@@ -54,7 +54,7 @@ for await (const line of input) {
       process.stdout.write(JSON.stringify({ type: "result", uuid: "foreground-result", session_id: sessionId, subtype: "success", is_error: false }) + "\n");
       fs.writeFileSync(path.join(root, "foreground-ended"), "done");
     }, 5);
-  }
+  } else append([{ type: "user", uuid, timestamp: at, message }]);
   const poll = setInterval(async () => {
     if (!fs.existsSync(path.join(root, "tool-done"))) return;
     clearInterval(poll);
@@ -66,7 +66,7 @@ for await (const line of input) {
     const answer = { type: "assistant", uuid: "background-answer", session_id: sessionId, timestamp: at,
       ...(mode ? { user_message_uuid: "fixture-notice" } : {}),
       message: { id: "succession-answer", role: "assistant", model: "fixture", stop_reason: "end_turn", content: [{ type: "text", text: "background result" }] } };
-    if (mode) append([answer]);
+    append([answer]);
     if (mode && fs.existsSync(path.join(root, "hold-delivery"))) {
       fs.writeFileSync(path.join(root, "native-terminal-written"), "done");
       while (!fs.existsSync(path.join(root, "allow-delivery"))) await new Promise(resolve => setTimeout(resolve, 5));
