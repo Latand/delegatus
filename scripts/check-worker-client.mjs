@@ -7,6 +7,15 @@ const key = Symbol.for("delegatus.checkAdmission.worker");
  * own kernel-held lease for this exact descendant. No new admission is taken. */
 export function reuseGateSlot(env = process.env) {
   if (!env.LLV_GATE_SLOT_BROKER || !env.LLV_GATE_SLOT_LEASE) return Promise.resolve(false);
+  // A child can select another gate pool before entering a service. Its old
+  // issuer is no authority for that pool and may be outside the new tree.
+  // Leave that pool's ordinary admission path to acquire its own real slot.
+  try {
+    const lease = JSON.parse(env.LLV_GATE_SLOT_LEASE);
+    const slot = typeof lease?.slot === "string" && /^llv-heavy-gate\.slot([1-9]\d*)\.lock$/.exec(path.basename(lease.slot));
+    if (!slot || !path.isAbsolute(lease.slot) || Number(slot[1]) > Number(env.LLV_GATE_SLOTS ?? 6)
+      || fs.realpathSync(path.dirname(lease.slot)) !== fs.realpathSync(env.LLV_GATE_LOCK_DIR ?? "/var/tmp")) return Promise.resolve(false);
+  } catch { return Promise.resolve(false); }
   const broker = JSON.parse(env.LLV_GATE_SLOT_BROKER);
   return new Promise((resolve, reject) => {
     const socket = net.connect(broker.port, "127.0.0.1");

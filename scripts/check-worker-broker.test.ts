@@ -13,6 +13,7 @@ import * as ownerContext from "../src/lib/runtime/signalSandboxContext";
 import { captureProcessIdentity } from "../src/lib/processIdentity";
 import { inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
+import { reuseGateSlot } from "./check-worker-client.mjs";
 
 async function until(check: () => boolean) {
   const deadline = performance.now() + 5_000;
@@ -247,3 +248,23 @@ for (const state of ["alive","ended","rebound"] as const) test.skipIf(process.pl
     await broker.close();
   } finally {if(requester)await stopFixtureProcess(requester);await stopFixtureProcess(holder);await broker.close().catch(()=>{});fs.rmSync(root,{recursive:true,force:true});}
 },30_000);
+
+for (const policy of ["directory", "slot count"] as const) test.skipIf(process.platform !== "linux")(`an unrelated ${policy} does not contact an inherited slot broker`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "slot-policy-")), ready = path.join(root, "ready");
+  const slot = path.join(root, "llv-heavy-gate.slot2.lock");
+  const holder = spawn("bash", ["-c", 'exec 9>"$1"; flock 9; printf ready >"$2"; exec sleep 60', "holder", slot, ready], { stdio: "ignore" });
+  const broker = await startCheckBroker();
+  try {
+    await until(() => fs.existsSync(ready));
+    const lease = { owner: captureProcessIdentity(holder.pid!), slot }, env = withoutInheritedGate({ ...process.env });
+    Object.assign(env, { LLV_GATE_LOCK_DIR: root, LLV_GATE_SLOTS: "2", LLV_GATE_SLOT_LEASE: JSON.stringify(lease), LLV_GATE_SLOT_BROKER: broker.address });
+    expect(inheritedCpuSlot(env)).toEqual(lease);
+    broker.provideCpuSlot(lease, env);
+    if (policy === "directory") { env.LLV_GATE_LOCK_DIR = path.join(root, "other"); fs.mkdirSync(env.LLV_GATE_LOCK_DIR); }
+    else env.LLV_GATE_SLOTS = "1";
+    // This process is the issuer, so it cannot enroll as its own descendant.
+    // A different pool must not send it a request or poison its lifecycle.
+    expect(await reuseGateSlot(env)).toBe(false);
+    await broker.close();
+  } finally { await stopFixtureProcess(holder); await broker.close().catch(() => {}); fs.rmSync(root, { recursive: true, force: true }); }
+}, 30_000);
