@@ -43,7 +43,7 @@ import { clearTelegramConnection, deleteTelegramSession, saveTelegramSession, wr
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 
 import type { CompletedGenerationRead } from "@/lib/lifecycle/inventorySelection";
-import { queryLifecycleEvents } from "@/lib/lifecycle/journal";
+import { queryLifecycleEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { productionLivenessSources } from "@/lib/lifecycle/liveness";
 import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
 
@@ -3048,9 +3048,7 @@ test("lifecycle_events projects the runtime deployment ledger into the journal (
 
   expect(result).toMatchObject({ mode: "query", journaled: 3 });
   expect((result.events as Array<Record<string, unknown>>).map((event) => event.type)).toEqual(["deploy_succeeded"]);
-  const journal = JSON.parse(fs.readFileSync(path.join(sandbox, "lifecycle-journal.json"), "utf8")) as {
-    events: Array<{ type: string; state: string; summary: string }>;
-  };
+  const journal = readLifecycleJournal();
   expect(journal.events.map((event) => event.type)).toEqual(["deploy_ready", "deploy_succeeded", "deploy_failed"]);
   expect(journal.events.map((event) => event.state)).toEqual(["waiting", "completed", "failed"]);
   expect(journal.events[2]!.summary).toBe("the health gate never went green");

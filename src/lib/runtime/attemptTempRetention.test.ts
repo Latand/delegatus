@@ -8,18 +8,19 @@ import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { attemptReferencesClear, repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
 import * as filesystem from "./attemptTempFilesystem";
 import type { ProcessScan } from "@/lib/tempSweep";
-import { AttemptTempStore, sweepAttemptTemps, type AttemptTempState, type AttemptTempOwner } from "./attemptTempRetention";
+import { AttemptTempStore, BLOCKED_SUBTREE_RETRY_MS, EXPIRED_HOLD_RETRY_MS, sweepAttemptTemps, type AttemptTempState, type AttemptTempOwner } from "./attemptTempRetention";
 import { attemptTempAuthority, attemptTempState } from "./attemptTempProduction";
-import { holdFinishedRoot } from "./attemptTempRetention.testSupport";
+import { holdFinishedRoot, nameInReport } from "./attemptTempRetention.testSupport";
 import { recordedRootHeld, RecordedCheckStore } from "@/lib/recordedChecks/store";
 import { Database } from "bun:sqlite";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
 import * as copyDiscovery from "./attemptCopyDiscovery";
 import { digest } from "@/lib/recordedChecks/wire";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
+import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { removeKeepMarkers(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
 const NOW = Date.parse("2026-10-22T12:00:00Z");
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-attempt-retention-")); roots.push(root);
@@ -44,7 +45,7 @@ test.each([1, 2, 3, 4])("expired root keeps a nested human marker added at refer
   let reads = 0, injected = false;
   try {
     const report = await f.sweep("expired", { references: async (_original: string, current: string) => {
-      if (++reads === boundary) { fs.writeFileSync(path.join(current, "nested", ".delegatus-keep"), "operator pin"); injected = true; }
+      if (++reads === boundary) { plantKeepMarker(path.join(current, "nested", ".delegatus-keep")); injected = true; }
       return true;
     } });
     expect(injected).toBeTrue(); expect(report.removed).toBe(0);
@@ -75,7 +76,7 @@ test.each([
     let injected = false, target = "", observedDirectory = destination;
     const pin = (current: string) => {
       if (current !== destination && !injected) {
-        target = path.join(current, "nested", ".delegatus-keep"); fs.writeFileSync(target, "operator pin"); injected = true;
+        target = path.join(current, "nested", ".delegatus-keep"); plantKeepMarker(target); injected = true;
       }
     };
     const report = await sweepEvidenceCopies(f.store, { ...options, authority: async () => {
@@ -109,7 +110,7 @@ test.each([false, true])("a human marker added in the final root authority read 
   try {
     const report = await f.sweep("expired", { references: async (_original: string, current: string) => { currentDirectory = current; return true; },
       authority: async () => {
-        if (currentDirectory !== directory && !injected) { fs.writeFileSync(path.join(currentDirectory, "nested", ".delegatus-keep"), "operator pin"); injected = true; }
+        if (currentDirectory !== directory && !injected) { plantKeepMarker(path.join(currentDirectory, "nested", ".delegatus-keep")); injected = true; }
         return { state: "expired", expiresAt: 1, revision: "fixture", isCurrent: () => true };
       } });
     expect(injected).toBeTrue(); expect(report.removed).toBe(0); expect(f.store.has(directory)).toBeTrue();
@@ -329,7 +330,7 @@ test("an existing nested human marker keeps an expired automatic copy", async ()
   process.env.LLV_STATE_DIR = path.join(f.root, "copy-state");
   const destination = statePath("evidence", "attempt-temp", digest("existing-copy-marker"));
   fs.mkdirSync(path.join(destination, "nested"), { recursive: true });
-  fs.writeFileSync(path.join(destination, "nested", ".delegatus-keep"), "operator pin");
+  plantKeepMarker(path.join(destination, "nested", ".delegatus-keep"));
   f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane", createdAt: 1, expiresAt: 1, checkedAt: 0, bytes: 4096 });
   try {
     expect((await sweepEvidenceCopies(f.store, { now: () => NOW, state: async () => "expired",
@@ -351,7 +352,7 @@ test("a pinned copy in quarantine stays out of upcoming bytes when expiry moves 
   const f = fixture(), priorState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(f.root, "recent-trash-state");
   const destination = statePath("evidence", "attempt-temp", digest("recent-trash"));
-  fs.mkdirSync(destination, { recursive: true }); fs.writeFileSync(path.join(destination, ".delegatus-keep"), "operator pin");
+  fs.mkdirSync(destination, { recursive: true }); plantKeepMarker(path.join(destination, ".delegatus-keep"));
   const stat = fs.lstatSync(destination), trash = path.join(path.dirname(destination), `.delegatus-trash-${path.basename(destination)}-fixture`);
   fs.renameSync(destination, trash);
   fs.writeFileSync(attemptTempJournalPath(destination), JSON.stringify({ directory: destination, trash, uid: stat.uid,
@@ -370,7 +371,7 @@ test("a recent pinned copy stays out of upcoming bytes and becomes eligible afte
   const f = fixture(), priorState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(f.root, "recent-copy-state");
   const destination = statePath("evidence", "attempt-temp", digest("recent-pin")), marker = path.join(destination, ".delegatus-keep");
-  fs.mkdirSync(destination, { recursive: true }); fs.writeFileSync(marker, "operator pin");
+  fs.mkdirSync(destination, { recursive: true }); plantKeepMarker(marker);
   const expiresAt = NOW + 6 * 86400000;
   // The root sweep schedules its new copy at expiry, without a due visit first.
   f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane",
@@ -407,7 +408,7 @@ test("scheduled copy inspection advances eight rows per process independently of
   try {
     for (let n = 0; n < 20; n++) {
       const destination = statePath("evidence", "attempt-temp", digest(n)); destinations.push(destination);
-      fs.mkdirSync(destination, { recursive: true }); fs.writeFileSync(path.join(destination, ".delegatus-keep"), "operator pin");
+      fs.mkdirSync(destination, { recursive: true }); plantKeepMarker(path.join(destination, ".delegatus-keep"));
       f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane",
         createdAt: 1, expiresAt, checkedAt: expiresAt, bytes: 4096 });
     }
@@ -449,7 +450,7 @@ test.each(["late-pin", "replacement", "parent-symlink", "unreadable", "deadline"
   const observation = spyOn(filesystem, "inspectAttemptTree").mockImplementation(async (directory, original) => {
     const result = await inspect(directory, original);
     if (directory === destination) {
-      if (kind === "late-pin") fs.writeFileSync(path.join(directory, ".delegatus-keep"), "operator pin");
+      if (kind === "late-pin") plantKeepMarker(path.join(directory, ".delegatus-keep"));
       if (kind === "replacement") { fs.renameSync(directory, directory + "-previous"); fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "replacement"); }
       if (kind === "parent-symlink") {
         const parent = path.dirname(directory); fs.renameSync(parent, parent + "-previous"); fs.symlinkSync(parent + "-previous", parent);
@@ -493,7 +494,7 @@ test("expired linked evidence retires without following its target; recent failu
 test.each(["keep", "outside-git", "cwd", "checkout-link"])("retention preserves an expired root protected by %s", async kind => {
   const f = fixture(), directory = f.make(kind, 30 * 86400000), checkout = path.join(f.root, "checkout");
   fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
-  if (kind === "keep") fs.writeFileSync(path.join(directory, ".delegatus-keep"), "operator pin");
+  if (kind === "keep") plantKeepMarker(path.join(directory, ".delegatus-keep"));
   if (kind === "outside-git") fs.writeFileSync(path.join(directory, ".git"), `gitdir: ${path.join(checkout, ".git")}\n`);
   if (kind === "checkout-link") fs.symlinkSync(directory, path.join(checkout, "scratch"));
   const scan = () => ({ ownNamespace: null, processes: kind === "cwd" || kind === "checkout-link"
@@ -529,7 +530,8 @@ test("retention removal holds no state transaction or collection lease", async (
   try {
     await holdFinishedRoot(directory, "lane", "", [], f.store.owner(directory)!.launchId);
     let removals = 0;
-    const result = await f.sweep("expired", { remove: async (trash: string, guard: () => Promise<boolean>, dispatch: () => boolean) => {
+    const result = await f.sweep("expired", { remove: async (trash: string, guard: () => Promise<boolean>, dispatch: () => boolean,
+      mutationStarted: () => void) => {
       expect(await guard()).toBeTrue(); expect(dispatch()).toBeTrue();
       const db = new Database(statePath("state.sqlite"));
       try {
@@ -538,7 +540,7 @@ test("retention removal holds no state transaction or collection lease", async (
           expect(db.query("SELECT 1 FROM state_leases LIMIT 1").get()).toBeNull();
         db.exec("ROLLBACK");
       } finally { db.close(); }
-      removals++; await fs.promises.rm(trash, { recursive: true });
+      removals++; mutationStarted(); await fs.promises.rm(trash, { recursive: true });
     } });
     expect(result.errors).toBe(0); expect(removals).toBe(1);
   } finally { f.store.close(); }
@@ -632,6 +634,20 @@ test("copies retain unfinished, recent and unattributed data and never touch dur
     expect(report.errors).toBe(0); expect(report.removed).toBe(2); expect(report.unattributed.count).toBe(1);
     expect(destinations.map(destination => fs.existsSync(destination))).toEqual([false, true, true, false, true]);
     for (const filename of durable) expect(fs.readFileSync(filename, "utf8")).toBe("durable");
+  } finally { process.env.LLV_STATE_DIR = priorState; f.store.close(); }
+});
+
+test("a creation-expired agent copy waits for the host-finish retention owner", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "agent-copy-state");
+  const destination = statePath("evidence", "attempt-temp", digest("agent-copy")); fs.mkdirSync(destination, { recursive: true });
+  fs.writeFileSync(path.join(destination, "capture.png"), "capture");
+  f.store.registerCopy({ destination, pipelineId: null, launchId: "agent-copy", kind: "agent", createdAt: NOW - 8 * 86400000,
+    expiresAt: NOW - 1000, checkedAt: 0, bytes: 4096 });
+  try {
+    const report = await sweepEvidenceCopies(f.store, { now: () => NOW, state: async () => "expired",
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true }, { agentCopiesManagedSeparately: true });
+    expect(report.removed).toBe(0); expect(fs.existsSync(destination)).toBeTrue(); expect(f.store.copy(destination)?.expiresAt).toBeNull();
   } finally { process.env.LLV_STATE_DIR = priorState; f.store.close(); }
 });
 
@@ -773,14 +789,22 @@ test("a settled attempt removes its scratch without waiting for host release", a
 });
 
 type NamespacePath = "namespace-only" | "permission-fallback";
-type NamespaceChange = "control" | "producer-changed" | "checkout-unreadable" | "root-replaced";
-async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceChange = "control", expired = false) {
+type NamespaceChange = "control" | "producer-changed" | "checkout-unreadable" | "root-replaced" | "namespace-refused";
+type NamespaceTree = { foreign?: boolean; image?: "source" | "named" };
+async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceChange = "control", expired = false, tree: NamespaceTree = {}) {
   const f = fixture(), directory = f.make(`namespace-${kind}`), bin = path.join(f.root, "bin");
   const checkout = path.join(f.root, "checkout"), completion = path.join(f.root, "cleanup-complete");
   fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
   fs.mkdirSync(path.join(directory, "private")); fs.mkdirSync(bin);
   fs.writeFileSync(path.join(directory, "private", "payload"), "reclaim me");
   if (expired) fs.writeFileSync(path.join(directory, "frame.png"), "expired evidence");
+  // A container that ran as another user leaves a directory this user cannot list.
+  const locked = path.join(directory, "private", "pgdata");
+  if (tree.foreign) { fs.mkdirSync(locked); fs.writeFileSync(path.join(locked, "base"), "database files"); fs.chmodSync(locked, 0); }
+  // An image of a checked-out source tree, and whether a report named it.
+  const image = path.join(directory, "private", "vendor", "static", "icon.png");
+  if (tree.image) { fs.mkdirSync(path.dirname(image), { recursive: true }); fs.writeFileSync(image, "source asset"); }
+  if (tree.image === "named") nameInReport(image);
   f.store.measure(directory, 8192); f.store.release(directory);
   fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}
 import fs from "node:fs";
@@ -790,8 +814,20 @@ if (args[0] !== "run") process.exit(61);
 const source = /source=([^,]+)/.exec(args[args.indexOf("--mount") + 1])?.[1];
 if (!source || !source.startsWith(${JSON.stringify(f.root + path.sep)})) process.exit(62);
 const script = args[args.indexOf("-c") + 1];
+if (script.includes("sha256sum /tmp/sorted") && !script.includes("-delete")) {
+  process.stdout.write("a".repeat(64) + "\\n"); process.exit(0);
+}
+// The namespace holds DAC_OVERRIDE: it lists what this user cannot.
+const grant = file => { if (!fs.lstatSync(file).isDirectory()) return; fs.chmodSync(file, 0o700); for (const entry of fs.readdirSync(file)) grant(file + "/" + entry); };
+// The no-evidence proof: the paths the evidence ledger links, passed after
+// the identity, or, before them, every picture anywhere in the tree.
+const at = args.indexOf("-c") + 2, linked = args.slice(at + 3, at + 3 + Number(args[at + 2]));
+const pictures = file => { try { return fs.lstatSync(file).isDirectory() ? fs.readdirSync(file).some(entry => pictures(file + "/" + entry)) : /\.(png|jpe?g|gif|webp|avif|bmp|svg|pdf|mp4|webm)$/i.test(file); } catch { return false; } };
+if (script.includes("found=$(find") ? pictures(source) : script.includes('test "$linked" = 0') && linked.some(file => fs.existsSync(source + "/" + file))) process.exit(75);
 if (script.includes("-delete")) {
-  if (script.includes("found=$(find") && fs.existsSync(source + "/frame.png")) process.exit(75);
+  if (${JSON.stringify(change)} === "namespace-refused") process.exit(75);
+  process.stdout.write("DELEGATUS_REMOVAL_STARTED\\n");
+  grant(source);
   for (const entry of fs.readdirSync(source)) fs.rmSync(source + "/" + entry, { recursive: true, force: true });
   if (${JSON.stringify(change)} === "checkout-unreadable") fs.chmodSync(${JSON.stringify(checkout)}, 0);
   if (${JSON.stringify(change)} === "root-replaced") {
@@ -824,6 +860,21 @@ if (script.includes("-delete")) {
       },
       authority: async () => ({ state: expired ? "expired" : "closed", revision: "unchanged",
         isCurrent: () => change !== "producer-changed" || !fs.existsSync(completion) }) });
+    if (tree.image === "named") {
+      // The evidence ledger links a picture in the tree: the proof refuses.
+      expect(report).toMatchObject({ removed: 0, errors: 1 });
+      expect(fs.existsSync(image)).toBeTrue(); expect(fs.existsSync(completion)).toBeFalse();
+      return;
+    }
+    if (change === "namespace-refused") {
+      expect(fs.existsSync(completion)).toBeFalse();
+      expect(report).toMatchObject({ removed: 0, errors: 1 });
+      expect(f.store.has(directory)).toBeTrue();
+      expect(fs.readFileSync(path.join(directory, "private", "payload"), "utf8")).toBe("reclaim me");
+      expect(fs.existsSync(attemptTempJournalPath(directory))).toBeFalse();
+      expect(fs.readdirSync(f.root).filter(name => name.startsWith(".delegatus-trash-"))).toEqual([]);
+      return;
+    }
     expect(fs.existsSync(completion)).toBeTrue();
     if (change !== "control") {
       expect(report.removed).toBe(0);
@@ -847,6 +898,7 @@ if (script.includes("-delete")) {
     expect(f.store.bytes()).toBe(0);
   } finally {
     opendir.mockRestore(); rm.mockRestore(); f.store.close(); fs.chmodSync(checkout, 0o700);
+    try { fs.chmodSync(locked, 0o700); } catch { /* Removed or never made. */ }
     if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
     if (previousImage === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
   }
@@ -856,12 +908,73 @@ test.skipIf(process.platform !== "linux")("expired evidence also retires through
   await integratedNamespaceSweep("permission-fallback", "control", true);
 });
 
+test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)("an expired root with a subtree this user cannot list retires through the namespace", async () => {
+  await integratedNamespaceSweep("permission-fallback", "control", true, { foreign: true });
+});
+
+test("the no-evidence proof counts a picture a report named, kept or not, and a root recorded-check custody holds", async () => {
+  const f = fixture(), directory = f.make("proof-ledger");
+  fs.mkdirSync(path.join(directory, "vendor")); fs.writeFileSync(path.join(directory, "vendor", "icon.png"), "source asset");
+  try {
+    expect(filesystem.ledgerLinkedEvidence(directory)).toEqual([]);
+    nameInReport(path.join(directory, "shots", "frame.png"));
+    const index = JSON.parse(fs.readFileSync(statePath("report-media", "index.json"), "utf8"));
+    fs.writeFileSync(statePath("report-media", index[0].file), "kept copy");
+    expect(filesystem.ledgerLinkedEvidence(directory)).toEqual([path.join("shots", "frame.png")]);
+    await holdFinishedRoot(directory);
+    expect(() => filesystem.ledgerLinkedEvidence(directory)).toThrow("recorded-check custody");
+  } finally { f.store.close(); }
+});
+
+test.skipIf(process.platform !== "linux").each([["source", "namespace-only"], ["source", "permission-fallback"], ["named", "namespace-only"]] as const)(
+  "the namespace no-evidence proof counts only what the evidence ledger links (%s image, %s)", (image, kind) =>
+    integratedNamespaceSweep(kind, "control", false, { image }));
+
+test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)("a root whose cleanup container cannot run waits for the operator and is reported", async () => {
+  const f = fixture(), directory = f.make("blocked", 2 * 86400000), bin = path.join(f.root, "bin");
+  // What a container that ran as another user leaves behind: a directory this
+  // user can neither list nor empty. Mode 000 on our own directory models it.
+  const locked = path.join(directory, "tmp", "pgdata");
+  fs.mkdirSync(locked, { recursive: true }); fs.writeFileSync(path.join(locked, "base"), Buffer.alloc(8192)); fs.chmodSync(locked, 0);
+  fs.mkdirSync(path.join(directory, "tmp", "empty-foreign")); fs.chmodSync(path.join(directory, "tmp", "empty-foreign"), 0o500);
+  // Docker answers, but no cleanup image is installed: the namespace cannot run.
+  fs.mkdirSync(bin); fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh\necho "$@" >> ${JSON.stringify(path.join(f.root, "docker.log"))}\n`
+    + 'case "$1" in ps) exit 0 ;; image) exit 0 ;; *) exit 1 ;; esac\n', { mode: 0o700 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = bin + path.delimiter + (previousPath ?? "");
+  try {
+    const held = await f.sweep("expired");
+    expect(held).toMatchObject({ removed: 0, errors: 0, operatorHeld: 1 });
+    expect(held.outcomes[0]).toMatchObject({ directory, disposition: "operator", unreadable: true });
+    expect(held.outcomes[0].reason).toContain("1 directory this user cannot remove");
+    expect(held.outcomes[0].reason).toContain("no installed container cleanup utility image");
+    expect(held.operatorHeldBytes).toBeGreaterThanOrEqual(4096);
+    expect(held.blocked).toMatchObject({ roots: 1, listed: [{ directory, count: 1, entries: [{ path: locked, uid: process.getuid!(), unreadable: true }] }] });
+    expect(fs.existsSync(path.join(directory, "tmp"))).toBeTrue();
+    expect(f.store.owner(directory)!.checkedAt).toBe(NOW + BLOCKED_SUBTREE_RETRY_MS);
+    const dockerLog = path.join(f.root, "docker.log");
+    expect((fs.existsSync(dockerLog) ? fs.readFileSync(dockerLog, "utf8") : "").split("\n").filter(line => line.startsWith("run"))).toEqual([]);
+    // Once the operator removed it, the next visit retires the root and the report forgets it.
+    fs.chmodSync(locked, 0o700); fs.rmSync(locked, { recursive: true });
+    const retired = await f.sweep("expired", { now: () => NOW + BLOCKED_SUBTREE_RETRY_MS });
+    expect(retired).toMatchObject({ removed: 1, errors: 0, blocked: { roots: 0, listed: [] } });
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally {
+    try { fs.chmodSync(locked, 0o700); } catch { /* Removed above. */ }
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+    f.store.close();
+  }
+});
+
 test.skipIf(process.platform !== "linux").each(["namespace-only", "permission-fallback"] as const)(
   "an unchanged integrated sweep finishes namespace cleanup in one pass (%s)", kind => integratedNamespaceSweep(kind));
 test.skipIf(process.platform !== "linux").each([
   ["namespace-only", "producer-changed"], ["namespace-only", "checkout-unreadable"], ["namespace-only", "root-replaced"],
   ["permission-fallback", "producer-changed"], ["permission-fallback", "checkout-unreadable"], ["permission-fallback", "root-replaced"],
 ] as const)("an integrated sweep refuses post-delete drift (%s, %s)", (kind, change) => integratedNamespaceSweep(kind, change));
+test.skipIf(process.platform !== "linux")("a namespace refusal before delete restores the root and clears its journal", async () => {
+  await integratedNamespaceSweep("namespace-only", "namespace-refused");
+});
 
 test.each(["absent", "unreadable", "restored-with-link"] as const)(
   "the final producer read revalidates a changed consumer checkout (%s)", async change => {
@@ -1317,19 +1430,54 @@ test("an incomplete real checkout inventory defers roots with their bytes instea
   } finally { clock.mockRestore(); f.store.close(); }
 });
 
-test("pressure retires the largest released settled roots first and reserves fair visits", async () => {
+test("pressure retires the oldest released settled roots first and reserves fair visits", async () => {
   const f = fixture();
   const oldest = f.make("oldest-unreleased", 10 * 86400000);
-  const small = f.make("a-small"), large = f.make("z-large");
-  fs.writeFileSync(path.join(large, "data"), Buffer.alloc(16 * 1024 ** 2));
-  f.store.measure(small, 4096); f.store.measure(large, 16 * 1024 ** 2);
-  f.store.release(small); f.store.release(large);
+  const older = f.make("z-older-small", 2 * 86400000), newer = f.make("a-newer-large", 86400000);
+  fs.writeFileSync(path.join(newer, "data"), Buffer.alloc(16 * 1024 ** 2));
+  f.store.measure(older, 4096); f.store.measure(newer, 16 * 1024 ** 2);
+  f.store.release(older); f.store.release(newer);
   try {
     const first = await f.sweep("closed", { maxRoots: 1, capBytes: 0 });
-    expect(first.removed).toBe(1); expect(fs.existsSync(large)).toBeFalse();
-    expect(first.removedBytes).toBeGreaterThanOrEqual(16 * 1024 ** 2);
+    expect(first.removed).toBe(1); expect(fs.existsSync(older)).toBeFalse(); expect(fs.existsSync(newer)).toBeTrue();
     const second = await f.sweep("closed", { maxRoots: 2, capBytes: 0 });
-    expect(second.removed).toBe(2); expect(fs.existsSync(oldest)).toBeFalse();
+    expect(second.removed).toBe(2); expect(fs.existsSync(oldest)).toBeFalse(); expect(fs.existsSync(newer)).toBeFalse();
+  } finally { f.store.close(); }
+});
+
+test("roots whose lane retention ended lead every page across the ledger, oldest finish first", async () => {
+  const f = fixture();
+  // Rows the round robin would visit first: they were checked longest ago.
+  const round = Array.from({ length: 12 }, (_, n) => f.make(`round-${String(n).padStart(2, "0")}`, 30 * 86400000));
+  const newer = f.make("expired-newer", 1000), older = f.make("expired-older", 2000), pending = f.make("expires-tomorrow", 3000);
+  f.store.retainRoot(newer, NOW - 1000); f.store.retainRoot(older, NOW - 2 * 86400000); f.store.retainRoot(pending, NOW + 86400000);
+  const page = (limit: number, pressure = false, at = NOW) => f.store.due(at, limit, pressure).map(row => row.directory);
+  try {
+    for (const pressure of [false, true]) {
+      expect(page(4, pressure).slice(0, 2)).toEqual([older, newer]);
+      expect(page(4, pressure).slice(2)).toEqual(round.slice(0, 2));
+      expect(page(4, pressure)).not.toContain(pending);
+    }
+    // At most half of a page, so the round robin keeps moving.
+    expect(page(2)).toEqual([older, round[0]]);
+    // Held past its retention, the oldest steps back and the next one leads.
+    const report = await f.sweep("live", { maxRoots: 2 });
+    expect(report.outcomes.map((row: { directory: string }) => row.directory)).toEqual([older, round[0]]);
+    expect(page(2, false, NOW + 60_000)).toEqual([newer, round[1]]);
+    expect(f.store.owner(older)!.checkedAt).toBe(NOW + EXPIRED_HOLD_RETRY_MS);
+  } finally { f.store.close(); }
+});
+
+test("a root the run budget never reached keeps its place for the next tick", async () => {
+  const f = fixture();
+  const first = f.make("budget-first", 3000), second = f.make("budget-second", 2000), third = f.make("budget-third", 1000);
+  let now = NOW;
+  try {
+    const report = await f.sweep("closed", { maxRoots: 3, now: () => now, onRetired: () => { now += 40_001; } });
+    expect(report).toMatchObject({ removed: 1, deferred: 2, errors: 0 });
+    expect(fs.existsSync(first)).toBeFalse();
+    expect(f.store.owner(second)!.checkedAt).toBe(NOW - 2000); expect(f.store.owner(third)!.checkedAt).toBe(NOW - 1000);
+    expect(f.store.due(now, 2).map(row => row.directory)).toEqual([second, third]);
   } finally { f.store.close(); }
 });
 
@@ -1476,15 +1624,15 @@ test("a symlink replacement cannot redirect cleanup", async () => {
 
 for (const replacement of ["directory", "symlink"] as const) test(`a ${replacement} swap during measurement keeps the prior accounting and both trees`, async () => {
   const f = fixture(); const directory = f.make("measurement-swap"), saved = `${directory}-saved`;
-  const measure = filesystem.allocatedAttemptBytes;
-  const race = spyOn(filesystem, "allocatedAttemptBytes").mockImplementation(async target => {
-    const bytes = await measure(target);
+  const measure = filesystem.measureAttemptAllocation;
+  const race = spyOn(filesystem, "measureAttemptAllocation").mockImplementation(async target => {
+    const measured = await measure(target);
     if (target === directory) {
       fs.renameSync(directory, saved);
       if (replacement === "symlink") fs.symlinkSync(saved, directory);
       else { fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "keep"), "replacement"); }
     }
-    return bytes;
+    return measured;
   });
   try {
     const report = await f.sweep();

@@ -9,6 +9,10 @@ compatibility raises the major version.
 ## [Unreleased]
 
 ### Added
+- **Native Mac app.** A universal `Delegatus.app` in a release disk image opens
+  its own window, installs its private runtime after confirmation, reuses a
+  running server, and offers login, stop, update and log controls in English
+  and Ukrainian. The initial app is ad-hoc signed.
 - **Start at login.** Opt-in `delegatus service install` and `service remove`
   create and remove a per-user service on Linux and macOS. Doctor reports its
   status, and the install prompt offers the command.
@@ -39,6 +43,11 @@ compatibility raises the major version.
 ### Changed
 - A launch an older release left in flight on the terminal transport ends
   failed with a reason; launch it again.
+- **A `state.sqlite` write costs a fraction of what it did.** Each process
+  keeps one writer connection per database instead of opening three per
+  write, and only the write's own commit waits for the disk, not the two that
+  take and release its lease. A one-row write went from about 14 ms to 0.7 ms
+  on tmpfs and from about 45 ms to 5 ms on a busy ext4 disk (#3890).
 - **Orchestrator seats are stored in `state.sqlite`** (collection
   `orchestrator_seats`) instead of `orchestrator-seats.json`: one row per
   seat, pending intent, revocation, lineage entry and history entry, and each
@@ -48,6 +57,66 @@ compatibility raises the major version.
   went from about 20 ms to about 0.1 ms. On first start the file is imported
   and verified, then kept as `orchestrator-seats.json.imported-<release>`,
   and a directory with a README takes its place (#1870).
+- **The forge cache is stored in `state.sqlite`** (collection
+  `forge_links`) instead of `forge-links.json`: one row per repository,
+  proposal page, pull request and issue number. Every sweep of a repository
+  and every pull request a stage report observed used to rewrite the whole
+  2.6 MB file; a sweep page now writes the pull requests it read, about
+  0.26 MB to disk, and an observed pull request about 90 KB. On first start the
+  file is imported and verified, then kept as
+  `forge-links.json.imported-<release>`, and a directory with a README takes
+  its place (#1870).
+- **"Asks you" state is stored in `state.sqlite`** (collection
+  `operator_asks`) instead of `operator-asks.json`: one row per ask, per
+  message already sent and per scored text, and one for the month's spend.
+  Every send and every memory-decision spend settlement used to rewrite the
+  whole 1.5 MB file; a settlement now writes one row, about 70 KB to disk
+  instead of 1.5 MB, and the board's ask overlay is answered without reading
+  anything while the store is unchanged. On first start the file is imported
+  and verified, then kept as `operator-asks.json.imported-<release>`, and a
+  directory with a README takes its place. A file that cannot be read is not
+  imported: nothing is sent until it reads again, as before (#1870).
+- **The project catalog is stored in `state.sqlite`** (collection
+  `project_catalog`) instead of `project-catalog.json`: one row per
+  catalogued transcript. A scan writes only the records that changed and
+  deletes those of transcripts that are gone; on a catalog shaped like a busy
+  installation's (about 20,000 transcripts, 15.6 MB), a scan that changes 22
+  of them writes about 0.6 MB instead of 15.6 MB, and a reader that has
+  already read the catalog answers an unchanged one without reading a row. On
+  first start the file is imported and then deleted, since it is a cache.
+- **The lifecycle journal, the seat tick's run journal and the reset-credit
+  ledger move into `state.sqlite`** (collections `lifecycle`,
+  `seat_tick_runs` and `reset_credits`), out of `lifecycle-journal.json`,
+  `seat-tick/runs.ndjson` with its per-project rings in
+  `runs.ndjson.projects/`, and `codex-reset-credits.ndjson`. Each event,
+  check or entry is one row, so an append writes its own rows and the trim it
+  owes; on a busy installation it used to rewrite 1.35 MB (lifecycle) or
+  5.7 MB (both seat tick rings). Readers follow the journal's change log or
+  read a bounded key range: reading the lifecycle journal went from about
+  8 ms to 0.1 ms, and the check-error alarm read after every seat tick check
+  from about 17 ms to 4 ms. In the Viewer a check's append runs on a worker
+  thread, so it does not hold the Viewer thread while it commits; the seat
+  tick's commits, like the files they replace, do not wait for the disk.
+  On first start each file is imported and
+  verified, then kept as `<name>.imported-<release>` (the per-project rings
+  as `runs.ndjson.projects.imported-<release>`), and a directory with a
+  README takes the file's place. `conversation-monitor/runs.ndjson` stays a
+  file (#1870).
+- **The limits history, the reaper's authorship evidence and the handoff
+  lineage are stored in `state.sqlite`** (collections `limits_history`,
+  `reaper` and `handoff_lineage`) instead of `limits-history.json`,
+  `reaper-state.json` and `handoff-lineage.json`, which were rewritten whole
+  (about 1.4 MB, 3 MB and 0.2 MB on a busy installation). The limits history
+  is one row per series and day, the reaper's evidence one row per transcript
+  path and the lineage one row per edge. A limits poll writes only the current
+  day of the series it extends, and nothing inside the five-minute gap; a
+  reaper cycle writes only the paths whose evidence changed, and nothing when
+  none did. Readers keep
+  the rows and follow only what changed, so the board's authorship check and
+  the burndown no longer parse a whole file on every request. An edge one
+  process records is now seen by the others. On first start each file is
+  imported and verified, then kept as `<file>.imported-<release>`, and a
+  directory with a README takes its place (#1870).
 
 ### Downgrading
 - A version older than this one finds a directory where
@@ -58,6 +127,43 @@ compatibility raises the major version.
   loses seat changes made since the upgrade. Deployed releases rolled back
   through the release fence get the file written back for them automatically,
   and the designations they make are merged at roll-forward.
+- A version older than this one finds a directory where `forge-links.json`
+  was. It reads that as an empty forge cache, so pull request and issue
+  chips disappear, and its sweep cannot write. Upgrade again to recover, or
+  replace the directory with the `forge-links.json.imported-*` copy. Deployed
+  releases rolled back through the release fence get the file written back
+  for them automatically, and their newer readings are merged at roll-forward.
+- A version older than this one finds a directory where
+  `operator-asks.json` was. Its classifier reads that as a file it cannot
+  read and sends nothing, memory decisions cannot record their spend, and the
+  board shows no asks. Upgrade again to
+  recover, or replace the directory with the `operator-asks.json.imported-*`
+  copy, which loses the asks and spend recorded since the upgrade. Deployed
+  releases rolled back through the release fence get the file written back
+  for them automatically, and what they record is merged at roll-forward.
+- A version older than this one finds no `project-catalog.json`. Its first
+  scan describes every transcript again, which takes longer once, and then
+  writes the file as before. Upgrading again imports that file.
+- A version older than this one finds directories where
+  `lifecycle-journal.json`, `seat-tick/runs.ndjson` and
+  `codex-reset-credits.ndjson` were. Its lifecycle surfaces (the
+  `lifecycle_events` tool, the digest and the projector) report the journal
+  as unreadable, its seat tick checks fail to record their line, and its
+  reset-credit redemptions answer `recorded: false`. Upgrade again to
+  recover. Replacing a directory with its `.imported-*` copy also works, but
+  loses what was recorded since the upgrade. Deployed releases rolled back
+  through the release fence get the files written back for them
+  automatically, and what they append is merged at roll-forward.
+- A version older than this one finds directories where
+  `limits-history.json`, `reaper-state.json` and `handoff-lineage.json` were.
+  It reads each as empty: the burndown shows no recorded history, every
+  finished worker stays pinned as unverified on the board, and older handoffs
+  lose their links. It cannot save new samples, evidence or edges, and its
+  reaper cycle fails at the evidence write. Upgrade again to recover.
+  Replacing a directory with its `<file>.imported-*` copy also works, but
+  loses what was recorded since the upgrade. Deployed releases rolled back
+  through the release fence get the files written back for them
+  automatically, and what they record is merged at roll-forward.
 
 ## [2.0.0] — 2026-10-27
 

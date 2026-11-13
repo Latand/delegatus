@@ -1,3 +1,5 @@
+import { once } from "node:events";
+import { idleWindowFixture } from "./fixtures/idleEventWindow";
 import { readNativeTiming } from "./attemptTiming";
 import { splitAttemptTime } from "@/lib/pipelines/accounting";
 import { readHostExit, withHostStopOrigin } from "./hostExit";
@@ -14,12 +16,12 @@ import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
 import { describe, expect, setSystemTime, spyOn, test } from "bun:test";
 
-import { AgentRegistry, type AgentRegistryStorageOptions } from "@/lib/agent/registry";
+import { AgentRegistry, setAgentRegistryForTests, type AgentRegistryStorageOptions } from "@/lib/agent/registry";
 import { registryLockHolder, type RegistryLockHolder } from "@/lib/agent/registryLockHolderFixture";
 import { defaultRegistrySqliteFilename } from "@/lib/agent/registryBackendIdentity";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { captureProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { viewerMcpServerEnv } from "@/lib/agent/spawnPolicy";
@@ -43,7 +45,7 @@ import {
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 import { DeliveryProgressStore } from "./deliveryProgress";
-import { observeDeliveryEcho } from "./structuredDeliveryController";
+import { observeDeliveryEcho, releaseStructuredDeliveryHostsForDemotion, retainUnpublishedStructuredLaunchHost } from "./structuredDeliveryController";
 import { projectEngineHostEvent } from "./engineHostEvents";
 import { normalizeQueueEntry, type HostState, type QueueEntry, type RuntimeEvent } from "./engineHost";
 import { structuredContent, type StructuredImageRef } from "./structuredContent";
@@ -59,9 +61,13 @@ import {
   type StructuredHostPersistenceOptions,
 } from "./registry";
 import { orphanWriterTree } from "./fixtures/orphanWriterTree";
-import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { captureProcessTree } from "@/lib/processGroup";
 import { claudeStartupHostOptions, type ClaudeStartupOwner } from "./startup";
+import { AgentStateService } from "@/lib/agentState/service";
+import { FIXTURE_CONVERSATION, FIXTURE_SESSION, fixtureRecords, fixtureRegistry } from "@/lib/agentState/testFixture";
+import { cachedAgentObservation, clearAgentObservations } from "@/lib/agentState/projectionCache";
+import { entryRevision, readAgentProjection, subjectId } from "@/lib/agentState/store";
+import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 
 /* #1905: the config and state root a spawned agent runs under, plus the `gh`
    configuration pinned for it because it no longer inherits XDG_CONFIG_HOME.
@@ -3171,7 +3177,7 @@ describe("ClaudeStreamBrokerHost", () => {
     });
   });
 
-  test("boot adoption reaps a surviving orphaned Claude child before resume", async () => {
+  test("boot adoption preserves a live orphaned Claude child without preparing a competing resume", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-orphan-adoption-"));
     const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
     const sessionId = "orphaned-claude-session";
@@ -3233,6 +3239,10 @@ describe("ClaudeStreamBrokerHost", () => {
         },
         { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
       );
+      expect(adopted).toHaveLength(0);
+      expect(optionsCalls).toBe(0);
+      expect(procBackend.processIdentity(orphan.pid)).toBe(startIdentity);
+      expect(registry.hostEntry({ engine: "claude", sessionId })!.structuredHost!.process).toEqual(orphanIdentity);
     } finally {
       if (procBackend.processIdentity(orphan.pid) === startIdentity) {
         try { orphan.kill("SIGKILL"); } catch { /* already exited */ }
@@ -3240,18 +3250,101 @@ describe("ClaudeStreamBrokerHost", () => {
       await Promise.race([orphanExit, Bun.sleep(2_000)]);
     }
 
-    expect(adopted).toHaveLength(1);
-    expect(optionsCalls).toBe(1);
-    expect(procBackend.processIdentity(orphan.pid)).not.toBe(startIdentity);
-    await adopted[0]!.host.release();
   }, 10_000);
+
+  test("settled stdio orphan is reaped under central proof before accepted work resumes exactly once", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-settled-orphan-work-"));
+    const registryPath = path.join(directory, "agent-registry.json");
+    const orphan = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    const orphanExit = new Promise<void>(resolve => { orphan.once("exit", () => resolve()); });
+    let startIdentity: string | null = null;
+    for (let attempt = 0; attempt < 100 && !startIdentity; attempt += 1) {
+      startIdentity = orphan.pid ? procBackend.processIdentity(orphan.pid) : null;
+      if (!startIdentity) await Bun.sleep(2);
+    }
+    if (!orphan.pid || !startIdentity) {
+      if (orphan.pid) { try { orphan.kill("SIGKILL"); } catch { /* owned fixture child already exited */ } }
+      await Promise.race([orphanExit, Bun.sleep(2_000)]);
+      throw new Error("orphan process identity is unavailable");
+    }
+    const identity = captureProcessIdentity(orphan.pid, undefined, startIdentity);
+    const records = fixtureRecords("claude");
+    const nativePath = path.join(directory, "native.jsonl");
+    fs.writeFileSync(nativePath, [...records.open, ...records.close].map(row => JSON.stringify(row)).join("\n") + "\n");
+    const source = fixtureRegistry(directory, "claude", identity, null);
+    fs.writeFileSync(registryPath, JSON.stringify(source));
+    const registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
+    let clock = Date.now();
+    setSystemTime(clock);
+    const service = new AgentStateService({ registry, now: () => clock, owns: () => true, process: processIdentityStatus,
+      memory: () => null, release: "fixture", publish: async () => false });
+    const replacement = new FakeClaude(new RecordingDeliveryLedger());
+    const message = "accepted work survives the owner restart";
+    let deliveryId = "";
+    let optionsSawOrphanGone = false;
+    let adopted: Awaited<ReturnType<typeof adoptClaudeRegistryHosts>> = [];
+    try {
+      await service.request();
+      const key = { engine: "claude" as const, sessionId: FIXTURE_SESSION };
+      const current = registry.hostEntry(key)!;
+      expect(current.structuredHost?.activeTurnRef).toBeNull();
+      deliveryId = registry.holdDelivery(FIXTURE_CONVERSATION, message).id;
+      await service.reconcile(registry.hostEntry(key)!);
+      const held = registry.agentStateRead(file => file.heldDeliveries[deliveryId]);
+      expect(held?.state).toBe("assigned");
+      const subject = subjectId(registry.hostEntry(key)!);
+      const durableBeforeNoop = readAgentProjection(registry, subject)!;
+      clock += 6_000;
+      setSystemTime(clock);
+      await service.reconcile(registry.hostEntry(key)!);
+      const durableAfterNoop = readAgentProjection(registry, subject)!;
+      const volatile = cachedAgentObservation(subject)!;
+      expect(durableAfterNoop.revision).toBe(durableBeforeNoop.revision);
+      const durableValidities = [durableAfterNoop.facts.process, durableAfterNoop.facts.owner, durableAfterNoop.facts.turn,
+        durableAfterNoop.facts.attention, durableAfterNoop.facts.transcript, durableAfterNoop.facts.obligations]
+        .map(fact => fact.evidence.validUntil).filter((value): value is number => value !== undefined);
+      expect(durableValidities.some(value => value < clock)).toBeTrue();
+      expect(volatile.facts.revision).toBe(entryRevision(registry.hostEntry(key)!));
+      expect([volatile.facts.process, volatile.facts.owner, volatile.facts.attention].every(fact =>
+        fact.evidence.validUntil === undefined || fact.evidence.validUntil >= clock)).toBeTrue();
+      adopted = await adoptClaudeRegistryHosts(registry, () => {
+        optionsSawOrphanGone = procBackend.processIdentity(orphan.pid!) !== startIdentity;
+        const ledger = new RecordingDeliveryLedger();
+        return { cwd: directory, eventStore: new MemoryEventStore(), deliveryLedger: ledger,
+          readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai" as const, subscriptionType: "max" }),
+          readTranscript: () => [], spawnProcess: fakeSpawn(replacement, {}) };
+      }, { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" }, () => true);
+      expect(adopted, JSON.stringify({ row: registry.hostEntry(key), orphan: procBackend.processIdentity(orphan.pid!) })).toHaveLength(1);
+      expect(optionsSawOrphanGone).toBe(true);
+      const pendingReceipt = adopted[0]!.host.send({ id: deliveryId, text: message });
+      await replacement.userFrameWritten;
+      replacement.emitJson({ type: "user", session_id: adopted[0]!.host.identity.sessionId, uuid: "accepted-work-echo",
+        message: { role: "user", content: [{ type: "text", text: message }] } });
+      const receipt = await pendingReceipt;
+      expect(receipt.outcome).toBe("turn-started");
+      expect(await adopted[0]!.host.send({ id: deliveryId, text: message })).toMatchObject({ outcome: "turn-started" });
+      expect(replacement.inputs.filter(input => input.type === "user")).toHaveLength(1);
+      expect(registry.agentStateRead(file => file.heldDeliveries[deliveryId]?.state)).toBe("assigned");
+    } finally {
+      service.stop();
+      for (const item of adopted) await item.host.release();
+      clearAgentObservations();
+      setSystemTime();
+      registry.close();
+      if (procBackend.processIdentity(orphan.pid) === startIdentity) {
+        try { orphan.kill("SIGKILL"); } catch { /* the owned test child already exited */ }
+      }
+      await Promise.race([orphanExit, Bun.sleep(2_000)]);
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   /* #2790: the host publishes `dead` when its stream fails and reaps the child
      about a second later. A Viewer generation that ends inside that window
      leaves a terminal row whose recorded engine process is still running in
-     the worktree, and whose claim owner is gone. Startup must stop that
-     process by its recorded identity before anything resumes the session or
-     forgets the identity: a successor engine beside it is two writers. */
+     the worktree, and whose claim owner is gone. Startup preserves that
+     process and identity for central reconciliation and idle retirement.
+     A successor cannot start while the old writer can still run. */
   async function terminalRowOverLiveOrphan(status: "dead" | "unhosted", sessionId: string) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-terminal-orphan-"));
     const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
@@ -3302,7 +3395,7 @@ describe("ClaudeStreamBrokerHost", () => {
   }
 
   for (const status of ["dead", "unhosted"] as const) {
-    test(`boot adoption stops a live engine process under a ${status} row before it resumes the session`, async () => {
+    test(`boot adoption preserves a live engine process under a ${status} row and refuses competing resume`, async () => {
       const sessionId = `terminal-orphan-adoption-${status}`;
       const fixture = await terminalRowOverLiveOrphan(status, sessionId);
       const ledger = new RecordingDeliveryLedger();
@@ -3325,9 +3418,10 @@ describe("ClaudeStreamBrokerHost", () => {
           }),
           { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
         );
-        expect(orphanAliveAtResume).toEqual([false]);
-        expect(adopted).toHaveLength(1);
-        expect(fixture.orphanAlive()).toBe(false);
+        expect(orphanAliveAtResume).toEqual([]);
+        expect(adopted).toHaveLength(0);
+        expect(fixture.orphanAlive()).toBe(true);
+        expect(fixture.registry.hostEntry({ engine: "claude", sessionId })!.structuredHost!.process).toEqual(fixture.orphanIdentity);
       } finally {
         await fixture.stop();
         for (const item of adopted) await item.host.release();
@@ -3335,18 +3429,17 @@ describe("ClaudeStreamBrokerHost", () => {
     }, 10_000);
   }
 
-  test("startup demotion stops a live engine process under a dead row before it forgets the identity", async () => {
+  test("startup demotion preserves a live engine process and its terminal-row identity", async () => {
     const sessionId = "terminal-orphan-demotion";
     const fixture = await terminalRowOverLiveOrphan("dead", sessionId);
     try {
       await demoteSkippedStructuredRegistryHosts(fixture.registry, () => false);
       /* A row that no longer names the process can never stop it again, so
          the identity may be dropped only once that process is gone. */
-      expect(fixture.orphanAlive()).toBe(false);
+      expect(fixture.orphanAlive()).toBe(true);
       expect(fixture.registry.snapshot().entries[`claude:${sessionId}`]).toMatchObject({
         status: "dead",
-        claimOwner: null,
-        structuredHost: { endpoint: "stdio:released", process: null },
+        structuredHost: { process: fixture.orphanIdentity },
       });
     } finally {
       await fixture.stop();
@@ -3366,10 +3459,14 @@ describe("ClaudeStreamBrokerHost", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-orphan-tree-"));
     const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
     const tree = await orphanWriterTree(options);
+    // Terminal cleanup of a living root now needs verified background
+    // absence. This fixture has detached writers, with no native jobs.
+    const transcript = path.join(directory, "native.jsonl");
+    fs.writeFileSync(transcript, "");
     const goneViewer = { pid: 2_000_000_119, startIdentity: "gone-viewer" };
     registry.upsert({
       key: { engine: "claude", sessionId },
-      artifactPath: `/sessions/${sessionId}.jsonl`,
+      artifactPath: transcript,
       cwd: "/repo",
       accountId: null,
       status: "dead",
@@ -3397,6 +3494,20 @@ describe("ClaudeStreamBrokerHost", () => {
      before the escalation would. */
   const incompleteCleanup = { graceMs: 60_000, deadlineMs: 300 };
   const successor = () => captureProcessIdentity(process.pid);
+
+  test("terminal cleanup of a living root refuses unreadable background evidence before capturing or signalling", async () => {
+    const fixture = await terminalRowOverWriterTree("orphan-tree-unreadable");
+    const transcript = fixture.row().artifactPath!;
+    try {
+      fs.writeFileSync(transcript, '{"toolUseResult":{"backgroundTaskId":BROKEN}}\n');
+      expect(await stopTerminalStructuredOrphan(fixture.registry, fixture.key)).toBe(false);
+      expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: true, tool: true });
+      expect(fixture.row().structuredTerminationSurvivors).toBeUndefined();
+      fs.writeFileSync(transcript, "");
+      expect(await stopTerminalStructuredOrphan(fixture.registry, fixture.key)).toBe(true);
+      expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: false, tool: false });
+    } finally { await fixture.stop(); }
+  }, 15_000);
 
   for (const engineIgnoresTerm of [false, true]) {
     test(`a terminal-row orphan stop ends its detached writer before a successor claims the row${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
@@ -3454,16 +3565,17 @@ describe("ClaudeStreamBrokerHost", () => {
   }
 
   for (const engineIgnoresTerm of [false, true]) {
-    test(`boot adoption ends an orphan's detached writer before it resumes the session${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
+    test(`boot adoption preserves an orphan's detached writer and starts no successor${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
       const fixture = await terminalRowOverWriterTree(`orphan-tree-adoption-${engineIgnoresTerm}`, { engineIgnoresTerm });
       const resumed: Array<{ engine: boolean; tool: boolean }> = [];
       let adopted: Awaited<ReturnType<typeof adoptClaudeRegistryHosts>> = [];
       try {
         adopted = await adoptClaudeRegistryHosts(fixture.registry, adoptionOptions(fixture, resumed),
           { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" });
-        expect(resumed).toEqual([{ engine: false, tool: false }]);
-        expect(adopted).toHaveLength(1);
-        expect(await fixture.tree.stillWriting()).toBe(false);
+        expect(resumed).toEqual([]);
+        expect(adopted).toHaveLength(0);
+        expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: true, tool: true });
+        expect(fixture.row().structuredHost?.process).toEqual(fixture.tree.engine);
       } finally {
         for (const item of adopted) await item.host.release();
         await fixture.stop();
@@ -3471,7 +3583,7 @@ describe("ClaudeStreamBrokerHost", () => {
     }, 15_000);
   }
 
-  test("boot adoption resumes nothing while an orphan's writer outlives its stop", async () => {
+  test("boot adoption leaves an orphan's live writer for evidence-based idle retirement", async () => {
     const fixture = await terminalRowOverWriterTree("orphan-tree-adoption-incomplete", { toolIgnoresTerm: true });
     const resumed: Array<{ engine: boolean; tool: boolean }> = [];
     let adopted: Awaited<ReturnType<typeof adoptClaudeRegistryHosts>> = [];
@@ -3482,7 +3594,8 @@ describe("ClaudeStreamBrokerHost", () => {
       expect(resumed).toEqual([]);
       expect(fixture.tree.toolAlive()).toBe(true);
       expect(fixture.row()).toMatchObject({ status: "dead", claimEpoch: 1, structuredHost: { process: fixture.tree.engine } });
-      expect(fixture.row().structuredTerminationSurvivors).toContainEqual(fixture.tree.tool);
+      expect(fixture.tree.engineAlive()).toBe(true);
+      expect(fixture.row().structuredTerminationSurvivors).toBeUndefined();
     } finally {
       for (const item of adopted) await item.host.release();
       await fixture.stop();
@@ -3490,13 +3603,12 @@ describe("ClaudeStreamBrokerHost", () => {
   }, 15_000);
 
   for (const engineIgnoresTerm of [false, true]) {
-    test(`startup demotion ends an orphan's detached writer before it forgets the identity${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
+    test(`startup demotion preserves an orphan's live tree and recorded identity${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
       const fixture = await terminalRowOverWriterTree(`orphan-tree-demotion-${engineIgnoresTerm}`, { engineIgnoresTerm });
       try {
         await demoteSkippedStructuredRegistryHosts(fixture.registry, () => false);
-        expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: false, tool: false });
-        expect(await fixture.tree.stillWriting()).toBe(false);
-        expect(fixture.row()).toMatchObject({ status: "dead", claimOwner: null, structuredHost: { endpoint: "stdio:released", process: null } });
+        expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: true, tool: true });
+        expect(fixture.row()).toMatchObject({ status: "dead", structuredHost: { process: fixture.tree.engine } });
       } finally {
         await fixture.stop();
       }
@@ -3509,7 +3621,8 @@ describe("ClaudeStreamBrokerHost", () => {
       await demoteSkippedStructuredRegistryHosts(fixture.registry, () => false, undefined, incompleteCleanup);
       expect(fixture.tree.toolAlive()).toBe(true);
       expect(fixture.row()).toMatchObject({ status: "dead", claimEpoch: 1, structuredHost: { process: fixture.tree.engine } });
-      expect(fixture.row().structuredTerminationSurvivors).toContainEqual(fixture.tree.tool);
+      expect(fixture.tree.engineAlive()).toBe(true);
+      expect(fixture.row().structuredTerminationSurvivors).toBeUndefined();
     } finally {
       await fixture.stop();
     }
@@ -3782,7 +3895,7 @@ describe("ClaudeStreamBrokerHost", () => {
     }, 20_000);
   }
 
-  test("startup demotion reaps a surviving skipped Claude child", async () => {
+  test("startup demotion retains a skipped live Claude child and its unresolved attention", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-skipped-orphan-"));
     const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
     const sessionId = "skipped-orphaned-claude-session";
@@ -3827,16 +3940,16 @@ describe("ClaudeStreamBrokerHost", () => {
 
     try {
       await demoteSkippedStructuredRegistryHosts(registry, () => false);
-      expect(procBackend.processIdentity(orphan.pid)).not.toBe(startIdentity);
+      expect(procBackend.processIdentity(orphan.pid)).toBe(startIdentity);
       expect(registry.snapshot().entries[`claude:${sessionId}`]).toMatchObject({
-        status: "dead",
+        status: "live",
         claimOwner: null,
         structuredHost: {
-          endpoint: "stdio:released",
-          process: null,
-          activeTurnRef: null,
-          pendingAttention: [],
-          activeFlags: [],
+          endpoint: `stdio:${orphan.pid}`,
+          process: orphanIdentity,
+          activeTurnRef: "stale-turn",
+          pendingAttention: ["stale-attention"],
+          activeFlags: ["working"],
         },
       });
     } finally {
@@ -4996,6 +5109,78 @@ describe("meaningful background turns", () => {
   });
 });
 
+test("planned succession preserves an active Claude broker until its background result settles once", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-background-succession-"));
+  const sessionId = FIXTURE_SESSION;
+  const eventStore = new FileRuntimeEventStore(path.join(root, "events"));
+  const host = await ClaudeStreamBrokerHost.start({
+    cwd: root, sessionId, eventStore, deliveryLedger: new FileClaudeDeliveryLedger(path.join(root, "deliveries")),
+    readTranscript: () => [], readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    spawnProcess: (_command, _args, options) => spawn(process.execPath,
+      [path.join(import.meta.dir, "fixtures/claudeBackgroundSuccessionChild.ts"), root, sessionId],
+      { ...options, stdio: ["pipe", "pipe", "pipe"], detached: true }),
+  });
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  let engineIdentity: ReturnType<typeof captureProcessIdentity> | undefined;
+  let toolIdentity: ReturnType<typeof captureProcessIdentity> | undefined;
+  let unbind: (() => Promise<void>) | undefined;
+  let forget: (() => void) | undefined;
+  try {
+    await host.send({ id: "succession-prompt", text: "start background work" });
+    const health = await host.health();
+    engineIdentity = captureProcessIdentity(health.pid!);
+    const toolPidPath = path.join(root, "tool.pid");
+    const readyDeadline = Date.now() + 5_000;
+    while (!fs.existsSync(toolPidPath) && Date.now() < readyDeadline) await new Promise(resolve => setTimeout(resolve, 10));
+    expect(fs.existsSync(toolPidPath)).toBeTrue();
+    toolIdentity = captureProcessIdentity(Number(fs.readFileSync(toolPidPath, "utf8")));
+    const initial = fixtureRegistry(root, "claude", engineIdentity, captureProcessIdentity(process.pid));
+    const entry = initial.entries[`claude:${sessionId}`]!;
+    entry.structuredHost = claudeHostColumns(health, 1);
+    await registry.deliveryWriteOrBusy({ label: "fixture.background-succession" }, () => registry.agentStateWrite(file => Object.assign(file, initial)));
+    setAgentRegistryForTests(registry);
+    unbind = await bindClaudeHostPersistence(registry, { engine: "claude", sessionId }, host, entry.claimOwner!, 1);
+    forget = retainUnpublishedStructuredLaunchHost({ key: { engine: "claude", sessionId }, host, registry, release: () => host.release() });
+    expect(health.status).toBe("active");
+    expect(health.activeTurnRef).toBe("succession-prompt");
+    expect(registry.hostEntry({ engine: "claude", sessionId })?.structuredHost?.process).toMatchObject({ pid: engineIdentity.pid, startIdentity: engineIdentity.startIdentity });
+
+    let demotionSettled = false;
+    const demotion = releaseStructuredDeliveryHostsForDemotion({ boundary: "fixture-planned-succession" })
+      .then(() => { demotionSettled = true; });
+    /* The native job cannot finish until the test opens this gate. Starting
+       demotion first proves custody is retained independently of setup speed. */
+    expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: "succession-prompt" });
+    expect(demotionSettled).toBeFalse();
+    expect(processIdentityStatus(engineIdentity)).toBe("alive");
+    expect(processIdentityStatus(toolIdentity)).toBe("alive");
+    fs.writeFileSync(path.join(root, "allow-tool-completion"), "go");
+    await demotion;
+    expect(demotionSettled).toBeTrue();
+
+    const completionDeadline = Date.now() + 7_000;
+    while (eventStore.load(sessionId).filter(event => event.kind === "turn-ended").length === 0 && Date.now() < completionDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const terminal = eventStore.load(sessionId).filter(event => event.kind === "turn-ended");
+    expect(terminal).toMatchObject([{ kind: "turn-ended", turnId: "succession-prompt", status: "completed" }]);
+    expect(terminal).toHaveLength(1);
+    const delivered = eventStore.load(sessionId).filter(event => event.kind === "delta" && event.text === "background result");
+    expect(delivered).toHaveLength(1);
+    expect(fs.readFileSync(path.join(root, "tool-starts"), "utf8").trim().split("\n")).toEqual(["start"]);
+    expect(fs.readFileSync(path.join(root, "tool-done"), "utf8")).toBe("done");
+  } finally {
+    forget?.();
+    await host.release().catch(() => {});
+    await unbind?.();
+    if (engineIdentity) await stopFixtureIdentity(engineIdentity);
+    if (toolIdentity) await stopFixtureIdentity(toolIdentity);
+    setAgentRegistryForTests(null);
+    registry.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 15_000);
+
 
 test("native accounting clocks reach the retained time reader through the real Claude producer", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-timing-"));
@@ -5042,4 +5227,79 @@ test("heap counters observe events and subscriber queues without consuming them"
     stop();
     expect(host.heapAttribution()).toMatchObject({ eventSubscribers: before.eventSubscribers, stateSubscribers: before.stateSubscribers });
   } finally { stop(); await stream.return?.(); await host.release(); }
+});
+
+test("central Claude session completion releases the local queue reference and admits a subsequent message", async () => {
+  const ledger = new RecordingDeliveryLedger(), child = new FakeClaude(ledger);
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), deliveryLedger: ledger,
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }), spawnProcess: fakeSpawn(child, {}) });
+  try {
+    const first = host.send({ id: "central-first", text: "first" });
+    await child.userFrameWritten;
+    child.emitJson({ type: "user", isReplay: true, session_id: host.identity.sessionId, uuid: "native-central-first",
+      message: { role: "user", content: [{ type: "text", text: "first" }] } });
+    await first;
+    expect(host.reconcileAgentStateTerminal("older-ref", "older-uuid", 1000)).toBe(false);
+    expect(host.reconcileAgentStateTerminal("central-first", "native-central-first", 1000)).toBe(true);
+    expect(host.agentStateMemory().activeTurnRef).toBeNull();
+    const second = host.send({ id: "central-second", text: "second" });
+    while (child.inputs.filter(input => input.type === "user").length < 2) await once(child.stdin, "data");
+    child.emitJson({ type: "user", isReplay: true, session_id: host.identity.sessionId, uuid: "native-central-second",
+      message: { role: "user", content: [{ type: "text", text: "second" }] } });
+    expect(await second).toMatchObject({ outcome: "turn-started", turnId: "central-second" });
+    expect(host.reconcileAgentStateTerminal("central-first", "native-central-first", 1000)).toBe(false);
+    expect(host.agentStateMemory().activeTurnRef).toBe("central-second");
+  } finally { await host.release(); }
+});
+
+test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
+  const ledger = new RecordingDeliveryLedger();
+  const child = new FakeClaude(ledger);
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", sessionId: "idle-window-session", env: { NODE_ENV: "test" },
+    eventStore: new MemoryEventStore(), deliveryLedger: ledger, readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    spawnProcess: fakeSpawn(child, {}) });
+  const idle = idleWindowFixture(host);
+  try {
+    const count = host.heapAttribution().events;
+    expect(count).toBeGreaterThan(0);
+    expect(await host.releaseIdleEventWindow(() => false)).toBeFalse();
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    expect(host.heapAttribution().events).toBe(0);
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    try {
+      expect(host.heapAttribution().events).toBeGreaterThan(0);
+      for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
+    } finally { await stream.return?.(); }
+    expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
+    const sent = host.send({ id: "next-idle-turn", text: "continue" });
+    const frame = await child.userFrameWritten;
+    child.emitJson({ type: "user", session_id: host.identity.sessionId, uuid: "next-idle-echo", message: frame.message });
+    await sent;
+    expect(host.heapAttribution().events).toBeGreaterThan(0);
+  } finally { idle.cleanup(); await host.release(); }
+});
+
+test("large Write inputs retain previews while the durable event keeps complete file content", async () => {
+  const ledger = new RecordingDeliveryLedger();
+  const child = new FakeClaude(ledger);
+  const eventStore = new MemoryEventStore();
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000000091"].join("-");
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", sessionId, eventStore, deliveryLedger: ledger, readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }), spawnProcess: fakeSpawn(child, {}) });
+  try {
+    child.emitJson({ type: "assistant", session_id: sessionId, message: { id: "large-write", role: "assistant", content: [
+      { type: "tool_use", id: "write", name: "Write", input: { file_path: "file.ts", content: "body".repeat(10_000) } },
+    ] } });
+    const stored = eventStore.load(sessionId);
+    expect(JSON.stringify(stored)).toContain("body".repeat(10_000));
+    const stream = host.attach(0)[Symbol.asyncIterator]();
+    try {
+      const replay: RuntimeEvent[] = [];
+      for (let index = 0; index < stored.length; index++) replay.push((await stream.next()).value as RuntimeEvent);
+      expect(JSON.stringify(replay)).toContain("[truncated; original UTF-8 bytes: 40000;");
+      expect(JSON.stringify(replay)).not.toContain("body".repeat(10_000));
+      expect(host.heapAttribution()).toMatchObject({ trimmedEvents: 1 });
+    } finally { await stream.return?.(); }
+  } finally { await host.release(); }
 });

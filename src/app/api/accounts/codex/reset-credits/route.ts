@@ -119,7 +119,7 @@ export async function POST(req: NextRequest) {
     redemption = await managedCodexRuntime().redeemResetCredit(account, idempotencyKey);
   } catch (error) {
     const detail = redactAppServerDetail(error instanceof Error ? error.message : String(error));
-    const recorded = appendResetCreditJournal(journalEntry(account, actor, idempotencyKey, null, detail, now));
+    const recorded = await appendResetCreditJournal(journalEntry(account, actor, idempotencyKey, null, detail, now));
     logEvent("reset-credit", { result: "error", reason: "consume_failed", meta: { accountId: account.id, actor: actor.kind, idempotencyKey, recorded } });
     return NextResponse.json({ error: "the reset credit could not be redeemed", code: "consume_failed", detail, recorded }, { status: 502 });
   }
@@ -131,7 +131,7 @@ export async function POST(req: NextRequest) {
     account.kind,
     { phase: "reset-credit-redeem", now },
   );
-  const recorded = appendResetCreditJournal(journalEntry(account, actor, idempotencyKey, redemption, null, now));
+  const recorded = await appendResetCreditJournal(journalEntry(account, actor, idempotencyKey, redemption, null, now));
   const redeemed = redemption.outcome === "reset" || redemption.outcome === "alreadyRedeemed";
   logEvent("reset-credit", {
     result: redeemed ? "ok" : "error",

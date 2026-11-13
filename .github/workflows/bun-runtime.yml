@@ -27,9 +27,14 @@ name: Bun runtime pin
 # rather than through the image's `npm install -g`.
 
 on:
+  # Only pull requests into main; a batch pull request carries the whole batch
+  # (docs/batch-branches.md). Pushes to main still run, for the self-update gate.
   pull_request:
+    branches: [main]
   push:
     branches: [main]
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
       native_queue_campaign:
@@ -45,8 +50,9 @@ permissions:
 # had already been replaced. One round per ref, and the newest wins. This group
 # is step 1 of the cut order on #1761.
 #
-# Pull requests and main each cancel obsolete runs on their own ref. A
-# cancelled commit stays ineligible until an exact-target gate succeeds.
+# Pull requests cancel obsolete runs on their own ref. Main pushes and manual
+# runs each need their own group so a later run cannot cancel a required
+# runtime verdict, including a matrix leg still waiting for a runner.
 #
 # The two required workflows get no group at all, deliberately. They run on
 # `pull_request_target` and, for the tracker audit, on issue and review events,
@@ -56,11 +62,41 @@ permissions:
 # They finish in 40 to 90 seconds and have never failed, so there is nothing
 # worth saving in cancelling them.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
+  codex-versions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      versions: ${{ steps.versions.outputs.versions }}
+      latest: ${{ steps.versions.outputs.latest }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Resolve the image's Bun pin
+        id: pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t pins < <(grep -oE 'npm install -g bun@[0-9]+\.[0-9]+\.[0-9]+' Dockerfile | sed 's/.*bun@//' | sort -u)
+          test "${#pins[@]}" -eq 1
+          printf 'version=%s\n' "${pins[0]}" >> "$GITHUB_OUTPUT"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ steps.pin.outputs.version }}
+      - name: Select the latest three reviewed Codex pins
+        id: versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun -e 'import { SUPPORTED_CODEX_VERSIONS } from "./src/lib/accounts/codexVersions.ts"; console.log(`versions=${JSON.stringify(SUPPORTED_CODEX_VERSIONS)}`); console.log(`latest=${JSON.stringify(SUPPORTED_CODEX_VERSIONS.slice(0, 1))}`)' >> "$GITHUB_OUTPUT"
+
   native-queue-campaign:
+    needs: [codex-versions]
     if: github.event_name == 'workflow_dispatch' && inputs.native_queue_campaign
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -69,9 +105,7 @@ jobs:
       max-parallel: 4
       matrix:
         repetition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-        # One list for both hosted jobs and scripts/local-gate.ts. The held
-        # workflow tests require the documented installed pin and host pins.
-        codex: &native-codex-versions [0.154.0, 0.159.0, 0.162.1, 0.163.0, 0.164.0, 0.165.0, 0.166.0, 0.167.0]
+        codex: ${{ fromJSON(needs.codex-versions.outputs.versions) }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -106,13 +140,16 @@ jobs:
           grep -q '0 fail' "$scratch/result.log"
 
   native-codex-runtime:
+    needs: [codex-versions]
     if: github.event_name != 'workflow_dispatch' || !inputs.native_queue_campaign
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        codex: *native-codex-versions
+        # Ordinary PRs gate on the newest reviewed pin. Batch PRs into main,
+        # nightly runs, main pushes and dispatch retain the whole window.
+        codex: ${{ fromJSON((github.event_name != 'pull_request' || (github.base_ref == 'main' && startsWith(github.head_ref, 'batch/'))) && needs.codex-versions.outputs.versions || needs.codex-versions.outputs.latest) }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:

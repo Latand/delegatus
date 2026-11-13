@@ -216,6 +216,10 @@ test("issue 533: a cross-process late recovery loses atomically to a claimed ret
   attempt.sessionId = key.sessionId;
   attempt.agentPath = artifactPath;
   attempt.paneId = null;
+  // Receipt claims protect launches that never settled. A verdict and
+  // completion time instead authorize a stage retry without a launch claim.
+  attempt.verdict = null;
+  attempt.completedAt = null;
   savePipelines([persisted]);
   h.ports.spawnReceipt = (launchId) => {
     const receipt = retryRegistry.readOnlySnapshot().receipts[launchId];

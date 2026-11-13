@@ -2461,6 +2461,128 @@ const actionResponse = (sample: string, body: WireCall) => ({ body: {
   ...x1Results[sample]!, call_id: body.call_id, tool: "tool" in body ? body.tool : x1Results[sample]!.tool,
 } });
 
+test("fresh member retry after definite not done applies once under its new identity", async () => {
+  const posts: { route: string; body: WireCall }[] = [];
+  const receipts = new Map<string, "error" | "ok">();
+  let effects = 0;
+  const server = await startTestRelay((req, raw) => {
+    if (req.url?.endsWith("/complete")) return { body: { status: "accepted", duplicate: false } };
+    if (!req.url?.endsWith("/tool-calls")) return { body: { status: "ok" } };
+    const body = raw as WireCall;
+    posts.push({ route: req.url, body });
+    const key = `${req.url}/${body.call_id}`;
+    if (!receipts.has(key)) {
+      // A terminal no-effect receipt fences this action. A later message
+      // creates a separate action, whose effect and receipt settle together.
+      const status = req.url.includes("/member_original/") ? "error" : "ok";
+      receipts.set(key, status);
+      if (status === "ok") effects++;
+    }
+    return { body: { ...actionResponse("action_ok", body).body, status: receipts.get(key), calls_remaining: 0 } };
+  });
+  const first = x1Request("actions_admin");
+  first.request_id = "member_original";
+  first.input.request_text = "Create the requested sample rule";
+  const second = structuredClone(first);
+  second.request_id = "member_retry";
+  second.lease_id = "b".repeat(64);
+  second.input.respond_to = "member_retry_message";
+  second.input.request_text = "Retry the same sample rule update";
+  second.input.conversation.push({ ...structuredClone(first.input.conversation[0]!), id: second.input.respond_to,
+    text: second.input.request_text, sent_at: "2026-10-06T12:01:00Z" });
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.id = first.target_id;
+  const command = loopStub(actionPlan("request_trigger_rule_update"), path.join(root, "member-retry-seen"));
+  try {
+    expect(await runClaimedRequest(paired, first, undefined, { command, sleep: async () => {} }))
+      .toMatchObject({ outcome: "answered", answer: { text: "Not done: trigger rule update." } });
+    expect(effects).toBe(0);
+    expect([...receipts.values()]).toEqual(["error"]);
+    expect(await runClaimedRequest(paired, second, undefined, { command, sleep: async () => {} }))
+      .toMatchObject({ outcome: "answered", answer: { text: "Done: trigger rule update." } });
+    expect(readAnswerRecord(paired.id, first.target_id, first.request_id)?.toolCalls?.[0]?.outcome).toBe("not_done");
+    expect(readAnswerRecord(paired.id, second.target_id, second.request_id)?.toolCalls?.[0]?.outcome).toBe("done");
+    const ledger = JSON.parse(fs.readFileSync(externalRelayFile("requests"), "utf8"));
+    expect(ledger.claims.filter((row: { terminalAt?: number }) => row.terminalAt !== undefined)).toHaveLength(2);
+    expect(effects).toBe(1);
+    expect(posts).toHaveLength(2);
+    expect([...receipts.values()]).toEqual(["error", "ok"]);
+    expect(posts[0]!.route).toContain(`/requests/${first.request_id}/tool-calls`);
+    expect(posts[1]!.route).toContain(`/requests/${second.request_id}/tool-calls`);
+    expect(posts[1]!.body.call_id).not.toBe(posts[0]!.body.call_id);
+    expect(posts[0]!.body.lease_id).toBe(first.lease_id);
+    expect(posts[1]!.body.lease_id).toBe(second.lease_id);
+    expect("arguments" in posts[1]!.body && posts[1]!.body.arguments)
+      .toEqual("arguments" in posts[0]!.body && posts[0]!.body.arguments);
+    // Redelivery recovers each request's own terminal answer without
+    // dispatching another action, including the earlier no-effect action.
+    for (const [request, text] of [[first, "Not done: trigger rule update."], [second, "Done: trigger rule update."]] as const) {
+      expect(await runClaimedRequest(paired, request, undefined, { command, sleep: async () => {} }))
+        .toMatchObject({ outcome: "answered", answer: { text } });
+      expect(posts).toHaveLength(2);
+      expect(effects).toBe(1);
+    }
+  } finally { await server.close(); }
+});
+
+test("a member action with an unreadable outcome answers verification failed and never not done", async () => {
+  const posts: WireCall[] = [];
+  let effects = 0;
+  const server = await startTestRelay((req, raw) => {
+    if (req.url?.endsWith("/complete")) return { body: { status: "accepted", duplicate: false } };
+    if (!req.url?.endsWith("/tool-calls")) return { body: { status: "ok" } };
+    const body = raw as WireCall;
+    posts.push(body);
+    if (posts.length === 1) {
+      effects++;
+      return { drop: true };
+    }
+    return { status: 401, body: { error: { code: "unauthorized" } } };
+  });
+  const request = x1Request("actions_admin");
+  request.request_id = "member_unresolved";
+  request.input.request_text = "Create the requested sample rule";
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.id = request.target_id;
+  const command = loopStub(actionPlan("request_trigger_rule_update"), path.join(root, "member-unresolved-seen"));
+  try {
+    const completion = await runClaimedRequest(paired, request, undefined, { command, sleep: async () => {} });
+    expect(completion).toMatchObject({ outcome: "answered", answer: {
+      text: "Verification failed for trigger rule update: the saved action outcome could not be read.",
+    } });
+    expect(JSON.stringify(completion)).not.toContain("Not done");
+    expect(readAnswerRecord(paired.id, request.target_id, request.request_id)?.toolCalls?.[0]?.outcome).toBe("verification_failed");
+    expect(effects).toBe(1);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]).toEqual(posts[0]);
+    const ledger = JSON.parse(fs.readFileSync(externalRelayFile("requests"), "utf8"));
+    expect(ledger.claims.filter((row: { terminalAt?: number }) => row.terminalAt !== undefined)).toHaveLength(1);
+  } finally { await server.close(); }
+});
+
+for (const initial of ["lost", "outcome_unknown"])
+for (const settled of ["ok", "error", "denied"] as const)
+  test(`trigger ${initial} then ${settled} delivers its established outcome without another agent round`, async () => {
+    const request = x1Request("actions_admin");
+    request.request_id = `trigger_${initial}_${settled}`;
+    request.input.request_text = "Create the requested sample rule";
+    const run = await runLoopCase({ request,
+      plan: actionPlan("request_trigger_rule_update", `{...reply,text:'The action may have happened.'}`),
+      response: (body, attempt) => attempt === 1 ? initial === "lost" ? { drop: true }
+        : { body: { ...actionResponse("action_ok", body).body, status: "outcome_unknown", calls_remaining: 0 } }
+        : { body: { ...actionResponse("action_ok", body).body, status: settled, replayed: true, calls_remaining: 0,
+          ...(settled === "denied" ? { code: "too_many_calls" } : {}) } } });
+    const outcome = settled === "ok" ? "done" : settled === "error" ? "not_done" : "verification_failed";
+    expect(run.completion).toMatchObject({ outcome: "answered", answer: { action: "reply",
+      text: settled === "ok" ? "Done: trigger rule update." : settled === "error" ? "Not done: trigger rule update."
+        : "Verification failed for trigger rule update: the saved action outcome could not be read." } });
+    expect(run.rounds).toHaveLength(1);
+    expect(run.calls).toHaveLength(2);
+    expect(run.calls[1]).toEqual(run.calls[0]);
+    expect(run.record?.toolCalls?.[0]).toMatchObject({ outcome });
+    expect(run.completions).toHaveLength(1);
+  });
+
 test("a post-execution switch-off denial prevents a changed-reason ban after switch-on", async () => {
   let actionsEnabled = true;
   const executed = new Set<string>();
@@ -4317,13 +4439,13 @@ test.each(["ok","lease_lost","refused","media_only_refused","outside","ignore"])
 });
 
 
-test.each([["claude",false],["codex",false],["codex",true]] as const)("owner %s returns rich text, buttons and a document through the real MCP binding (lease loss=%s)", async (engine, leaseLost)=>{
+test.each([["claude",false,false],["codex",false,false],["codex",true,false],["claude",false,true]] as const)("owner %s returns rich text, buttons and a document through the real MCP binding (lease loss=%s, relay_answer text=%s)", async (engine, leaseLost, composed)=>{
   const { richRequest }=await import("./rich.fixture");
   const { viewerMcpBindings, productionDomainDependencies }=await import("@/lib/mcp/bindings");
   const ownerHome=fs.mkdtempSync(path.join("/tmp","relay-rich-owner-"));
   fs.mkdirSync(path.join(ownerHome,"handoff")); const file=path.join(ownerHome,"handoff","report.md");fs.writeFileSync(file,"# Report");
   const oldHome=process.env.HOME, oldState=process.env.LLV_STATE_DIR; process.env.HOME=ownerHome; process.env.LLV_STATE_DIR=path.join(ownerHome,"state");
-  const request=richRequest(true);request.request_id=`rq_owner_rich_${engine}_${leaseLost}`;
+  const request=richRequest(true);request.request_id=`rq_owner_rich_${engine}_${leaseLost}_${composed}`;
   request.input.requester={key:"u1",is_owner:true,is_admin:true,is_anonymous_admin:false,can_delete_messages:true,can_restrict_members:true};
   if (leaseLost) request.owner_delivery={chat_id:-1000000000101,reply_to_message_id:51,message_thread_id:null};
   const events:string[]=[], lateSends:unknown[]=[];
@@ -4335,10 +4457,12 @@ test.each([["claude",false],["codex",false],["codex",true]] as const)("owner %s 
   });
   const paired=relay(`${server.origin}/v1`);paired.targets[0]={...paired.targets[0]!,ownerTier:true,engine};
   updateRelayStore(s=>({...s,relays:[paired]}));
-  const conversationId=`conversation_owner_rich_${engine}`;
+  const conversationId=`conversation_owner_rich_${engine}_${composed}`;
   const binding=(via?:{deputy:string},kind="agent")=>viewerMcpBindings(undefined,{get:async()=>({}),post:async()=>({})},{...productionDomainDependencies,callerAttribution:()=>({kind,conversationId,role:null,...(via?{via}:{})})} as never);
   const own=binding();let observedError:unknown;
-  const text=leaseLost ? "Owner reply" : ("# Report\n\n"+"Long report. ".repeat(500)).trimEnd();
+  const text=composed ? "# Report\n\nThe chat reply cites its [source](https://example.com/source) inline." : leaseLost ? "Owner reply" : ("# Report\n\n"+"Long report. ".repeat(500)).trimEnd();
+  // With relay_answer text, the last message stays in the session.
+  const lastMessage=composed ? "Answered in the chat.\n\nSources:\n- [Source](https://example.com/source)" : text;
   try {
     const result=await runClaimedRequest(paired,request,undefined,{timeoutMs:10000,ownerPorts:{
       launch:async body=>{expect(body.prompt).toContain("<format>");expect(body.prompt).toContain("relay_answer");return {status:202,body:{conversationId}};},
@@ -4346,9 +4470,9 @@ test.each([["claude",false],["codex",false],["codex",true]] as const)("owner %s 
         try{
           await expect(binding({deputy:"seat"}).relay_answer({format:"rich_markdown"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
           await expect(binding(undefined,"voice-gateway").relay_answer({format:"rich_markdown"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
-          await own.relay_answer({format:"rich_markdown",mentions:[{author_key:"u1",offset:2,length:6}],buttons:[[{text:"Open",url:"https://example.com/report"}]],attachments:[{path:file,kind:"document",caption:"Report"}]});
+          await own.relay_answer({...(composed?{text}:{}),format:"rich_markdown",mentions:[{author_key:"u1",offset:2,length:6}],buttons:[[{text:"Open",url:"https://example.com/report"}]],attachments:[{path:file,kind:"document",caption:"Report"}]});
         }catch(error){observedError=error;}
-        return {state:"ended",finalText:text};
+        return {state:"ended",finalText:lastMessage};
       },stop:async()=>{},pollMs:1}});
     if(observedError)throw observedError;
     expect(result).toMatchObject({outcome:"answered",answer:{text}});
@@ -5018,4 +5142,69 @@ test(`owner ${mode} answers an oversized required parent through a context file`
     if (previousCatalog) fs.writeFileSync(catalog, previousCatalog); else fs.rmSync(catalog, { force: true });
     resetProjectDirectoryCacheForTests(); await service.close();
   }
+});
+
+
+test.each([
+  ["codex", "avatar"], ["claude", "avatar"],
+  ["codex", "frames"], ["claude", "frames"],
+  ["codex", "bad-type"], ["claude", "bad-type"],
+] as const)("read-tool result images reach the next %s turn (%s)", async (engine, mode) => {
+  const capture = JSON.parse(fs.readFileSync(path.join(x1Dir, "tool_result_images.json"), "utf8"));
+  const tool = mode === "frames" ? "get_media" : "get_profile_photo";
+  const sample = capture[tool];
+  const output = JSON.parse(sample.output);
+  const descriptors = mode === "frames" ? output.selected_frames.map((frame: { file: unknown }) => frame.file) : output.media;
+  const png = await (await import("sharp")).default({ create: { width: 2, height: 3, channels: 3, background: "red" } }).png().toBuffer();
+  for (const media of descriptors) Object.assign(media, { expires_at: "2099-01-01T00:00:00Z", byte_size: png.length,
+    mime_type: mode === "bad-type" ? "image/svg+xml" : "image/png" });
+  const request = x1Request("member"); request.request_id = `tool_images_${engine}_${mode}`;
+  request.features = [...new Set([...(request.features ?? []), "requester_context", "relay_media_in"])];
+  let downloads = 0;
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/tool-calls")) return { body: { ...sample, output: JSON.stringify(output), call_id: (body as WireCall).call_id } };
+    if (req.url?.includes("/media/")) {
+      expect(req.url).toStartWith(`/v1/requests/${request.request_id}/media/`);
+      expect(req.headers["delegatus-relay-lease"]).toBe(request.lease_id);
+      downloads++;
+      return { raw: png, headers: { "content-type": "image/png", "content-length": String(png.length) } };
+    }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.engine = engine;
+  paired.targets[0]!.id = request.target_id;
+  const marker = path.join(root, `tool-result-paths-${engine}-${mode}`);
+  const expected = mode === "bad-type" ? 0 : descriptors.length;
+  const fake = stub(`const a=process.argv.slice(2), input=await Bun.stdin.text();
+    const frame=input.startsWith('{"type":"user"')?JSON.parse(input):null;
+    const prompt=frame?frame.message.content.find(p=>p.type==='text').text:input;
+    const round=Number(prompt.match(/This is round (\\d+) of 8/)?.[1]??1);
+    const answer=round===1?{action:'call',text:'',reply_to:null,calls:[{tool:${JSON.stringify(tool)},arguments:'{}',cursor:null}]}:
+      {action:'reply',text:'Photo inspected',reply_to:null,calls:[]};
+    if(round===2){
+      const results=JSON.parse(prompt.match(/<tool_results>\\n([^]*?)\\n<\\/tool_results>/)[1]);
+      if(${JSON.stringify(mode)}==='bad-type'&&!results[0].media_notes.join(' ').includes('unsupported_media_type'))process.exit(8);
+      const paths=[];for(let i=0;i<a.length;i++)if(a[i]==='--image')paths.push(a[i+1]);
+      if(${JSON.stringify(engine)}==='codex'){
+        if(paths.length!==${expected})process.exit(3);
+        for(const file of paths)if(Buffer.from(await Bun.file(file).arrayBuffer()).toString('base64')!==${JSON.stringify(png.toString("base64"))})process.exit(4);
+      }else{
+        const images=frame?.message.content.filter(p=>p.type==='image')??[];
+        if(images.length!==${expected})process.exit(5);
+        for(const image of images)if(image.source.data!==${JSON.stringify(png.toString("base64"))})process.exit(6);
+      }
+      await Bun.write(${JSON.stringify(marker)},JSON.stringify(paths));
+    }
+    if(a.includes('--output-last-message'))await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify(answer));
+    else{
+      console.log(JSON.stringify({type:'system',subtype:'init',tools:['StructuredOutput','WebSearch'],mcp_servers:[]}));
+      console.log(JSON.stringify({type:'result',subtype:'success',structured_output:answer}));
+    }`);
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { command: fake });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Photo inspected" } });
+    expect(downloads).toBe(expected);
+    expect(fs.existsSync(marker)).toBe(true);
+    for (const file of JSON.parse(fs.readFileSync(marker, "utf8"))) expect(fs.existsSync(file)).toBe(false);
+  } finally { await server.close(); }
 });
