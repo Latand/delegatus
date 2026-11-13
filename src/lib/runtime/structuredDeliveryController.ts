@@ -88,7 +88,7 @@ import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
 import { confirmJournalDelivery, deliveryRouteOf, journalVerdict, mirrorSettledReceiptsAsync, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends, settleEchoedSend } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
-import { noteVoiceWorkBoundary } from "./voiceViewBinding";
+import { noteVoiceWorkBoundary, realtimeBoundConversationIds } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
 import { NATIVE_INJECT_CAPABILITY, NATIVE_QUEUE_CAPABILITY, NATIVE_TURN_PROFILE_CAPABILITY } from "./codexCapabilityFlags";
 import {
@@ -2545,6 +2545,37 @@ export function hasStructuredDeliveryHost(key: SessionKey): boolean {
 /** Scalar attachment counts from the current publication; reads no payload. */
 export function structuredDeliveryHeapCounts() {
   return state.activeHosts ? { hosts: state.activeHosts.size, ...state.heapCounts?.() } : { hosts: 0, registrations: 0, attachments: 0, pendingPublishChains: 0 };
+}
+
+/** Only the published controller clears its own hosts. Identity and voice
+ * bindings are read again after each host's asynchronous transcript read. */
+export async function releaseIdleStructuredHostEventWindows(): Promise<number> {
+  const registry = state.activeRegistry;
+  const hosts = state.activeHosts;
+  if (!registry || !hosts || structuredDeliveryPublicationState() !== "ready") return 0;
+  let released = 0;
+  for (const item of state.activeRegistrations?.() ?? []) {
+    if (!item.host.releaseIdleEventWindow) continue;
+    const key = sessionKeyId(item.key);
+    const entry = registry.hostEntry(item.key);
+    const conversationId = entry ? conversationIdForEntry(registry, entry) : null;
+    if (!entry || !conversationId || (typeof item.writerEpoch === "number"
+      && item.writerEpoch !== entry.structuredHost?.writerClaimEpoch)) continue;
+    const process = recordedScopeProcess(entry.structuredHost);
+    const canRelease = () => {
+      const current = registry.hostEntry(item.key);
+      const currentProcess = recordedScopeProcess(current?.structuredHost);
+      return state.activeRegistry === registry && state.activeHosts === hosts
+        && structuredDeliveryPublicationState() === "ready" && hosts.get(key) === item.host
+        && current !== null && current.claimEpoch === entry.claimEpoch && current.claimOwner === entry.claimOwner
+        && current.structuredHost?.writerClaimEpoch === entry.structuredHost?.writerClaimEpoch
+        && (process === null ? currentProcess === null : currentProcess !== null && sameRecordedProcessIdentity(currentProcess, process))
+        && conversationIdForEntry(registry, current) === conversationId
+        && !realtimeBoundConversationIds().has(conversationId);
+    };
+    if (await item.host.releaseIdleEventWindow(canRelease)) released++;
+  }
+  return released;
 }
 
 /** The hosts this Viewer holds, by session key. The update drain asks each
