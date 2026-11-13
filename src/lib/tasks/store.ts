@@ -9,6 +9,8 @@ import { createHash } from "node:crypto";
 
 import { isTaskNote } from "./note";
 import { lazyTaskMutationView, type TaskMutationView } from "./mutationView";
+import { TaskAdmissionEvidence } from "./admissionEvidence";
+import { taskShowsOnBoard } from "./boardVisibility";
 import { isTaskSummary } from "./summary";
 import { isTaskProgress } from "./progress";
 import { storedDueHistory } from "./helpers";
@@ -923,17 +925,17 @@ function taskDrafts(pristine: readonly BoardTask[]) {
 const syncStep = (current: readonly BoardTask[], sync: TaskSyncWrite | null) =>
   sync ? { write: sync, groups: snapshotGroups(current, sync.linked, taskFingerprint) } : undefined;
 
-type ProjectEvidence = { revision: number; rows: Map<string, BoardTask>; ordered: BoardTask[]; bytes: number };
-const evidenceOwner = globalThis as typeof globalThis & { __delegatusTaskProjectEvidenceV1?: Map<string, ProjectEvidence> };
-const projectEvidence = evidenceOwner.__delegatusTaskProjectEvidenceV1 ??= new Map<string, ProjectEvidence>();
+type ProjectEvidence = { revision: number; rows: Map<string, BoardTask>; doneFindings: Map<string, Map<string, BoardTask>>; admission?: TaskAdmissionEvidence; bytes: number };
+const evidenceOwner = globalThis as typeof globalThis & { __delegatusTaskProjectEvidenceV2?: Map<string, ProjectEvidence> };
+const projectEvidence = evidenceOwner.__delegatusTaskProjectEvidenceV2 ??= new Map<string, ProjectEvidence>();
 const PROJECT_EVIDENCE_BYTES = 64 * 1024 * 1024;
 
 /** Admission is a reader of project history. Reuse its immutable projection;
  * later revisions decode only journaled rows. This cache has one owner, eight
  * project slots and a total byte bound. */
-function taskProjectEvidence(collection: SqliteStateCollection<TaskStateRow>, projects: readonly string[], canonical: (project: string) => string, aliases: string): BoardTask[] {
+function taskProjectEvidence(collection: SqliteStateCollection<TaskStateRow>, projects: readonly string[], canonical: (project: string) => string, aliases: string): ProjectEvidence {
   const identity = databaseFileIdentity(collection.filename);
-  const key = JSON.stringify([collection.filename, identity, projects]);
+  const key = JSON.stringify([collection.filename, identity, projects, aliases]);
   const revision = collection.revision();
   let evidence = projectEvidence.get(key);
   const decode = (raw: TaskStateRow) => {
@@ -949,7 +951,13 @@ function taskProjectEvidence(collection: SqliteStateCollection<TaskStateRow>, pr
     const tasks = reuse
       ? [...new Set(projects.map(canonical))].flatMap(project => snapshot!.byProject!.get(project) ?? [])
       : collection.keysInOrder(keys, keys.length).map(key => decode(collection.get(key)!));
-    return { revision: reuse ? latest!.revision : revision, rows: new Map(tasks.map(task => [task.id, task])), ordered: tasks, bytes: tasks.reduce((sum, task) => sum + JSON.stringify(task).length * 2, 0) };
+    const doneFindings = new Map<string, Map<string, BoardTask>>();
+    for (const task of tasks) if (task.status === "done" && task.findingKey !== undefined) {
+      let group = doneFindings.get(task.findingKey);
+      if (!group) doneFindings.set(task.findingKey, group = new Map());
+      group.set(task.id, task);
+    }
+    return { revision: reuse ? latest!.revision : revision, rows: new Map(tasks.map(task => [task.id, task])), doneFindings, bytes: tasks.reduce((sum, task) => sum + JSON.stringify(task).length * 2, 0) };
   };
   if (!evidence || evidence.revision > revision) evidence = fill();
   if (evidence.revision !== revision) {
@@ -962,20 +970,32 @@ function taskProjectEvidence(collection: SqliteStateCollection<TaskStateRow>, pr
         if (!entry.key.startsWith("t:")) continue;
         const id = entry.key.slice(2);
         const previous = evidence.rows.get(id);
-        if (previous) { evidence.bytes -= JSON.stringify(previous).length * 2; evidence.rows.delete(id); }
+        if (previous) {
+          evidence.bytes -= JSON.stringify(previous).length * 2; evidence.rows.delete(id);
+          evidence.admission?.remove(previous);
+          if (previous.findingKey !== undefined) {
+            const group = evidence.doneFindings.get(previous.findingKey);
+            group?.delete(id);
+            if (!group?.size) evidence.doneFindings.delete(previous.findingKey);
+          }
+        }
         const raw = entry.valueJson ? JSON.parse(entry.valueJson) as TaskStateRow : null;
         if (raw && projects.includes(raw.project as string)) {
           const task = decode(raw);
           evidence.bytes += JSON.stringify(task).length * 2;
           evidence.rows.set(id, task);
+          evidence.admission?.put(task);
+          if (task.status === "done" && task.findingKey !== undefined) {
+            let group = evidence.doneFindings.get(task.findingKey);
+            if (!group) evidence.doneFindings.set(task.findingKey, group = new Map());
+            group.set(id, task);
+          }
         }
       }
       if (page.entries.length < 512) { evidence.revision = page.revision; break; }
       const last = page.entries.at(-1)!;
       from = last.revision; cursor = last.key;
     }
-    const byKey = new Map([...evidence.rows.values()].map(task => [`t:${task.id}`, task]));
-    evidence.ordered = collection.keysInOrder([...byKey.keys()], byKey.size).map(key => byKey.get(key)!);
   }
   projectEvidence.delete(key); projectEvidence.set(key, evidence);
   let bytes = 0;
@@ -985,7 +1005,7 @@ function taskProjectEvidence(collection: SqliteStateCollection<TaskStateRow>, pr
     bytes -= projectEvidence.get(oldest)!.bytes;
     projectEvidence.delete(oldest);
   }
-  return evidence.ordered;
+  return evidence;
 }
 
 function preparationRevision(filePath: string): string {
@@ -1196,10 +1216,30 @@ function writeTaskCommands<R>(filePath: string,
       const makeView = (changes: ReadonlyMap<string, BoardTask>): BoardTask[] => {
         const view: TaskMutationView = {
           get: id => changes.get(id) ?? get(id),
-          project: project => {
-            const rows = new Map(taskProjectEvidence(collection, projects(project), canonical, aliasKey).map(task => [task.id, task]));
-            for (const [id, task] of changes) { rows.delete(id); if (canonical(task.project) === canonical(project)) rows.set(id, task); }
-            return [...rows.values()];
+          boardCount: (project, now, members, seat) => {
+            // Preserve the pure command's exact project comparison.
+            if (project !== canonical(project)) return 0;
+            const evidence = taskProjectEvidence(collection, projects(project), canonical, aliasKey);
+            if (!evidence.admission || now < evidence.admission.observedAt) evidence.admission = new TaskAdmissionEvidence(evidence.rows.values(), now);
+            let count = evidence.admission.count(project, now, members, seat);
+            for (const [id, task] of changes) {
+              const prior = evidence.rows.get(id);
+              const visible = (row: BoardTask) => row.project === project && taskShowsOnBoard(row, members?.(row) ?? false, { now, get holdsSeat() { return seat?.(row) === "holds"; } });
+              if (prior && visible(prior)) count--;
+              if (visible(task)) count++;
+            }
+            return count;
+          },
+          completedFinding: (project, key) => {
+            const evidence = taskProjectEvidence(collection, projects(project), canonical, aliasKey);
+            const rows = new Map(evidence.doneFindings.get(key));
+            for (const [id, task] of changes) {
+              rows.delete(id);
+              if (task.project === canonical(project) && task.findingKey === key && task.status === "done") rows.set(id, task);
+            }
+            const ordered = collection.keysInOrder([...rows.keys()].map(id => `t:${id}`), rows.size);
+            const existing = new Set(ordered.map(key => key.slice(2)));
+            return [...ordered.map(key => rows.get(key.slice(2))!), ...[...rows.values()].filter(task => !existing.has(task.id))];
           },
           finding: (project, key) => {
             const rows = new Map(projects(project).flatMap(project => collection.findingTaskKeys(project, key)).flatMap(key => {
@@ -1258,6 +1298,7 @@ function writeTaskCommands<R>(filePath: string,
       const edits = new Map([...normalizations].map(([id, task]) => [id, structuredClone(task)]));
       let deleted: BoardTask[] = [];
       let outputPositions: Map<string, number> | undefined;
+      const replacements = new Set<string>();
       if (!plan || structural) {
         readFull();
         const ids = new Map<string, number>();
@@ -1265,7 +1306,9 @@ function writeTaskCommands<R>(filePath: string,
           if (ids.has(task.id)) throw new Error("duplicate persisted task id");
           ids.set(task.id, ids.size);
           const index = full!.indices.get(task.id);
-          if (index === undefined || full!.draft.copies.get(index) !== task) edits.set(task.id, task);
+          if (index === undefined || full!.draft.copies.get(index) !== task) {
+            edits.set(task.id, task); replacements.add(task.id);
+          }
         }
         deleted = full!.pristine.tasks.filter(task => !ids.has(task.id));
         outputPositions = ids;
@@ -1275,7 +1318,7 @@ function writeTaskCommands<R>(filePath: string,
       for (const id of deletedIds) edits.delete(id);
       if (full) for (const [index, task] of full.draft.copies) {
         const prior = full.pristine.tasks[index]!;
-        if (full.draft.changed(index, task) && !deletedIds.has(prior.id)) edits.set(task.id, task);
+        if (full.draft.changed(index, task) && !deletedIds.has(prior.id) && !replacements.has(task.id)) edits.set(task.id, task);
       }
       if (plan) for (const [id, task] of plan) edits.set(id, task);
       let tasks = [...edits.values()];

@@ -52,12 +52,21 @@ Commands identify their input rows before producing a write plan; persistence
 compares only those rows, receipts and migration markers. Finding guards seek
 the existing finding index. Board admission reads the relevant project's
 evidence through the existing project index. A single shared cache retains at
-most eight project projections and 64 MiB of serialized UTF-16 content; changed
-revisions refresh it from journaled rows, with a full project refill only after
-journal expiry. A synchronous alias snapshot removes per-row metadata probes.
+most eight project summaries and 64 MiB of serialized UTF-16 content. It fills
+on a cold read, eviction or journal expiry; later revisions update only journaled
+rows. Admission keeps visibility counts, expiration deadlines and assignment
+references. Production seat snapshots supply their current conversation/path
+references, so only matching expired tasks need a seat check. Custom membership
+and seat callbacks retain their dynamic checks on the relevant candidates.
+Hidden creates skip board admission entirely. Accounting reads named parents;
+completed findings select only their own group, preserving collection order
+for timestamp ties. A synchronous alias snapshot removes per-row metadata probes.
 
 Callers that explicitly enumerate history retain an array view and the old
-ordering, replacement, deletion and nested mutation behavior. The immutable
+ordering, replacement, deletion and nested mutation behavior. Reading the array
+ends its keyed-command shortcut: a later command sees the actual mutable drafts.
+An explicit replacement returned by that command takes precedence over its
+earlier draft during persistence. The immutable
 reader projection is cached by collection revision and aliases. Only nested
 values that a callback reads get mutable copies. Explicit full-state saves
 remain full-state operations. The alarm controller and tick scheduling remain
@@ -177,7 +186,7 @@ work they request.
 | Map complete committed key-to-row index | src/lib/tasks/store.ts:823 | Every successful array mutation |
 | Filter complete next vector; compare rebuilt row JSON | src/lib/tasks/store.ts:824 | Every successful array mutation |
 
-## Measurements and checks
+## Initial measurements and checks
 
 Both final paired runs used Bun 1.4.0, three available CPUs, one active writer,
 17 synthetic projects, 3942 done rows, nine repetitions per operation and
@@ -303,3 +312,69 @@ of that file, retaining matching reference failures.
 | `src/lib/tasks/taskDetails.test.ts` | 0 | 5 / 0 / 0 | 35 |
 | `src/lib/tasks/taskHold.test.ts` | 0 | 22 / 0 / 0 | 548 |
 | `src/lib/tasks/taskNote.test.ts` | 0 | 3 / 0 / 0 | 13 |
+
+## Review fixes and refreshed verification
+
+The composed-edit regression adds an assignment through the mutable array and
+then patches that same task. It checks both edits, completion admissions,
+untouched rows and callback rollback. The one-project regression seeds 4599
+rows, rejects whole-history reads and multi-task ordering, and bounds admission
+fact updates across repeated writes. Both reproductions fail on the reviewed
+implementation. Additional cases cover strict expiration, seat retention,
+capacity released by hiding, completed-finding ties and accounting refusals.
+These cases live in `src/lib/tasks/store.keyed.test.ts`.
+
+The committed differential now compares 22 exact states with the reference:
+the original 18 plus reverse/list/selection ordering, callback rollback, two
+composed commands, and a nested assignment edit followed by a command.
+All 22 match, including stored task and row revisions.
+
+Eight explicit test-file commands passed: keyed store 17 tests/88 assertions,
+SQLite store 36/174, state child results 10/99, done visibility 16/108,
+board limit 13/44, task creation 27/84, accounting 5/26 and findings 7/66.
+Total: 131 tests and 689 assertions. Changed-file ESLint and the clean source
+export's `bunx tsc --noEmit` exited 0. An initial typecheck included a private
+measurement probe accidentally copied into the export; that scratch-only input
+was removed before the successful source check. No product code changed for it.
+
+The refreshed paired measurements reused the two exact fixture hashes above,
+each with 4599 rows and 25,165,834 bytes. Both remain synthetic; the second
+uses only recorded row lengths. Conditions: Bun 1.4.0, three available CPUs,
+nine repetitions per operation, one active writer, alternating versions,
+prepared unlinked stores and keyed cleanup outside timing. Starting load
+averages were 36.70/33.51/29.98 and 36.61/33.61/30.05. The reference was
+`fbc7d2474b3c`. All observations are retained; no repetition was discarded.
+
+| Fixture | Operation | Before median / max, ms | After median / max, ms |
+| --- | --- | ---: | ---: |
+| Original | Patch | 221.893 / 294.673 | 4.349 / 35.065 |
+| Original | Note | 244.565 / 321.791 | 5.291 / 6.712 |
+| Original | Create | 245.034 / 294.067 | 4.440 / 42.997 |
+| Recorded size distribution | Patch | 243.362 / 316.505 | 11.302 / 48.776 |
+| Recorded size distribution | Note | 255.932 / 315.053 | 8.240 / 12.160 |
+| Recorded size distribution | Create | 246.475 / 310.045 | 5.510 / 38.357 |
+
+The one-project control uses the same count and total bytes, hash
+`2c90edbfa806b394538d9c5a0f79b75f25e90c9de3468e0274b9ecdfae84a54b`.
+It compares the reviewed implementation `c9f7d5dbdec0` with the fix, with hidden
+creates. Load averages started at 34.83/33.35/30.02. Create median/max fell
+from 31.048/103.045 ms to 3.701/17.508 ms; patch and note maxima were
+10.990 and 9.001 ms after the fix. Before, each create ordered 4599 task keys
+plus 0–8 receipt keys; after, it ordered only those receipt keys. Across all
+three fixtures the candidate completed 81/81 measured transactions below 50 ms.
+Task-root clones stayed at one for patch/note and zero for create.
+
+The retained reviewer probes add identical clone/hash/stat/order counters to
+both scratch exports and use the measurement protocol above. Their commands
+are:
+
+```sh
+bash "$GATE" bun scripts/reviewer-measure.ts "$REFERENCE" "$CANDIDATE"
+bash "$GATE" bun scripts/reviewer-measure.ts "$REFERENCE" "$CANDIDATE" --sizes "$SIZES"
+bash "$GATE" bun scripts/reviewer-oneproject.ts "$REVIEWED" "$CANDIDATE"
+```
+
+The scripts and command receipts are retained with the stage evidence, outside
+the source tree. Every nested check proved reuse of its parent's admitted CPU
+lease, and test files ran serially with fresh HOME/config/temp/state roots.
+The final commit's unmodified pre-push exit is reported in the stage result.

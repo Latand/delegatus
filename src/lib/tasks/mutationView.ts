@@ -1,10 +1,16 @@
 import type { BoardTask } from "./types";
+import type { SeatHolding } from "./commands";
+
+export type TaskSeatReader = ((task: BoardTask) => SeatHolding) & {
+  references?: (project: string) => readonly string[];
+};
 
 /** A command can name its inputs before an array reader asks for history.
  * The store owns these views for one synchronous, leased transaction only. */
 export interface TaskMutationView {
   get(id: string): BoardTask | null;
-  project(project: string): BoardTask[];
+  boardCount(project: string, now: number, members?: (task: BoardTask) => boolean, seat?: TaskSeatReader): number;
+  completedFinding(project: string, key: string): BoardTask[];
   finding(project: string, key: string): BoardTask[];
   replace(task: BoardTask): BoardTask[];
 }
@@ -28,7 +34,12 @@ export function readMutationTask(tasks: BoardTask[], id: string): BoardTask | un
  * keyed view without resolving the array at all. */
 export function lazyTaskMutationView(read: () => BoardTask[], view: TaskMutationView, onArrayWrite: () => void): BoardTask[] {
   let rows: BoardTask[] | undefined;
-  const resolve = () => rows ??= read();
+  const resolve = () => {
+    // Once an application reads the array it owns mutable drafts. Subsequent
+    // commands must consume that array, including nested edits and reordering.
+    views.delete(tasks);
+    return rows ??= read();
+  };
   const tasks = new Proxy<BoardTask[]>([], {
     get: (_target, key) => Reflect.get(resolve(), key),
     set: (_target, key, value) => { onArrayWrite(); return Reflect.set(resolve(), key, value); },

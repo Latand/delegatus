@@ -109,6 +109,30 @@ if (process.argv[2] === "--worker") {
   }, file);
   checkpoint({ deleted: true });
   create("recreated", "first", { findingKey: "new-occurrence" });
+  instant += 1000; freeze();
+  store.mutateTasks(tasks => { tasks.reverse(); return { tasks, result: null }; }, file);
+  checkpoint({ reverse: true, list: store.loadTasksForList(file).map(task => task.id), selected: store.loadTasksByIds(new Set(["plain", "done"]), file).map(task => task.id) });
+  instant += 1000; freeze();
+  const saved = JSON.stringify(store.loadTasksFile(file));
+  assert.throws(() => store.mutateTasks(tasks => { tasks[0]!.text = "rollback edit"; throw new Error("intentional refusal"); }, file), /intentional refusal/);
+  assert.equal(JSON.stringify(store.loadTasksFile(file)), saved);
+  checkpoint({ rollback: true });
+  store.mutateTasks(tasks => {
+    const first = commands.patchTask(tasks, "plain", { note: "first composed command" }, at());
+    if (!first.ok) throw new Error(first.error);
+    const second = commands.patchTask(first.tasks, "done", { color: "lime" }, at());
+    if (!second.ok) throw new Error(second.error);
+    return { tasks: second.tasks, result: null };
+  }, file);
+  checkpoint({ twoCommands: true });
+  instant += 1000; freeze();
+  store.mutateTasks(tasks => {
+    tasks.find(task => task.id === "plain")!.assignments.push({ path: "fixture/composed.jsonl", panePid: null, state: "delivered", error: null, at: at(), conversationId: "composed" });
+    const result = commands.patchTask(tasks, "plain", { text: "composed edit" }, at());
+    if (!result.ok) throw new Error(result.error);
+    return { tasks: result.tasks, result: null };
+  }, file);
+  checkpoint({ composedNestedAndCommand: true });
   db.close();
   console.log(JSON.stringify(snapshots));
 } else {

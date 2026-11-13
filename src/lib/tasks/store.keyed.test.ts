@@ -17,6 +17,10 @@ import { importLegacyTasks, loadTasks, loadTasksFile, loadTasksForList, mutateTa
 import { OperationLease } from "@/lib/operationLease";
 import type { BoardTask } from "./types";
 import { taskRevision } from "./revision";
+import { TaskAdmissionEvidence } from "./admissionEvidence";
+import { taskSeatHoldingSnapshot } from "./seatHolding";
+import { admissionSnapshot } from "./groupHide";
+import { DONE_TASK_BOARD_RETENTION_MS } from "./boardVisibility";
 
 const at = "2026-11-01T00:00:00.000Z";
 const roots: string[] = [];
@@ -52,6 +56,104 @@ function raw(file: string) {
     "SELECT row_key,value_json,row_revision FROM state_rows WHERE collection='tasks' ORDER BY row_order,row_key").all(); }
   finally { db.close(); }
 }
+
+test("nested draft edits and a following command preserve both changes and roll back together", () => {
+  const { file } = sandbox();
+  seed(file, [task("target"), task("other")]); prepareTaskRows(file);
+  const assignment = { path: "fixture/composed.jsonl", panePid: null, state: "delivered" as const, error: null, at, conversationId: "composed" };
+  const edit = (refuse: boolean) => mutateTasks(tasks => {
+    tasks.find(row => row.id === "target")!.assignments.push(assignment);
+    const result = patchTask(tasks, "target", { text: "composed edit", status: "done" }, at);
+    if (!result.ok) throw new Error(result.error);
+    if (refuse) throw new Error("refused composed edit");
+    return { tasks: result.tasks, result: null };
+  }, file);
+  const before = raw(file);
+  expect(() => edit(true)).toThrow("refused composed edit");
+  expect(raw(file)).toEqual(before);
+  edit(false);
+  const persisted = loadTasks(file).find(row => row.id === "target")!;
+  expect(persisted.assignments).toEqual([assignment]);
+  expect(persisted.text).toBe("composed edit");
+  expect(persisted.doneAdmissions).toEqual(admissionSnapshot([assignment]));
+  expect(raw(file).find(row => row.row_key === "t:other")).toEqual(before.find(row => row.row_key === "t:other"));
+});
+
+test("4599 rows in one project: hidden creates skip history and visible creates refresh only changed admission facts", () => {
+  const { file } = sandbox();
+  seed(file, Array.from({ length: 4599 }, (_, i) => task(`history-${i}`, { status: "done", board: "hidden", doneAt: at, doneAdmissions: [], details: "x".repeat(5000) })));
+  prepareTaskRows(file);
+  loadTasksForList(file);
+  const now = new Date(Date.parse(at) + DONE_TASK_BOARD_RETENTION_MS + 1).toISOString();
+  const create = (id: string, board: "hidden" | "shown") => mutateTasksFile(state => {
+    const result = createTask(state.tasks, { project: "fixture", text: id, placement: "unplaced", board }, state.recentCreates, { now: () => now, id: () => id, seatHolding: taskSeatHoldingSnapshot(() => ({ active: null, pending: null }) as never) });
+    return { state: result.ok ? { ...state, tasks: result.tasks, recentCreates: result.recentCreates } : undefined, result };
+  }, file);
+  const order = SqliteStateCollection.prototype.keysInOrder;
+  const sort = spyOn(SqliteStateCollection.prototype, "keysInOrder").mockImplementation(function(this: SqliteStateCollection<BoardTask>, keys, limit) {
+    expect(keys.filter(key => key.startsWith("t:")).length).toBeLessThan(2);
+    return order.call(this, keys, limit);
+  });
+  const read = spyOn(SqliteStateCollection.prototype, "loadReadonly").mockImplementation(() => { throw new Error("full read"); });
+  const projectRead = spyOn(SqliteStateCollection.prototype, "taskProjectKeys").mockImplementation(() => { throw new Error("project history read"); });
+  const facts = spyOn(TaskAdmissionEvidence.prototype, "put");
+  try {
+    expect(create("hidden", "hidden").ok).toBe(true);
+    expect(facts).not.toHaveBeenCalled();
+    expect(create("warm", "shown").ok).toBe(true);
+    facts.mockClear();
+    for (let i = 0; i < 3; i++) {
+      mutateTasks(tasks => {
+        const result = patchTask(tasks, "history-4598", { note: `note ${i}` }, now);
+        return { tasks: result.ok ? result.tasks : undefined, result };
+      }, file);
+      expect(create(`visible-${i}`, "shown").ok).toBe(true);
+    }
+    expect(facts.mock.calls.length).toBeLessThan(10);
+  } finally { facts.mockRestore(); read.mockRestore(); sort.mockRestore(); projectRead.mockRestore(); }
+});
+
+test("admission summaries keep the strict expiry boundary, seat candidates and changed rows", () => {
+  const { file } = sandbox();
+  const assignment = { path: "fixture/seat.jsonl", panePid: null, state: "delivered" as const, error: null, at, conversationId: "seat" };
+  seed(file, [...Array.from({ length: 299 }, (_, i) => task(`visible-${i}`)), task("done", { status: "done", doneAt: at, doneAdmissions: admissionSnapshot([assignment]), assignments: [assignment] })]);
+  prepareTaskRows(file); loadTasksForList(file);
+  const expires = Date.parse(at) + DONE_TASK_BOARD_RETENTION_MS;
+  const create = (id: string, now: number, seat: boolean) => mutateTasksFile(state => {
+    const result = createTask(state.tasks, { project: "fixture", text: id, placement: "unplaced" }, state.recentCreates, { id: () => id, now: () => new Date(now).toISOString(), seatHolding: taskSeatHoldingSnapshot(() => ({ active: seat ? { conversationId: "seat" } : null, pending: null }) as never) });
+    return { state: result.ok ? { ...state, tasks: result.tasks } : undefined, result };
+  }, file);
+  expect(create("at-boundary", expires, false)).toMatchObject({ ok: false, code: "TASK_BOARD_FULL" });
+  expect(create("seat-held", expires + 1, true)).toMatchObject({ ok: false, code: "TASK_BOARD_FULL" });
+  expect(create("after-expiry", expires + 1, false).ok).toBe(true);
+  // The preceding accepted create is now the 300th visible band.
+  expect(create("full", expires + 2, false)).toMatchObject({ ok: false, code: "TASK_BOARD_FULL" });
+  mutateTasks(tasks => {
+    const result = patchTask(tasks, "visible-0", { board: "hidden" }, new Date(expires + 3).toISOString());
+    return { tasks: result.ok ? result.tasks : undefined, result };
+  }, file);
+  expect(create("freed", expires + 3, false).ok).toBe(true);
+});
+
+test("keyed create retains completed finding order and validates accounting references", () => {
+  const { file } = sandbox();
+  seed(file, [task("first", { status: "done", findingKey: "incident", finding: { count: 1, lastSeenAt: at } }),
+    task("second", { status: "done", findingKey: "incident", finding: { count: 1, lastSeenAt: at } }),
+    task("parent"), task("other-project", { project: "elsewhere" })]);
+  prepareTaskRows(file); loadTasksForList(file);
+  const create = (id: string, accounting: unknown, findingKey?: string) => mutateTasksFile(state => {
+    const result = createTask(state.tasks, { project: "fixture", text: id, placement: "unplaced", board: "hidden", accounting, findingKey }, state.recentCreates, { id: () => id, now: () => at });
+    return { state: result.ok ? { ...state, tasks: result.tasks } : undefined, result };
+  }, file);
+  const accepted = create("followup", { originalTaskId: "parent" }, "incident");
+  expect(accepted.ok && accepted.task.finding?.previousTaskId).toBe("first");
+  expect(accepted.ok && accepted.task.accounting?.originalTaskId).toBe("parent");
+  const before = raw(file);
+  expect(create("invalid", { correctsTaskId: "other-project" })).toMatchObject({ ok: false, field: "accounting" });
+  expect(create("missing", { originalTaskId: "absent" })).toMatchObject({ ok: false, field: "accounting" });
+  expect(create("nested", { originalTaskId: "followup" })).toMatchObject({ ok: false, field: "accounting" });
+  expect(raw(file)).toEqual(before);
+});
 
 test("preparation equals the old full writer, preserves extensions and is idempotent", () => {
   setSystemTime(new Date("2026-11-05T00:00:00.000Z"));
