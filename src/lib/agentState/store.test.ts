@@ -6,8 +6,9 @@ import path from "node:path";
 import { AgentRegistry, normalizeRegistry } from "@/lib/agent/registry";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { AgentStateService } from "./service";
-import { readAgentStateMetrics, readAgentStatePage } from "./store";
-import { FIXTURE_NOW, FIXTURE_SESSION, fixtureRegistry, fixtureRecords } from "./testFixture";
+import { readAgentProjection, readAgentStateMetrics, readAgentStatePage, subjectId } from "./store";
+import { cachedAgentObservation } from "./projectionCache";
+import { FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION, fixtureRegistry, fixtureRecords } from "./testFixture";
 
 const roots: string[] = [], registries: AgentRegistry[] = [];
 afterEach(() => { for (const registry of registries.splice(0)) registry.close(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -18,6 +19,7 @@ function fixture(mode: "off" | "sqlite") {
   fs.writeFileSync(filename, JSON.stringify(source));
   const records = fixtureRecords("codex");
   fs.writeFileSync(path.join(root, "native.jsonl"), [...records.open, ...records.close].map(row => JSON.stringify(row)).join("\n") + "\n");
+  fs.utimesSync(path.join(root, "native.jsonl"), new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
   const open = () => { const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: mode, sqliteFilename }); registries.push(registry); return registry; };
   const service = (registry: AgentRegistry, publish = false) => new AgentStateService({ registry, now: () => FIXTURE_NOW + 2000,
     owns: () => true, process: processIdentityStatus, memory: () => null, release: "fixture", publish: async () => publish });
@@ -38,7 +40,38 @@ for (const mode of ["off", "sqlite"] as const) {
     expect(readAgentStateMetrics(successor)).toMatchObject({ registryTranscriptDivergencesTotal: 1, pendingProjectionPublications: 0 });
     const page = readAgentStatePage(successor, "agentStateJournal", "", 1);
     expect(page.rows).toHaveLength(1);
-    expect(readAgentStatePage(successor, "agentStateJournal", page.nextCursor!, 1).rows).toHaveLength(0);
+    const observed = [...page.rows];
+    let cursor = page.nextCursor;
+    while (cursor) {
+      const next = readAgentStatePage(successor, "agentStateJournal", cursor, 1);
+      observed.push(...next.rows);
+      cursor = next.nextCursor;
+    }
+    const journalRows = observed.filter(row => "id" in row);
+    expect(new Set(journalRows.map(row => row.id)).size).toBe(journalRows.length);
+    expect(journalRows.filter(row => row.divergence !== null)).toHaveLength(1);
+  });
+}
+for (const mode of ["off", "sqlite"] as const) {
+  test(`${mode}: accepted and settled delivery obligations update durable facts across registry restart`, async () => {
+    const f = fixture(mode), registry = f.open();
+    const service = f.service(registry);
+    await service.request();
+    const entry = registry.hostEntry({ engine: "codex", sessionId: FIXTURE_SESSION })!;
+    const held = registry.holdDelivery(FIXTURE_CONVERSATION, "accepted fixture work", "fixture-message");
+    await service.reconcile(registry.hostEntry(entry.key)!);
+    const subject = subjectId(entry);
+    const accepted = readAgentProjection(registry, subject)!;
+    expect(accepted.facts.obligations).toMatchObject({ determined: true, value: ["delivery:assigned", "delivery-owner"] });
+    expect(cachedAgentObservation(subject)?.facts.obligations).toEqual(accepted.facts.obligations);
+
+    service.stop(); registry.close();
+    const successor = f.open();
+    successor.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+    await f.service(successor).request();
+    const settled = readAgentProjection(successor, subject)!;
+    expect(settled.facts.obligations).toMatchObject({ determined: true, value: [] });
+    expect(cachedAgentObservation(subject)?.facts.obligations).toEqual(settled.facts.obligations);
   });
 }
 test("a refused journal insert rolls back the cache, conversation and counters; retry commits once", async () => {

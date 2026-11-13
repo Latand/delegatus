@@ -101,7 +101,7 @@ const TERMINATION_DEADLINE_MARGIN_MS = 10_000;
  * How often the release that owns traffic sweeps.
  *
  * Far slower than the reconciliation controllers, and deliberately so: the
- * default quiet interval is six hours, so a few minutes of latency costs
+ * default quiet interval is one hour, so a few minutes of latency costs
  * nothing, while every tick reads `/proc` for each recorded host inside the
  * process that is also serving the operator's board.
  */

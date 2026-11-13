@@ -332,6 +332,9 @@ export class CopilotAcpHost implements EngineHost {
   private readonly events = this.eventWindow.events;
   private eventWindowReleased = false;
   private eventWindowRevision = 0;
+  /** Native completion settles the turn facts; ACP custody remains until the
+      matching session/prompt response or transport teardown completes. */
+  private outstandingPrompt: RunningPrompt | null = null;
 
   releaseIdleEventWindow(canRelease: () => boolean): Promise<boolean> {
     const transcriptPath = this.identity.path;
@@ -340,7 +343,7 @@ export class CopilotAcpHost implements EngineHost {
       revision: () => this.eventWindowRevision,
       transcriptPath,
       eligible: () => this.identity.path === transcriptPath && !this.dead && !this.releasing && !this.released
-        && !(this.running !== null) && canRelease(),
+        && this.outstandingPrompt === null && canRelease(),
       onRelease: () => { this.eventWindow.release(); this.eventWindowReleased = true; },
     });
   }
@@ -575,7 +578,7 @@ export class CopilotAcpHost implements EngineHost {
     const normalized = normalizeQueueEntry(entry);
     const already = this.sentEntries.get(normalized.id);
     if (already) return { outcome: "turn-started", turnId: already };
-    if (this.running) return { outcome: "rejected", reason: "stale-turn" };
+    if (this.running || this.outstandingPrompt) return { outcome: "rejected", reason: "stale-turn" };
     if (typeof normalized.expectedTurnId === "string") return { outcome: "rejected", reason: "stale-turn" };
     const prompt: JsonObject[] = [];
     if (normalized.content.text) prompt.push({ type: "text", text: normalized.content.text });
@@ -593,6 +596,7 @@ export class CopilotAcpHost implements EngineHost {
     const running: RunningPrompt = { turnId, entryId: normalized.id, settled: new Promise((resolve) => { settle = resolve; }) };
     this.agentStateTurnStartedAt = Date.now();
     this.running = running;
+    this.outstandingPrompt = running;
     this.emit({ kind: "turn-started", turnId });
     const request = this.request("session/prompt", { sessionId: this.identity.sessionId, prompt }, null);
     void request.then(
@@ -604,6 +608,7 @@ export class CopilotAcpHost implements EngineHost {
             ? "completed"
             : "error";
         this.finishTurn(running, status);
+        if (this.outstandingPrompt === running) this.outstandingPrompt = null;
         settle();
       },
       (error) => {
@@ -622,6 +627,7 @@ export class CopilotAcpHost implements EngineHost {
           }));
         }
         this.finishTurn(running, this.cancelledTurns.has(turnId) ? "interrupted" : "error");
+        if (this.outstandingPrompt === running) this.outstandingPrompt = null;
         settle();
       },
     );
@@ -1029,6 +1035,7 @@ export class CopilotAcpHost implements EngineHost {
     if (this.released) return;
     const running = this.running;
     this.running = null;
+    this.outstandingPrompt = null;
     this.attentions.clear();
     if (running && !this.dead) this.emit({ kind: "turn-ended", turnId: running.turnId, status: "interrupted" });
     this.released = true;

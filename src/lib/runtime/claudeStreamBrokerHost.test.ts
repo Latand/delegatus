@@ -21,7 +21,7 @@ import { registryLockHolder, type RegistryLockHolder } from "@/lib/agent/registr
 import { defaultRegistrySqliteFilename } from "@/lib/agent/registryBackendIdentity";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { captureProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { viewerMcpServerEnv } from "@/lib/agent/spawnPolicy";
@@ -64,6 +64,8 @@ import { orphanWriterTree } from "./fixtures/orphanWriterTree";
 import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { captureProcessTree } from "@/lib/processGroup";
 import { claudeStartupHostOptions, type ClaudeStartupOwner } from "./startup";
+import { AgentStateService } from "@/lib/agentState/service";
+import { FIXTURE_CONVERSATION, FIXTURE_SESSION, fixtureRecords, fixtureRegistry } from "@/lib/agentState/testFixture";
 
 /* #1905: the config and state root a spawned agent runs under, plus the `gh`
    configuration pinned for it because it no longer inherits XDG_CONFIG_HOME.
@@ -3247,6 +3249,74 @@ describe("ClaudeStreamBrokerHost", () => {
     }
 
   }, 10_000);
+
+  test("settled stdio orphan is reaped under central proof before accepted work resumes exactly once", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-settled-orphan-work-"));
+    const registryPath = path.join(directory, "agent-registry.json");
+    const orphan = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    const orphanExit = new Promise<void>(resolve => { orphan.once("exit", () => resolve()); });
+    let startIdentity: string | null = null;
+    for (let attempt = 0; attempt < 100 && !startIdentity; attempt += 1) {
+      startIdentity = orphan.pid ? procBackend.processIdentity(orphan.pid) : null;
+      if (!startIdentity) await Bun.sleep(2);
+    }
+    if (!orphan.pid || !startIdentity) {
+      if (orphan.pid) { try { orphan.kill("SIGKILL"); } catch { /* owned fixture child already exited */ } }
+      await Promise.race([orphanExit, Bun.sleep(2_000)]);
+      throw new Error("orphan process identity is unavailable");
+    }
+    const identity = captureProcessIdentity(orphan.pid, undefined, startIdentity);
+    const records = fixtureRecords("claude");
+    const nativePath = path.join(directory, "native.jsonl");
+    fs.writeFileSync(nativePath, [...records.open, ...records.close].map(row => JSON.stringify(row)).join("\n") + "\n");
+    const source = fixtureRegistry(directory, "claude", identity, null);
+    fs.writeFileSync(registryPath, JSON.stringify(source));
+    const registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
+    const service = new AgentStateService({ registry, now: Date.now, owns: () => true, process: processIdentityStatus,
+      memory: () => null, release: "fixture", publish: async () => false });
+    const replacement = new FakeClaude(new RecordingDeliveryLedger());
+    const message = "accepted work survives the owner restart";
+    let deliveryId = "";
+    let optionsSawOrphanGone = false;
+    let adopted: Awaited<ReturnType<typeof adoptClaudeRegistryHosts>> = [];
+    try {
+      await service.request();
+      const key = { engine: "claude" as const, sessionId: FIXTURE_SESSION };
+      const current = registry.hostEntry(key)!;
+      expect(current.structuredHost?.activeTurnRef).toBeNull();
+      deliveryId = registry.holdDelivery(FIXTURE_CONVERSATION, message).id;
+      await service.reconcile(registry.hostEntry(key)!);
+      const held = registry.agentStateRead(file => file.heldDeliveries[deliveryId]);
+      expect(held?.state).toBe("assigned");
+      adopted = await adoptClaudeRegistryHosts(registry, () => {
+        optionsSawOrphanGone = procBackend.processIdentity(orphan.pid!) !== startIdentity;
+        const ledger = new RecordingDeliveryLedger();
+        return { cwd: directory, eventStore: new MemoryEventStore(), deliveryLedger: ledger,
+          readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai" as const, subscriptionType: "max" }),
+          readTranscript: () => [], spawnProcess: fakeSpawn(replacement, {}) };
+      }, { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" }, () => true);
+      expect(adopted, JSON.stringify({ row: registry.hostEntry(key), orphan: procBackend.processIdentity(orphan.pid!) })).toHaveLength(1);
+      expect(optionsSawOrphanGone).toBe(true);
+      const pendingReceipt = adopted[0]!.host.send({ id: deliveryId, text: message });
+      await replacement.userFrameWritten;
+      replacement.emitJson({ type: "user", session_id: adopted[0]!.host.identity.sessionId, uuid: "accepted-work-echo",
+        message: { role: "user", content: [{ type: "text", text: message }] } });
+      const receipt = await pendingReceipt;
+      expect(receipt.outcome).toBe("turn-started");
+      expect(await adopted[0]!.host.send({ id: deliveryId, text: message })).toMatchObject({ outcome: "turn-started" });
+      expect(replacement.inputs.filter(input => input.type === "user")).toHaveLength(1);
+      expect(registry.agentStateRead(file => file.heldDeliveries[deliveryId]?.state)).toBe("assigned");
+    } finally {
+      service.stop();
+      for (const item of adopted) await item.host.release();
+      registry.close();
+      if (procBackend.processIdentity(orphan.pid) === startIdentity) {
+        try { orphan.kill("SIGKILL"); } catch { /* the owned test child already exited */ }
+      }
+      await Promise.race([orphanExit, Bun.sleep(2_000)]);
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   /* #2790: the host publishes `dead` when its stream fails and reaps the child
      about a second later. A Viewer generation that ends inside that window

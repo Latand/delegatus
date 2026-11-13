@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { AgentRegistry, AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { registryCollectionPage, registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
-import { AGENT_STATE_POLICY, emptyAgentStateMetrics, evaluateAgentState, fact, validAgentFacts, validAgentEvidence, type AgentProjection, type AgentStateJournal, type AgentStateMetrics } from "./model";
+import { AGENT_STATE_POLICY, emptyAgentStateMetrics, evaluateAgentState, fact, validAgentFacts, validAgentEvidence, type AgentFacts, type AgentProjection, type AgentStateJournal, type AgentStateMetrics } from "./model";
 
 export function copyAgentStateRow<T>(row: T): T { return JSON.parse(JSON.stringify(row)) as T; }
 const hash = (v: unknown) => crypto.createHash("sha256").update(JSON.stringify(v)).digest("hex");
@@ -113,8 +113,18 @@ function changeMetrics(file: RegistryFile, metrics: AgentStateMetrics, old: Agen
   else delete file.agentStateMetrics[key];
 }
 function semantic(row: AgentProjection): string {
-  return JSON.stringify([row.facts.revision, row.verdict.state, row.verdict.reason, row.verdict.stuck, row.verdict.missing,
-    row.facts.turn.determined ? row.facts.turn.value : row.facts.turn.why, row.facts.transcript.determined ? row.facts.transcript.value.signature : null, row.divergence, row.rssBytes]);
+  const factMeaning = (value: AgentFacts[keyof AgentFacts]) => {
+    if (!value || typeof value !== "object" || !("determined" in value)) return null;
+    const evidence = value.evidence;
+    return { determined: value.determined, value: value.determined ? value.value : null,
+      why: value.determined ? null : value.why,
+      evidence: { source: evidence.source, subjectRevision: evidence.subjectRevision, ref: evidence.ref,
+        eventAt: evidence.eventAt, validUntil: evidence.validUntil } };
+  };
+  const facts = Object.fromEntries(Object.entries(row.facts).filter(([key]) => key !== "revision")
+    .map(([key, value]) => [key, factMeaning(value as AgentFacts[keyof AgentFacts])]));
+  return JSON.stringify([row.subject, row.entryKey, row.conversationId, facts, row.verdict.state, row.verdict.reason,
+    row.verdict.stuck, row.verdict.missing, row.divergence, row.divergenceKey, row.rssBytes, row.publishable]);
 }
 /** The repair, conversation axis, journal and totals have one commit boundary. */
 export function commitAgentObservation(registry: AgentRegistry, observation: StateObservation, guard: () => boolean): AgentProjection | null {
@@ -130,6 +140,9 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
       current.structuredHost!.activeTurnRef = null;
       current.status = open ? "live" : "idle";
       next.facts.revision = entryRevision(current);
+      for (const value of Object.values(next.facts)) {
+        if (value && typeof value === "object" && "evidence" in value) value.evidence.subjectRevision = next.facts.revision;
+      }
       next.divergence = null;
     }
     if (observation.repair || observation.repairConversation) {

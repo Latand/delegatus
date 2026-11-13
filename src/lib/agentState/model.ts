@@ -1,7 +1,7 @@
 import type { ProcessIdentity } from "@/lib/processIdentity";
 import type { Determinable } from "@/lib/runtime/determinable";
 
-export const AGENT_STATE_POLICY = Object.freeze({ version: 1, reconcileMs: 2 * 60_000, observationMs: 5000, stuckMs: 10 * 60_000, startupGraceMs: 5 * 60_000, idleMs: 6 * 3_600_000 });
+export const AGENT_STATE_POLICY = Object.freeze({ version: 1, reconcileMs: 2 * 60_000, observationMs: 5000, stuckMs: 10 * 60_000, startupGraceMs: 5 * 60_000, idleMs: 3_600_000 });
 export type AgentState = "working" | "waiting-operator" | "idle" | "stuck" | "unowned" | "dead";
 export interface Evidence {
   source: "proc" | "host-memory" | "native-transcript" | "registry-cache" | "operation-ledger";

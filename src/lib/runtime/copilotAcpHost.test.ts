@@ -94,6 +94,9 @@ class FakeCopilot extends EventEmitter {
   }
 
   reply(id: number | string, result: unknown): void { this.send({ jsonrpc: "2.0", id, result }); }
+  reject(id: number | string, code = -32000, message = "fixture ACP failure"): void {
+    this.send({ jsonrpc: "2.0", id, error: { code, message } });
+  }
   update(update: Record<string, unknown>): void {
     this.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: this.sessionId, update } });
   }
@@ -802,7 +805,7 @@ test("heap counters observe events and subscriber queues without consuming them"
   } finally { stop(); await stream.return?.(); await host.release(); }
 });
 
-test("central Copilot completion releases the prompt while a late prior ACP reply preserves its successor", async () => {
+test("native Copilot completion keeps ACP request custody until the original response", async () => {
   const child = new FakeCopilot();
   const host = await CopilotAcpHost.start(options(child));
   try {
@@ -810,13 +813,45 @@ test("central Copilot completion releases the prompt while a late prior ACP repl
     const first = host.agentStateMemory().activeTurnRef!;
     expect(host.reconcileAgentStateTerminal("older-ref", null, 1000)).toBe(false);
     expect(host.reconcileAgentStateTerminal(first, "native-prompt", 1000)).toBe(true);
-    expect(await host.send({ id: "central-second", text: "second" })).toMatchObject({ outcome: "turn-started" });
+    expect(host.agentStateMemory().activeTurnRef).toBeNull();
+    expect(await host.send({ id: "central-second", text: "second" })).toMatchObject({ outcome: "rejected", reason: "stale-turn" });
+    expect(child.prompts).toHaveLength(1);
+    child.reply(child.prompts[0]!.id!, { stopReason: "end_turn" });
+    let secondReceipt: Awaited<ReturnType<typeof host.send>> | undefined;
+    await until(async () => {
+      secondReceipt = await host.send({ id: "central-second", text: "second" });
+      return secondReceipt.outcome === "turn-started";
+    }, "original ACP response to release prompt custody");
+    expect(secondReceipt).toMatchObject({ outcome: "turn-started" });
     const second = host.agentStateMemory().activeTurnRef;
     expect(second).not.toBe(first);
-    child.reply(child.prompts[0]!.id!, { stopReason: "end_turn" });
-    await until(() => child.prompts.length === 2, "successor prompt");
-    expect(host.agentStateMemory().activeTurnRef).toBe(second);
+    expect(child.prompts).toHaveLength(2);
     expect(host.reconcileAgentStateTerminal(first, "native-prompt", 1000)).toBe(false);
+  } finally { await host.release(); }
+});
+
+test("ACP error and cancelled replies release only their own outstanding request", async () => {
+  const child = new FakeCopilot();
+  child.answerCancel = false;
+  const host = await CopilotAcpHost.start(options(child, { interruptTimeoutMs: 20 }));
+  try {
+    await host.send({ id: "error-first", text: "first" });
+    const first = child.prompts[0]!;
+    child.reject(first.id!);
+    await until(() => host.agentStateMemory().activeTurnRef === null, "failed prompt settlement");
+    expect(await host.send({ id: "error-second", text: "second" })).toMatchObject({ outcome: "turn-started" });
+    const second = child.prompts[1]!;
+    await expect(host.interrupt(host.agentStateMemory().activeTurnRef!)).rejects.toThrow("did not stop");
+    expect(await host.send({ id: "blocked-after-cancel", text: "blocked" })).toMatchObject({ outcome: "rejected", reason: "stale-turn" });
+    expect(child.prompts).toHaveLength(2);
+    child.reply(second.id!, { stopReason: "cancelled" });
+    let thirdReceipt: Awaited<ReturnType<typeof host.send>> | undefined;
+    await until(async () => {
+      thirdReceipt = await host.send({ id: "after-cancel", text: "third" });
+      return thirdReceipt.outcome === "turn-started";
+    }, "cancelled ACP response to release prompt custody");
+    expect(thirdReceipt).toMatchObject({ outcome: "turn-started" });
+    expect(child.prompts).toHaveLength(3);
   } finally { await host.release(); }
 });
 

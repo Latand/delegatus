@@ -24,6 +24,7 @@ test("six states share one precedence and preserve silent open-turn facts for un
 });
 test("missing, expired or independently held evidence cannot authorize idle retirement", () => {
   const f = facts();
+  expect(AGENT_STATE_POLICY.idleMs).toBe(3_600_000);
   expect(centralIdleEligible(f, now + AGENT_STATE_POLICY.idleMs)).toBe(true);
   for (const key of ["process", "owner", "turn", "attention", "transcript", "obligations", "activity"] as const) {
     const bad = { ...f, [key]: unknown("unreadable", f[key].evidence) };
