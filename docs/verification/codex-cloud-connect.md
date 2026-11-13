@@ -151,3 +151,9 @@ Binding tests now own listeners and state roots through one context per file;
 the after-test cleanup remains explicit in each suite. Binding and succession
 groups now schedule independently at the end of the campaign. The campaign retains its
 15-minute head limit, five-minute file limit and all test cases.
+
+A later publication check reached the five-minute file limit in
+`engine.cloud.test.ts`. Its unchanged test bodies now run across that file,
+`engine.cloud.lifecycle.test.ts` and `engine.cloud.deadline.test.ts`, sharing
+`engine.cloud.fixture.ts`. Provider fakes and every parameter combination remain;
+each test file runs separately under the existing limits.
