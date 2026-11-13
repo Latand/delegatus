@@ -82,7 +82,7 @@ export function gateToolFiles(root: string): string[] {
       if (resolved) pending.push(path.relative(root, resolved));
     }
   }
-  return [...seen, "scripts/gate-slot.sh", "bunfig.toml", "tsconfig.json"].sort();
+  return [...seen, "scripts/check-worker-entry.py", "scripts/gate-slot.sh", "bunfig.toml", "tsconfig.json"].sort();
 }
 
 /** Isolation replaces these before a check reads them, or they only record

@@ -3,8 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 const key = Symbol.for("delegatus.checkAdmission.worker");
 
-/** The broker remains outside private compiler namespaces and verifies its
- * own kernel-held lease for this exact descendant. No new admission is taken. */
+/** The broker verifies its own kernel-held lease for this exact descendant.
+ * No new admission is taken. */
 export function reuseGateSlot(env = process.env) {
   if (!env.LLV_GATE_SLOT_BROKER || !env.LLV_GATE_SLOT_LEASE) return Promise.resolve(false);
   // A child can select another gate pool before entering a service. Its old
@@ -44,6 +44,12 @@ export function reuseGateSlot(env = process.env) {
 
 /** The owning runner keeps this exact process counted until its socket closes. */
 export function admitWorker(kind) {
+  // The Linux entry supervisor has already enrolled this exact PID before
+  // Bun evaluates any config preload. Require its live kernel tracing proof;
+  // an inherited PID or an environment value alone cannot skip admission.
+  if (process.platform === "linux" && Number(process.env.LLV_CHECK_ENTRY_PID) === process.pid
+    && Number(process.env.LLV_CHECK_ENTRY_TRACER) > 0
+    && Number(/^TracerPid:\s+(\d+)/m.exec(fs.readFileSync("/proc/self/status", "utf8"))?.[1]) === Number(process.env.LLV_CHECK_ENTRY_TRACER)) return Promise.resolve();
   return globalThis[key] ??= new Promise((resolve, reject) => {
     const broker = JSON.parse(process.env.LLV_CHECK_BROKER ?? process.env.DELEGATUS_CHECK_BROKER ?? "null");
     if (!broker) { reject(new Error("test/compiler admission requires an owned runner")); return; }

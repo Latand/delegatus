@@ -2461,6 +2461,128 @@ const actionResponse = (sample: string, body: WireCall) => ({ body: {
   ...x1Results[sample]!, call_id: body.call_id, tool: "tool" in body ? body.tool : x1Results[sample]!.tool,
 } });
 
+test("fresh member retry after definite not done applies once under its new identity", async () => {
+  const posts: { route: string; body: WireCall }[] = [];
+  const receipts = new Map<string, "error" | "ok">();
+  let effects = 0;
+  const server = await startTestRelay((req, raw) => {
+    if (req.url?.endsWith("/complete")) return { body: { status: "accepted", duplicate: false } };
+    if (!req.url?.endsWith("/tool-calls")) return { body: { status: "ok" } };
+    const body = raw as WireCall;
+    posts.push({ route: req.url, body });
+    const key = `${req.url}/${body.call_id}`;
+    if (!receipts.has(key)) {
+      // A terminal no-effect receipt fences this action. A later message
+      // creates a separate action, whose effect and receipt settle together.
+      const status = req.url.includes("/member_original/") ? "error" : "ok";
+      receipts.set(key, status);
+      if (status === "ok") effects++;
+    }
+    return { body: { ...actionResponse("action_ok", body).body, status: receipts.get(key), calls_remaining: 0 } };
+  });
+  const first = x1Request("actions_admin");
+  first.request_id = "member_original";
+  first.input.request_text = "Create the requested sample rule";
+  const second = structuredClone(first);
+  second.request_id = "member_retry";
+  second.lease_id = "b".repeat(64);
+  second.input.respond_to = "member_retry_message";
+  second.input.request_text = "Retry the same sample rule update";
+  second.input.conversation.push({ ...structuredClone(first.input.conversation[0]!), id: second.input.respond_to,
+    text: second.input.request_text, sent_at: "2026-10-06T12:01:00Z" });
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.id = first.target_id;
+  const command = loopStub(actionPlan("request_trigger_rule_update"), path.join(root, "member-retry-seen"));
+  try {
+    expect(await runClaimedRequest(paired, first, undefined, { command, sleep: async () => {} }))
+      .toMatchObject({ outcome: "answered", answer: { text: "Not done: trigger rule update." } });
+    expect(effects).toBe(0);
+    expect([...receipts.values()]).toEqual(["error"]);
+    expect(await runClaimedRequest(paired, second, undefined, { command, sleep: async () => {} }))
+      .toMatchObject({ outcome: "answered", answer: { text: "Done: trigger rule update." } });
+    expect(readAnswerRecord(paired.id, first.target_id, first.request_id)?.toolCalls?.[0]?.outcome).toBe("not_done");
+    expect(readAnswerRecord(paired.id, second.target_id, second.request_id)?.toolCalls?.[0]?.outcome).toBe("done");
+    const ledger = JSON.parse(fs.readFileSync(externalRelayFile("requests"), "utf8"));
+    expect(ledger.claims.filter((row: { terminalAt?: number }) => row.terminalAt !== undefined)).toHaveLength(2);
+    expect(effects).toBe(1);
+    expect(posts).toHaveLength(2);
+    expect([...receipts.values()]).toEqual(["error", "ok"]);
+    expect(posts[0]!.route).toContain(`/requests/${first.request_id}/tool-calls`);
+    expect(posts[1]!.route).toContain(`/requests/${second.request_id}/tool-calls`);
+    expect(posts[1]!.body.call_id).not.toBe(posts[0]!.body.call_id);
+    expect(posts[0]!.body.lease_id).toBe(first.lease_id);
+    expect(posts[1]!.body.lease_id).toBe(second.lease_id);
+    expect("arguments" in posts[1]!.body && posts[1]!.body.arguments)
+      .toEqual("arguments" in posts[0]!.body && posts[0]!.body.arguments);
+    // Redelivery recovers each request's own terminal answer without
+    // dispatching another action, including the earlier no-effect action.
+    for (const [request, text] of [[first, "Not done: trigger rule update."], [second, "Done: trigger rule update."]] as const) {
+      expect(await runClaimedRequest(paired, request, undefined, { command, sleep: async () => {} }))
+        .toMatchObject({ outcome: "answered", answer: { text } });
+      expect(posts).toHaveLength(2);
+      expect(effects).toBe(1);
+    }
+  } finally { await server.close(); }
+});
+
+test("a member action with an unreadable outcome answers verification failed and never not done", async () => {
+  const posts: WireCall[] = [];
+  let effects = 0;
+  const server = await startTestRelay((req, raw) => {
+    if (req.url?.endsWith("/complete")) return { body: { status: "accepted", duplicate: false } };
+    if (!req.url?.endsWith("/tool-calls")) return { body: { status: "ok" } };
+    const body = raw as WireCall;
+    posts.push(body);
+    if (posts.length === 1) {
+      effects++;
+      return { drop: true };
+    }
+    return { status: 401, body: { error: { code: "unauthorized" } } };
+  });
+  const request = x1Request("actions_admin");
+  request.request_id = "member_unresolved";
+  request.input.request_text = "Create the requested sample rule";
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.id = request.target_id;
+  const command = loopStub(actionPlan("request_trigger_rule_update"), path.join(root, "member-unresolved-seen"));
+  try {
+    const completion = await runClaimedRequest(paired, request, undefined, { command, sleep: async () => {} });
+    expect(completion).toMatchObject({ outcome: "answered", answer: {
+      text: "Verification failed for trigger rule update: the saved action outcome could not be read.",
+    } });
+    expect(JSON.stringify(completion)).not.toContain("Not done");
+    expect(readAnswerRecord(paired.id, request.target_id, request.request_id)?.toolCalls?.[0]?.outcome).toBe("verification_failed");
+    expect(effects).toBe(1);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]).toEqual(posts[0]);
+    const ledger = JSON.parse(fs.readFileSync(externalRelayFile("requests"), "utf8"));
+    expect(ledger.claims.filter((row: { terminalAt?: number }) => row.terminalAt !== undefined)).toHaveLength(1);
+  } finally { await server.close(); }
+});
+
+for (const initial of ["lost", "outcome_unknown"])
+for (const settled of ["ok", "error", "denied"] as const)
+  test(`trigger ${initial} then ${settled} delivers its established outcome without another agent round`, async () => {
+    const request = x1Request("actions_admin");
+    request.request_id = `trigger_${initial}_${settled}`;
+    request.input.request_text = "Create the requested sample rule";
+    const run = await runLoopCase({ request,
+      plan: actionPlan("request_trigger_rule_update", `{...reply,text:'The action may have happened.'}`),
+      response: (body, attempt) => attempt === 1 ? initial === "lost" ? { drop: true }
+        : { body: { ...actionResponse("action_ok", body).body, status: "outcome_unknown", calls_remaining: 0 } }
+        : { body: { ...actionResponse("action_ok", body).body, status: settled, replayed: true, calls_remaining: 0,
+          ...(settled === "denied" ? { code: "too_many_calls" } : {}) } } });
+    const outcome = settled === "ok" ? "done" : settled === "error" ? "not_done" : "verification_failed";
+    expect(run.completion).toMatchObject({ outcome: "answered", answer: { action: "reply",
+      text: settled === "ok" ? "Done: trigger rule update." : settled === "error" ? "Not done: trigger rule update."
+        : "Verification failed for trigger rule update: the saved action outcome could not be read." } });
+    expect(run.rounds).toHaveLength(1);
+    expect(run.calls).toHaveLength(2);
+    expect(run.calls[1]).toEqual(run.calls[0]);
+    expect(run.record?.toolCalls?.[0]).toMatchObject({ outcome });
+    expect(run.completions).toHaveLength(1);
+  });
+
 test("a post-execution switch-off denial prevents a changed-reason ban after switch-on", async () => {
   let actionsEnabled = true;
   const executed = new Set<string>();

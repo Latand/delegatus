@@ -37,8 +37,8 @@ if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("owned ru
 // explicitly selected pool across that filter before any child can start.
 if (process.env.LLV_CHECK_ADMISSION_FILE) process.env.LLV_GATE_CHECK_ADMISSION_FILE = process.env.LLV_CHECK_ADMISSION_FILE;
 
-// Test preloads travel through package scripts and shells. Compiler admission
-// is installed at its source entry below, independently of runtime options.
+// Test preloads travel through package scripts and shells. Linux workers also
+// enter admission before loading their compiler or any test configuration.
 const runtimePreload = path.join(import.meta.dir, "check-runtime-preload.mjs");
 const option = `--preload=${pathToFileURL(runtimePreload).href}`;
 if (!process.env.BUN_OPTIONS?.includes(option)) process.env.BUN_OPTIONS = `${process.env.BUN_OPTIONS ?? ""} ${option}`.trim();
@@ -250,7 +250,11 @@ if (args[0] === "--namespace-guardian") {
     producerReport("service", null, { service: serviceEvidence, phase: "close", cleanup: "pending" });
     budget.close(); process.exit(refused === "deadline" ? 124 : 137);
   }
-  const members = () => fs.readFileSync(path.join("/sys/fs/cgroup", cgroup, "cgroup.procs"), "utf8").trim().split(/\s+/).map(Number).filter(pid => pid > 0 && pid !== process.pid && !procBackend.processExited(pid));
+  const members = () => {
+    const visit = (directory: string): number[] => fs.readFileSync(path.join(directory, "cgroup.procs"), "utf8").trim().split(/\s+/).map(Number)
+      .concat(fs.readdirSync(directory, { withFileTypes: true }).filter(entry => entry.isDirectory()).flatMap(entry => visit(path.join(directory, entry.name))));
+    return visit(path.join("/sys/fs/cgroup", cgroup)).filter(pid => pid > 0 && pid !== process.pid && !procBackend.processExited(pid));
+  };
   // exec preserves the shell's kernel start identity and binds the admission
   // token to this command's PID. A nested test cannot reuse its parent's token.
   const shell = timedCommand(launch.command, 'export LLV_OWNED_TEST_RUNNER_PID=$$; ');
@@ -366,7 +370,7 @@ if (args[0] === "--namespace-guardian") {
   fs.writeFileSync(file, JSON.stringify({ command: args, cwd: process.cwd(), env: process.env, owner, parent, unit, timeoutMs, ...(sandbox ? { namespace: true as const } : {}) } satisfies Launch), { mode: 0o600 });
   const cpu = [...gateServiceProperties(), ...gateTaskProperties()];
   const recorded = process.env.LLV_RECORDED_CHECK_ID ? [`--setenv=LLV_RECORDED_CHECK_ID=${process.env.LLV_RECORDED_CHECK_ID}`] : [];
-  const service = spawn("systemd-run", [...cpu, "--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, ...recorded, "--service-type=exec", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", "WatchdogSec=60s", "-p", "NotifyAccess=all", "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "14G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
+  const service = spawn("systemd-run", [...cpu, "--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, ...recorded, "--service-type=exec", "-p", "Delegate=yes", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", "WatchdogSec=60s", "-p", "NotifyAccess=all", "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "14G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
   const close = new Promise<number>(resolve => {
     service.once("exit", (code, signal) => resolve(code ?? (signal === "SIGTERM" ? 143 : 137)));
     service.once("error", error => { console.error(`owned runner: systemd admission failed: ${error.message}`); resolve(1); });

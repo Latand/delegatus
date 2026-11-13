@@ -127,7 +127,7 @@ for (const [capacity, hang, service] of [[1, false, false], [2, false, false], [
           try {
             const pid = Number(fs.readFileSync(${JSON.stringify(f.root)} + "/" + id + ".start", "utf8"));
             const state = /^State:\\s+(\\S)/m.exec(fs.readFileSync("/proc/" + pid + "/status", "utf8"))?.[1];
-            return state && !["T", "Z", "X"].includes(state);
+            return state && !["T", "t", "Z", "X"].includes(state);
           } catch { return false; }
         }).length;
         const peakFile = ${JSON.stringify(f.root)} + "/peak";
@@ -192,7 +192,7 @@ test.skipIf(process.platform !== "linux")("a nested real watch compiler lends a 
         try {
           const rows = db.query("SELECT owner FROM checks").all();
           const executing = rows.filter(row => {
-            try { return !/^State:\\s+[TZX]/m.test(fs.readFileSync("/proc/" + JSON.parse(row.owner).pid + "/status", "utf8")); }
+            try { return !/^State:\\s+[TtZX]/m.test(fs.readFileSync("/proc/" + JSON.parse(row.owner).pid + "/status", "utf8")); }
             catch { return false; }
           });
           expect(executing).toHaveLength(1);

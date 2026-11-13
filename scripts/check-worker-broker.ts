@@ -165,7 +165,7 @@ async function supervise(socket: net.Socket, workerPid: number, hostPid: number 
       let stopped = false;
       try {
         stopped = process.platform === "linux"
-          ? fs.readdirSync(`/proc/${pid}/task`).every(tid => /^State:\s+T/m.test(fs.readFileSync(`/proc/${pid}/task/${tid}/status`, "utf8")))
+          ? fs.readdirSync(`/proc/${pid}/task`).every(tid => /^State:\s+[Tt]/m.test(fs.readFileSync(`/proc/${pid}/task/${tid}/status`, "utf8")))
           : /^T/.test((await ps("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8", timeout: 1_000 })).stdout.trim());
       } catch (error) {
         // A worker or one of its native threads can exit during the sample.

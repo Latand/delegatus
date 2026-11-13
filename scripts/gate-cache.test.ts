@@ -13,10 +13,10 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 const fixture = () => { const root = mkdtempSync(path.join(tmpdir(), "gate-cache-")); roots.push(root); return root; };
 const valid = (value: unknown): value is { passed: true } => !!value && typeof value === "object" && "passed" in value && value.passed === true;
 
-test("runtime admission changes invalidate a cached gate verdict", () => {
+for (const name of ["check-runtime-preload.mjs", "check-worker-entry.py"]) test(`${name} changes invalidate a cached gate verdict`, () => {
   const root = fixture();
   mkdirSync(path.join(root, "scripts"));
-  const preload = path.join(root, "scripts/check-runtime-preload.mjs");
+  const preload = path.join(root, "scripts", name);
   const key = () => gateToolFiles(root).map(file => fileFingerprint(path.join(root, file))).join(":");
   writeFileSync(preload, "export const admission = true;");
   const before = key();
