@@ -99,7 +99,7 @@ const KEYED = /^(?:PATH|LANG|LANGUAGE|LC_[A-Z]+|TZ|USER|LOGNAME|SHELL|NODE_OPTIO
 const IDENTITY = /^GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL)$/;
 /** Admission, placement and the signal boundary decide where and when a check
  * runs, never what it checks. The boundary's host epoch is keyed instead. */
-const TRANSPORT = /^(?:LLV_SIGNAL_SANDBOX|LLV_(?:GATE|CPU|OWNED)_[A-Z0-9_]+|DELEGATUS_(?:GATE_CPU_HEADROOM|CHECK_ADMISSION_OWNER)|(?:LLV|DELEGATUS)_(?:AGENT_CPU|CPU_PRESSURE[A-Z0-9_]*|WORK_(?:SCOPE_)?CPU_QUOTA)|LLV_DOCKER_NSENTER_SHIMS|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
+const TRANSPORT = /^(?:LLV_SIGNAL_SANDBOX|LLV_(?:GATE|CPU|OWNED)_[A-Z0-9_]+|DELEGATUS_(?:GATE_CPU_HEADROOM|CHECK_(?:ADMISSION_OWNER|BROKER))|(?:LLV|DELEGATUS)_(?:AGENT_CPU|CPU_PRESSURE[A-Z0-9_]*|WORK_(?:SCOPE_)?CPU_QUOTA)|LLV_DOCKER_NSENTER_SHIMS|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
 const declaredInputs = (env: Partial<NodeJS.ProcessEnv>) => new Set((env.LLV_GATE_CHECK_ENV ?? "").split(",").map(name => name.trim()).filter(Boolean));
 
 /** One environment for every reusable check, whoever starts the hook: a stage

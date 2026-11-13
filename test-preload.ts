@@ -61,12 +61,12 @@ if (process.env.LLV_TEST_STARTUP_HOME !== os.homedir()) {
 // A nested runner cannot reuse its parent's admission. Without a manager the
 // owned runner binds portable admission to the command PID and warns about
 // polling limits. Re-enter before modules load, preserving Bun's command line.
-const admitted = process.platform !== "linux"
+const admitted = Boolean(process.env.DELEGATUS_CHECK_BROKER) && (process.platform !== "linux"
   || Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) === process.pid
   || (Number(process.env.LLV_OWNED_TEST_RUNNER_PID) === process.pid
-    && fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line === `0::${process.env.LLV_OWNED_TEST_RUN_CGROUP}`));
+    && fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line === `0::${process.env.LLV_OWNED_TEST_RUN_CGROUP}`)));
 if (!admitted) {
-  const runner = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "scripts/owned-runner.ts"), ...testArguments()], {
+  const runner = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "scripts/owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), ...testArguments()], {
     env: { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) }, stdin: "inherit", stdout: "inherit", stderr: "inherit",
   });
   process.on("SIGTERM", () => runner.kill("SIGTERM"));

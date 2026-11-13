@@ -4,12 +4,11 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CheckAdmission, acquireCheckSlot, checkAdmissionFile, checkCapacity, isTypecheckCommand, withTestAdmission } from "./check-admission";
+import { CheckAdmission, acquireCheckSlot, checkAdmissionFile, checkCapacity, withTestAdmission } from "./check-admission";
 import { onlineCpuCount } from "../src/lib/runtime/cpuPlacement";
 import type { ProcessIdentity, ProcessIdentityStatus } from "../src/lib/processIdentity";
 import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
-import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 
 const identity = (pid: number, start = 1): ProcessIdentity => ({ pid, startIdentity: `${pid}:${start}`, bootEpoch: "fixture" });
 function fixture() {
@@ -69,6 +68,29 @@ test("strictest concurrent capacity wins and an exited waiter cannot hold the FI
   } finally { queue.close(); f.close(); }
 });
 
+test("legacy admission rows and new service lineage survive reopen in both readers", () => {
+  const f = fixture(), first = identity(101), second = identity(102), third = identity(103);
+  const legacy = new Database(f.file, { create: true });
+  legacy.exec("CREATE TABLE checks(seq INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT UNIQUE NOT NULL, capacity INTEGER NOT NULL, held INTEGER NOT NULL DEFAULT 0)");
+  legacy.query("INSERT INTO checks(owner, capacity, held) VALUES (?, 1, 1)").run(JSON.stringify(first));
+  const observer = { status: () => "alive" as const, exited: () => false };
+  let queue = new CheckAdmission(f.file, observer);
+  try {
+    expect(queue.holds(first)).toBe(true);
+    expect(queue.claim(second, 1, [first])).toBe(false);
+    // The old writer omits lineage, and the old reader selects its own fields.
+    legacy.query("INSERT INTO checks(owner, capacity) VALUES (?, 1)").run(JSON.stringify(third));
+    expect(legacy.query("SELECT owner, held FROM checks ORDER BY seq").all()).toEqual([
+      { owner: JSON.stringify(first), held: 1 }, { owner: JSON.stringify(second), held: 0 }, { owner: JSON.stringify(third), held: 0 },
+    ]);
+    queue.close(); queue = new CheckAdmission(f.file, observer);
+    expect(queue.db.query<{ lineage: string }, []>("SELECT lineage FROM checks ORDER BY seq").all().map(row => JSON.parse(row.lineage))).toEqual([[], [first], []]);
+    queue.cancel(first);
+    expect(queue.claim(second, 1, [first])).toBe(true);
+    expect(queue.claim(third, 1)).toBe(false);
+  } finally { queue.close(); legacy.close(); f.close(); }
+});
+
 test("binding folds a preload's racing ticket into its launch permit", () => {
   const f = fixture();
   const queue = new CheckAdmission(f.file, { status: () => "alive", exited: () => false });
@@ -83,14 +105,7 @@ test("binding folds a preload's racing ticket into its launch permit", () => {
   } finally { queue.close(); f.close(); }
 });
 
-test("typecheck launch forms and baseline preloads survive the CPU-scope handoff", () => {
-  for (const command of [["bunx", "tsc", "--noEmit"], ["bun", "x", "tsc"], ["node", "node_modules/typescript/bin/tsc"], ["tsc.cmd", "--noEmit"]]) {
-    expect(isTypecheckCommand(command)).toBe(true);
-    expect(isTypecheckCommand(["bash", "scripts/gate-slot.sh", "--in-cpu-scope", ...command])).toBe(true);
-  }
-  expect(isTypecheckCommand(["bun", "test", "tsc.test.ts"])).toBe(false);
-  expect(isTypecheckCommand(["bash", "-c", 'exec "$@"', "probe", "bun", "node_modules/typescript/bin/tsc", "--project", "fixture"])).toBe(true);
-  expect(isTypecheckCommand(["sh", "-c", "node ./node_modules/typescript/bin/tsc --noEmit"])).toBe(true);
+test("baseline test preloads survive the CPU-scope handoff", () => {
   const command = ["bash", "scripts/gate-slot.sh", "--in-cpu-scope", "bun", "test", "baseline.test.ts"];
   const wrapped = withTestAdmission(command, "check-test-preload.ts");
   expect(wrapped).toEqual([...command.slice(0, 5), "--preload", "check-test-preload.ts", "baseline.test.ts"]);
@@ -98,18 +113,104 @@ test("typecheck launch forms and baseline preloads survive the CPU-scope handoff
   expect(withTestAdmission(["bun", "run", "test", "branch.test.ts"], "preload.ts")).toEqual(["bun", "run", "test", "--preload", "preload.ts", "branch.test.ts"]);
 });
 
-test("nested test children share their admitted parent suite ticket", async () => {
-  const f = fixture(), queue = new CheckAdmission(f.file);
-  expect(queue.claim(cpuOwnerIdentity(process.pid), 1)).toBe(true);
-  const env = withoutInheritedGate<NodeJS.ProcessEnv>({ ...process.env, LLV_CHECK_ADMISSION_FILE: f.file });
-  const source = `import { admitTestProcess } from ${JSON.stringify(path.join(import.meta.dir, "check-admission.ts"))}; await admitTestProcess(); console.log("child-ready");`;
-  const child = Bun.spawn([process.execPath, "-e", source], { env, stdout: "pipe", stderr: "pipe" });
+for (const [capacity, hang, service] of [[1, false, false], [2, false, false], [1, true, false], [1, false, true]] as const) test.skipIf(process.platform !== "linux" || service && !process.env.LLV_OWNED_TEST_RUN_CGROUP)(`nested workers cap=${capacity} hang=${hang} service=${service} preserve the process bound and deadline`, async () => {
+  const f = processFixture();
+  const worker = path.join(f.root, "nested.test.ts");
+  const runner = path.join(import.meta.dir, "owned-runner.ts");
+  fs.writeFileSync(worker, `import fs from "node:fs";
+    import { spawn } from "node:child_process"; import { test, expect } from "bun:test";
+    import { Database } from "bun:sqlite";
+    const db = new Database(process.env.LLV_CHECK_ADMISSION_FILE);
+    function sample() {
+      try { return db.transaction(() => {
+        const active = ["parent", "first", "second"].filter(id => {
+          try {
+            const pid = Number(fs.readFileSync(${JSON.stringify(f.root)} + "/" + id + ".start", "utf8"));
+            const state = /^State:\\s+(\\S)/m.exec(fs.readFileSync("/proc/" + pid + "/status", "utf8"))?.[1];
+            return state && !["T", "Z", "X"].includes(state);
+          } catch { return false; }
+        }).length;
+        const peakFile = ${JSON.stringify(f.root)} + "/peak";
+        const peak = fs.existsSync(peakFile) ? Number(fs.readFileSync(peakFile, "utf8")) : 0;
+        fs.writeFileSync(peakFile, String(Math.max(peak, active)));
+        expect(active).toBeLessThanOrEqual(${capacity});
+        return true;
+      }).immediate(); } catch (error) {
+        if (error.code === "SQLITE_BUSY" || error.code === "SQLITE_LOCKED") return false;
+        throw error;
+      }
+    }
+    test("nested worker", async () => {
+      fs.writeFileSync(process.env.START, String(process.pid));
+      while (!sample()) await Bun.sleep(1);
+      if (process.env.ROLE === "parent") {
+        const children = ["first", "second"].map(id => spawn(process.execPath,
+          [${JSON.stringify(runner)}, ...${JSON.stringify(service ? [] : ["--portable"])}, process.execPath, "test", "./nested.test.ts"],
+          { env: {...process.env, ROLE: id, START: ${JSON.stringify(f.root)} + "/" + id + ".start"}, stdio: "inherit" }));
+        const exits = children.map(child => new Promise(resolve => child.once("exit", resolve)));
+        while (!["first", "second"].every(id => fs.existsSync(${JSON.stringify(f.root)} + "/" + id + ".start"))) { sample(); await Bun.sleep(10); }
+        sample();
+        if (process.env.HANG === "1") await new Promise(() => {});
+        fs.writeFileSync(process.env.RELEASE, "release");
+        for (const code of await Promise.all(exits)) expect(code).toBe(0);
+      } else while (!fs.existsSync(process.env.RELEASE)) { sample(); await Bun.sleep(10); }
+      db.close();
+    }, 30_000);`);
+  const child = spawn(process.execPath, [runner, ...(service ? [] : ["--portable"]), process.execPath, "test", "./nested.test.ts"], {
+    cwd: f.root, env: { ...f.env, ROLE: "parent", START: path.join(f.root, "parent.start"), RELEASE: path.join(f.root, "nested.release"),
+      DELEGATUS_GATE_CPU_HEADROOM: String(onlineCpuCount() - capacity), HANG: hang ? "1" : "0",
+      LLV_OWNED_RUN_TIMEOUT_MS: hang ? "1500" : "30000" }, stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = ""; child.stderr!.on("data", data => { stderr += String(data); }); child.stdout!.resume();
+  const exited = new Promise(resolve => child.once("exit", resolve));
   try {
-    const output = await new Response(child.stdout).text();
-    expect(await child.exited).toBe(0);
-    expect(output).toContain("child-ready");
-  } finally { child.kill(); await child.exited; queue.close(); f.close(); }
-});
+    expect(await exited, stderr).toBe(hang ? 124 : 0);
+    for (const id of ["parent", "first", "second"]) expect(f.started(id)).toBe(true);
+    const peak = Number(fs.readFileSync(path.join(f.root, "peak"), "utf8"));
+    expect(peak).toBeGreaterThan(0); expect(peak).toBeLessThanOrEqual(capacity);
+    console.log(JSON.stringify({ capacity, peakExecutingWorkers: peak, hang, service, terminalExit: child.exitCode }));
+    await until(() => f.rows().length === 0);
+  } finally { await stopFixtureProcess(child); await f.close(); }
+}, 60_000);
+
+test.skipIf(process.platform !== "linux")("a nested real watch compiler lends a turn back to its test parent", async () => {
+  const f = processFixture();
+  const runner = path.join(import.meta.dir, "owned-runner.ts");
+  const compiler = path.resolve(import.meta.dir, "../node_modules/typescript/bin/tsc");
+  fs.writeFileSync(path.join(f.root, "source.ts"), "export const answer: number = 42;\n");
+  fs.writeFileSync(path.join(f.root, "tsconfig.json"), JSON.stringify({ compilerOptions: { types: [], skipLibCheck: true, outDir: "out" }, files: ["source.ts"] }));
+  fs.writeFileSync(path.join(f.root, "parent.test.ts"), `import fs from "node:fs";
+    import { spawn } from "node:child_process"; import { test, expect } from "bun:test";
+    import { Database } from "bun:sqlite";
+    import { stopFixtureProcess } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/lib/testing/fixtureProcess.ts"))};
+    test("parent controls its watch compiler", async () => {
+      const child = spawn(process.execPath, [${JSON.stringify(runner)}, "--portable", process.execPath,
+        ${JSON.stringify(compiler)}, "--project", "tsconfig.json", "--watch", "--preserveWatchOutput"], {env:process.env,stdio:"inherit"});
+      try {
+        while (!fs.existsSync("out/source.js")) await Bun.sleep(10);
+        const db = new Database(process.env.LLV_CHECK_ADMISSION_FILE);
+        try {
+          const rows = db.query("SELECT owner FROM checks").all();
+          const executing = rows.filter(row => {
+            try { return !/^State:\\s+[TZX]/m.test(fs.readFileSync("/proc/" + JSON.parse(row.owner).pid + "/status", "utf8")); }
+            catch { return false; }
+          });
+          expect(executing).toHaveLength(1);
+          expect(child.exitCode).toBeNull();
+        } finally { db.close(); }
+      } finally { await stopFixtureProcess(child); }
+    }, 20_000);`);
+  const child = spawn(process.execPath, [runner, "--portable", process.execPath, "test", "./parent.test.ts"], {
+    cwd: f.root, env: { ...f.env, DELEGATUS_GATE_CPU_HEADROOM: String(onlineCpuCount() - 1) }, stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = ""; child.stderr!.on("data", data => { stderr += String(data); }); child.stdout!.resume();
+  const exited = new Promise(resolve => child.once("exit", resolve));
+  try {
+    expect(await exited, stderr).toBe(0);
+    expect(fs.existsSync(path.join(f.root, "out/source.js"))).toBe(true);
+    await until(() => f.rows().length === 0);
+  } finally { await stopFixtureProcess(child); await f.close(); }
+}, 60_000);
 
 test("concurrent ancestor probes retry admission database initialization", async () => {
   const f = fixture();
@@ -160,7 +261,7 @@ function processFixture() {
   const rows = () => db.query<{ seq: number; owner: string; held: number }, []>("SELECT seq, owner, held FROM checks ORDER BY seq").all();
   const start = (id: string, compiler = false) => {
     const child = spawn(process.execPath, [path.join(import.meta.dir, "owned-runner.ts"), "--portable", process.execPath,
-      ...(compiler ? [path.join(f.root, "tsc")] : ["test", "./worker.test.ts"])], {
+      ...(compiler ? [path.join(f.root, "tsc")] : [...(id === "base" ? ["--smol"] : []), "test", "./worker.test.ts"])], {
       cwd: f.root, env: { ...env, START: path.join(f.root, `${id}.start`), RELEASE: path.join(f.root, `${id}.release`) }, stdio: ["ignore", "ignore", "pipe"],
     });
     children.push(child);
@@ -223,6 +324,50 @@ test.skipIf(process.platform === "win32")("a compiler failure preserves its exit
     f.release("successor");
     expect(await f.records[1]!.code, f.records[1]!.stderr()).toBe(0);
   } finally { await f.close(); }
+}, 60_000);
+
+for (const interpreter of ["bun", "node"]) test(`a real compiler through a ${interpreter} package script waits without output`, async () => {
+  const f = processFixture();
+  const runner = path.join(import.meta.dir, "owned-runner.ts");
+  const compiler = path.resolve(import.meta.dir, "../node_modules/typescript/bin/tsc");
+  const binary = interpreter === "bun" ? process.execPath : Bun.which("node")!;
+  const env = { ...f.env, DELEGATUS_GATE_CPU_HEADROOM: String(onlineCpuCount() - 1) };
+  for (const name of ["held", "second"]) {
+    fs.mkdirSync(path.join(f.root, name));
+    fs.writeFileSync(path.join(f.root, name, "source.ts"), "export const answer: number = 42;\n");
+    fs.writeFileSync(path.join(f.root, name, "tsconfig.json"), JSON.stringify({ compilerOptions: { types: [], skipLibCheck: true, outDir: "out" }, files: ["source.ts"] }));
+  }
+  fs.writeFileSync(path.join(f.root, "package.json"), JSON.stringify({ scripts: {
+    typecheck: `${interpreter === "node" && process.platform !== "win32" ? `sh -c 'exec "$@"' compiler-probe ` : ""}${JSON.stringify(binary)} ${JSON.stringify(compiler)} --project second/tsconfig.json --listEmittedFiles`,
+  } }));
+  const start = (args: string[]) => {
+    const child = spawn(process.execPath, [runner, "--portable", ...args], { cwd: f.root, env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = "";
+    child.stdout!.on("data", data => { stdout += String(data); });
+    child.stderr!.on("data", data => { stderr += String(data); });
+    const exited = new Promise(resolve => child.once("exit", resolve));
+    return { child, exited, stdout: () => stdout, stderr: () => stderr };
+  };
+  const first = start([process.execPath, compiler, "--project", "held/tsconfig.json", "--watch", "--preserveWatchOutput"]);
+  let second: ReturnType<typeof start> | undefined;
+  try {
+    await until(() => fs.existsSync(path.join(f.root, "held/out/source.js")) || first.child.exitCode !== null);
+    expect(first.child.exitCode, first.stderr()).toBeNull();
+    second = start([process.execPath, "run", "typecheck"]);
+    await until(() => f.rows().length === 2 || second!.child.exitCode !== null);
+    expect(f.rows().map(row => row.held), second.stderr()).toEqual([1, 0]);
+    expect(second.stdout()).toBe("");
+    expect(fs.existsSync(path.join(f.root, "second/out/source.js"))).toBe(false);
+    expect(second.child.exitCode).toBeNull();
+    await stopFixtureProcess(first.child);
+    expect(await second.exited, second.stderr()).toBe(0);
+    expect(second.stdout()).toContain("TSFILE:");
+    expect(fs.existsSync(path.join(f.root, "second/out/source.js"))).toBe(true);
+    await until(() => f.rows().length === 0);
+  } finally {
+    if (second) await stopFixtureProcess(second.child);
+    await stopFixtureProcess(first.child); await f.close();
+  }
 }, 60_000);
 
 test("real process restart reclaims an abandoned holder and waiter", async () => {

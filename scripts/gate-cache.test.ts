@@ -31,6 +31,13 @@ test("pre-push isolation preserves the public CPU headroom setting", () => {
   expect(checkEnvironment(isolated)).toEqual(isolated);
 });
 
+test("check isolation retains admission transport without keying its per-run capability", () => {
+  const first = { PATH: "/usr/bin", DELEGATUS_CHECK_BROKER: "first" };
+  const second = { ...first, DELEGATUS_CHECK_BROKER: "second" };
+  expect(checkEnvironment(first).DELEGATUS_CHECK_BROKER).toBe("first");
+  expect(environmentFingerprint(first)).toBe(environmentFingerprint(second));
+});
+
 test("publication custody never reaches checks, even as a declared input", () => {
   const env = { PATH: "/usr/bin", LLV_GATE_PUBLICATION_RECEIPT: "/fixture/receipt", LLV_GATE_PUBLICATION_ID: "publication",
     LLV_GATE_CHECK_ENV: "LLV_GATE_PUBLICATION_RECEIPT" };

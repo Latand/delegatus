@@ -24,7 +24,7 @@ export function checkCapacity(env: Readonly<Record<string, string | undefined>> 
   return Math.max(1, cores - headroom);
 }
 
-type Row = { seq: number; owner: string; capacity: number; held: number };
+type Row = { seq: number; owner: string; capacity: number; held: number; lineage: string };
 type Observer = { status: typeof cpuOwnerStatus; exited: typeof cpuOwnerExited };
 
 /** A separate connection per runner, never a process-local counter. The write
@@ -40,12 +40,20 @@ export class CheckAdmission {
       this.db.exec("PRAGMA busy_timeout=0; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL");
       this.db.exec(`CREATE TABLE IF NOT EXISTS checks (
         seq INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT UNIQUE NOT NULL,
-        capacity INTEGER NOT NULL CHECK(capacity > 0), held INTEGER NOT NULL DEFAULT 0
+        capacity INTEGER NOT NULL CHECK(capacity > 0), held INTEGER NOT NULL DEFAULT 0,
+        lineage TEXT NOT NULL DEFAULT '[]'
       )`);
+      // Old launchers continue to write the same owner and default lineage.
+      // Serialize the probe and ALTER together across concurrent upgrades.
+      this.db.transaction(() => {
+        if (!this.db.query<{ name: string }, []>("PRAGMA table_info(checks)").all().some(row => row.name === "lineage")) {
+          this.db.exec("ALTER TABLE checks ADD COLUMN lineage TEXT NOT NULL DEFAULT '[]'");
+        }
+      }).immediate();
     } catch (error) { this.db.close(); throw error; }
   }
 
-  claim(owner: ProcessIdentity, capacity: number): boolean {
+  claim(owner: ProcessIdentity, capacity: number, lineage: readonly ProcessIdentity[] = []): boolean {
     if (!owner.startIdentity || !owner.bootEpoch || !Number.isSafeInteger(capacity) || capacity < 1) throw new Error("check admission needs a verified owner and positive capacity");
     const identity = JSON.stringify(owner);
     return this.db.transaction(() => {
@@ -54,7 +62,7 @@ export class CheckAdmission {
         const previous = JSON.parse(row.owner) as ProcessIdentity;
         if (this.observer.status(previous) === "dead" || this.observer.exited(previous)) this.db.query("DELETE FROM checks WHERE seq = ?").run(row.seq);
       }
-      this.db.query("INSERT OR IGNORE INTO checks(owner, capacity) VALUES (?, ?)").run(identity, capacity);
+      this.db.query("INSERT OR IGNORE INTO checks(owner, capacity, lineage) VALUES (?, ?, ?)").run(identity, capacity, JSON.stringify(lineage));
       const rows = this.db.query<Row, []>("SELECT * FROM checks ORDER BY seq").all();
       const own = rows.find(row => row.owner === identity)!;
       if (own.held) return true;
@@ -78,16 +86,6 @@ export class CheckAdmission {
   holds(owner: ProcessIdentity): boolean {
     return this.db.query<{ held: number }, [string]>("SELECT held FROM checks WHERE owner = ?").get(JSON.stringify(owner))?.held === 1
       && this.observer.status(owner) === "alive" && !this.observer.exited(owner);
-  }
-  hasAdmittedAncestor(pid: number): boolean {
-    const parents = procBackend.ppidMap(), ancestors = new Set<number>();
-    let parent = parents.get(pid);
-    while (parent && parent > 1 && !ancestors.has(parent)) { ancestors.add(parent); parent = parents.get(parent); }
-    return this.db.query<Row, []>("SELECT * FROM checks WHERE held = 1").all()
-      .some(row => {
-        const owner = JSON.parse(row.owner) as ProcessIdentity;
-        return ancestors.has(owner.pid) && this.holds(owner);
-      });
   }
   cancel(owner: ProcessIdentity): void { this.db.query("DELETE FROM checks WHERE owner = ?").run(JSON.stringify(owner)); }
   close(): void { this.db.close(); }
@@ -131,29 +129,11 @@ export async function openCheckAdmission(env = process.env): Promise<CheckAdmiss
   } finally { endWait(); }
 }
 
-const testSlot = Symbol.for("delegatus.checkAdmission.test");
-const globals = globalThis as typeof globalThis & { [testSlot]?: Promise<void> };
-export function admitTestProcess(): Promise<void> {
-  return globals[testSlot] ??= (async () => {
-    const env = process.env;
-    const queue = await openCheckAdmission(env);
-    try {
-      const inherited = process.env.DELEGATUS_CHECK_ADMISSION_OWNER;
-      if (inherited) {
-        try {
-          const owner = JSON.parse(inherited) as ProcessIdentity;
-          if (queue.holds(owner)) return;
-        } catch { /* A stale or malformed inherited ticket must reacquire. */ }
-      }
-        // Child suites are part of the parent's admitted gate tree. Detect the
-        // live ownership chain from process identities so isolated child envs
-        // cannot turn a saturated parent/child wait into a queue cycle.
-      if (queue.hasAdmittedAncestor(process.pid)) return;
-    } finally { queue.close(); }
-    const slot = await acquireCheckSlot(env);
-    process.env.DELEGATUS_CHECK_ADMISSION_OWNER = JSON.stringify(slot.owner);
-    slot.queue.close();
-  })();
+/** The preload client supervises this exact worker; an ancestor can never
+ * authorize another process. Shared by the repository and injected preloads. */
+export async function admitTestProcess(): Promise<void> {
+  const { admitWorker } = await import("./check-worker-client.mjs");
+  await admitWorker("test");
 }
 
 export async function admittedCheckAncestor(pid: number, env = process.env): Promise<ProcessIdentity | undefined> {
@@ -175,25 +155,4 @@ export function withTestAdmission(command: readonly string[], preload: string): 
   const test = binary === "bun" && (command[1] === "test" ? 2 : command[1] === "run" && command[2] === "test" ? 3 : 0);
   if (!test || command.includes(preload)) return [...command];
   return [...command.slice(0, test), "--preload", preload, ...command.slice(test)];
-}
-
-export function isTestCommand(command: readonly string[]): boolean {
-  const binary = path.basename(command[0] ?? "").replace(/\.exe$/, "");
-  if (["bash", "sh"].includes(binary) && command[2] === "--in-cpu-scope") return isTestCommand(command.slice(3));
-  return binary === "bun" && command[1] === "test";
-}
-
-/** Only compiler commands need wrapping here. Bun tests admit their final
- * process in test-preload, after startup HOME and ownership re-entry. */
-export function isTypecheckCommand(command: readonly string[]): boolean {
-  const name = (value = "") => path.basename(value).replace(/\.(?:cmd|exe|js|cjs|mjs)$/, "");
-  const binary = name(command[0]);
-  if (["bash", "sh"].includes(binary) && command[2] === "--in-cpu-scope") return isTypecheckCommand(command.slice(3));
-  // Shell campaigns often forward their actual command through `exec "$@"`.
-  // Admitting the enclosing owned run keeps the permit through that handoff.
-  if (["bash", "sh"].includes(binary) && command.slice(1).some(part => /(?:^|[/\\])tsc(?:\.(?:cmd|exe|js|cjs|mjs))?(?:\s|$)/.test(part))) return true;
-  if (binary === "tsc") return true;
-  if (["bunx", "npx"].includes(binary)) return name(command[1]) === "tsc";
-  if (["bun", "node"].includes(binary)) return name(command[1]) === "tsc" || command[1] === "x" && name(command[2]) === "tsc";
-  return false;
 }

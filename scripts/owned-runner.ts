@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { captureProcessIdentity, processIdentityStatus, systemBootEpoch, type ProcessIdentity } from "../src/lib/processIdentity";
 import { procBackend } from "../src/lib/proc";
@@ -18,104 +19,32 @@ import { sandboxGateEntryCommand } from "../src/lib/runtime/sandboxGateEntry";
 import { gateServiceProperties } from "../src/lib/runtime/cpuPlacement";
 import { GateTasks, GATE_TASKS_MAX, GATE_TASK_LIMIT_EXIT, gateTaskProperties, gateTaskResult, gateTaskFailure, warnGateTaskFallback, type GateTaskSnapshot } from "./gate-tasks";
 import { producerReport, producerCommandIdentity, recordedSupervisorObligation, recordedSupervisorRefusal, supervisorCancellation, reportSchema, readEnvelope, writeEnvelope, digest, type ProducerReport } from "../src/lib/recordedChecks/wire";
-import { openCheckAdmission, acquireCheckSlot, admittedCheckAncestor, isTestCommand, isTypecheckCommand, withTestAdmission } from "./check-admission";
-import { admissionLockWait } from "./cpu-admission-lock";
+import { startCheckBroker } from "./check-worker-broker";
+import { withTestAdmission } from "./check-admission";
 
 /** `namespace` marks a caller inside an agent signal domain. Its identities
  * are translated to the host, where the service checks them, and the service
  * runs the command inside the owner's namespaces. */
 type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; unit: string; timeoutMs: number; namespace?: true };
 const args = process.argv.slice(2);
-if (!["--service", "--namespace-guardian", "--check-process"].includes(args[0] ?? "")) ownGateSandboxes();
+if (!["--service", "--namespace-guardian"].includes(args[0] ?? "")) ownGateSandboxes();
 const timeoutMs = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
 if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("owned runner needs a positive finite deadline");
 
-// Wrap at the dispatch boundary, so the same command runs inside the service,
-// portable guardian or namespace leaf. The helper waits within their CPU wait
-// budget and binds the permit to the compiler itself before yielding.
+// Runtime preloads travel through package scripts and shells, including
+// absolute interpreter paths. Admit only the final worker/compiler, so a
+// waiting script runner never consumes its child's permit.
+const runtimePreload = path.join(import.meta.dir, "check-runtime-preload.mjs");
+for (const [key, flag] of [["BUN_OPTIONS", "--preload="], ["NODE_OPTIONS", "--import="]] as const) {
+  const option = `${flag}${pathToFileURL(runtimePreload).href}`;
+  if (!process.env[key]?.includes(option)) process.env[key] = `${process.env[key] ?? ""} ${option}`.trim();
+}
+const launchOwner = args[0] === "--service"
+  ? (JSON.parse(fs.readFileSync(args[1]!, "utf8")) as Launch).owner : undefined;
+const broker = await startCheckBroker(launchOwner);
+process.env.DELEGATUS_CHECK_BROKER = broker.address;
 const offset = ["--portable", "--namespace"].includes(args[0] ?? "") ? 1 : 0;
-if (!process.env.DELEGATUS_CHECK_ADMISSION_OWNER) {
-  const owner = await admittedCheckAncestor(process.pid);
-  if (owner) process.env.DELEGATUS_CHECK_ADMISSION_OWNER = JSON.stringify(owner);
-}
 if (!args[offset]?.startsWith("--")) args.splice(offset, args.length - offset, ...withTestAdmission(args.slice(offset), path.join(import.meta.dir, "check-test-preload.ts")));
-// Startup HOME re-entry creates its own final owned run. Admit that launch
-// before spawning Bun; the preload below also covers older/raw launch paths.
-if (isTypecheckCommand(args.slice(offset)) || isTestCommand(args.slice(offset)) && process.env.LLV_TEST_STARTUP_HOME === os.homedir()) {
-  args.splice(offset, args.length - offset, process.execPath, import.meta.path, "--check-process", ...args.slice(offset));
-}
-
-if (args[0] === "--check-process") {
-  const command = args.slice(1);
-  if (!command.length) throw new Error("check process needs a command");
-  const controller = new AbortController();
-  let child: ReturnType<typeof spawn> | undefined;
-  let stopping: Promise<void> | undefined;
-  let interrupted = 0;
-  const stop = (code: number) => {
-    interrupted ||= code;
-    controller.abort();
-    if (child) stopping ??= stopFixtureProcess(child);
-  };
-  process.on("SIGTERM", () => stop(143)); process.on("SIGINT", () => stop(130));
-  let slot: Awaited<ReturnType<typeof acquireCheckSlot>> | undefined;
-  const inheritedOwner = process.env.DELEGATUS_CHECK_ADMISSION_OWNER;
-  if (inheritedOwner && isTestCommand(command)) {
-    let validated = false;
-    try {
-      const owner = JSON.parse(inheritedOwner) as ProcessIdentity;
-      const queue = await openCheckAdmission();
-      try { validated = queue.holds(owner); }
-      finally { queue.close(); }
-    } catch { delete process.env.DELEGATUS_CHECK_ADMISSION_OWNER; }
-    if (validated) process.env.DELEGATUS_CHECK_ADMISSION_OWNER = inheritedOwner;
-    else delete process.env.DELEGATUS_CHECK_ADMISSION_OWNER;
-  }
-  if (!isTestCommand(command)) delete process.env.DELEGATUS_CHECK_ADMISSION_OWNER;
-  if (!process.env.DELEGATUS_CHECK_ADMISSION_OWNER && isTestCommand(command)) {
-    const ancestor = await admittedCheckAncestor(process.pid);
-    if (ancestor) process.env.DELEGATUS_CHECK_ADMISSION_OWNER = JSON.stringify(ancestor);
-  }
-  if (!process.env.DELEGATUS_CHECK_ADMISSION_OWNER) {
-    slot = await acquireCheckSlot(process.env, controller.signal).catch(error => { if (interrupted) process.exit(interrupted); throw error; });
-  }
-  let holder = slot?.owner;
-  try {
-    controller.signal.throwIfAborted();
-    // Replacing the helper preserves the kernel start identity, the runner's
-    // PID-bound cleanup proof and its stdio. No extra test supervisor remains
-    // in the service cgroup. A failed exec retires the permit below.
-    if (process.platform !== "win32" && typeof process.execve === "function") {
-      const executable = Bun.which(command[0]!);
-      if (!executable) throw new Error("check command executable was not found");
-      process.execve(executable, [executable, ...command.slice(1)], process.env);
-    }
-    // The surrounding runner owns cleanup. Preserve its PID-bound admission
-    // through this extra exec, so the final test need not enter another unit.
-    const launch = isTestCommand(command) && process.platform === "linux"
-      ? ["/bin/bash", "-c", 'export LLV_OWNED_TEST_RUNNER_PID=$$ LLV_PORTABLE_TEST_RUNNER_PID=$$; exec "$@"', "admitted-test", ...command] : command;
-    child = spawn(launch[0]!, launch.slice(1), { stdio: "inherit" });
-    const closed = new Promise<number>(resolve => {
-      child!.once("exit", (code, signal) => resolve(code ?? (signal === "SIGTERM" ? 143 : 137)));
-      child!.once("error", error => { console.error(`owned runner: compiler launch failed: ${error.message}`); resolve(1); });
-    });
-    if (child.pid) {
-      const identity = hostProcessIdentity(captureProcessIdentity(child.pid));
-      if (slot) await admissionLockWait()(() => slot!.queue.bind(slot!.owner, identity));
-      holder = identity;
-    }
-    const code = await closed;
-    await stopping;
-    process.exitCode = interrupted || code;
-  } finally {
-    if (child) await stopFixtureProcess(child);
-    if (slot) {
-      await admissionLockWait()(() => slot!.queue.cancel(holder!));
-      slot.queue.close();
-    }
-  }
-  process.exit(process.exitCode ?? 0);
-}
 
 // Resolve automatic admission before dispatch so fallback has the same owner,
 // deadline and signal handlers as an explicitly portable invocation.
@@ -232,6 +161,7 @@ if (args[0] === "--namespace-guardian") {
   clearInterval(parentTimer); stopTimer(); budget.close();
   fs.writeFileSync(`${ledger}.done`, "done");
   await Promise.race([guardian.exited, Bun.sleep(3_000).then(() => { guardian.kill("SIGKILL"); throw new Error("owned runner guardian exceeded cleanup deadline"); })]);
+  await broker.close();
   let guardianConfirmed = guardian.exitCode === 0;
   if (recorded) {
     try {
@@ -263,6 +193,8 @@ if (args[0] === "--namespace-guardian") {
   const notifySocket = process.env.NOTIFY_SOCKET;
   const invocation = process.env.INVOCATION_ID;
   process.env = { ...hostEnv, NOTIFY_SOCKET: notifySocket, INVOCATION_ID: invocation };
+  process.env.DELEGATUS_CHECK_BROKER = broker.address;
+  launch.env.DELEGATUS_CHECK_BROKER = broker.address;
   const recorded = recordedSupervisorObligation();
   const budget = cpuWaitBudget(launch.env);
   const slot = inheritedCpuSlot(hostEnv) ?? cpuSlotForOwner(launch.owner, hostEnv);
@@ -305,15 +237,17 @@ if (args[0] === "--namespace-guardian") {
   let commandExit: number | null = null, commandSignal: string | null = null;
   let cancellation: ProducerReport["cancellation"] = null;
   let settled = false;
+  let stopExecutionTimer = () => {};
   const finish = async (code: number) => {
     if (settled) return;
     settled = true;
     clearInterval(taskTimer);
+    stopExecutionTimer();
     await stopNotify();
-    budget.close();
     try { if (saveTasks().denied > 0) code = GATE_TASK_LIMIT_EXIT; }
     catch (error) { console.error(`GATE_TASK_OBSERVATION_FAILED: ${launch.unit}: ${(error as Error).message}`); code = 1; }
     const survivors = members().filter(pid => pid !== identity?.pid || processIdentityStatus(identity!) === "alive");
+    try { await broker.close(); } finally { budget.close(); }
     // A deadline ends the main process before systemd drains the cgroup.
     // Its pending children are expected; the waiting client returns only after
     // that cleanup. A normal exit with children still refuses the check.
@@ -336,7 +270,7 @@ if (args[0] === "--namespace-guardian") {
     if (refusal) cancellation ??= supervisorCancellation(refusal);
     if (refusal || !alive(launch.owner) || (launch.parent && !alive(launch.parent))) void finish(refusal === "deadline" ? 124 : 137);
   }, 100);
-  cpuBudgetTimer(launch.timeoutMs, budget.elapsed, () => { console.error("owned runner: deadline expired"); void finish(124); });
+  stopExecutionTimer = cpuBudgetTimer(launch.timeoutMs, budget.elapsed, () => { console.error("owned runner: deadline expired"); void finish(124); });
   // A kernel watchdog bounds a hung supervisor while its execution timer
   // excludes queue waits. RuntimeMaxSec cannot be extended on older systemd.
   // A short-lived helper can fail under pressure while the command is healthy.
