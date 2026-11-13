@@ -23,6 +23,7 @@ import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import {
   hasStructuredDeliveryHost,
+  releaseIdleStructuredHostEventWindows,
   structuredDeliveryHostForConversation,
   structuredDeliveryPublicationState,
 } from "./structuredDeliveryController";
@@ -79,9 +80,8 @@ import { realtimeBoundConversationIds } from "./voiceViewBinding";
  *   {@link startStructuredHostRetirement}.
  */
 
-/** Conservative default: well past the 2 h the resources dialog offers by
-    hand, well inside the 16–25 h the manual sweeps found hosts sitting at. */
-const DEFAULT_RETIREMENT_IDLE_HOURS = 6;
+/** Finished hosts resume from their transcripts after one quiet hour. */
+const DEFAULT_RETIREMENT_IDLE_HOURS = 1;
 /** How long a host may take to honour SIGTERM before its tree is force-killed.
     An unattended sweep can afford to wait far longer than the interactive kill
     does, so a host that is flushing its ledger gets to finish. */
@@ -93,7 +93,7 @@ const TERMINATION_DEADLINE_MARGIN_MS = 10_000;
  * How often the release that owns traffic sweeps.
  *
  * Far slower than the reconciliation controllers, and deliberately so: the
- * default quiet interval is six hours, so a few minutes of latency costs
+ * default quiet interval is one hour, so a few minutes of latency costs
  * nothing, while every tick reads `/proc` for each recorded host inside the
  * process that is also serving the operator's board.
  */
@@ -156,7 +156,7 @@ function readRetirementCursor(): string | null {
 function parseRetirementCursor(value: unknown): string | null {
   const cursor = value as { version?: unknown; afterKey?: unknown } | null;
   if (cursor?.version !== 1 || !(cursor.afterKey === null
-    || typeof cursor.afterKey === "string" && /^(claude|codex):[0-9a-f-]{36}$/i.test(cursor.afterKey))) {
+    || typeof cursor.afterKey === "string" && /^(claude|codex|copilot):[0-9a-f-]{36}$/i.test(cursor.afterKey))) {
     throw new Error("retirement cursor is invalid");
   }
   return cursor.afterKey;
@@ -955,7 +955,7 @@ function undeliveredHandoffIndex(
     for (const row of readable) {
       const replayed = new Set(row.replayedDeliveryIds ?? []);
       if (!(row.pendingDeliveries ?? []).some((delivery) => !replayed.has(delivery.deliveryId))) continue;
-      if (row.engine === "claude" || row.engine === "codex") index.addKey(`${row.engine}:${row.engineSessionId}`);
+      if (row.engine === "claude" || row.engine === "codex" || row.engine === "copilot") index.addKey(`${row.engine}:${row.engineSessionId}`);
       else index.addConversation(row.conversationId);
     }
     for (const delivery of registryRowsMatching(file, "heldDeliveries", "state", [...UNDELIVERED_HELD_STATES])) {
@@ -1043,7 +1043,7 @@ interface RetirementReaders {
 function retirementCandidates(file: RegistryFile) {
   return registryLivenessRows(file).entries
     .filter((entry) => Boolean(recordedScopeProcess(entry.structuredHost))
-      && (entry.key.engine === "claude" || entry.key.engine === "codex"))
+      && (entry.key.engine === "claude" || entry.key.engine === "codex" || entry.key.engine === "copilot"))
     .sort((left, right) => {
       const a = sessionKeyId(left.key), b = sessionKeyId(right.key);
       return a < b ? -1 : a > b ? 1 : 0;
@@ -1090,7 +1090,7 @@ function retirementSubject(
 ): StructuredHostRetirementSubject {
   const columns = entry.structuredHost!;
   const hostProcess = recordedScopeProcess(columns)!;
-  const key = entry.key as SessionKey & { engine: "claude" | "codex" };
+  const key = entry.key as SessionKey & { engine: "claude" | "codex" | "copilot" };
   const keyId = sessionKeyId(key);
   const conversation = inputs.conversationsBySession.get(keyId) ?? null;
   const conversationId = conversation?.id ?? null;
@@ -1663,7 +1663,10 @@ export function startStructuredHostRetirement(ports: {
 } = {}): void {
   if (retirementHost.__llvStructuredHostRetirementTimer) return;
   const schedule = ports.scheduleInterval ?? ((callback, delayMs) => setInterval(callback, delayMs));
-  const sweep = ports.sweep ?? (() => reconcileStructuredHostRetirement());
+  const sweep = ports.sweep ?? (async () => {
+    await releaseIdleStructuredHostEventWindows();
+    return reconcileStructuredHostRetirement();
+  });
   let running = false;
   const timer = schedule(() => {
     if (running) return;
