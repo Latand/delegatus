@@ -181,6 +181,40 @@ Restoration now forces a terminal append after the reader captures its initial f
 
 After merging the newer main, renewed verification passed all 21 focused succession cases and found one failure in the older active-broker fixture: it emitted its stream result without creating any native transcript. The reused child fixture now writes its actual opening and terminal in that mode too. Missing-artifact refusal remains covered by the focused suite; no production guard is relaxed. The renewed per-command counts and final hook receipt are retained in the delivery report.
 
+The first hook on the merged repair exposed ten startup differences. Before the additional repair, the shared-path inventory is: `addStructuredRestartConversation` in `startupRecipient.fixture.ts` is the sole synthetic transcript writer/default used by `startup.test.ts`; its default omits the final newline, while explicit suffixes also supply torn-record cases. `releaseHandoverIncumbent.ts` has two callers in that suite, for normal and deliberately skipped release; its active fake host never delivers a terminal. The older bounded-tail Codex assertion expects an unanswered tool to override a matching native completion. Finally, the pending-delivery orphan recovery helper feeds both Codex and Claude adoption, including claim retries: its settled-turn precondition also blocks cleanup of a proven-dead root with recorded descendants. Complete fixture records must use the native writer's newline, explicit torn suffixes must remain, the normal incumbent must settle before demotion, the Codex completion must stay settled, and proven-dead roots must reach the existing captured-tree ladder. Living roots retain the background custody fence.
+
+The final anchor audit also checks the effect of every non-prompt frame on a completed turn. Host memory and ledger fallback ignore those frames; the native boundary reader still emits a generic continuation for metadata, which reopens the prior completed turn. The shared prompt qualifier must make that reader ignore the frame too. The six existing non-prompt cases now check the completed-turn verdict as well as anchor qualification.
+
+### Delivery continuation command record
+
+`git fetch origin main` and the merge command exit 0. The merge preserves the repair files; both private checkouts install their own dependencies with `bun install --frozen-lockfile` (exit 0, 543 packages each). The active child fixture correction commits through the canonical hook (exit 0, zero lint errors). An initial scratch checkout refuses two copied edits (exit 1, no effect); restoring those owned copies and checking out the committed revision exits 0. No scratch commit is created.
+
+Every test command below is `bun test --timeout=60000 <path> [selection]`, through the supplied gate and fresh private state. Repeated rows preserve intermediate failures. The 27 green files in the renewed named campaign contain 1,355 passes; their rows above retain their counts, with the succession file increased to 21 passes. The interruption runs below are separate from those green files.
+
+| Path / selection and source | Exit | Pass / fail / skip | Assertions or filters |
+| --- | ---: | ---: | --- |
+| `src/lib/runtime/claudeStreamBrokerHost.test.ts`, first merged run | 1 | 198 / 1 / 0 | 3,488 assertions; absent native artifact in the active fixture |
+| Same path, `-t "planned succession preserves an active"`, published input | 0 | 1 / 0 / 0 | 14 assertions, 197 filtered |
+| Same full path, corrected fixture | 0 | 199 / 0 / 0 | 3,494 assertions |
+| `src/lib/runtime/releaseInterruption.test.ts`, renewed head | 1 | 145 / 8 / 1 | 823 assertions; seven known failures and a busy-lock failure |
+| Same full path, published input confirmation | 1 | 146 / 7 / 1 | 825 assertions |
+| Same full path, head confirmation | 1 | 145 / 8 / 1 | 822 assertions; lock case passes, a different probe timing case fails |
+| `src/lib/runtime/startup.test.ts`, diagnostic | 1 | 184 / 15 / 0 | 818 assertions; five main failures and ten differences |
+| Same path, `-t "D1 records the seat cut"`, input dead-root control, twice | 1 each | 0 / 1 / 0 each | 4 assertions, 198 filtered each |
+| Same full path, first startup repair | 1 | 191 / 8 / 0 | 861 assertions |
+| Same full path, second startup repair | 1 | 193 / 6 / 0 | 868 assertions; five main failures and the incomplete handover fixture |
+| Same path, `-t "a target-first hand-over"`, missing runtime-session control | 1 | 1 / 1 / 0 | 44 assertions, 197 filtered |
+| Same path and selection, complete queued-operation fixture | 0 | 2 / 0 / 0 | 56 assertions, 197 filtered; one delivery |
+| `src/lib/agentState/transcript.test.ts`, `-t "Claude native and ledger readers exclude"`, prior-repair adapter | 1 | 3 / 3 / 0 | 18 assertions, 17 filtered; metadata reopens completion |
+| Same full path, final adapter | 0 | 23 / 0 / 0 | 72 assertions |
+| `src/lib/agentState/restart.test.ts` | 0 | 4 / 0 / 0 | 74 assertions |
+| `src/lib/agentState/service.test.ts` | 0 | 26 / 0 / 0 | 82 assertions |
+| `src/lib/accounts/migration/turnState.test.ts` | 0 | 46 / 0 / 0 | 59 assertions |
+| `src/lib/runtime/claudeSuccession.test.ts` | 0 | 21 / 0 / 0 | 155 assertions |
+| `src/lib/runtime/agentScope.test.ts` | 0 | 57 / 0 / 15 | 204 assertions |
+
+The final focused positive commands contain 378 passes, zero failures and 15 platform skips; the expected metadata control is counted separately. That batch spends about 15 minutes in CPU admission before execution. The seven interruption baseline failures match both names and assertions: each expects two continuations and receives one. The first unmodified hook on the merged repair exits 1: ten new startup failures, 30 pre-existing, one fixed and two flaky; its types, lint and Linux peers are cancelled and judge nothing. The final hook receipt belongs to the post-commit delivery report and runs on the eventual committed tree.
+
 Touched runtime ESLint invocation:
 
 ```sh

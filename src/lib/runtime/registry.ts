@@ -939,6 +939,13 @@ async function stopSettledOrphanForPendingDelivery(
   if (!persisted) return false;
   entry = persisted;
   const process = entry.structuredHost?.process;
+  if (process && processIdentityProvenDead(process)) {
+    // A dead root can still hold recorded writers. End its captured tree
+    // before retrying the claim, even when its last turn stayed open.
+    const custody = structuredCustodyIdentity(entry);
+    return terminateVerifiedStructuredOrphan(registry, entry.key, process, entry.claimOwner, dependencies,
+      current => structuredCustodyIdentity(current) === custody && current?.artifactPath === entry.artifactPath);
+  }
   if (!process || (entry.structuredTerminationSurvivors?.length ?? 0) > 0
     || !settledOrphanWithPendingDelivery(registry, entry)) return false;
   const key = entry.key;

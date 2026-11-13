@@ -68,7 +68,7 @@ export function nativeBoundaryEvent(record: RecordLike, engine: Engine, localRef
       }
       const content = object(record.message).content;
       if (Array.isArray(content) && content.some(part => object(part).type === "tool_result")) return { kind: "output", type, id, at, parentId: identity(record.parentUuid) };
-      if (!isClaudePrompt(record)) return { kind: "continue", type, id, at, parentId: identity(record.parentUuid) };
+      if (!isClaudePrompt(record)) return null;
       return { kind: "start", type, id, at, parentId: identity(record.parentUuid) };
     }
     if (record.type !== "assistant" && record.type !== "result") return null;

@@ -20,6 +20,12 @@ test.each([
   const user = { type: "user", uuid: "non-prompt", ...frame };
   expect(nativeBoundaryEvent(user, "claude")?.kind).not.toBe("start");
   expect(nativeBoundaryEvent({ kind: "item", turnId: "local-ref", item: user }, "claude-ledger", "local-ref")).toBeNull();
+  const events = [
+    { type: "user", uuid: "opening", message: { role: "user", content: "start" } },
+    { type: "assistant", uuid: "terminal", parentUuid: "opening", message: { role: "assistant", model: "fixture", stop_reason: "end_turn", content: [] } },
+    user,
+  ].map(row => nativeBoundaryEvent(row, "claude")).filter((event): event is NonNullable<typeof event> => event !== null);
+  expect(foldNativeBoundaries(events, "claude", "local-ref")).toMatchObject({ state: "closed", nativeId: "opening" });
 });
 
 test("ledger fallback recovers the opening before a large tool result and joined prompt", async () => {
