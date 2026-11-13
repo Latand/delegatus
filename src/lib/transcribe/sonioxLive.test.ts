@@ -173,3 +173,56 @@ test("a language tag survives final tokens arriving before their endpoint", () =
   const endpoint = applySonioxFrame(first.state, frame([{ text: "<end>", is_final: true }]))!;
   expect(endpoint).toMatchObject({ commit: "speech", language: "uk" });
 });
+
+
+test("replayed final tokens are identified by time while repeated speech stays", () => {
+  const firstFrame = JSON.stringify({ tokens: [
+    { text: "again", start_ms: 0, end_ms: 100, is_final: true },
+    { text: " again", start_ms: 100, end_ms: 200, is_final: true },
+    { text: "<end>", is_final: true },
+  ] });
+  const first = applySonioxFrame(sonioxLiveInitialState(), firstFrame)!;
+  expect(first.commit).toBe("again again");
+  const replay = applySonioxFrame(first.state, firstFrame)!;
+  expect(replay.commit).toBe("");
+  const later = applySonioxFrame(replay.state, JSON.stringify({ tokens: [
+    { text: "again", start_ms: 200, end_ms: 300, is_final: true },
+    { text: "<end>", is_final: true },
+  ] }))!;
+  expect(later.commit).toBe("again");
+});
+
+
+test("an old replayed endpoint cannot cut a newer segment still in progress", () => {
+  const first = JSON.stringify({ tokens: [
+    { text: "first", start_ms: 0, end_ms: 100, is_final: true }, { text: "<end>", is_final: true },
+  ] });
+  let state = applySonioxFrame(sonioxLiveInitialState(), first)!.state;
+  state = applySonioxFrame(state, JSON.stringify({ tokens: [{ text: "new", start_ms: 200, end_ms: 300, is_final: true }] }))!.state;
+  const replay = applySonioxFrame(state, first)!;
+  expect(replay.commit).toBe(""); expect(replay.liveText).toBe("new");
+  const next = applySonioxFrame(replay.state, JSON.stringify({ tokens: [
+    { text: " words", start_ms: 300, end_ms: 400, is_final: true }, { text: "<end>", is_final: true },
+  ] }))!;
+  expect(next.commit).toBe("new words");
+});
+
+
+test("finished counts the remaining timed final as a segment without an endpoint", () => {
+  const update = applySonioxFrame(sonioxLiveInitialState(), JSON.stringify({ tokens: [
+    { text: "tail", start_ms: 0, end_ms: 100, is_final: true },
+  ], finished: true }))!;
+  expect(update).toMatchObject({ commit: "tail", finalSegments: 1, segments: 1, finished: true });
+});
+
+
+test("missing timestamps after a timed commit cannot reuse the earlier segment identity", () => {
+  const first = applySonioxFrame(sonioxLiveInitialState(), JSON.stringify({ tokens: [
+    { text: "first", start_ms: 0, end_ms: 100, is_final: true }, { text: "<end>", is_final: true },
+  ] }))!;
+  const next = applySonioxFrame(first.state, JSON.stringify({ tokens: [
+    { text: "untimed", is_final: true }, { text: "<end>", is_final: true },
+    { text: "timed", start_ms: 200, end_ms: 300, is_final: true }, { text: "<end>", is_final: true },
+  ] }))!;
+  expect(next.stableCommit).toBe(false);
+});

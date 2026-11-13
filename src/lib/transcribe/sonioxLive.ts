@@ -64,6 +64,11 @@ export function sonioxStartRequest({ token, sampleRate }: {
 export interface SonioxLiveState {
   finalText: string;
   language?: TranscriptionLanguage;
+  /** Monotone provider audio positions, independent of recognized words. */
+  committedThroughMs?: number;
+  finalThroughMs?: number;
+  finalTokenIds?: string[];
+  finalIdentityValid?: boolean;
 }
 
 export interface SonioxLiveUpdate {
@@ -78,6 +83,10 @@ export interface SonioxLiveUpdate {
   /** The server closed the stream (our empty frame, or its own session cap). */
   finished: boolean;
   error: string | null;
+  segments: number;
+  replayedFinals: number;
+  finalSegments: number;
+  stableCommit: boolean;
 }
 
 export function sonioxLiveInitialState(): SonioxLiveState {
@@ -88,6 +97,8 @@ interface SonioxToken {
   language?: unknown;
   text?: unknown;
   is_final?: unknown;
+  start_ms?: unknown;
+  end_ms?: unknown;
 }
 
 interface SonioxFrame {
@@ -127,6 +138,25 @@ export function applySonioxFrame(state: SonioxLiveState, data: unknown): SonioxL
   let tail = "";
   const segments: string[] = [];
   const languages: unknown[] = [state.language];
+  let committedThroughMs = state.committedThroughMs;
+  let finalThroughMs = state.finalThroughMs;
+  const tokenIds = new Set(state.finalTokenIds ?? []);
+  let replayedFinals = 0;
+  let finalSegments = 0;
+  let finalIdentityValid = state.finalIdentityValid ?? !state.finalText;
+  let stableCommit = true;
+  let frameFinalEndMs: number | undefined;
+  const commitSegment = () => {
+    const segment = finalText.trim();
+    if (segment) {
+      segments.push(segment);
+      stableCommit = stableCommit && finalIdentityValid;
+      committedThroughMs = finalIdentityValid ? finalThroughMs : undefined;
+    }
+    finalText = "";
+    finalIdentityValid = true;
+    tokenIds.clear();
+  };
   for (const raw of Array.isArray(frame.tokens) ? frame.tokens : []) {
     if (!raw || typeof raw !== "object") continue;
     const token = raw as SonioxToken;
@@ -137,18 +167,40 @@ export function applySonioxFrame(state: SonioxLiveState, data: unknown): SonioxL
       continue;
     }
     if (token.text === ENDPOINT_TOKEN) {
-      const segment = finalText.trim();
-      if (segment) segments.push(segment);
-      finalText = "";
+      finalSegments++;
+      // A replayed boundary belongs to the old timed finals in this frame,
+      // even if newer finals are already waiting in state.
+      if (frameFinalEndMs !== undefined && committedThroughMs !== undefined && frameFinalEndMs <= committedThroughMs) continue;
+      commitSegment();
       continue;
     }
+    const start = token.start_ms;
+    const end = token.end_ms;
+    if (typeof start === "number" && Number.isFinite(start) && start >= 0
+      && typeof end === "number" && Number.isFinite(end) && end >= start) {
+      frameFinalEndMs = Math.max(frameFinalEndMs ?? 0, end);
+      const id = `${start}:${end}`;
+      if ((committedThroughMs !== undefined && end <= committedThroughMs) || tokenIds.has(id)) {
+        replayedFinals++;
+        continue;
+      }
+      // A corrupt unbounded utterance is recovered from the retained PCM.
+      if (tokenIds.size >= 8192) return { state, commit: "", liveText: state.finalText, finished: false, error: "Soniox token limit", segments: 0, replayedFinals, finalSegments, stableCommit: false };
+      tokenIds.add(id);
+      finalThroughMs = Math.max(finalThroughMs ?? 0, end);
+    } else finalIdentityValid = false;
     finalText += token.text;
   }
 
+  if (frame.finished === true && finalText.trim()) { finalSegments++; commitSegment(); }
   const language = transcriptionResult("", languages).language;
   return {
     ...(language ? { language } : {}),
-    state: { finalText, ...(finalText && language ? { language } : {}) },
+    state: { finalText, committedThroughMs, finalThroughMs, finalTokenIds: [...tokenIds], finalIdentityValid, ...(finalText && language ? { language } : {}) },
+    segments: segments.length,
+    replayedFinals,
+    finalSegments,
+    stableCommit,
     commit: segments.join(" "),
     /* Tokens carry their own spacing, so the seam needs no separator — only
        the leading space of a fresh segment is dropped, since the composer

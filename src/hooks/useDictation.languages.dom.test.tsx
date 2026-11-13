@@ -23,8 +23,9 @@ Object.defineProperty(dom.navigator, "mediaDevices", { value: { getUserMedia: as
 class AudioFixture {
   sampleRate = 16000;
   destination = {};
-  createMediaStreamSource() { return { connect() {} }; }
-  createScriptProcessor() { return { connect() {}, disconnect() {}, onaudioprocess: null }; }
+  createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+  static processors: Array<{ onaudioprocess: ((e: unknown) => void) | null }> = [];
+  createScriptProcessor() { const p = { connect() {}, disconnect() {}, onaudioprocess: null }; AudioFixture.processors.push(p); return p; }
   createAnalyser() { return { frequencyBinCount: 64, getByteFrequencyData() {} }; }
   async close() {}
 }
@@ -32,9 +33,10 @@ class SocketFixture extends EventTarget {
   static CONNECTING = 0; static OPEN = 1;
   static urls: string[] = [];
   static latest: SocketFixture;
-  readyState = 0;
+  readyState = 1;
   constructor(url: string) { super(); SocketFixture.urls.push(url); SocketFixture.latest = this; }
-  send() {}
+  send(data: unknown) { if (data === "") queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ finished: true }) }))); }
+  bufferedAmount = 0;
   close() { this.readyState = 3; }
 }
 class RecorderFixture {
@@ -79,7 +81,7 @@ test.each(["soniox", "elevenlabs"])("%s live tags an unexpected provider languag
   globalThis.fetch = (async () => Response.json({ provider, token: "fixture" })) as unknown as typeof fetch;
   mount("en"); await dictation().start();
   const data = provider === "soniox"
-    ? { tokens: [{ text: "speech", is_final: true, language: "be" }, { text: "<end>", is_final: true }] }
+    ? { tokens: [{ text: "speech", start_ms: 0, end_ms: 0, is_final: true, language: "be" }, { text: "<end>", is_final: true }] }
     : { message_type: "committed_transcript", text: "speech", language_code: "bel" };
   SocketFixture.latest.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(data) }));
   expect(commits).toEqual([{ text: "speech", language: provider === "soniox" ? "uk" : "en" }]);
@@ -93,7 +95,7 @@ test.each(["uk", "en"] as const)("batch fallback carries the %s UI language", as
     language = (init!.body as FormData).get("language");
     return Response.json({ text: "speech" });
   }) as unknown as typeof fetch;
-  mount(locale); await dictation().start(); await dictation().stop();
+  mount(locale); await dictation().start(); feedAudio(); await dictation().stop();
   expect(errors).toEqual([]);
   expect(language as FormDataEntryValue | null).toBe(locale);
 });
@@ -129,6 +131,7 @@ Object.assign(stream, { getAudioTracks: () => [audioTrack] });
 const CLIENT_SECRET = ["client", "secret", "fixture"].join("-");
 function openAiFetch(calls: Array<{ url: string; init?: RequestInit }>, answer: () => Response = () => new Response("v=0 answer-fixture")) {
   return (async (url: unknown, init?: RequestInit) => {
+    if (String(url).endsWith("/diagnostics")) return new Response(null, { status: 204 });
     calls.push({ url: String(url), init });
     if (String(url).endsWith("/api/transcribe/token")) return Response.json({ provider: "openai", token: CLIENT_SECRET, expiresAt: 2_000_000_000 });
     if (String(url) === "https://api.openai.com/v1/realtime/calls") return answer();
@@ -180,7 +183,7 @@ test("OpenAI live: the client secret goes only to OpenAI's calls endpoint, and t
 test("OpenAI live: a refused offer records the clip and transcribes it instead", () => withPeer(async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   globalThis.fetch = openAiFetch(calls, () => new Response("unauthorized", { status: 401 }));
-  mount("en"); await dictation().start();
+  mount("en"); await dictation().start(); feedAudio();
   expect(PeerFixture.latest!.closed).toBe(true);
   expect(await dictation().stop()).toBe("recorded speech");
   expect(calls.map((call) => call.url).filter((url) => url.startsWith("/api/transcribe"))).toEqual(["/api/transcribe/token", "/api/transcribe"]);
@@ -210,5 +213,9 @@ test("a token for a provider this client cannot place is never spent on another 
   globalThis.fetch = (async (url: unknown) => String(url).endsWith("/token") ? Response.json({ provider: "unknown", token: "fixture" }) : Response.json({ text: "speech" })) as unknown as typeof fetch;
   mount("en"); await dictation().start();
   expect(SocketFixture.urls.length).toBe(sockets);
-  expect(await dictation().stop()).toBe("speech");
+  feedAudio(); expect(await dictation().stop()).toBe("speech");
 });
+
+function feedAudio() {
+  for (const p of AudioFixture.processors) p.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array(1600).fill(0.25) } });
+}

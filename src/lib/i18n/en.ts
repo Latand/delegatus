@@ -3919,6 +3919,8 @@ export const en = {
   "dictation.silence": "silence — nothing recognized",
   "dictation.unsupported": "recording is not supported in this browser",
   "dictation.liveError": "live transcription error",
+  "dictation.tailMissing": "Final words were not received. Confirmed text remains in the draft. Review it before sending.",
+  "dictation.bufferLimit": "Dictation stopped: the audio buffer filled. Recovered text is in the draft. Review it before continuing.",
   "dictation.connectionLost": "transcription connection dropped",
   "dictation.noMic": "no microphone access",
 
