@@ -261,6 +261,8 @@ export interface LoopProfilerPorts {
   root: string;
   completed?(profile: LoopGapProfile): void;
   beforeCollect?(): Promise<boolean>;
+  /** Synchronous boundary immediately before native sampling starts. */
+  captureStarted?(): void;
 }
 
 /** One owner per Viewer monitor; no runtime-host start path calls this. */
@@ -283,6 +285,10 @@ export function createLoopProfiler(ports: LoopProfilerPorts, expires: number) {
         inactive = { status: "not-armed", reason: "waiting-for-capture" };
         return false;
       }
+      // Admission may perform durable I/O. Re-read controls after its final
+      // await so a switch or stop that arrived during admission wins.
+      if (!await enabled()) return false;
+      ports.captureStarted?.();
       const raw = await ports.phase("collect", () => ports.collect(() => ports.sleep(Math.min(LOOP_PROFILE_WINDOW_MS, expires - ports.now())), intervalUs));
       // A profile timer can recover before the monitor's timer. Observe that
       // recovery while this window still owns its pending gap records.

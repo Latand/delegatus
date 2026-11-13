@@ -18,7 +18,8 @@ type Ports = {
   settings(): Promise<ProfilerControl>;
   reserve(at: number): Promise<boolean>;
   beginCapture(at: number, admittedAt: number): Promise<boolean>;
-  capture(source: CaptureSource, beginCapture: (at: number) => Promise<boolean>): Promise<void | string>;
+  cancel(admittedAt: number): Promise<void>;
+  capture(source: CaptureSource, beginCapture: (at: number) => Promise<boolean>, captureStarted: () => void, admittedAt: number): Promise<void | string>;
   decision(reason: string): void;
 };
 
@@ -54,23 +55,31 @@ export function createLoopProfilerSupervisor(ports: Ports) {
         if (!stopped) { nextAttempt = ports.now() + LOOP_PROFILE_POLL_MS; decision("cooldown"); }
         return;
       }
-      if (stopped) return;
-      nextAttempt = admittedAt + LOOP_PROFILE_COOLDOWN_MS;
-      settings = await ports.settings();
-      if (stopped) return;
-      reason = source(settings, automatic);
-      if (!reason.startsWith("armed-")) { decision(reason); return; }
-      decision(reason);
+      let started = false;
       try {
+        if (stopped) return;
+        nextAttempt = admittedAt + LOOP_PROFILE_COOLDOWN_MS;
+        settings = await ports.settings();
+        if (stopped) return;
+        reason = source(settings, automatic);
+        if (!reason.startsWith("armed-")) { decision(reason); return; }
+        decision(reason);
         const beginCapture = async (at: number) => {
           const began = await ports.beginCapture(at, admittedAt);
           if (began) nextAttempt = at + LOOP_PROFILE_COOLDOWN_MS;
           return began;
         };
-        const refusal = await ports.capture(reason === "armed-manual" ? "manual" : "automatic", beginCapture);
+        const markCaptureStarted = () => { started = true; nextAttempt = ports.now() + LOOP_PROFILE_COOLDOWN_MS; };
+        const refusal = await ports.capture(reason === "armed-manual" ? "manual" : "automatic", beginCapture, markCaptureStarted, admittedAt);
         if (!stopped) decision(refusal ?? "cooldown");
       }
       catch { if (!stopped) decision("capture-failed"); }
+      finally {
+        if (!started) {
+          nextAttempt = 0;
+          try { await ports.cancel(admittedAt); } catch { if (!stopped) decision("admission-unavailable"); }
+        }
+      }
       // A stall observed inside a capture cannot queue a second capture.
       stalled = false;
     } catch { if (!stopped) decision("settings-unavailable"); }

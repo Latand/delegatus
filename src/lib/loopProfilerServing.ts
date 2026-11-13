@@ -78,7 +78,7 @@ export async function claimLoopProfilerDeploy(directory: string, revision: strin
 }
 
 export async function startServingLoopProfiler(monitor: ReturnType<typeof createViewerLoopMonitor>, env = process.env,
-  injected: Partial<Pick<LoopProfilerPorts, "collect" | "sleep" | "now">> & { wallNow?: () => number; decision?: (reason: string) => void; poll?: false } = {}) {
+  injected: Partial<Pick<LoopProfilerPorts, "collect" | "sleep" | "now">> & { wallNow?: () => number; decision?: (reason: string) => void; poll?: false; afterBeginCapturePersistence?: () => Promise<void> } = {}) {
   if (env.LLV_STATE_OWNER !== "viewer" || env.NODE_ENV !== "production" || !process.versions.bun || env.NEXT_PHASE?.includes("build")) return;
   const revision = [env.LLV_DIAGNOSTIC_REVISION, env.LLV_HOT_STATE_RELEASE_REVISION].find(value => value && /^[a-f0-9]{7,40}$/.test(value)) ?? "";
   if (!/^[a-f0-9]{7,40}$/.test(revision)) return;
@@ -86,7 +86,7 @@ export async function startServingLoopProfiler(monitor: ReturnType<typeof create
   // Diagnostic refusal must never stop serving. No raw errors or paths log.
   try {
     const now = injected.now ?? (() => performance.now());
-    const store = createLoopProfileStore(directory);
+    const store = createLoopProfileStore(directory, { afterBeginCapturePersistence: injected.afterBeginCapturePersistence });
     const decisions = createLoopLogSink();
     let active: ReturnType<typeof createLoopProfiler> | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -95,8 +95,9 @@ export async function startServingLoopProfiler(monitor: ReturnType<typeof create
       settings: () => monitor.run("loop-profiler.settings", () => loopProfilerControl(directory)),
       reserve: at => monitor.run("loop-profiler.settings", () => store.reserve(at)),
       beginCapture: (at, admittedAt) => monitor.run("loop-profiler.settings", () => store.beginCapture(at, admittedAt)),
+      cancel: admittedAt => monitor.run("loop-profiler.settings", async () => { await store.cancelCapture(admittedAt); }),
       decision: injected.decision ?? (reason => decisions.enqueue(`[loop-profiler] ${reason}`)),
-      capture: async (source, beginCapture) => {
+      capture: async (source, beginCapture, captureStarted, reservedAt) => {
         // Only an admitted capture loads the Bun builtin. Idle polling does
         // not sample stacks or read source files.
         const collect = injected.collect ?? (await monitor.run("loop-profiler.settings", () => import(/* webpackIgnore: true */ "bun:jsc"))).profile;
@@ -108,6 +109,8 @@ export async function startServingLoopProfiler(monitor: ReturnType<typeof create
         };
         if (!await enabled()) return refusal;
         let captured: LoopGapProfile | undefined;
+        const admittedAt = reservedAt;
+        let startedAt: number | undefined;
         const recorder = active = createLoopProfiler({ now,
           enabled, collect,
           beforeCollect: async () => {
@@ -115,6 +118,7 @@ export async function startServingLoopProfiler(monitor: ReturnType<typeof create
             if (!began) refusal = "cooldown";
             return began;
           },
+          captureStarted: () => { startedAt = (injected.wallNow ?? Date.now)(); captureStarted(); },
           sleep: injected.sleep ?? (ms => new Promise(resolve => { const timeout = setTimeout(resolve, ms); timeout.unref(); })),
           flushTick: () => monitor.tick(), root: process.cwd(),
           phase: (phase, work) => monitor.run(`loop-profiler.${phase}`, work),
@@ -124,7 +128,11 @@ export async function startServingLoopProfiler(monitor: ReturnType<typeof create
           await recorder.start();
           if (!captured) { if (refusal) return refusal; throw new Error("capture-failed"); }
           await monitor.run("loop-profiler.settings", () => store.save(captured!, revision, (injected.wallNow ?? Date.now)()));
-        } finally { recorder.stop(); if (active === recorder) active = undefined; }
+        } finally {
+          recorder.stop(); if (active === recorder) active = undefined;
+          if (admittedAt !== undefined && startedAt !== undefined)
+            await monitor.run("loop-profiler.settings", () => store.completeCapture(startedAt!, admittedAt!));
+        }
       },
     });
     monitor.setProfiler({

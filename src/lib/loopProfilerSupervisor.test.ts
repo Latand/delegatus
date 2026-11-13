@@ -12,20 +12,25 @@ function harness() {
   const decisions: string[] = [];
   let settingsRead: (() => Promise<ProfilerControl>) | undefined;
   let capture: (() => Promise<void>) | undefined;
+  let beginDelay: (() => Promise<void>) | undefined;
   let afterReserve: (() => void) | undefined;
   const supervisor = createLoopProfilerSupervisor({ now: () => at,
     settings: () => settingsRead ? settingsRead() : Promise.resolve(settings),
     reserve: async now => { if (now < next) return false; next = now + LOOP_PROFILE_COOLDOWN_MS; afterReserve?.(); return true; },
     beginCapture: async (now, admittedAt) => {
+      await beginDelay?.();
       if (next !== admittedAt + LOOP_PROFILE_COOLDOWN_MS || now < admittedAt) return false;
       next = now + LOOP_PROFILE_COOLDOWN_MS; return true;
     },
-    capture: async (_source, beginCapture) => { calls++; await capture?.(); return await beginCapture(at) ? undefined : "cooldown"; },
+    cancel: async () => {},
+    capture: async (_source, beginCapture, captureStarted) => { calls++;
+      if (!await beginCapture(at)) return "cooldown"; captureStarted(); await capture?.(); return undefined; },
     decision: reason => decisions.push(reason) });
   return { supervisor, decisions, get calls() { return calls; }, get at() { return at; },
     time: (time: number) => { at = time; }, settings: (value: Partial<ProfilerControl>) => { settings = { ...settings, ...value }; },
     read: (value: () => Promise<ProfilerControl>) => { settingsRead = value; },
     capture: (value: () => Promise<void>) => { capture = value; },
+    beginDelay: (value: () => Promise<void>) => { beginDelay = value; },
     reserved: (value: () => void) => { afterReserve = value; } };
 }
 
@@ -47,6 +52,20 @@ test("repeated stalls obey cooldown, including a stall during collection", async
   expect(h.calls).toBe(1);
   h.time(h.at + LOOP_PROFILE_COOLDOWN_MS); h.supervisor.stall(6000); await h.supervisor.refresh();
   expect(h.calls).toBe(2);
+});
+
+test("cooldown starts after delayed durable admission and applies to the next sampling call", async () => {
+  const h = harness(); const callsAt: number[] = [];
+  h.capture(async () => { callsAt.push(h.at); });
+  let delayed = false;
+  h.beginDelay(async () => { if (!delayed) { delayed = true; h.time(h.at + LOOP_PROFILE_COOLDOWN_MS); } });
+  h.supervisor.stall(6000); await h.supervisor.refresh();
+  expect(callsAt).toEqual([1_000_000 + LOOP_PROFILE_COOLDOWN_MS]);
+  h.capture(async () => { callsAt.push(h.at); });
+  h.time(callsAt[0]! + LOOP_PROFILE_COOLDOWN_MS - 1); h.supervisor.stall(6000); await h.supervisor.refresh();
+  expect(callsAt).toHaveLength(1);
+  h.time(callsAt[0]! + LOOP_PROFILE_COOLDOWN_MS); h.supervisor.stall(6000); await h.supervisor.refresh();
+  expect(callsAt).toEqual([1_000_000 + LOOP_PROFILE_COOLDOWN_MS, 1_000_000 + 2 * LOOP_PROFILE_COOLDOWN_MS]);
 });
 
 test("manual request works with automatic disabled and expires", async () => {
@@ -113,16 +132,51 @@ test("stored summaries remain capped and durable cooldown survives fresh store o
   const directory = await mkdtemp(path.join(tmpdir(), "profile-store-"));
   try {
     for (let i = 0; i < LOOP_PROFILE_STORED_CAP + 5; i++) {
-      const at = 1_000_000 + i * LOOP_PROFILE_COOLDOWN_MS;
+      const at = 1_000_000 + i * (LOOP_PROFILE_COOLDOWN_MS + 10);
       const store = createLoopProfileStore(directory);
       expect(await store.reserve(at)).toBe(true);
+      expect(await store.beginCapture(at, at)).toBe(true);
+      expect(await store.completeCapture(at + 10, at)).toBe(true);
       await store.save({ status: "captured", from: at, to: at + 5000, intervalUs: 10000 }, "a".repeat(40), at + 5000);
       expect(await createLoopProfileStore(directory).reserve(at + 1)).toBe(false);
     }
     const saved = JSON.parse(await readFile(path.join(directory, "loop-profiler-captures.json"), "utf8"));
     expect(saved.profiles).toHaveLength(LOOP_PROFILE_STORED_CAP);
-    expect(saved.profiles[0].profile.from).toBe(1_000_000 + 5 * LOOP_PROFILE_COOLDOWN_MS);
+    expect(saved.profiles[0].profile.from).toBe(1_000_000 + 5 * (LOOP_PROFILE_COOLDOWN_MS + 10));
     expect(saved.profiles[0].revision).toBe("a".repeat(40));
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("an in-flight durable admission blocks a fresh store owner and finalizes from sampling time", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "profile-store-pending-"));
+  try {
+    const first = createLoopProfileStore(directory);
+    const reservedAt = 1_000_000;
+    expect(await first.reserve(reservedAt)).toBe(true);
+    expect(await first.beginCapture(reservedAt, reservedAt)).toBe(true);
+    const restartedOwner = createLoopProfileStore(directory);
+    expect(await restartedOwner.reserve(reservedAt + LOOP_PROFILE_COOLDOWN_MS * 4)).toBe(false);
+    const samplingAt = reservedAt + LOOP_PROFILE_COOLDOWN_MS * 4;
+    expect(await first.completeCapture(samplingAt, reservedAt)).toBe(true);
+    expect(await createLoopProfileStore(directory).reserve(samplingAt + LOOP_PROFILE_COOLDOWN_MS - 1)).toBe(false);
+    expect(await createLoopProfileStore(directory).reserve(samplingAt + LOOP_PROFILE_COOLDOWN_MS)).toBe(true);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a dead process's unfinished admission recovers to a full conservative cooldown", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "profile-store-recovery-"));
+  try {
+    const store = createLoopProfileStore(directory);
+    const reservedAt = 1_000_000;
+    expect(await store.reserve(reservedAt)).toBe(true);
+    const file = path.join(directory, "loop-profiler-captures.json");
+    const ledger = JSON.parse(await readFile(file, "utf8"));
+    ledger.pendingCapture.pid = 2_147_483_647;
+    await writeFile(file, JSON.stringify(ledger));
+    const recoveredAt = reservedAt + 4 * LOOP_PROFILE_COOLDOWN_MS;
+    expect(await createLoopProfileStore(directory).reserve(recoveredAt)).toBe(false);
+    expect(await createLoopProfileStore(directory).reserve(recoveredAt + LOOP_PROFILE_COOLDOWN_MS - 1)).toBe(false);
+    expect(await createLoopProfileStore(directory).reserve(recoveredAt + LOOP_PROFILE_COOLDOWN_MS)).toBe(true);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -131,7 +185,7 @@ test("corrupt storage refuses admission and oversized summaries cannot grow the 
   try {
     const store = createLoopProfileStore(directory);
     await writeFile(path.join(directory, "loop-profiler-captures.json"), "invalid");
-    await expect(store.reserve(1_000_000)).rejects.toThrow();
+      await expect(store.reserve(1_000_000)).rejects.toThrow();
     await rm(path.join(directory, "loop-profiler-captures.json"));
     expect(await store.reserve(1_000_000)).toBe(true);
     const before = await readFile(path.join(directory, "loop-profiler-captures.json"), "utf8");

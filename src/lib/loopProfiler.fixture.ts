@@ -146,15 +146,22 @@ if (process.argv[2] === "native" || process.argv[2] === "native-computed" || pro
   console.log(JSON.stringify({ bun: process.versions.bun, checksum, measurements }));
 } else if (process.argv[2] === "lifetime") {
   let at = Number(process.argv[3]);
+  let monotonicAt = at;
   const gapMs = Number(process.argv[4]);
   const directory = process.env.LLV_STATE_DIR!;
   const reasons: string[] = [];
   let calls = 0;
-  const monitor = createViewerLoopMonitor(() => {}, () => at);
+  const monitor = createViewerLoopMonitor(() => {}, () => monotonicAt);
   try {
     const supervisor = await startServingLoopProfiler(monitor, { ...process.env, LLV_STATE_OWNER: "viewer", NODE_ENV: "production", LLV_DIAGNOSTIC_REVISION: "a".repeat(40) }, {
-      now: () => at, wallNow: () => at, decision: reason => reasons.push(reason),
-      sleep: async ms => { at += ms; },
+      now: () => monotonicAt, wallNow: () => at, decision: reason => reasons.push(reason),
+      sleep: async ms => { at += ms; monotonicAt += ms; },
+      afterBeginCapturePersistence: async () => {
+        if (process.argv[5] === "late-admission-delay") at += 600_000;
+        if (process.argv[5] === "late-admission-kill") fs.writeFileSync(path.join(directory, "loop-profiler.json"), JSON.stringify({ enabled: false }));
+        if (process.argv[5] === "late-admission-automatic-off") fs.writeFileSync(path.join(directory, "loop-profiler.json"), JSON.stringify({ automatic: false }));
+        if (process.argv[5] === "late-admission-manual-expiry") at += 60_000;
+      },
       get collect() {
         if (process.argv[5] === "late-load") at += 600_000;
         if (process.argv[5] === "late-kill") fs.writeFileSync(path.join(directory, "loop-profiler.json"), JSON.stringify({ enabled: false }));
@@ -166,9 +173,9 @@ if (process.argv[2] === "native" || process.argv[2] === "native-computed" || pro
     if (process.argv[5] === "manual-switch") {
       fs.writeFileSync(path.join(directory, "loop-profiler.json"), JSON.stringify({ enabled: true, automatic: false, manualUntil: at + 30_000 }));
       await supervisor?.refresh();
-      at += 30_000; await supervisor?.refresh();
+      at += 30_000; monotonicAt += 30_000; await supervisor?.refresh();
     }
-    at += gapMs + 10; monitor.tick(); await supervisor?.refresh();
+    at += gapMs + 10; monotonicAt += gapMs + 10; monitor.tick(); await supervisor?.refresh();
     let profiles = 0;
     try { profiles = JSON.parse(fs.readFileSync(path.join(directory, "loop-profiler-captures.json"), "utf8")).profiles.length; } catch { /* no capture */ }
     console.log(JSON.stringify({ calls, profiles, reasons }));
