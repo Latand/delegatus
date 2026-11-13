@@ -1484,8 +1484,8 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
   const sources = new Proxy(sourcePorts, { get: (target, key, receiver) => {
     if (key === "liveness") return (...args: Parameters<SeatTickSources["liveness"]>) =>
       work.source("liveness", () => target.liveness(...args), []);
-    if (key === "workerAsks" && target.workerAsks) return (project: string) =>
-      work.source("workerAsks", () => target.workerAsks!(project), null);
+    if (key === "workerAsks" && target.workerAsks) return (...args: Parameters<NonNullable<SeatTickSources["workerAsks"]>>) =>
+      work.source("workerAsks", () => target.workerAsks!(...args), null);
     if (key === "recordRuleReports" && target.recordRuleReports) return (project: string, at: string) =>
       work.source("recordRuleReports", () => target.recordRuleReports!(project, at), undefined);
     if (key === "prepareRead" && target.prepareRead) return async () => {

@@ -1313,7 +1313,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   // No work agenda is admitted through that reporting exception.
   if (!input.settings.enabled) {
     if (!wakeDue && input.state.autonomySummaryFor === endReports[0]!.startedAt) return { verdict: { kind: "quiet", detail: "autonomy end report already requested" }, state: quiet(observed, at), cards: [] };
-    return { verdict: { kind: "wake", reasons: [{ kind: "autonomy-ended", detail: "the autonomy episode ended; its report is owed" }], items: [], deferred: 0, skippedChildren: { stale: 0, unreadable: 0, unchanged: 0 }, gaps: [], reportLines: [autonomyEndInstructions(endReports[0]!)] }, state: observed, cards: [] };
+    return { verdict: { kind: "wake", reasons: [{ kind: "autonomy-ended", detail: "the autonomy episode ended; its report is owed" }], items: [], deferred: 0, skippedChildren: { stale: 0, unreadable: 0, unchanged: 0 }, gaps: [], formPage: seatTickFormPage(input), reportLines: [autonomyEndInstructions(endReports[0]!)] }, state: observed, cards: [] };
   }
 
   const laneEvents = input.events.filter(event => isOwedEvent(event, input));

@@ -1,4 +1,4 @@
-import { expect, test, spyOn, harness, PROJECT, OPEN_LANE, OVERDUE, runSeatTickCheck, fs, path, spawn, SANDBOX } from "./seatTickController.fixture";
+import { expect, test, spyOn, harness, PROJECT, CONVERSATION, OPEN_LANE, OVERDUE, runSeatTickCheck, fs, path, spawn, SANDBOX } from "./seatTickController.fixture";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { guardedSeatTickPort, seatTickWorkSignal } from "./seatTickWork";
 import type { DeadlineScheduler } from "@/lib/deadline";
@@ -414,6 +414,21 @@ for (const source of ["skipped", "failed"] as const) test(`a ${source} forms rea
   expect(rig.sent).toHaveLength(1);
   expect(rig.sent[0]!.text).toContain("Open decision forms: not read this check");
   expect(rig.sent[0]!.text).not.toContain("Open decision forms: 0");
+});
+
+test("the controller forwards the active seat identity through the ordinary form gather", async () => {
+  const { NOW } = await import("./seatTickController.fixture");
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  const ids: (string | undefined)[] = [];
+  rig.deps.sources!.workerAsks = async (_project, seatConversationId) => {
+    ids.push(seatConversationId);
+    return { asks: [], forms: { count: 1, rows: [{ id: "prototype:previous-seat", kind: "prototype", title: "Choose",
+      line: "Choose", since: new Date(NOW - 86_400_000).toISOString(), taskId: null, subject: { reviewId: "previous-seat" },
+      target: null, stale: false, evidence: [{ code: "earlier-seat", stale: false, detail: "a previous seat epoch asked this", at: null, source: "seat-notices" }] }] } };
+  };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(ids).toContain(CONVERSATION);
+  expect(rig.sent[0]!.text).toContain("earlier-seat");
 });
 
 test("form pages rotate only after complete rows land, and carry exact withdrawal identities", async () => {

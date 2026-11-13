@@ -747,18 +747,43 @@ for (const delivered of [false, true]) test(`deploy-settled controller wakes rea
       : { ok: false, outcome: "failed", error: "fixture refusal", status: 503 },
   });
   let reads = 0;
-  rig.deps.sources!.workerAsks = async () => {
+  const seatConversationIds: (string | undefined)[] = [];
+  rig.deps.sources!.workerAsks = async (_project, seatConversationId) => {
     reads++;
+    seatConversationIds.push(seatConversationId);
     return { asks: [], forms: { count: 1, rows: [{ id: `prototype:${reviewId}`, kind: "prototype", title: "Choose a direction",
       line: "Choose", since: new Date(NOW - 86_400_000).toISOString(), taskId: null,
-      subject: { reviewId }, target: null, stale: false, evidence: [] }] } };
+      subject: { reviewId }, target: null, stale: false, evidence: [{ code: "earlier-seat", detail: "a previous seat epoch asked this", stale: false, at: null, source: "seat-notices" }] }] } };
   };
   const result = await runSeatTickCheck(PROJECT, rig.deps);
   expect(result?.reasons).toContain("deploy-settled");
   expect(reads).toBeGreaterThan(0);
+  expect(seatConversationIds).toContain(CONVERSATION);
   expect(rig.sent).toHaveLength(1);
   expect(rig.sent[0]!.text).toContain(`- prototype ${reviewId} |`);
+  expect(rig.sent[0]!.text).toContain("earlier-seat");
   expect(rig.deps.readState!(PROJECT).formPageAfter).toBe(delivered ? `prototype:${reviewId}` : undefined);
+});
+
+test("deploy-settled wake reviews old legacy instructions and leaves operator text unflagged", async () => {
+  const rig = harness({ state: OVERDUE,
+    seatDeployments: [{ deploymentId: "deploy-own", conversationId: CONVERSATION }],
+    deployments: { "deploy-own": { phase: "succeeded", terminal: true, revision: "a".repeat(40) } } });
+  const oldAt = new Date(NOW - 8 * 86_400_000).toISOString();
+  rig.deps.sources!.settings = () => ({ ...defaultSeatTickSettings(PROJECT),
+    reason: "legacy lane deadbeef; operator policy",
+    instructionLines: [
+      { text: "legacy lane deadbeef", at: oldAt, author: null },
+      { text: "operator policy", at: oldAt, author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } },
+    ],
+  });
+  rig.deps.sources!.pipelines = () => [pipelineRecord({ id: "deadbeef", state: "completed", createdAt: new Date(NOW - 10 * 86_400_000).toISOString(),
+    movedAt: new Date(NOW - 8 * 86_400_000).toISOString(), closedAt: new Date(NOW - 7 * 86_400_000).toISOString() })] as never;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent[0]!.text).toContain("Instructions to review:");
+  expect(rig.sent[0]!.text).toContain("legacy lane deadbeef");
+  const reviewLine = rig.sent[0]!.text.split("\n").find(line => line.startsWith("Instructions to review:"));
+  expect(reviewLine).not.toContain("operator policy");
 });
 
 test("a lane the operator paused is not the seat's work: no stall, no interval wake (#2063)", async () => {

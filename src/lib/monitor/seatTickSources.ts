@@ -13,6 +13,7 @@ import { projectAliasResolver, projectAliasSnapshot } from "@/lib/projects/alias
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { shortId } from "@/lib/shortIds";
 import { seatTickCatchUp } from "./seatTick";
+import { pendingAutonomyReports } from "./autonomy";
 import { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 import { defaultSeatTickAdmissionSources } from "./seatTickAdmissionSources";
 import { readReleaseProject } from "@/lib/release/store";
@@ -3317,7 +3318,7 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   const settings = effectiveSeatTickSettings(sources.settings(project), sources.now(), SEAT_TICK_WAKE_INTERVAL_MS);
   let workerAsksObserved = true;
   let decisionForms: SeatTickCheckInput["decisionForms"];
-  if (settings.enabled && sources.workerAsks) {
+  if (sources.workerAsks) {
     try {
       const read = await sources.workerAsks(project, seat.conversationId ?? undefined);
       workerAsksObserved = read !== null;
@@ -3342,6 +3343,7 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   return { project, now: sources.now(), seat, state, policy, settings,
     pipelines, tasks: [], events: [], children: [], childrenUnavailable: null,
     workerAsksObserved, ...(decisionForms ? { decisionForms } : {}),
+    instructionReview: instructionReviewFor(project, sources.now(), settings, sources.pipelines(), sources.tasks(), seat),
     ownLanes: [], pullRequests: [], pullRequestsUnavailable: null, pullRequestsObserved: false,
     signals: [], settledDeploys, deploySettlementWakeDue: true, ...(observedReports ? { reports: observedReports } : {}),
     changeFingerprint: seatTickFingerprint(pipelines, [], [], [], null, [], settledDeploys, []),
@@ -3456,7 +3458,7 @@ async function gatherSeatTickInputWork(
   let workerAsks: readonly SeatTickWorkerAskInput[] = [];
   let workerAsksObserved = true;
   let decisionForms: SeatTickCheckInput["decisionForms"];
-  if (seat && settings.enabled && sources.workerAsks) {
+  if (seat && (settings.enabled || pendingAutonomyReports(settings, now).length > 0) && sources.workerAsks) {
     try {
       const read = await sources.workerAsks(canonical, seat.conversationId ?? undefined);
       workerAsksObserved = read !== null;
