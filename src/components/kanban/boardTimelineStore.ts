@@ -52,6 +52,11 @@ export class BoardTimelineStore {
   };
 }
 
+/** The key a group's fold keeps in `expanded`. Task ids never start with `group:`, so the two cannot collide. */
+export const groupKey = (group: "needs-you" | "still" | "still-long") => `group:${group}`;
+/** A group is closed until the person opens it. */
+export const groupOpen = (preference: TimelinePreference, group: "needs-you" | "still" | "still-long") => preference.expanded[groupKey(group)] === true;
+
 export function timelineExpanded(preference: TimelinePreference, taskId: string, live: boolean): boolean {
   return Object.hasOwn(preference.expanded, taskId) ? preference.expanded[taskId]! : live;
 }

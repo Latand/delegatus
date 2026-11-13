@@ -86,9 +86,14 @@ reads this from the card; the projection's `live` flag no longer decides it.
   the phone). In the fixture, shaped like production, one live task sits in
   «Очікують»: the chart says 8 and the tabs say ●7 and ●1. Done tasks never enter the
   chart, as today.
-- Each working card gets a row even if the projection returned no row for it (no
-  open lane and its member filtered out): the row shows its label and «Час
-  невідомий», with no bar. This keeps the agreement by construction.
+- Each working card of this project gets a row even if the projection returned no row
+  for it (no open lane and its member filtered out): the row shows its label and «Час
+  невідомий», with no bar. This keeps the agreement by construction. A finished task
+  and another project's task never get one, whatever they hold; the header's number
+  sums the cards of the rows drawn.
+- The conversation of a stage that completed and was resumed counts as working only
+  when the card counts it (a member of the card); the chart follows the kanban here
+  and does not lift such a task.
 - Default expansion follows the same rule: a task is expanded by default when it is in
   the working group (`timelineExpanded(preference, taskId, working)`), so the chosen
   «task in work is expanded by default» uses the kanban's definition too. The
@@ -238,12 +243,14 @@ For every task row whose task has a parseable `dueAt`:
   «прострочено на 4 д · переносили 2 рази» in danger ink, weight 600 (the card's
   overdue style). The date is `formatDue(dueAt, dueTz, locale)`, the zone the task was
   set in (the viewer's zone when `dueTz` is missing). The slip part is omitted at 0.
-- **In-window placement without measuring.** The words sit above the pole at
-  `left: x` with `transform: translateX(−p %)`, where `p = 100 × x / laneWidth`. The
-  text's left edge is then `x(1 − w/L) ≥ 0` and its right edge `≤ L` for any text
-  narrower than the lane, and the pole always stays under the text. The longest
-  strings (about 230 px at 11 px) fit the narrowest lane (390 px phone, 410 px at
-  1024).
+- **In-window placement without measuring.** The words sit in the lane's own flow, above
+  the bar track, with `margin-left: x` and `transform: translateX(−p %)`, where
+  `p = 100 × x / laneWidth`. The text's left edge is then `x(1 − w/L) ≥ 0` and its right
+  edge `≤ L` for any text narrower than the lane, and the pole always stays under the
+  text. The longest strings (about 230 px at 11 px) fit the narrowest lane the named
+  widths give (390 px phone, 410 px at 1024). A lane narrower than its words (a desktop
+  of 720 px has a lane of about 250 px) wraps them (`max-width: 100%`) and grows by a
+  line, so no word is cut; the phone lane is fixed and never needs it.
 - **Edge marker.** When the due instant lies before `viewStart`: «‹ ⚑ прострочено на
   4 д · переносили 2 рази» at the text track's left edge. After `viewEnd`: «⚑ до 16
   лист., 12:00 · переносили 2 рази ›» at its right edge.
@@ -406,10 +413,13 @@ words in lanes.
 
 ## 10. Beside the seat panel (D)
 
-**Decision.** Delete `.kb .board-frame:has(> .board-timeline) { flex: 1 1 auto;
-height: auto; min-height: 0; }` (`boardTimeline.css:39`). The chart then lives in the
-kanban's own frame rule, `height: max(440px, 100%)`, and `max(440px, 100% − 32px)`
-while the seat's return strip shows (`kanbanBoard.css:991`, `:1230`):
+**Decision.** Replace `.kb .board-frame:has(> .board-timeline) { flex: 1 1 auto;
+height: auto; min-height: 0; }` (`boardTimeline.css:39`) with the same rule at
+`min-height: 440px`, and keep it ahead of the return-strip height rule
+(`kanbanBoard.css:1230`). The frame is the kanban's own `max(440px, 100%)` only in
+effect: with the seat folded it takes exactly what the seat leaves of the page (so no
+row is cut by the window at rest, which a plain `height: max(440px, 100%)` would do,
+because the seat's strip sits above it), and with the seat expanded it keeps 440 px:
 
 - the page (`.kb-page`) scrolls under the expanded seat; the frame is at least 440 px
   and, scrolled down, as tall as the page; the return strip appears as on the kanban;
@@ -417,8 +427,8 @@ while the seat's return strip shows (`kanbanBoard.css:991`, `:1230`):
   contain`, the columns' rule: a wheel or a finger inside the rows stays in the chart
   at both ends, the page scrolls from its scrollbar, the seat's head, the chart's head and the
   return strip (`docs/design/independent-panel-scroll.md`);
-- `fitRows` measures the timeline root, which now fills the 440 px or taller frame,
-  so it fits whole rows into that height as it does with the seat folded.
+- `fitRows` measures the timeline root, which fills the 440 px or taller frame, so it
+  fits whole rows into that height as it does with the seat folded.
 
 At 1440×900 (page ≈ 852 px) and 1024×768 (≈ 720 px) the chart is then at least 440 px
 tall, and scrolled to the page's end it fills the page under the 32 px strip. Every
@@ -437,7 +447,8 @@ jumps» to the kanban driver.
 - At build start: if its change is on `origin/main`, build on it. Otherwise merge its
   published branch with a merge commit first. If it is still unpublished, build on
   `origin/main` and say so in the report; whichever lane lands second resolves the
-  overlap above.
+  overlap above. At build time the branch was published and was merged (merge commit)
+  before any change here.
 - This design writes no `scrollTop`, no `scrollLeft` and no height during a gesture or
   on refresh. It deletes the only remaining refresh-time `scrollLeft` write (the
   positioning effect). Group expansion is a change of `preference.expanded`, which
@@ -452,8 +463,8 @@ jumps» to the kanban driver.
 
 | File | Change |
 | --- | --- |
-| `src/components/kanban/kanbanModel.ts` | export `workedRecently`; add `timelineGroup(card, nowMs)` and the group order comparator beside `parkedCard`. |
-| `src/lib/board/taskTimelineView.ts` (new, pure) | `timelineWindow`, `pageTo`, `taskSegments` (the table in §6), `dueMark` (place, x, overdue ms), `timelineDuration` thresholds. |
+| `src/components/kanban/kanbanModel.ts` | export `workedRecently`; add `timelineGroup(card, nowMs)` beside `parkedCard`. |
+| `src/lib/board/taskTimelineView.ts` (new, pure) | `timelineWindow`, `pageTo`, `attemptSegment` and `clipSpan` (the table in §6), `dueMark` (place, x, overdue ms), `anchorShift`, `timelineDuration`, `startWords` and `compareTimelineRows` (the due order). |
 | `src/components/kanban/BoardTimeline.tsx` | `cards` prop; groups and nested line; header split; window and paging; thin line, segments, clipped glyph, due flag, words and edge marker; start words in the label; day durations; default expansion from the working group. |
 | `src/components/kanban/boardTimeline.css` | delete `:39`; `.bt-scroll` axes; lane tracks and `overflow: hidden`; new classes; phone group rows without lane. |
 | `src/components/kanban/boardTimelineStore.ts` | a `groupKey()` helper; no schema change. |

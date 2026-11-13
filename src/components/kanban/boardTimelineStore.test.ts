@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { BoardTimelineStore, parseTimelinePreference, timelineExpanded, TIMELINE_HOURS } from "./boardTimelineStore";
+import { BoardTimelineStore, groupKey, groupOpen, parseTimelinePreference, timelineExpanded, TIMELINE_HOURS } from "./boardTimelineStore";
 
 function storage() {
   const values = new Map<string, string>();
@@ -55,4 +55,17 @@ test("a storage update from another surface is read before the next local write"
   desktop.update({ expanded: { first: false } });
   phone.update({ hours: 72 });
   expect(desktop.snapshot()).toEqual({ view: "board", hours: 72, expanded: { first: false } });
+});
+
+test("group folds share the task record, survive a write and a parse, and never collide with a task id", () => {
+  const disk = storage();
+  const writer = new BoardTimelineStore("project-a", disk);
+  expect(groupOpen(writer.snapshot(), "needs-you")).toBe(false);
+  writer.update({ expanded: { ...writer.snapshot().expanded, [groupKey("needs-you")]: true, [groupKey("still")]: true, "task-a": false } });
+  const reader = new BoardTimelineStore("project-a", disk).snapshot();
+  expect(groupOpen(reader, "needs-you")).toBe(true);
+  expect(groupOpen(reader, "still")).toBe(true);
+  expect(groupOpen(reader, "still-long")).toBe(false);
+  expect(timelineExpanded(reader, "task-a", true)).toBe(false);
+  expect(Object.keys(reader.expanded).filter(key => key.startsWith("group:")).sort()).toEqual(["group:needs-you", "group:still"]);
 });

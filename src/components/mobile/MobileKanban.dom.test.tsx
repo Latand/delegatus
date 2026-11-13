@@ -315,7 +315,8 @@ test.each(["completed", "needs_decision"] as const)("Timeline expands resumed wo
   const role = { roleId: "builder" as const };
   const resolved = resolvePipelineRole({ role, engine: "codex", model: null, effort: "high", access: "read-write" }, "run", pipelineRoleLookup);
   if (!resolved.role) throw new Error(resolved.error);
-  const file = working(301), owner = task("resumed", "assigned");
+  // The stage's conversation is linked to its task, as a launch records it; the chart takes «working» from the card, as the kanban counts it.
+  const file = working(301), owner = task("resumed", "assigned", [working(301).path]);
   const stamp = (ago: number) => new Date((NOW - ago) * 1000).toISOString();
   const lane = buildPipeline({ id: "resumed-lane", task: owner.text, project: "fixture", taskIds: [owner.id], repoDir: "/fixture",
     srcPath: null, srcConversationId: null, now: stamp(3600), stages: [{ id: "build", kind: "run", next: null, prompt: "Build", role, effectiveRole: resolved.role }] });
