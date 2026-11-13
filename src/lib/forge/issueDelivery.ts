@@ -273,30 +273,32 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
         }
         // A runner batch receipt may precede the forge cache. Its verified
         // landing commit identifies the integration PR without scanning history.
+        let associatedCarrier = false;
         const workMergeCommit = lane.merge?.mergeCommit ?? primary.merge_commit_sha;
         if (!receipt.batch && workMergeCommit
           && (!primary.merged_at || primary.base?.ref !== primary.base?.repo?.default_branch)) {
           const associated = await read(`repos/${receipt.repository}/commits/${workMergeCommit}/pulls?per_page=100`);
           if (!Array.isArray(associated)) throw new Error("Invalid landing PRs");
-          const batch = associated.find(p => p.merged_at && p.base?.ref === p.base?.repo?.default_branch
-            && p.number !== receipt.pr && isMergeBatchHead(p.head?.ref ?? "") && parseMergeBatchTitle(p.title).includes(receipt.pr));
-          if (batch) {
-            receipt.batch = batch.number;
+          const carrier = associated.find(p => p.base?.ref === p.base?.repo?.default_branch
+            && p.number !== receipt.pr && (p.state === "open" || p.merged_at));
+          if (carrier) {
+            receipt.batch = carrier.number;
             primary = await read(`repos/${receipt.repository}/pulls/${receipt.batch}`);
-            if (primary.number !== batch.number || primary.merged_at !== batch.merged_at
-              || primary.base?.ref !== primary.base?.repo?.default_branch) throw new Error("Default-branch carrier changed");
+            if (primary.number !== carrier.number || primary.base?.ref !== primary.base?.repo?.default_branch) throw new Error("Default-branch carrier changed");
+            associatedCarrier = true;
           }
         }
         if (!primary.merged_at) {
           receipt.retryAt = new Date(ports.now() + 300_000).toISOString();
           await save(); continue;
         }
-        if (receipt.batch && !verifiedCarried && !isMergeBatchHead(primary.head?.ref ?? "")) {
+        if (receipt.batch && !verifiedCarried && !associatedCarrier && !isMergeBatchHead(primary.head?.ref ?? "")) {
           if (!await carried()) continue;
         }
-        if (receipt.batch && !verifiedCarried && (!isMergeBatchHead(primary.head?.ref ?? "") || !parseMergeBatchTitle(primary.title).includes(receipt.pr))) throw new Error("Batch membership unconfirmed");
+        if (receipt.batch && !verifiedCarried && !associatedCarrier && isMergeBatchHead(primary.head?.ref ?? "")
+          && !parseMergeBatchTitle(primary.title).includes(receipt.pr)) throw new Error("Batch membership unconfirmed");
         if (!date(primary.merged_at) || !primary.base?.ref || !primary.base?.repo?.default_branch) throw new Error("Invalid landing record");
-        if (Date.parse(primary.merged_at) < since) { receipt.state = "skipped"; await save(); continue; }
+        if (primary.base.ref === primary.base.repo.default_branch && Date.parse(primary.merged_at) < since) { receipt.state = "skipped"; await save(); continue; }
         if (primary.base.ref !== primary.base.repo.default_branch) {
           const rawCommit = primary.merge_commit_sha;
           if (typeof rawCommit !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(rawCommit)) throw new Error("Invalid batch merge commit");
@@ -313,6 +315,7 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
             await save(); continue;
           }
         }
+        if (Date.parse(primary.merged_at) < since) { receipt.state = "skipped"; await save(); continue; }
         const route = `repos/${receipt.repository}/issues/${receipt.number}`;
         let issue;
         try { issue = await read(route); } catch (error) {

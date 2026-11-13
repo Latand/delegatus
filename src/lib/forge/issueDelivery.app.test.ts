@@ -45,6 +45,7 @@ test.skipIf(process.platform === "win32").each(["close", "part", "missing-pr", "
     fs.mkdirSync(path.dirname(declaration), { recursive: true });
     fs.writeFileSync(declaration, JSON.stringify([app.repository]));
     const lane = buildPipeline({ id: "delivery", task: "Issue #7: Widgets", taskIds: [], project: "fixture", repoDir: "fixture", stages: [], srcPath: null, srcConversationId: null, now: AT });
+    lane.delivery = { target: { repository: "repo-fixture-identity", remote: `https://github.com/${REPO}.git`, branch: "refs/heads/pipeline/widgets", pr: 9 }, disposition: "owner", publish: "disabled", ownerId: "delivery", epoch: 1, active: false, journal: [] };
     lane.state = "completed"; lane.closedAt = AT;
     lane.merge = { state: "merged", by: "outside", repository: REPO, prNumber: 9, mergedAt: AT,
       policyChangedAt: AT, reviewedHead: "a".repeat(40), chain: ["a".repeat(40)], updates: [], seenChecks: [],

@@ -506,7 +506,7 @@ test("task-only issue links keep a completed lane hot until delivery is settled"
 });
 
 
-test("a merged integration PR uses its later main carrier time and retains carrier identity", async () => {
+test("an ordinary default-branch carrier uses its landing time and retains carrier identity", async () => {
   const f = fixture(), p = f.lanes[0]!; p.merge = undefined;
   cached(f, 3909, "merged");
   f.data.repositories[REPO]!.prs["3909"]!.mergedAt = "2026-10-31T13:00:00.000Z";
@@ -518,10 +518,10 @@ test("a merged integration PR uses its later main carrier time and retains carri
   f.ports.run = async args => {
     const route = args[1]!;
     if (route.endsWith("/pulls/4000")) return JSON.stringify({ ...f.primary, number: 4000, merged_at: AT,
-      base: { ref: "main", repo: { default_branch: "main" } }, head: { ref: "merge-batch/widgets" }, title: "Merge batch: #3909" });
+      base: { ref: "main", repo: { default_branch: "main" } }, head: { ref: "integration/widgets" }, title: "Widget integration" });
     if (route.includes("/commits/") && route.endsWith("/pulls?per_page=100")) return JSON.stringify([
       { ...f.primary, number: 4000, merged_at: AT, base: { ref: "main", repo: { default_branch: "main" } },
-        head: { ref: "merge-batch/widgets" }, title: "Merge batch: #3909" },
+        head: { ref: "integration/widgets" }, title: "Widget integration" },
     ]);
     return original(args);
   };
@@ -530,6 +530,32 @@ test("a merged integration PR uses its later main carrier time and retains carri
   expect(f.issue.state).toBe("open");
   expect(f.writes.filter(args => args.includes("state=open"))).toHaveLength(1);
   expect(p.issueDelivery).toMatchObject([{ state: "reopened", batch: 4000 }]);
+});
+
+test("an integration merge stays pending until its default-branch carrier lands", async () => {
+  const f = fixture(), p = f.lanes[0]!; p.merge = undefined; p.closedAt = "2026-10-31T12:00:00.000Z";
+  cached(f, 3909, "closed"); f.primary.merged_at = "2026-10-31T13:00:00.000Z";
+  f.primary.base.ref = "integration/widgets";
+  let carrierMergedAt: string | null = null;
+  const run = f.ports.run;
+  f.ports.run = async args => {
+    const route = args[1]!;
+    if (route.endsWith("/pulls/4000")) return JSON.stringify({ ...f.primary, number: 4000, merged_at: carrierMergedAt,
+      state: carrierMergedAt ? "closed" : "open", base: { ref: "main", repo: { default_branch: "main" } },
+      head: { ref: "integration/widgets" }, title: "Widget integration" });
+    if (route.includes("/commits/") && route.endsWith("/pulls?per_page=100")) return JSON.stringify([
+      { number: 4000, merged_at: carrierMergedAt, state: carrierMergedAt ? "closed" : "open",
+        base: { ref: "main", repo: { default_branch: "main" } }, head: { ref: "integration/widgets" }, title: "Widget integration" },
+    ]);
+    return run(args);
+  };
+  await f.sweep();
+  expect(p.issueDelivery).toMatchObject([{ state: "pending" }]);
+  expect(f.writes).toEqual([]);
+  carrierMergedAt = AT; f.advance();
+  await f.sweep();
+  expect(p.issueDelivery).toMatchObject([{ state: "closed", batch: 4000 }]);
+  expect(f.writes.filter(args => args.includes("state=closed"))).toHaveLength(1);
 });
 
 test.each([false, true])("a carrier landing controls rollout even when its work PR closed earlier: backfill=%s", async backfill => {

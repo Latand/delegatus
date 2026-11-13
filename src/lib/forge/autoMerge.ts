@@ -27,6 +27,7 @@ import { checkFailedReason, MERGE_REASONS } from "./mergeReasons";
 import { lanePullRequest, pipelineRepository } from "./resolve";
 import { type PullRequestState } from "./workLinks";
 import { readBatchLanding, readCarriedBranchLanding } from "./batchLanding";
+import { isForgeAppRepository } from "@/lib/git/agentForgeCredentials";
 import { githubReadBackoff, githubReadFailure } from "./githubReadFailure";
 import { issueDeliverySince, sweepIssueDelivery, type IssueDeliveryPorts } from "./issueDelivery";
 
@@ -1909,25 +1910,26 @@ export function scheduleAutoMerge(overrides: Partial<AutoMergePorts> & Pick<Auto
       cache: () => ({ data: readForgeCache().data, view: forgeCacheView() }),
       run: issueRead, readLanding: landingRead,
       carriedLanding: async (lane, repository, pr, base, head, hint) => {
-        const token = await landingTokens.token(repository);
-        const gitUsername = "x-access-token";
-        const headerName = ["AUTH", "ORIZATION"].join("");
-        const headerScheme = ["ba", "sic"].join("");
-        const fetchEnv = {
-          GIT_TERMINAL_PROMPT: "0",
-          GIT_CONFIG_GLOBAL: "/dev/null",
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_CONFIG_COUNT: "2",
-          GIT_CONFIG_KEY_0: `http.https://github.com/${repository}.git.extraheader`,
-          GIT_CONFIG_VALUE_0: `${headerName}: ${headerScheme} ${Buffer.from(`${gitUsername}:${token}`).toString("base64")}`,
-          GIT_CONFIG_KEY_1: "credential.helper",
-          GIT_CONFIG_VALUE_1: "",
-        };
+        const declared = isForgeAppRepository(repository);
+        const fetchEnv: Partial<NodeJS.ProcessEnv> = {};
+        const contentsRead = declared ? landingRead : issueRead;
+        if (declared) {
+          const token = await landingTokens.token(repository);
+          const gitUsername = "x-access-token";
+          const headerName = ["AUTH", "ORIZATION"].join("");
+          const headerScheme = ["ba", "sic"].join("");
+          Object.assign(fetchEnv, {
+            GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "2",
+            GIT_CONFIG_KEY_0: `http.https://github.com/${repository}.git.extraheader`,
+            GIT_CONFIG_VALUE_0: `${headerName}: ${headerScheme} ${Buffer.from(`${gitUsername}:${token}`).toString("base64")}`,
+            GIT_CONFIG_KEY_1: "credential.helper", GIT_CONFIG_VALUE_1: "",
+          });
+        }
         return readCarriedBranchLanding(repository, pr, base, {
           head: lane.merge?.reviewedHead || lane.lastPassedCommit || head,
-          repoDir: lane.delivery?.target.repository ?? lane.repoDir,
+          repoDir: lane.repoDir!,
           ...hint,
-        }, issueRead, landingRead, fetchEnv);
+        }, issueRead, contentsRead, fetchEnv);
       },
       mutate: ports.mutate, prepareRead: ports.prepareRead,
       write: overrides.write ?? forgeWriter(issueRead, issueApp),
