@@ -165,16 +165,16 @@ test.each((["resolve-decision", "retry-stage"] as const).flatMap(action =>
     const stored = current();
     const oldRepair = stored.runs[0]!.attempts[0]!.publicationRepair!;
     // Observed legacy shape: a rejected send on attempt 1, followed by a
-    // passed attempt 2 whose publication exhausted its check deadlines.
+    // passed attempt 2 whose publication was refused by code checks.
     delete oldRepair.clientMessageId; delete oldRepair.delivery;
     delete oldRepair.requestedAt; delete oldRepair.sendingAt;
     expect(oldRepair.outcome?.status).toBe("rejected");
     expect(oldRepair.settledAt).toBeDefined();
     expect(stored.runs[0]!.attempts[1]!.publicationRepair).toBeUndefined();
     expect(stored.runs[0]!.attempts[1]!.state).toBe("passed");
-    // Reproduce the retained park after automatic deadline retries ran out.
+    // Reproduce the retained code-check publication park.
     stored.state = "needs_decision";
-    stored.stateDetail = "publishing the passed stage: publication check deadlines exhausted; retry-stage.";
+    stored.stateDetail = "publishing the passed stage: code checks failed; retry-stage.";
     savePipelines([stored]);
     clock += 3 * 24 * 60 * 60_000;
     f.h.setConversationActive(activity === "unknown" ? null : activity === "running");
@@ -194,7 +194,7 @@ test.each((["resolve-decision", "retry-stage"] as const).flatMap(action =>
       expect(current().runs[0]!.attempts[1]!.publicationRepairAbandonment?.reason).toContain("abandoned");
       expect(current().lastPassedCommit).toBe(stored.lastPassedCommit);
     }
-    expect(current().runs[0]!.attempts).toHaveLength(action === "resolve-decision" && activity !== "running" ? 3 : 2);
+    expect(current().runs[0]!.attempts).toHaveLength(activity !== "running" ? 3 : 2);
     expect(f.h.spawnInputs).toHaveLength(2);
   } finally { f.close(); }
 });
@@ -236,7 +236,11 @@ test.each((["resolve-decision", "retry-stage"] as const).flatMap(action =>
     expect((await act()).status).toBe(409);
     clock++;
     const result = await act();
-    if (shape === "running" || shape === "fresh-busy" || shape === "queued") {
+    if (action === "retry-stage" && shape === "stale-background") {
+      expect(result.status).toBe(409);
+      expect(result.error).toContain("background work");
+      expect(current().runs[0]!.attempts).toHaveLength(1);
+    } else if (shape === "running" || shape === "fresh-busy" || shape === "queued") {
       expect(result.status).toBe(409);
       expect(result.error).toContain("turn build/1");
       expect(result.error).toContain("age 1200s");
@@ -294,7 +298,8 @@ test.each((["resolve-decision", "retry-stage"] as const).flatMap(action =>
         });
       }
       expect(await f.h.ports.conversationAgentActive(conversationId)).toBe(owner === "running" ? true : null);
-      await tickPipelines([], f.h.ports);
+      // Exercise the manual action before the next tick can automatically
+      // hand an idle producer's repair to a fresh attempt.
       expect(current().state).toBe("needs_decision");
       const ready = current();
 
@@ -311,7 +316,7 @@ test.each((["resolve-decision", "retry-stage"] as const).flatMap(action =>
         expect(current().state).toBe("running");
         expect(current().runs[0]!.attempts[0]!.publicationRepairAbandonment?.reason).toContain("idle");
       }
-      expect(current().runs[0]!.attempts).toHaveLength(owner === "idle" && action === "resolve-decision" ? 2 : 1);
+      expect(current().runs[0]!.attempts).toHaveLength(owner === "idle" ? 2 : 1);
       expect(current().runs[0]!.attempts[0]!.publicationRepair?.delivery?.operationId).toBe("failed-alias-repair");
     } finally {
       await new Promise<void>(resolve => server.close(() => resolve()));
@@ -351,7 +356,7 @@ test.each(["resolve-decision", "retry-stage"] as const)(
       }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
       expect(result.error).toBeUndefined();
       expect(current().state).toBe("running");
-      expect(current().runs[0]!.attempts).toHaveLength(action === "resolve-decision" ? 2 : 1);
+      expect(current().runs[0]!.attempts).toHaveLength(2);
       expect(current().runs[0]!.attempts[0]!.publicationRepair!.delivery?.state).toBe("failed");
       expect(f.h.spawnInputs).toHaveLength(1);
     } finally { f.close(); }
@@ -380,7 +385,9 @@ test("the next controller tick heals a stored orphaned repair before an answer",
     f.h.ports.durableTurnEvidence = async () => null;
     f.h.ports.stageRepairDelivery = async () => ({ operationId: "orphaned-delivery", state: "unavailable", safeToReplace: false });
     await tickPipelines([], f.h.ports);
-    expect(current().state).toBe("needs_decision");
+    expect(current().state).toBe("running");
+    expect(current().runs[0]!.attempts).toHaveLength(2);
+    expect(current().publicationProducerRepairs).toBe(1);
     expect(current().runs[0]!.attempts[0]!.publicationRepair).toMatchObject({
       settledAt: new Date(clock).toISOString(), outcome: { status: "rejected" }, delivery: { state: "unavailable" },
     });
@@ -410,7 +417,7 @@ test.each(["resolve-decision", "retry-stage"] as const)("a gone producer with un
     expect(result.error).toBeUndefined();
     expect(current().state).toBe("running");
     expect(current().lastPassedCommit).toBe(parked.lastPassedCommit);
-    expect(current().runs[0]!.attempts).toHaveLength(action === "resolve-decision" ? 2 : 1);
+    expect(current().runs[0]!.attempts).toHaveLength(2);
   } finally { f.close(); }
 });
 
@@ -476,7 +483,7 @@ test.each((["resolve-decision", "retry-stage"] as const).flatMap(action =>
       expect(current().runs[0]!.attempts).toHaveLength(1);
     } else {
       expect(result.error).toBeUndefined();
-      expect(current().runs[0]!.attempts).toHaveLength(action === "resolve-decision" ? 2 : 1);
+      expect(current().runs[0]!.attempts).toHaveLength(2);
     }
   } finally { f.close(); }
 });

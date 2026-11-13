@@ -288,6 +288,8 @@ export interface CompanionPatch<C> {
 
 export interface StateBoundedTransaction<T> {
   get(key: string): T | null;
+  /** Indexed pipeline lookup by id across the active and archive collections. */
+  pipelineGet(key: string): T | null;
   /** Indexed task evidence; each project seek and returned row spends budget. */
   taskProjectRows(projects: readonly string[]): T[];
   pipelineLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null;
@@ -2786,6 +2788,17 @@ export class SqliteStateCollection<T> {
                 if (!this.options.preserveRejectedRecords) throw new Error("invalid bounded state row");
                 return null;
               }
+              return this.options.clone(value);
+            },
+            pipelineGet: (key) => {
+              consume();
+              if (this.options.collection !== "pipelines") throw new Error("pipeline id lookup requires the pipeline collection");
+              const row = db.query<{ value_json: string }, [string]>(
+                "SELECT value_json FROM state_rows WHERE collection IN ('pipelines', 'pipelines_archive') AND row_key = ? ORDER BY collection LIMIT 1",
+              ).get(key);
+              if (!row) return null;
+              const value = this.decodeRow(row.value_json, db);
+              if (value === null) throw new Error("invalid bounded pipeline row");
               return this.options.clone(value);
             },
             put: (record) => {

@@ -41,12 +41,25 @@ export const projectRemoteStore = smallStore<Record<string, string>>({
 });
 export const worktreeMapStore = smallStore<Record<string, WorktreeMapping>>({
   collection: "worktree_map", empty: () => ({}),
-  parse: raw => Object.fromEntries(Object.entries(object(raw)).map(([cwd, item]) => {
-    const value = object(item);
-    if (typeof value.repo !== "string" || typeof value.worktree !== "string") throw new Error("Worktree map is unreadable");
-    return [cwd, { repo: value.repo, worktree: value.worktree }];
-  })),
-  toRows: value => rows(value), fromRows: rows => Object.fromEntries(rows.map(r => [r.key, r.value as WorktreeMapping])), toFile: value => value,
+  parse: raw => {
+    // JSON.parse keeps the last occurrence of a duplicate member. The legacy
+    // map has no timestamps, so file order is the only recorded precedence;
+    // preserve that resolution without normalizing distinct path spellings.
+    const entries = Object.entries(object(raw));
+    const valid = entries.filter(([cwd]) => cwd.trim().length > 0);
+    const mapping = Object.fromEntries(valid.map(([cwd, item]) => {
+      const value = object(item);
+      if (typeof value.repo !== "string" || typeof value.worktree !== "string") throw new Error("Worktree map is unreadable");
+      return [cwd, { repo: value.repo, worktree: value.worktree }];
+    }));
+    const skipped = entries.length - valid.length;
+    if (skipped) console.warn(`[state import] worktree_map skipped ${skipped} empty keys`);
+    return mapping;
+  },
+  toRows: value => {
+    if (Object.keys(value).some(cwd => !cwd.trim())) throw new Error("Worktree map key is empty");
+    return rows(value);
+  }, fromRows: rows => Object.fromEntries(rows.map(r => [r.key, r.value as WorktreeMapping])), toFile: value => value,
 });
 export const projectCurationStore = smallStore<CurationDocument>({
   collection: "project_curation", empty: () => ({ crowned: [], manualProjects: [] }),

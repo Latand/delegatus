@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, setSystemTime, test } from "bun:test";
 import { Window as HappyWindow } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
@@ -184,6 +184,7 @@ beforeEach(() => {
   putHandler = null;
 });
 afterEach(() => {
+  setSystemTime();
   for (const root of [...roots]) unmount(root);
   dom.document.body.replaceChildren();
 });
@@ -591,9 +592,9 @@ function choose(element: HTMLSelectElement, value: string): void {
   });
 }
 
-type MaintenanceBlock = SeatTickSettingsAnswer["maintenance"];
+type MaintenanceBlock = NonNullable<SeatTickSettingsAnswer["maintenance"]>;
 function withMaintenance(overrides: Partial<MaintenanceBlock>, base: SeatTickSettingsAnswer = record()): SeatTickSettingsAnswer {
-  return { ...base, maintenance: { ...base.maintenance, ...overrides } };
+  return { ...base, maintenance: { ...base.maintenance!, ...overrides } };
 }
 const endedRun = (overrides: Partial<NonNullable<MaintenanceBlock["lastRun"]>> = {}): NonNullable<MaintenanceBlock["lastRun"]> => ({
   runId: "run-1", taskId: "card-from-the-last-run", conversationId: "conv-1", state: "succeeded",
@@ -1373,4 +1374,220 @@ test("a removal refused because the seat rewrote its note stores nothing, keeps 
   expect(body().querySelector("[data-seat-tick-error]")?.textContent).toBe("The notes from the orchestrator and agents changed while the panel was open. Nothing was stored\u00A0— check the notes and save again.");
   expect(moved.instructionLines!.map(line => line.text)).toEqual(["a release afternoon", "Seat note, revised."]);
   expect(field<HTMLTextAreaElement>("[data-seat-tick-reason]").value).toBe("a release afternoon, edited");
+});
+
+
+test("a closed switch reads only the summary and stays visible while the opened panel is held", async () => {
+  getAnswer = configured({ settings: { ...configured().settings, wakeIntervalMinutes: 10 }, effective: { ...configured().effective, wakeIntervalMinutes: 10 } });
+  const served = globalThis.fetch;
+  let release!: (response: Response) => void;
+  let enter!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const held = new Promise<Response>(resolve => { release = resolve; });
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("/api/monitor/seat-tick/settings") && (!init?.method || init.method === "GET")) {
+      urls.push(url);
+      if (!url.includes("view=summary")) { enter(); return held; }
+      return json({ ...getAnswer, view: "summary", maintenance: undefined, curation: undefined });
+    }
+    return served(input, init);
+  }) as typeof fetch;
+  try {
+    const { root } = await mount();
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain("view=summary");
+    const word = chip().textContent;
+    expect(word).toContain("10 min");
+    press(chip() as HTMLButtonElement);
+    await entered;
+    await settle(root);
+    expect(popover()).not.toBeNull();
+    expect(chip().textContent).toBe(word);
+    expect(body().querySelector("[data-seat-tick-interval]")).toBeNull();
+    release(json(getAnswer));
+    await settle(root);
+    expect(field<HTMLInputElement>("[data-seat-tick-interval]").value).toBe("10");
+    expect(urls).toHaveLength(2);
+  } finally { release?.(json(getAnswer)); globalThis.fetch = served; }
+});
+
+
+test("summary overlays retain visible and spoken autonomy and paid Turbo, and expire at their boundary", async () => {
+  setSystemTime(new Date("2026-11-12T10:00:00Z"));
+  getAnswer = { ...configured(), view: "summary", switchState: {
+    autonomy: { active: true, until: "2099-01-01T12:00:00Z" }, turbo: { active: true, until: "2099-01-01T12:00:00Z", paid: true },
+  } };
+  await mount();
+  expect(chip().getAttribute("data-seat-tick-autonomy")).toBe("on");
+  expect(chip().querySelector('[data-seat-tick-turbo-mark="credits"]')).not.toBeNull();
+  expect(chip().getAttribute("aria-valuetext")).toContain("Turbo");
+  for (const root of [...roots]) unmount(root);
+  resetSeatTickSettingsCacheForTests();
+  getAnswer = { ...getAnswer, switchState: {
+    autonomy: { active: true, until: "2000-01-01T12:00:00Z" }, turbo: { active: true, until: "2000-01-01T12:00:00Z", paid: true },
+  } };
+  await mount();
+  expect(chip().getAttribute("data-seat-tick-autonomy")).toBe("off");
+  expect(chip().querySelector("[data-seat-tick-turbo-mark]")).toBeNull();
+});
+
+
+test("a refused summary write keeps its reason through a held panel read and clears on the panel receipt", async () => {
+  getAnswer = configured();
+  putAnswers = [{ status: 400, body: { error: "Fixture cadence held" } }];
+  const served = globalThis.fetch;
+  let release!: (response: Response) => void;
+  let enter!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const held = new Promise<Response>(resolve => { release = resolve; });
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("/api/monitor/seat-tick/settings") && (!init?.method || init.method === "GET")) {
+      if (!url.includes("view=summary")) { enter(); return held; }
+      return json({ ...getAnswer, view: "summary", maintenance: undefined, curation: undefined });
+    }
+    return served(input, init);
+  }) as typeof fetch;
+  try {
+    const { root } = await mount();
+    for (const key of ["ArrowRight", "Enter"]) flushSync(() => chip().dispatchEvent(new dom.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }) as never));
+    await entered;
+    await settle(root);
+    expect(popover()!.querySelector("[data-seat-tick-error]")?.textContent).toBe("Fixture cadence held");
+    expect(body().querySelector("[data-seat-tick-interval]")).toBeNull();
+    release(json(getAnswer));
+    await settle(root);
+    expect(popover()!.querySelector("[data-seat-tick-error]")?.textContent).toBe("Fixture cadence held");
+    putAnswers = [{ status: 200, body: record() }];
+    press(restore());
+    await settle(root);
+    expect(popover()!.querySelector("[data-seat-tick-error]")).toBeNull();
+    expect(chip().textContent).toContain("1 h");
+  } finally { release?.(json(getAnswer)); globalThis.fetch = served; }
+});
+
+test("reopening the panel with the read held never shows a panel record older than the closed switch reading", async () => {
+  getAnswer = configured();
+  const served = globalThis.fetch;
+  let hold = false;
+  let release!: (response: Response) => void;
+  let enter!: () => void;
+  let entered = new Promise<void>(resolve => { enter = resolve; });
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("/api/monitor/seat-tick/settings") && (!init?.method || init.method === "GET")) {
+      urls.push(url);
+      if (url.includes("view=summary")) return json({ ...getAnswer, view: "summary", maintenance: undefined, curation: undefined });
+      if (hold) { enter(); return new Promise<Response>(resolve => { release = resolve; }); }
+      return json(getAnswer);
+    }
+    return served(input, init);
+  }) as typeof fetch;
+  try {
+    // 1. Card mounts, operator opens the panel once: it loads 30 min, then closes.
+    let { root } = await mount();
+    expect(chip().textContent).toContain("30 min");
+    await open(root);
+    expect(field<HTMLInputElement>("[data-seat-tick-interval]").value).toBe("30");
+    flushSync(() => dom.document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as never));
+    await settle(root);
+    expect(popover()).toBeNull();
+    // 2. Another writer (MCP tool, another tab) moves the cadence to 10 min.
+    //    The closed chip's summary read (poll / remount) shows it.
+    const ten = configured({ settings: { ...configured().settings, wakeIntervalMinutes: 10, updatedAt: ago(1) }, effective: { ...configured().effective, wakeIntervalMinutes: 10, updatedAt: ago(1) } });
+    getAnswer = ten;
+    for (const r of [...roots]) unmount(r);
+    ({ root } = await mount());
+    const fresh = chip().textContent;
+    expect(fresh).toContain("10 min");
+    // 3. Operator opens the panel again; the live panel read is slow (0.6–6 s on the running release).
+    hold = true;
+    entered = new Promise<void>(resolve => { enter = resolve; });
+    chip().focus();
+    flushSync(() => chip().click());
+    await entered;
+    await settle(root);
+    const faceWhileOpening = chip().textContent;
+    const formWhileOpening = field<HTMLInputElement>("[data-seat-tick-interval]")?.value ?? null;
+    expect(faceWhileOpening).toContain("10 min");
+    expect(formWhileOpening === null || formWhileOpening === "10").toBe(true);
+  } finally { release?.(json(getAnswer)); globalThis.fetch = served; }
+});
+
+
+test("reopening the panel after another writer moved the cadence, a failed panel read leaves the newer reading on the face", async () => {
+  getAnswer = configured();
+  const served = globalThis.fetch;
+  let failPanel = false;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("/api/monitor/seat-tick/settings") && (!init?.method || init.method === "GET")) {
+      if (url.includes("view=summary")) return json({ ...getAnswer, view: "summary", maintenance: undefined, curation: undefined });
+      if (failPanel) return json({ error: "curation panel read timed out" }, 500);
+      return json(getAnswer);
+    }
+    return served(input, init);
+  }) as typeof fetch;
+  try {
+    let { root } = await mount();
+    await open(root);
+    expect(field<HTMLInputElement>("[data-seat-tick-interval]").value).toBe("30");
+    flushSync(() => dom.document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as never));
+    await settle(root);
+    getAnswer = configured({ settings: { ...configured().settings, wakeIntervalMinutes: 10, updatedAt: ago(1) }, effective: { ...configured().effective, wakeIntervalMinutes: 10, updatedAt: ago(1) } });
+    for (const r of [...roots]) unmount(r);
+    ({ root } = await mount());
+    expect(chip().textContent).toContain("10 min");
+    failPanel = true;
+    await open(root);
+    await settle(root);
+    const face = chip().textContent;
+    const form = field<HTMLInputElement>("[data-seat-tick-interval]")?.value ?? null;
+    expect(face).toContain("10 min");
+    expect(form === null || form === "10").toBe(true);
+  } finally { globalThis.fetch = served; }
+});
+
+
+test("a seat's own note write seen first by the summary poll keeps the open panel form and the operator's draft", async () => {
+  getAnswer = configured();
+  const served = globalThis.fetch;
+  const panelGets: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("/api/monitor/seat-tick/settings") && (!init?.method || init.method === "GET")) {
+      if (url.includes("view=summary")) return json({ ...getAnswer, at: new Date().toISOString(), view: "summary", maintenance: undefined, curation: undefined });
+      panelGets.push(url);
+      return json({ ...getAnswer, at: new Date().toISOString() });
+    }
+    return served(input, init);
+  }) as typeof fetch;
+  const realSetInterval = globalThis.setInterval;
+  const polls: Array<() => void> = [];
+  globalThis.setInterval = ((fn: () => void, ms?: number, ...rest: unknown[]) => {
+    if (ms === 60_000) polls.push(fn);
+    return realSetInterval(fn as never, ms, ...(rest as []));
+  }) as typeof setInterval;
+  try {
+    const { root } = await mount();
+    const closedPolls = polls.length;
+    await open(root);
+    expect(field<HTMLInputElement>("[data-seat-tick-interval]").value).toBe("30");
+    type(field<HTMLInputElement>("[data-seat-tick-interval]"), "45");
+    expect(save()).not.toBeNull();
+    const panelGetsBefore = panelGets.length;
+    // The seat appends a line to its own monitor note: the schedule is unchanged, updatedAt moves.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const at = new Date().toISOString();
+    getAnswer = configured({ settings: { ...configured().settings, monitorPrompt: "lane ledger line", updatedAt: at }, effective: { ...configured().effective, updatedAt: at }, monitorPromptLength: 16 });
+    // The closed control's summary poll (registered at mount) answers before the panel's own poll.
+    for (const poll of polls.slice(0, closedPolls)) poll();
+    await settle(root);
+    const interval = field<HTMLInputElement>("[data-seat-tick-interval]")?.value ?? null;
+    expect(interval).toBe("45");
+    expect(save()).not.toBeNull();
+  } finally { globalThis.setInterval = realSetInterval; globalThis.fetch = served; }
 });
