@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 
 // TypeScript's command-line entry is shared by its CLI and module wrappers.
@@ -26,11 +25,15 @@ export function withCompilerEntry(command: string[], cwd = process.cwd()) {
   if (process.platform !== "linux") return;
   const installations = new Set<string>();
   for (const directory of [cwd, path.resolve(import.meta.dir, "..")]) {
-    try {
-      const require = createRequire(path.join(directory, "package.json"));
-      installations.add(path.dirname(fs.realpathSync(require.resolve("typescript/package.json"))));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND") throw error;
+    // Bun's require.resolve can auto-install an absent package. Only an
+    // installation actually on this command's filesystem belongs to its gate.
+    for (let parent = directory; ; parent = path.dirname(parent)) {
+      const manifest = path.join(parent, "node_modules/typescript/package.json");
+      if (fs.existsSync(manifest)) {
+        installations.add(path.dirname(fs.realpathSync(manifest)));
+        break;
+      }
+      if (path.dirname(parent) === parent) break;
     }
   }
   let root: string | undefined;
