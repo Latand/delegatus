@@ -5196,6 +5196,110 @@ describe("native evidence with admission contained", () => {
     } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
   });
 
+  test.each(["result-only", "assistant", "assistant-without-anchor", "error", "interrupted"] as const)(
+    "late follower membership retains its original owner after an incomplete boundary (%s)", async mode => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-late-member-"));
+      const { host, child, ledger, store } = await openNative(directory);
+      const firstEntry = { id: "first", text: "fixture first" };
+      const nextEntry = { id: "follower", text: "fixture follower" };
+      try {
+        const first = host.send(firstEntry).catch(() => null);
+        await until(() => users(child).length === 1);
+        const follower = host.send(nextEntry).catch(error => error as Error);
+        await until(() => users(child).length === 2);
+        child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(1), subtype: "success",
+          user_message_uuid: users(child)[0]!.uuid });
+        await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+        expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+        expect(ledger.load(sessionId).map(row => row.delivered)).toEqual([false, false]);
+        // Neither hostile membership nor an echo can manufacture a receipt.
+        for (const inputUuids of [[resultUuid(99)], [users(child)[1]!.uuid, users(child)[1]!.uuid],
+          [users(child)[1]!.uuid, users(child)[0]!.uuid]]) {
+          result(child, inputUuids, 2);
+          await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+          expect(ledger.load(sessionId).map(row => row.delivered)).toEqual([false, false]);
+        }
+        echo(child, users(child)[1]!);
+        await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+        expect(ledger.load(sessionId)[1]?.delivered).toBe(false);
+        if (mode.startsWith("assistant")) {
+          child.emitJson({ type: "assistant", session_id: sessionId,
+            ...(mode === "assistant" ? { user_message_uuid: users(child)[1]!.uuid } : {}),
+            message: { id: "fixture-assistant", role: "assistant", content: [{ type: "text", text: "fixture response" }] } });
+          await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+          expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: nextEntry.id });
+        }
+        const terminal = mode === "error" || mode === "interrupted";
+        child.emitJson({ type: "result", session_id: sessionId, uuid: resultUuid(3),
+          subtype: terminal ? mode === "error" ? "error_during_execution" : "interrupted" : "success",
+          is_error: terminal, user_message_uuid: users(child)[1]!.uuid, user_message_uuids: [users(child)[1]!.uuid] });
+        const receipt = await follower;
+        if (terminal) expect(receipt).toBeInstanceOf(Error);
+        else expect(receipt).toMatchObject({ turnId: nextEntry.id });
+        await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+        expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+        expect(ledger.load(sessionId)[0]?.delivered).toBe(false);
+        expect(ledger.load(sessionId)[1]?.delivered).toBe(!terminal);
+        expect(store.load(sessionId).filter(event => event.kind === "turn-ended").map(event => event.turnId))
+          .toEqual([firstEntry.id, nextEntry.id]);
+        if (terminal) await expect(host.send(nextEntry)).rejects.toThrow("uncertain");
+        else expect(await host.send(nextEntry)).toMatchObject({ turnId: nextEntry.id });
+        expect(users(child)).toHaveLength(2);
+        await host.release(); await first;
+        const restored = await openNative(directory);
+        try {
+          await expect(restored.host.send(firstEntry)).rejects.toThrow("uncertain");
+          if (terminal) await expect(restored.host.send(nextEntry)).rejects.toThrow("uncertain");
+          else expect(await restored.host.send(nextEntry)).toMatchObject({ turnId: nextEntry.id });
+          expect(users(restored.child)).toHaveLength(0);
+          expect(restored.store.load(sessionId).filter(event => event.kind === "turn-ended").map(event => event.turnId))
+            .toEqual([firstEntry.id, nextEntry.id]);
+        } finally { await restored.host.release(); }
+      } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+    });
+
+  test.each([false, true])("permission frames retain wire order across a held result (cancelled: %s)", async cancelled => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-control-order-"));
+    const { host, child, ledger } = await openNative(directory);
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const persisting = new Promise<void>(resolve => { entered = resolve; });
+    const confirm = ledger.confirmNativeResult.bind(ledger);
+    ledger.confirmNativeResult = async (...args) => {
+      const accepted = await confirm(...args);
+      if (args[1].turnId === "first") { entered(); await held; }
+      return accepted;
+    };
+    try {
+      const first = host.send({ id: "first", text: "fixture first" });
+      await until(() => users(child).length === 1);
+      const follower = host.send({ id: "follower", text: "fixture follower" });
+      await until(() => users(child).length === 2);
+      child.emitJson({ type: "control_request", request_id: "old-permission", request: { subtype: "can_use_tool" } });
+      const answered = host.answer("old-permission", { behavior: "deny" });
+      result(child, [users(child)[0]!.uuid], 1);
+      await persisting;
+      // This send entered the lane before the new request, but must observe
+      // that request's arrival before it may persist an intent or write.
+      const third = host.send({ id: "third", text: "fixture third" });
+      child.emitJson({ type: "control_request", request_id: "next-permission", request: { subtype: "can_use_tool" } });
+      child.emitJson({ type: "control_response", response: { subtype: "success", request_id: "old-permission" } });
+      await answered; // An existing answer remains live while result persistence waits.
+      if (cancelled) child.emitJson({ type: "control_cancel_request", request_id: "next-permission" });
+      release();
+      await first;
+      expect(await third).toEqual({ outcome: "rejected", reason: "stale-turn" });
+      expect(ledger.load(sessionId).map(row => row.entry.id)).toEqual(["first", "follower"]);
+      await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+      expect(await host.health()).toMatchObject({ activeTurnRef: "follower", pendingAttention: cancelled ? [] : ["next-permission"] });
+      result(child, [users(child)[1]!.uuid], 2);
+      expect(await follower).toMatchObject({ turnId: "follower" });
+      await (host as unknown as { nativeWork: Promise<void> }).nativeWork;
+      expect(await host.health()).toMatchObject({ status: "idle", pendingAttention: [] });
+      expect(users(child)).toHaveLength(2);
+    } finally { release(); await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
   test("a cut between an incomplete boundary and its event restores the boundary without a receipt", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-anchor-cut-"));
     let active = await openNative(directory, options => {

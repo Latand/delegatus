@@ -903,6 +903,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private nativeWorkCount = 0;
   private nativeQueuedBytes = 0;
   private nativeBoundaryPending = 0;
+  private nativeControlPending = 0;
   private nativeUncertain = false;
   private nativeProtocolUncertain = false;
   private nativeDeadlineEpoch = 0;
@@ -1512,7 +1513,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       // Adoption of a possibly written input never grants another write.
       if (existing && !existing.nativeNoWrite) throw new Error("Claude native delivery outcome is uncertain; input remains fenced");
       if (!this.nativeCurrent()) return { receipt: { outcome: "rejected", reason: "dead-host" } };
-      if (this.nativeUncertain && !this.nativeIdleSafe(entry.id) || this.attentions.size || this.nativeBoundaryPending || this.backgroundTurn(this.activeTurnId)
+      if (this.nativeUncertain && !this.nativeIdleSafe(entry.id) || this.attentions.size || this.nativeBoundaryPending || this.nativeControlPending || this.backgroundTurn(this.activeTurnId)
         || this.activeTurnId && this.turnQueue.some(id => id !== this.activeTurnId && id !== entry.id)
         || normalized.expectedTurnId !== undefined && normalized.expectedTurnId !== this.activeTurnId) {
         return { receipt: { outcome: "rejected", reason: "stale-turn" } };
@@ -1528,7 +1529,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         catch { /* no matching receipt means the hook abstains */ }
       }
       authorize?.();
-      if (!this.nativeCurrent() || this.nativeUncertain && !this.nativeIdleSafe(entry.id) || attemptEpoch !== this.nativeDeadlineEpoch || this.attentions.size || this.nativeBoundaryPending
+      if (!this.nativeCurrent() || this.nativeUncertain && !this.nativeIdleSafe(entry.id) || attemptEpoch !== this.nativeDeadlineEpoch || this.attentions.size || this.nativeBoundaryPending || this.nativeControlPending
         || normalized.expectedTurnId !== undefined && normalized.expectedTurnId !== this.activeTurnId) return { receipt: { outcome: "rejected", reason: "stale-turn" } };
       const observedTurn = this.activeTurnId;
       const resumingNoWrite = existing?.nativeNoWrite === true;
@@ -1551,7 +1552,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       try {
         authorize?.();
         fenceChanged = !this.nativeCurrent() || this.nativeUncertain && !this.nativeIdleSafe(entry.id) || attemptEpoch !== this.nativeDeadlineEpoch || this.attentions.size > 0
-          || this.nativeBoundaryPending > 0 || observedTurn !== this.activeTurnId;
+          || this.nativeBoundaryPending > 0 || this.nativeControlPending > 0 || observedTurn !== this.activeTurnId;
         if (fenceChanged) throw new Error("Claude native dispatch fence changed before write");
       } catch (error) {
         try {
@@ -1636,16 +1637,20 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private async acceptNativeResult(message: JsonObject): Promise<void> {
-    if (!this.nativeCurrent(true) || !this.activeTurnId) return;
+    if (!this.nativeCurrent(true)) return;
     if (message.parent_tool_use_id != null || message.agent_id != null) return;
     const prior = this.deliveries.map(state => state.nativeResult ?? state.nativeTerminal ?? state.nativeTurnBoundary).find(proof => proof?.resultUuid === message.uuid);
     if (prior) {
       if ("inputUuids" in prior && JSON.stringify(prior.inputUuids) !== JSON.stringify(message.user_message_uuids)) this.nativeUncertain = this.nativeProtocolUncertain = true;
       return;
     }
-    const interrupted = this.interruptedTurns.has(this.activeTurnId) || message.subtype === "interrupted";
+    // An incomplete incumbent boundary leaves written followers unowned,
+    // while retaining their slots for a later complete terminal proof.
+    const turnId = this.activeTurnId ?? this.turnQueue[0];
+    if (!turnId) return;
+    const interrupted = this.interruptedTurns.has(turnId) || message.subtype === "interrupted";
     if (interrupted || message.subtype !== "success" || message.is_error === true) {
-      const attempted = nativeBoundary({ ...message, subtype: "success", is_error: false, error: null }, this.nativeWriter!, this.activeTurnId, this.deliveries);
+      const attempted = nativeBoundary({ ...message, subtype: "success", is_error: false, error: null }, this.nativeWriter!, turnId, this.deliveries);
       if (!attempted) { await this.acceptNativeTurnBoundary(message); return; }
       const evidence: ClaudeNativeTerminal = { ...attempted, status: interrupted ? "interrupted" : "error" };
       const members = nativeResultMembers(this.deliveries, attempted)!;
@@ -1670,7 +1675,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       if (!this.ledgerFailed) { this.refreshNativeUncertainty(); this.finishResultTurn(evidence.turnId); }
       return;
     }
-    const proof = nativeBoundary(message, this.nativeWriter!, this.activeTurnId, this.deliveries);
+    const proof = nativeBoundary(message, this.nativeWriter!, turnId, this.deliveries);
     if (!proof) {
       // Repeated old boundaries cannot close a newer batch.
       if (this.deliveries.some(state => state.nativeResult?.resultUuid === message.uuid)) return;
@@ -1731,11 +1736,12 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.emit({ kind: "turn-ended", turnId: proof.turnId, status: proof.status, claudeResultUuid: proof.resultUuid });
     if (this.ledgerFailed) return;
     this.lastResultUuid = proof.resultUuid;
-    this.turnQueue.splice(0);
+    const index = this.turnQueue.indexOf(proof.turnId);
+    if (index >= 0) this.turnQueue.splice(index, 1);
     // Any already-written followers retain their intents and receipts. With
     // unknown membership they acquire no invented new running turn.
     this.refreshNativeUncertainty();
-    this.finishResultTurn(proof.turnId);
+    this.finishResultTurn(proof.turnId, false);
   }
 
   private nativeIdleSafe(unwrittenEntryId?: string): boolean {
@@ -2193,7 +2199,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
           // before this frame reaches the serialized reducer.
           let envelope: JsonObject | null = null;
           try { envelope = record(JSON.parse(line)); } catch { /* normal parser refuses it below */ }
-          if (["control_request", "control_response", "control_cancel_request"].includes(String(envelope?.type))) {
+          // New requests belong after preceding result boundaries. Responses
+          // to controls already in flight must remain serviceable during I/O.
+          const orderedControl = (this.nativeBoundaryPending > 0 || this.nativeControlPending > 0)
+            && ["control_request", "control_cancel_request"].includes(String(envelope?.type));
+          if (!orderedControl && ["control_request", "control_response", "control_cancel_request"].includes(String(envelope?.type))) {
             const handled = this.acceptMessage(line);
             if (handled) void handled.catch(error => this.noteNativeFailure("reducer", error));
             if (this.dead) return;
@@ -2207,9 +2217,14 @@ export class ClaudeStreamBrokerHost implements EngineHost {
             && envelope.parent_tool_use_id == null && envelope.agent_id == null;
           const terminal = main && envelope?.session_id === this.identity.sessionId && envelope.type === "result";
           if (terminal) this.nativeBoundaryPending++;
+          if (orderedControl) this.nativeControlPending++;
           void this.enqueueNative(async () => {
             try { await this.acceptMessage(line); }
-            finally { if (terminal) this.nativeBoundaryPending--; this.nativeQueuedBytes -= bytes; }
+            finally {
+              if (terminal) this.nativeBoundaryPending--;
+              if (orderedControl) this.nativeControlPending--;
+              this.nativeQueuedBytes -= bytes;
+            }
           }).catch(error => this.noteNativeFailure("reducer", error));
         } else this.acceptMessage(line);
       }
@@ -2440,7 +2455,12 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     }
     const token = messageId ? `message:${messageId}` : `sequence:${this.cursor + 1}`;
     const digest = crypto.createHash("sha256").update(JSON.stringify([this.identity.sessionId, token])).digest("hex");
-    this.activeTurnId = `${CLAUDE_BACKGROUND_TURN_PREFIX}${digest}`;
+    const follower = this.deliveries.find(state => state.entry.id === this.turnQueue[0]);
+    // Actual assistant work after an incomplete boundary can start the next
+    // written input's turn. Its receipt still requires complete membership.
+    this.activeTurnId = follower?.native && this.nativeWriter && sameNativeWriter(follower.native, this.nativeWriter)
+      && !follower.nativeNoWrite && !follower.nativeUnverified && !follower.nativeResult && !follower.nativeTerminal && !follower.nativeTurnBoundary
+      && (!userUuid || userUuid === follower.native.inputUuid) ? follower.entry.id : `${CLAUDE_BACKGROUND_TURN_PREFIX}${digest}`;
     this.activeUserUuid = userUuid;
     this.emit({ kind: "turn-started", turnId: this.activeTurnId, accountingAt: new Date().toISOString() });
   }
@@ -2485,7 +2505,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.finishResultTurn(turnId);
   }
 
-  private finishResultTurn(turnId: string): void {
+  private finishResultTurn(turnId: string, promote = true): void {
     this.partialTurns.delete(turnId);
     this.interruptedTurns.delete(turnId);
     this.joinedUserUuids.clear();
@@ -2507,7 +2527,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       this.emit({ kind: "attention-resolved", id: attentionId, resolution: "turn-ended" });
     }
     this.attentions.clear();
-    this.activeTurnId = this.turnQueue[0] ?? null;
+    this.activeTurnId = promote ? this.turnQueue[0] ?? null : null;
     if (this.activeTurnId) this.armDeliveryConfirmation(this.activeTurnId);
     if (this.activeTurnId) this.emit({ kind: "turn-started", turnId: this.activeTurnId });
     else this.emit({ kind: "session-status", status: "idle" });

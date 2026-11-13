@@ -915,3 +915,194 @@ test("a proven no-write retry follows actual write order and preserves its UUID 
     expect(new FileClaudeDeliveryLedger(directory).load(sessionId).map(row => row.nativeResult?.turnId)).toEqual(["incumbent", "incumbent"]);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+
+// Reproductions from boundary review: B is already accepted by the broker,
+// but its pipe consumption follows result A. Hold A's durable confirmation
+// independently from CLI output so B can request permission during that await.
+test.skipIf(!binary).each([
+  "late-membership", "next-permission-allow", "next-permission-deny", "next-permission-cancel",
+] as const)("installed CLI boundary control: %s", async mode => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-native-boundary-"));
+  const config = path.join(directory, ".claude");
+  fs.mkdirSync(config);
+  fs.writeFileSync(path.join(directory, ".claude.json"), JSON.stringify({ hasCompletedOnboarding: true }));
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const store = new FileRuntimeEventStore(path.join(directory, "events"));
+  const ledger = new FileClaudeDeliveryLedger(path.join(directory, "deliveries"));
+  const conversationId = "native-boundary-fixture";
+  const requests: unknown[] = [];
+  const rawFrames: Record<string, unknown>[] = [];
+  const wireInputs: Record<string, unknown>[] = [];
+  const actualWrites: Record<string, unknown>[] = [];
+  const permissionFile = path.join(directory, "permission.txt");
+  const permission = mode.startsWith("next-permission");
+  let finishProof!: () => void;
+  const proofGate = new Promise<void>(resolve => { finishProof = resolve; });
+  if (permission) {
+    const confirm = ledger.confirmNativeResult.bind(ledger);
+    ledger.confirmNativeResult = async (...args) => {
+      const accepted = await confirm(...args);
+      if (args[1].turnId === "boundary-a") await proofGate;
+      return accepted;
+    };
+  }
+  const event = (type: string, data: unknown) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+  const api = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    if (new URL(request.url).pathname !== "/v1/messages") return new Response("{}", { status: 404 });
+    const body = await request.json() as { tools?: unknown; messages?: unknown[] };
+    if (body.tools === undefined || !body.messages?.length) return new Response("{}", { status: 404 });
+    requests.push(body);
+    const call = requests.length;
+    const tool = call === 1 ? "Bash" : permission && call === 3 ? "Write" : null;
+    const input = tool === "Bash" ? {
+      command: "touch tool-started; for attempt in {1..400}; do if [ -f tool-release ]; then echo tool finished; exit 0; fi; sleep 0.05; done; exit 1",
+      description: "fixture wait",
+    } : tool === "Write" ? { file_path: permissionFile, content: "fixture permission" } : null;
+    const message = { id: `msg_fixture_${call}`, type: "message", role: "assistant", model: "fixture-model",
+      content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
+    return new Response([
+      event("message_start", { type: "message_start", message }),
+      event("content_block_start", { type: "content_block_start", index: 0, content_block: tool
+        ? { type: "tool_use", id: `toolu_fixture_${call}`, name: tool, input: {} } : { type: "text", text: "" } }),
+      event("content_block_delta", { type: "content_block_delta", index: 0, delta: tool
+        ? { type: "input_json_delta", partial_json: JSON.stringify(input) } : { type: "text_delta", text: "fixture response" } }),
+      event("content_block_stop", { type: "content_block_stop", index: 0 }),
+      event("message_delta", { type: "message_delta", delta: { stop_reason: tool ? "tool_use" : "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } }),
+      event("message_stop", { type: "message_stop" }),
+    ].join(""), { headers: { "content-type": "text/event-stream" } });
+  } });
+  let host: ClaudeStreamBrokerHost | null = null;
+  const wait = async (check: () => boolean) => {
+    for (let attempt = 0; attempt < 1200 && !check(); attempt++) await Bun.sleep(25);
+    expect(check()).toBe(true);
+  };
+  const settleEvidence = () => (host as unknown as { nativeWork: Promise<unknown> }).nativeWork;
+  try {
+    host = await ClaudeStreamBrokerHost.start({ binary, cwd: directory,
+      env: { PATH: process.env.PATH, HOME: directory, TMPDIR: directory, XDG_CONFIG_HOME: path.join(directory, "config"),
+        LLV_STATE_DIR: path.join(directory, "state"), NODE_ENV: "test" },
+      tools: ["Bash", "Write"], permissionMode: permission ? "default" : "bypassPermissions", model: "fixture-model", requestTimeoutMs: 20000,
+      deliveryLedger: ledger, readTranscript: () => [],
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version: installedVersion }),
+      eventStore: { load: id => store.load(id), append: (id, frame) => {
+        store.append(id, frame);
+        const projected = projectEngineHostEvent(conversationId, `claude:${id}`, frame);
+        if (projected) journal.append(projected);
+      } },
+      spawnProcess: (command, args, options) => {
+        const child = spawn(command, [...args, "--setting-sources", "", "--allowedTools", "Bash"], {
+          ...options, stdio: ["pipe", "pipe", "pipe"], env: { ...options.env, NODE_ENV: "test", CLAUDE_CONFIG_DIR: config,
+            ANTHROPIC_BASE_URL: `http://127.0.0.1:${api.port}`, CLAUDE_CODE_OAUTH_TOKEN: "isolated-fixture-credential",
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
+        });
+        const write = child.stdin.write.bind(child.stdin);
+        let held: string | null = null;
+        child.stdin.write = ((chunk: string, ...rest: unknown[]) => {
+          const frame = JSON.parse(String(chunk));
+          wireInputs.push(frame);
+          if (frame.type === "user" && wireInputs.filter(f => f.type === "user").length === 2) {
+            held = String(chunk);
+            return true;
+          }
+          actualWrites.push(frame);
+          return Reflect.apply(write, child.stdin, [chunk, ...rest]);
+        }) as typeof child.stdin.write;
+        const emit = child.stdout.emit.bind(child.stdout);
+        let tail = "";
+        child.stdout.emit = ((name: string, ...args: unknown[]) => {
+          if (name !== "data") return Reflect.apply(emit, child.stdout, [name, ...args]);
+          tail += String(args[0]);
+          let newline: number;
+          while ((newline = tail.indexOf("\n")) >= 0) {
+            const line = tail.slice(0, newline);
+            tail = tail.slice(newline + 1);
+            if (!line) continue;
+            const frame = JSON.parse(line);
+            rawFrames.push(structuredClone(frame));
+            const firstResult = frame.type === "result" && rawFrames.filter(f => f.type === "result").length === 1;
+            if (firstResult && mode === "late-membership") delete frame.user_message_uuids;
+            emit("data", Buffer.from(JSON.stringify(frame) + "\n"));
+            // Actuation and consumption are independently delayed. The real
+            // pipe receives B once, strictly after the incumbent's result.
+            if (firstResult && held) {
+              actualWrites.push(JSON.parse(held));
+              write(held);
+              held = null;
+            }
+          }
+          return true;
+        }) as typeof child.stdout.emit;
+        return child;
+      },
+    });
+    expect(host.supportsQueuedSend).toBe(false);
+    journal.append({ scope: `session:${conversationId}`, kind: "session-status", payload: { conversationId,
+      sessionKey: { engine: "claude", sessionId: host.identity.sessionId }, hostKind: "claude-broker", host: "hosted", turn: "idle",
+      activeTurnId: null, capabilities: { steer: false, structuredAttention: true } } });
+    const queue = new StructuredDeliveryQueue({
+      effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+      status: async id => journal.operationResult(id)?.receipt ?? null,
+      hostClaim: async () => "fixture-owner",
+      transition: async (...args) => { journal.transitionOperation(...args); },
+    }, () => host, undefined, undefined, undefined, undefined, undefined, undefined, { passBudgetMs: 20 });
+    const drive = async (check: () => boolean) => {
+      for (let attempt = 0; attempt < 1200 && !check(); attempt++) { await queue.drain(); await Bun.sleep(25); }
+      expect(check()).toBe(true);
+    };
+    const submit = (id: string) => ({ kind: "send" as const, operationId: id, idempotencyKey: id,
+      conversationId, text: `fixture ${id}`, policy: "interrupt-active" as const, origin: { kind: "operator" as const } });
+    journal.executeOperation(submit("boundary-a"));
+    await drive(() => journal.operationResult("boundary-a")?.receipt.status === "delivered");
+    await wait(() => fs.existsSync(path.join(directory, "tool-started")));
+    journal.executeOperation(submit("boundary-b"));
+    await drive(() => wireInputs.filter(f => f.type === "user").length === 2);
+    expect(actualWrites.filter(f => f.type === "user")).toHaveLength(1);
+    fs.writeFileSync(path.join(directory, "tool-release"), "");
+    if (mode === "late-membership") {
+      await wait(() => rawFrames.filter(f => f.type === "result").length === 2);
+      await settleEvidence();
+      expect(ledger.load(host.identity.sessionId).find(row => row.entry.id === "boundary-b")?.delivered).toBe(true);
+    } else {
+      await wait(() => rawFrames.some(f => f.type === "control_request"));
+      const attention = String(rawFrames.find(f => f.type === "control_request")!.request_id);
+      expect(fs.existsSync(permissionFile)).toBe(false);
+      finishProof();
+      await settleEvidence();
+      expect((await host.health()).pendingAttention).toContain(attention);
+      expect(store.load(host.identity.sessionId).filter(e => e.kind === "attention-resolved" && e.id === attention)).toEqual([]);
+      expect(journal.sessionState(conversationId)?.attentionIds).toContain(attention);
+      if (mode.endsWith("cancel")) await host.interrupt((await host.health()).activeTurnRef!);
+      else await host.answer(attention, { behavior: mode.endsWith("allow") ? "allow" : "deny" });
+      await wait(() => rawFrames.filter(f => f.type === "result").length === 2);
+      await settleEvidence();
+      expect(fs.existsSync(permissionFile)).toBe(mode.endsWith("allow"));
+    }
+    // Cancellation retains conservative consumption evidence under the same
+    // operation. A successful result confirms B, without any replacement send.
+    await drive(() => journal.operationResult("boundary-b")?.receipt.status === (mode.endsWith("cancel") ? "uncertain" : "delivered"));
+    expect(journal.operationResult("boundary-b")?.receipt).toMatchObject({ operationId: "boundary-b", idempotencyKey: "boundary-b" });
+    expect(journal.executeOperation(submit("boundary-b")).replayed).toBe(true);
+    await queue.drain();
+    expect(actualWrites.filter(f => f.type === "user")).toHaveLength(2);
+    expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null, pendingAttention: [] });
+    expect(journal.sessionState(conversationId)).toMatchObject({ turn: "idle", activeTurnId: null, attentionIds: [] });
+    expect(store.load(host.identity.sessionId).filter(e => e.kind === "turn-ended").map(e => e.turnId))
+      .toEqual(["boundary-a", "boundary-b"]);
+  } finally {
+    finishProof();
+    fs.writeFileSync(path.join(directory, "tool-release"), "");
+    if (process.env.LLV_EVIDENCE_DIR) {
+      const out = path.join(process.env.LLV_EVIDENCE_DIR, "boundary-controls");
+      fs.mkdirSync(out, { recursive: true });
+      fs.writeFileSync(path.join(out, `${process.env.LLV_NATIVE_EVIDENCE_RUN}-${mode}.json`), JSON.stringify({ mode,
+        version: installedVersion, requests, rawFrames, wireInputs, actualWrites, rows: host ? ledger.load(host.identity.sessionId) : [],
+        receipts: [journal.operationResult("boundary-a")?.receipt, journal.operationResult("boundary-b")?.receipt],
+        health: await host?.health(), events: host ? store.load(host.identity.sessionId) : [] }, null, 2));
+    }
+    await host?.release();
+    api.stop(true);
+    journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 60000);

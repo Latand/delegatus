@@ -81,8 +81,11 @@ reopening an already-projected boundary adds no event and writes no input.
 Images stay referenced in the original ledger entries during uncertainty.
 Closed and zero-byte entries release their in-memory payload; original payloads
 remain in the ledger. A deadline ends the caller's wait while the actual append
-retains its serialized lane. Controls bypass that lane, and queued stream data
-has a byte bound. An expired, unstarted dispatch performs no actuation.
+retains its serialized lane. Responses to controls already in flight bypass
+that lane. New permission requests and cancellations follow preceding result
+boundaries, with an arrival guard blocking further input writes while those
+frames wait. Queued stream data has a byte bound. An expired, unstarted
+dispatch performs no actuation.
 
 After a verified terminal boundary, new unwritten inputs may proceed from idle;
 previous attempted inputs remain unconfirmed and cannot be replayed. An
@@ -241,6 +244,24 @@ operations may progress after a proven safe boundary. Restoring the ledger
 replays this terminal event under its original result UUID. An exact late
 incumbent replay may still settle its original receipt without closing a
 subsequent turn.
+
+Written followers retain their pending slots after an incomplete incumbent
+boundary, without immediately becoming a running turn. Later assistant work
+can establish the next slot's running state; a complete result can establish
+its terminal ownership even when no assistant frame was observed. The same
+ordered membership and writer checks apply, and the incumbent's unknown
+membership grants no follower receipt. Reopening the ledger preserves the
+late proof and each original operation's write fence.
+
+The installed-CLI `installed CLI boundary control` regressions delay B's pipe
+consumption until A's result. One removes only A's plural membership; the
+other holds A's confirmation after its durable append while B requests Write.
+The permission must survive A's completion in both host health and the runtime
+journal. Allow, deny and cancellation close B under its original operation
+without another input write; cancellation retains an uncertain receipt when
+the terminal evidence does not establish consumption. The broker unit cases
+also exercise result-only completion, missing assistant identity, hostile
+membership, restart and live answers during the held result.
 
 The file ledger's native working index retires closed and proven no-write
 entries. Active intent allocation is limited to three inputs. An 8 KiB
