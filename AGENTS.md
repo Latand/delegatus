@@ -247,10 +247,14 @@ during `verify-candidate`, so a candidate whose host cannot boot, cannot take
 the fence, or cannot hold what it took is refused before promotion rather than
 after.
 
-**Both halves run on every PR into main and by CI dispatch** under the pin read
-from the Dockerfile, with the stable `runtime-gate` context joining both runtime
-and native Codex verdicts. Locally they run when `Dockerfile`,
-`src/runtime-host/**` or `bin/**` changes. After this workflow lands, the seat
+**Both halves run on every PR into main and nightly on main**, under the pin
+read from the Dockerfile. CI dispatch also runs both unless
+`native_queue_campaign` is enabled. The stable `runtime-gate` context waits
+for `bun-runtime` and native Codex on the newest reviewed pin for ordinary PRs.
+For `batch/*` PRs into main, nightly runs, main pushes and dispatches without
+that campaign, it waits for `bun-runtime` and the full three-version native
+Codex window. Locally they run
+when `Dockerfile`, `src/runtime-host/**` or `bin/**` changes. After this workflow lands, the seat
 adds `runtime-gate` to main branch protection; older PRs need a new push or reopen.
 `scripts/verify-viewer-runtime.ts` loads every compiled
 server runtime, then serves the build and requires `GET /` to answer 200.
