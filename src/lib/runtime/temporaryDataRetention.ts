@@ -175,6 +175,9 @@ export function temporaryDataProtection(row: TemporaryDataCandidate, target: str
     const key = `${stat.dev}:${stat.ino}`;
     if (!seen.has(key)) { seen.add(key); bytes += Number(stat.blocks) * 512; }
     if (stat.isDirectory()) {
+      // Refuse before quarantine or restore a legacy trash root through the
+      // existing pre-dispatch catch. Native rm cannot finish these directories.
+      if ((Number(stat.mode) & 0o300) !== 0o300) throw new Error("permission-repair-needed");
       const names = new Set<string>();
       const stream = fs.opendirSync(file);
       try {

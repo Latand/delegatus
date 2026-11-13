@@ -37,6 +37,45 @@ function trashOf(f: ReturnType<typeof fixture>) {
   return (JSON.parse(fs.readFileSync(attemptTempJournalPath(f.row.directory), "utf8")) as { trash: string }).trash;
 }
 
+for (const replay of [false, true]) {
+  for (const mode of [0o555, 0o600]) {
+    test(`permission hold restores the owner path (mode=${mode.toString(8)}, replay=${replay})`, async () => {
+      const f = fixture(), inode = fs.lstatSync(f.row.directory).ino;
+      const cache = path.join(f.row.directory, "gomod");
+      fs.mkdirSync(cache); fs.writeFileSync(path.join(cache, "module"), "retained module");
+      let target = f.row.directory;
+      if (replay) {
+        expect(await runRecovery(f, "crash", NOW)).toBe("quarantined\n");
+        target = trashOf(f);
+      }
+      fs.chmodSync(path.join(target, "gomod"), mode);
+      try {
+        // Reproduce a legacy native-removal failure with its real intent left
+        // behind, then recover in a new process with a reopened ledger.
+        if (replay) await expect(fs.promises.rm(target, { recursive: true, force: true })).rejects.toMatchObject({ code: "EACCES" });
+        for (const time of [NOW + 60001, NOW + 120002]) {
+          const report = JSON.parse(await runRecovery(f, "recover", time));
+          expect(report).toMatchObject({ checked: 1, removed: 0, kept: { "permission-repair-needed": 1 } });
+          expect(fs.lstatSync(f.row.directory).ino).toBe(inode);
+          expect(fs.statSync(cache).mode & 0o777).toBe(mode);
+          // Reading a child of a directory without search permission must wait
+          // until the test restores that permission in its cleanup.
+          if (mode === 0o555) expect(fs.readFileSync(path.join(cache, "module"), "utf8")).toBe("retained module");
+          expect(f.store.get(f.row.directory)?.reason).toBe("permission-repair-needed");
+          expect(fs.readdirSync(path.dirname(f.row.directory)).filter(name => name.startsWith(".delegatus-trash-") || name.startsWith(".delegatus-sweep-"))).toEqual([]);
+        }
+      } finally {
+        for (const current of new Set([target, f.row.directory, ...(fs.existsSync(attemptTempJournalPath(f.row.directory)) ? [trashOf(f)] : [])])) {
+          if (fs.existsSync(path.join(current, "gomod"))) fs.chmodSync(path.join(current, "gomod"), 0o755);
+        }
+      }
+      expect(fs.readFileSync(path.join(cache, "module"), "utf8")).toBe("retained module");
+      expect(JSON.parse(await runRecovery(f, "recover", NOW + 180003))).toMatchObject({ removed: 1, errors: 0 });
+      expect(f.store.get(f.row.directory)).toBeNull();
+    });
+  }
+}
+
 test.each([true, false])("crash after durable intent before rename recovers (directory=%s)", async directory => {
   const f = fixture(directory), inode = fs.lstatSync(f.row.directory).ino;
   expect(await runRecovery(f, "crash-before-rename", NOW)).toBe("intent-written\n");

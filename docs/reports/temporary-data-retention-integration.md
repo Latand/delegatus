@@ -1,5 +1,104 @@
 # Temporary-data retention integration validation
 
+## Read-only directory successor
+
+To verify this repair, run the permission-hold regressions in
+`src/lib/runtime/temporaryDataRetention.test.ts` against the published
+`0bc574a773` production code first. Then run the final tree's 21 files from
+the predecessor's final review, each in a separate gated command and private
+HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR, with a closed Viewer control
+endpoint. Run types, touched-file lint and privacy, commit, and invoke the
+unmodified pre-push hook on that commit. The command results below supplement
+the historical integration evidence.
+
+The repair chooses intent (a): a directory missing owner write or search
+permission is held as `permission-repair-needed` during protection inspection.
+This uses the existing bounded physical walk and avoids permission changes.
+The existing claimed, identity-bound restoration path returns a replayed
+quarantine to its original path and clears its intent before releasing custody.
+The authority, reference, mount, preservation and final mutation checks retain
+their existing contracts. No retention lifetime or deletion eligibility expands.
+
+The shared-path audit covers `temporaryDataProduction.ts` (candidate discovery,
+authority and retirement claims), `temporaryDataStore.ts` (candidate identity and
+persisted reason), `temporaryDataRetention.fixture.ts` (real process restart),
+`tempSweep.ts` (quarantine writer and replay reader), and
+`pipelines/retirementClaim.ts` (identity-bound restoration). No persisted format
+changes. Both fresh inspection and trash replay use the same protection walk;
+dry-run uses that inspection while preserving its existing no-restoration rule.
+
+Four regressions cover fresh and legacy-trash replay with modes `0555` and
+`0600`. The search-permission variant also receives the stable named reason.
+Replay setup uses the real quarantine writer and a real EACCES removal failure.
+Recovery reopens the ledger in a new process, checks two ticks, the original
+inode, unchanged mode and payload, persisted reason, and absence of trash and
+intent. Restoring permissions in test cleanup permits a later successful sweep.
+
+Notes: a continuously busy ancestor can starve the final poll until its
+deadline; the worktree sweep's test-only `removeTree` port lacks `started()`.
+Both remain outside this repair and are unchanged. No performance gain is claimed.
+
+### Successor command results
+
+Each test row invokes `bash "$GATE" bun run test ./<file>`, one file at a time.
+`GATE` is the launch-provided wrapper. Each command receives fresh private
+`HOME`, `XDG_CONFIG_HOME`, `TMPDIR` and `LLV_STATE_DIR`, with
+`LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1`. A recorded campaign holds one
+admission; every child verifies inherited slot reuse and invokes the wrapper.
+The actual child exits and pass/fail/skip counts are retained in stage evidence.
+
+| Tree / command or explicit test path | Exit | Pass/fail/skip |
+| --- | ---: | --- |
+| Published head: `bun run test ./src/lib/runtime/temporaryDataRetention.test.ts --test-name-pattern "permission hold"` | 1 | 0/4/0; 69 filtered |
+| First preservation run: `src/lib/runtime/temporaryDataRetention.preservation.test.ts` | 1 | 77/1/0 |
+| Merged baseline preservation comparison: same path | 0 | 78/0/0 |
+| `src/lib/agent/registry.temporaryData.test.ts` | 0 | 3/0/0 |
+| `src/lib/dockerCacheRetention.test.ts` | 0 | 10/0/0 |
+| `src/lib/pipelines/worktreeSweepWorker.test.ts` | 0 | 38/0/0 |
+| `src/lib/retentionTestSafety.test.ts` | 0 | 6/0/0 |
+| `src/lib/runtime/attemptEvidenceBinding.test.ts` | 0 | 8/0/0 |
+| `src/lib/runtime/attemptMutationFence.test.ts` | 0 | 17/0/0 |
+| `src/lib/runtime/attemptTempFilesystem.permissions.test.ts` | 0 | 27/0/5 |
+| `src/lib/runtime/attemptTempRetention.liveness.test.ts` | 0 | 3/0/0 |
+| `src/lib/runtime/attemptTempRetention.permissions.test.ts` | 0 | 25/0/5 |
+| `src/lib/runtime/attemptTempRetention.removalFences.test.ts` | 0 | 25/0/0 |
+| `src/lib/runtime/attemptTempRetention.test.ts` | 0 | 143/0/0 |
+| `src/lib/runtime/temporaryDataProduction.recovery.test.ts` | 0 | 13/0/0 |
+| `src/lib/runtime/temporaryDataProduction.test.ts` | 0 | 29/0/0 |
+| `src/lib/runtime/temporaryDataRetention.preservation.test.ts` | 0 | 78/0/0 |
+| `src/lib/runtime/temporaryDataRetention.test.ts` | 0 | 73/0/0 |
+| `src/lib/selfUpdate/gatedTrash.test.ts` | 0 | 17/0/0 |
+| `src/lib/selfUpdate/releaseObserver.test.ts` | 0 | 8/0/0 |
+| `src/lib/selfUpdate/retention.test.ts` | 0 | 135/0/0 |
+| `src/lib/tempSweep.test.ts` | 0 | 88/0/0 |
+| `src/lib/runtime/attemptCopyDiscovery.test.ts` | 0 | 3/0/0 |
+| `src/lib/runtime/attemptTempProduction.test.ts` | 0 | 65/0/1 |
+| `bun scripts/privacy-publication-gate.ts --repository "$EXPORT" --require-known-values --paths src/lib/runtime/temporaryDataRetention.ts src/lib/runtime/temporaryDataRetention.test.ts docs/reports/temporary-data-retention-integration.md successor-pr-body.md` | 0 | zero findings |
+| `bunx --no-install tsc --noEmit` | 0 | zero diagnostics |
+| `bun node_modules/eslint/bin/eslint.js src/lib/runtime/temporaryDataRetention.ts src/lib/runtime/temporaryDataRetention.test.ts` | 0 | zero diagnostics |
+
+The final selection totals **814 pass / 0 fail / 11 existing opt-in skips**.
+The first preservation run held the `hop none (replay=false)` control instead
+of removing it. A fresh full-file baseline comparison and full-file head repeat
+each passed 78/78. No fence or preservation assertion was changed.
+Both 0555 cases and both 0600 cases fail before the repair and pass afterward.
+The two replay cases first create an actual EACCES removal failure with the
+real writer's trash and intent, then recover on the next tick.
+
+The identical three-tick 0555 probe (`bash "$GATE" bun ./permission-timing.ts`
+in each scratch tree) exited 0 on both trees. Baseline ticks took 29.25, 21.23
+and 19.41 ms: each retained one trash directory and one intent with EACCES.
+Final ticks took 8.75, 2.63 and 3.52 ms: each kept the original path with
+`permission-repair-needed`, zero trash and zero intents. These diagnostic
+tick timings cover one root and one file.
+The probe exists only in stage scratch and is absent from the commit.
+
+Publication verification runs after this report is committed. The final
+unmodified pre-push hook exit and published-text read-back are recorded in the
+pull request description and retained stage command ledger.
+
+## Earlier integration validation
+
 To verify this integration, export its committed tree into private stage scratch,
 install the pinned dependencies there, and give each command private `HOME`,
 `XDG_CONFIG_HOME`, `TMPDIR` and `LLV_STATE_DIR`. Set
