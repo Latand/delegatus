@@ -148,13 +148,19 @@ test.each(["running", "spawning", "completed", "earlier-transport"] as const)("a
   }
 });
 
-test.each([false, true])("a Claude limit-only first turn with no spare stops with its reset, pinned=%s", async pinned => {
+test.each([false, true])("a Claude limit-only first turn with no spare holds without delivery or relaunch until its reset, pinned=%s", async pinned => {
   const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your weekly limit", 3600_000, pinned);
   f.h.durableTurns.get("/codex/stage-1.jsonl")!.lastAgentOutputAt = null;
   await tickPipelines([], f.h.ports);
-  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.state).toBe("running");
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.resetsAt).toBe(f.resetsAt);
   expect(loadPipelines()[0]!.stateDetail).toContain("limit");
+  expect(quota.quotaObservations("claude").find(item => item.accountId === LIMITED_ACCOUNT)?.limits?.weekly)
+    .toMatchObject({ usedPercent: 100, resetsAt: f.resetsAt });
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(f.sends).toHaveLength(0);
+  f.advance(3599_000);
+  await tickPipelines([], f.h.ports);
   expect(f.h.spawnInputs).toHaveLength(1);
   expect(f.sends).toHaveLength(0);
 });
@@ -168,7 +174,7 @@ test("an exhausted pool wakes at the earliest reset while retaining the source a
   await tickPipelines([], f.h.ports);
   const after = loadPipelines()[0]!;
   const wait = after.runs[0]!.attempts[0]!.providerWait!;
-  expect(after.state).toBe("needs_decision");
+  expect(after.state).toBe("running");
   expect(wait.resetsAt).toBe(f.resetsAt);
   expect(wait.resumeAt).toBe(new Date(earliest * 1000 + 60_000).toISOString());
   expect(after.stateDetail).toContain(new Date(earliest * 1000).toISOString());

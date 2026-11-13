@@ -3838,15 +3838,17 @@ async function recoverProviderCut(
   if (engine === "claude" && condition.kind === "usage_limit" && notice?.onlyOutput) {
     const accountLimitRetrySpent = usageLimitsOn(attempt, engine).some(limited => limited.accountId !== wait.accountId
       && !providerAccountHasNewWindow(pipeline, attempt, engine, limited.accountId, ports));
-    if (!target || accountLimitRetrySpent) {
+    if (accountLimitRetrySpent) {
       const reset = knownReset(wait.resetsAt, exhaustedReset);
       const retryAt = reset !== null && reset * 1000 > time ? new Date(reset * 1000 + 60_000).toISOString() : undefined;
-      const reason = accountLimitRetrySpent ? "one account-limit retry was spent"
-        : pinned ? "stage account pin is retained" : "no other allowed account has capacity";
       await parkProviderCut(pipeline, attempt,
-        `stage cut by ${condition.label}; ${reason}${reset !== null ? `; earliest reset ${new Date(reset * 1000).toISOString()}` : ""}; last: ${wait.text}`,
+        `stage cut by ${condition.label}; one account-limit retry was spent${reset !== null ? `; earliest reset ${new Date(reset * 1000).toISOString()}` : ""}; last: ${wait.text}`,
         ports, retryAt);
       return true;
+    }
+    if (!target && exhaustedReset !== null) {
+      wait.resumeAt = new Date(exhaustedReset * 1000 + 60_000).toISOString();
+      await persist();
     }
   }
   const waitForAccountPolicy = async (accountId: string, operation: string): Promise<boolean> => {
@@ -3897,6 +3899,9 @@ async function recoverProviderCut(
     return true;
   }
   pipeline.stateDetail = providerWaitDetail(attempt, ports);
+  if (notice?.onlyOutput && exhaustedReset !== null) {
+    pipeline.stateDetail += `; earliest reset ${new Date(exhaustedReset * 1000).toISOString()}`;
+  }
   const sourceRecovered = condition.kind === "usage_limit" && wait.accountId
     && providerAccountRecovered(pipeline, attempt, wait.accountId, wait.turnTs, wait.resetsAt, ports);
   if (!target && !sourceRecovered && time < unixMs(wait.resumeAt)) {
