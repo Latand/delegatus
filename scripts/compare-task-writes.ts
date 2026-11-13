@@ -161,8 +161,13 @@ if (process.argv[2] === "--worker") {
     instant += 1000; freeze();
     const before = store.loadTasksFile(file);
     const structural = (rollback: boolean) => store.mutateTasksFile(state => {
+      let recentCreates = state.recentCreates;
       const command = mode === "splice-created"
-        ? commands.createTask(state.tasks, { project: "dir-after", text: "Structural", placement: "unplaced", clientRequestId: "structural-request" }, state.recentCreates, { now: at, id: () => "structural-new" })
+        ? (() => {
+          const created = commands.createTask(state.tasks, { project: "dir-after", text: "Structural", placement: "unplaced", clientRequestId: "structural-request" }, recentCreates, { now: at, id: () => "structural-new" });
+          if (created.ok) recentCreates = created.recentCreates;
+          return created;
+        })()
         : commands.patchTask(state.tasks, "plain", { note: `Structural ${mode}` }, at());
       if (!command.ok) throw new Error(command.error);
       const index = command.tasks.findIndex(task => task.id === command.task.id);
@@ -170,7 +175,7 @@ if (process.argv[2] === "--worker") {
       else if (mode === "truncate-patched") command.tasks.length = 0;
       else command.tasks.splice(index, 1);
       if (rollback) throw new Error("structural rollback");
-      return { state: { ...state, tasks: command.tasks, recentCreates: "recentCreates" in command ? command.recentCreates : state.recentCreates }, result: null };
+      return { state: { ...state, tasks: command.tasks, recentCreates }, result: null };
     }, file);
     assert.throws(() => structural(true), /structural rollback/);
     assert.deepEqual(store.loadTasksFile(file), before);

@@ -161,8 +161,13 @@ for (const mode of ["replace-patched", "splice-patched", "truncate-patched", "sp
     const original = loadTasksForList(file);
     const revision = taskRevision(original[0]!);
     const write = (refuse: boolean) => mutateTasksFile(state => {
+      let recentCreates = state.recentCreates;
       const out = mode === "splice-created"
-        ? createTask(state.tasks, { project: "fixture", text: "New", placement: "unplaced", clientRequestId: "structural-create" }, state.recentCreates, { now: () => at, id: () => "new" })
+        ? (() => {
+          const created = createTask(state.tasks, { project: "fixture", text: "New", placement: "unplaced", clientRequestId: "structural-create" }, recentCreates, { now: () => at, id: () => "new" });
+          if (created.ok) recentCreates = created.recentCreates;
+          return created;
+        })()
         : patchTask(state.tasks, "target", { note: "Command edit", expectedProject: "fixture", expectedRevision: revision }, at);
       if (!out.ok) throw new Error(out.error);
       const index = out.tasks.findIndex(row => row.id === out.task.id);
@@ -170,7 +175,7 @@ for (const mode of ["replace-patched", "splice-patched", "truncate-patched", "sp
       else if (mode === "truncate-patched") out.tasks.length = 0;
       else out.tasks.splice(index, 1);
       if (refuse) throw new Error("structural rollback");
-      return { state: { ...state, tasks: out.tasks, recentCreates: "recentCreates" in out ? out.recentCreates : state.recentCreates }, result: null };
+      return { state: { ...state, tasks: out.tasks, recentCreates }, result: null };
     }, file);
     expect(() => write(true)).toThrow("structural rollback");
     expect(raw(file)).toEqual(before);
