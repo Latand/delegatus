@@ -8613,13 +8613,6 @@ async function spawnCorrelatedRunStage(
     }
     const detail = error instanceof Error ? error.message : String(error);
     if (await adoptClaudeLimitTurn(pipeline, stage, attempt, ports, persist, true)) return;
-    if (error instanceof ProjectAccountRefusedError && error.engine === "claude" && error.resolution.kind === "exhausted"
-      && !attempt.launchId && !attempt.conversationId && !attempt.agentPath && !attempt.paneId && !attempt.providerWait) {
-      openProviderWait(stage, attempt, { condition: { kind: "usage_limit", scope: "usage", resetLabel: null, label: "claude usage limit" },
-        text: detail, ts: unixMs(ports.now()), resetsAt: error.resolution.resetsAt }, ports);
-      await parkProviderCut(pipeline, attempt, detail, ports);
-      return;
-    }
     if (isLaunchAdmissionContention(error)) recordSpawnFailure(attempt, ports.now(), "writer", detail);
     if (error instanceof SpawnAdmissionBudgetExhausted) {
       const previous = spawnAdmissionFailure(attempt);

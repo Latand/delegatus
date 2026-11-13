@@ -212,8 +212,8 @@ test("an exhausted Claude admission holds the stage before reservation with its 
   const attempt = lane.runs[0]!.attempts[0]!;
   expect(lane.state).toBe("needs_decision");
   expect(attempt.launchId).toBeNull();
-  expect(attempt.providerWait?.condition.kind).toBe("usage_limit");
-  expect(attempt.providerWait?.resetsAt).toBe(reset);
+  expect(lane.stateDetail).toContain("no allowed claude account has capacity");
+  expect(lane.stateDetail).toContain(new Date(reset * 1000).toISOString());
   expect(h.spawnInputs).toHaveLength(0);
 });
 
