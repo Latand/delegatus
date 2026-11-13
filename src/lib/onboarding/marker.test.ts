@@ -102,3 +102,19 @@ test("#2166: the walk field is validated, written once finished or skipped, and 
   fs.writeFileSync(file, JSON.stringify({ ...readOnboardingMarker(file), walk: "sometimes" }));
   expect(readOnboardingMarker(file)?.walk).toBeNull();
 });
+
+test("the inherited-state acknowledgement is its own field: validated, kept once, and independent of the guide's verdict", () => {
+  expect(parseOnboardingPatch({ legacyNoticeAcknowledged: true })).toEqual({ legacyNoticeAcknowledged: true });
+  expect(parseOnboardingPatch({ legacyNoticeAcknowledged: false })).toBe("legacyNoticeAcknowledged must be true");
+  const file = path.join(sandbox, "legacy-notice.json");
+  const upgrade = { ...applyOnboardingPatch(null, {}, NOW), dismissedAt: NOW, reason: "existing-install" as const };
+  writeOnboardingMarker(upgrade, file);
+  writeOnboardingMarker(applyOnboardingPatch(readOnboardingMarker(file), { legacyNoticeAcknowledged: true }, "2026-10-02T00:00:00.000Z"), file);
+  /* The upgrade marker's own fields are untouched. */
+  expect(readOnboardingMarker(file)).toEqual({ ...upgrade, legacyNoticeAckedAt: "2026-10-02T00:00:00.000Z" });
+  writeOnboardingMarker(applyOnboardingPatch(readOnboardingMarker(file), { legacyNoticeAcknowledged: true }, "2026-10-09T00:00:00.000Z"), file);
+  expect(readOnboardingMarker(file)?.legacyNoticeAckedAt).toBe("2026-10-02T00:00:00.000Z");
+  /* A marker written before the field reads as not acknowledged. */
+  fs.writeFileSync(file, JSON.stringify({ ...upgrade, legacyNoticeAckedAt: undefined }));
+  expect(readOnboardingMarker(file)?.legacyNoticeAckedAt).toBeNull();
+});

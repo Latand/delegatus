@@ -37,6 +37,7 @@ export function callBody(request: ExternalRelayRequest, logical: { tool: string;
     : { lease_id: request.lease_id, call_id, tool: normalized.tool, arguments: normalized.arguments };
 }
 export type ToolProjection = {
+  media_notes?: string[];
   round: number; tool: string; arguments?: Record<string, unknown>; page_of?: string;
   effect?: "action"; delivered?: true; execution_unknown?: true; summary?: string; expires_in_s?: number;
   outcome?: ActionOutcome;

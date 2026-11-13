@@ -5143,3 +5143,68 @@ test(`owner ${mode} answers an oversized required parent through a context file`
     resetProjectDirectoryCacheForTests(); await service.close();
   }
 });
+
+
+test.each([
+  ["codex", "avatar"], ["claude", "avatar"],
+  ["codex", "frames"], ["claude", "frames"],
+  ["codex", "bad-type"], ["claude", "bad-type"],
+] as const)("read-tool result images reach the next %s turn (%s)", async (engine, mode) => {
+  const capture = JSON.parse(fs.readFileSync(path.join(x1Dir, "tool_result_images.json"), "utf8"));
+  const tool = mode === "frames" ? "get_media" : "get_profile_photo";
+  const sample = capture[tool];
+  const output = JSON.parse(sample.output);
+  const descriptors = mode === "frames" ? output.selected_frames.map((frame: { file: unknown }) => frame.file) : output.media;
+  const png = await (await import("sharp")).default({ create: { width: 2, height: 3, channels: 3, background: "red" } }).png().toBuffer();
+  for (const media of descriptors) Object.assign(media, { expires_at: "2099-01-01T00:00:00Z", byte_size: png.length,
+    mime_type: mode === "bad-type" ? "image/svg+xml" : "image/png" });
+  const request = x1Request("member"); request.request_id = `tool_images_${engine}_${mode}`;
+  request.features = [...new Set([...(request.features ?? []), "requester_context", "relay_media_in"])];
+  let downloads = 0;
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/tool-calls")) return { body: { ...sample, output: JSON.stringify(output), call_id: (body as WireCall).call_id } };
+    if (req.url?.includes("/media/")) {
+      expect(req.url).toStartWith(`/v1/requests/${request.request_id}/media/`);
+      expect(req.headers["delegatus-relay-lease"]).toBe(request.lease_id);
+      downloads++;
+      return { raw: png, headers: { "content-type": "image/png", "content-length": String(png.length) } };
+    }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.engine = engine;
+  paired.targets[0]!.id = request.target_id;
+  const marker = path.join(root, `tool-result-paths-${engine}-${mode}`);
+  const expected = mode === "bad-type" ? 0 : descriptors.length;
+  const fake = stub(`const a=process.argv.slice(2), input=await Bun.stdin.text();
+    const frame=input.startsWith('{"type":"user"')?JSON.parse(input):null;
+    const prompt=frame?frame.message.content.find(p=>p.type==='text').text:input;
+    const round=Number(prompt.match(/This is round (\\d+) of 8/)?.[1]??1);
+    const answer=round===1?{action:'call',text:'',reply_to:null,calls:[{tool:${JSON.stringify(tool)},arguments:'{}',cursor:null}]}:
+      {action:'reply',text:'Photo inspected',reply_to:null,calls:[]};
+    if(round===2){
+      const results=JSON.parse(prompt.match(/<tool_results>\\n([^]*?)\\n<\\/tool_results>/)[1]);
+      if(${JSON.stringify(mode)}==='bad-type'&&!results[0].media_notes.join(' ').includes('unsupported_media_type'))process.exit(8);
+      const paths=[];for(let i=0;i<a.length;i++)if(a[i]==='--image')paths.push(a[i+1]);
+      if(${JSON.stringify(engine)}==='codex'){
+        if(paths.length!==${expected})process.exit(3);
+        for(const file of paths)if(Buffer.from(await Bun.file(file).arrayBuffer()).toString('base64')!==${JSON.stringify(png.toString("base64"))})process.exit(4);
+      }else{
+        const images=frame?.message.content.filter(p=>p.type==='image')??[];
+        if(images.length!==${expected})process.exit(5);
+        for(const image of images)if(image.source.data!==${JSON.stringify(png.toString("base64"))})process.exit(6);
+      }
+      await Bun.write(${JSON.stringify(marker)},JSON.stringify(paths));
+    }
+    if(a.includes('--output-last-message'))await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify(answer));
+    else{
+      console.log(JSON.stringify({type:'system',subtype:'init',tools:['StructuredOutput','WebSearch'],mcp_servers:[]}));
+      console.log(JSON.stringify({type:'result',subtype:'success',structured_output:answer}));
+    }`);
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { command: fake });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Photo inspected" } });
+    expect(downloads).toBe(expected);
+    expect(fs.existsSync(marker)).toBe(true);
+    for (const file of JSON.parse(fs.readFileSync(marker, "utf8"))) expect(fs.existsSync(file)).toBe(false);
+  } finally { await server.close(); }
+});

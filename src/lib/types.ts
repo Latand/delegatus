@@ -821,6 +821,7 @@ export interface ResourcesSystem {
 export const RESOURCE_STRUCTURED_HOST_LIMIT = 512;
 
 export interface ResourceSession {
+  agentState?: import("./agentState/model").AgentStateDisplay;
   target: string;
   /** Root pid of the attributed tree: the host process itself. */
   panePid: number;
@@ -893,6 +894,7 @@ export type ResourcesViewerUnavailable = "not-the-viewer" | "measurement-failed"
 
 /** GET /api/resources response. `system` is null when no platform probe worked. */
 export interface ResourcesPayload {
+  agentState?: import("./agentState/model").AgentStateMetrics;
   /** Free space on the volumes Delegatus writes to, and the open pressure episode. */
   diskPressure?: import("./state/diskPressure").DiskPressure;
   /** The last worktree sweep, counts and bytes per reason. */
