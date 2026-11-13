@@ -359,6 +359,9 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
         const work = attempt.observedTurn ? bar(attempt.observedTurn.startedAtMs, attempt.observedTurn.endAtMs) : null;
         const model = attempt.engine && attempt.model ? { engine: attempt.engine, model: attempt.model } : null;
         const earlier = hiddenBefore(attempt);
+        // A start without an end draws the same 3 px tick the task row draws.
+        const segment = attemptSegment(attempt, nowMs);
+        const tickBox = segment?.kind === "tick" ? clipSpan(segment.startMs, segment.startMs, view, laneWidth, 3) : null;
         return <div className="bt-row bt-stage" key={attempt.key} data-timeline-attempt={attempt.key} data-live={attempt.live ? "1" : "0"} data-earlier={earlier ? "1" : "0"}>
           <div className="bt-label">
             <div className="bt-stage-name text-body font-semibold text-primary"><StageGlyph state={chipState(attempt)} model={model} fallback="mark" badge={false} live={attempt.live} /><span>{name(attempt)}</span></div>
@@ -370,6 +373,8 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
             <span className="bt-stage-bar" data-timeline-bar="" data-start-ms={attempt.startedAtMs ?? undefined} data-end-ms={attempt.endAtMs ?? undefined} style={{ ...bounds, background: "transparent", borderColor: `color-mix(in srgb, ${tone(attempt).color} 60%, transparent)` }} title={`${name(attempt)} · ${elapsed(attempt.startedAtMs, attempt.endAtMs)} · ${turnDuration(attempt)}`} />
             {work ? <span className="bt-stage-work" data-timeline-work="" data-start-ms={attempt.observedTurn?.startedAtMs} data-end-ms={attempt.observedTurn?.endAtMs} style={{ ...work, background: agentColor(attempt) }} title={turnDuration(attempt)} /> : null}
             </> : null}
+            {tickBox && segment ? <span className="bt-segment bt-stage-tick" data-timeline-tick="" data-start-ms={segment.startMs} style={{ left: tickBox.left, width: 3, background: tone(attempt).color }}
+              title={`${name(attempt)} · ${t("timeline.endUnknown")}`} /> : null}
             {earlier ? <button type="button" className="bt-earlier text-label text-secondary" style={{ left: 6 }}
               aria-label={t("timeline.reveal", { stage: name(attempt) })} onClick={() => setPaged({ key: pageKey, end: pageTo(view.liveEnd, preference.hours, attempt.startedAtMs!) })}>‹ {date(attempt.startedAtMs!)} {time(attempt.startedAtMs!)}</button> : null}
           </>)}

@@ -1366,6 +1366,21 @@ describe("board timeline manager view", () => {
             check(tasks.filter(row => row.due[0]?.words.includes(lang === "uk" ? "переносили" : "moved")).length === 16, `${where}: rows with slip words`);
             void page;
           };
+          // An attempt with a start and no end draws the same 3 px tick in its expanded stage row (brief §6).
+          const stageTicks = async (page: Page, taskId: string) => {
+            const toggleRow = page.locator(`[data-timeline-task="${taskId}"] [data-timeline-expand]`);
+            const wasOpen = await toggleRow.getAttribute("aria-expanded") === "true";
+            if (!wasOpen) { await toggleRow.click(); await settleChart(page); }
+            const ticks = await page.evaluate(id => {
+              const task = document.querySelector(`[data-timeline-task="${id}"]`)!, found: number[] = [];
+              for (let row = task.nextElementSibling; row && row.hasAttribute("data-timeline-attempt"); row = row.nextElementSibling) {
+                for (const tick of row.querySelectorAll<HTMLElement>("[data-timeline-tick]")) found.push(Number(tick.dataset.startMs));
+              }
+              return found;
+            }, taskId);
+            if (!wasOpen) { await toggleRow.click(); await settleChart(page); }
+            return ticks;
+          };
           const checkWindow = async (page: Page, rows: ManagerRow[], hours: number, where: string) => {
             const view = timelineWindow(MANAGER_NOW, hours, null);
             const fit = await page.evaluate(() => { const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!; return { scrollWidth: s.scrollWidth, clientWidth: s.clientWidth, lane: document.querySelector<HTMLElement>(".bt-lane")!.offsetWidth, labels: document.querySelector<HTMLElement>(".bt-label")!.offsetWidth }; });
@@ -1449,8 +1464,8 @@ describe("board timeline manager view", () => {
             const row1 = rows.find(row => row.task === idOf(1))!;
             check(row1.since === t("timeline.since", { start: lang === "uk" ? "30.10" : "30/10", duration: days(340) }), `${tag}: row 1 start words «${row1.since}»`);
             check(row1.clipped === 1 && row1.line === 1, `${tag}: row 1 is not clipped at the left edge`);
-            for (const hours of [12, 6]) { await scaleButton("zoomIn").click(); await settleChart(page); if (hours === 6) { rows = await readRows(page); await checkDue(page, rows, 6, `${tag} 6h`); await checkWindow(page, rows, 6, `${tag} 6h`); await frame("zoom-6h"); } }
-            for (const hours of [12, 24, 72, 168]) { await scaleButton("zoomOut").click(); await settleChart(page); if (hours === 168) { rows = await readRows(page); await checkDue(page, rows, 168, `${tag} 1w`); await checkWindow(page, rows, 168, `${tag} 1w`); await frame("zoom-1w"); } }
+            for (const hours of [12, 6]) { await scaleButton("zoomIn").click(); await settleChart(page); if (hours === 6) { rows = await readRows(page); await checkDue(page, rows, 6, `${tag} 6h`); await checkWindow(page, rows, 6, `${tag} 6h`); check((await stageTicks(page, idOf(12))).length === 0, `${tag} 6h: task 12 stage row draws a tick for a start outside the window`); await frame("zoom-6h"); } }
+            for (const hours of [12, 24, 72, 168]) { await scaleButton("zoomOut").click(); await settleChart(page); if (hours === 168) { rows = await readRows(page); await checkDue(page, rows, 168, `${tag} 1w`); await checkWindow(page, rows, 168, `${tag} 1w`); const unknownEnd = truth[idOf(12)]!.segments.filter(segment => segment.endMs === null).map(segment => segment.startMs); const drawn = await stageTicks(page, idOf(12)); check(unknownEnd.length === 1 && drawn.length === 1 && drawn[0] === unknownEnd[0], `${tag} 1w: task 12 stage-row ticks ${JSON.stringify(drawn)}, expected ${JSON.stringify(unknownEnd)}`); await frame("zoom-1w"); } }
             const r12 = rows.find(row => row.task === idOf(12))!, r13 = rows.find(row => row.task === idOf(13))!;
             check(r12.ticks === 1 && r13.ticks === 0 && r13.segments === 3, `${tag}: end-unknown tick ${r12.ticks}, never-started tick ${r13.ticks}, segments ${r13.segments}`);
             for (const hours of [72, 24]) { await scaleButton("zoomIn").click(); void hours; }

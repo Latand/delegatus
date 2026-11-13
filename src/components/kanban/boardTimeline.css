@@ -38,6 +38,9 @@
 .bt-line[data-clipped="1"]::before, .bt-line[data-clipped-end="1"]::after { display: none; }
 .bt-clip-glyph { position: absolute; left: 0; top: -1px; color: var(--color-secondary); }
 .bt-segment { position: absolute; top: 0; height: 10px; min-width: 3px; border-radius: 2px; }
+/* A stage row's tick spans the same height as the stage bar would. */
+.bt-stage .bt-stage-tick, .board-timeline[data-phone="1"] .bt-stage .bt-stage-tick { top: 5px; bottom: 5px; height: auto; }
+.board-timeline[data-phone="1"] .bt-stage[data-earlier="1"] .bt-stage-tick { top: 13px; bottom: 13px; }
 .bt-strip { position: absolute; bottom: 0; height: 4px; }
 .bt-flag { position: absolute; bottom: 6px; height: 16px; width: 2px; margin-left: -1px; background: var(--color-secondary); pointer-events: none; }
 .bt-flag::before { content: ""; position: absolute; top: 0; left: 0; width: 6px; height: 5px; background: inherit; }
