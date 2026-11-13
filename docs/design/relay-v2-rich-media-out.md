@@ -193,11 +193,11 @@ Outcome the brief pins for this install, in its own five parts:
   the two image-generation item names Codex uses elsewhere, should an exec
   stream ever carry them.
 - **Owner runs.** A new Viewer MCP tool, `relay_answer`, lets the owner agent
-  set `format`, `buttons` and `attachments` for its final message. It is bound
-  in the Viewer through the caller's live owner run, in the same way as lane
-  97089d71's `relay_service_tools`. The final message stays the answer text;
-  plain text is capped at 4,000 under negotiation, and rich text at 32,000
-  when the agent chose it.
+  give the chat reply as `text` and set `format`, `buttons` and `attachments`
+  for it. It is bound in the Viewer through the caller's live owner run, in
+  the same way as lane 97089d71's `relay_service_tools`. Without `text`, the
+  final message is the answer text; plain text is capped at 4,000 under
+  negotiation, and rich text at 32,000.
 
 ## 2. What happens at `49648aba`
 
@@ -766,31 +766,55 @@ run.
 
 ### 10.1 Prompt and answer
 
-When `caps.rich`, `ownerRunPrompt` (`ownerRun.ts:24-46`) adds the
-`<format>` section. The opening sentence (`:29`) lists `<format>` among the
-sections that "may shape only how your reply reads". The closing sentence
-`Write plain text of at most ${request.answer.max_chars} characters as your
-last message.` (`:44`) becomes:
+When `caps.rich`, `ownerRunPrompt` adds the `<format>` section as trusted
+formatting guidance. This applies to both initial and continued owner turns.
 
-> Write your last message as plain text of at most {plainMax} characters.
-> For tables, lists, headings, code or a longer reply, first call
-> relay_answer with format rich_markdown, then write Markdown in the subset
-> <format> lists, of at most {richMax} characters. relay_answer also sets up
-> to {rows} rows of {perRow} https link buttons{media:, and up to {max_items}
-> files to send after your message (photo, document, audio or video) by
-> absolute path under your document roots}; never write a path into the
-> message itself.
+With rich-message negotiation the agent gives its chat reply as
+`relay_answer({text})`; the prompt tells it to call `relay_answer`, when it is
+available, before it finishes. The final assistant message stays in the
+session and is posted only when no call supplied `text`. A run without
+`relay_answer`, such as a Codex Cloud run, is told that its last message is
+the chat reply. The reply uses `rich_markdown` by default, including
+when a call omits `format`. Markdown bold, italic, links and lists pass to the
+service's renderer intact. `relay_answer({format: "plain"})` explicitly
+selects literal text. Each call replaces the prior parts, including `text`,
+and an omitted format returns to the rich default. Without negotiation the
+final assistant message is the chat reply, as before.
 
-`ownerAnswer(text, request, owner, credentials, staged)` (`:48-55`) scrubs as
-today. Plain text is truncated at `plainMax`, the same `…` rule the code
-applies today. Rich text is used when `staged.format` is `rich_markdown` and
-the scrubbed text passes §7.2. Otherwise the text falls back to plain under
-the same truncation. Buttons and captions pass through
-`scrubOwnerOutput` too, and a button whose url the scrub changed is dropped.
-Owner answers keep `reply_to: owner.messageId`.
+`ownerAnswer` scrubs the reply text before validating it. Rich text uses the
+negotiated rich limit. Text that fails rich validation falls back to the
+existing plain path and its `plainMax` truncation. Buttons and captions pass
+through `scrubOwnerOutput` too. Owner answers keep
+`reply_to: owner.messageId`.
 
-Without negotiation none of this runs, and the owner prompt keeps its bytes
-(`owner-tools-off-*` hashes, `ownerTier.test.ts:58-71`).
+The owner wrapper addresses the agent as the chat assistant. Task handoffs
+and authority remain as before; the wrapper no longer asks for a separate
+report about the reply. Shared relay search guidance asks for citations as
+inline links beside supported claims.
+
+Why the reply is a tool argument: Claude Code's built-in WebSearch tool, which
+Delegatus does not write, ends its description with an instruction to end the
+response to the user with a "Sources:" list, and every search result ends with
+a reminder to include those sources in that response. When the final message
+was the chat post, that instruction put a separate Sources list into the chat
+in some replies, whatever the relay prompt said about citations. The chat
+reply is now what the agent composes for the chat, and the final message
+remains free for the engine's own conventions.
+
+Offline rendering checks run `ownerAnswer.render.test.ts` with
+`LLV_RELAY_SERVICE_ROOT` pointing at an isolated service backend export and
+`LLV_RELAY_RENDER_PYTHON` naming a Python interpreter with the service's
+`markdown-it-py` and Pydantic dependencies plus Telethon. They validate the
+actual answer with the service, render its HTML fallback and parse Telegram
+entities for bold, italic, links and lists. They import no transport.
+`ownerReply.native.test.ts` uses `LLV_RELAY_REPLY_PROBE=1` for an optional
+signed-in Claude rehearsal of an initial chat reply and a resumed turn with
+web search; set `LLV_RELAY_REPLY_CONFIG` to a private signed-in Claude config
+copy, and use private HOME, state and temp roots, retaining only
+synthetic output. Neither check posts a message.
+
+Without negotiation owner answers retain the existing plain wire format and
+length limit.
 
 ### 10.2 The `relay_answer` tool
 
@@ -798,6 +822,7 @@ Without negotiation none of this runs, and the owner prompt keeps its bytes
 
   ```ts
   relay_answer: z.object({
+    text: z.string().min(1).max(32000).optional(),
     format: z.enum(["plain", "rich_markdown"]).optional(),
     buttons: z.array(z.array(z.object({ text: z.string().min(1).max(64), url: z.string().min(1).max(2048) }))
       .min(1).max(3)).max(2).optional(),
@@ -807,11 +832,11 @@ Without negotiation none of this runs, and the owner prompt keeps its bytes
   }),
   ```
 
-- **Description**: "Only while you answer a relay message as its owner: how
-  your last message is delivered. format rich_markdown renders Markdown up to
-  the length the prompt states; buttons are https links; attachments are files
-  under your document roots, sent after the message. Each call replaces the
-  previous one. Refused in any other conversation and after you answer."
+- **Description** (`relayAnswerDescription` in `protocol.ts`): `text` is the
+  reply posted in the chat, and without it the last message is posted;
+  format, buttons, mentions and attachments choose how it is delivered. Each
+  call replaces the previous one. Refused in any other conversation and after
+  the answer.
 - **Binding** (beside `relay_owner_history`, `bindings.ts:7954`), in order:
   (1) caller `kind: "agent"`, a conversation, no deputy (`:7437-7440`);
   (2) `liveOwnerRelayRequest(conversationId)` finds the live owner run;
@@ -820,8 +845,8 @@ Without negotiation none of this runs, and the owner prompt keeps its bytes
   and names no request or chat.
 - **Each call** validates everything with §7.3 and §8.2-8.3, stages the copies
   in the request's run directory, and replaces the entry's parts whole. It
-  answers `{ format, buttons, attachments: [{ index, kind, filename, bytes }],
-  limits }`. A refusal names the class (`document_outside_roots`,
+  answers `{ text_chars, format, buttons, attachments: [{ index,
+  attachment_id, kind, filename, bytes }], limits }`. A refusal names the class (`document_outside_roots`,
   `document_forbidden_path`, `document_type`, `document_secret`, `too_large`,
   `button_invalid`, `caption_too_long`, `media_not_negotiated`) and never the
   file content. A replaced call's copies are deleted by their recorded paths.

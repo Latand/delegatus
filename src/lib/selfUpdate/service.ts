@@ -189,6 +189,7 @@ class StaleApplyDispatch extends Error {}
 export class SelfUpdateService {
   readonly changes = new Changes();
   private readonly apply: ApplyController;
+  private readonly disabledByAdmin: boolean;
   private recoverReadyApply: boolean;
   private deploying: Promise<unknown> | null = null;
   private slice: CheckSlice = initialCheck();
@@ -229,6 +230,7 @@ export class SelfUpdateService {
   private observedWork: ObservedWork | null = null;
 
   constructor(private readonly deps: ServiceDeps) {
+    this.disabledByAdmin = (deps.env.DELEGATUS_DISABLE_SELF_UPDATE ?? deps.env.LLV_DISABLE_SELF_UPDATE) === "1";
     this.apply = new ApplyController(deps.dir);
     this.recoverReadyApply = this.apply.current?.state === "ready";
     this.auto = readAuto(join(deps.dir, "auto.json"));
@@ -260,6 +262,9 @@ export class SelfUpdateService {
     }, DEPLOYMENT_WATCH_MS);
     this.deploymentWatch.unref?.();
   }
+
+  /** The installation policy overrides the saved preference without rewriting it. */
+  private get autoEnabled(): boolean { return !this.disabledByAdmin && this.auto.enabled; }
 
   private get stateFile(): string { return join(this.deps.dir, "state.json"); }
   private get managedFile(): string { return join(this.deps.dir, "managed.json"); }
@@ -294,8 +299,8 @@ export class SelfUpdateService {
     if (this.autoTimer) return;
     // Restore durable custody before startup hands pending stages or seats to
     // their controllers, even when future automatic updates are switched off.
-    this.refreshDrain();
-    if (this.auto.enabled) this.ensureChecked();
+    if (!this.disabledByAdmin || this.hasAutoCustody()) this.refreshDrain();
+    if (this.autoEnabled) this.ensureChecked();
     const checkCodex = () => {
       if (!this.stopped) void import("@/lib/codexUpdate/controller").then(({ codexUpdateTick }) => codexUpdateTick())
         .catch(() => console.error("[codex update] scheduler failed"));
@@ -329,6 +334,7 @@ export class SelfUpdateService {
       Each write is recorded with its writer, on the setting and in the
       history the dialog shows. */
   async setAuto(enabled: boolean, writer: AutoWriter = DIALOG_WRITER, requestId?: string): Promise<ActionResult> {
+    if (this.disabledByAdmin) return this.adminRefusal();
     const sequence = ++this.autoSwitchSequence;
     const receiptId = requestId ? createHash("sha256").update(requestId).digest("hex") : undefined;
     if (receiptId) {
@@ -427,6 +433,7 @@ export class SelfUpdateService {
   }
 
   private async autoView(decision: ModeDecision, snapshot: Snapshot, auto: AutoState = this.auto): Promise<AutoView> {
+    if (this.disabledByAdmin) return { availability: "disabled-by-admin", enabled: false, off: null, phase: "idle", target: null, green: null, blockers: null, waitingSince: null, longWait: false, decision: null, drain: null };
     const built = snapshot.installed.sha;
     const target = auto.off ? (this.described.get(auto.off.target) ?? { ...UNKNOWN_REVISION, sha: auto.off.target, short: shortSha(auto.off.target) })
       : auto.drain ? auto.drain.target : auto.managedPending?.target ?? this.slice.available ?? (built && (snapshot.serving.web?.sha !== built || snapshot.serving.runtimeHost?.sha !== built) ? snapshot.installed : null);
@@ -480,7 +487,7 @@ export class SelfUpdateService {
       this.auto = { ...this.auto, quietSince: null, drain: drain ? { ...drain, admitted: false } : null };
       this.admittedWork = null;
       this.saveAuto(); this.refreshDrain();
-      if (this.auto.enabled) void this.check();
+      if (this.autoEnabled) void this.check();
       return;
     }
     this.auto = { ...this.auto, enabled: false, off: { at: new Date(this.deps.now()).toISOString(), target: intent.target, stage: "restart-web", reason: intent.detail ?? "The release rolled back" } };
@@ -489,19 +496,20 @@ export class SelfUpdateService {
   }
 
   private async runAutoTick(): Promise<void> {
-    if (this.apply.current?.state === "switching") {
+    if (this.apply.current?.state === "switching"
+      || this.apply.current && activeDrain(this.drainFile, this.deps.now())?.id === this.apply.current.requestId) {
       await this.snapshot();
       if (this.apply.current?.state === "switching") return;
     }
     if (this.apply.current?.state === "failed" && this.apply.current.trigger === "auto" && this.auto.drain?.admitted
       && this.auto.drain.target.sha === this.apply.current.target && !this.auto.pending && !this.auto.managedPending && !this.auto.rollback) this.finishFailedApply();
     // Recover a switch-off persisted before its lease cleanup during a crash.
-    if (!this.auto.enabled && !this.hasAutoCustody()) this.endDrain();
-    if (!this.auto.enabled && !this.hasAutoCustody()) return;
+    if (!this.autoEnabled && !this.hasAutoCustody()) this.endDrain();
+    if (!this.autoEnabled && !this.hasAutoCustody()) return;
     // The previous web process may have saved the terminal host status just
     // before it exited. Settle that durable result even if the host is away.
     if (this.auto.managedPending && this.managed && !managedActive(this.managed)) this.finishManagedAuto();
-    if (!this.auto.enabled && !this.hasAutoCustody()) return;
+    if (!this.autoEnabled && !this.hasAutoCustody()) return;
     const decision = await this.decide();
     // Older releases could admit a cohort without ever filing an operation.
     // Release that orphan only when no durable work still owns its custody.
@@ -512,12 +520,12 @@ export class SelfUpdateService {
         rollbackPointer: null, rollbackCaptured: false, lastBlockers: null };
       this.endDrain(); this.saveAuto();
     }
-    if ((!this.auto.enabled || (await this.autoAvailability(decision)) !== "available") && !this.hasAutoCustody()) this.endDrain();
+    if ((!this.autoEnabled || (await this.autoAvailability(decision)) !== "available") && !this.hasAutoCustody()) this.endDrain();
     else if (this.auto.drain) this.refreshDrain();
     const drain = this.auto.drain;
     // Operator attention follows the original cohort's age even when checks
     // stop a deployment. Observing it grants no release admission.
-    if (this.auto.enabled && drain && !drain.admitted
+    if (this.autoEnabled && drain && !drain.admitted
       && this.deps.now() - Date.parse(drain.since) >= DRAIN_NOTICE_MS) {
       await this.waitForAutoQuiet(await this.snapshot(), drain.target.sha, this.deps.now());
     }
@@ -589,8 +597,8 @@ export class SelfUpdateService {
       }
       return;
     }
-    if (!this.auto.enabled && !this.hasAutoCustody()) return;
-    if ((await this.autoAvailability(decision)) !== "available" || (!this.auto.enabled && !this.hasAutoCustody()) || this.auto.pending) return;
+    if (!this.autoEnabled && !this.hasAutoCustody()) return;
+    if ((await this.autoAvailability(decision)) !== "available" || (!this.autoEnabled && !this.hasAutoCustody()) || this.auto.pending) return;
     const staleBuilt = snapshot.installed.sha && (snapshot.serving.web?.short !== snapshot.installed.short || snapshot.serving.runtimeHost?.short !== snapshot.installed.short);
     const target = this.auto.drain ? this.auto.drain.target : this.slice.available ?? ((staleBuilt || this.auto.waitingSince) ? snapshot.installed : null);
     if (!target?.sha) return;
@@ -608,14 +616,14 @@ export class SelfUpdateService {
     if (snapshot.installed.sha !== target.sha) {
       // Pending updates fence new work before building too: otherwise busy
       // agents can keep consuming the resources the candidate build needs.
-      if (!this.auto.enabled && !this.hasAutoCustody()) return;
+      if (!this.autoEnabled && !this.hasAutoCustody()) return;
       // A candidate this install already built is published again without a
       // build, so it waits for no memory.
       const needsMemory = () => !releaseBuilt(releaseDirFor(record.releasesDir, target.sha), target.sha) && memAvailableMb() < 4_096;
       if (snapshot.busy || this.checking || snapshot.check.state === "checking" || needsMemory()) return;
       green = await this.refreshGreen(target.sha, record.checkout!, green);
       const admissionSnapshot = await this.snapshot();
-      if (green.state !== "green" || (!this.auto.enabled && !this.hasAutoCustody()) || this.auto.pending || (!this.draining() && this.slice.available?.sha !== target.sha)
+      if (green.state !== "green" || (!this.autoEnabled && !this.hasAutoCustody()) || this.auto.pending || (!this.draining() && this.slice.available?.sha !== target.sha)
         || this.active() || admissionSnapshot.busy || this.checking || admissionSnapshot.check.state === "checking" || needsMemory()) return;
       const runner = this.runnerFor(record);
       if (!this.auto.rollbackCaptured) {
@@ -648,7 +656,7 @@ export class SelfUpdateService {
       if (current.mode !== "checkout" || current.record?.launcher.autoAdmission !== 1
         || current.record.launcher.pid !== record.launcher.pid
         || current.record.launcher.startIdentity !== record.launcher.startIdentity
-        || (!this.auto.enabled && !this.hasAutoCustody())) return;
+        || (!this.autoEnabled && !this.hasAutoCustody())) return;
       if (!this.hasAutoCustody() && !await this.targetOnBranch(record.checkout!, target.sha)) {
         this.auto = { ...this.auto, quietSince: null };
         this.saveAuto();
@@ -682,7 +690,7 @@ export class SelfUpdateService {
       this.autoBlockers = admissionProbe.blockers;
       const recordFile = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
       const admissionRecord = readLauncherRecord(recordFile || launcherControlFile(record.requestFile, "launcher")) ?? (recordFile ? null : admissionDecision.record);
-      if ((!this.auto.enabled && !this.hasAutoCustody()) || this.active() || this.auto.pending || !ownsRestartGate(gateFile, gateId) || !this.quietAdmits(admissionProbe)
+      if ((!this.autoEnabled && !this.hasAutoCustody()) || this.active() || this.auto.pending || !ownsRestartGate(gateFile, gateId) || !this.quietAdmits(admissionProbe)
         || dispatchActivity === null || dispatchActivity !== quietDispatchVersion(quiet, this.deps.now())
         || admissionRecord?.launcher.autoAdmission !== 1 || admissionRecord.launcher.pid !== dispatchOwner.pid
         || admissionRecord.launcher.startIdentity !== dispatchOwner.startIdentity || admissionRecord.requestFile !== record.requestFile
@@ -730,7 +738,7 @@ export class SelfUpdateService {
   private async advanceFailedDrain(target: Revision, repo: string, now: number): Promise<void> {
     const drain = this.auto.drain;
     const candidate = this.slice.available;
-    const eligible = () => this.auto.enabled && !this.hasAutoCustody() && !this.checking
+    const eligible = () => this.autoEnabled && !this.hasAutoCustody() && !this.checking
       && this.slice.check.state === "update-available" && this.slice.available?.sha === candidate?.sha
       && this.auto.drain?.id === drain?.id && this.auto.drain?.target.sha === target.sha
       && this.auto.green[target.sha]?.state === "red"
@@ -750,7 +758,7 @@ export class SelfUpdateService {
   }
 
   private async waitForAutoQuiet(snapshot: Snapshot, target: string, now: number): Promise<boolean> {
-    if (!this.auto.enabled && !this.hasAutoCustody()) return false;
+    if (!this.autoEnabled && !this.hasAutoCustody()) return false;
     if (!this.hasAutoCustody() && this.auto.deferred && now < Date.parse(this.auto.deferred.until)) return false;
     const at = new Date(now).toISOString();
     if (!this.auto.waitingSince) {
@@ -891,7 +899,7 @@ export class SelfUpdateService {
       // A terminal failure can follow web promotion or a failed rollback.
       // Disable future updates immediately, but keep the accepted transaction
       // and its custody until a fresh observation establishes safe succession.
-      if (this.auto.enabled || !this.auto.off) {
+      if (this.autoEnabled || !this.auto.off) {
         this.auto = { ...this.auto, enabled: false, off: { at: new Date(this.deps.now()).toISOString(), target: record!.target,
           stage: "deploy", reason: record!.error || (record!.lost ? "deployment record was lost" : "deployment failed") } };
         this.saveAuto();
@@ -960,7 +968,7 @@ export class SelfUpdateService {
       }
       // If the switch is off, retain the uncertain identity for observation
       // and do not admit a request. Re-enabling will re-check current policy.
-      if (!this.auto.enabled) return;
+      if (!this.autoEnabled) return;
       if ((this.slice.check.state === "update-available" || this.slice.check.state === "up-to-date")
         && this.slice.available?.sha !== pending.target.sha) {
         // The host does not know this key and a successful check moved past
@@ -973,8 +981,8 @@ export class SelfUpdateService {
         pending = null;
       }
     }
-    if (!this.auto.enabled) return;
-    if ((await this.autoAvailability(decision)) !== "available" || !this.auto.enabled || managedActive(this.managed)
+    if (!this.autoEnabled) return;
+    if ((await this.autoAvailability(decision)) !== "available" || !this.autoEnabled || managedActive(this.managed)
       || this.checking || snapshot.check.state === "checking") return;
     const target = this.draining() ? this.auto.drain!.target : pending?.target ?? this.slice.available;
     if (this.slice.check.state !== "update-available" || !target?.sha || (!this.draining() && this.slice.available?.sha !== target.sha)
@@ -995,7 +1003,7 @@ export class SelfUpdateService {
     const finalProbe = this.deps.quiet ? await probeQuiet(finalSnapshot, this.deps.quiet, this.deps.now(), this.draining(), "live") : null;
     this.autoBlockers = finalProbe?.blockers ?? null;
     if (!this.quietAdmits(finalProbe) || (!this.draining() && finalSnapshot.available?.sha !== target.sha) || finalSnapshot.installed.sha === target.sha
-      || this.checking || finalSnapshot.check.state === "checking" || !this.auto.enabled) {
+      || this.checking || finalSnapshot.check.state === "checking" || !this.autoEnabled) {
       this.auto = { ...this.auto, quietSince: null, lastBlockers: finalProbe?.blockers ?? this.auto.lastBlockers };
       this.saveAuto();
       return;
@@ -1008,7 +1016,7 @@ export class SelfUpdateService {
       // read blockers again so work that starts during that read can veto it.
       this.decision = null;
       const current = await this.decide();
-      if (current.mode !== "managed" || (await this.autoAvailability(current)) !== "available" || !this.auto.enabled
+      if (current.mode !== "managed" || (await this.autoAvailability(current)) !== "available" || !this.autoEnabled
         || managedActive(this.managed) || this.checking || this.slice.check.state !== "update-available"
         || (!this.draining() && this.slice.available?.sha !== target.sha)) return;
       green = await this.refreshGreen(target.sha, repo, green);
@@ -1018,7 +1026,7 @@ export class SelfUpdateService {
       const admissionSnapshot = await this.snapshot();
       const admissionProbe = this.deps.quiet ? await probeQuiet(admissionSnapshot, this.deps.quiet, this.deps.now(), this.draining(), "live") : null;
       this.autoBlockers = admissionProbe?.blockers ?? null;
-      if (activeRestartGate(gateFile, this.deps.now()) !== gateId || !reachable || green.state !== "green" || !this.quietAdmits(admissionProbe) || !this.auto.enabled || this.checking || this.active()
+      if (activeRestartGate(gateFile, this.deps.now()) !== gateId || !reachable || green.state !== "green" || !this.quietAdmits(admissionProbe) || !this.autoEnabled || this.checking || this.active()
         || admissionSnapshot.check.state === "checking" || admissionSnapshot.installed.sha === target.sha
         || (!this.draining() && (admissionSnapshot.available?.sha !== target.sha || this.slice.available?.sha !== target.sha))) {
         this.auto = { ...this.auto, quietSince: null, lastBlockers: admissionProbe?.blockers ?? this.auto.lastBlockers };
@@ -1055,6 +1063,7 @@ export class SelfUpdateService {
   /** The launcher calls this under the held admission gate, immediately before
       taking an automatic request. It is the final read for both restart roles. */
   async admitAutoRestart(requestId: string, gateId: string): Promise<boolean> {
+    if (this.disabledByAdmin && !this.hasAutoCustody()) return false;
     const pending = this.auto.pending;
     const activity = quietDispatchVersion(this.deps.quiet, this.deps.now());
     const decision = await this.decide();
@@ -1118,7 +1127,7 @@ export class SelfUpdateService {
     if (JSON.stringify(this.auto.pending) !== JSON.stringify(pending)) return false;
     const recordFile = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
     const currentRecord = recordFile ? readLauncherRecord(recordFile) : current.record;
-    if (!this.active() && this.slice.check.state !== "checking" && (this.auto.enabled || this.hasAutoCustody())
+    if (!this.active() && this.slice.check.state !== "checking" && (this.autoEnabled || this.hasAutoCustody())
       && reachable && green.state === "green" && this.quietAdmits(quiet) && snapshot.installed.sha === pending.target
       && availability === "available" && current.mode === "checkout" && currentRecord?.checkout === record.checkout
       && currentRecord.web.state === "healthy" && currentRecord.runtimeHost.state === "healthy"
@@ -1190,11 +1199,19 @@ export class SelfUpdateService {
   }
 
   private recoverDrainOwner(): void {
+    // Older recovery could copy an apply-owned lease into automatic state.
+    // Drop that copy without touching the live hold its apply still owns.
+    if (this.auto.drain && this.auto.drain.id === this.apply.current?.requestId) {
+      this.auto = { ...this.auto, drain: null };
+      this.saveAuto();
+    }
     if (this.auto.drain) return;
     const lease = activeDrain(this.drainFile, this.deps.now());
     // A valid older first-publication checkpoint can lack its owner. An
     // unreadable hold stays fenced for repair instead of being reassigned.
-    if (!lease?.persistent || lease.id === "unreadable" || !/^[a-f0-9]{40}$/i.test(lease.target)) return;
+    // ApplyController alone releases its request's hold after serving proof.
+    if (!lease?.persistent || lease.id === "unreadable" || lease.id === this.apply.current?.requestId
+      || !/^[a-f0-9]{40}$/i.test(lease.target)) return;
     const target = [this.auto.managedPending?.target, this.slice.available, this.slice.installed]
       .find(revision => revision?.sha === lease.target)
       ?? { ...UNKNOWN_REVISION, sha: lease.target, short: shortSha(lease.target) };
@@ -1207,7 +1224,7 @@ export class SelfUpdateService {
   private refreshDrain(): void {
     this.recoverDrainOwner();
     let drain = this.auto.drain;
-    if (!drain || (!this.auto.enabled && !this.hasAutoCustody())) return;
+    if (!drain || (!this.autoEnabled && !this.hasAutoCustody())) return;
     const now = this.deps.now();
     const custody = this.hasAutoCustody() || !!(this.managed?.trigger === "operator"
       && Date.parse(this.managed.requestedAt) >= Date.parse(drain.since)
@@ -1269,8 +1286,9 @@ export class SelfUpdateService {
   /** Only the operator route accepts this decision; the drain identity fences
       an old tab from forcing a newer update. Keep waiting retains its cooldown. */
   async decideDrain(id: string, choice: "deploy-now" | "keep-waiting"): Promise<ActionResult> {
+    if (this.disabledByAdmin) return this.adminRefusal();
     const drain = this.auto.drain;
-    if (!this.auto.enabled || !drain || drain.id !== id || !drain.overranAt || drain.acknowledgedAt || drain.admitted) {
+    if (!this.autoEnabled || !drain || drain.id !== id || !drain.overranAt || drain.acknowledgedAt || drain.admitted) {
       return refuse(409, "auto-switch-superseded", "This automatic update decision is no longer pending");
     }
     this.auto = { ...this.auto, ...(choice === "deploy-now" ? { deferred: null } : {}),
@@ -1388,7 +1406,7 @@ export class SelfUpdateService {
         const outcome: CheckOutcome = input
           ? await this.deps.check(input)
           : { ok: false, error: "This install cannot check for updates", code: "cannot-check", installed: null };
-        if (epoch === this.comparisonEpoch) this.slice = applyCheck(this.slice, outcome, new Date(this.deps.now()), this.auto.enabled ? 15 : this.deps.pollMinutes);
+        if (epoch === this.comparisonEpoch) this.slice = applyCheck(this.slice, outcome, new Date(this.deps.now()), this.autoEnabled ? 15 : this.deps.pollMinutes);
       } catch (error) {
         const failed: CheckOutcome = {
           ok: false,
@@ -1396,7 +1414,7 @@ export class SelfUpdateService {
           ...(error instanceof CheckError ? { code: error.code } : {}),
           installed: null,
         };
-        if (epoch === this.comparisonEpoch) this.slice = applyCheck(this.slice, failed, new Date(this.deps.now()), this.auto.enabled ? 15 : this.deps.pollMinutes);
+        if (epoch === this.comparisonEpoch) this.slice = applyCheck(this.slice, failed, new Date(this.deps.now()), this.autoEnabled ? 15 : this.deps.pollMinutes);
       } finally {
         this.checking = null;
         this.undescribable.clear();
@@ -1404,7 +1422,7 @@ export class SelfUpdateService {
         this.saveNow();
         this.changes.emit();
         if (this.recheckPending && !this.stopped) void this.check();
-        if (this.auto.enabled) void this.autoTick();
+        if (this.autoEnabled) void this.autoTick();
       }
     })();
     return this.checking;
@@ -1426,7 +1444,7 @@ export class SelfUpdateService {
 
   private schedulePoll(): void {
     if (this.pollTimer) clearTimeout(this.pollTimer);
-    const interval = (this.auto.enabled ? 15 : this.deps.pollMinutes) * 60_000;
+    const interval = (this.autoEnabled ? 15 : this.deps.pollMinutes) * 60_000;
     const at = this.slice.check.at ? Date.parse(this.slice.check.at) + interval : this.deps.now() + interval;
     this.pollTimer = setTimeout(() => {
       this.pollTimer = null;
@@ -1438,7 +1456,7 @@ export class SelfUpdateService {
   /** The surface opened: check now when nothing current is known. */
   ensureChecked(): void {
     const { check } = this.slice;
-    const stale = !check.at || this.deps.now() - Date.parse(check.at) > (this.auto.enabled ? 15 : this.deps.pollMinutes) * 60_000;
+    const stale = !check.at || this.deps.now() - Date.parse(check.at) > (this.autoEnabled ? 15 : this.deps.pollMinutes) * 60_000;
     if (check.state === "idle" || (stale && check.state !== "checking")) void this.check();
     else if (!this.pollTimer) this.schedulePoll();
   }
@@ -1478,6 +1496,10 @@ export class SelfUpdateService {
 
   /* ---------- actions ---------- */
 
+  private adminRefusal(): ActionResult {
+    return refuse(403, "updates-disabled", "Built-in updates are disabled by the administrator. Use the installation’s command-line update procedure.");
+  }
+
   /** No await may separate this check from the custody write it admits. */
   private reserve(record: LauncherRecord, write: () => void, ownedApply?: string): ActionResult | null {
     const intent = this.apply.current;
@@ -1505,6 +1527,7 @@ export class SelfUpdateService {
   }
 
   async startUpdate(clientKey: string): Promise<ActionResult> {
+    if (this.disabledByAdmin) return this.adminRefusal();
     if (this.retaining) return busy("update");
     const decision = await this.decide();
     const snapshot = await this.snapshot();
@@ -1529,6 +1552,7 @@ export class SelfUpdateService {
   }
 
   async retry(clientKey: string): Promise<ActionResult> {
+    if (this.disabledByAdmin) return this.adminRefusal();
     const decision = await this.decide();
     if ((decision.mode === "checkout" || decision.mode === "package") && decision.record) {
       const runner = this.runnerFor(decision.record);
@@ -1654,7 +1678,7 @@ export class SelfUpdateService {
       });
       this.apply.patch({ externalRestart: true });
       if (action?.id === "restart-service") {
-        const result = await this.performInstallAction();
+        const result = await this.executeInstallAction();
         if (!result.ok) throw new Error(result.error);
       }
     }
@@ -1674,6 +1698,14 @@ export class SelfUpdateService {
   }
 
   async performInstallAction(): Promise<ActionResult> {
+    if (this.disabledByAdmin) return this.adminRefusal();
+    return this.executeInstallAction();
+  }
+
+  /** Shared handoff for the public action and an already admitted apply.
+      External deployments have their own admission, independent of the
+      administrator's policy for new built-in update requests. */
+  private async executeInstallAction(): Promise<ActionResult> {
     const decision = await this.decide();
     const action = await this.actionFor(decision);
     if (!action || !action.button || action.id === "update-first") return refuse(409, "cannot-restart", "The install action must be performed from its terminal");
@@ -1966,7 +1998,7 @@ export class SelfUpdateService {
     this.saveNow();
     if ((this.runner?.state.state === "done" && this.runner.state.trigger === "auto") || (this.runner?.state.state === "failed" && ["remote-moved", "memory", "interrupted"].includes(this.runner.state.steps.find((step) => step.state === "failed")?.failure?.kind ?? ""))) void this.check();
     this.changes.emit();
-    if (this.auto.enabled) void this.autoTick();
+    if (this.autoEnabled) void this.autoTick();
   }
 
   async restart(role: LauncherRole): Promise<ActionResult> {
@@ -2191,14 +2223,15 @@ export class SelfUpdateService {
     // immutable response across later changes.
     const auto = replayAuto ?? this.auto;
     snapshot.auto = await this.autoView(decision, snapshot, auto);
+    snapshot.selfUpdateDisabled = this.disabledByAdmin;
     snapshot.history = readHistory(this.historyFile);
-    snapshot.meta.pollMinutes = auto.enabled ? 15 : this.deps.pollMinutes;
+    snapshot.meta.pollMinutes = snapshot.auto.enabled ? 15 : this.deps.pollMinutes;
     return snapshot;
   }
 
   private async checkoutPart(record: LauncherRecord, now: number): Promise<Omit<Snapshot, "mode" | "unsupportedReason" | "available" | "check" | "meta">> {
     const runner = this.runnerFor(record);
-    if (this.recoverReadyApply) {
+    if (this.recoverReadyApply && !this.disabledByAdmin) {
       this.recoverReadyApply = false;
       const intent = this.apply.current;
       if (intent?.state === "ready" && record.launcher.pid === intent.launcherPid && record.launcher.startIdentity === intent.launcherIdentity
@@ -2229,8 +2262,13 @@ export class SelfUpdateService {
     let health: RuntimeHostHealth | null = null;
     let healthError: string | null = null;
     try { health = await this.deps.hostHealth(); } catch (error) { healthError = error instanceof Error ? error.message : String(error); }
-    const settled = this.apply.observe(record, runtimeHostMatches(record.runtimeHost, health, this.deps.processAlive, this.deps.processIdentity)
-      && record.web.pid !== null && record.web.startIdentity !== null && this.deps.processAlive(record.web.pid, record.web.startIdentity), now);
+    const hostHealthy = runtimeHostMatches(record.runtimeHost, health, this.deps.processAlive, this.deps.processIdentity)
+      && record.web.pid !== null && record.web.startIdentity !== null && this.deps.processAlive(record.web.pid, record.web.startIdentity);
+    const settled = this.apply.observe(record, hostHealthy, now);
+    if (this.recoverReadyApply && this.disabledByAdmin && (settled === "done" || settled === "failed")) this.recoverReadyApply = false;
+    if (this.recoverReadyApply && this.disabledByAdmin && this.apply.cancelSuppressedReady(
+      record, "The administrator disabled built-in updates before this apply was handed to the launcher", hostHealthy,
+    )) this.recoverReadyApply = false;
     if (settled) {
       const intent = this.apply.current!;
       appendHistory(this.historyFile, { at: new Date(now).toISOString(), by: intent.trigger, kind: "apply", target: intent.target, from: null,
