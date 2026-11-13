@@ -1,6 +1,7 @@
 import { statePath } from "./configDir";
 import { initializeStateCollections, readStateCollectionRows, SqliteStateCollection } from "./state/sqliteStateStore";
 import { servingHeapDiagnostics } from "./heapDiagnostics";
+import { readHeapSeriesMemory } from "./heapSeriesMemory";
 
 export const HEAP_SERIES_INTERVAL_MS = 10 * 60_000;
 export const HEAP_SERIES_RETENTION_MS = 7 * 24 * 60 * 60_000;
@@ -12,10 +13,15 @@ export interface HeapSeriesRow {
   id: string; at: number; pid: number; uptimeSeconds: number;
   censusAt: string; heapSize: number; extraMemorySize: number; rss: number;
   censusMs: number; gc: unknown; types: Record<string, number>; attribution: unknown;
+  /** Added to new samples; older retained rows predate the breakdown. */
+  heapCapacity?: number | null; heapTotal?: number | null; external?: number | null; arrayBuffers?: number | null;
+  memoryBreakdown?: Awaited<ReturnType<typeof readHeapSeriesMemory>> | null;
 }
 const decode = (value: unknown): HeapSeriesRow | null => {
   const row = value as HeapSeriesRow;
-  return row && typeof row.id === "string" && Number.isFinite(row.at) ? row : null;
+  return row && typeof row.id === "string" && Number.isFinite(row.at) ? {
+    heapCapacity: null, heapTotal: null, external: null, arrayBuffers: null, memoryBreakdown: null, ...row,
+  } : null;
 };
 
 /** Initialized only after the Viewer has its state startup fence. */
@@ -71,15 +77,25 @@ export function startServingHeapSeries(current: () => boolean) {
       const diagnostics = await servingHeapDiagnostics();
       if (!diagnostics) return null;
       const body = diagnostics.stats(false, false).body;
-      const at = Date.now();
-      const heap = body.heap as { heapSize: number; extraMemorySize: number };
-      const counts = body.objectTypeCounts as Record<string, number>;
-      return { id: `${at}-${process.pid}`, at, pid: process.pid, uptimeSeconds: process.uptime(), censusAt: body.at as string,
-        heapSize: heap.heapSize, extraMemorySize: heap.extraMemorySize, rss: (body.memoryUsage as { rss: number }).rss,
-        censusMs: body.blockedMs as number, gc: body.gc, types: Object.fromEntries(TYPES.map(type => [type, counts[type] ?? 0])), attribution: body.attribution };
+      return sampleHeapSeries(body);
     },
     append: row => { store ??= createHeapSeriesStore(statePath("state.sqlite")); store.append(row); },
   });
+}
+
+/** Each source can be absent independently without discarding the census. */
+export async function sampleHeapSeries(body: Record<string, unknown>): Promise<HeapSeriesRow> {
+  const at = Date.now();
+  const heap = body.heap as { heapSize: number; extraMemorySize: number; heapCapacity?: number };
+  const memory = body.memoryUsage as Partial<NodeJS.MemoryUsage> & { rss: number };
+  const counts = body.objectTypeCounts as Record<string, number>;
+  return { id: `${at}-${process.pid}`, at, pid: process.pid, uptimeSeconds: process.uptime(), censusAt: body.at as string,
+    heapSize: heap.heapSize, extraMemorySize: heap.extraMemorySize, rss: memory.rss,
+    heapCapacity: heap.heapCapacity ?? null, heapTotal: memory.heapTotal ?? null,
+    external: memory.external ?? null, arrayBuffers: memory.arrayBuffers ?? null,
+    memoryBreakdown: await readHeapSeriesMemory(),
+    censusMs: body.blockedMs as number, gc: body.gc,
+    types: Object.fromEntries(TYPES.map(type => [type, counts[type] ?? 0])), attribution: body.attribution };
 }
 
 /** Reading never initializes a collection or writes a sample. */
