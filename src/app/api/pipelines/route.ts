@@ -203,6 +203,7 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse<{ ok: true;
       ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
       ...(result.queued ? { queued: result.queued } : {}),
       ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+      ...(result.briefWarnings?.length ? { briefWarnings: result.briefWarnings } : {}),
       ...(result.convertedStages?.length ? { convertedStages: result.convertedStages } : {}),
       ...(result.legacyReview?.length ? { legacyReview: result.legacyReview } : {}),
     }, { status: result.queued ? 202 : 201 });

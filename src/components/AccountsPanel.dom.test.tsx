@@ -801,7 +801,7 @@ test("stale quota windows without timestamps retain a visible last-known label",
   expect(view.host.querySelector('[data-account-row="acc"]')?.textContent).toContain("Last known values");
 });
 
-// ── Issues #1418 / #1373 — the two card actions fire on click, no confirm ─────
+// ── Issues #1418 / #1373 — Refresh fires on click; a reset arms a confirmation first ─────
 
 const codexCard = (over: Record<string, unknown> = {}) => ({
   id: "account-a", label: "Account A", kind: "managed" as const, authPresent: true, authHealth: "authenticated" as const, plan: "pro",
@@ -828,7 +828,19 @@ test("Refresh re-reads that account's limits on click, with no confirmation step
   expect(view.host.textContent).not.toContain("Confirm");
 });
 
-test("Use one reset fires on the first click and the card shows the new window once the store answers (#1373)", async () => {
+const resetCard = async (calls: string[], over: Record<string, unknown> = {}) => {
+  const view = await mount(state(login({ phase: "authenticated" }), {
+    engine: "codex",
+    accounts: [codexCard(over)],
+    useResetCredit: async (id) => { calls.push(id); return true; },
+  }));
+  mounted.push(view);
+  return view;
+};
+const useButton = (host: HTMLElement) => host.querySelector<HTMLButtonElement>('button[data-account-use-reset="account-a"]')!;
+const armedLine = (host: HTMLElement) => host.querySelector<HTMLElement>('[data-account-reset-armed="account-a"]');
+
+test("Use one reset arms a confirmation on the first press and spends nothing until the explicit confirm (#1373)", async () => {
   const redeemed: string[] = [];
   const initial = state(login({ phase: "authenticated" }), {
     engine: "codex",
@@ -840,12 +852,23 @@ test("Use one reset fires on the first click and the card shows the new window o
   const block = () => view.host.querySelector('[data-account-row="account-a"]')!;
   expect(block().textContent).toContain("0%");
   expect(block().textContent).toContain("1 reset available");
-  const use = view.host.querySelector<HTMLButtonElement>('button[data-account-use-reset="account-a"]')!;
-  expect(use.disabled).toBeFalse();
-  flushSync(() => { use.click(); });
+  expect(useButton(view.host).disabled).toBeFalse();
+  flushSync(() => { useButton(view.host).click(); });
+  await Promise.resolve();
+  expect(redeemed).toEqual([]);
+  const armed = armedLine(view.host)!;
+  expect(armed.textContent).toContain("One reset is spent for this account and cannot be taken back.");
+  // The armed line replaces the reset line, and the confirm takes focus.
+  expect(useButton(view.host)).toBeNull();
+  const confirm = view.host.querySelector<HTMLButtonElement>('[data-account-reset-confirm="account-a"]')!;
+  expect(confirm.textContent).toBe("Use one reset");
+  expect(document.activeElement).toBe(confirm);
+
+  flushSync(() => { confirm.click(); });
   await Promise.resolve();
   expect(redeemed).toEqual(["account-a"]);
-  expect(view.host.textContent).not.toContain("Confirm");
+  expect(armedLine(view.host)).toBeNull();
+  expect(useButton(view.host)).not.toBeNull();
 
   // The store answers with the new window: zero used, a later reset, no credit left.
   const later = Math.floor(Date.now() / 1000) + 7 * 86_400;
@@ -863,6 +886,71 @@ test("Use one reset fires on the first click and the card shows the new window o
   expect(view.host.querySelector('button[data-account-use-reset="account-a"]')).toBeNull();
   openRow(view.host, "account-a");
   expect(block().textContent).toContain("No resets available");
+});
+
+test("Cancel on an armed reset spends nothing and puts the Use one reset line back", async () => {
+  const redeemed: string[] = [];
+  const view = await resetCard(redeemed);
+  flushSync(() => { useButton(view.host).click(); });
+  flushSync(() => { buttonNamed(armedLine(view.host)!, "Cancel")!.click(); });
+  await Promise.resolve();
+  expect(redeemed).toEqual([]);
+  expect(armedLine(view.host)).toBeNull();
+  expect(useButton(view.host)).not.toBeNull();
+});
+
+test("Escape disarms an armed reset without closing the panel, and the arm times out after ten seconds, spending nothing", async () => {
+  const redeemed: string[] = [];
+  let closed = 0;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  const initial = state(login({ phase: "authenticated" }), {
+    engine: "codex",
+    accounts: [codexCard()],
+    useResetCredit: async (id) => { redeemed.push(id); return true; },
+  });
+  flushSync(() => { root.render(<AccountsPanel state={initial} onClose={() => { closed += 1; }} />); });
+  mounted.push({ unmount: async () => { flushSync(() => { root.unmount(); }); host.remove(); } });
+
+  flushSync(() => { useButton(host).click(); });
+  const confirm = host.querySelector<HTMLButtonElement>('[data-account-reset-confirm="account-a"]')!;
+  flushSync(() => { dispatch(confirm, new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+  expect(armedLine(host)).toBeNull();
+  expect(closed).toBe(0);
+
+  const timers: Array<() => void> = [];
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((callback: () => void, ms?: number) => {
+    if (ms === 10_000) { timers.push(callback); return 0 as unknown as ReturnType<typeof setTimeout>; }
+    return realSetTimeout(callback, ms);
+  }) as typeof setTimeout;
+  try {
+    flushSync(() => { useButton(host).click(); });
+    expect(armedLine(host)).not.toBeNull();
+    expect(timers).toHaveLength(1);
+    flushSync(() => { timers[0]!(); });
+    expect(armedLine(host)).toBeNull();
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+  await Promise.resolve();
+  expect(redeemed).toEqual([]);
+});
+
+test("an armed reset in Ukrainian says the reset cannot be taken back, in natural words", async () => {
+  const previous = getLocale();
+  setLocale("uk");
+  try {
+    const view = await mount(state(login({ phase: "authenticated" }), { engine: "codex", accounts: [codexCard()] }));
+    mounted.push(view);
+    flushSync(() => { useButton(view.host).click(); });
+    expect(armedLine(view.host)!.textContent).toContain("Для цього акаунта буде витрачено один скид, його не можна повернути.");
+    expect(buttonNamed(armedLine(view.host)!, "Скасувати")).toBeDefined();
+    expect(buttonNamed(armedLine(view.host)!, "Використати скид")).toBeDefined();
+  } finally {
+    setLocale(previous);
+  }
 });
 
 test("an action in flight marks its button busy and holds the other action until it settles (#1418)", async () => {
