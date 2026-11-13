@@ -1,25 +1,39 @@
-# Claude input evidence with admission contained
+# Claude input during a running turn
 
-Send a decision and two follow-ups through the existing composer. This first
-slice keeps the existing admission policy: seat follow-ups show their queued
-state while Claude is busy. The existing single ordinary-operator join remains
-bounded. Both follow-ups reaching the next tool boundary together is the next
-slice's acceptance, described in `docs/design/claude-native-queued-send.md`.
+Send the decision and follow-ups through the existing composer. On verified
+Claude Code **2.1.325**, a foreground turn accepts two pending native inputs.
+Both follow-ups reach stdin during the turn and its next supported tool
+boundary reads them in submission order. The existing seat inbox composer
+retains its member manifest, original operations and image ranges; arrivals
+in a later queue pass form a later native input.
 
-For Claude Code 2.1.323, each newly written input now has a broker-owned UUID
-persisted with its original operation, payload and writer/process binding before
-stdin. A result that combines inputs settles their original receipts with one
-stable turn owner. An early queued replay retains its evidence until the result
-establishes that owner. An idle-origin input's exact replay can acknowledge its
-already-established initial owner. A content match cannot acknowledge another
-native input.
+`LLV_CLAUDE_NATIVE_QUEUED_SEND=0` disables this admission for newly created
+hosts. `1` requests it through the exact-version gate; an invalid value fails
+closed. Absence enables the verified version. The broker option
+`nativeQueuedSend: false` also disables admission. Other or missing CLI
+versions retain contained delivery. Existing hosts are not restarted by a
+setting change. The child CLI receives no new command or permission flag.
 
-The broker keeps `supportsQueuedSend=false`. Its reserved `nativeQueuedSend`
-request cannot activate multi-input admission in this slice. Missing and other
-CLI versions retain the existing contained path. Native proof reading and the
-write-intent fence remain active when adopting an existing native record, even
-when the current CLI version cannot produce new native evidence. A historical
-binary that does not understand these records is an unsupported downgrade.
+Native proof reading and the write-intent fence remain active when admission
+is disabled or an existing native record is adopted by an unsupported version.
+A historical binary lacking these readers remains an unsupported downgrade.
+Uncertain evidence closes native admission and the ordinary active-turn join;
+possibly written inputs retain their original receipts and cannot write again.
+Unactuated overflow and deferred inputs keep the composer's existing queued
+state. No new composer state is introduced.
+
+Each input UUID and writer/process binding is durable before stdin. A terminal
+result's explicit ordered membership settles the original receipts under one
+stable batch turn. Queued replay alone leaves ownership unresolved. Combined
+replay shape records only a canonical manifest; the feed splits its original
+authors and images only after every member has the same durable terminal proof.
+Concatenated text cannot confirm another instruction.
+
+The installed binary advanced from 2.1.323 to 2.1.325 during this fix round.
+The gate correctly refused the unverified version. The final campaign uses a
+byte-identical scratch copy of the installed 2.1.325 executable, retaining its
+version and digest with the check receipts. Version 2.1.323 observations below
+remain historical; current native admission is scoped to 2.1.325.
 
 ## Reproduce in isolation
 
@@ -55,7 +69,7 @@ no existing host, installation, provider or conversation is a fixture.
 
 ## Evidence and recovery contract
 
-| Existing owner | First-slice behavior |
+| Existing owner | Behavior |
 | --- | --- |
 | `FileClaudeDeliveryLedger` | Existing queued/delivered records remain readable. Versioned native intents precede stdin; one fsynced result record carries the whole ordered batch. Cold loading and positive observers sync the same descriptor they read before acknowledging proof. Normal delivered markers retain existing image retirement for proven, closed inputs; the image collector replays the same proof and retains unknown versions or missing proof. |
 | `ClaudeStreamBrokerHost.sendNative` | Reuses the production image/parts builder, preserves the original entry and UUID, rechecks authorization, process/writer, attention and boundary arrival after asynchronous persistence, and records proven zero-byte refusals before allowing retry. |
@@ -112,14 +126,59 @@ fixture and receipt path. It introduces no replacement queue or receipt store.
   identity and writer/turn CAS. The controller
   changes here are confined to typed receipt confirmation and queue wiring.
 
-The next slice enables verified native admission, two pending writes, active
-seat composition and the narrower in-flight barrier. It must prove the full
-operator decision/two-message case during a held tool, both arrival passes,
-Viewer/host restart cuts and the joint #3975 path. The feed projection of merged
-canonical rows belongs with that admission, using the retained original member
-provenance; it must add no whole-transcript scan to the feed request path.
-Rendered queued, uncertain and delivered acceptance in both languages and themes also belongs to that slice.
-This first slice leaves the originating mid-turn admission task open.
+Native admission now uses a broker-local `QueueEntry.attemptTurnId`. The queue
+produces it from observed health, preserves it through inbox composition and
+checks each original member's authorization again before stdin. The broker
+checks the attempt before intent and after asynchronous preparation. The
+normalizer excludes it from durable payload identity; the journal and public
+command readers never supply it. Genuine `expectedTurnId` constraints remain
+in the original payload. Explicit idle/named fences retain their semantics.
+
+The queue releases its lane while native receipts wait, including an initial
+input whose echo waits behind the first API response. Its narrower handover
+barrier applies only to identity-bound inputs held by the same broker writer,
+including advancement to the next actual CLI batch. Every new write separately
+observes and revalidates its current attempt turn. Controls, release,
+authorization, permission and seat fences remain. Capacity and combined-replay
+byte overflow return the unwritten operation to its existing queued slot.
+
+`usesNativeInputIdentity` preserves the caller's durable fence at idle as well
+as during a turn, including with native admission disabled. A proven zero-byte
+retry retains an older implicit idle constraint as a stronger fence. Moving
+between attempts never changes that operation's payload identity.
+
+A valid prefix result frees its consumed input slots while healthy remaining
+inputs keep their writer custody. A bounded observation set retains timed-out
+or ambiguously consumed inputs; an exact late proof repairs only its originals.
+Restart loses positive in-memory writer custody and reconstructs the stronger
+fence from every unresolved durable intent. It cannot reset uncertainty into
+permission to write again.
+
+The native stream reducer pauses stdout at 512 accepted work items, retaining
+the unparsed suffix and resuming after its bounded persistence window drains.
+It never removes and discards a terminal frame at capacity. Pending bytes keep
+the existing byte bound, with a visible host failure on excess. Cleanup joins
+all windows under one deadline; a later input tests that boundary counters are
+released. The retained reproduction is a finite, unmodified CLI burst of more
+than 512 frames, plus a deterministic slow-persistence regression.
+
+The process-restart fixture uses the production Viewer delivery controller,
+registry, queue, journal, event store, image store and installed CLI in separate
+owned processes. It checks completed and unconfirmed originals across process
+replacement. This names the exercised process; it is not a full Next.js server
+startup or a deployment rehearsal. Those server layers are unchanged here.
+
+Rendered checks replay the real native/contained/ambiguous receipts through
+the existing composer fixture, preserving original operation and submission
+identities. Only its fixture conversation is aliased. The canonical conversation
+and phone browser drivers cover English/Ukrainian, light/dark and desktop/phone.
+They verify pending-to-delivered and unconfirmed states without offering a
+new-key resend for uncertain input.
+
+The immutable design remains `docs/design/claude-native-queued-send.md`.
+The following sections retain earlier slice observations as historical evidence.
+Current verification receipts and the final unmodified pre-push exit belong to
+the fix-round handover; earlier slice hook receipts do not certify its commit.
 
 ## Initial regression evidence
 

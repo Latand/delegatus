@@ -1,5 +1,6 @@
 import { normalizeQueueEntry, type NormalizedQueueEntry, type QueueEntry } from "./engineHost";
 import type { ClaudeDeliveryRecord, ClaudeDeliveryState, ClaudeTranscriptUser } from "./claudeStreamBrokerHost";
+import { structuredContent } from "./structuredContent";
 
 export interface ClaudeNativeWriter {
   sessionId: string;
@@ -64,17 +65,41 @@ export interface ClaudeNativeConsumed extends ClaudeNativeWriter {
   /** An input written at idle already owns its initial batch. Queued echoes
    * retain null until a result identifies which batch consumed them. */
   turnId: string | null;
+  /** Canonical replay shape only. Every member still needs its independent
+      terminal identity proof before this manifest can reach the feed. */
+  mergedInputUuids?: string[];
+  mergedContentDigest?: string;
 }
 
 export function nativeConsumed(value: unknown): ClaudeNativeConsumed | null {
   const row = object(value);
   const writer = nativeWriter(value);
+  const merged = row?.mergedInputUuids === undefined && row?.mergedContentDigest === undefined ? undefined : nativeUuids(row?.mergedInputUuids);
+  if (merged !== undefined && (!merged || merged.length < 2 || merged.at(-1) !== row?.inputUuid
+    || typeof row?.mergedContentDigest !== "string" || !/^[0-9a-f]{64}$/.test(row.mergedContentDigest))) return null;
   return row?.version === 1 && writer && claudeNativeUuid(row.inputUuid)
     && row.canonicalUuid === row.inputUuid && typeof row.entryId === "string" && row.entryId.length > 0
     && typeof row.contentDigest === "string" && /^[0-9a-f]{64}$/.test(row.contentDigest)
     && (row.turnId === null || row.turnId === row.entryId)
     ? { ...writer, version: 1, inputUuid: row.inputUuid, canonicalUuid: row.inputUuid,
-      entryId: row.entryId, contentDigest: row.contentDigest, turnId: row.turnId as string | null } : null;
+      entryId: row.entryId, contentDigest: row.contentDigest, turnId: row.turnId as string | null,
+      ...(merged ? { mergedInputUuids: merged, mergedContentDigest: row.mergedContentDigest as string } : {}) } : null;
+}
+
+export function nativeMergedContent(states: readonly ClaudeDeliveryState[]) {
+  return structuredContent(states.map((state, index) => state.entry.content.text
+    + (index < states.length - 1 && state.entry.content.text ? "\n" : "")).join(""),
+  states.flatMap(state => state.entry.content.images));
+}
+
+export function nativeMergedMembers(states: readonly ClaudeDeliveryState[], evidence: ClaudeNativeConsumed): ClaudeDeliveryState[] | null {
+  const ids = evidence.mergedInputUuids;
+  if (!ids || ids.at(-1) !== evidence.inputUuid) return null;
+  const members = states.filter(state => ids.includes(state.native?.inputUuid ?? ""));
+  if (members.length !== ids.length || members.some((state, index) => !state.native || state.nativeUnverified || state.nativeNoWrite
+    || !sameNativeWriter(state.native, evidence) || state.native.inputUuid !== ids[index])
+    || members.at(-1)?.entry.id !== evidence.entryId) return null;
+  return nativeMergedContent(members).contentDigest === evidence.mergedContentDigest ? members : null;
 }
 
 export const CLAUDE_NATIVE_INPUT_LIMIT = 3;
@@ -130,7 +155,7 @@ export function nativeResultMembers(states: readonly ClaudeDeliveryState[], proo
     ? members : null;
 }
 
-/** Strictly top-level, owned-stream success evidence observed on 2.1.323.
+/** Strictly top-level, owned-stream success evidence on the verified CLI.
  * Other terminal branches retain uncertainty until independently verified. */
 export function nativeBoundary(frame: Record<string, unknown>, writer: ClaudeNativeWriter,
   turnId: string, states: readonly ClaudeDeliveryState[]): ClaudeNativeResult | null {
@@ -261,6 +286,7 @@ export function replayClaudeDeliveries(records: ClaudeDeliveryRecord[], sessionI
       if (!evidence || !state?.native || state.nativeUnverified || state.nativeNoWrite || state.nativeConsumed
         || !sameNativeWriter(state.native, evidence) || state.native.inputUuid !== evidence.inputUuid
         || state.entry.contentDigest !== evidence.contentDigest || evidence.turnId !== null && state.disposition !== "turn-started") continue;
+      if (evidence.mergedInputUuids && !nativeMergedMembers(states, evidence)) continue;
       state.nativeConsumed = evidence;
       state.engineMessageId = evidence.canonicalUuid;
       if (evidence.turnId) { state.delivered = true; state.confirmation = "operation-bound"; }

@@ -46,6 +46,9 @@ export interface QueueEntry {
   images?: StructuredImageRef[];
   /** Optional caller fence. A mismatch is rejected before any engine write. */
   expectedTurnId?: string | null;
+  /** Broker-local observation for this attempt; excluded from durable identity
+      and public command parsing. A moved turn refuses the unwritten attempt. */
+  attemptTurnId?: string | null;
   /** Per-turn runtime settings snapshotted on the durable send effect (issue
       #390 §10). A host applies what its protocol can honor and ignores the
       rest; absent = the host's own configuration, exactly as before. */
@@ -236,6 +239,9 @@ export interface EngineHost {
   /** send() accepts input into the engine's own queue while a turn is active
       or awaiting attention, preserving that turn until it finishes. */
   readonly supportsQueuedSend?: boolean;
+  /** The broker persists per-input native identity even with admission off.
+      Queue attempts must keep observed turn fences out of payload identity. */
+  readonly usesNativeInputIdentity?: boolean;
   /** How a host without steer takes a message meant for its running turn.
       `interrupt`: the delivery queue interrupts that turn and sends the
       message as the next one (Copilot's ACP has no steer). Absent keeps the

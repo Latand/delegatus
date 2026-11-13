@@ -1,4 +1,4 @@
-import { CLAUDE_NATIVE_INPUT_LIMIT, claudeNativeUuid, nativeBoundary, nativeTurnBoundary, nativeTurnBoundaryMember, nativeConsumed, nativeInput, nativeResult, nativeResultMembers, nativeTerminal, nativeUuids, sameNativeWriter,
+import { CLAUDE_NATIVE_INPUT_LIMIT, claudeNativeUuid, nativeBoundary, nativeTurnBoundary, nativeTurnBoundaryMember, nativeConsumed, nativeInput, nativeResult, nativeResultMembers, nativeMergedContent, nativeMergedMembers, nativeTerminal, nativeUuids, sameNativeWriter,
   deliveryRecord, parseDeliveryRecords, replayClaudeDeliveries, sameNormalizedEntry, type ClaudeNativeTurnBoundary, type ClaudeNativeConsumed, type ClaudeNativeInput, type ClaudeNativeResult, type ClaudeNativeTerminal, type ClaudeNativeWriter } from "./claudeNativeDelivery";
 import { assertReleasedHostEventLedger } from "./hostEventWindow";
 import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
@@ -284,11 +284,12 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
     return this.serializeNative(async () => {
       const evidence = nativeConsumed(value);
       if (!evidence || evidence.sessionId !== sessionId) return "refused";
-      const states = await this.nativeStates(sessionId, [evidence.entryId]);
+      const states = evidence.mergedInputUuids ? await this.loadDurable(sessionId) : await this.nativeStates(sessionId, [evidence.entryId]);
       const state = states.find(row => row.entry.id === evidence.entryId);
       if (!state?.native || !sameNativeWriter(state.native, evidence) || state.native.inputUuid !== evidence.inputUuid
         || state.entry.contentDigest !== evidence.contentDigest || state.nativeNoWrite
         || evidence.turnId !== null && state.disposition !== "turn-started") return "refused";
+      if (evidence.mergedInputUuids && !nativeMergedMembers(states, evidence)) return "refused";
       if (state.nativeConsumed) return JSON.stringify(state.nativeConsumed) === JSON.stringify(evidence) ? "already-confirmed" : "refused";
       await this.appendNative(sessionId, { kind: "native-consumed", evidence });
       state.nativeConsumed = evidence;
@@ -437,7 +438,7 @@ export interface ClaudeSessionIdentity { sessionId: string }
 
 export interface ClaudeStreamBrokerHostOptions {
   memoryQueuePath?: string;
-  /** Reserved admission request. This evidence-only slice keeps it contained. */
+  /** Disable native admission while retaining native proof and write fences. */
   nativeQueuedSend?: boolean;
   cwd: string;
   sessionId?: string;
@@ -878,9 +879,9 @@ const CLAUDE_BACKGROUND_TURN_PREFIX = "claude-background:";
 /** One durable writer around a long-lived Claude stream-json process. */
 export class ClaudeStreamBrokerHost implements EngineHost {
   readonly supportsSteer = false;
-  // Admission remains contained for this evidence slice. Enabling two pending
-  // writes also requires the queue/admission and full native acceptance slice.
-  readonly supportsQueuedSend = false;
+  private readonly nativeAdmission: boolean;
+  get supportsQueuedSend(): boolean { return this.nativeAdmission && !this.nativeUncertain; }
+  get usesNativeInputIdentity(): boolean { return this.nativeWriter !== null; }
   readonly coalescesQueuedInput = true;
   // Claude Code answers an interrupt during a tool call by rejecting that tool
   // use ("The user doesn't want to proceed with this tool use. ... STOP what
@@ -904,6 +905,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private nativeQueuedBytes = 0;
   private nativeBoundaryPending = 0;
   private nativeControlPending = 0;
+  private stdoutPaused = false;
   private nativeUncertain = false;
   private nativeProtocolUncertain = false;
   private nativeDeadlineEpoch = 0;
@@ -958,6 +960,12 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private readonly deliveries: ClaudeDeliveryState[] = [];
+  /** At most the incumbent and two pending native writes. Proof application
+      removes each member; historical receipts remain in the existing ledger. */
+  private readonly nativeOutstanding = new Map<string, ClaudeDeliveryState>();
+  /** At most three live inputs. Restart loses positive writer custody and
+      fences every unresolved intent independently of this observation set. */
+  private readonly nativeObservationUncertain = new Set<string>();
   private readonly turnQueue: string[] = [];
   /** Engine ids of the inputs the running turn read at a tool boundary. */
   private readonly joinedUserUuids = new Set<string>();
@@ -1040,12 +1048,16 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.releaseCleanup = options.releaseCleanup ?? null;
     this.cursor = options.initialEventCursor ?? 0;
     this.protocolVersion = auth.version ?? null;
-    // Protocol evidence is exact-version scoped. Native admission remains off,
-    // including when its future kill-switch setting requests activation.
-    this.nativeWriter = auth.version === "2.1.323" && claudeNativeUuid(identity.sessionId) && this.childStartIdentity
+    // Protocol evidence is exact-version scoped. The reader remains available
+    // with admission disabled, so the kill switch never discards write fences.
+    this.nativeWriter = auth.version === "2.1.325" && claudeNativeUuid(identity.sessionId) && this.childStartIdentity
       && this.deliveryLedger.recordNativeIntent && this.deliveryLedger.recordNativeConsumed && this.deliveryLedger.confirmNativeResult && this.deliveryLedger.recordNativeNoWrite
       ? { sessionId: identity.sessionId, writerId: crypto.randomUUID(),
         process: { pid: nativeProcessId(child)!, startIdentity: this.childStartIdentity } } : null;
+    const nativeSetting = (options.env ?? process.env).LLV_CLAUDE_NATIVE_QUEUED_SEND;
+    this.nativeAdmission = !!this.nativeWriter && !!this.deliveryLedger.recordNativeTerminal && !!this.deliveryLedger.recordNativeTurnBoundary
+      && options.nativeQueuedSend !== false
+      && (nativeSetting === undefined || nativeSetting === "1");
     this.account = { type: auth.authMethod, planType: auth.subscriptionType };
     this.launchFlags = options.allowSubagents
       ? [STRUCTURED_IMAGE_CAPABILITY]
@@ -1259,7 +1271,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     options = { ...options, deliveryLedger: options.deliveryLedger ?? new FileClaudeDeliveryLedger() };
     try {
       initialDeliveries = options.deliveryLedger!.loadDurable
-        ? await options.deliveryLedger!.loadDurable(sessionId, auth.version === "2.1.323")
+        ? await options.deliveryLedger!.loadDurable(sessionId, auth.version === "2.1.325")
         : options.deliveryLedger!.load(sessionId);
       options.assertCurrent?.();
       child = await spawnManagedEngine(binary, args, {
@@ -1349,6 +1361,9 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (!entry.id) throw new Error("queue entry id is required");
     const normalized = normalizeQueueEntry(entry);
     const duplicate = this.deliveries.find((state) => state.entry.id === entry.id);
+    const keepsLegacyIdleFence = this.nativeWriter !== null && duplicate?.entry.expectedTurnId === null
+      && normalized.expectedTurnId === undefined;
+    if (keepsLegacyIdleFence) normalized.expectedTurnId = null;
     if (duplicate && !sameNormalizedEntry(duplicate.entry, normalized)) {
       throw new Error("Claude queue entry id belongs to a different payload");
     }
@@ -1363,6 +1378,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     }
     const existingPending = this.pendingDeliveries.get(entry.id);
     if (existingPending) return existingPending.promise;
+    if (keepsLegacyIdleFence && this.activeTurnId !== null
+      || entry.attemptTurnId !== undefined && entry.attemptTurnId !== this.activeTurnId) {
+      return { outcome: "rejected", reason: "stale-turn" };
+    }
     /* One input waits behind the running turn at a time. A second one could be
        joined with it into one echo, which would confirm neither. */
     if (this.activeTurnId && this.turnQueue.some((id) => id !== this.activeTurnId && id !== entry.id)) {
@@ -1380,6 +1399,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     const blocks = this.prepareUserBlocks(normalized);
     markTiming("claude-prepare-end");
     authorizeDispatch?.();
+    if (keepsLegacyIdleFence && this.activeTurnId !== null
+      || entry.attemptTurnId !== undefined && entry.attemptTurnId !== this.activeTurnId
+      || this.nativeWriter && (this.nativeBoundaryPending || this.nativeControlPending || this.stdoutPaused)) {
+      return { outcome: "rejected", reason: "stale-turn" };
+    }
     const disposition: ClaudeDeliveryState["disposition"] = duplicate?.disposition
       ?? (this.activeTurnId ? "queued-next-turn" : "turn-started");
     try {
@@ -1457,6 +1481,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
 
   private noteNativeFailure(phase: "intent" | "no-write" | "reducer", error: unknown): void {
     this.nativeUncertain = true;
+    for (const id of this.nativeOutstanding.keys()) this.nativeObservationUncertain.add(id);
     if (this.nativeFailureReported) return;
     this.nativeFailureReported = true;
     const cause = error instanceof Error && ["Error", "TypeError", "SyntaxError", "RangeError", "ReferenceError", "AggregateError"].includes(error.name) ? error.name : "Error";
@@ -1468,11 +1493,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   /** Input writes and proof appends share one asynchronous, bounded lane.
    * Receipt promises wait outside it, leaving permission controls serviceable. */
   private enqueueNative<T>(action: () => Promise<T>, discardUnstarted = false): Promise<T> {
-    if (++this.nativeWorkCount > 512) {
-      this.nativeWorkCount--;
-      this.nativeUncertain = this.nativeProtocolUncertain = true;
-      return Promise.reject(new Error("Claude native evidence backlog is uncertain"));
-    }
+    // Stream producers pause before removing a frame at capacity. Only a new,
+    // unactuated dispatch can be refused here; accepted evidence is never lost.
+    if (discardUnstarted && this.nativeWorkCount >= 512) return Promise.reject(
+      new StructuredDispatchDeferredError("Claude native dispatch is waiting for local persistence"));
+    this.nativeWorkCount++;
     let resolve!: (value: T) => void, reject!: (error: unknown) => void;
     let started = false, expired = false;
     const result = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
@@ -1482,6 +1507,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         reject(new StructuredDispatchDeferredError("Claude native dispatch is waiting for local persistence"));
       } else {
         this.nativeUncertain = true;
+        for (const id of this.nativeOutstanding.keys()) this.nativeObservationUncertain.add(id);
         this.nativeDeadlineEpoch++;
         reject(new Error("Claude native delivery persistence timed out; outcome is uncertain"));
       }
@@ -1494,7 +1520,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         started = true;
         resolve(await action());
       } catch (error) { reject(error); }
-      finally { clearTimeout(timer); this.nativeWorkCount--; }
+      finally {
+        clearTimeout(timer); this.nativeWorkCount--;
+        if (this.stdoutPaused && this.nativeWorkCount <= 256) this.acceptStdout("");
+      }
     });
     this.nativeWork = work;
     return result;
@@ -1505,6 +1534,12 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       const attemptEpoch = this.nativeDeadlineEpoch;
       const normalized = normalizeQueueEntry(entry);
       const existing = this.deliveries.find(state => state.entry.id === entry.id);
+      // Older contained callers persisted an implicit idle helper fence. Keep
+      // that stronger constraint on a proven zero-byte retry; it cannot become
+      // either a new payload or permission to write into an active turn.
+      if (existing?.nativeNoWrite && existing.entry.expectedTurnId === null && normalized.expectedTurnId === undefined) {
+        normalized.expectedTurnId = null;
+      }
       if (existing && !sameNormalizedEntry(existing.entry, normalized)) throw new Error("Claude queue entry id belongs to a different payload");
       if (existing?.nativeResult) return { receipt: { outcome: existing.nativeResult.turnId === entry.id ? existing.disposition : "steered", turnId: existing.nativeResult.turnId } };
       if (existing?.nativeConsumed?.turnId) return { receipt: { outcome: existing.disposition, turnId: existing.nativeConsumed.turnId } };
@@ -1513,11 +1548,20 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       // Adoption of a possibly written input never grants another write.
       if (existing && !existing.nativeNoWrite) throw new Error("Claude native delivery outcome is uncertain; input remains fenced");
       if (!this.nativeCurrent()) return { receipt: { outcome: "rejected", reason: "dead-host" } };
-      if (this.nativeUncertain && !this.nativeIdleSafe(entry.id) || this.attentions.size || this.nativeBoundaryPending || this.nativeControlPending || this.backgroundTurn(this.activeTurnId)
-        || this.activeTurnId && this.turnQueue.some(id => id !== this.activeTurnId && id !== entry.id)
+      if (this.nativeUncertain && !this.nativeIdleSafe(entry.id) || this.attentions.size || this.nativeBoundaryPending || this.nativeControlPending || this.stdoutPaused || this.manualCompaction || this.backgroundTurn(this.activeTurnId)
+        || this.turnQueue.length >= (this.supportsQueuedSend ? CLAUDE_NATIVE_INPUT_LIMIT : 2)
+        || this.activeTurnId && !this.nativeOutstanding.has(this.activeTurnId)
+        || entry.attemptTurnId !== undefined && entry.attemptTurnId !== this.activeTurnId
         || normalized.expectedTurnId !== undefined && normalized.expectedTurnId !== this.activeTurnId) {
         return { receipt: { outcome: "rejected", reason: "stale-turn" } };
       }
+      // The CLI may replay every pending input in one frame. Keep that frame
+      // inside the same byte bound as an individual input before writing any
+      // part of an overflowing follow-up. Its original queue slot can wait.
+      const replayEntries = [normalized, ...Array.from(this.nativeOutstanding.values(), state => state.entry)];
+      const replayBytes = replayEntries.reduce((bytes, item) => bytes + Buffer.byteLength(JSON.stringify(item.content.text))
+        + item.content.images.reduce((sum, image) => sum + Math.ceil(image.bytes / 3) * 4 + 1024, 0), 1024);
+      if (replayBytes > MAX_LINE_BYTES) return { receipt: { outcome: "rejected", reason: "stale-turn" } };
       const mark = (value: DeliveryTimingMark) => { try { timing?.(value); } catch { /* observation only */ } };
       mark("claude-prepare-start");
       const blocks = this.prepareUserBlocks(normalized);
@@ -1529,7 +1573,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         catch { /* no matching receipt means the hook abstains */ }
       }
       authorize?.();
-      if (!this.nativeCurrent() || this.nativeUncertain && !this.nativeIdleSafe(entry.id) || attemptEpoch !== this.nativeDeadlineEpoch || this.attentions.size || this.nativeBoundaryPending || this.nativeControlPending
+      if (!this.nativeCurrent() || this.nativeUncertain && !this.nativeIdleSafe(entry.id) || attemptEpoch !== this.nativeDeadlineEpoch || this.attentions.size || this.nativeBoundaryPending || this.nativeControlPending || this.stdoutPaused || this.manualCompaction
+        || entry.attemptTurnId !== undefined && entry.attemptTurnId !== this.activeTurnId
         || normalized.expectedTurnId !== undefined && normalized.expectedTurnId !== this.activeTurnId) return { receipt: { outcome: "rejected", reason: "stale-turn" } };
       const observedTurn = this.activeTurnId;
       const resumingNoWrite = existing?.nativeNoWrite === true;
@@ -1552,7 +1597,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       try {
         authorize?.();
         fenceChanged = !this.nativeCurrent() || this.nativeUncertain && !this.nativeIdleSafe(entry.id) || attemptEpoch !== this.nativeDeadlineEpoch || this.attentions.size > 0
-          || this.nativeBoundaryPending > 0 || this.nativeControlPending > 0 || observedTurn !== this.activeTurnId;
+          || this.nativeBoundaryPending > 0 || this.nativeControlPending > 0 || this.stdoutPaused || this.manualCompaction !== null || observedTurn !== this.activeTurnId;
         if (fenceChanged) throw new Error("Claude native dispatch fence changed before write");
       } catch (error) {
         try {
@@ -1575,6 +1620,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       const waiting: PendingDelivery = { promise, resolve, reject, timer: null };
       this.pendingDeliveries.set(entry.id, waiting);
       this.turnQueue.push(entry.id);
+      this.nativeOutstanding.set(entry.id, state);
       const startsTurn = !this.activeTurnId;
       if (startsTurn) this.activeTurnId = entry.id;
       mark("claude-write-start");
@@ -1603,12 +1649,32 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     let echo: string | null = null;
     if (this.nativeCurrent(true) && state?.native && sameNativeWriter(state.native, this.nativeWriter!) && content && message.isReplay === true
       && message.session_id === this.identity.sessionId && message.parent_tool_use_id == null && message.agent_id == null
-      && stringField(message.message, "role") === "user" && (state.entry.contentDigest === content.contentDigest
+      && stringField(message.message, "role") === "user") {
+      const ownContent = state.entry.contentDigest === content.contentDigest
         || state.nativeReplayShape && state.nativeReplayShape.imageCount === content.content.images.length
-          && state.nativeReplayShape.textDigest === crypto.createHash("sha256").update(content.content.text).digest("hex"))) {
+          && state.nativeReplayShape.textDigest === crypto.createHash("sha256").update(content.content.text).digest("hex");
+      let merged: ClaudeDeliveryState[] | null = null;
+      if (!ownContent && !state.nativeConsumed) {
+        const outstanding = [...this.nativeOutstanding.values()].filter(row => row.native && sameNativeWriter(row.native, state.native!)
+          && !row.nativeResult && !row.nativeTerminal && !row.nativeTurnBoundary && !row.nativeNoWrite);
+        const end = outstanding.indexOf(state) + 1;
+        for (let count = 2; count <= Math.min(end, CLAUDE_NATIVE_INPUT_LIMIT); count++) {
+          const members = outstanding.slice(end - count, end);
+          const combined = nativeMergedContent(members);
+          if (combined.content.text === content.content.text && combined.content.images.length === content.content.images.length) {
+            if (merged) { merged = null; break; }
+            merged = members;
+          }
+        }
+      }
+      if (!ownContent && !merged) {
+        this.emit({ kind: "item", turnId: this.activeTurnId, item: sanitizedUserReplay(message, content), phase: "completed", accountingAt: receivedAt });
+        return;
+      }
       const evidence: ClaudeNativeConsumed = { ...state.native, canonicalUuid: state.native.inputUuid,
         entryId: state.entry.id, contentDigest: state.entry.contentDigest,
-        turnId: state.disposition === "turn-started" ? state.entry.id : null };
+        turnId: state.disposition === "turn-started" ? state.entry.id : null,
+        ...(merged ? { mergedInputUuids: merged.map(row => row.native!.inputUuid), mergedContentDigest: nativeMergedContent(merged).contentDigest } : {}) };
       const result = await this.deliveryLedger.recordNativeConsumed!(this.identity.sessionId, evidence);
       if (result !== "refused") await this.noteNativeConsumed([state.entry.id]);
       if (result !== "refused" && this.nativeCurrent(true)) {
@@ -1619,7 +1685,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         if (evidence.turnId) {
           state.delivered = true;
           state.confirmation = "operation-bound";
-          if (state.nativeTerminal || state.nativeTurnBoundary) this.refreshNativeUncertainty();
+          this.refreshNativeUncertainty();
           const waiting = this.pendingDeliveries.get(state.entry.id);
           if (waiting) {
             if (waiting.timer) clearTimeout(waiting.timer);
@@ -1662,6 +1728,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         state.nativeTerminal = evidence;
         const index = this.turnQueue.indexOf(state.entry.id);
         if (index >= 0) this.turnQueue.splice(index, 1);
+        this.nativeOutstanding.delete(state.entry.id);
+        this.nativeObservationUncertain.delete(state.entry.id);
         const pending = this.pendingDeliveries.get(state.entry.id);
         if (pending) {
           this.pendingDeliveries.delete(state.entry.id);
@@ -1702,6 +1770,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     for (const state of members) {
       const index = this.turnQueue.indexOf(state.entry.id);
       if (index >= 0) this.turnQueue.splice(index, 1);
+      this.nativeOutstanding.delete(state.entry.id);
+      this.nativeObservationUncertain.delete(state.entry.id);
       const waiting = this.pendingDeliveries.get(state.entry.id);
       if (waiting) {
         if (waiting.timer) clearTimeout(waiting.timer);
@@ -1738,6 +1808,9 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.lastResultUuid = proof.resultUuid;
     const index = this.turnQueue.indexOf(proof.turnId);
     if (index >= 0) this.turnQueue.splice(index, 1);
+    this.nativeOutstanding.delete(proof.turnId);
+    this.nativeObservationUncertain.delete(proof.turnId);
+    for (const id of this.nativeOutstanding.keys()) this.nativeObservationUncertain.add(id);
     // Any already-written followers retain their intents and receipts. With
     // unknown membership they acquire no invented new running turn.
     this.refreshNativeUncertainty();
@@ -1751,7 +1824,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
 
   private refreshNativeUncertainty(): void {
     this.nativeUncertain = this.nativeProtocolUncertain || this.deliveries.some(state => state.nativeUnverified
-      || state.native && !state.nativeNoWrite && !state.delivered);
+      || state.native && !state.nativeNoWrite && !state.delivered
+        && (!this.nativeOutstanding.has(state.entry.id) || this.nativeObservationUncertain.has(state.entry.id)));
   }
 
   /* Legacy queued inputs start their echo budget with their own turn. Native
@@ -1767,6 +1841,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       // write the same input again while its original replay echo is pending.
       if (this.deliveries.find(state => state.entry.id === id)?.native) {
         this.nativeUncertain = true;
+        this.nativeObservationUncertain.add(id);
         this.nativeDeadlineEpoch++;
       }
       pending.reject(new Error("Claude delivery confirmation timed out; outcome is uncertain"));
@@ -1955,7 +2030,12 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private async joinNativePersistence(): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.race([this.nativeWork, new Promise<never>((_, reject) => {
+      const drain = async () => {
+        // Backpressure can append another bounded window during the previous
+        // tail's finally. Keep custody through every window under one deadline.
+        do { await this.nativeWork; } while (this.nativeWorkCount > 0);
+      };
+      await Promise.race([drain(), new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error("Claude native persistence cleanup could not be confirmed")), this.requestTimeoutMs);
       })]);
     } finally { if (timer) clearTimeout(timer); }
@@ -2186,10 +2266,18 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private acceptStdout(chunk: string): void {
-    if (this.dead || this.released || this.nativeWriter && this.reaped) return;
+    if (this.dead || this.released || this.nativeWriter && this.reaped && chunk) return;
     this.stdoutBuffer += chunk;
+    if (this.nativeWriter && this.nativeQueuedBytes + Buffer.byteLength(this.stdoutBuffer) > MAX_LINE_BYTES + 4 * 1024 * 1024) {
+      return this.fail(new Error("Claude native evidence backlog exceeded its byte limit"));
+    }
     let newline = this.stdoutBuffer.indexOf("\n");
     while (newline >= 0) {
+      if (this.nativeWriter && this.nativeWorkCount >= 512) {
+        this.stdoutPaused = true;
+        this.child.stdout.pause();
+        return;
+      }
       const line = this.stdoutBuffer.slice(0, newline);
       this.stdoutBuffer = this.stdoutBuffer.slice(newline + 1);
       if (Buffer.byteLength(line) > MAX_LINE_BYTES) return this.fail(new Error("Claude emitted an oversized JSONL frame"));
@@ -2232,6 +2320,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       newline = this.stdoutBuffer.indexOf("\n");
     }
     if (Buffer.byteLength(this.stdoutBuffer) > MAX_LINE_BYTES) this.fail(new Error("Claude emitted an oversized JSONL frame"));
+    if (this.stdoutPaused && !this.dead && !this.released) {
+      this.stdoutPaused = false;
+      this.child.stdout.resume();
+    }
   }
 
   private acceptMessage(line: string): void | Promise<void> {

@@ -22,6 +22,8 @@ test.skipIf(!binary).each([
   "native-evidence-review-omitted", "native-evidence-review-invalid", "native-evidence-review-legacy",
   "native-evidence", "native-evidence-restart", "native-evidence-error", "native-evidence-interruption",
   "native-evidence-permission-allow", "native-evidence-permission-deny", "native-evidence-permission-cancel",
+  "native-enabled", "native-enabled-restart", "native-enabled-error", "native-enabled-interruption",
+  "native-enabled-permission-allow", "native-enabled-permission-deny", "native-enabled-permission-cancel",
   "images", "restart", "interruption", "permission-allow", "permission-deny", "permission-cancel",
 ] as const)(
   "installed Claude queue protocol with loopback API: %s", async (mode) => {
@@ -42,17 +44,21 @@ test.skipIf(!binary).each([
     const resultFrames: Array<Record<string, unknown>> = [];
     const wireInputs: Array<Record<string, unknown>> = [];
     const requests: Array<{ messages: unknown[] }> = [];
-    const lifecycle = mode.startsWith("native-evidence") || ["images", "restart", "interruption", "permission-allow", "permission-deny", "permission-cancel"].includes(mode);
+    const lifecycle = mode.startsWith("native-enabled") || mode.startsWith("native-evidence") || ["images", "restart", "interruption", "permission-allow", "permission-deny", "permission-cancel"].includes(mode);
     const permission = mode.includes("permission-");
-    const nativeEvidence = mode.startsWith("native-evidence") || mode === "seat-inbox-native";
+    const enabled = mode.startsWith("native-enabled");
+    const nativeEvidence = enabled || mode.startsWith("native-evidence") || mode === "seat-inbox-native";
     const permissionFile = path.join(directory, "permission.txt");
     // Valid 1px PNG; both the original bytes and references survive delivery.
     const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=", "base64");
     const image = { sha256: crypto.createHash("sha256").update(imageBytes).digest("hex"), mime: "image/png" as const, bytes: imageBytes.length };
     const inputUuid = (ordinal: number) => `00000000-0000-4000-8000-${String(ordinal).padStart(12, "0")}`;
     let apiCalls = 0;
+    let handoff = false;
     let releaseFirst!: () => void;
     const firstResponse = new Promise<void>(resolve => { releaseFirst = resolve; });
+    let releaseSecond!: () => void;
+    const secondResponse = new Promise<void>(resolve => { releaseSecond = resolve; });
     const delayedWrites = new Set<Promise<void>>();
 
     const event = (type: string, data: unknown) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -63,7 +69,8 @@ test.skipIf(!binary).each([
       requests.push(body);
       const call = ++apiCalls;
       if ((mode.startsWith("seat-inbox") || lifecycle) && call === 1) await firstResponse;
-      if (mode === "native-evidence-error") return Response.json({ type: "error",
+      if (mode === "native-enabled" && call === 2) await secondResponse;
+      if (mode.endsWith("-error")) return Response.json({ type: "error",
         error: { type: "invalid_request_error", message: "fixture rejection" } }, { status: 400 });
 
       const tool = permission && call === 1;
@@ -102,7 +109,7 @@ test.skipIf(!binary).each([
       expect(journal.operationResult(operationId)?.receipt.status).toBe(expected);
     };
     const openHost = (sessionId?: string) => {
-      const options = { binary, cwd: directory,
+      const options = { binary, cwd: directory, nativeQueuedSend: enabled,
         env: { PATH: process.env.PATH, HOME: directory, TMPDIR: directory, XDG_CONFIG_HOME: path.join(directory, "config"),
           LLV_STATE_DIR: path.join(directory, "state"), NODE_ENV: "test" },
         tools: permission ? ["Write"] : [], permissionMode: permission ? "default" : "bypassPermissions",
@@ -210,6 +217,7 @@ test.skipIf(!binary).each([
         effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
         status: async id => journal.operationResult(id)?.receipt ?? null,
         hostClaim: async () => "fixture-owner",
+        handoffHeld: () => handoff,
         ...{ coalescesConversation: () => mode.startsWith("seat-inbox"), bindDeliveryBatch: async () => true },
         transition: async (...args) => { journal.transitionOperation(...args); },
       }, () => host, undefined, undefined, undefined, undefined, undefined, undefined, { passBudgetMs: 20 });
@@ -262,6 +270,93 @@ test.skipIf(!binary).each([
         return;
       }
       if (lifecycle) {
+        if (enabled) {
+          expect(host.supportsQueuedSend).toBe(true);
+          const command = (id: string, withImage = false) => ({ kind: "send" as const, operationId: id,
+            idempotencyKey: id, conversationId, text: withImage ? "" : `fixture ${id}`,
+            images: withImage ? [image] : [], policy: "queue" as const });
+          const incumbent = command("enabled-incumbent");
+          journal.executeOperation(incumbent); await queue.drain(); await wait(() => apiCalls === 1);
+          const pending = [command("enabled-first", true), command("enabled-second"), command("enabled-overflow")];
+          pending.forEach(input => journal.executeOperation(input));
+          await queue.drain();
+          await wait(() => wireInputs.filter(frame => frame.type === "user").length === 3);
+          await wait(() => journal.operationResult(pending[2]!.operationId)?.receipt.status === "queued");
+          expect(pending.map(input => journal.operationResult(input.operationId)?.receipt.status)).toEqual(["delivering", "delivering", "queued"]);
+          expect(ledger.load(host.identity.sessionId)).toHaveLength(3);
+          if (mode.endsWith("interruption")) {
+            journal.executeOperation({ kind: "interrupt", operationId: "enabled-stop", idempotencyKey: "enabled-stop",
+              conversationId, turnId: incumbent.operationId });
+            await driveUntilReceipt(queue, "enabled-stop", "interrupted");
+          }
+          releaseFirst();
+          if (permission) {
+            let attention: string | undefined;
+            for (let i = 0; i < 1200 && !attention; i++) { attention = (await host.health()).pendingAttention[0]; if (!attention) await Bun.sleep(25); }
+            expect(attention).toBeString();
+            await queue.drain();
+            expect(wireInputs.filter(frame => frame.type === "user")).toHaveLength(3);
+            if (mode.endsWith("permission-cancel")) {
+              journal.executeOperation({ kind: "interrupt", operationId: "enabled-cancel", idempotencyKey: "enabled-cancel",
+                conversationId, turnId: incumbent.operationId });
+              await driveUntilReceipt(queue, "enabled-cancel", "interrupted");
+            } else {
+              journal.executeOperation({ kind: "answer", operationId: "enabled-answer", idempotencyKey: "enabled-answer",
+                conversationId, attentionId: attention!, resolution: mode.endsWith("permission-allow") ? { behavior: "allow" } : { behavior: "deny" } });
+              await driveUntilReceipt(queue, "enabled-answer", "answered");
+            }
+          }
+          if (mode === "native-enabled") {
+            await wait(() => apiCalls === 2);
+            for (let i = 0; i < 1200 && wireInputs.filter(frame => frame.type === "user").length < 4; i++) {
+              await queue.drain(); await Bun.sleep(25);
+            }
+            expect(wireInputs.filter(frame => frame.type === "user")).toHaveLength(4);
+            expect(journal.operationResult(pending[2]!.operationId)?.receipt.status).toBe("delivering");
+            releaseSecond();
+          }
+          await wait(() => ledger.load(host!.identity.sessionId).slice(0, 3).every(row => row.nativeResult || row.nativeTerminal || row.nativeTurnBoundary));
+          await wait(() => store.load(host!.identity.sessionId).filter(frame => frame.kind === "turn-ended").length >= 1);
+          const firstRows = ledger.load(host.identity.sessionId).slice(0, 3);
+          expect(firstRows.map(row => row.entry.id)).toEqual([incumbent.operationId, ...pending.slice(0, 2).map(input => input.operationId)]);
+          expect(firstRows[1]!.entry.content.images).toEqual([image]);
+          const encoded = JSON.stringify(requests);
+          expect(JSON.stringify(wireInputs)).toContain(imageBytes.toString("base64"));
+          if (!mode.endsWith("interruption") && !mode.endsWith("permission-cancel")) expect(encoded).toContain(imageBytes.toString("base64"));
+          for (const row of firstRows) {
+            if (row.nativeResult) await driveUntilReceipt(queue, row.entry.id, "delivered");
+            else expect(row.delivered).toBe(row.nativeConsumed?.turnId != null);
+          }
+          if (permission) expect(fs.existsSync(permissionFile)).toBe(mode.endsWith("permission-allow"));
+          if (mode.endsWith("restart")) {
+            const sessionId = host.identity.sessionId;
+            handoff = true;
+            await host.release();
+            await wait(() => [incumbent, ...pending].every(input => journal.operationResult(input.operationId)?.receipt.status !== "delivering"));
+            const before = [incumbent, ...pending].map(input => journal.operationResult(input.operationId)?.receipt);
+            journal.close();
+            journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+            host = await openHost(sessionId); queue = newQueue();
+            expect([incumbent, ...pending].map(input => journal.operationResult(input.operationId)?.receipt)).toEqual(before);
+            handoff = false;
+          }
+          // Repeated batches and overflow keep their original operation/receipt.
+          for (let i = 0; i < 1200 && !["delivered", "uncertain"].includes(journal.operationResult(pending[2]!.operationId)?.receipt.status ?? ""); i++) {
+            await queue.drain(); await Bun.sleep(25);
+          }
+          expect(["delivered", "uncertain"]).toContain(journal.operationResult(pending[2]!.operationId)?.receipt.status ?? "missing");
+          await wait(() => ledger.load(host!.identity.sessionId).length >= 4);
+          await wait(() => ledger.load(host!.identity.sessionId).slice(0, 4).every(row => row.nativeResult || row.nativeTerminal || row.nativeTurnBoundary));
+          await wait(() => store.load(host!.identity.sessionId).some(event => event.kind === "turn-ended" && event.turnId === pending[2]!.operationId));
+          if (journal.operationResult(pending[2]!.operationId)?.receipt.status === "delivered") {
+            expect(ledger.load(host.identity.sessionId)[3]!.delivered).toBe(true);
+          }
+          for (const input of [incumbent, ...pending]) expect(journal.executeOperation(input).replayed).toBe(true);
+          await queue.drain();
+          expect(wireInputs.filter(frame => frame.type === "user")).toHaveLength(4);
+          expect(new Set(ledger.load(host.identity.sessionId).map(row => row.native!.inputUuid)).size).toBe(4);
+          return;
+        }
         expect(host.supportsQueuedSend).toBe(false);
         const command = (id: string, withImage = false) => ({ kind: "send" as const, operationId: id,
           idempotencyKey: id, conversationId, text: withImage && mode === "native-evidence" ? "" : `fixture ${id}`, images: withImage ? [image] : [], policy: "queue" as const });
@@ -346,7 +441,7 @@ test.skipIf(!binary).each([
         expect(rows.map(row => row.entry.id)).toEqual([incumbent, ...commands].map(input => input.operationId));
         expect(rows.every(row => row.delivered && (row.engineMessageId || row.nativeResult))).toBe(true);
         if (mode.startsWith("native-evidence")) {
-          expect(installedVersion).toBe("2.1.323");
+          expect(installedVersion).toBe("2.1.325");
           expect(rows.every(row => row.native && (row.nativeResult || row.nativeTerminal))).toBe(true);
           expect(rows.map(row => row.native!.inputUuid)).toEqual(wireInputs.filter(frame => frame.type === "user").map(frame => String(frame.uuid)));
           expect(rows.map(row => (row.nativeResult ?? row.nativeTerminal)!.turnId)).toEqual(rows.map(row => row.entry.id));
@@ -485,7 +580,7 @@ test.skipIf(!binary).each([
         }, null, 2));
       }
       await Promise.all(delayedWrites);
-      releaseFirst(); await host?.release(); api.stop(true); journal.close(); fs.rmSync(directory, { recursive: true, force: true });
+      releaseFirst(); releaseSecond(); await host?.release(); api.stop(true); journal.close(); fs.rmSync(directory, { recursive: true, force: true });
     }
   }, 60_000,
 );
@@ -495,7 +590,16 @@ test.skipIf(!binary).each([
    "[Request interrupted by user for tool use]" ahead of the next message. An
    ordinary operator send to that running turn must leave the call alone and
    reach the model as the next user message. */
-test.skipIf(!binary).each([false, true])("installed Claude keeps a running tool call when the operator sends to the busy turn (native evidence: %s)", async (nativeEvidence) => {
+test.skipIf(!binary).each(["legacy", "contained", "contained-seat", "native", "native-adjacent", "native-seat", "native-seat-adjacent", "native-ambiguous"])("installed Claude keeps a running tool call when the operator sends to the busy turn (admission: %s)", async (admission) => {
+  const nativeEvidence = admission !== "legacy";
+  const enabled = admission.startsWith("native");
+  const seat = admission.includes("seat");
+  const adjacent = admission.endsWith("adjacent");
+  const ambiguous = admission === "native-ambiguous";
+  const containedSeat = admission === "contained-seat";
+  const observations: unknown[] = [];
+  const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=", "base64");
+  const image = { sha256: crypto.createHash("sha256").update(imageBytes).digest("hex"), mime: "image/png" as const, bytes: imageBytes.length };
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-busy-send-"));
   const config = path.join(directory, ".claude");
   fs.mkdirSync(config);
@@ -516,10 +620,11 @@ test.skipIf(!binary).each([false, true])("installed Claude keeps a running tool 
     // Side requests (titles, classifiers) carry no tools; only the turn is scripted.
     if (body.tools === undefined || !body.messages?.length) return new Response("{}", { status: 404 });
     requests.push({ messages: body.messages });
-    const first = requests.length === 1;
+    const first = requests.length === 1 || enabled && requests.length === 3;
+    const currentToolId = requests.length === 3 ? toolUseId + "_second" : toolUseId;
     const message = { id: `msg_fixture_${requests.length}`, type: "message", role: "assistant", model: "fixture-model",
       content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
-    const block = first ? { type: "tool_use", id: toolUseId, name: "Bash", input: {} } : { type: "text", text: "" };
+    const block = first ? { type: "tool_use", id: currentToolId, name: "Bash", input: {} } : { type: "text", text: "" };
     const delta = first
       ? { type: "input_json_delta", partial_json: JSON.stringify({
         command: "touch tool-started; for attempt in {1..400}; do if [ -f tool-release ]; then echo tool finished; exit 0; fi; sleep 0.05; done; exit 1",
@@ -541,10 +646,10 @@ test.skipIf(!binary).each([false, true])("installed Claude keeps a running tool 
     expect(done()).toBe(true);
   };
   try {
-    host = await ClaudeStreamBrokerHost.start({ binary, cwd: directory,
+    host = await ClaudeStreamBrokerHost.start({ binary, cwd: directory, nativeQueuedSend: enabled,
       env: { PATH: process.env.PATH, HOME: directory, TMPDIR: directory, XDG_CONFIG_HOME: path.join(directory, "config"),
         LLV_STATE_DIR: path.join(directory, "state"), NODE_ENV: "test" },
-      tools: ["Bash"], model: "fixture-model", requestTimeoutMs: 20_000, deliveryLedger: ledger, readTranscript: () => [],
+      tools: ["Bash"], model: "fixture-model", requestTimeoutMs: ambiguous ? 5_000 : 20_000, deliveryLedger: ledger, readImage: () => imageBytes, readTranscript: () => [],
       readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max",
         ...(nativeEvidence ? { version: installedVersion } : {}) }),
       eventStore: {
@@ -560,7 +665,21 @@ test.skipIf(!binary).each([false, true])("installed Claude keeps a running tool 
           env: { ...options.env, NODE_ENV: "test", CLAUDE_CONFIG_DIR: config, ANTHROPIC_BASE_URL: `http://127.0.0.1:${api.port}`,
             CLAUDE_CODE_OAUTH_TOKEN: "isolated-fixture-credential", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } });
         let buffer = "";
-        child.stdout.on("data", chunk => {
+        if (ambiguous) {
+        const emit = child.stdout.emit.bind(child.stdout); let tail = "";
+        child.stdout.emit = ((name: string, ...args: unknown[]) => {
+          if (name !== "data") return Reflect.apply(emit, child.stdout, [name, ...args]);
+          tail += String(args[0]); let end: number;
+          while ((end = tail.indexOf("\n")) >= 0) {
+            const line = tail.slice(0, end); tail = tail.slice(end + 1); if (!line) continue;
+            const frame = JSON.parse(line);
+            if (frame.type === "result") delete frame.user_message_uuids;
+            emit("data", Buffer.from(JSON.stringify(frame) + "\n"));
+          }
+          return true;
+        }) as typeof child.stdout.emit;
+      }
+      child.stdout.on("data", chunk => {
           buffer += String(chunk);
           let newline: number;
           while ((newline = buffer.indexOf("\n")) >= 0) {
@@ -587,11 +706,13 @@ test.skipIf(!binary).each([false, true])("installed Claude keeps a running tool 
       effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
       status: async id => journal.operationResult(id)?.receipt ?? null,
       hostClaim: async () => "fixture-owner",
+      coalescesConversation: () => seat, bindDeliveryBatch: async () => true,
       transition: async (...args) => { journal.transitionOperation(...args); },
     }, () => host, undefined, undefined, undefined, undefined, undefined, undefined, { passBudgetMs: 20 });
     // What the composer's Send posts when the operator picks no policy.
     const send = (id: string) => {
       const command = { kind: "send" as const, operationId: id, idempotencyKey: id, conversationId, text: `fixture ${id}`,
+        images: id.includes("extra-context") ? [image] : [],
         policy: "interrupt-active" as const, origin: { kind: "operator" as const } };
       journal.executeOperation(command);
       return command;
@@ -601,15 +722,50 @@ test.skipIf(!binary).each([false, true])("installed Claude keeps a running tool 
     await wait(() => journal.operationResult(incumbent.operationId)?.receipt.status === "delivered");
     await wait(() => requests.length === 1);
     await wait(() => fs.existsSync(path.join(directory, "tool-started")));
+    expect(host.supportsQueuedSend).toBe(enabled);
     const extra = send("native-extra-context");
+    if (adjacent) {
+      await queue.drain();
+      await wait(() => wireInputs.filter(frame => frame.type === "user").length === 2);
+    }
     const quick = nativeEvidence ? send("native-second-quick-context") : null;
+    const observe = (phase: string) => observations.push({ phase, admission, entries: [extra, ...(quick ? [quick] : [])].map(input => ({
+      text: input.text, images: input.images, receipt: journal.operationResult(input.operationId)!.receipt,
+    })) });
     const delivery = queue.drain();
-    await wait(() => wireInputs.filter(frame => frame.type === "user").length === 2);
+    await wait(() => wireInputs.filter(frame => frame.type === "user").length === (containedSeat ? 1 : enabled && (!seat || adjacent) ? 3 : 2));
+    observe("waiting");
     fs.writeFileSync(path.join(directory, "tool-release"), "");
     await delivery;
+    if (containedSeat) {
+      await wait(() => results.length === 1);
+      for (let i = 0; i < 1200 && journal.operationResult(quick!.operationId)?.receipt.status !== "delivered"; i++) {
+        await queue.drain(); await Bun.sleep(25);
+      }
+      await wait(() => ledger.load(host!.identity.sessionId).every(row => row.nativeResult));
+      expect(journal.operationResult(extra.operationId)?.receipt.status).toBe("delivered");
+      expect(journal.operationResult(quick!.operationId)?.receipt.status).toBe("delivered");
+      expect(JSON.stringify(requests[1]!.messages)).not.toContain(extra.text);
+      expect(JSON.stringify(requests[2]!.messages)).toContain(extra.text);
+      expect(JSON.stringify(requests[2]!.messages)).toContain(quick!.text);
+      expect(wireInputs.filter(frame => frame.type === "user")).toHaveLength(2);
+      observe("completed");
+      return;
+    }
+    if (ambiguous) {
+      await wait(() => journal.operationResult(quick!.operationId)?.receipt.status === "uncertain");
+      expect(host.supportsQueuedSend).toBe(false);
+      expect(host.acceptsInputDuringTurn).toBe(false);
+      expect(wireInputs.filter(frame => frame.type === "user")).toHaveLength(3);
+      for (const input of [extra, quick!]) journal.executeOperation(input);
+      await queue.drain();
+      expect(wireInputs.filter(frame => frame.type === "user")).toHaveLength(3);
+      observe("unconfirmed");
+      return;
+    }
     await wait(() => journal.operationResult(extra.operationId)?.receipt.status === "delivered");
     await wait(() => results.length >= 1);
-    if (quick) {
+    if (quick && !enabled) {
       for (let attempt = 0; attempt < 1200 && journal.operationResult(quick.operationId)?.receipt.status !== "delivered"; attempt++) {
         await queue.drain(); await Bun.sleep(25);
       }
@@ -621,12 +777,12 @@ test.skipIf(!binary).each([false, true])("installed Claude keeps a running tool 
     }
 
     expect(wireInputs.filter(frame => frame.type === "control_request")).toEqual([]);
-    expect(results).toEqual(quick ? ["success", "success"] : ["success"]);
+    expect(results).toEqual(quick && !enabled ? ["success", "success"] : ["success"]);
     const wire = JSON.stringify(requests);
     expect(wire).not.toContain("doesn't want to proceed");
     expect(wire).not.toContain("Request interrupted by user");
     // Claude reads the follow-up alongside the completed tool at its boundary.
-    expect(requests).toHaveLength(quick ? 3 : 2);
+    expect(requests).toHaveLength(quick && !enabled ? 3 : 2);
     const toolResults = requests[1]!.messages.flatMap(message => {
       const content = (message as { content?: unknown }).content;
       return Array.isArray(content) ? content.filter(block => (block as { type?: string }).type === "tool_result") : [];
@@ -635,37 +791,75 @@ test.skipIf(!binary).each([false, true])("installed Claude keeps a running tool 
     expect(JSON.stringify(toolResults)).toContain("tool finished");
     expect(JSON.stringify(requests[0]!.messages)).not.toContain(extra.text);
     expect(JSON.stringify(requests[1]!.messages)).toContain(extra.text);
+    expect(JSON.stringify(requests[1]!.messages)).toContain(imageBytes.toString("base64"));
     expect(journal.operationResult(extra.operationId)?.receipt.turnId).toBe(incumbent.operationId);
-    expect(ledger.load(host.identity.sessionId).map(row => [row.entry.id, row.delivered]))
-      .toEqual([[incumbent.operationId, true], [extra.operationId, true], ...(quick ? [[quick.operationId, true]] : [])]);
     if (nativeEvidence) {
-      expect(installedVersion).toBe("2.1.323");
-      expect(host.supportsQueuedSend).toBe(false);
+      expect(installedVersion).toBe("2.1.325");
+      await wait(() => ledger.load(host!.identity.sessionId).every(row => row.nativeResult));
       const rows = ledger.load(host.identity.sessionId);
-      expect(rows.every(row => row.native && row.nativeResult)).toBe(true);
-      expect(rows.map(row => row.nativeResult!.inputUuids)).toEqual([
-        rows.slice(0, 2).map(row => row.native!.inputUuid), rows.slice(0, 2).map(row => row.native!.inputUuid), [rows[2]!.native!.inputUuid],
-      ]);
-      expect(JSON.stringify(requests[1]!.messages)).not.toContain(quick!.text);
+      expect(rows.every(row => row.delivered)).toBe(true);
+      if (enabled) {
+        const boundary = JSON.stringify(requests[1]!.messages);
+        expect(boundary).toContain(extra.text);
+        expect(boundary).toContain(quick!.text);
+        expect(boundary.indexOf(extra.text)).toBeLessThan(boundary.indexOf(quick!.text));
+        await wait(() => journal.operationResult(quick!.operationId)?.receipt.status === "delivered");
+        expect(journal.operationResult(quick!.operationId)?.receipt.turnId).toBe(incumbent.operationId);
+        expect(rows.every(row => row.nativeResult!.turnId === incumbent.operationId)).toBe(true);
+        const ids = rows.map(row => row.native!.inputUuid);
+        expect(rows.every(row => JSON.stringify(row.nativeResult!.inputUuids) === JSON.stringify(ids))).toBe(true);
+      } else expect(JSON.stringify(requests[1]!.messages)).not.toContain(quick!.text);
     }
     await queue.drain();
-    expect(wireInputs.filter(frame => frame.type === "user")).toHaveLength(quick ? 3 : 2);
+    observe("completed");
+    expect(wireInputs.filter(frame => frame.type === "user")).toHaveLength(enabled && seat && !adjacent ? 2 : quick ? 3 : 2);
     expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
     expect(journal.snapshot().sessions.find(session => session.conversationId === conversationId))
       .toMatchObject({ turn: "idle", activeTurnId: null });
     expect(store.load(host.identity.sessionId).filter(frame => frame.kind === "turn-ended"))
       .toEqual([
         expect.objectContaining({ turnId: incumbent.operationId, status: "completed" }),
-        ...(quick ? [expect.objectContaining({ turnId: quick.operationId, status: "completed" })] : []),
+        ...(quick && !enabled ? [expect.objectContaining({ turnId: quick.operationId, status: "completed" })] : []),
       ]);
+    if (enabled) {
+      // Another held tool proves progress beyond the first delivery credit.
+      const previousWrites = wireInputs.filter(frame => frame.type === "user").length;
+      fs.unlinkSync(path.join(directory, "tool-started")); fs.unlinkSync(path.join(directory, "tool-release"));
+      const second = send("native-second-incumbent"); await queue.drain();
+      await wait(() => journal.operationResult(second.operationId)?.receipt.status === "delivered");
+      await wait(() => fs.existsSync(path.join(directory, "tool-started")));
+      const laterFirst = send("native-second-extra-context");
+      if (adjacent) { await queue.drain(); await wait(() => wireInputs.filter(frame => frame.type === "user").length === previousWrites + 2); }
+      const laterSecond = send("native-second-quick-follow-up"); await queue.drain();
+      await wait(() => wireInputs.filter(frame => frame.type === "user").length === previousWrites + (seat && !adjacent ? 2 : 3));
+      fs.writeFileSync(path.join(directory, "tool-release"), "");
+      await wait(() => journal.operationResult(laterSecond.operationId)?.receipt.status === "delivered");
+      await wait(() => ledger.load(host!.identity.sessionId).every(row => row.nativeResult));
+      expect(journal.operationResult(laterFirst.operationId)?.receipt.turnId).toBe(second.operationId);
+      expect(journal.operationResult(laterSecond.operationId)?.receipt.turnId).toBe(second.operationId);
+      const continued = JSON.stringify(requests[3]!.messages);
+      expect(continued.indexOf(laterFirst.text)).toBeGreaterThanOrEqual(0);
+      expect(continued.indexOf(laterSecond.text)).toBeGreaterThan(continued.indexOf(laterFirst.text));
+      const subsequent = send("native-subsequent"); await queue.drain();
+      await wait(() => ledger.load(host!.identity.sessionId).some(row => row.entry.id === subsequent.operationId && row.nativeResult));
+      for (const input of [incumbent, extra, quick!, second, laterFirst, laterSecond, subsequent]) expect(journal.executeOperation(input).replayed).toBe(true);
+      await queue.drain();
+      expect(wireInputs.filter(frame => frame.type === "user")).toHaveLength(previousWrites * 2 + 1);
+      expect(store.load(host.identity.sessionId).filter(event => event.kind === "turn-ended").map(event => event.turnId))
+        .toEqual([incumbent.operationId, second.operationId, subsequent.operationId]);
+      expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+    }
   } finally {
+    if (process.env.LLV_EVIDENCE_DIR) {
+      const output = path.join(process.env.LLV_EVIDENCE_DIR, "native-admission"); fs.mkdirSync(output, { recursive: true });
+      fs.writeFileSync(path.join(output, `${admission}.json`), JSON.stringify(observations, null, 2));
+    }
     fs.writeFileSync(path.join(directory, "tool-release"), "");
     await host?.release(); api.stop(true); journal.close(); fs.rmSync(directory, { recursive: true, force: true });
   }
 }, 60_000);
 
-// Prospective batch contract. Admission remains contained in this slice; the
-// ledger is exercised with exactly the identities its broker producer stores.
+// The durable batch contract uses exactly the identities the broker stores.
 test("decision then two quick messages retain original receipts across two result boundaries", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-proof-"));
   try {
@@ -979,7 +1173,7 @@ test.skipIf(!binary).each([
   };
   const settleEvidence = () => (host as unknown as { nativeWork: Promise<unknown> }).nativeWork;
   try {
-    host = await ClaudeStreamBrokerHost.start({ binary, cwd: directory,
+    host = await ClaudeStreamBrokerHost.start({ binary, cwd: directory, nativeQueuedSend: false,
       env: { PATH: process.env.PATH, HOME: directory, TMPDIR: directory, XDG_CONFIG_HOME: path.join(directory, "config"),
         LLV_STATE_DIR: path.join(directory, "state"), NODE_ENV: "test" },
       tools: ["Bash", "Write"], permissionMode: permission ? "default" : "bypassPermissions", model: "fixture-model", requestTimeoutMs: 20000,
@@ -1106,3 +1300,158 @@ test.skipIf(!binary).each([
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }, 60000);
+
+test.skipIf(!binary)("installed CLI burst retains terminal ownership", async () => {
+ const directory=fs.mkdtempSync(path.join(os.tmpdir(),"claude-burst-"));
+ const config=path.join(directory,".claude"); fs.mkdirSync(config);
+ fs.writeFileSync(path.join(directory,".claude.json"),JSON.stringify({hasCompletedOnboarding:true}));
+ const ledger=new FileClaudeDeliveryLedger(path.join(directory,"ledger"));
+ const store=new FileRuntimeEventStore(path.join(directory,"events"));
+ const journal=new RuntimeJournal(path.join(directory,"runtime.sqlite"),{structuredHosts:true});
+ const conversationId="burst-fixture"; const wireInputs:unknown[]=[]; const actualFrames:Record<string,unknown>[]=[];
+ const event=(type:string,data:unknown)=>`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+ let calls=0;
+ const api=Bun.serve({hostname:"127.0.0.1",port:0,async fetch(request){
+  if(new URL(request.url).pathname!=="/v1/messages")return new Response("{}",{status:404});
+  const body=await request.json() as {tools?:unknown}; if(body.tools===undefined)return new Response("{}",{status:404}); calls++;
+  const message={id:"msg_burst",type:"message",role:"assistant",model:"fixture-model",content:[],stop_reason:null,stop_sequence:null,usage:{input_tokens:1,output_tokens:1}};
+  return new Response([
+   event("message_start",{type:"message_start",message}),
+   event("content_block_start",{type:"content_block_start",index:0,content_block:{type:"text",text:""}}),
+   ...Array.from({length:600},()=>event("content_block_delta",{type:"content_block_delta",index:0,delta:{type:"text_delta",text:"fixture "}})),
+   event("content_block_stop",{type:"content_block_stop",index:0}),
+   event("message_delta",{type:"message_delta",delta:{stop_reason:"end_turn",stop_sequence:null},usage:{output_tokens:1}}),
+   event("message_stop",{type:"message_stop"})
+  ].join(""),{headers:{"content-type":"text/event-stream"}});
+ }});
+ let host:ClaudeStreamBrokerHost|null=null;
+ try{
+ host=await ClaudeStreamBrokerHost.start({binary,cwd:directory,tools:[],permissionMode:"bypassPermissions",model:"fixture-model",requestTimeoutMs:20000,
+  env:{PATH:process.env.PATH,HOME:directory,TMPDIR:directory,XDG_CONFIG_HOME:path.join(directory,"config"),LLV_STATE_DIR:path.join(directory,"state"),NODE_ENV:"test"},
+  deliveryLedger:ledger,readTranscript:()=>[],readAuthStatus:()=>({loggedIn:true,authMethod:"claude.ai",subscriptionType:"max",version:installedVersion}),
+  eventStore:{load:id=>store.load(id),append:(id,frame)=>{store.append(id,frame);const p=projectEngineHostEvent(conversationId,`claude:${id}`,frame);if(p)journal.append(p);}},
+  spawnProcess:(command,args,options)=>{
+   const child=spawn(command,[...args,"--setting-sources",""],{...options,stdio:["pipe","pipe","pipe"],env:{...options.env,NODE_ENV:"test",CLAUDE_CONFIG_DIR:config,ANTHROPIC_BASE_URL:`http://127.0.0.1:${api.port}`,CLAUDE_CODE_OAUTH_TOKEN:"isolated-fixture-credential",CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:"1"}});
+   const emit=child.stdout.emit.bind(child.stdout);let held="",tail="";
+   child.stdout.emit=((name:string,...values:unknown[])=>{
+    if(name!=="data")return Reflect.apply(emit,child.stdout,[name,...values]);
+    held+=String(values[0]);tail+=String(values[0]);let newline:number;
+    while((newline=tail.indexOf("\n"))>=0){const line=tail.slice(0,newline);tail=tail.slice(newline+1);if(!line)continue;const frame=JSON.parse(line);actualFrames.push(frame);
+     if(frame.type==="result"){const data=held;held="";emit("data",Buffer.from(data));}}
+    return true;
+   }) as typeof child.stdout.emit;
+   const write=child.stdin.write.bind(child.stdin);child.stdin.write=((chunk:string,...rest:unknown[])=>{wireInputs.push(JSON.parse(String(chunk)));return Reflect.apply(write,child.stdin,[chunk,...rest]);}) as typeof child.stdin.write;
+   return child;
+  }});
+ journal.append({scope:`session:${conversationId}`,kind:"session-status",payload:{conversationId,sessionKey:{engine:"claude",sessionId:host.identity.sessionId},hostKind:"claude-broker",host:"hosted",turn:"idle",activeTurnId:null,capabilities:{steer:false,structuredAttention:true}}});
+ const queue=new StructuredDeliveryQueue({effects:async(kinds,after)=>journal.effectBatch(100,kinds,after),status:async id=>journal.operationResult(id)?.receipt??null,hostClaim:async()=>"fixture-owner",transition:async(...args)=>{journal.transitionOperation(...args);}},()=>host,undefined,undefined,undefined,undefined,undefined,undefined,{passBudgetMs:20});
+ journal.executeOperation({kind:"send",operationId:"burst-original",idempotencyKey:"burst-original",conversationId,text:"fixture burst",policy:"queue"});
+ await queue.drain();
+ for(let i=0;i<1200&&!actualFrames.some(f=>f.type==="result");i++)await Bun.sleep(25);
+ expect(actualFrames.some(f=>f.type==="result")).toBe(true);
+ for (let i = 0; i < 1200 && (await host.health()).status !== "idle"; i++) await Bun.sleep(5);
+ await queue.drain();
+ const health=await host.health();
+ expect(actualFrames.length).toBeGreaterThan(512);
+ expect(calls).toBe(1);
+ expect(wireInputs).toHaveLength(1);
+ expect(ledger.load(host.identity.sessionId)[0]?.nativeResult).toBeDefined();
+ expect(store.load(host.identity.sessionId).filter(frame => frame.kind === "turn-ended")).toHaveLength(1);
+ expect(journal.snapshot().sessions.find(session => session.conversationId === conversationId)).toMatchObject({turn:"idle",activeTurnId:null});
+ expect(health).toMatchObject({status:"idle",activeTurnRef:null});
+ }finally{await host?.release();api.stop(true);journal.close();fs.rmSync(directory,{recursive:true,force:true});}
+},60000);
+
+
+test.skipIf(!binary).each(["completed", "unconfirmed"] as const)("native Viewer delivery-controller process restart preserves %s originals", async cut => {
+  const { startNativeClaudeRuntime } = await import("./fixtures/claudeNativeRuntime");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-controller-"));
+  const requests: Array<{ messages: unknown[] }> = [];
+  const event = (type: string, data: unknown) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const api = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const body = await request.json() as { tools?: unknown; messages: unknown[] };
+    if (new URL(request.url).pathname !== "/v1/messages" || body.tools === undefined) return new Response("{}", { status: 404 });
+    requests.push(body);
+    if (cut === "unconfirmed") await held;
+    const message = { id: `msg_controller_${requests.length}`, type: "message", role: "assistant", model: "fixture-model", content: [],
+      stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
+    return new Response([
+      event("message_start", { type: "message_start", message }),
+      event("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }),
+      event("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "fixture response" } }),
+      event("content_block_stop", { type: "content_block_stop", index: 0 }),
+      event("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } }),
+      event("message_stop", { type: "message_stop" }),
+    ].join(""), { headers: { "content-type": "text/event-stream" } });
+  } });
+  const options = { directory, api: `http://127.0.0.1:${api.port}`, binary: binary!, version: installedVersion!, enabled: true,
+    ...(cut === "unconfirmed" ? { requestTimeoutMs: 2_000 } : {}) };
+  let runtime: Awaited<ReturnType<typeof startNativeClaudeRuntime>> | undefined;
+  let image: import("./structuredContent").StructuredImageRef | undefined;
+  const command = (id: string) => ({ images: id === "restart-first" && image ? [image] : [], kind: "send", operationId: id, idempotencyKey: id, text: `fixture ${id}`, policy: "queue" });
+  try {
+    runtime = await startNativeClaudeRuntime(options);
+    const firstPid = runtime.pid;
+    const images = await runtime.call<import("./structuredContent").StructuredImageRef[]>("/image", {
+      base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=",
+    });
+    image = images[0]!;
+    await runtime.call("/command", command("restart-decision"));
+    let before = await runtime.call("/snapshot");
+    for (let i = 0; i < 1200 && (!before.wire.some(frame => frame.type === "user") || cut === "completed" && !before.rows[0]?.nativeResult); i++) {
+      await Bun.sleep(25); before = await runtime.call("/snapshot");
+    }
+    expect(before.health.protocolVersion).toBe(installedVersion);
+    expect(before.wire.filter(frame => frame.type === "user")).toHaveLength(1);
+    if (cut === "unconfirmed") {
+      await runtime.call("/command", command("restart-first"));
+      await runtime.call("/command", command("restart-second"));
+      for (let i = 0; i < 1200 && before.wire.filter(frame => frame.type === "user").length < 3; i++) {
+        await Bun.sleep(25); before = await runtime.call("/snapshot");
+      }
+      expect(before.wire.filter(frame => frame.type === "user")).toHaveLength(3);
+      expect(before.rows[1]!.entry.content.images).toEqual([image]);
+      for (let i = 0; i < 1200 && before.nativeQueued; i++) { await Bun.sleep(25); before = await runtime.call("/snapshot"); }
+      expect(before.nativeQueued).toBe(false);
+    }
+    const { captureProcessIdentity, processIdentityStatus } = await import("@/lib/processIdentity");
+    const nativeProcess = captureProcessIdentity(before.health.pid!);
+    await runtime.stop(); runtime = undefined;
+    expect(processIdentityStatus(nativeProcess)).toBe("dead");
+    release();
+    runtime = await startNativeClaudeRuntime(options);
+    expect(runtime.pid).not.toBe(firstPid);
+    const restored = await runtime.call("/snapshot");
+    expect(restored.rows.map(row => [row.entry.id, row.native!.inputUuid, row.entry.content]))
+      .toEqual(before.rows.map(row => [row.entry.id, row.native!.inputUuid, row.entry.content]));
+    expect(restored.wire.filter(frame => frame.type === "user")).toEqual([]);
+    for (const receipt of before.journal.recentOperations ?? []) {
+      const original = restored.journal.recentOperations?.find(candidate => candidate.operationId === receipt.operationId);
+      expect(original).toMatchObject({ operationId: receipt.operationId, idempotencyKey: receipt.idempotencyKey,
+        conversationId: receipt.conversationId, admittedAt: receipt.admittedAt });
+    }
+    for (const row of before.rows) await runtime.call("/command", command(row.entry.id));
+    expect((await runtime.call("/snapshot")).wire.filter(frame => frame.type === "user")).toEqual([]);
+    if (cut === "completed") {
+      await runtime.call("/command", command("restart-later"));
+      let after = await runtime.call("/snapshot");
+      for (let i = 0; i < 1200 && !after.rows.find(row => row.entry.id === "restart-later")?.nativeResult; i++) { await Bun.sleep(25); after = await runtime.call("/snapshot"); }
+      expect(after.rows.map(row => row.entry.id)).toEqual(["restart-decision", "restart-later"]);
+      expect(after.wire.filter(frame => frame.type === "user")).toHaveLength(1);
+    } else {
+      expect(restored.nativeQueued).toBe(false);
+      expect(restored.rows.slice(1).every(row => !row.delivered && !row.nativeNoWrite)).toBe(true);
+      expect(restored.health.activeTurnRef).toBeNull();
+    }
+  } finally {
+    release();
+    if (runtime && process.env.LLV_EVIDENCE_DIR) {
+      const output = path.join(process.env.LLV_EVIDENCE_DIR, "native-admission"); fs.mkdirSync(output, { recursive: true });
+      const snapshot = await runtime.call("/snapshot").catch(() => null);
+      fs.writeFileSync(path.join(output, `controller-${cut}.json`), JSON.stringify(snapshot, null, 2));
+    }
+    await runtime?.stop(); api.stop(true); fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 60_000);
