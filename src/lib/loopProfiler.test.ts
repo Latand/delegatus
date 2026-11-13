@@ -6,10 +6,10 @@ import { categorizeLoopProfile, createLoopProfiler, LOOP_PROFILE_ARM_MS, LOOP_PR
   type LoopProfile, type LoopGapProfile, type LoopProfilerPorts } from "./loopProfiler";
 import { createViewerLoopMonitor } from "./viewerLoopMonitor";
 import { createPerformanceSpans } from "./performanceSpans";
-import { loopProfilerEnabled, loopProfilerSettings } from "./loopProfilerServing";
+import { loopProfilerEnabled, loopProfilerSettings, loopProfilerControl } from "./loopProfilerServing";
 
 const root = path.resolve(".");
-const frame = { name: "syntheticThreeSecondBlock", sourceURL: path.join(root, "src/lib/loopProfiler.fixture.ts"), line: 7, column: 1 };
+const frame = { name: "syntheticThreeSecondBlock", sourceURL: path.join(root, "src/lib/loopProfiler.fixture.ts"), line: 8, column: 1 };
 const sample: LoopProfile = { traces: [{ frames: [frame] }] };
 function harness(expires = LOOP_PROFILE_ARM_MS) {
   let at = 0, enabled = true, reads = 0, calls = 0;
@@ -333,6 +333,18 @@ test("settings default to thirty minutes and accept the bounded arm duration", a
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test("lifetime settings use explicit booleans and finite timestamps with the bounded reader", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-control-"));
+  try {
+    for (const value of ["null", "invalid", " ".repeat(513), JSON.stringify({ enabled: "false", automatic: "false", manualUntil: "1000000" })]) {
+      await writeFile(path.join(dir, "loop-profiler.json"), value);
+      expect(await loopProfilerControl(dir)).toEqual({ enabled: true, automatic: true, manualUntil: 0 });
+    }
+    await writeFile(path.join(dir, "loop-profiler.json"), JSON.stringify({ enabled: false, automatic: false, manualUntil: 1000000 }));
+    expect(await loopProfilerControl(dir)).toEqual({ enabled: false, automatic: false, manualUntil: 1000000 });
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test.each([29, 121, -1, 0, "90", "privateSyntheticMarker", null, true, {}, []].map(value => [value]))(
   "invalid arm duration logs a fixed refusal and falls back to thirty minutes: %j", async armMinutes => {
     const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-invalid-settings-"));
@@ -343,16 +355,18 @@ test.each([29, 121, -1, 0, "90", "privateSyntheticMarker", null, true, {}, []].m
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
-test.each([90, 120])("serving uses the configured %s-minute deadline in a fresh process", async minutes => {
+test("same-revision restarts arm after a stall and preserve cooldown and storage cap", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-arm-window-"));
   try {
-    expect(await child(["arm-window", String(minutes)], dir)).toEqual([
-      { status: "skipped", reason: "no-active-window" },
-      { status: "skipped", reason: "no-active-window" },
-      { status: "not-armed", reason: "arm-expired" },
-    ]);
+    expect(await child(["claim", dir, "a".repeat(40)], dir)).toBe(true);
     const ledger = await readFile(path.join(dir, "loop-profiler-deploy.json"), "utf8");
-    expect(await child(["arm-window", "120"], dir)).toEqual([]);
+    expect(await child(["lifetime", "1000000", "4000"], dir)).toMatchObject({ calls: 0, profiles: 0 });
+    expect(await child(["lifetime", "1000000", "6000"], dir)).toMatchObject({ calls: 1, profiles: 1 });
+    expect(await child(["lifetime", "1000000", "6000"], dir)).toMatchObject({ calls: 0, profiles: 1 });
+    for (let i = 1; i <= 13; i++) {
+      expect(await child(["lifetime", String(1000000 + i * 600000), "6000"], dir))
+        .toMatchObject({ calls: 1, profiles: Math.min(i + 1, 12) });
+    }
     expect(await readFile(path.join(dir, "loop-profiler-deploy.json"), "utf8")).toBe(ledger);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
@@ -405,16 +419,41 @@ test("fresh processes cannot renew a consumed deploy budget; runtime host never 
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test("explicit enabled:false is a kill switch: deploy opportunity is consumed and nothing is recorded", async () => {
+test("explicit enabled:false suppresses serving capture without consuming a deploy claim", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-off-"));
   try {
     const lines: string[] = await child(["disabled"], dir);
     expect(lines.some(line => line.includes('"jsProfile"'))).toBe(false);
-    expect(JSON.parse(await readFile(path.join(dir, "loop-profiler-deploy.json"), "utf8")).revision).toBe("a".repeat(40));
+    expect(await readdir(dir)).not.toContain("loop-profiler-deploy.json");
+    expect(await readdir(dir)).not.toContain("loop-profiler-captures.json");
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test("with no settings file, Bun main-thread three-second block is named on its actual loop-gap record", async () => {
+test("running serving adapter notices a manual switch after a disabled start and expires it", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-manual-switch-"));
+  try {
+    await writeFile(path.join(dir, "loop-profiler.json"), JSON.stringify({ enabled: false }));
+    const result = await child(["lifetime", "1000000", "4000", "manual-switch"], dir);
+    expect(result).toMatchObject({ calls: 1, profiles: 1 });
+    expect(result.reasons).toEqual(["kill-switch", "armed-manual", "cooldown", "automatic-disabled"]);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test.each([
+  ["late-kill", "kill-switch"], ["late-automatic-off", "automatic-disabled"], ["late-manual-expiry", "manual-expired"],
+])("serving rechecks %s after collector loading", async (scenario, reason) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-late-control-"));
+  try {
+    if (scenario !== "late-automatic-off") {
+      await writeFile(path.join(dir, "loop-profiler.json"), JSON.stringify({ automatic: false, manualUntil: 1_030_000 }));
+    }
+    const result = await child(["lifetime", "1000000", "6000", scenario!], dir);
+    expect(result).toMatchObject({ calls: 0, profiles: 0 });
+    expect(result.reasons).toContain(reason);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("manual capture names a Bun main-thread three-second block on its actual loop-gap record", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-native-"));
   try {
     const lines: string[] = await child(["native"], dir);
