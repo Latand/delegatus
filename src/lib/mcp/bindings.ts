@@ -4326,9 +4326,10 @@ async function postReportTelegram(
   control: ViewerControlDependencies | null,
 ): Promise<ReportTelegramDelivery> {
   const { chat, html, topicId } = copy;
-  // Pending bookkeeping must recover the same bot receipt, including when
-  // the send succeeded. Only a durably recorded attempt advances the key.
-  const clientRequestId = `bridge-report:${reportId}${copy.attempts ? `:r${copy.attempts}` : ""}`;
+  // The bot re-admits a confirmed failed receipt itself. Keep that receipt
+  // across bridge bookkeeping so an unfinished recovery cannot fork a send.
+  const receiptAttempt = copy.receiptAttempt ?? copy.attempts;
+  const clientRequestId = `bridge-report:${reportId}${receiptAttempt ? `:r${receiptAttempt}` : ""}`;
   const send = dependencies.sendReportTelegram ?? ((input: ReportTelegramSend) => productionSendReportTelegram(input, control));
   let outcome: ReportTelegramSendOutcome;
   let attempted = true;
@@ -4344,7 +4345,7 @@ async function postReportTelegram(
   const at = new Date().toISOString();
   const evidence = { ...(outcome.bot ? { bot: outcome.bot } : {}), ...(outcome.refusals ? { refusals: outcome.refusals } : {}) };
   const delivery: BridgeReportTelegram = {
-    chat, html, ...(topicId ? { topicId } : {}), attempts: copy.attempts + (attempted ? 1 : 0), at, ...evidence,
+    chat, html, ...(topicId ? { topicId } : {}), attempts: copy.attempts + (attempted ? 1 : 0), receiptAttempt, at, ...evidence,
     ...(copy.messageIds ? { messageIds: copy.messageIds } : {}),
     ...(outcome.ok
       ? { state: "sent", messageIds: outcome.messageIds }

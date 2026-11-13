@@ -185,7 +185,7 @@ test("a busy send keeps the recorded row and retries a failed copy once", async 
   expect(store.readBridgeReportLog().reports).toHaveLength(1);
 });
 
-test("a settled retryable bot refusal advances the attempt key and reconciles once", async () => {
+test("a settled retryable bot refusal retains the receipt key and reconciles once", async () => {
   const p = await protocol();
   sendRefusal = "network_failed";
   expect(await p.call()).toMatchObject({ ok: true, recorded: true, seq: 1, destinations: { telegram: { state: "failed", retryable: true } } });
@@ -197,7 +197,7 @@ test("a settled retryable bot refusal advances the attempt key and reconciles on
   await p.close();
   const restarted = await protocol();
   expect(await restarted.call()).toMatchObject({ ok: true, seq: 1, destinations: { telegram: { state: "sent" } } });
-  expect(sends[1]!.clientRequestId).toBe(`${sends[0]!.clientRequestId}:r1`);
+  expect(sends[1]!.clientRequestId).toBe(sends[0]!.clientRequestId);
   expect(sends[2]!.clientRequestId).toBe(sends[1]!.clientRequestId);
   expect(delivered.size).toBe(1);
   expect(store.readBridgeReportLog().reports).toHaveLength(1);
@@ -486,6 +486,118 @@ for (const { previouslySent, bookkeepingBusy, race, deputy } of [
       else process.env.LLV_VIEWER_CONTROL_URL = savedUrl;
       if (savedCapability === undefined) delete process.env[VIEWER_SPAWN_CAPABILITY_ENV];
       else process.env[VIEWER_SPAWN_CAPABILITY_ENV] = savedCapability;
+    }
+  });
+}
+
+async function freshReportProcess(clientRequestId: string): Promise<Answer> {
+  const child = Bun.spawn([process.execPath, "run", "src/lib/mcp/bridgeReportRecovery.fixture.ts", clientRequestId], {
+    env: { ...process.env, REPORT_RECEIPTS_FILE: path.join(directory, "process-receipts.sqlite") },
+    stdout: "pipe", stderr: "pipe", timeout: 15_000, killSignal: "SIGKILL",
+  });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(code, stderr).toBe(0);
+  const line = stdout.split("\n").find(line => line.startsWith("RECOVERY_RESULT "));
+  expect(line).toBeDefined();
+  return JSON.parse(line!.slice("RECOVERY_RESULT ".length));
+}
+
+for (const order of ["C-before-B", "B-before-C", "B-before-A", "A-before-B", "restart", "legacy-key"] as const) {
+  test(order === "C-before-B" ? "review: a known refusal cannot rotate the key while its old-key recovery is sending"
+    : `known refusal recovery ordering: ${order}`, async () => {
+    const { TelegramBotService, productionTelegramBotDependencies, setTelegramBotServiceForTests } = await import("@/lib/telegram/bot/service");
+    const { FakeBotTransport, fakeBotToken, ok, refused } = await import("@/lib/telegram/bot/fakeTransport");
+    const transport = new FakeBotTransport();
+    const now = new Date("2026-09-25T12:00:00Z");
+    const dependencies = { ...productionTelegramBotDependencies(), clones: undefined, publicationTarget: () => null, publishMessage: () => "skipped" as const, signInHook: () => null, reportReplies: undefined, transportFor: () => transport,
+      now: () => now, sleep: async () => {}, conversationTitle: () => null };
+    const bot = new TelegramBotService(dependencies);
+    const chat = { id: -1000000000101, type: "supergroup", title: "Report room" };
+    transport.script("getMe", ok({ id: 4242424, is_bot: true, first_name: "Report Bot", username: "report_test_bot", can_join_groups: true, can_read_all_group_messages: false }));
+    const firstRefused = Promise.withResolvers<void>();
+    const releaseFirst = Promise.withResolvers<void>();
+    const secondStarted = Promise.withResolvers<void>();
+    const releaseSecond = Promise.withResolvers<void>();
+    const thirdReady = Promise.withResolvers<void>();
+    const releaseThird = Promise.withResolvers<void>();
+    const posted: number[] = [];
+    let sendCount = 0;
+    transport.handlers.sendMessage = async () => {
+      const turn = ++sendCount;
+      if (turn === 1) return refused(429, "Too Many Requests", { retryAfterSeconds: 1 });
+      if (turn === 2) { secondStarted.resolve(); await releaseSecond.promise; }
+      const message_id = 70 + turn;
+      posted.push(message_id);
+      return ok({ message_id, date: Math.floor(now.getTime()/1000), chat, text: "The lane finished." });
+    };
+    const savedUrl = process.env.LLV_VIEWER_CONTROL_URL;
+    const savedCapability = process.env[VIEWER_SPAWN_CAPABILITY_ENV];
+    process.env[VIEWER_SPAWN_CAPABILITY_ENV] = "a".repeat(43);
+    setCallerConversationResolverForTests(() => activeManagerId);
+    const seats = spyOn(authority, "authorizedManagerSeats").mockImplementation(() => [{ conversationId: activeManagerId, path: null, project: PROJECT }]);
+    restores.push(() => seats.mockRestore());
+    setTelegramBotServiceForTests(bot);
+    const routeCalls: Record<string, unknown>[] = [];
+    const viewer = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+      const body = await req.clone().json();
+      routeCalls.push(body);
+      const turn = routeCalls.length;
+      const response = await telegramPost(new NextRequest(req));
+      if (turn === 1) { firstRefused.resolve(); await releaseFirst.promise; }
+      if (turn === 3 && order === "B-before-C") { thirdReady.resolve(); await releaseThird.promise; }
+      return response;
+    } });
+    process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${viewer.port}`;
+    wireControl = true;
+    let first: Promise<Answer> | undefined, second: Promise<Answer> | undefined, third: Promise<Answer> | undefined;
+    try {
+      await bot.connect(fakeBotToken("4242424"));
+      await bot.stopPoller();
+      transport.script("getUpdates", ok([{ update_id: 1, my_chat_member: { chat, date: Math.floor(now.getTime()/1000)-10, new_chat_member: { status: "member" } } }]));
+      await bot.pollOnce(new AbortController().signal);
+      bot.setChat(String(chat.id), "report-room", true);
+      const p = await protocol();
+      if (order === "legacy-key") {
+        // An old persisted row may already use :r3. Keep that receipt too.
+        store.appendBridgeReports([{ key: ARGS.key, class: "completed", at: now.toISOString(), origin: MANAGER,
+          project: PROJECT, targetSeatConversationId: MANAGER.conversationId, body: ARGS.summary,
+          telegram: { chat: "report-room", html: ARGS.summary } }]);
+        for (let i = 0; i < 3; i++) store.recordBridgeReportTelegram(store.readBridgeReportLog().reports[0]!.id,
+          { state: "failed", code: "rate_limited", at: now.toISOString() });
+      }
+      first = order === "restart" ? freshReportProcess(ARGS.clientRequestId) : p.call();
+      await firstRefused.promise;
+      let firstAnswer: Answer;
+      if (order === "A-before-B") { releaseFirst.resolve(); firstAnswer = await first; }
+      second = p.call({ clientRequestId: "report-overlap-second" });
+      const overlap = await Promise.race([secondStarted.promise.then(() => true), second.then(() => false)]);
+      if (!overlap) releaseSecond.resolve();
+      if (order === "B-before-A") { releaseSecond.resolve(); await second; }
+      releaseFirst.resolve();
+      firstAnswer = await first;
+      expect(firstAnswer).toMatchObject({ ok: true, seq: 1 });
+      if (order !== "B-before-A") expect(firstAnswer.destinations?.telegram?.state).toBe("failed");
+      third = order === "restart" ? freshReportProcess("report-overlap-third") : p.call({ clientRequestId: "report-overlap-third" });
+      if (order === "B-before-C") { await thirdReady.promise; releaseSecond.resolve(); await second; releaseThird.resolve(); }
+      const thirdAnswer = await third;
+      releaseSecond.resolve();
+      const secondAnswer = await second;
+      console.log("PROBE_EVIDENCE", JSON.stringify({ order, overlap, keys: routeCalls.map(x => x.clientRequestId), posted, reports: store.readBridgeReportLog().reports.length,
+        first: firstAnswer.destinations, second: secondAnswer.destinations, third: thirdAnswer.destinations, stored: store.readBridgeReportLog().reports[0]!.telegram }));
+      expect(store.readBridgeReportLog().reports).toHaveLength(1);
+      expect(posted).toHaveLength(1);
+      expect(store.readBridgeReportLog().reports[0]!.telegram).toMatchObject({ state: "sent", messageIds: posted });
+      expect(routeCalls.every(call => call.clientRequestId === routeCalls[0]!.clientRequestId)).toBe(true);
+      if (order === "legacy-key") expect(String(routeCalls[0]!.clientRequestId).endsWith(":r3")).toBe(true);
+    } finally {
+      releaseFirst.resolve(); releaseSecond.resolve(); releaseThird.resolve();
+      await Promise.allSettled([first, second, third].filter(Boolean));
+      await viewer.stop(true);
+      await bot.remove();
+      setTelegramBotServiceForTests(null);
+      setCallerConversationResolverForTests(null);
+      if (savedUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = savedUrl;
+      if (savedCapability === undefined) delete process.env[VIEWER_SPAWN_CAPABILITY_ENV]; else process.env[VIEWER_SPAWN_CAPABILITY_ENV] = savedCapability;
     }
   });
 }

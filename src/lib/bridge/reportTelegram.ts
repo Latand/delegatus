@@ -27,7 +27,8 @@ export async function sendBridgeReportTelegram(reportId: unknown, callerId: stri
     throw new BridgeReportTelegramAdmissionRefusal("chat_not_allowed", "the project no longer reports to this destination");
   }
   if (copy.state === "sent") return { messageIds: copy.messageIds ?? [] };
-  const key = `bridge-report:${report.id}${copy.attempts ? `:r${copy.attempts}` : ""}`;
+  const receiptAttempt = copy.receiptAttempt ?? copy.attempts;
+  const key = `bridge-report:${report.id}${receiptAttempt ? `:r${receiptAttempt}` : ""}`;
   if (requestId !== key || copy.state === "uncertain" || copy.state === "failed"
     && !RETRYABLE_TELEGRAM_BOT_CODES.has(copy.code as TelegramBotErrorCode)) {
     throw new TelegramBotError("send_uncertain", "the stored report does not admit this delivery attempt");

@@ -239,6 +239,7 @@ function normalizeTelegram(value: unknown): BridgeReportTelegram | undefined {
     ...(typeof raw.code === "string" ? { code: raw.code } : {}),
     ...(typeof raw.message === "string" ? { message: scrubTelegramDiagnostic(raw.message) } : {}),
     attempts: Number.isInteger(raw.attempts) && (raw.attempts as number) >= 0 ? raw.attempts as number : 0,
+    ...(Number.isSafeInteger(raw.receiptAttempt) && raw.receiptAttempt! >= 0 ? { receiptAttempt: raw.receiptAttempt } : {}),
     at: raw.at,
   };
 }
@@ -947,16 +948,18 @@ export function appendBridgeReports(
  */
 export function recordBridgeReportTelegram(
   id: string,
-  outcome: { state: BridgeReportTelegramState; messageIds?: readonly number[]; code?: string | null; message?: string; bot?: string; refusals?: { bot: string; code: string }[]; at: string; attempted?: boolean; expectedAttempts?: number },
+  outcome: { state: BridgeReportTelegramState; messageIds?: readonly number[]; code?: string | null; message?: string; bot?: string; refusals?: { bot: string; code: string }[]; at: string; attempted?: boolean; expectedAttempts?: number; receiptAttempt?: number },
 ): BridgeReportV1 | null {
   return mutateLog((file) => {
     const report = file.reports.find((candidate) => candidate.id === id);
     if (!report?.telegram) return { result: null, changed: false };
     // A delivery confirmation is terminal. Concurrent recoveries can finish
-    // out of order; only the same attempt may upgrade a recorded failure.
+    // out of order; success for the same bot receipt may upgrade a refusal.
     const heldAttempts = report.telegram.attempts;
-    const sameAttemptSuccess = outcome.expectedAttempts !== undefined && outcome.state === "sent"
-      && heldAttempts === outcome.expectedAttempts + 1;
+    const receiptAttempt = report.telegram.receiptAttempt ?? heldAttempts;
+    const sameAttemptSuccess = outcome.expectedAttempts !== undefined && heldAttempts !== outcome.expectedAttempts && outcome.state === "sent"
+      && (outcome.receiptAttempt !== undefined ? outcome.receiptAttempt === receiptAttempt
+        : heldAttempts === outcome.expectedAttempts + 1);
     if (outcome.expectedAttempts !== undefined && (report.telegram.state === "sent"
       || heldAttempts !== outcome.expectedAttempts && !sameAttemptSuccess)) {
       return { result: structuredClone(report), changed: false };
@@ -967,6 +970,7 @@ export function recordBridgeReportTelegram(
     report.telegram = {
       ...held,
       state: outcome.state,
+      ...(outcome.receiptAttempt !== undefined ? { receiptAttempt } : {}),
       ...(outcome.bot ? { bot: outcome.bot } : {}),
       ...(outcome.refusals ? { refusals: outcome.refusals.slice(0, 9) } : {}),
       ...(outcome.messageIds?.length ? { messageIds: [...outcome.messageIds] } : held.messageIds ? { messageIds: held.messageIds } : {}),
