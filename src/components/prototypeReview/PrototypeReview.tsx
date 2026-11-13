@@ -509,7 +509,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
      saved, on its way, delivered. It raises its voice only once the message
      has kept failing, and only then offers to send it again. A replicated
      decision carries no phase and reads as its state. */
-  const delivery = ({ state, retryable, phase }: NonNullable<PrototypeRoundView["decision"]>["delivery"]) => {
+  const delivery = ({ state, retryable, phase, settlement }: NonNullable<PrototypeRoundView["decision"]>["delivery"]) => {
     const tone = phase ? phase === "delivered" ? "text-success" : phase === "attention" ? "text-warning" : "text-muted"
       : state === "sent" ? "text-success" : state === "pending" ? "text-muted" : "text-warning";
     const mark = phase ? phase === "delivered" ? <CircleCheck className="h-3.5 w-3.5" /> : phase === "attention" ? <TriangleAlert className="h-3.5 w-3.5" />
@@ -523,6 +523,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
           <span aria-hidden className="flex h-[1lh] shrink-0 items-center">{mark}</span>
           <span className="min-w-0">{t(round?.decision?.rejected && (phase === "delivered" || state === "sent") ? "proto.saved.rejectedDelivered" : phase ? `proto.saved.${phase}` : `proto.delivery.${state}`, { n: rounds.length + 1 })}</span>
         </span>
+        {phase === "retired" && settlement ? <span data-prototype-delivery-retirement="" className="basis-full pl-5 font-normal text-secondary">{t(settlement.reason === "delivery-expired" ? "decisions.deliveryExpired" : "decisions.deliveryRetired")}</span> : null}
         {offersRetry && !elsewhere ? (
           <button type="button" className={SECONDARY} data-prototype-retry="" disabled={review.saving} onClick={() => void review.retry(round!.id)}>
             {review.saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <RotateCw className="h-3.5 w-3.5" aria-hidden />}

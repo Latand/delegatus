@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 
 /* The job in `bun-runtime.yml` is the answer to "nobody here can reproduce
    that": it runs the runtime verification at the pull request's own commit so
@@ -28,7 +29,7 @@ interface WorkflowStep {
 }
 
 const workflow = Bun.YAML.parse(workflowSource) as {
-  jobs: Record<string, { if?: string; strategy?: { matrix: { repetition?: number[]; codex?: string[] } }; steps: WorkflowStep[] }>;
+  jobs: Record<string, { if?: string; needs?: string[]; outputs?: Record<string, string>; strategy?: { matrix: { repetition?: number[]; codex?: string } }; steps: WorkflowStep[] }>;
 };
 const steps = workflow.jobs["bun-runtime"].steps;
 const scripts = steps.map((step) => step.run ?? "");
@@ -118,25 +119,50 @@ test("the native queue campaign is manual-only and exercises twenty cases per su
   expect(workflow.jobs["bun-runtime"].if).toBe("github.event_name != 'workflow_dispatch' || !inputs.native_queue_campaign");
 });
 
-test("the native Codex matrix covers every pinned host version", () => {
-  const document = fs.readFileSync(path.join(repositoryRoot, "docs/design/codex-pinned-protocol.md"), "utf8");
-  const installed = [...document.matchAll(/^Installed CLI pin: `(\d+\.\d+\.\d+)`\.$/gm)];
-  expect(installed).toHaveLength(1);
-  const versions = workflow.jobs["native-codex-runtime"].strategy?.matrix.codex;
-  expect(versions).toContain(installed[0]![1]);
-  const protocolRoot = path.join(repositoryRoot, "src/lib/accounts/protocol");
-  const supported = fs.readdirSync(protocolRoot).filter(version => /^\d+\.\d+\.\d+$/.test(version));
-  expect(supported.length).toBeGreaterThan(0);
-  expect(versions?.toSorted()).toEqual(supported.toSorted());
-  // Keeping the declaration and alias wired prevents a second list drifting.
-  expect(workflowSource.match(/&native-codex-versions/g)).toHaveLength(1);
-  expect(workflowSource.match(/\*native-codex-versions/g)).toHaveLength(1);
+test("the native Codex matrices resolve the latest three reviewed pins at the proposed commit", () => {
+  const resolver = workflow.jobs["codex-versions"];
+  expect(resolver.needs).toBeUndefined();
+  expect(resolver.if).toBeUndefined();
+  expect(resolver.steps.find(step => step.uses?.startsWith("actions/checkout@"))?.with?.ref)
+    .toBe("${{ github.event.pull_request.head.sha || github.sha }}");
+  expect(resolver.outputs?.versions).toBe("${{ steps.versions.outputs.versions }}");
+  for (const name of ["native-codex-runtime", "native-queue-campaign"]) {
+    const job = workflow.jobs[name];
+    expect(job.needs).toEqual(["codex-versions"]);
+    expect(job.strategy?.matrix.codex).toBe("${{ fromJSON(needs.codex-versions.outputs.versions) }}");
+  }
+  const step = resolver.steps.find(step => (step as WorkflowStep & { id?: string }).id === "versions")!;
+  expect(step.if).toBeUndefined();
+  expect(step["continue-on-error"]).toBeUndefined();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-matrix-"));
+  try {
+    const output = path.join(root, "output");
+    const run = Bun.spawnSync(["bash", "-c", step.run!], {
+      cwd: repositoryRoot, env: { ...process.env, GITHUB_OUTPUT: output }, timeout: 5000,
+    });
+    expect(run.exitCode).toBe(0);
+    const value = fs.readFileSync(output, "utf8").trim();
+    expect(value.startsWith("versions=")).toBeTrue();
+    const versions = JSON.parse(value.slice("versions=".length));
+    expect(versions).toEqual(SUPPORTED_CODEX_VERSIONS);
+    expect(versions).toHaveLength(3);
+
+    // A failed selection cannot publish a successful empty matrix.
+    const bin = path.join(root, "bin"); fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, "bun"), "#!/bin/sh\nexit 23\n", { mode: 0o755 });
+    fs.rmSync(output);
+    const failed = Bun.spawnSync([Bun.which("bash")!, "-c", step.run!], {
+      cwd: repositoryRoot, env: { ...process.env, PATH: bin, GITHUB_OUTPUT: output }, timeout: 5000,
+    });
+    expect(failed.exitCode).toBe(23);
+    expect(fs.readFileSync(output, "utf8")).toBe("");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("supported Codex CLIs run the full native contracts at the proposed commit", () => {
   const job = workflow.jobs["native-codex-runtime"];
   expect(job.if).toBe(workflow.jobs["bun-runtime"].if);
-  expect(job.strategy?.matrix.codex?.length).toBeGreaterThan(0);
+  expect(job.strategy?.matrix.codex).toBe("${{ fromJSON(needs.codex-versions.outputs.versions) }}");
   expect(job.steps.find(step => step.uses?.startsWith("actions/checkout@"))?.with?.ref)
     .toContain("github.event.pull_request.head.sha");
   expect(job.steps.find(step => step.uses?.startsWith("oven-sh/setup-bun@"))?.with?.["bun-version"])
