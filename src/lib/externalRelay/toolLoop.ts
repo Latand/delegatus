@@ -5,7 +5,7 @@ import { isOwnerTool, ownerRateLimitSchema, RELAY_OWNER_TOOLS, toolCallResultSch
 import { readRelaySwitches } from "./switches";
 import type { PairedRelay } from "./store";
 import type { RelayToolCallRecord } from "./answers";
-import { ACTION_VERIFICATION_MS, ACTION_VERIFICATION_READS, actionOutcomeReads, definiteActionOutcome, establishActionOutcome, verificationFailed, type ActionOutcome, type ActionResolution } from "./actionOutcome";
+import { ACTION_VERIFICATION_MS, ACTION_VERIFICATION_READS, actionOutcomeReads, establishActionOutcome, verificationFailed, type ActionOutcome, type ActionResolution } from "./actionOutcome";
 
 export const RELAY_TOOL_ROUNDS = 8;
 
@@ -51,10 +51,10 @@ export async function toolSleep(ms: number, signal: AbortSignal): Promise<void> 
     signal.addEventListener("abort", abort, { once: true });
   });
 }
-/** Request-scoped memory only. The service owns the durable C6 ledger. */
+/** Request-local projections; the request ledger fences dispatch, and the service owns action outcomes. */
 export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest, lease: {
   signal: AbortSignal; lose: () => void; ack: () => Promise<boolean>; beforeSend?: () => void | Promise<void>; deadlineAt?: number;
-  verificationBudget?: (callId: string, deadlineAt: number, consume: boolean) => Promise<{ deadlineAt: number; reads: number; allowed: boolean }>;
+  verificationBudget?: (callId: string, deadlineAt: number, consume: boolean | "send") => Promise<{ deadlineAt: number; reads: number; allowed: boolean; recovering?: boolean }>;
 }, runtime: ToolLoopRuntime = {}, onProgress?: (tool: string, done: boolean, failed: boolean) => void, onToolState?: (pending: boolean) => void) {
   // I8/C8 admission and the authoritative index belong to the service. The
   // feature gates only the amended owner semantics; legacy 2a owner reads stay.
@@ -91,46 +91,69 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
     const action = effectOf(tool) === "action";
     const verifyingRead = action && Object.hasOwn(actionOutcomeReads, tool) ? actionOutcomeReads[tool] : undefined;
     const owner = ownerToolsEnabled && isOwnerTool(tools.find((item) => item.name === tool)!);
-    const unknown = async (initial?: ToolCallResult): Promise<ActionResolution> => {
-      terminal = true;
+    if (verifyingRead) {
+      const monotonicNow = runtime.monotonicNow ?? (() => performance.now());
       let deadlineAt = Math.min(now() + ACTION_VERIFICATION_MS, (lease.deadlineAt ?? Infinity) - 1000);
-      if (verifyingRead && lease.verificationBudget) {
-        try {
-          const state = await lease.verificationBudget(body.call_id, deadlineAt, false);
-          deadlineAt = state.deadlineAt;
-          if (!state.allowed || state.reads >= ACTION_VERIFICATION_READS) {
-            sawUnknown = true; return verificationFailed(tool, "saved verification bound exhausted");
+      const monotonicDeadline = monotonicNow() + Math.max(0, deadlineAt - now());
+      let recovering = false;
+      try {
+        if (lease.verificationBudget) {
+          const saved = await lease.verificationBudget(body.call_id, deadlineAt, "send");
+          deadlineAt = Math.min(deadlineAt, saved.deadlineAt);
+          recovering = saved.recovering === true;
+          if (!saved.allowed || recovering && saved.reads >= ACTION_VERIFICATION_READS) {
+            terminal = true; sawUnknown = true;
+            return verificationFailed(tool, "saved verification bound exhausted");
           }
-        } catch (error) {
-          lease.signal.throwIfAborted();
-          const reason = error instanceof ExternalRelayError ? error.code : "saved verification bound unavailable";
-          console.error("External relay verification budget unavailable", reason);
-          sawUnknown = true; return verificationFailed(tool, reason);
         }
+      } catch (error) {
+        lease.signal.throwIfAborted();
+        terminal = true; sawUnknown = true;
+        return verificationFailed(tool, error instanceof ExternalRelayError ? error.code : "saved verification bound unavailable");
       }
-      const resolution: ActionResolution = verifyingRead
-        ? await establishActionOutcome(tool, async (signal, check) => {
-          if (!await lease.ack()) { lease.lose(); lease.signal.throwIfAborted(); }
+      const resolution = await establishActionOutcome(tool, async (signal, check, initial) => {
+        const checkBounds = () => {
           check();
+          if (now() >= deadlineAt || monotonicNow() >= monotonicDeadline) throw new ExternalRelayError("verification_deadline", 409);
+        };
+        checkBounds();
+        if (!initial) {
+          if (!await lease.ack()) { lease.lose(); lease.signal.throwIfAborted(); }
+          checkBounds();
           if (lease.verificationBudget && !(await lease.verificationBudget(body.call_id, deadlineAt, true)).allowed)
             throw new ExternalRelayError("verification_limit", 409);
-          check();
-          try {
-            const response = await relayCall(relay.api_base, `/requests/${encodeURIComponent(request.request_id)}/tool-calls`, "POST", body,
-              relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal, beforeSend: async () => { await lease.beforeSend?.(); check(); } });
-            const parsed = toolCallResultSchema.safeParse(response.body);
-            if (!parsed.success || parsed.data.call_id !== body.call_id || parsed.data.tool !== tool || parsed.data.effect !== "action")
-              throw new ExternalRelayError("malformed");
-            return parsed.data;
-          } catch (error) {
-            if (isUnknownFeatureRefusal(error)) await runtime.onUnknownFeature?.();
-            if (error instanceof ExternalRelayError && (error.status === 404 || error.status === 409 && error.code === "lease_lost")) lease.lose();
-            throw error;
-          }
-        }, callSignal, { now: runtime.monotonicNow ?? (() => performance.now()), sleep, budgetMs: Math.max(0, deadlineAt - now()) })
-        : { result: initial ?? null, unknown: true, output: verificationFailed(tool, "no verifying read declared").output };
-      if (!verifyingRead || resolution.outcome === "verification_failed") sawUnknown = true;
+          checkBounds();
+        }
+        if (owner) possibleOwnerActions.add(body.call_id);
+        else actionSent = true;
+        try {
+          const response = await relayCall(relay.api_base, `/requests/${encodeURIComponent(request.request_id)}/tool-calls`, "POST", body,
+            relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal,
+              beforeSend: async () => { checkBounds(); await lease.beforeSend?.(); checkBounds(); } });
+          checkBounds();
+          const parsed = toolCallResultSchema.safeParse(response.body);
+          if (!parsed.success || parsed.data.call_id !== body.call_id || parsed.data.tool !== tool || parsed.data.effect !== "action")
+            throw new ExternalRelayError("malformed");
+          if (!parsed.data.replayed) remaining = Math.min(remaining, parsed.data.calls_remaining);
+          if (parsed.data.calls_remaining === 0 || parsed.data.delivered || parsed.data.status !== "ok" && parsed.data.status !== "error") terminal = true;
+          return parsed.data;
+        } catch (error) {
+          if (isUnknownFeatureRefusal(error)) await runtime.onUnknownFeature?.();
+          if (error instanceof ExternalRelayError && (error.status === 404 || error.status === 409 && error.code === "lease_lost")) lease.lose();
+          if (error instanceof ExternalRelayError && [401, 426].includes(error.status)) rejectionCode = error.code;
+          throw error;
+        }
+      }, callSignal, { now: monotonicNow, sleep, initial: !recovering,
+        budgetMs: Math.max(0, Math.min(deadlineAt - now(), monotonicDeadline - monotonicNow())) });
+      if (recovering || resolution.outcome === "verification_failed") terminal = true;
+      if (resolution.outcome === "verification_failed") sawUnknown = true;
+      if (rejectionCode) { terminal = true; rejected.abort(); }
       return resolution;
+    }
+    const unknown = async (initial?: ToolCallResult): Promise<ActionResolution> => {
+      terminal = true;
+      sawUnknown = true;
+      return { result: initial ?? null, unknown: true, output: verificationFailed(tool, "no verifying read declared").output };
     };
     let ambiguous = false;
     const refused = (code?: string) => {
@@ -138,7 +161,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       // A wire refusal proves this owner call was not admitted. Other calls'
       // markers and any earlier uncertainty in this call still block handoff.
       if (owner) possibleOwnerActions.delete(body.call_id);
-      return { result: null, code, output: "The call could not be completed.", ...(verifyingRead ? { outcome: "not_done" as const } : {}) };
+      return { result: null, code, output: "The call could not be completed." };
     };
     const unfinished = () => action ? unknown() : { result: null, output: "The read did not finish." };
     const started = now();
@@ -158,7 +181,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
           relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal: callSignal, beforeSend: lease.beforeSend });
         if (rejectionCode) return refused(rejectionCode);
         const parsed = toolCallResultSchema.safeParse(response.body);
-        if (!parsed.success || parsed.data.call_id !== body.call_id || parsed.data.tool !== tool || verifyingRead && parsed.data.effect !== "action") throw new ExternalRelayError("malformed");
+        if (!parsed.success || parsed.data.call_id !== body.call_id || parsed.data.tool !== tool) throw new ExternalRelayError("malformed");
         const result = parsed.data;
         onlyRateLimited = false;
         // Concurrent responses and historical replays must never replenish the budget.
@@ -168,7 +191,6 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         // Reauthorization can deny a saved success after execution. Keep the
         // denial; unavailable permits only retries of this same wire identity.
         if (action && result.status === "denied" && result.code !== "unavailable") terminal = true;
-        if (verifyingRead && result.status === "denied" && result.code !== "unavailable") return unknown(result);
         if (action && result.status === "outcome_unknown") return unknown(result);
         if (!action && !mayQuote(result.audience, request.input.requester)) return { result };
         if (result.status === "pending") {
@@ -180,7 +202,6 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         }
         if (result.status === "denied" && result.code === "unavailable") {
           if (action) ambiguous = true;
-          if (verifyingRead) return unknown(result);
           if (unavailable++ < 2) {
             await wait((result.retry_after_s ?? 1) * 1000);
             continue;
@@ -189,7 +210,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
             return unknown(result);
           }
         }
-        return { result, ...(verifyingRead ? { outcome: definiteActionOutcome(result) } : {}) };
+        return { result };
       } catch (error) {
         if (lease.signal.aborted) throw error;
         if (isUnknownFeatureRefusal(error)) await runtime.onUnknownFeature?.();
@@ -223,7 +244,6 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         // response (including a redirect or HTTP timeout) leaves fate unresolved.
         ambiguous = true;
         onlyRateLimited = false;
-        if (verifyingRead) return unknown();
         if (++failures > 3) return action ? unknown() : refused();
         await wait(1000 * 2 ** (failures - 1));
       }

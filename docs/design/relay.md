@@ -66,11 +66,12 @@ remains the operator's gate pending the final-head cross-check.
 
 Revision of 2026-11-13: declared actions establish uncertain outcomes through
 their idempotent verifying read before the group reply. The trigger update is
-the first declaration. At most three same-call reads share one deadline of
-up to 30 seconds, capped by the request lifetime with time left for completion.
-The existing request ledger preserves these bounds through restart and lease
-replacement. The final reply says done, not done, or explicitly that the saved
-outcome could not be read. This supersedes the uncertainty-final behaviour
+the first declaration. The initial send, pending waits and at most three
+same-call reads share one deadline of up to 30 seconds, capped by the request
+lifetime with time left for completion. Before the first POST, the existing
+request ledger records possible emission and preserves the bounds through
+restart and lease replacement. The final reply says done, not done, or explicitly
+that the saved outcome could not be read. This supersedes the uncertainty-final behaviour
 above for declared actions. The service still owns the action outcome and must
 fence late writes after a definite no-effect result. See the
 [outcome contract and service dependencies](../reports/relay-action-unknown-outcome.md#build-contract-read-the-saved-outcome-through-the-same-call).
@@ -1707,13 +1708,16 @@ owner rules, with the same unseen-message and digest policy.
 ## A.9 Idempotency and replay protection
 
 Declared outcome verification reuses the same request ID, call ID and arguments;
-each read checks current lease authority. Its read count and expiry live in the
-existing request-claim ledger, independently of claim ownership and release,
+each read checks current lease authority. Possible emission, read count and
+expiry live in the existing request-claim ledger, independently of claim ownership and release,
 with the claim retention duration and at most 16 action keys per request.
-These are verification limits; settled action receipts remain service-owned.
+Every restored POST consumes that budget. A later authorization refusal cannot
+establish that an earlier action had no effect. Settled action receipts remain
+service-owned.
 A negative state snapshot never establishes no effect. A fresh member message's
-retry identity remains the service's responsibility; this adds no cross-turn
-identity or new wire field.
+retry identity is unresolved under the current contract and blocks acceptance;
+the full runner reproduction is retained as an expected failure. This adds no
+cross-turn identity or new wire field. See the linked outcome report above.
 
 **[ra]** The service commits its action ledger entry and L5 stamp together
 before execution. Stamped requests are never re-claimed and fall back silently

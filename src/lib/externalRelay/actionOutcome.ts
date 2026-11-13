@@ -35,8 +35,8 @@ async function withinDeadline<T>(work: () => Promise<T>, signal: AbortSignal): P
 
 /** One bounded reconciliation for every declared action. The caller owns the
  * lease and exact wire identity; every read must recheck that authority. */
-export async function establishActionOutcome(tool: string, read: (signal: AbortSignal, check: () => void) => Promise<ToolCallResult>,
-  signal: AbortSignal, runtime: { now: () => number; sleep: (ms: number, signal: AbortSignal) => Promise<void>; budgetMs?: number },
+export async function establishActionOutcome(tool: string, read: (signal: AbortSignal, check: () => void, initial: boolean) => Promise<ToolCallResult>,
+  signal: AbortSignal, runtime: { now: () => number; sleep: (ms: number, signal: AbortSignal) => Promise<void>; budgetMs?: number; initial?: boolean },
 ): Promise<ActionResolution> {
   const budget = Math.max(0, Math.min(ACTION_VERIFICATION_MS, runtime.budgetMs ?? ACTION_VERIFICATION_MS));
   const deadline = runtime.now() + budget;
@@ -48,15 +48,16 @@ export async function establishActionOutcome(tool: string, read: (signal: AbortS
     bounded.throwIfAborted();
   };
   let reason = "no settled outcome";
+  let delay = 1000;
   try {
-    for (let attempt = 0; attempt < ACTION_VERIFICATION_READS; attempt++) {
+    for (let attempt = runtime.initial ? -1 : 0; attempt < ACTION_VERIFICATION_READS; attempt++) {
       signal.throwIfAborted();
       if (runtime.now() >= deadline) { reason = "verification deadline expired"; break; }
       try {
-        await withinDeadline(() => runtime.sleep(Math.min(1000, deadline - runtime.now()), bounded), bounded);
+        if (attempt >= 0) await withinDeadline(() => runtime.sleep(Math.min(delay, deadline - runtime.now()), bounded), bounded);
         bounded.throwIfAborted();
         if (runtime.now() >= deadline) { reason = "verification deadline expired"; break; }
-        const result = await withinDeadline(() => read(bounded, check), bounded);
+        const result = await withinDeadline(() => read(bounded, check, attempt === -1), bounded);
         signal.throwIfAborted();
         // Timers may have been delayed by an event-loop stall. A late result
         // never counts as proof obtained inside this deadline.
@@ -67,9 +68,12 @@ export async function establishActionOutcome(tool: string, read: (signal: AbortS
           reason = result.code ?? result.status; break;
         }
         reason = result.status;
+        delay = (result.retry_after_s ?? 1) * 1000;
       } catch (error) {
         signal.throwIfAborted();
         if (error instanceof ExternalRelayError && [400, 401, 409, 413, 426].includes(error.status)) {
+          if (attempt === -1 && [400, 401, 413, 426].includes(error.status))
+            return { result: null, outcome: "not_done", code: error.code, output: "The call could not be completed." };
           reason = error.code; break;
         }
         reason = bounded.aborted || runtime.now() >= deadline ? "verification deadline expired" : "status read unavailable";

@@ -857,7 +857,7 @@ export async function runClaimedRequest(
     const lose = () => { if (ownerPastWindow()) return; leaseUnavailable = true; if (!ownerExecution) { run?.cancel(); callAbort.abort(); } };
     const lease = {
       deadlineAt: serviceDeadline.at,
-      verificationBudget: (callId: string, until: number, consume: boolean) => reserveRelayActionVerificationAsync(requestId, leaseId, callId, until, consume),
+      verificationBudget: (callId: string, until: number, consume: boolean | "send") => reserveRelayActionVerificationAsync(requestId, leaseId, callId, until, consume),
       signal: callAbort.signal, lose,
       ack: async () => {
         while (!acked && !leaseUnavailable) {

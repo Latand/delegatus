@@ -158,7 +158,7 @@ export function runHoldsCapacity(run: RunRecord): boolean {
   return !run.capacityReleased && !run.ownerTurn?.confirmed && !run.ownerTurn?.released;
 }
 type RelayRequestClaim = { requestId: string; leaseId: string; ownerPid: number; ownerIdentity: string; claimedAt: number; terminalAt?: number; completion?: ExternalRelayCompletion };
-export type RelayActionVerification = { deadlineAt: number; reads: number };
+export type RelayActionVerification = { deadlineAt: number; reads: number; sent?: true };
 type RelayRequestLedger = { v: 1; claims: RelayRequestClaim[]; actionVerifications?: Record<string, Record<string, RelayActionVerification>> };
 const RELAY_REQUEST_CLAIM_RETENTION_MS = 24 * 60 * 60_000;
 export const externalRelayFile = (name: "relays" | "runs" | "requests") =>
@@ -526,10 +526,10 @@ export async function settleRelayRequestClaimAsync(
 /** The existing request ledger owns verification bounds, independently of
  * process ownership and completion delivery. It stores no action outcome. */
 export async function reserveRelayActionVerificationAsync(requestId: string, leaseId: string, callId: string,
-  proposedDeadline: number, consume: boolean, now = Date.now()): Promise<RelayActionVerification & { allowed: boolean }> {
+  proposedDeadline: number, consume: boolean | "send", now = Date.now()): Promise<RelayActionVerification & { allowed: boolean; recovering?: boolean }> {
   if (!Number.isFinite(proposedDeadline) || !Number.isFinite(now)) throw new ExternalRelayError("invalid_verification_bound", 409);
   const file = externalRelayFile("requests");
-  let result!: RelayActionVerification & { allowed: boolean };
+  let result!: RelayActionVerification & { allowed: boolean; recovering?: boolean };
   await withFileLockAsync(file, () => {
     const ledger = readRelayRequestLedger();
     if (!ledger.claims.some(claim => claim.requestId === requestId && claim.leaseId === leaseId && claim.terminalAt === undefined &&
@@ -539,15 +539,18 @@ export async function reserveRelayActionVerificationAsync(requestId: string, lea
     const bucket = Object.hasOwn(all, requestId) ? all[requestId]! : {};
     const hadSaved = Object.hasOwn(bucket, callId);
     const saved = hadSaved ? bucket[callId] : undefined;
-    if (hadSaved && (!saved || !Number.isFinite(saved.deadlineAt) || !Number.isInteger(saved.reads) || saved.reads < 0 || saved.reads > ACTION_VERIFICATION_READS))
+    if (hadSaved && (!saved || !Number.isFinite(saved.deadlineAt) || !Number.isInteger(saved.reads) || saved.reads < 0 || saved.reads > ACTION_VERIFICATION_READS || saved.sent !== undefined && saved.sent !== true))
       throw new ExternalRelayError("invalid_verification_bound", 409);
     if (!saved && Object.keys(bucket).length >= 16) throw new ExternalRelayError("verification_bound_exhausted", 409);
     const deadlineAt = Math.min(proposedDeadline, saved?.deadlineAt ?? proposedDeadline);
     const reads = saved?.reads ?? 0;
-    const allowed = now < deadlineAt && (!consume || reads < ACTION_VERIFICATION_READS);
-    const state = { deadlineAt, reads: reads + Number(consume && allowed) };
+    const allowed = now < deadlineAt && (consume !== true || reads < ACTION_VERIFICATION_READS);
+    // Persist possible emission before the first POST. Older records were
+    // created only after uncertainty, so their presence also requires recovery.
+    const state = { deadlineAt, reads: reads + Number(consume === true && allowed),
+      ...(saved?.sent || consume === "send" ? { sent: true as const } : {}) };
     writeRelayFile(file, { ...ledger, actionVerifications: { ...all, [requestId]: { ...bucket, [callId]: state } } });
-    result = { ...state, allowed };
+    result = { ...state, allowed, ...(consume === "send" ? { recovering: hadSaved } : {}) };
   }, Math.min(proposedDeadline, Date.now() + 5000));
   return result;
 }

@@ -7,8 +7,102 @@ import { x1Request } from "./toolLoop.fixture";
 import type { PairedRelay } from "./store";
 import { actionOutcomeAnswer, establishActionOutcome } from "./actionOutcome";
 import { answerRecorder, readAnswerRecord } from "./answers";
+import { startTestRelay } from "./testRelay";
 
 const call = { tool: "request_trigger_rule_update", arguments: JSON.stringify({ name: "Sample rule", filter: { words: ["sample"] }, action: { text: "Sample reply" } }), cursor: null };
+
+async function client(origin: string, id: string, phase = "next") {
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "actionOutcome.client.fixture.ts"), origin, id, phase],
+    { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+  return stdout ? JSON.parse(stdout) as { outcome: string }[] : [];
+}
+
+for (const version of ["next", "legacy"]) test(`restart and authorization refusal preserve uncertainty about an applied action: ${version}`, async () => {
+  let posts = 0, effects = 0, revoked = false;
+  const peer = await startTestRelay(() => {
+    posts++;
+    if (revoked) return { status: 401, body: { error: { code: "unauthorized" } } };
+    effects++; return { drop: true };
+  });
+  try {
+    const id = `restart_authorization_${version}`;
+    await client(peer.origin, id, "crash");
+    expect({ posts, effects }).toEqual({ posts: 1, effects: 1 });
+    revoked = true;
+    expect((await client(peer.origin, id, version))[0]?.outcome).toBe("verification_failed");
+    expect({ posts, effects }).toEqual({ posts: 2, effects: 1 });
+  } finally { await peer.close(); }
+});
+
+test("a crash at the emission boundary leaves a durable recovery marker", async () => {
+  let posts = 0;
+  const peer = await startTestRelay(() => { posts++; return { status: 401, body: { error: { code: "unauthorized" } } }; });
+  try {
+    await client(peer.origin, "restart_before_emission", "before_send_crash");
+    expect(posts).toBe(0);
+    expect((await client(peer.origin, "restart_before_emission"))[0]?.outcome).toBe("verification_failed");
+    expect(posts).toBe(1);
+  } finally { await peer.close(); }
+});
+
+for (const seam of ["budget", "initial send"]) test(`the initial action cannot emit after a stall in ${seam}`, async () => {
+  const peer = await service("lost");
+  let clock = 0;
+  try {
+    const loop = peer.loop(false, { now: () => clock, monotonicNow: () => clock }, {
+      verificationBudget: async (_id, deadlineAt) => {
+        if (seam === "budget") clock = 30_001;
+        return { deadlineAt, reads: 0, allowed: true, recovering: false };
+      },
+      beforeSend: () => { if (seam === "initial send") clock = 30_001; },
+    });
+    await loop.runCalls([call], 1);
+    expect(loop.results[0]?.outcome).toBe("verification_failed");
+    expect((await peer.state()).calls).toBe(0);
+  } finally { await peer.close(); }
+});
+
+for (const phase of ["next", "expired"]) test(`real client restarts cannot replenish the action bound: ${phase}`, async () => {
+  let posts = 0;
+  const peer = await startTestRelay((_req, raw) => {
+    const body = raw as { call_id: string; tool: string };
+    posts++;
+    return { body: { ...body, effect: "action", status: "outcome_unknown", output: "", truncated: false,
+      delivered: false, replayed: posts > 1, calls_remaining: 0 } };
+  });
+  try {
+    const id = `restart_bound_${phase}`;
+    expect((await client(peer.origin, id, phase === "expired" ? "crash" : "next"))[0]?.outcome)
+      .toBe(phase === "expired" ? undefined : "verification_failed");
+    const initialPosts = posts;
+    for (let generation = 0; generation < 3; generation++) {
+      expect((await client(peer.origin, id, phase))[0]?.outcome).toBe("verification_failed");
+      expect(posts).toBe(initialPosts);
+    }
+    expect(posts).toBe(phase === "expired" ? 1 : 4);
+  } finally { await peer.close(); }
+});
+
+test("pending action status respects the original request deadline", async () => {
+  let clock = 0, posts = 0;
+  const peer = await startTestRelay((_req, raw) => {
+    const body = raw as { call_id: string; tool: string };
+    posts++;
+    return { body: { ...body, effect: "action", status: posts === 1 ? "pending" : "ok", retry_after_s: 60,
+      output: "", truncated: false, delivered: false, replayed: posts > 1, calls_remaining: 0 } };
+  });
+  try {
+    const loop = createToolLoop({ api_base: `${peer.origin}/v1`, credential: "x".repeat(43) } as PairedRelay, x1Request("actions_admin"),
+      { signal: new AbortController().signal, ack: async () => true, lose: () => { throw new Error("lost"); }, deadlineAt: 2000 },
+      { now: () => clock, monotonicNow: () => clock, sleep: async ms => { clock += ms; } });
+    await loop.runCalls([call], 1);
+    expect(clock).toBeLessThanOrEqual(2000);
+    expect(posts).toBe(1);
+    expect(loop.results[0]?.outcome).toBe("verification_failed");
+  } finally { await peer.close(); }
+});
 async function service(mode: string) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "relay-outcome-"));
   const start = async () => {

@@ -2461,6 +2461,52 @@ const actionResponse = (sample: string, body: WireCall) => ({ body: {
   ...x1Results[sample]!, call_id: body.call_id, tool: "tool" in body ? body.tool : x1Results[sample]!.tool,
 } });
 
+// Known contract gap: a new member message carries no reference to an earlier
+// action. Keep the acceptance reproduction executable until the service can
+// redeliver the original identity under its existing authorization rules.
+test.failing("fresh member retry after not done retains the original request and call identity", async () => {
+  const posts: { route: string; body: WireCall }[] = [];
+  const receipts = new Set<string>();
+  let effects = 0;
+  const server = await startTestRelay((req, raw) => {
+    if (req.url?.endsWith("/complete")) return { body: { status: "accepted", duplicate: false } };
+    if (!req.url?.endsWith("/tool-calls")) return { body: { status: "ok" } };
+    const body = raw as WireCall;
+    posts.push({ route: req.url, body });
+    const key = `${req.url}/${body.call_id}`;
+    if (posts.length > 1 && !receipts.has(key)) { receipts.add(key); effects++; }
+    return { body: { ...actionResponse("action_ok", body).body, status: posts.length === 1 ? "error" : "ok", calls_remaining: 0 } };
+  });
+  const first = x1Request("actions_admin");
+  first.request_id = "member_original";
+  first.input.request_text = "Create the requested sample rule";
+  const second = structuredClone(first);
+  second.request_id = "member_retry";
+  second.lease_id = "b".repeat(64);
+  second.input.respond_to = "member_retry_message";
+  second.input.request_text = "Retry the same sample rule update";
+  second.input.conversation.push({ ...structuredClone(first.input.conversation[0]!), id: second.input.respond_to,
+    text: second.input.request_text, sent_at: "2026-10-06T12:01:00Z" });
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.id = first.target_id;
+  const command = loopStub(actionPlan("request_trigger_rule_update"), path.join(root, "member-retry-seen"));
+  try {
+    expect(await runClaimedRequest(paired, first, undefined, { command, sleep: async () => {} }))
+      .toMatchObject({ outcome: "answered", answer: { text: "Not done: trigger rule update." } });
+    expect(await runClaimedRequest(paired, second, undefined, { command, sleep: async () => {} }))
+      .toMatchObject({ outcome: "answered", answer: { text: "Done: trigger rule update." } });
+    expect(readAnswerRecord(paired.id, first.target_id, first.request_id)?.toolCalls?.[0]?.outcome).toBe("not_done");
+    expect(readAnswerRecord(paired.id, second.target_id, second.request_id)?.toolCalls?.[0]?.outcome).toBe("done");
+    const ledger = JSON.parse(fs.readFileSync(externalRelayFile("requests"), "utf8"));
+    expect(ledger.claims.filter((row: { terminalAt?: number }) => row.terminalAt !== undefined)).toHaveLength(2);
+    expect(effects).toBe(1);
+    expect(posts).toHaveLength(2);
+    // Both components make up the service's idempotency key.
+    expect({ route: posts[1]!.route, call: posts[1]!.body.call_id })
+      .toEqual({ route: posts[0]!.route, call: posts[0]!.body.call_id });
+  } finally { await server.close(); }
+});
+
 for (const initial of ["lost", "outcome_unknown"])
 for (const settled of ["ok", "error", "denied"] as const)
   test(`trigger ${initial} then ${settled} delivers its established outcome without another agent round`, async () => {
